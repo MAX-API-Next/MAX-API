@@ -1,0 +1,18 @@
+# File path: /etc/systemd/system/max-api.service
+# sudo systemctl daemon-reload
+# sudo systemctl start max-api
+# sudo systemctl enable max-api
+# sudo systemctl status max-api
+[Unit]
+Description=MAX API Service
+After=network.target
+
+[Service]
+User=ubuntu  # 注意修改用户名
+WorkingDirectory=/path/to/max-api  # 注意修改路径
+ExecStart=/path/to/max-api/max-api --port 3000 --log-dir /path/to/max-api/logs  # 注意修改路径和端口号
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

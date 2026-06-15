@@ -1,0 +1,161 @@
+{
+  "name": "max-api-electron",
+  "version": "1.0.0",
+  "description": "MAX API - AI Model Gateway Desktop Application",
+  "main": "main.js",
+  "scripts": {
+    "start-app": "electron .",
+    "dev-app": "cross-env NODE_ENV=development electron .",
+    "build": "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux"
+  },
+  "keywords": [
+    "ai",
+    "api",
+    "gateway",
+    "openai",
+    "claude"
+  ],
+  "author": "MAX-API-Next",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MAX-API-Next/MAX-API"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "39.8.5",
+    "electron-builder": "^26.7.0"
+  },
+  "build": {
+    "appId": "com.maxapi.desktop",
+    "productName": "MAX-API-App",
+    "publish": null,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "tray-iconTemplate.png",
+      "tray-iconTemplate@2x.png",
+      "tray-icon-windows.png"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "icon.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "../max-api",
+          "to": "bin/max-api"
+        },
+        {
+          "from": "../web/dist",
+          "to": "web/dist"
+        },
+        {
+          "from": "../LICENSE",
+          "to": "licenses/LICENSE"
+        },
+        {
+          "from": "../NOTICE",
+          "to": "licenses/NOTICE"
+        },
+        {
+          "from": "../THIRD-PARTY-LICENSES.md",
+          "to": "licenses/THIRD-PARTY-LICENSES.md"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "licenses/electron/LICENSE"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "licenses/electron/LICENSES.chromium.html"
+        }
+      ]
+    },
+    "win": {
+      "icon": "icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "extraResources": [
+        {
+          "from": "../max-api.exe",
+          "to": "bin/max-api.exe"
+        },
+        {
+          "from": "../LICENSE",
+          "to": "licenses/LICENSE"
+        },
+        {
+          "from": "../NOTICE",
+          "to": "licenses/NOTICE"
+        },
+        {
+          "from": "../THIRD-PARTY-LICENSES.md",
+          "to": "licenses/THIRD-PARTY-LICENSES.md"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "licenses/electron/LICENSE"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "licenses/electron/LICENSES.chromium.html"
+        }
+      ]
+    },
+    "linux": {
+      "icon": "icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "extraResources": [
+        {
+          "from": "../max-api",
+          "to": "bin/max-api"
+        },
+        {
+          "from": "../LICENSE",
+          "to": "licenses/LICENSE"
+        },
+        {
+          "from": "../NOTICE",
+          "to": "licenses/NOTICE"
+        },
+        {
+          "from": "../THIRD-PARTY-LICENSES.md",
+          "to": "licenses/THIRD-PARTY-LICENSES.md"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "licenses/electron/LICENSE"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "licenses/electron/LICENSES.chromium.html"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
