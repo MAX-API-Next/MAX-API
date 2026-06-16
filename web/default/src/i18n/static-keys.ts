@@ -479,6 +479,21 @@ export const STATIC_I18N_KEYS = [
   'Batch detection failed',
   'Batch detection complete: {{channels}} channels, {{add}} to add, {{remove}} to remove, {{fails}} failed',
 
+  // Home upstream platform labels
+  'Google Gemini',
+  'AWS',
+  'Azure',
+  'Vertex AI',
+  'Ollama',
+  'Codex',
+  'Dify',
+  'RAGFlow',
+  'Alibaba Cloud Bailian',
+  'VolcEngine',
+  'Kling',
+  'Seedance',
+  'More compatible APIs',
+
   // Misc
   'Cancel',
   'Status',

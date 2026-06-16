@@ -17,224 +17,172 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import {
-  Zap,
-  Shield,
-  Globe,
-  Code,
-  Gauge,
-  DollarSign,
-  Users,
-  HeartHandshake,
+  Binary,
+  CircleDollarSign,
+  FileSearch,
+  GitBranch,
+  RadioTower,
+  Workflow,
+  type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { AnimateInView } from '@/components/animate-in-view'
 
-interface FeaturesProps {
-  className?: string
+interface FeatureCard {
+  title: string
+  description: string
+  eyebrow: string
+  icon: LucideIcon
+  span?: string
+  accent: string
+  sample: string[]
 }
 
-export function Features(_props: FeaturesProps) {
+export function Features() {
   const { t } = useTranslation()
-
-  const features = [
+  const features: FeatureCard[] = [
     {
-      id: 'fast',
-      num: '01',
-      title: t('Lightning Fast'),
-      desc: t(
-        'Optimized network architecture ensures millisecond response times'
+      title: t('AI asset governance'),
+      description: t(
+        'Unify model catalogs, channel mappings, group access, pricing rules, and multimodal task capabilities across authorized providers.'
       ),
-      span: 'md:col-span-2',
-      icon: <Zap className='size-4 text-blue-400' />,
-      visual: (
-        <div className='mt-4 grid grid-cols-3 gap-2'>
-          {['OpenAI', 'Claude', 'Gemini', 'DeepSeek', 'Qwen', 'Llama'].map(
-            (name) => (
-              <div
-                key={name}
-                className='border-border/30 bg-muted/20 text-muted-foreground flex items-center justify-center rounded-lg border px-3 py-2 text-xs transition-colors duration-300 hover:border-blue-500/30 hover:bg-blue-500/5'
-              >
-                {name}
-              </div>
-            )
-          )}
-        </div>
+      eyebrow: t('Model governance'),
+      icon: RadioTower,
+      span: 'lg:col-span-2',
+      accent: 'text-cyan-600 dark:text-cyan-300',
+      sample: ['catalog', 'mapping', 'groups', 'pricing', 'DeepSeek', 'Qwen'],
+    },
+    {
+      title: t('Intuitive cost audit'),
+      description: t(
+        'Make model pricing, token usage, async task costs, refunds, and Agent cost attribution visible and auditable.'
       ),
+      eyebrow: t('Cost audit'),
+      icon: CircleDollarSign,
+      accent: 'text-amber-600 dark:text-amber-300',
+      sample: ['p * 2.5', 'cache discount', '720p / 5s', 'audio flag'],
     },
     {
-      id: 'secure',
-      num: '02',
-      title: t('Secure & Reliable'),
-      desc: t(
-        'Enterprise-grade security with comprehensive permission management'
+      title: t('AgentOps control plane'),
+      description: t(
+        'Issue scoped API keys for Agents and workflows, then govern model access, quotas, cost attribution, request traces, and audit visibility.'
       ),
-      span: 'md:col-span-1',
-      icon: <Shield className='size-4 text-emerald-400' />,
-      visual: (
-        <div className='mt-4 flex items-center justify-center'>
-          <div className='relative'>
-            <div className='flex size-16 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/5'>
-              <Shield
-                className='size-7 text-emerald-500/70'
-                strokeWidth={1.5}
-              />
-            </div>
-            <div className='absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-emerald-500'>
-              <svg
-                className='size-2.5 text-white'
-                fill='none'
-                viewBox='0 0 24 24'
-                stroke='currentColor'
-                strokeWidth={3}
-              >
-                <path
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  d='m4.5 12.75 6 6 9-13.5'
-                />
-              </svg>
-            </div>
-          </div>
-        </div>
+      eyebrow: t('AgentOps'),
+      icon: Workflow,
+      accent: 'text-emerald-600 dark:text-emerald-300',
+      sample: ['Agent keys', 'model limits', 'usage logs', 'audit'],
+    },
+    {
+      title: t('Provider protocol governance'),
+      description: t(
+        'Normalize OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime, and configurable non-standard video task protocols.'
       ),
+      eyebrow: t('Protocol layer'),
+      icon: Binary,
+      span: 'lg:col-span-2',
+      accent: 'text-sky-600 dark:text-sky-300',
+      sample: ['/v1/chat', '/v1/responses', '/v1/messages', '/v1/videos'],
     },
     {
-      id: 'global',
-      num: '03',
-      title: t('Global Coverage'),
-      desc: t('Multi-region deployment for stable global access'),
-      span: 'md:col-span-1',
-      icon: <Globe className='size-4 text-violet-400' />,
-      visual: (
-        <div className='mt-4 space-y-2'>
-          {[t('Load Balancing'), t('Rate Limiting'), t('Cost Tracking')].map(
-            (step, i) => (
-              <div key={step} className='flex items-center gap-2'>
-                <div
-                  className={`flex size-6 items-center justify-center rounded-full text-[10px] font-bold ${
-                    i === 1
-                      ? 'border border-blue-500/30 bg-blue-500/20 text-blue-500'
-                      : 'border-border/40 bg-muted text-muted-foreground border'
-                  }`}
-                >
-                  {i + 1}
-                </div>
-                <div className='bg-border/40 h-px flex-1' />
-                <span className='text-muted-foreground text-xs'>{step}</span>
-              </div>
-            )
-          )}
-        </div>
+      title: t('Routing and reliability governance'),
+      description: t(
+        'Route by model, group, weight, channel state, and failure policy with retries, pre-charge, refunds, limits, and operational visibility.'
       ),
+      eyebrow: t('Operations'),
+      icon: GitBranch,
+      span: 'lg:col-span-2',
+      accent: 'text-lime-700 dark:text-lime-300',
+      sample: ['weighted', 'retry', 'rate limit', 'refund'],
     },
     {
-      id: 'developer',
-      num: '04',
-      title: t('Developer Friendly'),
-      desc: t('Compatible API routes for common AI application workflows'),
-      span: 'md:col-span-2',
-      icon: <Code className='size-4 text-amber-400' />,
-      visual: (
-        <div className='mt-4 flex items-center gap-3'>
-          <div className='flex -space-x-2'>
-            {['API', 'SDK', 'CLI', 'Docs'].map((n) => (
-              <div
-                key={n}
-                className='border-background from-muted to-muted/60 text-muted-foreground flex size-8 items-center justify-center rounded-full border-2 bg-gradient-to-br text-[9px] font-bold'
-              >
-                {n}
-              </div>
-            ))}
-          </div>
-          <div className='text-muted-foreground flex items-center gap-1.5 text-xs'>
-            <Code className='size-3.5 text-blue-500' />
-            {t('Multi-protocol Compatible')}
-          </div>
-        </div>
+      title: t('Compliance-aware audit surface'),
+      description: t(
+        'Keep sensitive request and response logging behind admin-only controls, explicit retention decisions, and deployment-side compliance boundaries.'
       ),
-    },
-  ]
-
-  const additionalFeatures = [
-    {
-      icon: <Gauge className='size-5' strokeWidth={1.5} />,
-      title: t('High Performance'),
-      desc: t('Support for high concurrency with automatic load balancing'),
-    },
-    {
-      icon: <DollarSign className='size-5' strokeWidth={1.5} />,
-      title: t('Transparent Billing'),
-      desc: t('Pay-as-you-go with real-time usage monitoring'),
-    },
-    {
-      icon: <Users className='size-5' strokeWidth={1.5} />,
-      title: t('Team Collaboration'),
-      desc: t('Multi-user management with flexible permission allocation'),
-    },
-    {
-      icon: <HeartHandshake className='size-5' strokeWidth={1.5} />,
-      title: t('Open Source'),
-      desc: t('Community driven, self-hosted, and extensible'),
+      eyebrow: t('Security'),
+      icon: FileSearch,
+      accent: 'text-rose-600 dark:text-rose-300',
+      sample: ['admin only', 'retention', 'redaction', 'trace'],
     },
   ]
 
   return (
-    <section className='relative z-10 px-6 py-24 md:py-32'>
-      <div className='mx-auto max-w-6xl'>
-        <AnimateInView className='mb-16 max-w-lg'>
-          <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
-            {t('Core Features')}
-          </p>
-          <h2 className='text-2xl leading-tight font-bold tracking-tight md:text-3xl'>
-            {t('Built for developers,')}
-            <br />
-            {t('designed for scale')}
+    <section className='bg-background relative z-10 px-4 py-20 sm:px-6 md:py-28'>
+      <div className='mx-auto max-w-7xl'>
+        <AnimateInView className='border-border mb-12 max-w-3xl border-b pb-8'>
+          <div className='flex items-center gap-3'>
+            <span className='h-px w-8 bg-emerald-500/70' />
+            <p className='text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase'>
+              {t('Core capabilities')}
+            </p>
+          </div>
+          <h2 className='mt-4 font-serif text-4xl leading-[1.05] font-black tracking-[-0.02em] md:text-[3.25rem]'>
+            {t('Built for AI model and Agent governance')}
           </h2>
         </AnimateInView>
 
-        {/* Bento grid */}
-        <div className='border-border/40 bg-border/40 grid gap-px overflow-hidden rounded-xl border md:grid-cols-3'>
-          {features.map((f, i) => (
-            <AnimateInView
-              key={f.id}
-              delay={i * 100}
-              animation='scale-in'
-              className={`bg-background group hover:bg-muted/20 p-7 transition-colors duration-300 md:p-8 ${f.span}`}
-            >
-              <div className='mb-3 flex items-center gap-3'>
-                <span className='border-border/40 bg-muted text-muted-foreground flex size-7 items-center justify-center rounded-md border text-[10px] font-semibold tabular-nums'>
-                  {f.num}
-                </span>
-                <h3 className='text-sm font-semibold'>{f.title}</h3>
-              </div>
-              <p className='text-muted-foreground text-sm leading-relaxed'>
-                {f.desc}
-              </p>
-              {f.visual}
-            </AnimateInView>
-          ))}
-        </div>
-
-        {/* Additional features row */}
-        <div className='mt-12 grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
-          {additionalFeatures.map((f, i) => (
-            <AnimateInView
-              key={f.title}
-              delay={i * 100}
-              animation='fade-up'
-              className='flex flex-col items-center text-center'
-            >
-              <div className='text-muted-foreground border-border/50 bg-muted/30 group-hover:text-foreground mb-3 flex size-12 items-center justify-center rounded-xl border transition-colors'>
-                {f.icon}
-              </div>
-              <h3 className='mb-1.5 text-sm font-semibold'>{f.title}</h3>
-              <p className='text-muted-foreground max-w-[200px] text-xs leading-relaxed'>
-                {f.desc}
-              </p>
-            </AnimateInView>
+        <div className='border-border bg-border grid gap-px overflow-hidden rounded-xl border lg:grid-cols-3'>
+          {features.map((feature, index) => (
+            <FeaturePanel key={feature.title} feature={feature} index={index} />
           ))}
         </div>
       </div>
     </section>
+  )
+}
+
+function FeaturePanel(props: { feature: FeatureCard; index: number }) {
+  const Icon = props.feature.icon
+
+  return (
+    <AnimateInView
+      delay={props.index * 70}
+      animation='fade-up'
+      className={cn(
+        'group bg-card hover:bg-muted/30 relative overflow-hidden p-6 transition-colors md:p-7',
+        props.feature.span
+      )}
+    >
+      <span
+        aria-hidden='true'
+        className='editorial-numeral text-foreground/[0.045] pointer-events-none absolute -top-4 -right-1 text-[5.5rem] leading-none font-black select-none md:text-[7.5rem]'
+      >
+        0{props.index + 1}
+      </span>
+      <div className='relative flex h-full min-h-[250px] flex-col justify-between gap-8'>
+        <div>
+          <div className='mb-5 flex items-center gap-2.5'>
+            <Icon className={cn('size-4', props.feature.accent)} />
+            <span className='text-muted-foreground text-[11px] font-semibold tracking-[0.2em] uppercase'>
+              {props.feature.eyebrow}
+            </span>
+          </div>
+          <h3 className='font-serif text-2xl leading-snug font-bold tracking-[-0.01em]'>
+            {props.feature.title}
+          </h3>
+          <p className='text-muted-foreground mt-3 text-sm leading-7'>
+            {props.feature.description}
+          </p>
+        </div>
+        <div className='flex flex-wrap gap-2'>
+          {props.feature.sample.map((item) => (
+            <span
+              key={item}
+              className='border-border bg-background text-muted-foreground rounded-md border px-2.5 py-1 font-mono text-[11px]'
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      </div>
+      <span
+        aria-hidden='true'
+        className={cn(
+          'absolute inset-x-0 bottom-0 h-0.5 origin-left scale-x-0 bg-current transition-transform duration-300 group-hover:scale-x-100',
+          props.feature.accent
+        )}
+      />
+    </AnimateInView>
   )
 }

@@ -16,532 +16,427 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  BadgeCheck,
+  Cable,
+  CircleDollarSign,
+  Gauge,
+  GitBranch,
+  LockKeyhole,
+  RadioTower,
+  Route,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
-type AccentTone = 'emerald' | 'amber' | 'blue' | 'violet'
+type FlowTone = 'cyan' | 'amber' | 'emerald' | 'slate'
 
-interface ApiDemoConfig {
-  id: string
+interface FlowRow {
+  model: string
+  vendor: string
+  protocol: string
+  status: string
+  cost: string
+  tone: FlowTone
+}
+
+interface SignalItem {
   label: string
-  method: 'POST' | 'GET'
-  endpoint: string
-  headers: string[]
-  request: string[]
-  response: string[]
-  responseHighlights: string[]
-  tokens: number
-  latency: number
-  accent: AccentTone
+  value: string
+  icon: LucideIcon
+  tone: FlowTone
 }
 
-const ACCENT_CLASSES: Record<
-  AccentTone,
+const FLOW_ROWS: FlowRow[] = [
   {
-    activeText: string
-    activeBorder: string
-    badge: string
-  }
-> = {
-  emerald: {
-    activeText: 'text-emerald-600 dark:text-emerald-400',
-    activeBorder: 'border-emerald-500 dark:border-emerald-400',
-    badge:
-      'bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-400',
-  },
-  amber: {
-    activeText: 'text-amber-600 dark:text-amber-400',
-    activeBorder: 'border-amber-500 dark:border-amber-400',
-    badge:
-      'bg-amber-500/10 text-amber-600 dark:bg-amber-400/10 dark:text-amber-400',
-  },
-  blue: {
-    activeText: 'text-blue-600 dark:text-blue-400',
-    activeBorder: 'border-blue-500 dark:border-blue-400',
-    badge:
-      'bg-blue-500/10 text-blue-600 dark:bg-blue-400/10 dark:text-blue-400',
-  },
-  violet: {
-    activeText: 'text-violet-600 dark:text-violet-400',
-    activeBorder: 'border-violet-500 dark:border-violet-400',
-    badge:
-      'bg-violet-500/10 text-violet-600 dark:bg-violet-400/10 dark:text-violet-400',
-  },
-}
-
-const API_DEMOS: ApiDemoConfig[] = [
-  {
-    id: 'gpt-chat',
-    label: 'Chat',
-    method: 'POST',
-    endpoint: '/v1/chat/completions',
-    headers: ['"Authorization: Bearer sk-••••"'],
-    request: [
-      '"model": "your-model",',
-      '"messages": [',
-      '  { "role": "user", "content": "..." }',
-      ']',
-    ],
-    response: [
-      '{',
-      '  "choices": [{ "message": { "content": <text> } }],',
-      '  "usage": { "total_tokens": <tokens> }',
-      '}',
-    ],
-    responseHighlights: ['<text>', '<tokens>'],
-    tokens: 27,
-    latency: 142,
-    accent: 'emerald',
+    model: 'GPT-5',
+    vendor: 'OpenAI',
+    protocol: 'Responses',
+    status: 'routed',
+    cost: 'expr:p*1.25+c*10',
+    tone: 'cyan',
   },
   {
-    id: 'responses',
-    label: 'Responses',
-    method: 'POST',
-    endpoint: '/v1/responses',
-    headers: ['"Authorization: Bearer sk-••••"'],
-    request: ['"model": "your-model",', '"input": "..."'],
-    response: [
-      '{',
-      '  "output": [{ "type": "output_text", "text": <text> }],',
-      '  "usage": { "total_tokens": <tokens> }',
-      '}',
-    ],
-    responseHighlights: ['<text>', '<tokens>'],
-    tokens: 31,
-    latency: 168,
-    accent: 'amber',
+    model: 'Claude Sonnet',
+    vendor: 'Anthropic',
+    protocol: 'Messages',
+    status: 'cached',
+    cost: 'cache hit',
+    tone: 'emerald',
   },
   {
-    id: 'claude',
-    label: 'Claude',
-    method: 'POST',
-    endpoint: '/v1/messages',
-    headers: ['"x-api-key: sk-••••"', '"anthropic-version: 2023-06-01"'],
-    request: [
-      '"model": "your-model",',
-      '"max_tokens": 1024,',
-      '"messages": [',
-      '  { "role": "user", "content": "..." }',
-      ']',
-    ],
-    response: [
-      '{',
-      '  "content": [{ "type": "text", "text": <text> }],',
-      '  "usage": { "input_tokens": <in>, "output_tokens": <out> }',
-      '}',
-    ],
-    responseHighlights: ['<text>', '<in>', '<out>'],
-    tokens: 29,
-    latency: 156,
-    accent: 'blue',
+    model: 'DeepSeek-R1',
+    vendor: 'DeepSeek',
+    protocol: 'OpenAI Compatible',
+    status: 'fallback',
+    cost: 'group x channel',
+    tone: 'slate',
   },
   {
-    id: 'gemini',
-    label: 'Gemini',
-    method: 'POST',
-    endpoint: '/v1beta/models/{model}:generateContent',
-    headers: ['"x-goog-api-key: sk-••••"'],
-    request: [
-      '"contents": [',
-      '  { "role": "user",',
-      '    "parts": [{ "text": "..." }] }',
-      ']',
-    ],
-    response: [
-      '{',
-      '  "candidates": [{ "content": { "parts": [{ "text": <text> }] } }],',
-      '  "usageMetadata": { "totalTokenCount": <tokens> }',
-      '}',
-    ],
-    responseHighlights: ['<text>', '<tokens>'],
-    tokens: 25,
-    latency: 93,
-    accent: 'violet',
+    model: 'doubao-seedance',
+    vendor: 'VolcEngine',
+    protocol: 'video task',
+    status: 'proxy',
+    cost: 'rate-card: 720p/5s',
+    tone: 'amber',
   },
 ]
 
-const CYCLE_INTERVAL = 4500
-const TRANSITION_MS = 220
+const TONE_CLASSES: Record<
+  FlowTone,
+  { dot: string; text: string; border: string; background: string }
+> = {
+  cyan: {
+    dot: 'bg-cyan-400',
+    text: 'text-cyan-700 dark:text-cyan-300',
+    border: 'border-cyan-400/30',
+    background: 'bg-cyan-400/10',
+  },
+  amber: {
+    dot: 'bg-amber-400',
+    text: 'text-amber-700 dark:text-amber-300',
+    border: 'border-amber-400/30',
+    background: 'bg-amber-400/10',
+  },
+  emerald: {
+    dot: 'bg-emerald-400',
+    text: 'text-emerald-700 dark:text-emerald-300',
+    border: 'border-emerald-400/30',
+    background: 'bg-emerald-400/10',
+  },
+  slate: {
+    dot: 'bg-slate-400',
+    text: 'text-slate-700 dark:text-slate-300',
+    border: 'border-slate-400/30',
+    background: 'bg-slate-400/10',
+  },
+}
+
+const CYCLE_INTERVAL_MS = 2800
 
 interface HeroTerminalDemoProps {
   className?: string
 }
 
 export function HeroTerminalDemo(props: HeroTerminalDemoProps) {
-  const [activeIndex, setActiveIndex] = useState(0)
-  const [transitioning, setTransitioning] = useState(false)
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(undefined)
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const { t } = useTranslation()
+  const [activeRow, setActiveRow] = useState(0)
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
     if (mq.matches) return
 
-    intervalRef.current = setInterval(() => {
-      setTransitioning(true)
-      timeoutRef.current = setTimeout(() => {
-        setActiveIndex((prev) => (prev + 1) % API_DEMOS.length)
-        setTransitioning(false)
-      }, TRANSITION_MS)
-    }, CYCLE_INTERVAL)
+    const intervalId = window.setInterval(() => {
+      setActiveRow((value) => (value + 1) % FLOW_ROWS.length)
+    }, CYCLE_INTERVAL_MS)
 
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    }
+    return () => window.clearInterval(intervalId)
   }, [])
 
-  const handleSelect = (index: number) => {
-    if (index === activeIndex) return
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    setTransitioning(true)
-    timeoutRef.current = setTimeout(() => {
-      setActiveIndex(index)
-      setTransitioning(false)
-    }, TRANSITION_MS)
-  }
-
-  const demo = API_DEMOS[activeIndex]
-  const accent = ACCENT_CLASSES[demo.accent]
-
-  return (
-    <div className={cn('mx-auto w-full max-w-2xl', props.className)}>
-      <div
-        className={cn(
-          'overflow-hidden rounded-2xl border backdrop-blur-sm',
-          'border-border/60 bg-white/95 shadow-[0_20px_50px_-25px_rgba(15,23,42,0.18)]',
-          'dark:border-white/[0.06] dark:bg-[#0b0f17]/95 dark:shadow-[0_20px_60px_-25px_rgba(0,0,0,0.7)]'
-        )}
-      >
-        {/* Tab strip */}
-        <div
-          className={cn(
-            'flex items-center gap-1 border-b px-2 sm:gap-1.5 sm:px-3',
-            'border-border/50 dark:border-white/[0.05]'
-          )}
-        >
-          {API_DEMOS.map((item, index) => {
-            const tone = ACCENT_CLASSES[item.accent]
-            const isActive = index === activeIndex
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleSelect(index)}
-                className={cn(
-                  'relative -mb-px flex items-center gap-1.5 border-b-2 px-2.5 py-2.5 text-[11px] font-medium tracking-wide transition-colors sm:px-3 sm:text-xs',
-                  isActive
-                    ? `${tone.activeBorder} ${tone.activeText}`
-                    : 'text-foreground/40 hover:text-foreground/70 border-transparent'
-                )}
-              >
-                {item.label}
-              </button>
-            )
-          })}
-          <div className='ml-auto flex items-center gap-2 pr-2 sm:pr-3'>
-            <span className='inline-block size-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.45)]' />
-            <span className='text-foreground/40 font-mono text-[10px] tracking-wider uppercase'>
-              200 ok
-            </span>
-          </div>
-        </div>
-
-        {/* Endpoint row */}
-        <div
-          className={cn(
-            'flex items-center gap-2.5 border-b px-5 py-3',
-            'border-border/40 dark:border-white/[0.04]'
-          )}
-        >
-          <span
-            className={cn(
-              'rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider',
-              accent.badge
-            )}
-          >
-            {demo.method}
-          </span>
-          <code
-            className={cn(
-              'text-foreground/75 truncate font-mono text-[12.5px] transition-opacity duration-200',
-              transitioning ? 'opacity-0' : 'opacity-100'
-            )}
-          >
-            {demo.endpoint}
-          </code>
-        </div>
-
-        {/* Body — fixed rows so neither block shifts when switching demos */}
-        <div className='grid h-[400px] grid-rows-[235px_minmax(0,1fr)] font-mono text-[12.5px] leading-[1.55]'>
-          {/* Request */}
-          <RequestBlock demo={demo} transitioning={transitioning} />
-
-          {/* Response */}
-          <ResponseBlock demo={demo} transitioning={transitioning} />
-        </div>
-
-        {/* Footer metrics */}
-        <div
-          className={cn(
-            'flex items-center justify-between border-t px-5 py-2.5',
-            'border-border/40 bg-muted/30 dark:border-white/[0.05] dark:bg-white/[0.02]'
-          )}
-        >
-          <div className='text-foreground/40 flex items-center gap-3 text-[10px] tabular-nums'>
-            <span className='flex items-center gap-1'>
-              <span className='font-mono'>{demo.latency}</span>
-              <span className='tracking-wider uppercase'>ms</span>
-            </span>
-            <span className='bg-foreground/15 size-1 rounded-full' />
-            <span className='flex items-center gap-1'>
-              <span className='font-mono'>{demo.tokens}</span>
-              <span className='tracking-wider uppercase'>tokens</span>
-            </span>
-            <span className='bg-foreground/15 size-1 rounded-full' />
-            <span className='flex items-center gap-1'>
-              <span className='tracking-wider uppercase'>cost</span>
-              <span className='font-mono'>
-                ${(demo.tokens * 0.00003).toFixed(5)}
-              </span>
-            </span>
-          </div>
-          <span className='text-foreground/30 font-mono text-[10px] tracking-wider uppercase'>
-            stream · sse
-          </span>
-        </div>
-      </div>
-    </div>
+  const signals = useMemo<SignalItem[]>(
+    () => [
+      {
+        label: t('Model governance'),
+        value: t('catalog + mapping'),
+        icon: RadioTower,
+        tone: 'cyan',
+      },
+      {
+        label: t('AgentOps boundary'),
+        value: t('token + audit'),
+        icon: ShieldCheck,
+        tone: 'emerald',
+      },
+      {
+        label: t('Cost rule engine'),
+        value: t('expression + rate-card'),
+        icon: CircleDollarSign,
+        tone: 'amber',
+      },
+    ],
+    [t]
   )
-}
-
-function RequestBlock(props: { demo: ApiDemoConfig; transitioning: boolean }) {
-  const { demo, transitioning } = props
-
-  return (
-    <div className='relative px-5 py-4'>
-      <SectionLabel>Request</SectionLabel>
-      <div
-        className={cn(
-          'mt-2 transition-opacity duration-200',
-          transitioning ? 'opacity-0' : 'opacity-100'
-        )}
-      >
-        <CodeLine>
-          <Command>curl</Command> <Flag>-X</Flag> <Flag>POST</Flag>{' '}
-          <StringText>&quot;{demo.endpoint}&quot;</StringText>{' '}
-          <Muted>{'\\'}</Muted>
-        </CodeLine>
-        {demo.headers.map((header) => (
-          <CodeLine key={header} indent={2}>
-            <Flag>-H</Flag> <StringText>{header}</StringText>{' '}
-            <Muted>{'\\'}</Muted>
-          </CodeLine>
-        ))}
-        <CodeLine indent={2}>
-          <Flag>-d</Flag> <StringText>&apos;{'{'}</StringText>
-        </CodeLine>
-        {demo.request.map((line, i) => (
-          <CodeLine key={i} indent={4}>
-            {renderJsonLine(line)}
-          </CodeLine>
-        ))}
-        <CodeLine indent={2}>
-          <StringText>{'}'}&apos;</StringText>
-        </CodeLine>
-      </div>
-    </div>
-  )
-}
-
-function ResponseBlock(props: { demo: ApiDemoConfig; transitioning: boolean }) {
-  const { demo, transitioning } = props
 
   return (
     <div
       className={cn(
-        'relative border-t px-5 py-4',
-        'border-border/40 bg-muted/20 dark:border-white/[0.05] dark:bg-white/[0.015]'
+        'relative mx-auto w-full max-w-5xl overflow-hidden rounded-[1.25rem] border border-white/12 bg-[#0b1118]/95 text-slate-100 shadow-[0_24px_80px_-42px_rgba(0,0,0,0.88)]',
+        props.className
       )}
     >
-      <SectionLabel>Response</SectionLabel>
+      <div
+        aria-hidden='true'
+        className='absolute inset-0 [background-image:linear-gradient(to_right,rgba(148,163,184,0.36)_1px,transparent_1px),linear-gradient(to_bottom,rgba(148,163,184,0.28)_1px,transparent_1px)] [background-size:34px_34px] opacity-[0.18]'
+      />
+      <div
+        aria-hidden='true'
+        className='absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-cyan-300/70 to-transparent'
+      />
+
+      <div className='relative grid min-h-[440px] grid-rows-[auto_minmax(0,1fr)_auto]'>
+        <div className='flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-5'>
+          <div className='flex items-center gap-3'>
+            <div className='flex size-9 items-center justify-center rounded-lg border border-cyan-300/20 bg-cyan-300/10'>
+              <Route className='size-4 text-cyan-200' aria-hidden='true' />
+            </div>
+            <div>
+              <div className='text-sm font-semibold'>
+                {t('AI governance operations plane')}
+              </div>
+              <div className='text-xs text-slate-400'>
+                {t(
+                  'Model access, Agent tokens, billing rules, audit scope, and upstream health'
+                )}
+              </div>
+            </div>
+          </div>
+          <div className='flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1.5 text-xs font-medium text-emerald-200'>
+            <span className='size-1.5 rounded-full bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.8)]' />
+            {t('Service online')}
+          </div>
+        </div>
+
+        <div className='grid gap-px bg-white/10 lg:grid-cols-[1fr_1.35fr_1fr]'>
+          <ControlColumn
+            title={t('Applications')}
+            icon={Workflow}
+            items={[
+              'Agent workflow',
+              'Research assistant',
+              'Image pipeline',
+              'Internal model console',
+            ]}
+          />
+
+          <div className='bg-[#0b1118]/95 p-4 sm:p-5'>
+            <div className='mb-4 flex items-center justify-between gap-3'>
+              <div>
+                <div className='text-xs font-medium tracking-[0.2em] text-slate-500 uppercase'>
+                  {t('Routing matrix')}
+                </div>
+                <div className='mt-1 text-lg font-semibold'>
+                  {t('One governance layer, many model protocols')}
+                </div>
+              </div>
+              <div className='rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 font-mono text-[11px] text-slate-300'>
+                p95 186ms
+              </div>
+            </div>
+
+            <div className='space-y-2'>
+              {FLOW_ROWS.map((row, index) => (
+                <FlowRowItem
+                  key={row.model}
+                  row={row}
+                  active={index === activeRow}
+                />
+              ))}
+            </div>
+
+            <div className='mt-4 grid grid-cols-3 gap-2'>
+              {signals.map((signal) => (
+                <SignalTile key={signal.label} signal={signal} />
+              ))}
+            </div>
+          </div>
+
+          <ControlColumn
+            title={t('Upstream platforms')}
+            icon={Cable}
+            items={[
+              'OpenAI',
+              'Anthropic',
+              'Google Gemini',
+              'AWS',
+              'Azure',
+              'Vertex AI',
+              'Ollama',
+              'Codex',
+              'Dify',
+              'RAGFlow',
+              'DeepSeek',
+              'Alibaba Cloud Bailian',
+              'VolcEngine',
+              'Kling',
+              'Seedance',
+              'More compatible APIs',
+            ]}
+            compact
+            align='right'
+          />
+        </div>
+
+        <div className='grid gap-px border-t border-white/10 bg-white/10 sm:grid-cols-4'>
+          <FooterMetric
+            icon={GitBranch}
+            label={t('Routing policy')}
+            value={t('weighted + retry')}
+          />
+          <FooterMetric
+            icon={LockKeyhole}
+            label={t('Agent access')}
+            value={t('token + model scope')}
+          />
+          <FooterMetric
+            icon={Gauge}
+            label={t('Cost operations')}
+            value={t('quota + refund')}
+          />
+          <FooterMetric
+            icon={Sparkles}
+            label={t('Audit')}
+            value={t('admin scoped')}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ControlColumn(props: {
+  title: string
+  icon: LucideIcon
+  items: string[]
+  align?: 'left' | 'right'
+  translateItems?: boolean
+  compact?: boolean
+}) {
+  const { t } = useTranslation()
+  const Icon = props.icon
+  const translateItems = props.translateItems ?? true
+
+  return (
+    <div className='bg-[#0d131c]/96 p-4 sm:p-5'>
       <div
         className={cn(
-          'mt-2 transition-opacity duration-200',
-          transitioning ? 'opacity-0' : 'opacity-100'
+          'mb-4 flex items-center gap-2 text-xs font-medium tracking-[0.2em] text-slate-500 uppercase',
+          props.align === 'right' && 'justify-end text-right'
         )}
       >
-        {demo.response.map((line, i) => (
-          <CodeLine key={i}>{renderResponseLine(line, demo)}</CodeLine>
+        <Icon className='size-3.5' aria-hidden='true' />
+        {props.title}
+      </div>
+      <div
+        className={cn(props.compact ? 'grid grid-cols-2 gap-2' : 'space-y-2')}
+      >
+        {props.items.map((item, index) => (
+          <div
+            key={item}
+            className={cn(
+              'flex items-center gap-2 rounded-lg border border-white/8 bg-white/[0.035] px-3 py-2 text-sm text-slate-300',
+              props.compact && 'px-2.5 py-1.5 text-xs',
+              props.align === 'right' && 'flex-row-reverse text-right'
+            )}
+          >
+            <span
+              className={cn(
+                'size-1.5 shrink-0 rounded-full',
+                index % 3 === 0 && 'bg-cyan-300',
+                index % 3 === 1 && 'bg-emerald-300',
+                index % 3 === 2 && 'bg-amber-300'
+              )}
+            />
+            <span className='min-w-0 truncate'>
+              {translateItems ? t(item) : item}
+            </span>
+          </div>
         ))}
       </div>
     </div>
   )
 }
 
-function SectionLabel(props: { children: ReactNode }) {
+function FlowRowItem(props: { row: FlowRow; active: boolean }) {
+  const { t } = useTranslation()
+  const tone = TONE_CLASSES[props.row.tone]
+
   return (
-    <span className='text-foreground/30 font-sans text-[10px] font-semibold tracking-[0.18em] uppercase'>
-      {props.children}
-    </span>
-  )
-}
-
-const STRING_RE = /"[^"]*"/g
-const PLACEHOLDER_RE = /<[a-z]+>/gi
-
-function renderJsonLine(line: string): ReactNode {
-  if (!line.trim()) return <Muted> </Muted>
-  return tokenize(line)
-}
-
-function renderResponseLine(line: string, demo: ApiDemoConfig): ReactNode {
-  if (!line.trim()) return <Muted> </Muted>
-
-  const segments: ReactNode[] = []
-  let cursor = 0
-  const matches = [...line.matchAll(PLACEHOLDER_RE)]
-
-  if (matches.length === 0) return tokenize(line)
-
-  matches.forEach((match, idx) => {
-    const start = match.index ?? 0
-    if (start > cursor) {
-      segments.push(
-        <span key={`pre-${idx}`}>{tokenize(line.slice(cursor, start))}</span>
-      )
-    }
-    const placeholder = match[0]
-    if (placeholder === '<text>') {
-      segments.push(
-        <Accent key={`ph-${idx}`} accent={demo.accent}>
-          {`"${truncateResponse(demo)}"`}
-        </Accent>
-      )
-    } else if (placeholder === '<tokens>') {
-      segments.push(<NumberText key={`ph-${idx}`}>{demo.tokens}</NumberText>)
-    } else if (placeholder === '<in>') {
-      segments.push(
-        <NumberText key={`ph-${idx}`}>
-          {Math.floor(demo.tokens * 0.4)}
-        </NumberText>
-      )
-    } else if (placeholder === '<out>') {
-      segments.push(
-        <NumberText key={`ph-${idx}`}>
-          {Math.ceil(demo.tokens * 0.6)}
-        </NumberText>
-      )
-    } else {
-      segments.push(<Muted key={`ph-${idx}`}>{placeholder}</Muted>)
-    }
-    cursor = start + placeholder.length
-  })
-
-  if (cursor < line.length) {
-    segments.push(<span key='tail'>{tokenize(line.slice(cursor))}</span>)
-  }
-
-  return segments
-}
-
-function truncateResponse(demo: ApiDemoConfig): string {
-  const map: Record<string, string> = {
-    'gpt-chat': 'Chat request routed.',
-    responses: 'Response workflow ready.',
-    claude: 'Claude message routed.',
-    gemini: 'Gemini request served.',
-  }
-  return map[demo.id] ?? '...'
-}
-
-function tokenize(input: string): ReactNode {
-  // Split string into "..." string runs and the rest, then color keys/punct.
-  const segments: ReactNode[] = []
-  let cursor = 0
-  const matches = [...input.matchAll(STRING_RE)]
-
-  matches.forEach((match, idx) => {
-    const start = match.index ?? 0
-    if (start > cursor) {
-      segments.push(
-        <Muted key={`m-${idx}`}>{input.slice(cursor, start)}</Muted>
-      )
-    }
-    const text = match[0]
-    const after = input.slice(start + text.length).trimStart()
-    const isKey = after.startsWith(':')
-    if (isKey) {
-      segments.push(<Key key={`k-${idx}`}>{text}</Key>)
-    } else {
-      segments.push(<StringText key={`s-${idx}`}>{text}</StringText>)
-    }
-    cursor = start + text.length
-  })
-
-  if (cursor < input.length) {
-    segments.push(<Muted key='tail'>{input.slice(cursor)}</Muted>)
-  }
-
-  return segments
-}
-
-function CodeLine(props: { children: ReactNode; indent?: number }) {
-  return (
-    <div className='break-words whitespace-pre-wrap'>
-      {props.indent ? (
-        <span
-          aria-hidden
-          className='inline-block'
-          style={{ width: `${props.indent}ch` }}
-        />
-      ) : null}
-      {props.children}
+    <div
+      className={cn(
+        'grid grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] gap-3 rounded-xl border px-3 py-3 transition-all duration-500 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)]',
+        props.active
+          ? `${tone.border} ${tone.background} shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_12px_34px_-24px_rgba(34,211,238,0.65)]`
+          : 'border-white/8 bg-white/[0.03]'
+      )}
+    >
+      <div className='min-w-0'>
+        <div className='flex items-center gap-2'>
+          <span className={cn('size-1.5 rounded-full', tone.dot)} />
+          <span className='truncate text-sm font-semibold'>
+            {props.row.model}
+          </span>
+        </div>
+        <div className='mt-1 truncate text-xs text-slate-500'>
+          {props.row.vendor}
+        </div>
+      </div>
+      <div className='min-w-0'>
+        <div className='truncate text-xs text-slate-500'>{t('Protocol')}</div>
+        <div className='mt-1 truncate font-mono text-xs text-slate-300'>
+          {props.row.protocol}
+        </div>
+      </div>
+      <div className='col-span-2 min-w-0 sm:col-span-1'>
+        <div className='flex items-center justify-between gap-2'>
+          <span
+            className={cn(
+              'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase',
+              tone.border,
+              tone.text
+            )}
+          >
+            {props.row.status}
+          </span>
+          <span className='truncate font-mono text-[11px] text-slate-400'>
+            {props.row.cost}
+          </span>
+        </div>
+      </div>
     </div>
   )
 }
 
-function Command(props: { children: ReactNode }) {
+function SignalTile(props: { signal: SignalItem }) {
+  const Icon = props.signal.icon
+  const tone = TONE_CLASSES[props.signal.tone]
+
   return (
-    <span className='font-medium text-emerald-600 dark:text-emerald-400'>
-      {props.children}
-    </span>
+    <div className='rounded-xl border border-white/8 bg-white/[0.035] p-3'>
+      <div className='mb-2 flex items-center justify-between gap-2'>
+        <Icon className={cn('size-3.5', tone.text)} aria-hidden='true' />
+        <BadgeCheck className='size-3.5 text-emerald-300' aria-hidden='true' />
+      </div>
+      <div className='truncate text-[11px] text-slate-500'>
+        {props.signal.label}
+      </div>
+      <div className='mt-1 truncate text-xs font-semibold text-slate-200'>
+        {props.signal.value}
+      </div>
+    </div>
   )
 }
 
-function Flag(props: { children: ReactNode }) {
-  return (
-    <span className='text-blue-600 dark:text-blue-400'>{props.children}</span>
-  )
-}
+function FooterMetric(props: {
+  icon: LucideIcon
+  label: string
+  value: string
+}) {
+  const Icon = props.icon
 
-function Key(props: { children: ReactNode }) {
   return (
-    <span className='text-sky-700 dark:text-sky-300'>{props.children}</span>
-  )
-}
-
-function StringText(props: { children: ReactNode }) {
-  return (
-    <span className='text-amber-700 dark:text-amber-300'>{props.children}</span>
-  )
-}
-
-function NumberText(props: { children: ReactNode }) {
-  return (
-    <span className='font-medium text-violet-600 dark:text-violet-300'>
-      {props.children}
-    </span>
-  )
-}
-
-function Muted(props: { children: ReactNode }) {
-  return <span className='text-foreground/55'>{props.children}</span>
-}
-
-function Accent(props: { children: ReactNode; accent: AccentTone }) {
-  const tone = ACCENT_CLASSES[props.accent]
-  return (
-    <span className={cn('font-medium', tone.activeText)}>{props.children}</span>
+    <div className='bg-[#0d131c]/96 px-4 py-3'>
+      <div className='flex items-center gap-2 text-[11px] text-slate-500'>
+        <Icon className='size-3.5' aria-hidden='true' />
+        {props.label}
+      </div>
+      <div className='mt-1 truncate text-xs font-semibold text-slate-200'>
+        {props.value}
+      </div>
+    </div>
   )
 }

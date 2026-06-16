@@ -52,6 +52,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Gemini',
   'Gemini Image 4K',
   'GitHub',
+  'Google Gemini',
   'Jimeng',
   'JustSong',
   'LingYiWanWu',
@@ -77,6 +78,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Perplexity',
   'MAX-API-Next',
   'Quota:',
+  'RAGFlow',
   'Replicate',
   'SiliconFlow',
   'Stripe',
@@ -315,4 +317,3 @@ main().catch((err) => {
   console.error(err)
   process.exitCode = 1
 })
-

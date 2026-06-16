@@ -18,6 +18,12 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useState, useCallback, useMemo, lazy, Suspense } from 'react'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import {
+  CircleDollarSign,
+  FileSearch,
+  RadioTower,
+  Workflow,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
@@ -245,7 +251,12 @@ export function Dashboard() {
               )}
             </div>
           )}
-          {activeSection === 'overview' && <OverviewDashboard />}
+          {activeSection === 'overview' && (
+            <>
+              <DashboardOpsHeader />
+              <OverviewDashboard />
+            </>
+          )}
           {activeSection === 'models' && (
             <>
               <FadeIn>
@@ -301,5 +312,84 @@ export function Dashboard() {
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
+  )
+}
+
+function DashboardOpsHeader() {
+  const { t } = useTranslation()
+  const items = [
+    {
+      label: t('Model governance'),
+      value: t('Channels, mappings, and model scope'),
+      icon: RadioTower,
+    },
+    {
+      label: t('Cost governance'),
+      value: t('Expressions and task rate-cards'),
+      icon: CircleDollarSign,
+    },
+    {
+      label: t('AgentOps'),
+      value: t('Agent tokens, traces, and workload cost'),
+      icon: Workflow,
+    },
+    {
+      label: t('Audit boundary'),
+      value: t('Admin-scoped log review'),
+      icon: FileSearch,
+    },
+  ]
+
+  return (
+    <div className='relative overflow-hidden rounded-xl border border-white/12 bg-[#0b1118] text-slate-100 shadow-sm'>
+      <div
+        aria-hidden='true'
+        className='absolute inset-0 [background-image:linear-gradient(to_right,rgba(203,213,225,0.35)_1px,transparent_1px),linear-gradient(to_bottom,rgba(203,213,225,0.25)_1px,transparent_1px)] [background-size:32px_32px] opacity-[0.14]'
+      />
+      <div className='editorial-grain absolute inset-0' aria-hidden='true' />
+      <span
+        aria-hidden='true'
+        className='absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-emerald-300/70 to-transparent'
+      />
+      <div className='relative flex items-center gap-2 border-b border-white/10 px-4 py-2.5 sm:px-5'>
+        <span className='editorial-numeral text-sm font-bold text-slate-500'>
+          §
+        </span>
+        <span className='text-[11px] font-semibold tracking-[0.26em] text-emerald-200/90 uppercase'>
+          {t('AI Models and Agents governance console')}
+        </span>
+      </div>
+      <div className='relative flex flex-col gap-5 p-4 sm:p-5 lg:flex-row lg:items-end lg:justify-between'>
+        <div className='max-w-2xl'>
+          <h3 className='font-serif text-2xl leading-tight font-black tracking-[-0.01em] sm:text-[1.75rem]'>
+            {t('Govern AI Models, Agents, cost audit, and boundary controls')}
+          </h3>
+          <p className='mt-3 text-sm leading-6 text-slate-400'>
+            {t(
+              'Use this console to keep upstream channels, domestic model adaptations, Agent tokens, costs, and admin audit scope under operational control.'
+            )}
+          </p>
+        </div>
+        <div className='grid gap-px overflow-hidden rounded-lg border border-white/10 bg-white/10 sm:grid-cols-2 xl:grid-cols-4'>
+          {items.map((item) => {
+            const Icon = item.icon
+            return (
+              <div
+                key={item.label}
+                className='min-w-0 bg-[#0b1118] px-3 py-2.5'
+              >
+                <div className='mb-2 flex items-center gap-2 text-xs text-slate-400'>
+                  <Icon className='size-3.5 text-emerald-200' />
+                  <span className='truncate'>{item.label}</span>
+                </div>
+                <div className='truncate text-xs font-semibold text-slate-100'>
+                  {item.value}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
   )
 }

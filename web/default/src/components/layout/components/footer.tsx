@@ -260,12 +260,18 @@ export function Footer(props: FooterProps) {
                 alt={displayName}
                 className='size-7 rounded-lg object-contain'
               />
-              <span className='text-sm font-semibold tracking-tight'>
+              <span className='font-serif text-base font-bold tracking-[-0.01em]'>
                 {displayName}
               </span>
             </Link>
+            <div className='mt-3 flex items-center gap-2'>
+              <span className='h-px w-6 bg-emerald-500/70' />
+              <span className='text-muted-foreground/60 text-[10px] font-semibold tracking-[0.24em] uppercase'>
+                {t('AI Models · Agents governance')}
+              </span>
+            </div>
             <p className='text-muted-foreground/60 mt-3 max-w-[200px] text-xs leading-relaxed'>
-              {t('Powerful API Management Platform')}
+              {t('AI Models and Agents governance infrastructure')}
             </p>
           </div>
 

@@ -238,8 +238,14 @@ export function SummaryCards() {
       <div className='grid xl:grid-cols-[minmax(0,1fr)_19rem]'>
         <div className='flex flex-col gap-3 p-4 sm:p-5'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
-            <div className='flex flex-col gap-1'>
-              <h3 className='text-base font-semibold'>
+            <div className='flex flex-col gap-2'>
+              <div className='flex items-center gap-2.5'>
+                <span className='h-px w-6 bg-emerald-500/70' />
+                <span className='text-muted-foreground text-[10px] font-semibold tracking-[0.26em] uppercase'>
+                  {t('Overview')}
+                </span>
+              </div>
+              <h3 className='font-serif text-xl font-bold tracking-[-0.01em]'>
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm'>
@@ -285,7 +291,7 @@ export function SummaryCards() {
               </span>
             </div>
 
-            <div className='font-mono text-2xl font-semibold tracking-tight'>
+            <div className='editorial-numeral text-3xl font-black tracking-[-0.02em]'>
               {formatQuota(remainQuota)}
             </div>
 

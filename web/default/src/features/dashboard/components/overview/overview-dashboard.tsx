@@ -190,7 +190,7 @@ function SetupGuideBackdrop(props: { compact?: boolean }) {
       />
       <div
         className={cn(
-          'text-foreground/5 pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono sm:block dark:text-foreground/8',
+          'text-foreground/5 dark:text-foreground/8 pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono sm:block',
           props.compact ? 'w-1/2 opacity-45' : 'w-[58%] opacity-75'
         )}
         aria-hidden='true'
@@ -498,21 +498,21 @@ export function OverviewDashboard() {
     () => [
       {
         title: t('Create API Key'),
-        description: t('Create a key for your app or service'),
+        description: t('Create a scoped key for your app, Agent, or workflow'),
         to: '/keys',
         icon: KeyRound,
         completed: Boolean(preferredKey),
       },
       {
         title: t('Add credits'),
-        description: t('Keep enough balance before production traffic'),
+        description: t('Keep enough quota before production or Agent traffic'),
         to: '/wallet',
         icon: CreditCard,
         completed: remainQuota > 0 || usedQuota > 0,
       },
       {
         title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
+        description: t('Verify model routing and billing with Playground'),
         to: '/playground',
         icon: TerminalSquare,
         completed: requestCount > 0,
@@ -525,26 +525,28 @@ export function OverviewDashboard() {
     () => [
       {
         title: t('API Keys'),
-        description: t('Create a key for your app or service'),
+        description: t('Issue scoped keys for apps, Agents, and workflows'),
         to: '/keys',
         icon: KeyRound,
       },
       {
         title: t('Channels'),
-        description: t('Configure upstream providers and routing.'),
+        description: t(
+          'Govern upstream providers, model mappings, and routing.'
+        ),
         to: '/channels',
         icon: RadioTower,
         adminOnly: true,
       },
       {
         title: t('Usage Logs'),
-        description: t('Inspect requests, errors, and billing details'),
+        description: t('Inspect requests, errors, billing, and audit details'),
         to: '/usage-logs',
         icon: FileText,
       },
       {
         title: t('Pricing'),
-        description: t('Review model rates before scaling traffic'),
+        description: t('Review model prices and task rate-cards'),
         to: '/pricing',
         icon: BookOpen,
       },
@@ -560,12 +562,12 @@ export function OverviewDashboard() {
   const heroSignals = useMemo<HeroSignal[]>(
     () => [
       {
-        label: t('Route active'),
+        label: t('Model route active'),
         value: apiInfoItems.length > 0 ? t('Online') : t('Current domain'),
         icon: RadioTower,
       },
       {
-        label: t('Auth configured'),
+        label: t('Agent key configured'),
         value: preferredKey ? t('Secured') : t('Needs API key'),
         icon: ShieldCheck,
       },
@@ -589,7 +591,9 @@ export function OverviewDashboard() {
       model,
       keyName,
       keyId: preferredKey?.id,
-      displayKey: preferredKey ? formatDisplayKey(`sk-${preferredKey.key}`) : 'sk-...',
+      displayKey: preferredKey
+        ? formatDisplayKey(`sk-${preferredKey.key}`)
+        : 'sk-...',
       ready,
     }
   }, [apiInfoItems, modelsQuery.data, preferredKey, t])
@@ -622,12 +626,12 @@ export function OverviewDashboard() {
                         <ListChecks className='size-3.5' aria-hidden='true' />
                         {t('Get started')}
                       </div>
-                      <h3 className='text-xl font-semibold tracking-tight sm:text-2xl'>
-                        {t('Build on your API gateway in minutes')}
+                      <h3 className='font-serif text-xl font-bold tracking-[-0.01em] sm:text-2xl'>
+                        {t('Start AI Models and Agents governance in minutes')}
                       </h3>
                       <p className='text-muted-foreground max-w-xl text-sm leading-relaxed'>
                         {t(
-                          'A focused home for keys, balance, routing, and service health.'
+                          'A focused home for Agent keys, model access, balance, routing, and service health.'
                         )}
                       </p>
                     </div>
@@ -674,7 +678,7 @@ export function OverviewDashboard() {
                   {t('Recommended actions')}
                 </div>
                 <h3 className='text-lg font-semibold tracking-tight'>
-                  {t('Keep the platform ready')}
+                  {t('Keep governance ready')}
                 </h3>
               </div>
               <div className='grid gap-2'>

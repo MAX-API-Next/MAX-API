@@ -16,72 +16,100 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { Settings, Zap, BarChart3 } from 'lucide-react'
+import { ChartNoAxesCombined, KeyRound, Route, Workflow } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { AnimateInView } from '@/components/animate-in-view'
 
 export function HowItWorks() {
   const { t } = useTranslation()
-
   const steps = [
     {
-      num: '1',
-      title: t('Configure'),
-      desc: t(
-        'Add your API keys, set up channels and configure access permissions'
+      title: t('Connect authorized upstreams'),
+      description: t(
+        'Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.'
       ),
-      icon: <Settings className='size-6' strokeWidth={1.5} />,
+      icon: Route,
     },
     {
-      num: '2',
-      title: t('Connect'),
-      desc: t(
-        'Connect through OpenAI, Claude, Gemini, and other compatible API routes'
+      title: t('Govern users, Agents, and tokens'),
+      description: t(
+        'Create scoped access tokens for users, apps, Agents, and workflows, then set model limits, quotas, groups, request limits, and audit policy.'
       ),
-      icon: <Zap className='size-6' strokeWidth={1.5} />,
+      icon: KeyRound,
     },
     {
-      num: '3',
-      title: t('Monitor'),
-      desc: t('Track usage, costs and performance with real-time analytics'),
-      icon: <BarChart3 className='size-6' strokeWidth={1.5} />,
+      title: t('Operate AI and Agent workloads'),
+      description: t(
+        'Observe model usage, Agent cost, latency, errors, retries, async task state, and admin-scoped audit boundaries.'
+      ),
+      icon: ChartNoAxesCombined,
+    },
+    {
+      title: t('Iterate with platform changes'),
+      description: t(
+        'Update model configs, pricing expressions, rate-cards, and protocol templates as upstreams evolve.'
+      ),
+      icon: Workflow,
     },
   ]
 
   return (
-    <section className='border-border/40 relative z-10 border-t px-6 py-24 md:py-32'>
-      <div className='mx-auto max-w-6xl'>
-        <AnimateInView className='mb-16 text-center md:mb-20'>
-          <p className='text-muted-foreground mb-3 text-xs font-medium tracking-widest uppercase'>
-            {t('How It Works')}
-          </p>
-          <h2 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            {t('Three steps to get started')}
-          </h2>
-        </AnimateInView>
-
-        <div className='grid gap-8 md:grid-cols-3 md:gap-12'>
-          {steps.map((step, i) => (
-            <AnimateInView
-              key={step.num}
-              delay={i * 150}
-              animation='fade-up'
-              className='relative flex flex-col items-center text-center'
-            >
-              <div className='relative mb-6'>
-                <div className='text-muted-foreground border-border/50 bg-muted/30 flex size-16 items-center justify-center rounded-2xl border transition-colors'>
-                  {step.icon}
-                </div>
-                <div className='bg-foreground text-background absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full text-xs font-bold'>
-                  {step.num}
-                </div>
-              </div>
-              <h3 className='mb-2 text-base font-semibold'>{step.title}</h3>
-              <p className='text-muted-foreground max-w-[240px] text-sm leading-relaxed'>
-                {step.desc}
+    <section className='border-border bg-muted/20 relative z-10 border-y px-4 py-20 sm:px-6 md:py-28'>
+      <div className='mx-auto max-w-7xl'>
+        <div className='grid gap-12 lg:grid-cols-[0.78fr_1.22fr]'>
+          <AnimateInView className='lg:sticky lg:top-28 lg:self-start'>
+            <div className='flex items-center gap-3'>
+              <span className='h-px w-8 bg-emerald-500/70' />
+              <p className='text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase'>
+                {t('Operating lifecycle')}
               </p>
-            </AnimateInView>
-          ))}
+            </div>
+            <h2 className='mt-4 font-serif text-4xl leading-[1.05] font-black tracking-[-0.02em] md:text-[3.25rem]'>
+              {t('From AI model access to Agent lifecycle governance')}
+            </h2>
+            <p className='text-muted-foreground mt-5 max-w-md text-sm leading-7 md:text-base'>
+              {t(
+                'A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.'
+              )}
+            </p>
+          </AnimateInView>
+
+          <div className='relative'>
+            <span
+              aria-hidden='true'
+              className='bg-border absolute top-0 bottom-0 left-[2.15rem] hidden w-px sm:block'
+            />
+            <div className='flex flex-col'>
+              {steps.map((step, index) => {
+                const Icon = step.icon
+                return (
+                  <AnimateInView
+                    key={step.title}
+                    delay={index * 90}
+                    animation='fade-left'
+                    className='group border-border relative flex gap-5 border-b py-6 last:border-b-0'
+                  >
+                    <div className='border-border bg-background relative z-10 flex size-[4.3rem] shrink-0 flex-col items-center justify-center rounded-xl border transition-colors group-hover:border-emerald-500/50'>
+                      <span className='editorial-numeral text-foreground text-2xl font-black'>
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                    </div>
+                    <div className='pt-1'>
+                      <div className='mb-2 flex items-center gap-2'>
+                        <Icon className='size-4 text-emerald-700 dark:text-emerald-300' />
+                        <h3 className='font-serif text-xl font-bold tracking-[-0.01em]'>
+                          {step.title}
+                        </h3>
+                      </div>
+                      <p className='text-muted-foreground text-sm leading-7'>
+                        {step.description}
+                      </p>
+                    </div>
+                  </AnimateInView>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </section>

@@ -16,27 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useRef, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 interface CounterProps {
   end: number
   suffix?: string
-  prefix?: string
   duration?: number
-  decimals?: number
 }
 
 function Counter(props: CounterProps) {
-  const { end, suffix = '', prefix = '', duration = 1600, decimals = 0 } = props
+  const { end, suffix = '', duration = 1300 } = props
   const ref = useRef<HTMLSpanElement>(null)
   const startedRef = useRef(false)
-
-  const formatValue = useCallback(
-    (v: number) =>
-      decimals > 0 ? v.toFixed(decimals) : Math.round(v).toLocaleString(),
-    [decimals]
-  )
 
   const animate = useCallback(() => {
     const el = ref.current
@@ -45,11 +37,11 @@ function Counter(props: CounterProps) {
     const step = (now: number) => {
       const progress = Math.min((now - start) / duration, 1)
       const eased = 1 - Math.pow(1 - progress, 3)
-      el.textContent = `${prefix}${formatValue(eased * end)}${suffix}`
+      el.textContent = `${Math.round(eased * end).toLocaleString()}${suffix}`
       if (progress < 1) requestAnimationFrame(step)
     }
     requestAnimationFrame(step)
-  }, [end, duration, prefix, suffix, formatValue])
+  }, [duration, end, suffix])
 
   useEffect(() => {
     const el = ref.current
@@ -57,7 +49,7 @@ function Counter(props: CounterProps) {
 
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
     if (mq.matches) {
-      el.textContent = `${prefix}${formatValue(end)}${suffix}`
+      el.textContent = `${end.toLocaleString()}${suffix}`
       return
     }
 
@@ -69,60 +61,78 @@ function Counter(props: CounterProps) {
           observer.unobserve(el)
         }
       },
-      { threshold: 0.5 }
+      { threshold: 0.45 }
     )
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [animate, end, prefix, suffix, formatValue])
+  }, [animate, end, suffix])
 
   return (
     <span ref={ref} className='tabular-nums'>
-      {prefix}0{suffix}
+      0{suffix}
     </span>
   )
 }
 
-interface StatsProps {
-  className?: string
-}
-
-interface StatItem {
-  end: number
-  suffix: string
-  label: string
-  decimals?: number
-}
-
-export function Stats(_props: StatsProps) {
+export function Stats() {
   const { t } = useTranslation()
-
-  const stats: StatItem[] = [
-    { end: 50, suffix: '+', label: t('upstream services integrated') },
-    { end: 100, suffix: '+', label: t('model billing support') },
-    { end: 50, suffix: '+', label: t('compatible API routes') },
-    { end: 10, suffix: '+', label: t('scheduling controls') },
+  const stats = [
+    {
+      value: 50,
+      suffix: '+',
+      label: t('upstream providers and compatible model platforms'),
+    },
+    {
+      value: 11,
+      suffix: '+',
+      label: t('video task adapters, status mappings, and protocol paths'),
+    },
+    {
+      value: 100,
+      suffix: '+',
+      label: t('model pricing entries, expressions, and rate-card rules'),
+    },
+    {
+      value: 6,
+      suffix: '',
+      label: t('governance layers for Agent workloads'),
+    },
   ]
 
   return (
-    <div className='border-border/40 bg-muted/10 relative z-10 border-y'>
-      <div className='mx-auto max-w-6xl px-6 py-10 md:py-12'>
-        <div className='grid grid-cols-2 gap-8 md:grid-cols-4 md:gap-12'>
-          {stats.map((s) => (
+    <section className='border-border bg-background relative z-10 border-y'>
+      <div className='bg-border mx-auto grid max-w-7xl gap-px px-4 sm:px-6 lg:grid-cols-[0.92fr_1.08fr]'>
+        <div className='bg-background flex flex-col justify-center py-10 pr-8'>
+          <div className='flex items-center gap-3'>
+            <span className='h-px w-8 bg-emerald-500/70' />
+            <p className='text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase'>
+              {t('Operational baseline')}
+            </p>
+          </div>
+          <h2 className='mt-4 max-w-xl font-serif text-3xl leading-[1.1] font-black tracking-[-0.01em] md:text-[2.5rem]'>
+            {t('Designed for the continuous operation of AI models and Agents')}
+          </h2>
+        </div>
+        <div className='bg-border grid grid-cols-2 gap-px md:grid-cols-4'>
+          {stats.map((stat, index) => (
             <div
-              key={s.label}
-              className='flex flex-col items-center text-center'
+              key={stat.label}
+              className='group bg-background hover:bg-muted/40 px-5 py-9 transition-colors'
             >
-              <span className='text-2xl font-bold tracking-tight md:text-3xl'>
-                <Counter end={s.end} suffix={s.suffix} decimals={s.decimals} />
+              <span className='editorial-numeral text-muted-foreground/60 text-[11px] font-bold'>
+                {String(index + 1).padStart(2, '0')}
               </span>
-              <span className='text-muted-foreground mt-1.5 text-xs'>
-                {s.label}
-              </span>
+              <div className='editorial-numeral text-foreground mt-2 text-4xl leading-none font-black tracking-[-0.02em] md:text-5xl'>
+                <Counter end={stat.value} suffix={stat.suffix} />
+              </div>
+              <p className='text-muted-foreground mt-3 text-xs leading-5'>
+                {stat.label}
+              </p>
             </div>
           ))}
         </div>
       </div>
-    </div>
+    </section>
   )
 }
