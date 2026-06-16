@@ -494,6 +494,18 @@ export const STATIC_I18N_KEYS = [
   'Seedance',
   'More compatible APIs',
 
+  // Tiered billing settings
+  'Tiered Billing',
+  'Tiered billing JSON',
+  'Tiered billing configuration saved',
+  'Failed to save tiered billing config',
+  'Save tiered billing',
+  'Load example',
+  'Manage tiered billing rules in one JSON document. Saving updates billing mode and billing expression atomically.',
+  '{{count}} tiered billing models enabled',
+  'Schema: model name maps to { enabled, expr }. Disabled entries remove the model from tiered billing while keeping the JSON visible before save.',
+  'Expression coefficients are USD prices per 1M tokens. Use len for context-length tiers and tier(name, value) to label the matched tier.',
+
   // Misc
   'Cancel',
   'Status',

@@ -38,6 +38,16 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
   return res.data
 }
 
+export async function updateTieredBillingConfig(request: {
+  config: Record<string, { enabled: boolean; expr: string }>
+}) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/option/tiered_billing',
+    request
+  )
+  return res.data
+}
+
 export async function confirmPaymentCompliance() {
   const res = await api.post<ConfirmPaymentComplianceResponse>(
     '/api/option/payment_compliance',

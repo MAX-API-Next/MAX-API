@@ -170,21 +170,21 @@ export function Hero(props: HeroProps) {
                 <span>{t('One endpoint, any model')}</span>
               </figcaption>
               <code className='text-foreground block overflow-x-auto px-4 py-3 font-mono text-[13px] leading-6'>
-                <div className='text-muted-foreground'>
+                <span className='text-muted-foreground block'>
                   # OpenAI-compatible endpoint
-                </div>
-                <div>
+                </span>
+                <span className='block'>
                   <span className='text-emerald-600 dark:text-emerald-300'>
                     POST
                   </span>{' '}
                   /v1/chat/completions
-                </div>
-                <div>
+                </span>
+                <span className='block'>
                   <span className='text-muted-foreground'>model</span>{' '}
                   <span className='text-amber-600 dark:text-amber-300'>
                     "gpt-5 · claude · gemini · deepseek"
                   </span>
-                </div>
+                </span>
               </code>
             </figure>
           </div>

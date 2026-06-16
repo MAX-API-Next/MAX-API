@@ -50,7 +50,6 @@ import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge, StatusBadgeList } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
-import { TruncatedText } from '@/components/truncated-text'
 import { getCodexUsage } from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
@@ -538,13 +537,11 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
 
         return (
           <div className='flex items-center gap-2'>
-            <div className='flex flex-col gap-1'>
-              <div className='flex items-center gap-1.5'>
-                <TruncatedText
-                  text={name}
-                  className='font-medium'
-                  maxWidth='max-w-[180px]'
-                />
+            <div className='flex min-w-0 flex-col gap-1'>
+              <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+                <span className='min-w-0 font-medium break-words whitespace-normal'>
+                  {name}
+                </span>
                 {isPassThrough && (
                   <TooltipProvider delay={100}>
                     <Tooltip>
@@ -597,7 +594,8 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
           </div>
         )
       },
-      minSize: 200,
+      minSize: 260,
+      size: 320,
     },
 
     // Type column

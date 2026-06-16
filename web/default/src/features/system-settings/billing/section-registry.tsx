@@ -23,6 +23,7 @@ import { QuotaSettingsSection } from '../general/quota-settings-section'
 import { PaymentSettingsSection } from '../integrations/payment-settings-section'
 import { RatioSettingsCard } from '../models/ratio-settings-card'
 import { TaskRateCardSettings } from '../models/task-rate-card-settings'
+import { TieredBillingSettings } from '../models/tiered-billing-settings'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -120,6 +121,16 @@ const BILLING_SECTIONS = [
     build: (settings: BillingSettings) => (
       <TaskRateCardSettings
         defaultValue={settings['task_billing_setting.rate_cards']}
+      />
+    ),
+  },
+  {
+    id: 'tiered-billing',
+    titleKey: 'Tiered Billing',
+    build: (settings: BillingSettings) => (
+      <TieredBillingSettings
+        billingMode={settings['billing_setting.billing_mode']}
+        billingExpr={settings['billing_setting.billing_expr']}
       />
     ),
   },
