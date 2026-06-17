@@ -899,21 +899,9 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         ))
 
         return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedItems(groupBadges, 2)}
-              </TooltipTrigger>
-              {groupArray.length > 2 && (
-                <TooltipContent
-                  side='top'
-                  className='border-border bg-popover max-h-48 max-w-[320px] overflow-y-auto p-2'
-                >
-                  <div className='flex flex-wrap gap-1'>{groupBadges}</div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
+          <div className='flex min-w-0 flex-wrap items-center gap-1'>
+            {groupBadges}
+          </div>
         )
       },
       filterFn: (row, id, value) => {
@@ -922,7 +910,8 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         const groupArray = parseGroupsList(group)
         return groupArray.some((g) => value.includes(g))
       },
-      size: 150,
+      minSize: 220,
+      size: 260,
       enableSorting: false,
     },
 
