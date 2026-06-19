@@ -16,7 +16,7 @@ version: '3.4' # For compatibility with older Docker versions
 
 services:
   max-api:
-    image: max-api:latest
+    image: cscitechtop/max-api:latest
     container_name: max-api
     restart: always
     command: --log-dir /app/logs

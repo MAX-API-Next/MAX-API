@@ -24,12 +24,19 @@ import {
 } from '../constants'
 import type { Channel } from '../types'
 import {
+  CHANNEL_TYPE_ADVANCED_CUSTOM,
+  advancedCustomConfigUsesRelativeUpstreamPath,
+  parseAdvancedCustomConfig,
+  stringifyAdvancedCustomConfig,
+  validateAdvancedCustomConfig,
+} from './advanced-custom'
+import { VIDEO_TASK_CHANNEL_TYPES } from './channel-capabilities'
+import {
   BASE_URL_REQUIRED_TYPES,
   OTHER_REQUIRED_TYPES,
   hasVertexDefaultRegion,
   hasVideoTaskQueryPlaceholder,
 } from './channel-config-rules'
-import { VIDEO_TASK_CHANNEL_TYPES } from './channel-capabilities'
 
 const VIDEO_TASK_PROTOCOL = 'generic_video_task'
 const LEGACY_SEEDANCE_MEDIA_PROTOCOL = 'seedance_official_media'
@@ -207,6 +214,7 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
+    advanced_custom: z.string().optional(),
     other: z.string().optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
@@ -268,6 +276,27 @@ export const channelFormSchema = z
         'other',
         'This channel type requires additional configuration'
       )
+    }
+
+    if (data.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {
+      const advancedCustomConfig = parseAdvancedCustomConfig(
+        data.advanced_custom
+      )
+      const advancedCustomError =
+        validateAdvancedCustomConfig(advancedCustomConfig)
+      if (advancedCustomError) {
+        addRequiredIssue(ctx, 'advanced_custom', advancedCustomError.message)
+      }
+      if (
+        advancedCustomConfigUsesRelativeUpstreamPath(advancedCustomConfig) &&
+        !data.base_url?.trim()
+      ) {
+        addRequiredIssue(
+          ctx,
+          'base_url',
+          'Base URL is required when a route upstream path is relative'
+        )
+      }
     }
 
     if (data.type === 57) {
@@ -378,6 +407,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   param_override: '',
   header_override: '',
   settings: '{}',
+  advanced_custom: '',
   other: '',
   multi_key_mode: 'single',
   multi_key_type: 'random',
@@ -558,6 +588,7 @@ export function transformChannelToFormDefaults(
   let videoTaskStatusRunning = DEFAULT_VIDEO_TASK_STATUS_RUNNING
   let videoTaskStatusSucceeded = DEFAULT_VIDEO_TASK_STATUS_SUCCEEDED
   let videoTaskStatusFailed = DEFAULT_VIDEO_TASK_STATUS_FAILED
+  let advancedCustom = ''
 
   if (channel.settings) {
     try {
@@ -582,6 +613,9 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      if (parsed.advanced_custom) {
+        advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
+      }
       const taskProtocolConfig = isJsonObjectValue(parsed.task_protocol_config)
         ? parsed.task_protocol_config
         : {}
@@ -671,6 +705,7 @@ export function transformChannelToFormDefaults(
     param_override: channel.param_override || '',
     header_override: channel.header_override || '',
     settings: channel.settings || '{}',
+    advanced_custom: advancedCustom,
     other: channel.other || '',
     multi_key_mode: 'single',
     multi_key_type: channel.channel_info.multi_key_mode || 'random',
@@ -924,6 +959,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     )
   ) {
     delete settingsObj.task_protocol
+  }
+
+  if (formData.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {
+    const advancedCustomConfig = parseAdvancedCustomConfig(
+      formData.advanced_custom
+    )
+    if (advancedCustomConfig) {
+      settingsObj.advanced_custom = advancedCustomConfig
+    }
+  } else if ('advanced_custom' in settingsObj) {
+    delete settingsObj.advanced_custom
   }
 
   return JSON.stringify(settingsObj)

@@ -108,6 +108,7 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_removed_models?: string[]
   task_protocol?: string
   task_protocol_config?: TaskProtocolConfig
+  advanced_custom?: AdvancedCustomConfig
 }
 
 export interface TaskProtocolConfig {
@@ -122,6 +123,33 @@ export interface TaskProtocolConfig {
   updated_at_path?: string
   status_map?: Record<string, string>
 }
+
+export interface AdvancedCustomConfig {
+  advanced_routes?: AdvancedCustomRoute[]
+}
+
+export interface AdvancedCustomRoute {
+  incoming_path?: string
+  upstream_path?: string
+  converter?: AdvancedCustomConverter
+  auth?: AdvancedCustomRouteAuth
+}
+
+export interface AdvancedCustomRouteAuth {
+  type?: AdvancedCustomAuthType
+  name?: string
+  value?: string
+}
+
+export type AdvancedCustomConverter =
+  | 'none'
+  | 'anthropic_messages_to_openai_chat_completions'
+  | 'openai_chat_completions_to_anthropic_messages'
+  | 'openai_chat_completions_to_openai_responses'
+  | 'gemini_generate_content_to_openai_chat_completions'
+  | 'openai_chat_completions_to_gemini_generate_content'
+
+export type AdvancedCustomAuthType = 'none' | 'header' | 'query'
 
 // ============================================================================
 // API Response Types

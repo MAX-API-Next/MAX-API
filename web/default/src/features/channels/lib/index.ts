@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 // Re-export all library functions
 export * from './channel-actions'
+export * from './advanced-custom'
 export * from './channel-capabilities'
 export * from './channel-config-rules'
 export * from './channel-config-validation'

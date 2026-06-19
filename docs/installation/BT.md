@@ -57,7 +57,7 @@
 version: '3'
 services:
   max-api:
-    image: max-api:latest
+    image: cscitechtop/max-api:latest
     container_name: max-api
     restart: always
     ports:
@@ -126,7 +126,7 @@ volumes:
 
 ```bash
 # 拉取最新镜像
-docker pull max-api:latest
+docker pull cscitechtop/max-api:latest
 
 # 重启容器
 docker-compose down && docker-compose up -d

@@ -21,7 +21,7 @@
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
     <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release">
   </a><!--
-  --><a href="https://hub.docker.com/r/max-api">
+  --><a href="https://hub.docker.com/r/cscitechtop/max-api">
     <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
   </a><!--
   --><a href="https://goreportcard.com/report/github.com/MAX-API-Next/MAX-API">
@@ -113,14 +113,14 @@ MAX API 的設計把 AI 模型和 AI Agent 的運行過程納入可配置、可�
 
 ```bash
 # 1. 拉取鏡像
-docker pull max-api:latest
+docker pull cscitechtop/max-api:latest
 
 # 2. 啟動服務，資料持久化到當前目錄 ./data
 docker run --name max-api -d --restart always \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 
 # 3. 訪問控制臺
 # 瀏覽器打開 http://localhost:3000
@@ -514,7 +514,7 @@ docker run --name max-api -d --restart always \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 ```
 
 **MySQL：**
@@ -525,7 +525,7 @@ docker run --name max-api -d --restart always \
   -e SQL_DSN="root:123456@tcp(mysql:3306)/max-api" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 ```
 
 ### 從源碼構建鏡像
@@ -533,7 +533,7 @@ docker run --name max-api -d --restart always \
 ```bash
 git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
-docker build -t max-api:latest .
+docker build -t cscitechtop/max-api:latest .
 ```
 
 > [!TIP]

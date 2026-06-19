@@ -945,6 +945,18 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	channelOtherSettings, err := channel.ParseOtherSettings()
+	if err != nil {
+		return err
+	}
+	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.AdvancedCustom == nil {
+		return fmt.Errorf("advanced_custom is required")
+	}
+	if channelOtherSettings.AdvancedCustom != nil {
+		if err := channelOtherSettings.AdvancedCustom.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -968,6 +980,15 @@ func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
 		return
 	}
 	channel.Setting = common.GetPointer[string](string(settingBytes))
+}
+
+func (channel *Channel) ParseOtherSettings() (dto.ChannelOtherSettings, error) {
+	setting := dto.ChannelOtherSettings{}
+	if channel == nil || channel.OtherSettings == "" {
+		return setting, nil
+	}
+	err := common.UnmarshalJsonStr(channel.OtherSettings, &setting)
+	return setting, err
 }
 
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {

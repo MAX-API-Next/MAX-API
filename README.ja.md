@@ -17,7 +17,7 @@
 <p align="center">
   <a href="https://raw.githubusercontent.com/MAX-API-Next/MAX-API/main/LICENSE"><img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="license"></a><!--
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest"><img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release"></a><!--
-  --><a href="https://hub.docker.com/r/max-api"><img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker"></a><!--
+  --><a href="https://hub.docker.com/r/cscitechtop/max-api"><img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker"></a><!--
   --><a href="https://goreportcard.com/report/github.com/MAX-API-Next/MAX-API"><img src="https://goreportcard.com/badge/github.com/MAX-API-Next/MAX-API" alt="GoReportCard"></a>
 </p>
 
@@ -105,14 +105,14 @@ MAX API は、AI モデルと AI Agent の実行プロセスを、設定可能�
 
 ```bash
 # 1. イメージを取得
-docker pull max-api:latest
+docker pull cscitechtop/max-api:latest
 
 # 2. サービスを起動し、データを ./data に永続化
 docker run --name max-api -d --restart always \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 
 # 3. コンソールにアクセス
 # ブラウザで http://localhost:3000 を開く
@@ -451,7 +451,7 @@ docker run --name max-api -d --restart always \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 ```
 
 **MySQL:**
@@ -462,7 +462,7 @@ docker run --name max-api -d --restart always \
   -e SQL_DSN="root:123456@tcp(mysql:3306)/max-api" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
-  max-api:latest
+  cscitechtop/max-api:latest
 ```
 
 ### ソースからイメージをビルド
@@ -470,7 +470,7 @@ docker run --name max-api -d --restart always \
 ```bash
 git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
-docker build -t max-api:latest .
+docker build -t cscitechtop/max-api:latest .
 ```
 
 > [!TIP]

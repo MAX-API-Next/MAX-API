@@ -11,12 +11,15 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
+var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
+var channel2advancedCustomConfigError map[int]error
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -24,10 +27,23 @@ func InitChannelCache() {
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
+	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
+	newChannel2advancedCustomConfigError := make(map[int]error)
 	var channels []*Channel
 	DB.Find(&channels)
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
+		if channel.Type == constant.ChannelTypeAdvancedCustom {
+			if config, err := validatedAdvancedCustomConfigFromChannel(channel); err == nil && config != nil {
+				newChannel2advancedCustomConfig[channel.Id] = config
+			} else {
+				if err == nil {
+					err = errors.New("advanced_custom is required")
+				}
+				newChannel2advancedCustomConfigError[channel.Id] = err
+				common.SysError(fmt.Sprintf("failed to parse advanced custom config: channel_id=%d, error=%v", channel.Id, err))
+			}
+		}
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
@@ -82,6 +98,8 @@ func InitChannelCache() {
 		}
 	}
 	channelsIDM = newChannelId2channel
+	channel2advancedCustomConfig = newChannel2advancedCustomConfig
+	channel2advancedCustomConfigError = newChannel2advancedCustomConfigError
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
 }
@@ -94,22 +112,28 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannel(group, model, retry, requestPath)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
+	channels, err := filterChannelsByRequestPath(group2model2channels[group][model], requestPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels, err = filterChannelsByRequestPath(group2model2channels[group][normalizedModel], requestPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(channels) == 0 {
@@ -191,6 +215,73 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	return nil, errors.New("channel not found")
 }
 
+func filterChannelsByRequestPath(channels []int, requestPath string) ([]int, error) {
+	if requestPath == "" || len(channels) == 0 {
+		return channels, nil
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			filtered = append(filtered, channelId)
+			continue
+		}
+		if channel.Type != constant.ChannelTypeAdvancedCustom {
+			filtered = append(filtered, channelId)
+			continue
+		}
+		if err := channel2advancedCustomConfigError[channelId]; err != nil {
+			continue
+		}
+		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPath(requestPath) {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered, nil
+}
+
+func ChannelSupportsRequestPath(channel *Channel, requestPath string) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.Type != constant.ChannelTypeAdvancedCustom {
+		return true
+	}
+	if requestPath == "" {
+		return false
+	}
+	if common.MemoryCacheEnabled {
+		channelSyncLock.RLock()
+		config := channel2advancedCustomConfig[channel.Id]
+		channelSyncLock.RUnlock()
+		return config != nil && config.SupportsPath(requestPath)
+	}
+	config, err := validatedAdvancedCustomConfigFromChannel(channel)
+	return err == nil && config != nil && config.SupportsPath(requestPath)
+}
+
+func advancedCustomConfigFromChannel(channel *Channel) (*dto.AdvancedCustomConfig, error) {
+	settings, err := channel.ParseOtherSettings()
+	if err != nil {
+		return nil, err
+	}
+	return settings.AdvancedCustom, nil
+}
+
+func validatedAdvancedCustomConfigFromChannel(channel *Channel) (*dto.AdvancedCustomConfig, error) {
+	config, err := advancedCustomConfigFromChannel(channel)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		return nil, nil
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 func CacheGetChannel(id int) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
 		return GetChannelById(id, true)
@@ -261,9 +352,31 @@ func CacheUpdateChannel(channel *Channel) {
 	if channelsIDM == nil {
 		channelsIDM = make(map[int]*Channel)
 	}
+	if channel2advancedCustomConfig == nil {
+		channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
+	}
+	if channel2advancedCustomConfigError == nil {
+		channel2advancedCustomConfigError = make(map[int]error)
+	}
 	if oldChannel, ok := channelsIDM[channel.Id]; ok {
 		logger.LogDebug(nil, "CacheUpdateChannel before: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, oldChannel.ChannelInfo.MultiKeyPollingIndex)
 	}
 	channelsIDM[channel.Id] = channel
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if config, err := validatedAdvancedCustomConfigFromChannel(channel); err == nil && config != nil {
+			channel2advancedCustomConfig[channel.Id] = config
+			delete(channel2advancedCustomConfigError, channel.Id)
+		} else {
+			if err == nil {
+				err = errors.New("advanced_custom is required")
+			}
+			channel2advancedCustomConfigError[channel.Id] = err
+			common.SysError(fmt.Sprintf("failed to parse advanced custom config: channel_id=%d, error=%v", channel.Id, err))
+			delete(channel2advancedCustomConfig, channel.Id)
+		}
+	} else {
+		delete(channel2advancedCustomConfig, channel.Id)
+		delete(channel2advancedCustomConfigError, channel.Id)
+	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
 }
