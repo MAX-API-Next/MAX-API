@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -20,6 +21,20 @@ const (
 	TaskProtocolLegacySeedanceMedia = "seedance_official_media"
 )
 
+var videoTaskChannelTypes = map[int]struct{}{
+	constant.ChannelTypeOpenAI:      {},
+	constant.ChannelTypeAli:         {},
+	constant.ChannelTypeGemini:      {},
+	constant.ChannelTypeMiniMax:     {},
+	constant.ChannelTypeVertexAi:    {},
+	constant.ChannelTypeVolcEngine:  {},
+	constant.ChannelTypeKling:       {},
+	constant.ChannelTypeJimeng:      {},
+	constant.ChannelTypeVidu:        {},
+	constant.ChannelTypeDoubaoVideo: {},
+	constant.ChannelTypeSora:        {},
+}
+
 func HasTaskProtocolConfig(settings dto.ChannelOtherSettings) bool {
 	return settings.TaskProtocolConfig != nil || UseConfiguredTaskProtocol(settings)
 }
@@ -27,6 +42,11 @@ func HasTaskProtocolConfig(settings dto.ChannelOtherSettings) bool {
 func UseConfiguredTaskProtocol(settings dto.ChannelOtherSettings) bool {
 	protocol := strings.ToLower(strings.TrimSpace(settings.TaskProtocol))
 	return protocol == TaskProtocolGenericVideo || protocol == TaskProtocolLegacySeedanceMedia
+}
+
+func IsVideoTaskChannelType(channelType int) bool {
+	_, ok := videoTaskChannelTypes[channelType]
+	return ok
 }
 
 func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocolConfig {

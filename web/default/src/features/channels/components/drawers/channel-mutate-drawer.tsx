@@ -141,6 +141,8 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  getChannelConfigValidationIssues,
+  VIDEO_TASK_CHANNEL_TYPES,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -148,6 +150,7 @@ import {
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
 import { useChannels } from '../channels-provider'
+import { ChannelCapabilityMatrix } from '../channel-capability-matrix'
 import { CodexOAuthDialog } from '../dialogs/codex-oauth-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
 import {
@@ -197,9 +200,6 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
-const VIDEO_TASK_CHANNEL_TYPES = new Set([
-  1, 17, 24, 35, 41, 45, 50, 51, 52, 54, 55,
-])
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -387,6 +387,7 @@ export function ChannelMutateDrawer({
     'video_task_path_override_enabled'
   )
   const videoTaskProtocolEnabled = form.watch('video_task_protocol_enabled')
+  const formSnapshot = form.watch() as ChannelFormValues
   const showVideoTaskPathFields =
     videoTaskPathOverrideEnabled || videoTaskProtocolEnabled
   const isVideoTaskChannel = VIDEO_TASK_CHANNEL_TYPES.has(currentType)
@@ -589,6 +590,10 @@ export function ChannelMutateDrawer({
   const upstreamDetectedModelsOmittedCount =
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
+
+  const channelConfigIssues = getChannelConfigValidationIssues(formSnapshot, {
+    isEditing,
+  })
 
   // Load channel data into form when editing
   useEffect(() => {
@@ -1173,6 +1178,11 @@ export function ChannelMutateDrawer({
                       />
                     )}
                   </ChannelBasicSection>
+
+                  <ChannelCapabilityMatrix
+                    channelType={currentType}
+                    issues={channelConfigIssues}
+                  />
 
                   {/* ── API Access ── */}
                   <ChannelApiAccessSection>

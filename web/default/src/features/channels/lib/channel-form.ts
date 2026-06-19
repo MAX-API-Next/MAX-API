@@ -23,10 +23,14 @@ import {
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
 import type { Channel } from '../types'
+import {
+  BASE_URL_REQUIRED_TYPES,
+  OTHER_REQUIRED_TYPES,
+  hasVertexDefaultRegion,
+  hasVideoTaskQueryPlaceholder,
+} from './channel-config-rules'
+import { VIDEO_TASK_CHANNEL_TYPES } from './channel-capabilities'
 
-const VIDEO_TASK_CHANNEL_TYPES = new Set([
-  1, 17, 24, 35, 41, 45, 50, 51, 52, 54, 55,
-])
 const VIDEO_TASK_PROTOCOL = 'generic_video_task'
 const LEGACY_SEEDANCE_MEDIA_PROTOCOL = 'seedance_official_media'
 const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([
@@ -47,11 +51,6 @@ const DEFAULT_VIDEO_TASK_STATUS_RUNNING = 'running,processing,in_progress'
 const DEFAULT_VIDEO_TASK_STATUS_SUCCEEDED =
   'succeeded,success,completed,complete'
 const DEFAULT_VIDEO_TASK_STATUS_FAILED = 'failed,failure,error'
-const VIDEO_TASK_QUERY_PLACEHOLDERS = [
-  '{task_id}',
-  '{operation_name}',
-  '{upstream_task_id}',
-]
 
 // ============================================================================
 // Form Validation Schema
@@ -132,6 +131,16 @@ function isVertexJsonKey(value: string | undefined): boolean {
       return parsed.every((item) => isJsonObjectValue(item))
     }
     return isJsonObjectValue(parsed)
+  } catch {
+    return false
+  }
+}
+
+function isVertexRegionConfig(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    if (parsed === undefined) return true
+    return hasVertexDefaultRegion(parsed)
   } catch {
     return false
   }
@@ -245,7 +254,7 @@ export const channelFormSchema = z
     video_task_status_failed: z.string().optional(),
   })
   .superRefine((data, ctx) => {
-    if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
+    if (BASE_URL_REQUIRED_TYPES.has(data.type) && !data.base_url?.trim()) {
       addRequiredIssue(
         ctx,
         'base_url',
@@ -253,7 +262,7 @@ export const channelFormSchema = z
       )
     }
 
-    if ([3, 18, 21, 39, 41, 49].includes(data.type) && !data.other?.trim()) {
+    if (OTHER_REQUIRED_TYPES.has(data.type) && !data.other?.trim()) {
       addRequiredIssue(
         ctx,
         'other',
@@ -293,6 +302,18 @@ export const channelFormSchema = z
 
     if (
       data.type === 41 &&
+      data.other?.trim() &&
+      !isVertexRegionConfig(data.other)
+    ) {
+      addRequiredIssue(
+        ctx,
+        'other',
+        'Vertex AI region configuration must include a default region.'
+      )
+    }
+
+    if (
+      data.type === 41 &&
       data.vertex_key_type === 'api_key' &&
       data.multi_key_mode &&
       data.multi_key_mode !== 'single'
@@ -320,11 +341,7 @@ export const channelFormSchema = z
       const queryPath = data.video_task_query_path?.trim()
       if (!queryPath) {
         addRequiredIssue(ctx, 'video_task_query_path', 'Query path is required')
-      } else if (
-        !VIDEO_TASK_QUERY_PLACEHOLDERS.some((placeholder) =>
-          queryPath.includes(placeholder)
-        )
-      ) {
+      } else if (!hasVideoTaskQueryPlaceholder(queryPath)) {
         addRequiredIssue(
           ctx,
           'video_task_query_path',

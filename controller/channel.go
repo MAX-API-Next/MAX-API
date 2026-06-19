@@ -456,19 +456,37 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
 
 	// 校验任务协议配置（settings JSON 中的 task_protocol_config）
+	otherSettings := dto.ChannelOtherSettings{}
+	if strings.TrimSpace(channel.OtherSettings) != "" {
+		_ = common.UnmarshalJsonStr(channel.OtherSettings, &otherSettings)
+	}
+
 	if err := taskcommon.ValidateTaskProtocolSettings(channel.OtherSettings); err != nil {
 		return fmt.Errorf("渠道任务协议设置[task protocol config] 校验失败：%s", err.Error())
 	}
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
+	if taskcommon.UseConfiguredTaskProtocol(otherSettings) || otherSettings.TaskProtocolConfig != nil {
+		if !taskcommon.IsVideoTaskChannelType(channel.Type) {
+			return fmt.Errorf("当前渠道类型不支持视频任务协议配置")
+		}
+	}
+
+	if isAdd && strings.TrimSpace(channel.Models) == "" {
+		return fmt.Errorf("models cannot be empty")
+	}
+
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 

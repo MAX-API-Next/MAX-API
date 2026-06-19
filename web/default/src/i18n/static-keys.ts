@@ -66,6 +66,14 @@ export const STATIC_I18N_KEYS = [
   'All Tags',
   'More...',
   'Less',
+  'Error',
+  'Warning',
+  'Info',
+  'Embeddings',
+  'Images',
+  'Audio',
+  'Rerank',
+  'Limited',
 
   // Roles
   'Super Admin',
@@ -493,6 +501,16 @@ export const STATIC_I18N_KEYS = [
   'Kling',
   'Seedance',
   'More compatible APIs',
+  'upstream platforms and compatible model ecosystems',
+  'AWS, Azure, Vertex, Ollama, Codex, Dify, RAGFlow, Kling, Seedance, domestic platforms, and OpenAI-compatible APIs.',
+  'video task channels and protocol templates',
+  'Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.',
+  'Continuously updated',
+  'pricing rule base and rate-card governance',
+  'Model prices, billing expressions, tiered JSON, and task rate-cards are maintained as upstream prices evolve.',
+  'agent governance category suffix',
+  'AgentOps governance dimensions',
+  'Token isolation, model scope, quota and cost, routing resilience, usage logs, and audit boundaries.',
 
   // Tiered billing settings
   'Tiered Billing',

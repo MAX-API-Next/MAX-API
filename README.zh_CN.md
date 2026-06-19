@@ -35,6 +35,7 @@
   <a href="#-适用场景">适用场景</a> •
   <a href="#-快速开始">快速开始</a> •
   <a href="#-核心能力">核心能力</a> •
+  <a href="#-治理配置">治理配置</a> •
   <a href="#-架构概览">架构概览</a> •
   <a href="#-ai-模型与接口支持">模型与接口</a> •
   <a href="#-部署">部署</a> •
@@ -48,13 +49,14 @@
 
 ## 📝 项目说明
 
-MAX API 是由来自科研机构的 AGI 爱好者组织发起、维护和长期运营的 AI 模型治理、AgentOps 与应用服务基础设施项目，面向开发者、研究者、团队和组织提供稳定、可复用的服务层能力。项目关注 AI 应用落地后的持续运营问题：模型越来越多、供应商接口频繁变化、Agent 调用链路变长、成本和审计压力增加。MAX API 在应用、Agent、用户、组织和上游模型服务之间提供统一的接入、鉴权、路由、计费、观测和治理层，让 AI 应用更稳定、更可控地运行。
+MAX API 是由来自科研机构和高校的 AGI 爱好者组织发起、维护和长期运营的 AI 模型治理、AgentOps 与应用服务基础设施项目，面向开发者、研究者、团队和组织提供稳定、可复用的服务层能力。项目关注 AI 应用落地后的持续运营问题：模型越来越多、供应商接口频繁变化、Agent 调用链路变长、成本和审计压力增加。MAX API 在应用、Agent、用户、组织和上游模型服务之间提供统一的接入、鉴权、路由、计费、观测和治理层，让 AI 应用更稳定、更可控地运行。
 
 持续投入方向：
 
-- **AI 模型治理**：持续跟踪 DeepSeek、通义千问 / 阿里云百炼、智谱 GLM、Kimi、豆包 / 火山引擎、腾讯混元、百度文心 / 千帆、讯飞星火、MiniMax、零一万物、硅基流动等国产模型与平台的模型更新、接口变化、参数差异、价格规则和任务协议；通过渠道、模型映射、协议转换、路径覆盖和可配置任务协议，把分散模型能力纳入统一治理。
+- **AI 模型治理**：持续跟踪 OpenAI、Azure OpenAI、AWS Bedrock、Vertex AI、Ollama，以及 DeepSeek、通义千问 / 阿里云百炼、智谱 GLM、Kimi、豆包 / 火山引擎、腾讯混元、百度文心 / 千帆、讯飞星火、MiniMax、零一万物、硅基流动等模型与平台的模型更新、接口变化、参数差异、价格规则和任务协议；同时关注 Dify、RAGFlow、Kling、Seedance 等应用和多模态生态的接入形态，通过渠道、模型映射、协议转换、路径覆盖和可配置任务协议，把分散模型能力纳入统一治理。
 - **AI Agent 治理 / AgentOps**：围绕 Agent、工作流和工具调用场景，持续完善令牌治理、模型访问控制、调用追踪、成本归因、异常定位和日志审计，并为后续 MCP 风格工具 / 服务接入预留统一治理边界，帮助 Agent 应用在真实业务中更可观测、更可运营。
-- **运营优化与成本治理**：持续优化渠道路由、失败重试、限流、预扣费、失败退款、日志观测、成本统计和运维分析；文本与多模态 token 场景可使用表达式计费，视频等异步任务场景可使用参数化 rate-card，让模型成本和 Agent 调用成本更直观、可核算。
+- **渠道配置治理**：在渠道新建和编辑界面提供渠道能力矩阵与配置校验，直观展示 `chat/completions`、`responses`、`embeddings`、`rerank`、`video tasks`、模型发现等能力，并提前提示 Base URL、JSON 配置、Vertex AI 区域、Codex 凭证、视频任务占位符等常见配置风险。
+- **运营优化与成本治理**：持续优化渠道路由、失败重试、限流、预扣费、失败退款、日志观测、成本统计和运维分析；文本与多模态 token 场景可使用表达式计费和统一 JSON 配置，视频等异步任务场景可使用参数化 rate-card，让模型成本和 Agent 调用成本更直观、可核算、可批量维护。
 
 > [!IMPORTANT]
 > - 面向公众提供生成式人工智能服务时，使用者应遵守[《生成式人工智能服务管理暂行办法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)等监管要求，并自行完成所在司法辖区要求的备案、许可、内容安全、实名、日志留存、税务、支付和上游授权等合规义务。
@@ -69,6 +71,7 @@ MAX API 是由来自科研机构的 AGI 爱好者组织发起、维护和长期�
 
 - **模型治理平面**：统一管理模型入口、渠道、供应商、协议格式、模型映射、价格规则、任务协议和多模态接口。
 - **AgentOps 控制平面**：不替代 Agent 编排框架，而是在网关层为 Agent 工作负载提供令牌治理、模型访问控制、调用日志、成本追踪、异常定位和运营分析。
+- **渠道配置平面**：通过能力矩阵、表单校验、模型发现和协议模板，降低新增上游渠道、迁移供应商和维护非标准接口时的误配置风险。
 - **协议与供应商适配层**：持续跟踪海外官方接口、国产模型平台接口（DeepSeek、通义、智谱、火山引擎、百度千帆等）以及各类 OpenAI 兼容 / 非标准接口的变化，并规范化为稳定的应用侧接口。
 - **成本、额度与可靠性治理**：支持渠道路由、加权分发、失败重试、限流、预扣费、失败退款，以及表达式计费、固定价格、任务 rate-card、倍率计费和用量统计。
 - **组织级运营与审计层**：为团队、研究机构、企业和社区服务提供用户管理、分组管理、私有化部署、数据留存、审计和持续运营优化能力。
@@ -78,17 +81,17 @@ MAX API 是由来自科研机构的 AGI 爱好者组织发起、维护和长期�
 
 ## 🧠 治理框架
 
-MAX API 的设计重点不是把请求简单转发给上游，而是把 AI 模型和 AI Agent 的运行过程纳入可配置、可观测、可核算、可审计的治理框架。
+MAX API 的设计把 AI 模型和 AI Agent 的运行过程纳入可配置、可观测、可核算、可审计的治理框架。
 
 | 治理对象 | MAX API 提供的能力 | 目标 |
 |----------|-------------------|------|
 | 模型资产 | 模型列表、模型映射、模型分组、模型限制、价格规则和多模态接口管理 | 让组织知道“有哪些模型、谁能用、怎么计费、如何切换” |
-| 上游渠道 | 供应商渠道、权重、分组、状态、密钥、Base URL、路径覆盖和失败重试 | 降低单一供应商不可用、涨价、限流或接口变化带来的风险 |
-| 协议格式 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、视频任务等协议入口和转换 | 让应用侧尽量面对稳定接口，而不是直接承担各家协议差异 |
+| 上游渠道 | 供应商渠道、权重、分组、状态、密钥、Base URL、路径覆盖、能力矩阵、配置校验、模型发现和失败重试 | 降低单一供应商不可用、涨价、限流、误配置或接口变化带来的风险 |
+| 协议格式 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、通用视频任务协议等协议入口和转换 | 让应用侧尽量面对稳定接口，而不是直接承担各家协议差异 |
 | Agent 令牌 | API Key、令牌分组、模型范围、额度限制、过期时间和访问控制 | 为 Agent、工作流和工具调用分配独立、可回收、可限额的访问凭据 |
-| 用量与成本 | 请求日志、用量统计、表达式计费、任务 rate-card、预扣费和失败退款 | 把模型调用成本拆到用户、令牌、模型、渠道和分组维度 |
+| 用量与成本 | 请求日志、用量统计、表达式计费、分阶段计费 JSON、任务 rate-card、预扣费和失败退款 | 把模型调用成本拆到用户、令牌、模型、渠道和分组维度 |
 | 异步任务 | 视频等任务提交、轮询、状态映射、结果代理和任务计费 | 统一治理长耗时、多状态、多上游格式的多模态任务 |
-| 审计与安全 | 管理员侧日志审计、错误日志、请求限制、流式超时、登录与权限控制 | 在私有化部署和合规场景中提供可控的审计边界 |
+| 审计与安全 | 管理员侧日志审计、错误日志、请求限制、流式超时、登录与权限控制 | 在私有化部署和合规场景中提供可控的审计边界，敏感内容审计集中放在安全与限制中管理 |
 | 组织运营 | 用户、分组、余额、支付、系统设置、数据看板和运维配置 | 支撑团队、研究机构、企业或社区服务的持续运营 |
 
 ---
@@ -145,9 +148,13 @@ docker compose up -d
 | 能力 | 说明 |
 |------|------|
 | 统一模型入口 | 支持 OpenAI 兼容接口、Responses、Claude Messages、Gemini、Realtime 等多种协议入口，应用侧可通过统一网关访问模型 |
-| 多供应商模型池 | 海外可接入 OpenAI、Azure、Claude、Gemini、AWS Bedrock；国产方向持续跟踪并内置 DeepSeek、通义千问、智谱 GLM、Kimi、豆包、腾讯混元、文心、讯飞星火、MiniMax、零一万物、硅基流动等渠道适配 |
+| 多供应商模型池 | 海外可接入 OpenAI、Azure、Claude、Gemini、AWS Bedrock、Vertex AI、Ollama；国产方向持续跟踪并内置 DeepSeek、通义千问、智谱 GLM、Kimi、豆包、腾讯混元、文心、讯飞星火、MiniMax、零一万物、硅基流动等渠道适配 |
+| 上游生态适配 | 支持 Codex、Dify、RAGFlow、Kling、Seedance 等应用、Agent 和多模态平台相关接口的接入治理，便于把模型调用、工作流调用和异步任务纳入统一网关 |
 | 模型映射与访问范围 | 支持按渠道配置模型列表、模型映射、用户分组、令牌分组和模型限制，让不同团队、应用或 Agent 使用不同模型集合 |
+| 渠道能力矩阵 | 渠道编辑界面展示 `chat/completions`、`responses`、`Claude Messages`、`Gemini native`、`embeddings`、`images`、`audio`、`rerank`、`video tasks`、`model discovery` 等能力状态，减少管理员对渠道能力的猜测 |
+| 渠道配置校验 | 在保存前检查 API Key、模型列表、Base URL、额外配置、JSON 对象、Vertex AI 区域、Codex 凭证、模型发现能力和视频任务路径占位符等常见问题 |
 | 多模态模型治理 | 支持聊天、图像、视频、音频、嵌入、重排序、实时对话等场景，并对视频等异步任务提供提交、轮询、状态映射和结果代理 |
+| 通用视频任务协议 | 支持将不同视频上游的任务提交、查询、进度、状态映射、错误消息和结果 URL 路径统一配置到渠道中，默认使用 `/v1/videos/create` 与 `/v1/videos/{task_id}` |
 | 协议转换与自定义上游 | 支持 OpenAI Compatible、Claude Messages、Gemini 等格式之间的转换与适配，也支持配置合法授权的上游地址、路径覆盖和任务协议解析规则 |
 
 ### AI Agent 治理 / AgentOps
@@ -168,11 +175,12 @@ docker compose up -d
 - **一行表达式 = 一个 token 模型的完整计价规则**：阶梯定价、缓存命中、图像 / 音频 token 分项、分时折扣、按请求头或参数动态加价，全部写在同一行，适合维护复杂模型价格。
 - **价格即真实价格**：系数直接填写「美元 / 百万 token」，`p * 2.5` 就是输入每百万 token 2.5 美元，适合按上游价格表维护成本；传统倍率模式仍保持兼容。
 - **可视化 + 原始双模式编辑**：既可逐项填价格、按档位设条件，也可直接编辑表达式，并内置常见模型预设模板。
+- **统一 JSON 批量维护**：支持在一个 `Tiered billing JSON` 窗口中维护多个模型的分阶段计费规则，保存时原子更新 `billing_mode` 与 `billing_expr`，避免手动维护多个配置项时出现不同步。
 - **自动 token 归一**：按上游格式（OpenAI / Claude）和表达式实际用到的变量，自动从输入/输出中剥离缓存、图像、音频等子类别，避免重复计费；日志中可还原命中的计价档位与明细。
 
 **任务计费、传统计费与可靠性**
 
-- 支持视频等异步任务的参数化 rate-card 计费，按模型、供应商、时长、质量、音频、视频输入等字段匹配单价。
+- 支持视频等异步任务的参数化 rate-card 计费，按模型、供应商、时长、质量、音频、视频输入等字段匹配单价；可通过 `task_billing_setting.rate_cards` 的 JSON 窗口统一维护，并用 `vendor` 字段区分 Sora、Veo、Seedance、Kling 等供应商分区。
 - 兼容按量、按次、缓存命中等计费模式，以及模型倍率、分组倍率、渠道倍率。
 - 支持预扣费、失败退款、异常处理和消费日志，适合长耗时 Agent 调用链路和异步多模态任务。
 - 支持渠道加权随机、失败重试、禁用渠道绕过和模型级路由，降低上游异常对应用和 Agent 的影响。
@@ -263,11 +271,12 @@ flowchart LR
 | Google Gemini | Gemini 聊天、文本和部分转换能力 |
 | Azure OpenAI | Azure OpenAI 与 Realtime 相关接口 |
 | AWS Bedrock | Bedrock Runtime 相关模型接入 |
+| 上游平台和应用生态 | AWS、Azure、Vertex、Ollama、Codex、Dify、RAGFlow、Kling、Seedance 等平台或应用形态可按渠道能力接入治理 |
 | 国产模型与平台 | 内置 DeepSeek、通义千问 / 阿里云百炼、智谱 GLM、Kimi、豆包 / 火山引擎、腾讯混元、百度文心 / 千帆、讯飞星火、MiniMax、零一万物、硅基流动等适配器或兼容接入能力 |
-| Rerank | Cohere、Jina 等重排序模型，可用于检索增强和 Agent 检索链路 |
-| Midjourney / Suno / Dify | 图像、音乐、工作流等第三方服务适配 |
-| 视频任务接口 | 支持视频生成任务的提交、轮询、状态映射、结果代理和参数化任务计费 |
-| 自定义上游 | 支持配置合法授权的上游接口地址、协议适配规则、路径覆盖和任务结果解析 |
+| `rerank` | Cohere、Jina 等重排序模型，可用于检索增强和 Agent 检索链路 |
+| Midjourney / Suno / Dify | 图像、音乐、工作流等服务适配 |
+| 视频任务接口 | 支持 `/v1/videos/create`、`/v1/videos/{task_id}` 等视频生成任务的提交、轮询、状态映射、结果代理和参数化任务计费 |
+| 自定义上游 | 支持配置合法授权的上游接口地址、协议适配规则、路径覆盖、状态映射、错误消息路径和任务结果解析 |
 
 ### 支持的主要接口
 
@@ -327,18 +336,119 @@ flowchart LR
 4. 根据组织结构配置用户分组、令牌分组、模型限制、额度策略和价格规则，将模型能力纳入访问控制。
 5. 为应用、Agent 或工作流创建独立令牌，按业务线、环境或风险级别配置模型范围和额度。
 6. 在运营设置中配置失败重试、日志记录、缓存策略和消费统计。
-7. 如需管理员侧内容审计，应在合规前提下启用日志审计，并确保“记录配额使用量”已开启。
+7. 如需管理员侧内容审计，应在合规前提下进入“系统设置 → 安全与限制 → 日志审计”启用，并确保“记录配额使用量（日志维护）”已开启。
+
+### 渠道能力矩阵与配置校验
+
+渠道新建或编辑时，系统会根据渠道类型展示能力矩阵，并给出实时配置校验结果。矩阵中的接口名称保留原始技术表述，例如 `chat/completions`、`responses`、`embeddings`、`rerank`、`video tasks`，说明文字使用中文，便于管理员判断当前渠道能承担哪些模型和任务。
+
+配置校验覆盖以下常见问题：
+
+- 新建渠道缺少 API Key、模型列表为空、需要 Base URL 或额外配置但未填写。
+- Base URL 误填到 `/v1` 结尾，导致系统再次拼接上游路径。
+- `setting`、`param_override`、`header_override`、`settings` 等字段不是 JSON 对象。
+- Vertex AI 区域配置缺少 `default`，或服务账号密钥不是有效 JSON。
+- Codex 渠道凭证缺少 `access_token` 或 `account_id`。
+- 当前渠道不支持模型发现，但开启了上游模型检查或自动同步。
+- 视频任务查询路径缺少 `{task_id}`、`{operation_name}` 或 `{upstream_task_id}` 占位符。
+
+### 通用视频任务协议
+
+视频模型供应商的接口经常在路径、任务 ID、状态字段、进度字段、错误字段和结果 URL 字段上不一致。MAX API 将原先面向单一模型的任务协议能力扩展为通用视频任务协议，适用于 OpenAI、Ali、Gemini、MiniMax、Vertex AI、VolcEngine、Kling、Jimeng、Vidu、Doubao Video、Sora 等视频任务渠道。
+
+支持两种配置层级：
+
+- **仅路径覆盖**：只配置 `submit_path` 和 `query_path`，系统仍使用对应渠道的官方响应解析逻辑，适合只改上游路径的兼容渠道。
+- **完整协议解析**：设置 `task_protocol = "generic_video_task"`，同时配置任务 ID、状态、进度、结果 URL、错误消息和状态映射路径，适合非标准视频任务响应。
+
+默认任务路径：
+
+```json
+{
+  "task_protocol": "generic_video_task",
+  "task_protocol_config": {
+    "submit_path": "/v1/videos/create",
+    "query_path": "/v1/videos/{task_id}",
+    "task_id_path": "task_id",
+    "status_path": "status",
+    "progress_path": "progress",
+    "result_url_paths": [
+      "result.primary_url",
+      "result.urls.0",
+      "data.result.primary_url",
+      "url",
+      "video_url",
+      "download_url"
+    ],
+    "error_message_path": "error_message",
+    "status_map": {
+      "queued": "QUEUED",
+      "running": "IN_PROGRESS",
+      "succeeded": "SUCCESS",
+      "failed": "FAILURE"
+    }
+  }
+}
+```
+
+查询路径支持 `{task_id}`、`{operation_name}`、`{upstream_task_id}`。其中 `{operation_name}` 可保留多段路径值，适合 Gemini / Vertex 风格的 operation 查询接口。视频内容可通过 `/v1/videos/{task_id}/content` 代理读取；在需要隐藏上游资源域名的部署中，建议让终端用户访问该内容代理地址，并配合鉴权、SSRF 防护和允许端口配置使用。
+
+### 计费 JSON 维护
+
+系统设置中的模型计费支持两类 JSON 统一维护入口：
+
+- **分阶段计费 JSON**：通过 `Tiered billing JSON` 统一维护多个模型的 `{ enabled, expr }` 配置，保存时同步更新 `billing_mode` 与 `billing_expr`。
+- **任务 rate-card JSON**：通过 `task_billing_setting.rate_cards` 统一维护异步任务计费规则，可按 `vendor` 分区维护 Sora、Veo、Seedance、Kling 等视频模型的不同计费表。
+
+示例结构：
+
+```json
+{
+  "model-name": {
+    "enabled": true,
+    "expr": "len <= 200000 ? tier(\"standard\", p * 3 + c * 15) : tier(\"long_context\", p * 6 + c * 22.5)"
+  }
+}
+```
+
+任务 rate-card 可按请求参数匹配价格：
+
+```json
+{
+  "vendor/model-name": {
+    "vendor": "kling",
+    "unit": "second",
+    "quantity_field": "duration",
+    "default_quantity": 5,
+    "strict": true,
+    "defaults": {
+      "quality": "std",
+      "has_audio": "false"
+    },
+    "rows": [
+      {
+        "id": "std_no_audio",
+        "match": {
+          "quality": "std",
+          "has_audio": "false"
+        },
+        "unit_price": 0.6
+      }
+    ]
+  }
+}
+```
 
 ### 常见运维入口
 
 | 功能 | 说明 |
 |------|------|
-| 渠道管理 | 配置上游供应商、模型映射、渠道权重、密钥、协议路径和状态 |
-| 模型与价格 | 维护模型列表、模型价格、表达式计费、任务计费和模型展示信息 |
+| 渠道管理 | 配置上游供应商、模型映射、渠道权重、密钥、协议路径和状态，并通过能力矩阵与配置校验提前发现风险 |
+| 模型与价格 | 维护模型列表、模型价格、表达式计费、分阶段计费 JSON、任务 rate-card JSON 和模型展示信息 |
 | 令牌管理 | 为应用、Agent、工作流、工具调用或用户创建访问令牌并限制模型与额度 |
 | 用户管理 | 管理用户、分组、余额、权限和状态 |
-| 使用日志 | 查看调用记录、消耗、耗时、错误、渠道命中和审计信息 |
-| 系统设置 | 管理安全限制、模型定价、任务计费、运营策略、日志维护、支付和站点配置 |
+| 使用日志 | 查看调用记录、消耗、耗时、错误、渠道命中和管理员可见的审计信息 |
+| 系统设置 | 管理安全限制、日志审计、模型定价、任务计费、运营策略、日志维护、支付和站点配置 |
 | 数据看板 | 查看整体请求量、模型用量、消费趋势、渠道状态和 Agent 令牌成本 |
 
 ---
@@ -534,10 +644,10 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或业务 Agent
 
 | 项目 | 说明 |
 |------|------|
-| [One API](https://github.com/songquanpeng/one-api) | 原版项目基础，MIT 协议 |
-| [New API](https://github.com/QuantumNous/new-api) | 原版项目基础，AGPLv3 协议 |
-| [Midjourney-Proxy](https://github.com/novicezk/midjourney-proxy) | Midjourney 接口支持，Apache-2.0 协议 |
-| [Suno API](https://github.com/Suno-API/Suno-API) | Suno 相关接口支持 |
+| [One API](https://github.com/songquanpeng/one-api) | MIT 协议 |
+| [New API](https://github.com/QuantumNous/new-api) | AGPLv3 协议 |
+| [Midjourney-Proxy](https://github.com/novicezk/midjourney-proxy) | Apache-2.0 协议 |
+| [Suno API](https://github.com/Suno-API/Suno-API) | MIT 协议 |
 
 ### 配套工具
 
