@@ -7,7 +7,7 @@ DEV_POSTGRES_DB = max-api
 DEV_POSTGRES_USER = root
 DEV_SQLITE_PATH ?= one-api.db
 
-.PHONY: all build-frontend build-all-frontends start-backend dev dev-api dev-api-rebuild dev-web reset-setup
+.PHONY: all build-frontend build-all-frontends start-backend check-json-wrapper dev dev-api dev-api-rebuild dev-web reset-setup
 
 all: build-all-frontends start-backend
 
@@ -20,6 +20,10 @@ build-all-frontends: build-frontend
 start-backend:
 	@echo "Starting backend dev server..."
 	@cd $(BACKEND_DIR) && go run main.go &
+
+check-json-wrapper:
+	@echo "Checking direct encoding/json calls..."
+	@go run ./tools/jsonwrapcheck
 
 dev-api:
 	@echo "Starting backend services (docker)..."

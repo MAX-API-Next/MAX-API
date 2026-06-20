@@ -1,11 +1,11 @@
 package ionet
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/samber/lo"
 )
 
@@ -290,7 +290,7 @@ func (c *Client) ExecuteInContainer(deploymentID, containerID string, command []
 	}
 
 	var result map[string]interface{}
-	if err := json.Unmarshal(resp.Body, &result); err != nil {
+	if err := common.Unmarshal(resp.Body, &result); err != nil {
 		return "", fmt.Errorf("failed to parse execution result: %w", err)
 	}
 

@@ -35,6 +35,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: JSON wrapper policy
+        run: go run ./tools/jsonwrapcheck
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest

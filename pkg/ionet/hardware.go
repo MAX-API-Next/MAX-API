@@ -1,10 +1,10 @@
 package ionet
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/samber/lo"
 )
 
@@ -150,7 +150,7 @@ func (c *Client) GetHardwareType(hardwareID int) (*HardwareType, error) {
 
 	// API response format not documented, assuming direct format
 	var hardwareType HardwareType
-	if err := json.Unmarshal(resp.Body, &hardwareType); err != nil {
+	if err := common.Unmarshal(resp.Body, &hardwareType); err != nil {
 		return nil, fmt.Errorf("failed to parse hardware type: %w", err)
 	}
 
@@ -172,7 +172,7 @@ func (c *Client) GetLocation(locationID int) (*Location, error) {
 
 	// API response format not documented, assuming direct format
 	var location Location
-	if err := json.Unmarshal(resp.Body, &location); err != nil {
+	if err := common.Unmarshal(resp.Body, &location); err != nil {
 		return nil, fmt.Errorf("failed to parse location: %w", err)
 	}
 
@@ -194,7 +194,7 @@ func (c *Client) GetLocationAvailability(locationID int) (*LocationAvailability,
 
 	// API response format not documented, assuming direct format
 	var availability LocationAvailability
-	if err := json.Unmarshal(resp.Body, &availability); err != nil {
+	if err := common.Unmarshal(resp.Body, &availability); err != nil {
 		return nil, fmt.Errorf("failed to parse location availability: %w", err)
 	}
 

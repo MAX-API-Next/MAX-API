@@ -1,10 +1,10 @@
 package ionet
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/samber/lo"
 )
 
@@ -12,24 +12,24 @@ import (
 // that omit timezone information by normalizing them to RFC3339Nano.
 func decodeWithFlexibleTimes(data []byte, target interface{}) error {
 	var intermediate interface{}
-	if err := json.Unmarshal(data, &intermediate); err != nil {
+	if err := common.Unmarshal(data, &intermediate); err != nil {
 		return err
 	}
 
 	normalized := normalizeTimeValues(intermediate)
-	reencoded, err := json.Marshal(normalized)
+	reencoded, err := common.Marshal(normalized)
 	if err != nil {
 		return err
 	}
 
-	return json.Unmarshal(reencoded, target)
+	return common.Unmarshal(reencoded, target)
 }
 
 func decodeData[T any](data []byte, target *T) error {
 	var wrapper struct {
 		Data T `json:"data"`
 	}
-	if err := json.Unmarshal(data, &wrapper); err != nil {
+	if err := common.Unmarshal(data, &wrapper); err != nil {
 		return err
 	}
 	*target = wrapper.Data
