@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, ServerCog } from 'lucide-react'
+import { ArrowRight, BookOpen, GitFork, ServerCog } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import { AnimateInView } from '@/components/animate-in-view'
 
@@ -27,67 +28,82 @@ interface CTAProps {
   isAuthenticated?: boolean
 }
 
+const COMMUNITY_POINTS = [
+  'Developers integrating multiple model providers',
+  'Research groups and university teams building AI systems',
+  'Organizations operating Agents, workflows, and internal AI platforms',
+  'Teams that need cost audit, private deployment, and governance boundaries',
+] as const
+
 export function CTA(props: CTAProps) {
   const { t } = useTranslation()
+  const { status } = useStatus()
+  const docsUrl =
+    (status?.docs_link as string | undefined) ||
+    'https://github.com/MAX-API-Next/MAX-API'
 
   if (props.isAuthenticated) {
     return null
   }
 
+  const docsButton = docsUrl.startsWith('http') ? (
+    <Button
+      variant='outline'
+      size='lg'
+      className='home-hero-button home-hero-button--ghost'
+      render={<a href={docsUrl} target='_blank' rel='noopener noreferrer' />}
+    >
+      <BookOpen data-icon='inline-start' />
+      {t('Docs')}
+    </Button>
+  ) : (
+    <Button
+      variant='outline'
+      size='lg'
+      className='home-hero-button home-hero-button--ghost'
+      render={<Link to={docsUrl} />}
+    >
+      <BookOpen data-icon='inline-start' />
+      {t('Docs')}
+    </Button>
+  )
+
   return (
-    <section className='bg-background relative z-10 px-4 py-20 sm:px-6 md:py-28'>
-      <AnimateInView
-        className='relative mx-auto max-w-7xl overflow-hidden rounded-xl border border-white/12 bg-[#0b1118] text-slate-100 shadow-[0_22px_70px_-44px_rgba(0,0,0,0.86)]'
-        animation='scale-in'
-      >
-        <div
-          aria-hidden='true'
-          className='absolute inset-0 [background-image:linear-gradient(to_right,rgba(203,213,225,0.35)_1px,transparent_1px),linear-gradient(to_bottom,rgba(203,213,225,0.25)_1px,transparent_1px)] [background-size:36px_36px] opacity-[0.16]'
-        />
-        <div className='editorial-grain absolute inset-0' aria-hidden='true' />
-        <span
-          aria-hidden='true'
-          className='absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-emerald-300/70 to-transparent'
-        />
-
-        {/* Colophon nameplate */}
-        <div className='relative flex items-center justify-between gap-3 border-b border-white/10 px-6 py-3 md:px-8'>
-          <div className='inline-flex items-center gap-2 text-[11px] font-semibold tracking-[0.26em] text-emerald-200/90 uppercase'>
-            <ServerCog className='size-3.5' />
-            {t('Deployable AI service infrastructure')}
-          </div>
-          <span className='editorial-numeral text-sm font-bold text-slate-500'>
-            §
-          </span>
+    <section className='home-section px-4 py-16 sm:px-6 md:py-24'>
+      <AnimateInView className='home-cta-panel' animation='scale-in'>
+        <div className='home-cta-orbit' aria-hidden='true' />
+        <div className='home-section-kicker'>
+          <ServerCog aria-hidden='true' />
+          {t('Open-source AI governance community')}
         </div>
-
-        <div className='relative grid gap-8 p-6 md:p-10 lg:grid-cols-[1.4fr_auto] lg:items-end'>
-          <div className='max-w-3xl'>
-            <h2 className='font-serif text-4xl leading-[1.02] font-black tracking-[-0.02em] md:text-[3.5rem]'>
-              {t('Build the governance layer for AI models and Agents')}
-            </h2>
-            <p className='mt-5 max-w-2xl text-sm leading-7 text-slate-400 md:text-base'>
+        <div className='home-cta-content'>
+          <div>
+            <h2>{t('Build with the MAX API Next community')}</h2>
+            <p>
               {t(
-                'Start with a self-hosted gateway, then keep improving model routing, pricing rules, audit boundaries, and Agent workload visibility as AI usage grows.'
+                'The community focuses on model platform adaptation, AgentOps engineering practice, cost audit, governance boundaries, multimodal task protocols, and infrastructure for AI applications that need to keep running after the demo.'
               )}
             </p>
           </div>
-          <div className='flex flex-wrap gap-3'>
+          <div className='home-cta-actions'>
             <Button
-              className='h-11 rounded-none bg-slate-100 px-5 text-sm text-slate-950 hover:bg-white'
+              size='lg'
+              className='home-hero-button home-hero-button--primary'
               render={<Link to='/sign-up' />}
             >
               {t('Get Started')}
               <ArrowRight data-icon='inline-end' />
             </Button>
-            <Button
-              variant='outline'
-              className='h-11 rounded-none border-white/20 bg-transparent px-5 text-sm text-slate-100 hover:bg-white/10 hover:text-white'
-              render={<Link to='/pricing' />}
-            >
-              {t('View Pricing')}
-            </Button>
+            {docsButton}
           </div>
+        </div>
+        <div className='home-community-grid'>
+          {COMMUNITY_POINTS.map((point) => (
+            <div key={point} className='home-community-point'>
+              <GitFork aria-hidden='true' />
+              <span>{t(point)}</span>
+            </div>
+          ))}
         </div>
       </AnimateInView>
     </section>

@@ -16,100 +16,111 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { ChartNoAxesCombined, KeyRound, Route, Workflow } from 'lucide-react'
+import { CloudCog, KeyRound, Layers3, Route, Workflow } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { AnimateInView } from '@/components/animate-in-view'
 
+const STEPS = [
+  {
+    title: 'Applications, Agents, users, and organizations',
+    description:
+      'Product code, internal tools, Agent workflows, user groups, and organization policies send requests through one governed entrance.',
+    icon: Layers3,
+    rail: 'Demand side',
+  },
+  {
+    title: 'MAX API governance layer',
+    description:
+      'Authentication, token scope, model range, channel routing, quota pre-consume, billing expressions, logs, audit controls, and admin operations live here.',
+    icon: KeyRound,
+    rail: 'Control plane',
+  },
+  {
+    title: 'Policy-aware routing and protocol conversion',
+    description:
+      'Requests are mapped to model aliases, provider channels, retries, failover rules, task polling flows, response handling, and settlement events.',
+    icon: Route,
+    rail: 'Execution',
+  },
+  {
+    title: 'Upstream model and multimodal platforms',
+    description:
+      'OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, domestic models, image, audio, video, embedding, rerank, and compatible API ecosystems stay replaceable.',
+    icon: CloudCog,
+    rail: 'Supply side',
+  },
+] as const
+
+const GOVERNANCE_OUTPUTS = [
+  {
+    label: 'Access',
+    value: 'models, users, groups, tokens',
+  },
+  {
+    label: 'Routing',
+    value: 'weights, retries, fallback, protocol mapping',
+  },
+  {
+    label: 'Settlement',
+    value: 'quota, rate-card, expressions, refunds',
+  },
+  {
+    label: 'Audit',
+    value: 'logs, retention, admin visibility, limits',
+  },
+] as const
+
 export function HowItWorks() {
   const { t } = useTranslation()
-  const steps = [
-    {
-      title: t('Connect authorized upstreams'),
-      description: t(
-        'Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.'
-      ),
-      icon: Route,
-    },
-    {
-      title: t('Govern users, Agents, and tokens'),
-      description: t(
-        'Create scoped access tokens for users, apps, Agents, and workflows, then set model limits, quotas, groups, request limits, and audit policy.'
-      ),
-      icon: KeyRound,
-    },
-    {
-      title: t('Operate AI and Agent workloads'),
-      description: t(
-        'Observe model usage, Agent cost, latency, errors, retries, async task state, and admin-scoped audit boundaries.'
-      ),
-      icon: ChartNoAxesCombined,
-    },
-    {
-      title: t('Iterate with platform changes'),
-      description: t(
-        'Update model configs, pricing expressions, rate-cards, and protocol templates as upstreams evolve.'
-      ),
-      icon: Workflow,
-    },
-  ]
 
   return (
-    <section className='border-border bg-muted/20 relative z-10 border-y px-4 py-20 sm:px-6 md:py-28'>
-      <div className='mx-auto max-w-7xl'>
-        <div className='grid gap-12 lg:grid-cols-[0.78fr_1.22fr]'>
-          <AnimateInView className='lg:sticky lg:top-28 lg:self-start'>
-            <div className='flex items-center gap-3'>
-              <span className='h-px w-8 bg-emerald-500/70' />
-              <p className='text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase'>
-                {t('Operating lifecycle')}
-              </p>
-            </div>
-            <h2 className='mt-4 font-serif text-4xl leading-[1.05] font-black tracking-[-0.02em] md:text-[3.25rem]'>
-              {t('From AI model access to Agent lifecycle governance')}
-            </h2>
-            <p className='text-muted-foreground mt-5 max-w-md text-sm leading-7 md:text-base'>
-              {t(
-                'A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.'
-              )}
-            </p>
-          </AnimateInView>
-
-          <div className='relative'>
-            <span
-              aria-hidden='true'
-              className='bg-border absolute top-0 bottom-0 left-[2.15rem] hidden w-px sm:block'
-            />
-            <div className='flex flex-col'>
-              {steps.map((step, index) => {
-                const Icon = step.icon
-                return (
-                  <AnimateInView
-                    key={step.title}
-                    delay={index * 90}
-                    animation='fade-left'
-                    className='group border-border relative flex gap-5 border-b py-6 last:border-b-0'
-                  >
-                    <div className='border-border bg-background relative z-10 flex size-[4.3rem] shrink-0 flex-col items-center justify-center rounded-xl border transition-colors group-hover:border-emerald-500/50'>
-                      <span className='editorial-numeral text-foreground text-2xl font-black'>
-                        {String(index + 1).padStart(2, '0')}
-                      </span>
-                    </div>
-                    <div className='pt-1'>
-                      <div className='mb-2 flex items-center gap-2'>
-                        <Icon className='size-4 text-emerald-700 dark:text-emerald-300' />
-                        <h3 className='font-serif text-xl font-bold tracking-[-0.01em]'>
-                          {step.title}
-                        </h3>
-                      </div>
-                      <p className='text-muted-foreground text-sm leading-7'>
-                        {step.description}
-                      </p>
-                    </div>
-                  </AnimateInView>
-                )
-              })}
-            </div>
+    <section className='home-section home-section--flow px-4 py-16 sm:px-6 md:py-24'>
+      <div className='mx-auto grid max-w-7xl gap-8 lg:grid-cols-[0.72fr_1.28fr]'>
+        <AnimateInView className='home-flow-copy'>
+          <div className='home-section-kicker'>
+            <Workflow aria-hidden='true' />
+            {t('Position in the stack')}
           </div>
+          <h2>{t('A governance layer between demand and model supply')}</h2>
+          <p>
+            {t(
+              'MAX API does not replace model vendors or Agent orchestration frameworks. It gives production AI systems a stable infrastructure layer for access, policy, cost, observability, and operational control.'
+            )}
+          </p>
+          <div className='home-output-grid'>
+            {GOVERNANCE_OUTPUTS.map((output) => (
+              <div key={output.label} className='home-output-item'>
+                <span>{t(output.label)}</span>
+                <strong>{t(output.value)}</strong>
+              </div>
+            ))}
+          </div>
+        </AnimateInView>
+
+        <div className='home-flow-stack'>
+          {STEPS.map((step, index) => {
+            const Icon = step.icon
+            return (
+              <AnimateInView
+                key={step.title}
+                delay={index * 80}
+                animation='fade-left'
+                className='home-glass-panel home-flow-card'
+              >
+                <div className='home-flow-index'>
+                  {String(index + 1).padStart(2, '0')}
+                </div>
+                <div className='home-icon-frame'>
+                  <Icon aria-hidden='true' />
+                </div>
+                <div>
+                  <span className='home-flow-rail'>{t(step.rail)}</span>
+                  <h3>{t(step.title)}</h3>
+                  <p>{t(step.description)}</p>
+                </div>
+              </AnimateInView>
+            )
+          })}
         </div>
       </div>
     </section>

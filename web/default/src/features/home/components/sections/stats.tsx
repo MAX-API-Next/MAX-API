@@ -18,14 +18,16 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useCallback, useEffect, useRef } from 'react'
 import {
+  Activity,
+  Boxes,
   CircleDollarSign,
   Clapperboard,
+  KeyRound,
   RadioTower,
   ShieldCheck,
-  type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+import { AnimateInView } from '@/components/animate-in-view'
 
 interface CounterProps {
   end: number
@@ -33,65 +35,72 @@ interface CounterProps {
   duration?: number
 }
 
-type StatTone = 'cyan' | 'amber' | 'emerald' | 'rose'
-
-type StatItem = {
-  icon: LucideIcon
-  tone: StatTone
-  label: string
-  description: string
-} & (
-  | {
-      value: number
-      suffix?: string
-    }
-  | {
-      valueText: string
-    }
-)
-
-const STAT_TONE_CLASSES: Record<
-  StatTone,
+const GOVERNANCE_PRESSURES = [
   {
-    icon: string
-    badge: string
-    border: string
-    accent: string
-    value: string
-  }
-> = {
-  cyan: {
-    icon: 'text-cyan-700 dark:text-cyan-300',
-    badge: 'border-cyan-500/25 bg-cyan-500/10',
-    border: 'hover:border-cyan-500/45',
-    accent: 'bg-cyan-500',
-    value: 'text-cyan-900 dark:text-cyan-100',
+    title: 'Provider and protocol drift is constant',
+    description:
+      'OpenAI, Claude, Gemini, Azure, Bedrock, Vertex, Ollama, and domestic platforms keep changing parameters, models, prices, limits, and multimodal surfaces.',
+    icon: RadioTower,
+    detail: 'Model access',
   },
-  amber: {
-    icon: 'text-amber-700 dark:text-amber-300',
-    badge: 'border-amber-500/25 bg-amber-500/10',
-    border: 'hover:border-amber-500/45',
-    accent: 'bg-amber-500',
-    value: 'text-amber-900 dark:text-amber-100',
+  {
+    title: 'Agents create long operational chains',
+    description:
+      'A production Agent may call multiple models, tools, knowledge bases, image or video tasks, and search systems inside one user intent.',
+    icon: Boxes,
+    detail: 'AgentOps',
   },
-  emerald: {
-    icon: 'text-emerald-700 dark:text-emerald-300',
-    badge: 'border-emerald-500/25 bg-emerald-500/10',
-    border: 'hover:border-emerald-500/45',
-    accent: 'bg-emerald-500',
-    value: 'text-emerald-900 dark:text-emerald-100',
+  {
+    title: 'Cost logic has outgrown token multipliers',
+    description:
+      'Teams need pricing rules for cache hits, input and output tokens, images, audio, fixed tasks, video duration, stages, quality, and refunds.',
+    icon: CircleDollarSign,
+    detail: 'Cost audit',
   },
-  rose: {
-    icon: 'text-rose-700 dark:text-rose-300',
-    badge: 'border-rose-500/25 bg-rose-500/10',
-    border: 'hover:border-rose-500/45',
-    accent: 'bg-rose-500',
-    value: 'text-rose-900 dark:text-rose-100',
+  {
+    title: 'Private deployment needs explicit boundaries',
+    description:
+      'Keys, users, groups, model scope, request logs, admin visibility, retention choices, and security limits need to stay observable and separated.',
+    icon: ShieldCheck,
+    detail: 'Security boundary',
   },
-}
+] as const
+
+const GOVERNANCE_COUNTERS = [
+  {
+    value: 40,
+    suffix: '+',
+    label: 'upstream AI ecosystems',
+    description:
+      'Global and domestic providers, compatible APIs, and local runtimes.',
+    icon: RadioTower,
+  },
+  {
+    value: 7,
+    suffix: '',
+    label: 'governance domains',
+    description: 'Access, routing, quota, price, Agent scope, logs, and audit.',
+    icon: KeyRound,
+  },
+  {
+    value: 11,
+    suffix: '+',
+    label: 'async task surfaces',
+    description:
+      'Submit, poll, map status, proxy results, settle, and refund tasks.',
+    icon: Clapperboard,
+  },
+] as const
+
+const SHIFT_ITEMS = [
+  'model invocation -> continuous governance',
+  'single key -> users, groups, and Agent tokens',
+  'token ratio -> price expressions and rate-cards',
+  'proxy logs -> audit boundaries and retention policy',
+] as const
 
 function Counter(props: CounterProps) {
-  const { end, suffix = '', duration = 1300 } = props
+  const { end, suffix = '', duration = 1200 } = props
   const ref = useRef<HTMLSpanElement>(null)
   const startedRef = useRef(false)
 
@@ -142,153 +151,68 @@ function Counter(props: CounterProps) {
 
 export function Stats() {
   const { t } = useTranslation()
-  const stats: StatItem[] = [
-    {
-      icon: RadioTower,
-      tone: 'cyan',
-      value: 50,
-      suffix: '+',
-      label: t('upstream platforms and compatible model ecosystems'),
-      description: t(
-        'AWS, Azure, Vertex, Ollama, Codex, Dify, RAGFlow, Kling, Seedance, domestic platforms, and OpenAI-compatible APIs.'
-      ),
-    },
-    {
-      icon: Clapperboard,
-      tone: 'amber',
-      value: 11,
-      suffix: '+',
-      label: t('video task channels and protocol templates'),
-      description: t(
-        'Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.'
-      ),
-    },
-    {
-      icon: CircleDollarSign,
-      tone: 'emerald',
-      valueText: t('Continuously updated'),
-      label: t('pricing rule base and rate-card governance'),
-      description: t(
-        'Model prices, billing expressions, tiered JSON, and task rate-cards are maintained as upstream prices evolve.'
-      ),
-    },
-    {
-      icon: ShieldCheck,
-      tone: 'rose',
-      value: 6,
-      suffix: t('agent governance category suffix'),
-      label: t('AgentOps governance dimensions'),
-      description: t(
-        'Token isolation, model scope, quota and cost, routing resilience, usage logs, and audit boundaries.'
-      ),
-    },
-  ]
-  const scopeLabels = [
-    t('Provider & platform adaptation'),
-    t('Protocol layer'),
-    t('Cost audit'),
-    t('AgentOps'),
-  ]
 
   return (
-    <section className='border-border bg-background relative z-10 overflow-hidden border-y px-4 py-14 sm:px-6 md:py-18'>
-      <div
-        aria-hidden='true'
-        className='absolute inset-0 -z-10 [background-image:linear-gradient(to_right,rgba(148,163,184,0.16)_1px,transparent_1px),linear-gradient(to_bottom,rgba(148,163,184,0.12)_1px,transparent_1px)] [background-size:36px_36px] opacity-60 dark:opacity-20'
-      />
-      <div className='mx-auto grid max-w-7xl gap-5 lg:grid-cols-[minmax(280px,0.74fr)_minmax(0,1.26fr)] lg:items-stretch'>
-        <div className='border-border/70 bg-card/72 relative overflow-hidden rounded-xl border p-6 shadow-sm backdrop-blur md:p-8'>
-          <span
-            aria-hidden='true'
-            className='absolute inset-y-0 left-0 w-1 bg-linear-to-b from-cyan-500 via-emerald-500 to-amber-500'
-          />
-          <div className='flex items-center gap-3'>
-            <span className='h-px w-8 bg-emerald-500/70' />
-            <p className='text-muted-foreground text-[11px] font-semibold tracking-[0.28em] uppercase'>
-              {t('Operational baseline')}
-            </p>
+    <section className='home-section home-section--metrics px-4 py-16 sm:px-6 md:py-24'>
+      <div className='mx-auto grid max-w-7xl gap-5 lg:grid-cols-[minmax(300px,0.76fr)_minmax(0,1.24fr)]'>
+        <AnimateInView className='home-glass-panel home-metrics-intro'>
+          <div className='home-section-kicker'>
+            <Activity aria-hidden='true' />
+            {t('Why governance now')}
           </div>
-          <h2 className='mt-4 max-w-xl font-serif text-3xl leading-[1.08] font-black tracking-[-0.01em] md:text-[2.45rem]'>
-            {t('Designed for the continuous operation of AI models and Agents')}
-          </h2>
-          <div className='mt-8 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2'>
-            {scopeLabels.map((label) => (
-              <span
-                key={label}
-                className='border-border/70 bg-background/70 text-muted-foreground rounded-md border px-3 py-2 text-xs font-medium'
-              >
-                {label}
-              </span>
+          <h2>{t('From model invocation to continuous governance')}</h2>
+          <p>
+            {t(
+              'AI products now sit on top of many model platforms, Agent workflows, user systems, billing rules, and security expectations. MAX API turns those moving parts into one operational layer instead of repeated glue code.'
+            )}
+          </p>
+          <div
+            className='home-shift-list'
+            aria-label={t('Governance shift summary')}
+          >
+            {SHIFT_ITEMS.map((item) => (
+              <span key={item}>{t(item)}</span>
             ))}
           </div>
-        </div>
+          <div className='home-governance-counters'>
+            {GOVERNANCE_COUNTERS.map((counter) => {
+              const Icon = counter.icon
+              return (
+                <div key={counter.label} className='home-governance-counter'>
+                  <Icon aria-hidden='true' />
+                  <strong>
+                    <Counter end={counter.value} suffix={counter.suffix} />
+                  </strong>
+                  <span>{t(counter.label)}</span>
+                </div>
+              )
+            })}
+          </div>
+        </AnimateInView>
 
-        <div className='grid gap-3 md:grid-cols-2'>
-          {stats.map((stat, index) => (
-            <StatPanel key={stat.label} stat={stat} index={index} />
-          ))}
+        <div className='home-pressure-grid'>
+          {GOVERNANCE_PRESSURES.map((pressure, index) => {
+            const Icon = pressure.icon
+            return (
+              <AnimateInView
+                key={pressure.title}
+                delay={index * 70}
+                className='home-glass-panel home-pressure-card'
+              >
+                <div className='home-pressure-card-header'>
+                  <div className='home-icon-frame'>
+                    <Icon aria-hidden='true' />
+                  </div>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                </div>
+                <div className='home-pressure-detail'>{t(pressure.detail)}</div>
+                <h3>{t(pressure.title)}</h3>
+                <p>{t(pressure.description)}</p>
+              </AnimateInView>
+            )
+          })}
         </div>
       </div>
     </section>
-  )
-}
-
-function StatPanel(props: { stat: StatItem; index: number }) {
-  const Icon = props.stat.icon
-  const tone = STAT_TONE_CLASSES[props.stat.tone]
-
-  return (
-    <article
-      className={cn(
-        'group border-border/70 bg-card/86 hover:bg-card relative flex min-h-[220px] overflow-hidden rounded-xl border p-5 shadow-sm transition-colors md:p-6',
-        tone.border
-      )}
-    >
-      <span
-        aria-hidden='true'
-        className={cn(
-          'absolute inset-x-0 top-0 h-0.5 origin-left scale-x-50 transition-transform duration-300 group-hover:scale-x-100',
-          tone.accent
-        )}
-      />
-      <div className='flex min-w-0 flex-1 flex-col'>
-        <div className='flex items-start justify-between gap-4'>
-          <span
-            className={cn(
-              'inline-flex size-10 shrink-0 items-center justify-center rounded-lg border',
-              tone.badge
-            )}
-          >
-            <Icon className={cn('size-4', tone.icon)} aria-hidden='true' />
-          </span>
-          <span className='editorial-numeral text-muted-foreground/55 text-xs font-bold'>
-            {String(props.index + 1).padStart(2, '0')}
-          </span>
-        </div>
-
-        <div
-          className={cn(
-            'editorial-numeral mt-5 min-h-12 leading-none font-black tracking-[-0.02em]',
-            tone.value,
-            'valueText' in props.stat ? 'text-2xl md:text-3xl' : 'text-5xl'
-          )}
-        >
-          {'valueText' in props.stat ? (
-            <span className='block leading-[1.08]'>{props.stat.valueText}</span>
-          ) : (
-            <Counter end={props.stat.value} suffix={props.stat.suffix} />
-          )}
-        </div>
-
-        <div className='mt-4'>
-          <h3 className='text-foreground text-sm leading-5 font-semibold'>
-            {props.stat.label}
-          </h3>
-          <p className='text-muted-foreground mt-2 text-xs leading-5'>
-            {props.stat.description}
-          </p>
-        </div>
-      </div>
-    </article>
   )
 }

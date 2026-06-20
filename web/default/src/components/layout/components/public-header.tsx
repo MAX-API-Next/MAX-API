@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { IconGithub } from '@/assets/brand-icons'
 import { useAuthStore } from '@/stores/auth-store'
 import { cn } from '@/lib/utils'
 import { useNotifications } from '@/hooks/use-notifications'
@@ -43,6 +44,7 @@ import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
 
 const AUTH_PROMPT_SECONDS = 5
+const MAX_API_GITHUB_URL = 'https://github.com/MAX-API-Next/MAX-API'
 
 type AuthPromptTarget = {
   title: string
@@ -184,7 +186,7 @@ export function PublicHeader(props: PublicHeaderProps) {
         <div
           className={cn(
             'pointer-events-auto mx-auto transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
-            scrolled ? 'max-w-[52rem] px-3 pt-3' : 'max-w-7xl px-4 pt-0 md:px-6'
+            scrolled ? 'max-w-[52rem] px-3 pt-1' : 'max-w-7xl px-4 pt-0 md:px-6'
           )}
         >
           <nav
@@ -192,7 +194,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               'flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
               scrolled
                 ? 'bg-background/72 ring-border/50 dark:bg-background/72 h-12 rounded-xl pr-1.5 pl-4 shadow-[0_2px_16px_-6px_rgba(0,0,0,0.08),0_0_0_0.5px_rgba(0,0,0,0.02)] ring-[0.5px] backdrop-blur-2xl dark:shadow-[0_2px_16px_-6px_rgba(0,0,0,0.4)]'
-                : 'h-16 rounded-none px-2 md:mt-3 md:h-12 md:rounded-xl md:border md:border-slate-300/45 md:bg-white/54 md:px-4 md:shadow-sm md:backdrop-blur-xl md:dark:border-white/10 md:dark:bg-white/[0.055]'
+                : 'h-16 rounded-none px-2 md:h-12 md:rounded-xl md:border md:border-slate-300/45 md:bg-white/54 md:px-4 md:shadow-sm md:backdrop-blur-xl md:dark:border-white/10 md:dark:bg-white/[0.055]'
             )}
           >
             {/* Logo */}
@@ -261,12 +263,9 @@ export function PublicHeader(props: PublicHeaderProps) {
                 )
               })}
 
-              {(showLanguageSwitcher ||
-                showThemeSwitch ||
-                showNotifications) && (
-                <div className='bg-border/40 mx-2 h-4 w-px' />
-              )}
+              <div className='bg-border/40 mx-2 h-4 w-px' />
 
+              <GitHubLinkButton />
               {showLanguageSwitcher && <LanguageSwitcher />}
               {showThemeSwitch && <ThemeSwitch />}
               {showNotifications && (
@@ -304,6 +303,7 @@ export function PublicHeader(props: PublicHeaderProps) {
 
             {/* Mobile: compact actions + hamburger */}
             <div className='flex items-center gap-2 sm:hidden'>
+              <GitHubLinkButton className='size-9' />
               {showThemeSwitch && <ThemeSwitch />}
               {showAuthButtons && !loading && isAuthenticated && (
                 <ProfileDropdown />
@@ -451,5 +451,26 @@ export function PublicHeader(props: PublicHeaderProps) {
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function GitHubLinkButton(props: { className?: string }) {
+  return (
+    <Button
+      variant='ghost'
+      size='icon'
+      className={cn('rounded-lg', props.className)}
+      render={
+        <a
+          href={MAX_API_GITHUB_URL}
+          target='_blank'
+          rel='noopener noreferrer'
+          aria-label='MAX API GitHub'
+          title='MAX API GitHub'
+        />
+      }
+    >
+      <IconGithub aria-hidden='true' />
+    </Button>
   )
 }
