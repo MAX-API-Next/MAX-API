@@ -72,14 +72,15 @@ export function isPerCallBilling(modelPrice?: number): boolean {
   return (modelPrice ?? 0) > 0
 }
 
+const HOUR_IN_MS = 60 * 60 * 1000
+
 /**
- * Get default time range (today 00:00:00 to now + 1 hour)
+ * Get default time range (one hour before now to one hour after now)
  */
 export function getDefaultTimeRange(): { start: Date; end: Date } {
-  const now = new Date()
-  const start = new Date(now)
-  start.setHours(0, 0, 0, 0)
-  const end = new Date(now.getTime() + 3600 * 1000) // +1 hour
+  const now = Date.now()
+  const start = new Date(now - HOUR_IN_MS)
+  const end = new Date(now + HOUR_IN_MS)
 
   return { start, end }
 }
