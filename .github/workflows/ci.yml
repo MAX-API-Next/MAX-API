@@ -26,6 +26,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Build embedded frontend
+        working-directory: web
+        env:
+          CI: ""
+          DISABLE_ESLINT_PLUGIN: "true"
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          VITE_REACT_APP_VERSION: ${{ github.sha }}
+        run: |
+          bun install --frozen-lockfile
+          cd default
+          bun run build
+
       - name: Download dependencies
         run: go mod download
 
@@ -48,7 +65,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: '1.3.14'
 
       - name: Install dependencies
         working-directory: web
