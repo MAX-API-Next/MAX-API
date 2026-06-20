@@ -67,6 +67,8 @@ MAX API 是由来自科研机构和高校的 AGI 爱好者组织发起、维护�
 
 ## 🎯 项目定位
 
+<img width="1902" height="1031" alt="image" src="https://github.com/user-attachments/assets/fa481602-1e75-4326-9275-3c8271d01f5b" />
+
 在 AGI 应用时代，MAX API 聚焦于开放的 AI 模型治理和 AI Agent 治理基础设施，建设让开发者和组织能够稳定运行 AI 应用与 Agent 工作负载的服务、治理和运营层：
 
 - **模型治理平面**：统一管理模型入口、渠道、供应商、协议格式、模型映射、价格规则、任务协议和多模态接口。
