@@ -57,7 +57,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            calciumion/new-api
+            cscitechtop/max-api
 
       - name: Build & push single-arch
         uses: docker/build-push-action@v6
@@ -66,8 +66,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            calciumion/new-api:nightly-${{ matrix.arch }}
-            calciumion/new-api:${{ steps.version.outputs.value }}-${{ matrix.arch }}
+            cscitechtop/max-api:nightly-${{ matrix.arch }}
+            cscitechtop/max-api:${{ steps.version.outputs.value }}-${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -101,13 +101,13 @@ jobs:
       - name: Create & push manifest (Docker Hub - nightly)
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:nightly \
-            calciumion/new-api:nightly-amd64 \
-            calciumion/new-api:nightly-arm64
+            -t cscitechtop/max-api:nightly \
+            cscitechtop/max-api:nightly-amd64 \
+            cscitechtop/max-api:nightly-arm64
 
       - name: Create & push manifest (Docker Hub - versioned nightly)
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:${VERSION} \
-            calciumion/new-api:${VERSION}-amd64 \
-            calciumion/new-api:${VERSION}-arm64
+            -t cscitechtop/max-api:${VERSION} \
+            cscitechtop/max-api:${VERSION}-amd64 \
+            cscitechtop/max-api:${VERSION}-arm64

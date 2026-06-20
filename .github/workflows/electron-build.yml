@@ -48,20 +48,21 @@ jobs:
         run: |
           cd web
           bun install
+          cd default
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
-          cd ..
+          cd ../..
 
       # - name: Build Go binary (macos/Linux)
       #   if: runner.os != 'Windows'
       #   run: |
       #     go mod download
-      #     go build -ldflags "-s -w -X 'new-api/common.Version=$(git describe --tags)' -extldflags '-static'" -o new-api
+      #     go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(git describe --tags)' -extldflags '-static'" -o max-api
 
       - name: Build Go binary (Windows)
         if: runner.os == 'Windows'
         run: |
           go mod download
-          go build -ldflags "-s -w -X 'new-api/common.Version=$(git describe --tags)'" -o new-api.exe
+          go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(git describe --tags)'" -o max-api.exe
 
       - name: Update Electron version
         run: |

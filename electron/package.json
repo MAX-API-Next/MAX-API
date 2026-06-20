@@ -61,7 +61,7 @@
           "to": "bin/max-api"
         },
         {
-          "from": "../web/dist",
+          "from": "../web/default/dist",
           "to": "web/dist"
         },
         {

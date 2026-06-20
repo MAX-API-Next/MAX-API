@@ -13,8 +13,8 @@ on:
 
 # 配置你的 Gitee 仓库信息
 env:
-  GITEE_OWNER: 'QuantumNous'  # 修改为你的 Gitee 用户名
-  GITEE_REPO: 'new-api'                # 修改为你的 Gitee 仓库名
+  GITEE_OWNER: 'MAX-API-Next'  # 修改为你的 Gitee 用户名
+  GITEE_REPO: 'MAX-API'                # 修改为你的 Gitee 仓库名
 
 jobs:
   sync-to-gitee:
@@ -88,4 +88,3 @@ jobs:
         run: |
           echo "✅ Successfully synced release ${{ github.event.inputs.tag_name }} to Gitee!"
           echo "🔗 Gitee Release URL: https://gitee.com/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/tag/${{ github.event.inputs.tag_name }}"
-

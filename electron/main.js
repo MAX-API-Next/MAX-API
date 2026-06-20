@@ -235,7 +235,7 @@ function startServer() {
       console.log('Development mode: skipping server startup');
       console.log('Please make sure you have started:');
       console.log('  1. Go backend: go run main.go (port 3000)');
-      console.log('  2. Frontend dev server: cd web && bun dev (port 5173)');
+      console.log('  2. Frontend dev server: cd web/default && bun run dev (port 5173)');
       console.log('');
       console.log('Checking if servers are running...');
       
@@ -248,7 +248,7 @@ function startServer() {
         .catch((err) => {
           console.error(`✗ Cannot connect to frontend dev server on port ${DEV_FRONTEND_PORT}`);
           console.error('Please make sure the frontend dev server is running:');
-          console.error('  cd web && bun dev');
+          console.error('  cd web/default && bun run dev');
           reject(err);
         });
       return;
