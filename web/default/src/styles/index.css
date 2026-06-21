@@ -1024,6 +1024,12 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   overflow: hidden;
 }
 
+.home-sphere-stage--standalone {
+  width: 100%;
+  min-height: clamp(30rem, 44vw, 35rem);
+  overflow: visible;
+}
+
 .home-sphere-backplane {
   position: absolute;
   width: min(88%, 33rem);
@@ -2078,6 +2084,246 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   .home-sphere-point,
   .home-orbit-node,
   .home-telemetry-track {
+    animation: none !important;
+  }
+}
+
+/* MAX API auth page technology system */
+.auth-shell {
+  background:
+    radial-gradient(circle at 20% 20%, rgb(59 130 246 / 0.16), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgb(34 211 238 / 0.12), transparent 24%),
+    radial-gradient(circle at 50% 82%, rgb(16 185 129 / 0.1), transparent 28%),
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--background) 94%, black 6%),
+      var(--background)
+    );
+}
+
+.auth-shell-bg {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.auth-shell-grid {
+  position: absolute;
+  inset: -20%;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.03) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  mask-image: radial-gradient(circle at center, black 28%, transparent 78%);
+  opacity: 0.55;
+  transform: perspective(1200px) rotateX(68deg) translateY(10%);
+}
+
+.auth-shell-orbit {
+  position: absolute;
+  inset: auto;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 9999px;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.02) inset,
+    0 0 48px rgb(59 130 246 / 0.1);
+  backdrop-filter: blur(2px);
+}
+
+.auth-shell-orbit-one {
+  top: 8%;
+  right: -8rem;
+  width: 26rem;
+  height: 26rem;
+}
+
+.auth-shell-orbit-two {
+  bottom: 12%;
+  left: -10rem;
+  width: 34rem;
+  height: 34rem;
+}
+
+.auth-shell-orbit-three {
+  top: 40%;
+  left: 42%;
+  width: 16rem;
+  height: 16rem;
+  opacity: 0.45;
+}
+
+.auth-brand-link {
+  backdrop-filter: blur(16px);
+}
+
+.auth-brand-logo {
+  position: relative;
+  size: 2rem;
+  width: 2rem;
+  height: 2rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.04);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.03) inset,
+    0 12px 32px rgb(15 23 42 / 0.25);
+}
+
+.auth-page-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 42rem) minmax(23rem, 29rem);
+  align-items: center;
+  justify-content: center;
+  gap: clamp(4.5rem, 8vw, 8rem);
+  width: 100%;
+  max-width: 90rem;
+  margin-inline: auto;
+  min-height: calc(100svh - 5rem);
+  padding: clamp(3.5rem, 6svh, 5rem) 0 clamp(2rem, 4svh, 3rem);
+}
+
+.auth-hero-panel,
+.auth-form-panel {
+  position: relative;
+}
+
+.auth-hero-panel {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  min-height: 100%;
+}
+
+.auth-card-badge {
+  width: fit-content;
+  gap: 0.4rem;
+  border-color: rgb(148 163 184 / 0.22);
+  background: rgb(15 23 42 / 0.38);
+  backdrop-filter: blur(14px);
+}
+
+.auth-hero-visual {
+  --home-bg: #030712;
+  --home-panel: rgb(15 23 42 / 0.58);
+  --home-panel-strong: rgb(15 23 42 / 0.78);
+  --home-border: rgb(148 163 184 / 0.2);
+  --home-border-strong: rgb(34 211 238 / 0.38);
+  --home-text: rgb(248 250 252);
+  --home-muted: rgb(203 213 225 / 0.72);
+  --home-cyan: rgb(34 211 238);
+  --home-emerald: rgb(52 211 153);
+  --home-violet: rgb(167 139 250);
+  --home-amber: rgb(251 191 36);
+  width: min(100%, 40rem);
+  margin-inline: auto;
+  color: white;
+}
+
+.auth-hero-visual .home-sphere-stage--standalone {
+  min-height: clamp(30rem, 42vw, 35rem);
+}
+
+.auth-hero-visual .home-orbit {
+  width: min(84%, 31rem);
+}
+
+.auth-hero-visual .home-orbit--inner {
+  width: min(64%, 23rem);
+}
+
+.auth-hero-visual .home-orbit--tilted {
+  width: min(73%, 26.5rem);
+}
+
+.auth-hero-visual .home-orbit-node {
+  --orbit-radius: min(15rem, 34vw);
+}
+
+.auth-hero-visual .home-sphere {
+  width: min(54vw, 21rem);
+  min-width: 15.75rem;
+}
+
+.auth-hero-visual .home-sphere-core {
+  width: 7.2rem;
+  height: 7.2rem;
+}
+
+.auth-login-card {
+  border-radius: 1.25rem;
+  box-shadow:
+    0 32px 90px rgb(2 6 23 / 0.34),
+    0 0 0 1px rgb(255 255 255 / 0.04) inset;
+}
+
+.auth-login-card .card-content {
+  padding-top: 0;
+}
+
+.auth-form-grid {
+  gap: 1rem;
+}
+
+.auth-form-grid > * {
+  min-width: 0;
+}
+
+.auth-form-panel {
+  display: flex;
+  justify-content: center;
+  transform: translateY(clamp(1.25rem, 3vw, 3rem));
+}
+
+.auth-login-card {
+  width: min(100%, 29rem);
+}
+
+@media (max-width: 1280px) {
+  .auth-page-grid {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 43rem;
+    gap: 2rem;
+  }
+
+  .auth-hero-panel {
+    order: 2;
+  }
+
+  .auth-form-panel {
+    order: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .auth-page-grid {
+    gap: 1rem;
+    padding: 1.25rem 0 1.5rem;
+  }
+
+  .auth-hero-visual .home-sphere-stage--standalone {
+    min-height: 25rem;
+  }
+
+  .auth-hero-visual .home-orbit-node {
+    --orbit-radius: min(12.5rem, 40vw);
+  }
+
+  .auth-hero-visual .home-sphere {
+    min-width: 14rem;
+  }
+
+  .auth-hero-visual .home-sphere-core {
+    width: 6.4rem;
+    height: 6.4rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-shell-grid,
+  .auth-shell-orbit {
     animation: none !important;
   }
 }

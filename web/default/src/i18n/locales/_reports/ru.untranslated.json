@@ -1,6 +1,5 @@
 {
   "A focused home for Agent keys, model access, balance, routing, and service health.": "A focused home for Agent keys, model access, balance, routing, and service health.",
-  "A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.": "A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.",
   "Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.": "Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.",
   "Agent access": "Agent access",
   "agent governance category suffix": " categories",
@@ -97,7 +96,6 @@
   "Start governing model and Agent traffic in minutes": "Start governing model and Agent traffic in minutes",
   "Start with a self-hosted gateway, then keep improving model routing, pricing rules, audit boundaries, and Agent workload visibility as AI usage grows.": "Start with a self-hosted gateway, then keep improving model routing, pricing rules, audit boundaries, and Agent workload visibility as AI usage grows.",
   "Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.": "Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.",
-  "The governance layer for AI models and Agents.": "The governance layer for AI models and Agents.",
   "Tiered Billing": "Tiered Billing",
   "Tiered billing configuration saved": "Tiered billing configuration saved",
   "Tiered billing JSON": "Tiered billing JSON",

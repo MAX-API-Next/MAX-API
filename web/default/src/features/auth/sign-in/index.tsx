@@ -19,6 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { Link, useSearch } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useStatus } from '@/hooks/use-status'
+import { useSystemConfig } from '@/hooks/use-system-config'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { NeuralSphere } from '@/components/neural-sphere'
 import { AuthLayout } from '../auth-layout'
 import { TermsFooter } from '../components/terms-footer'
 import { UserAuthForm } from './components/user-auth-form'
@@ -27,36 +31,56 @@ export function SignIn() {
   const { t } = useTranslation()
   const { redirect } = useSearch({ from: '/(auth)/sign-in' })
   const { status } = useStatus()
+  const { logo, systemName } = useSystemConfig()
+  const canRegister =
+    !status?.self_use_mode_enabled && status?.register_enabled !== false
 
   return (
-    <AuthLayout>
-      <div className='w-full space-y-8'>
-        <div className='space-y-2'>
-          <h2 className='text-center text-2xl font-semibold tracking-tight sm:text-left'>
-            {t('Sign in')}
-          </h2>
-          {!status?.self_use_mode_enabled &&
-            status?.register_enabled !== false && (
-              <p className='text-muted-foreground text-left text-sm sm:text-base'>
-                {t("Don't have an account?")}{' '}
-                <Link
-                  to='/sign-up'
-                  className='hover:text-primary font-medium underline underline-offset-4'
-                >
-                  {t('Sign up')}
-                </Link>
-                .
-              </p>
-            )}
-        </div>
+    <AuthLayout variant='split'>
+      <div className='auth-page-grid'>
+        <section className='auth-hero-panel'>
+          <div className='auth-hero-visual'>
+            <NeuralSphere logo={logo} name={systemName} variant='sphere' />
+          </div>
+        </section>
 
-        <UserAuthForm redirectTo={redirect} />
+        <section className='auth-form-panel'>
+          <Card className='auth-login-card border-border/60 bg-background/60 backdrop-blur-2xl'>
+            <CardHeader className='space-y-4'>
+              <Badge variant='outline' className='auth-card-badge w-fit'>
+                {t('Sign in')}
+              </Badge>
+              <div className='space-y-2'>
+                <CardTitle className='text-3xl leading-tight font-semibold tracking-tight'>
+                  {t('Sign in')}
+                </CardTitle>
+              </div>
+            </CardHeader>
 
-        <TermsFooter
-          variant='sign-in'
-          status={status}
-          className='text-center'
-        />
+            <CardContent className='space-y-6'>
+              {canRegister && (
+                <p className='text-muted-foreground text-sm'>
+                  {t("Don't have an account?")}{' '}
+                  <Link
+                    to='/sign-up'
+                    className='text-foreground hover:text-primary font-medium underline underline-offset-4'
+                  >
+                    {t('Sign up')}
+                  </Link>
+                  .
+                </p>
+              )}
+
+              <UserAuthForm redirectTo={redirect} className='auth-form-grid' />
+
+              <TermsFooter
+                variant='sign-in'
+                status={status}
+                className='text-muted-foreground text-left text-xs leading-5'
+              />
+            </CardContent>
+          </Card>
+        </section>
       </div>
     </AuthLayout>
   )

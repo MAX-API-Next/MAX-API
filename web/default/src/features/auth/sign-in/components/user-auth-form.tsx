@@ -381,10 +381,14 @@ export function UserAuthForm({
             {/* Submit Button */}
             <Button
               type='submit'
-              className='mt-2 w-full justify-center gap-2'
+              className='mt-2 h-11 w-full justify-center gap-2 rounded-xl'
               disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
             >
-              {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
+              {isLoading ? (
+                <Loader2 className='size-4 animate-spin' />
+              ) : (
+                <LogIn />
+              )}
               {t('Sign in')}
             </Button>
 
@@ -456,6 +460,7 @@ export function UserAuthForm({
                 variant='outline'
                 onClick={() => handleWeChatDialogChange(false)}
                 disabled={isWeChatSubmitting}
+                className='rounded-xl'
               >
                 {t('Cancel')}
               </Button>
@@ -467,10 +472,10 @@ export function UserAuthForm({
                   !wechatCode.trim() ||
                   (requiresLegalConsent && !agreedToLegal)
                 }
-                className='gap-2'
+                className='gap-2 rounded-xl'
               >
                 {isWeChatSubmitting ? (
-                  <Loader2 className='h-4 w-4 animate-spin' />
+                  <Loader2 className='size-4 animate-spin' />
                 ) : null}
                 {t('Confirm')}
               </Button>

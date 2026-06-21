@@ -18,44 +18,65 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { Skeleton } from '@/components/ui/skeleton'
 
 type AuthLayoutProps = {
   children: React.ReactNode
+  variant?: 'center' | 'split'
 }
 
-export function AuthLayout({ children }: AuthLayoutProps) {
+export function AuthLayout({ children, variant = 'center' }: AuthLayoutProps) {
   const { t } = useTranslation()
   const { systemName, logo, loading } = useSystemConfig()
 
   return (
-    <div className='relative grid h-svh max-w-none'>
+    <div className='auth-shell relative min-h-svh overflow-hidden'>
+      <div className='auth-shell-bg' aria-hidden='true'>
+        <div className='auth-shell-grid' />
+        <div className='auth-shell-orbit auth-shell-orbit-one' />
+        <div className='auth-shell-orbit auth-shell-orbit-two' />
+        <div className='auth-shell-orbit auth-shell-orbit-three' />
+      </div>
+
       <Link
         to='/'
-        className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
+        className={cn(
+          'auth-brand-link absolute z-20 flex items-center gap-2 transition-opacity hover:opacity-80',
+          'top-4 left-4 sm:top-6 sm:left-6'
+        )}
       >
-        <div className='relative h-8 w-8'>
+        <div className='auth-brand-logo'>
           {loading ? (
             <Skeleton className='absolute inset-0 rounded-full' />
           ) : (
             <img
               src={logo}
               alt={t('Logo')}
-              className='h-8 w-8 rounded-full object-cover'
+              className='size-full object-cover'
             />
           )}
         </div>
         {loading ? (
-          <Skeleton className='h-6 w-24' />
+          <Skeleton className='h-6 w-24 rounded-full' />
         ) : (
-          <h1 className='text-xl font-medium'>{systemName}</h1>
+          <h1 className='text-lg font-medium tracking-tight sm:text-xl'>
+            {systemName}
+          </h1>
         )}
       </Link>
-      <div className='container flex items-center pt-16 sm:pt-0'>
-        <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:p-8'>
-          {children}
-        </div>
+
+      <div className='relative z-10 container flex min-h-svh items-stretch px-4 py-6 sm:px-6 lg:px-8'>
+        {variant === 'split' ? (
+          <div className='auth-layout-split flex w-full items-center'>
+            {children}
+          </div>
+        ) : (
+          <div className='auth-layout-center mx-auto flex w-full max-w-[32rem] flex-col justify-center py-8 sm:py-10'>
+            {children}
+          </div>
+        )}
       </div>
     </div>
   )

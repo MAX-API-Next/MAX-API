@@ -1,6 +1,5 @@
 {
   "A focused home for Agent keys, model access, balance, routing, and service health.": "A focused home for Agent keys, model access, balance, routing, and service health.",
-  "A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.": "A service layer for the continuous operation of AI models and Agents, adapting as model platforms, pricing rules, Agent workloads, and audit requirements evolve.",
   "Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.": "Add authorized provider keys, model catalogs, model mappings, custom paths, task protocols, and channel groups.",
   "Agent token scopes, model access, audit visibility, retention, and admin controls.": "Agent token scopes, model access, audit visibility, retention, and admin controls.",
   "Agent tokens, traces, and workload cost": "Agent tokens, traces, and workload cost",
@@ -54,7 +53,6 @@
   "Start governing model and Agent traffic in minutes": "Start governing model and Agent traffic in minutes",
   "Start with a self-hosted gateway, then keep improving model routing, pricing rules, audit boundaries, and Agent workload visibility as AI usage grows.": "Start with a self-hosted gateway, then keep improving model routing, pricing rules, audit boundaries, and Agent workload visibility as AI usage grows.",
   "Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.": "Task submission, polling, status mapping, error paths, result proxying, and configurable upstream paths.",
-  "The governance layer for AI models and Agents.": "The governance layer for AI models and Agents.",
   "Token isolation, model scope, quota and cost, routing resilience, usage logs, and audit boundaries.": "Token isolation, model scope, quota and cost, routing resilience, usage logs, and audit boundaries.",
   "Token scopes, model access, cost attribution, audit scope, and workload visibility.": "Token scopes, model access, cost attribution, audit scope, and workload visibility.",
   "Unify access, routing, billing, observability, and audit for AI models and Agent workloads in a single self-hosted service layer.": "Unify access, routing, billing, observability, and audit for AI models and Agent workloads in a single self-hosted service layer.",

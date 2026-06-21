@@ -16,14 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { CSSProperties } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
-  Activity,
   ArrowRight,
   BookOpen,
   CircleDollarSign,
-  Coins,
   KeyRound,
   LockKeyhole,
   Network,
@@ -35,6 +32,7 @@ import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { NeuralSphere } from '@/components/neural-sphere'
 
 interface HeroProps {
   className?: string
@@ -90,67 +88,6 @@ const HERO_PANELS = [
       'Keep channel health, cost audit, task state, logs, admin visibility, and private deployment boundaries explicit over time.',
     icon: ShieldCheck,
   },
-] as const
-
-const ORBIT_NODES = [
-  { label: 'OpenAI', angle: '18deg', delay: '0s' },
-  { label: 'Claude', angle: '78deg', delay: '-1.4s' },
-  { label: 'Gemini', angle: '144deg', delay: '-2.5s' },
-  { label: 'DeepSeek', angle: '214deg', delay: '-3.8s' },
-  { label: 'Qwen', angle: '288deg', delay: '-5.1s' },
-  { label: 'Agents', angle: '336deg', delay: '-6.2s' },
-] as const
-
-const SPHERE_POINTS = [
-  { x: '17%', y: '31%', delay: '0s' },
-  { x: '28%', y: '68%', delay: '-0.8s' },
-  { x: '44%', y: '23%', delay: '-1.6s' },
-  { x: '82%', y: '42%', delay: '-2.1s' },
-  { x: '69%', y: '27%', delay: '-2.8s' },
-  { x: '78%', y: '63%', delay: '-3.5s' },
-  { x: '31%', y: '38%', delay: '-4.2s' },
-  { x: '61%', y: '76%', delay: '-4.9s' },
-  { x: '23%', y: '49%', delay: '-5.5s' },
-  { x: '72%', y: '47%', delay: '-6.1s' },
-  { x: '49%', y: '82%', delay: '-6.8s' },
-  { x: '58%', y: '18%', delay: '-7.3s' },
-] as const
-
-const SPHERE_PANEL_ITEMS = [
-  {
-    title: 'Ingress',
-    value: 'Apps + Agents',
-    icon: Network,
-  },
-  {
-    title: 'Policy',
-    value: 'users / groups',
-    icon: KeyRound,
-  },
-  {
-    title: 'Settlement',
-    value: 'rate-card / expr',
-    icon: Coins,
-  },
-  {
-    title: 'Audit',
-    value: 'logs / limits',
-    icon: ShieldCheck,
-  },
-] as const
-
-const SPHERE_ARCS = [
-  { className: 'home-sphere-arc--primary', delay: '0s' },
-  { className: 'home-sphere-arc--secondary', delay: '-1.6s' },
-  { className: 'home-sphere-arc--tertiary', delay: '-3.1s' },
-] as const
-
-const TELEMETRY_ITEMS = [
-  'Policy matched',
-  'Route selected',
-  'Quota reserved',
-  'Task observed',
-  'Audit sealed',
 ] as const
 
 export function Hero(props: HeroProps) {
@@ -319,122 +256,5 @@ export function Hero(props: HeroProps) {
         })}
       </div>
     </section>
-  )
-}
-
-function sphereStyle(values: {
-  x: string
-  y: string
-  delay: string
-}): CSSProperties {
-  return {
-    '--sphere-point-x': values.x,
-    '--sphere-point-y': values.y,
-    '--sphere-point-delay': values.delay,
-  } as CSSProperties
-}
-
-function orbitStyle(values: { angle: string; delay: string }): CSSProperties {
-  return {
-    '--orbit-angle': values.angle,
-    '--orbit-delay': values.delay,
-  } as CSSProperties
-}
-
-function arcStyle(values: { delay: string }): CSSProperties {
-  return {
-    '--sphere-arc-delay': values.delay,
-  } as CSSProperties
-}
-
-function NeuralSphere(props: { logo: string; name: string }) {
-  const { t } = useTranslation()
-
-  return (
-    <div
-      className='home-visual-shell'
-      aria-label={t('Live AI governance visualization')}
-    >
-      <div className='home-visual-topbar'>
-        <div className='flex items-center gap-2'>
-          <span className='home-window-dot' />
-          <span className='home-window-dot home-window-dot--secondary' />
-          <span className='home-window-dot home-window-dot--tertiary' />
-        </div>
-        <div className='flex items-center gap-2 text-xs text-slate-400'>
-          <Activity aria-hidden='true' className='size-3.5' />
-          {t('Governance fabric online')}
-        </div>
-      </div>
-
-      <div className='home-sphere-stage'>
-        <div className='home-sphere-backplane' aria-hidden='true' />
-        <div className='home-orbit home-orbit--outer' aria-hidden='true' />
-        <div className='home-orbit home-orbit--inner' aria-hidden='true' />
-        <div className='home-orbit home-orbit--tilted' aria-hidden='true' />
-
-        {ORBIT_NODES.map((node) => (
-          <div
-            key={node.label}
-            className='home-orbit-node'
-            style={orbitStyle(node)}
-          >
-            <span>{node.label}</span>
-          </div>
-        ))}
-
-        <div className='home-sphere' aria-hidden='true'>
-          <div className='home-sphere-grid home-sphere-grid--lat' />
-          <div className='home-sphere-grid home-sphere-grid--lng' />
-          <div className='home-sphere-halo home-sphere-halo--equator' />
-          <div className='home-sphere-halo home-sphere-halo--meridian' />
-          {SPHERE_ARCS.map((arc) => (
-            <span
-              key={arc.className}
-              className={cn('home-sphere-arc', arc.className)}
-              style={arcStyle(arc)}
-            />
-          ))}
-          <div className='home-sphere-core'>
-            <img
-              src={props.logo}
-              alt={props.name}
-              className='home-sphere-logo'
-            />
-          </div>
-          {SPHERE_POINTS.map((point, index) => (
-            <span
-              key={`${point.x}-${point.y}`}
-              className='home-sphere-point'
-              style={sphereStyle(point)}
-              data-index={index}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className='home-visual-panels'>
-        {SPHERE_PANEL_ITEMS.map((item) => {
-          const Icon = item.icon
-          return (
-            <div key={item.title} className='home-visual-panel'>
-              <Icon aria-hidden='true' />
-              <div>
-                <span>{t(item.title)}</span>
-                <strong>{t(item.value)}</strong>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-
-      <div className='home-telemetry-band' aria-hidden='true'>
-        <div className='home-telemetry-track'>
-          {[...TELEMETRY_ITEMS, ...TELEMETRY_ITEMS].map((item, index) => (
-            <span key={`${item}-${index}`}>{t(item)}</span>
-          ))}
-        </div>
-      </div>
-    </div>
   )
 }
