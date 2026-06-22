@@ -60,6 +60,7 @@ func (user *User) ToBaseUser() *UserBase {
 		Id:       user.Id,
 		Group:    user.Group,
 		Quota:    user.Quota,
+		Role:     user.Role,
 		Status:   user.Status,
 		Username: user.Username,
 		Setting:  user.Setting,
@@ -328,8 +329,10 @@ func HardDeleteUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(&User{}, "id = ?", id).Error
-	return err
+	if err := DB.Unscoped().Delete(&User{}, "id = ?", id).Error; err != nil {
+		return err
+	}
+	return invalidateUserCache(id)
 }
 
 func inviteUser(inviterId int) (err error) {
@@ -509,8 +512,7 @@ func (user *User) Update(updatePassword bool) error {
 		return err
 	}
 
-	// Update cache
-	return updateUserCache(*user)
+	return invalidateUserCache(user.Id)
 }
 
 func (user *User) Edit(updatePassword bool) error {
@@ -538,8 +540,7 @@ func (user *User) Edit(updatePassword bool) error {
 		return err
 	}
 
-	// Update cache
-	return updateUserCache(*user)
+	return invalidateUserCache(user.Id)
 }
 
 func (user *User) ClearBinding(bindingType string) error {
@@ -589,8 +590,10 @@ func (user *User) HardDelete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(user).Error
-	return err
+	if err := DB.Unscoped().Delete(user).Error; err != nil {
+		return err
+	}
+	return invalidateUserCache(user.Id)
 }
 
 // ValidateAndFill check password & user status

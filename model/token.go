@@ -225,6 +225,34 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	return nil, fmt.Errorf("%w: %v", ErrDatabase, err)
 }
 
+func ValidateUserTokenForReadOnly(key string) (token *Token, err error) {
+	if key == "" {
+		return nil, ErrTokenNotProvided
+	}
+	token, err = GetTokenByKey(key, false)
+	if err == nil {
+		if token.Status != common.TokenStatusEnabled && token.Status != common.TokenStatusExhausted {
+			return token, ErrTokenInvalid
+		}
+		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
+			if !common.RedisEnabled {
+				token.Status = common.TokenStatusExpired
+				err := token.SelectUpdate()
+				if err != nil {
+					common.SysLog("failed to update token status" + err.Error())
+				}
+			}
+			return token, ErrTokenInvalid
+		}
+		return token, nil
+	}
+	common.SysLog("ValidateUserTokenForReadOnly: failed to get token: " + err.Error())
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTokenInvalid
+	}
+	return nil, fmt.Errorf("%w: %v", ErrDatabase, err)
+}
+
 func GetTokenByIds(id int, userId int) (*Token, error) {
 	if id == 0 || userId == 0 {
 		return nil, errors.New("id 或 userId 为空！")

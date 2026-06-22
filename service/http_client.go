@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,10 +17,138 @@ import (
 )
 
 var (
-	httpClient      *http.Client
-	proxyClientLock sync.Mutex
-	proxyClients    = make(map[string]*http.Client)
+	httpClient              *http.Client
+	ssrfProtectedHTTPClient *http.Client
+	proxyClientLock         sync.Mutex
+	proxyClients            = make(map[string]*http.Client)
+
+	ssrfProtectionCacheLock    sync.RWMutex
+	ssrfProtectionCacheKey     string
+	ssrfProtectionCache        *common.SSRFProtection
+	ssrfProtectionCacheEnabled bool
+	ssrfProtectionCacheErr     error
 )
+
+func newBaseTransport(proxyFunc func(*http.Request) (*url.URL, error)) *http.Transport {
+	transport := &http.Transport{
+		MaxIdleConns:        common.RelayMaxIdleConns,
+		MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
+		IdleConnTimeout:     time.Duration(common.RelayIdleConnTimeout) * time.Second,
+		ForceAttemptHTTP2:   true,
+		Proxy:               proxyFunc,
+	}
+	if common.TLSInsecureSkipVerify {
+		transport.TLSClientConfig = common.InsecureTLSConfig
+	}
+	return transport
+}
+
+func newHTTPClient(transport *http.Transport) *http.Client {
+	client := &http.Client{
+		Transport:     transport,
+		CheckRedirect: checkRedirect,
+	}
+	if common.RelayTimeout != 0 {
+		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
+	}
+	return client
+}
+
+func ssrfProtectionSettingKey(fetchSetting *system_setting.FetchSetting) string {
+	return fmt.Sprintf(
+		"%t|%t|%t|%t|%q|%q|%q|%t",
+		fetchSetting.EnableSSRFProtection,
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		fetchSetting.AllowedPorts,
+		fetchSetting.ApplyIPFilterForDomain,
+	)
+}
+
+func getCachedSSRFProtection() (*common.SSRFProtection, bool, error) {
+	fetchSetting := system_setting.GetFetchSetting()
+	cacheKey := ssrfProtectionSettingKey(fetchSetting)
+
+	ssrfProtectionCacheLock.RLock()
+	if cacheKey == ssrfProtectionCacheKey {
+		protection := ssrfProtectionCache
+		enabled := ssrfProtectionCacheEnabled
+		err := ssrfProtectionCacheErr
+		ssrfProtectionCacheLock.RUnlock()
+		return protection, enabled, err
+	}
+	ssrfProtectionCacheLock.RUnlock()
+
+	ssrfProtectionCacheLock.Lock()
+	defer ssrfProtectionCacheLock.Unlock()
+	if cacheKey == ssrfProtectionCacheKey {
+		return ssrfProtectionCache, ssrfProtectionCacheEnabled, ssrfProtectionCacheErr
+	}
+
+	protection, enabled, err := common.NewSSRFProtectionWithFetchSetting(
+		fetchSetting.EnableSSRFProtection,
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		fetchSetting.AllowedPorts,
+		fetchSetting.ApplyIPFilterForDomain,
+	)
+	ssrfProtectionCacheKey = cacheKey
+	ssrfProtectionCache = protection
+	ssrfProtectionCacheEnabled = enabled
+	ssrfProtectionCacheErr = err
+	return protection, enabled, err
+}
+
+func ssrfProtectedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	protection, enabled, err := getCachedSSRFProtection()
+	if err != nil {
+		return nil, fmt.Errorf("request reject - %v", err)
+	}
+	if !enabled {
+		return dialer.DialContext(ctx, network, addr)
+	}
+
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %s", portStr)
+	}
+	dialAddrs, err := protection.ResolveValidatedDialAddresses(ctx, host, port)
+	if err != nil {
+		return nil, err
+	}
+	if len(dialAddrs) == 0 {
+		return nil, fmt.Errorf("no validated dial addresses for %s", addr)
+	}
+	var lastErr error
+	for _, dialAddr := range dialAddrs {
+		conn, err := dialer.DialContext(ctx, network, dialAddr)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func newSSRFProtectedHTTPClient() *http.Client {
+	// SSRF-protected fetches must dial the validated destination directly.
+	// Environment proxies resolve the target on the proxy side, so DialContext
+	// would only validate the proxy address and lose DNS/IP binding.
+	transport := newBaseTransport(nil)
+	transport.DialContext = ssrfProtectedDialContext
+	return newHTTPClient(transport)
+}
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	fetchSetting := system_setting.GetFetchSetting()
@@ -34,33 +163,19 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func InitHttpClient() {
-	transport := &http.Transport{
-		MaxIdleConns:        common.RelayMaxIdleConns,
-		MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-		IdleConnTimeout:     time.Duration(common.RelayIdleConnTimeout) * time.Second,
-		ForceAttemptHTTP2:   true,
-		Proxy:               http.ProxyFromEnvironment, // Support HTTP_PROXY, HTTPS_PROXY, NO_PROXY env vars
-	}
-	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
-	}
-
-	if common.RelayTimeout == 0 {
-		httpClient = &http.Client{
-			Transport:     transport,
-			CheckRedirect: checkRedirect,
-		}
-	} else {
-		httpClient = &http.Client{
-			Transport:     transport,
-			Timeout:       time.Duration(common.RelayTimeout) * time.Second,
-			CheckRedirect: checkRedirect,
-		}
-	}
+	httpClient = newHTTPClient(newBaseTransport(http.ProxyFromEnvironment))
+	ssrfProtectedHTTPClient = newSSRFProtectedHTTPClient()
 }
 
 func GetHttpClient() *http.Client {
 	return httpClient
+}
+
+func GetSSRFProtectedHttpClient() *http.Client {
+	if ssrfProtectedHTTPClient != nil {
+		return ssrfProtectedHTTPClient
+	}
+	return newSSRFProtectedHTTPClient()
 }
 
 // GetHttpClientWithProxy returns the default client or a proxy-enabled one when proxyURL is provided.

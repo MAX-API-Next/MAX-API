@@ -15,22 +15,39 @@ import (
 func withHeaderNavModules(t *testing.T, raw string) {
 	t.Helper()
 
+	withHeaderNavOptions(t, map[string]string{
+		"HeaderNavModules": raw,
+		"RankingsModule":   "",
+	})
+}
+
+func withHeaderNavOptions(t *testing.T, values map[string]string) {
+	t.Helper()
+
 	common.OptionMapRWMutex.Lock()
 	if common.OptionMap == nil {
 		common.OptionMap = map[string]string{}
 	}
-	previous, hadPrevious := common.OptionMap["HeaderNavModules"]
-	common.OptionMap["HeaderNavModules"] = raw
+	previousValues := make(map[string]string, len(values))
+	hadPreviousValues := make(map[string]bool, len(values))
+	for key, value := range values {
+		previous, hadPrevious := common.OptionMap[key]
+		previousValues[key] = previous
+		hadPreviousValues[key] = hadPrevious
+		common.OptionMap[key] = value
+	}
 	common.OptionMapRWMutex.Unlock()
 
 	t.Cleanup(func() {
 		common.OptionMapRWMutex.Lock()
 		defer common.OptionMapRWMutex.Unlock()
-		if hadPrevious {
-			common.OptionMap["HeaderNavModules"] = previous
-			return
+		for key := range values {
+			if hadPreviousValues[key] {
+				common.OptionMap[key] = previousValues[key]
+				continue
+			}
+			delete(common.OptionMap, key)
 		}
-		delete(common.OptionMap, "HeaderNavModules")
 	})
 }
 
@@ -59,6 +76,7 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 
 	var cookies []*http.Cookie
 	if authenticated {
+		seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusEnabled, "default")
 		loginRecorder := httptest.NewRecorder()
 		loginRequest := httptest.NewRequest(http.MethodGet, "/login", nil)
 		router.ServeHTTP(loginRecorder, loginRequest)
@@ -91,6 +109,48 @@ func TestHeaderNavModuleAuthRejectsDisabledPricing(t *testing.T) {
 	withHeaderNavModules(t, raw)
 
 	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("pricing"), false)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthRejectsDisabledRankings(t *testing.T) {
+	raw := `{"rankings":{"enabled":false,"requireAuth":false}}`
+	withHeaderNavModules(t, raw)
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("rankings"), false)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthUsesRankingsModuleOverride(t *testing.T) {
+	withHeaderNavOptions(t, map[string]string{
+		"HeaderNavModules": `{"rankings":{"enabled":true,"requireAuth":false}}`,
+		"RankingsModule":   `{"enabled":false,"requireAuth":false}`,
+	})
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("rankings"), false)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthUsesLegacyRankingsFallbackForPartialRankingsModule(t *testing.T) {
+	withHeaderNavOptions(t, map[string]string{
+		"HeaderNavModules": `{"rankings":{"enabled":true,"requireAuth":true}}`,
+		"RankingsModule":   `{"enabled":true}`,
+	})
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("rankings"), false)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestHeaderNavModuleAuthFallsBackToLegacyRankingsConfig(t *testing.T) {
+	withHeaderNavOptions(t, map[string]string{
+		"HeaderNavModules": `{"rankings":{"enabled":false,"requireAuth":false}}`,
+		"RankingsModule":   "",
+	})
+
+	recorder := performHeaderNavRequest(t, HeaderNavModuleAuth("rankings"), false)
 
 	require.Equal(t, http.StatusForbidden, recorder.Code)
 }

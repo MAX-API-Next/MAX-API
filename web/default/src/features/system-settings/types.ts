@@ -68,6 +68,7 @@ export type SiteSettings = {
   'legal.user_agreement': string
   'legal.privacy_policy': string
   HeaderNavModules: string
+  RankingsModule: string
   SidebarModulesAdmin: string
 }
 

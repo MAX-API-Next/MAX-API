@@ -1,6 +1,8 @@
 package common
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -116,6 +118,60 @@ func TestValidateRedirectURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveValidatedDialAddressRejectsPrivateIP(t *testing.T) {
+	protection := &SSRFProtection{
+		AllowPrivateIp:         false,
+		DomainFilterMode:       false,
+		IpFilterMode:           false,
+		AllowedPorts:           []int{80},
+		ApplyIPFilterForDomain: true,
+	}
+
+	_, err := protection.ResolveValidatedDialAddress(context.Background(), "127.0.0.1", 80)
+	if err == nil {
+		t.Fatalf("expected private IP to be rejected")
+	}
+	if !strings.Contains(err.Error(), "private IP address not allowed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveValidatedDialAddressRejectsDomainResolvingToPrivateIP(t *testing.T) {
+	protection := &SSRFProtection{
+		AllowPrivateIp:         false,
+		DomainFilterMode:       false,
+		IpFilterMode:           false,
+		AllowedPorts:           []int{80},
+		ApplyIPFilterForDomain: true,
+	}
+
+	_, err := protection.ResolveValidatedDialAddress(context.Background(), "localhost", 80)
+	if err == nil {
+		t.Fatalf("expected domain resolving to private IP to be rejected")
+	}
+	if !strings.Contains(err.Error(), "private IP address not allowed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveValidatedDialAddressAllowsPrivateIPWhenConfigured(t *testing.T) {
+	protection := &SSRFProtection{
+		AllowPrivateIp:         true,
+		DomainFilterMode:       false,
+		IpFilterMode:           false,
+		AllowedPorts:           []int{80},
+		ApplyIPFilterForDomain: true,
+	}
+
+	addr, err := protection.ResolveValidatedDialAddress(context.Background(), "127.0.0.1", 80)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if addr != "127.0.0.1:80" {
+		t.Fatalf("unexpected dial address: %s", addr)
 	}
 }
 

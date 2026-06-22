@@ -154,6 +154,9 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
+	if err := server.SetTrustedProxies(common.TrustedProxies); err != nil {
+		common.FatalLog("failed to configure trusted proxies: " + err.Error())
+	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -175,7 +178,7 @@ func main() {
 		Path:     "/",
 		MaxAge:   2592000, // 30 days
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   common.SessionCookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	server.Use(sessions.Sessions("session", store))

@@ -511,6 +511,13 @@ export const STATIC_I18N_KEYS = [
   'agent governance category suffix',
   'AgentOps governance dimensions',
   'Token isolation, model scope, quota and cost, routing resilience, usage logs, and audit boundaries.',
+  'Access, routing, quota, price, Agent scope, logs, and audit.',
+  'Authentication, token scope, model range, channel routing, quota pre-consume, billing expressions, logs, audit controls, and admin operations live here.',
+  'Global and domestic providers, compatible APIs, and local runtimes.',
+  'OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, domestic models, image, audio, video, embedding, rerank, and compatible API ecosystems stay replaceable.',
+  'OpenAI, Claude, Gemini, Azure, Bedrock, Vertex, Ollama, and domestic platforms keep changing parameters, models, prices, limits, and multimodal surfaces.',
+  'Refund rules',
+  'Submit, poll, map status, proxy results, settle, and refund tasks.',
 
   // Tiered billing settings
   'Tiered Billing',

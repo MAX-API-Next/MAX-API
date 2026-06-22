@@ -67,6 +67,8 @@ var DefaultCollapseSidebar = false // default value of collapse sidebar
 
 var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
+var SessionCookieSecure = true
+var TrustedProxies []string
 
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex

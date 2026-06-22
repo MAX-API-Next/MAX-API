@@ -15,25 +15,44 @@ type headerNavAccess struct {
 }
 
 func getHeaderNavAccess(module string) headerNavAccess {
-	fallback := headerNavAccess{
+	defaultAccess := headerNavAccess{
 		Enabled:     true,
 		RequireAuth: false,
 	}
 
 	common.OptionMapRWMutex.RLock()
 	raw := common.OptionMap["HeaderNavModules"]
+	rankingsRaw := common.OptionMap["RankingsModule"]
 	common.OptionMapRWMutex.RUnlock()
 
-	if strings.TrimSpace(raw) == "" {
+	legacyAccess := defaultAccess
+
+	if strings.TrimSpace(raw) != "" {
+		var parsed map[string]any
+		if err := common.Unmarshal([]byte(raw), &parsed); err == nil {
+			legacyAccess = parseHeaderNavAccess(parsed[module], defaultAccess)
+		}
+	}
+
+	if module == "rankings" && strings.TrimSpace(rankingsRaw) != "" {
+		return parseHeaderNavAccessOption(rankingsRaw, legacyAccess)
+	}
+
+	return legacyAccess
+}
+
+func parseHeaderNavAccessOption(raw string, fallback headerNavAccess) headerNavAccess {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return fallback
 	}
 
-	var parsed map[string]any
-	if err := common.Unmarshal([]byte(raw), &parsed); err != nil {
-		return fallback
+	var parsed any
+	if err := common.Unmarshal([]byte(trimmed), &parsed); err == nil {
+		return parseHeaderNavAccess(parsed, fallback)
 	}
 
-	return parseHeaderNavAccess(parsed[module], fallback)
+	return parseHeaderNavAccess(trimmed, fallback)
 }
 
 func parseHeaderNavAccess(raw any, fallback headerNavAccess) headerNavAccess {

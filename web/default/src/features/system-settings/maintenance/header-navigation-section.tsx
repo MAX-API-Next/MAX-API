@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -39,20 +39,15 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
-import {
-  HEADER_NAV_DEFAULT,
-  type HeaderNavModulesConfig,
-  serializeHeaderNavModules,
-} from './config'
+import { useResetForm } from '../hooks/use-reset-form'
+import { HEADER_NAV_DEFAULT, type HeaderNavModulesConfig } from './config'
+import { useHeaderNavModulesOption } from './use-header-nav-modules-option'
 
 const headerNavSchema = z.object({
   home: z.boolean(),
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
-  rankingsEnabled: z.boolean(),
-  rankingsRequireAuth: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -61,7 +56,6 @@ type HeaderNavFormValues = z.infer<typeof headerNavSchema>
 
 type HeaderNavigationSectionProps = {
   config: HeaderNavModulesConfig
-  initialSerialized: string
 }
 
 const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
@@ -79,14 +73,6 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
-  rankingsEnabled:
-    config.rankings?.enabled === undefined
-      ? HEADER_NAV_DEFAULT.rankings.enabled
-      : Boolean(config.rankings.enabled),
-  rankingsRequireAuth:
-    config.rankings?.requireAuth === undefined
-      ? HEADER_NAV_DEFAULT.rankings.requireAuth
-      : Boolean(config.rankings.requireAuth),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -97,10 +83,9 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
 
 export function HeaderNavigationSection({
   config,
-  initialSerialized,
 }: HeaderNavigationSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const headerNavOption = useHeaderNavModulesOption()
   const formDefaults = useMemo(() => toFormValues(config), [config])
 
   const form = useForm<HeaderNavFormValues>({
@@ -108,38 +93,21 @@ export function HeaderNavigationSection({
     defaultValues: formDefaults,
   })
 
-  useEffect(() => {
-    form.reset(formDefaults)
-  }, [formDefaults, form])
+  useResetForm(form, formDefaults)
 
   const onSubmit = async (values: HeaderNavFormValues) => {
-    const payload: HeaderNavModulesConfig = {
-      ...config,
+    await headerNavOption.updateHeaderNavModules((current) => ({
+      ...current,
       home: values.home,
       console: values.console,
       docs: values.docs,
       about: values.about,
       pricing: {
-        ...(config.pricing ?? HEADER_NAV_DEFAULT.pricing),
+        ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
         enabled: values.pricingEnabled,
         requireAuth: values.pricingRequireAuth,
       },
-      rankings: {
-        ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
-        enabled: values.rankingsEnabled,
-        requireAuth: values.rankingsRequireAuth,
-      },
-    }
-
-    const serialized = serializeHeaderNavModules(payload)
-    if (serialized === initialSerialized) {
-      return
-    }
-
-    await updateOption.mutateAsync({
-      key: 'HeaderNavModules',
-      value: serialized,
-    })
+    }))
   }
 
   const resetToDefault = () => {
@@ -176,7 +144,7 @@ export function HeaderNavigationSection({
   const accessModules: Array<{
     enabledKey: keyof HeaderNavFormValues
     requireAuthKey: keyof HeaderNavFormValues
-    requireAuthDependsOn: 'pricingEnabled' | 'rankingsEnabled'
+    requireAuthDependsOn: 'pricingEnabled'
     title: string
     description: string
     requireAuthTitle: string
@@ -193,17 +161,6 @@ export function HeaderNavigationSection({
         'Visitors must authenticate before accessing the pricing directory.'
       ),
     },
-    {
-      enabledKey: 'rankingsEnabled',
-      requireAuthKey: 'rankingsRequireAuth',
-      requireAuthDependsOn: 'rankingsEnabled',
-      title: t('Rankings'),
-      description: t('Public rankings page based on live usage data.'),
-      requireAuthTitle: t('Require login to view rankings'),
-      requireAuthDescription: t(
-        'Visitors must authenticate before accessing the rankings page.'
-      ),
-    },
   ]
 
   return (
@@ -213,7 +170,7 @@ export function HeaderNavigationSection({
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}
             onReset={resetToDefault}
-            isSaving={updateOption.isPending}
+            isSaving={headerNavOption.isPending}
             resetLabel='Reset to default'
             saveLabel='Save navigation'
           />

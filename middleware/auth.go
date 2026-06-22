@@ -33,7 +33,60 @@ func validUserInfo(username string, role int) bool {
 	return true
 }
 
+func sessionInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func refreshSessionFromUser(session sessions.Session, user *model.UserBase) {
+	changed := false
+	setIfChanged := func(key string, value any) {
+		if session.Get(key) != value {
+			session.Set(key, value)
+			changed = true
+		}
+	}
+	setIfChanged("id", user.Id)
+	setIfChanged("username", user.Username)
+	setIfChanged("role", user.Role)
+	setIfChanged("status", user.Status)
+	setIfChanged("group", user.Group)
+	if changed {
+		if err := session.Save(); err != nil {
+			common.SysLog(fmt.Sprintf("failed to refresh session for user %d: %v", user.Id, err))
+		}
+	}
+}
+
+func getSessionUser(session sessions.Session) (*model.UserBase, error) {
+	id, ok := sessionInt(session.Get("id"))
+	if !ok || id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return model.GetUserCache(id)
+}
+
+func writeSessionUserContext(c *gin.Context, user *model.UserBase) {
+	c.Set("id", user.Id)
+	c.Set("username", user.Username)
+	c.Set("role", user.Role)
+	c.Set("group", user.Group)
+	c.Set("user_group", user.Group)
+	user.WriteContext(c)
+}
+
 func authHelper(c *gin.Context, minRole int) {
+	freshAuthHelper(c, minRole)
+	return
+
 	session := sessions.Default(c)
 	username := session.Get("username")
 	role := session.Get("role")
@@ -159,12 +212,157 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Next()
 }
 
+func freshAuthHelper(c *gin.Context, minRole int) {
+	session := sessions.Default(c)
+	useAccessToken := false
+	var (
+		username string
+		role     int
+		id       int
+		status   int
+		group    string
+	)
+
+	if session.Get("id") != nil || session.Get("username") != nil {
+		userCache, err := getSessionUser(session)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+				})
+			} else {
+				common.SysLog("session user refresh error: " + err.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+			}
+			c.Abort()
+			return
+		}
+		refreshSessionFromUser(session, userCache)
+		username = userCache.Username
+		role = userCache.Role
+		id = userCache.Id
+		status = userCache.Status
+		group = userCache.Group
+		userCache.WriteContext(c)
+	} else {
+		accessToken := c.Request.Header.Get("Authorization")
+		if accessToken == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+			})
+			c.Abort()
+			return
+		}
+		user, authErr := model.ValidateAccessToken(accessToken)
+		if authErr != nil {
+			if errors.Is(authErr, model.ErrDatabase) {
+				common.SysLog("ValidateAccessToken database error: " + authErr.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+			} else {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
+				})
+			}
+			c.Abort()
+			return
+		}
+		if user == nil || user.Username == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
+			})
+			c.Abort()
+			return
+		}
+		username = user.Username
+		role = user.Role
+		id = user.Id
+		status = user.Status
+		group = user.Group
+		useAccessToken = true
+	}
+
+	apiUserIdStr := c.Request.Header.Get("Max-Api-User")
+	if apiUserIdStr == "" {
+		apiUserIdStr = c.Request.Header.Get("New-Api-User")
+	}
+	if apiUserIdStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdNotProvided),
+		})
+		c.Abort()
+		return
+	}
+	apiUserId, err := strconv.Atoi(apiUserIdStr)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdFormatError),
+		})
+		c.Abort()
+		return
+	}
+	if id != apiUserId {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
+		})
+		c.Abort()
+		return
+	}
+	if status == common.UserStatusDisabled {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
+		})
+		c.Abort()
+		return
+	}
+	if role < minRole {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+		})
+		c.Abort()
+		return
+	}
+	if !validUserInfo(username, role) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
+		})
+		c.Abort()
+		return
+	}
+
+	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
+	c.Set("username", username)
+	c.Set("role", role)
+	c.Set("id", id)
+	c.Set("group", group)
+	c.Set("user_group", group)
+	c.Set("use_access_token", useAccessToken)
+	c.Next()
+}
+
 func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
-		id := session.Get("id")
-		if id != nil {
-			c.Set("id", id)
+		if session.Get("id") != nil {
+			if userCache, err := getSessionUser(session); err == nil && userCache.Status == common.UserStatusEnabled {
+				refreshSessionFromUser(session, userCache)
+				writeSessionUserContext(c, userCache)
+			}
 		}
 		c.Next()
 	}
@@ -172,19 +370,19 @@ func TryUserAuth() func(c *gin.Context) {
 
 func UserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		authHelper(c, common.RoleCommonUser)
+		freshAuthHelper(c, common.RoleCommonUser)
 	}
 }
 
 func AdminAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		authHelper(c, common.RoleAdminUser)
+		freshAuthHelper(c, common.RoleAdminUser)
 	}
 }
 
 func RootAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		authHelper(c, common.RoleRootUser)
+		freshAuthHelper(c, common.RoleRootUser)
 	}
 }
 
@@ -198,11 +396,16 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
-		if id := session.Get("id"); id != nil {
-			if status, ok := session.Get("status").(int); ok && status == common.UserStatusEnabled {
-				c.Set("id", id)
+		if session.Get("id") != nil {
+			userCache, err := getSessionUser(session)
+			if err == nil && userCache.Status == common.UserStatusEnabled {
+				refreshSessionFromUser(session, userCache)
+				writeSessionUserContext(c, userCache)
 				c.Next()
 				return
+			}
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				common.SysLog("TokenOrUserAuth session user refresh error: " + err.Error())
 			}
 		}
 		// Fall back to token auth (API clients)
@@ -210,10 +413,9 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	}
 }
 
-// TokenAuthReadOnly 宽松版本的令牌认证中间件，用于只读查询接口。
-// 只验证令牌 key 是否存在，不检查令牌状态、过期时间和额度。
-// 即使令牌已过期、已耗尽或已禁用，也允许访问。
-// 仍然检查用户是否被封禁。
+// TokenAuthReadOnly validates token identity for read-only query APIs.
+// It rejects disabled and expired tokens, but still allows exhausted tokens to
+// read their own usage/log data.
 func TokenAuthReadOnly() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		key := c.Request.Header.Get("Authorization")
@@ -232,15 +434,15 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		parts := strings.Split(key, "-")
 		key = parts[0]
 
-		token, err := model.GetTokenByKey(key, false)
+		token, err := model.ValidateUserTokenForReadOnly(key)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if errors.Is(err, model.ErrTokenInvalid) || errors.Is(err, model.ErrTokenNotProvided) {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"success": false,
 					"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
 				})
 			} else {
-				common.SysLog("TokenAuthReadOnly GetTokenByKey database error: " + err.Error())
+				common.SysLog("TokenAuthReadOnly ValidateUserTokenForReadOnly database error: " + err.Error())
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"success": false,
 					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),

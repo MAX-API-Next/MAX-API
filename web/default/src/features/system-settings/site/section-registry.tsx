@@ -18,13 +18,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { SystemInfoSection } from '../general/system-info-section'
 import {
+  parseHeaderNavAccessModule,
   parseHeaderNavModules,
   parseSidebarModulesAdmin,
-  serializeHeaderNavModules,
   serializeSidebarModulesAdmin,
 } from '../maintenance/config'
 import { HeaderNavigationSection } from '../maintenance/header-navigation-section'
 import { NoticeSection } from '../maintenance/notice-section'
+import { RankingsVisibilitySection } from '../maintenance/rankings-visibility-section'
 import { SidebarModulesSection } from '../maintenance/sidebar-modules-section'
 import type { SiteSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
@@ -61,17 +62,23 @@ const SITE_SECTIONS = [
     ),
   },
   {
+    id: 'rankings',
+    titleKey: 'Rankings',
+    build: (settings: SiteSettings) => {
+      const headerNavConfig = parseHeaderNavModules(settings.HeaderNavModules)
+      const rankingsConfig = parseHeaderNavAccessModule(
+        settings.RankingsModule,
+        headerNavConfig.rankings
+      )
+      return <RankingsVisibilitySection config={rankingsConfig} />
+    },
+  },
+  {
     id: 'header-navigation',
     titleKey: 'Header navigation',
     build: (settings: SiteSettings) => {
       const headerNavConfig = parseHeaderNavModules(settings.HeaderNavModules)
-      const headerNavSerialized = serializeHeaderNavModules(headerNavConfig)
-      return (
-        <HeaderNavigationSection
-          config={headerNavConfig}
-          initialSerialized={headerNavSerialized}
-        />
-      )
+      return <HeaderNavigationSection config={headerNavConfig} />
     },
   },
   {

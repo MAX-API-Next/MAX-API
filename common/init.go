@@ -84,6 +84,16 @@ func InitEnv() {
 	LogRequestContentEnabled = GetEnvOrDefaultBool("LOG_REQUEST_CONTENT_ENABLED", false)
 	LogResponseContentEnabled = GetEnvOrDefaultBool("LOG_RESPONSE_CONTENT_ENABLED", false)
 	LogContentMaxCharacters = GetEnvOrDefault("LOG_CONTENT_MAX_CHARACTERS", 12000)
+	SessionCookieSecure = GetEnvOrDefaultBool("SESSION_COOKIE_SECURE", true)
+	TrustedProxies = nil
+	if trustedProxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); trustedProxies != "" {
+		for _, proxy := range strings.Split(trustedProxies, ",") {
+			proxy = strings.TrimSpace(proxy)
+			if proxy != "" {
+				TrustedProxies = append(TrustedProxies, proxy)
+			}
+		}
+	}
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
 	NodeName = os.Getenv("NODE_NAME")
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)

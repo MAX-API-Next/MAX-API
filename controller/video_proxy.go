@@ -135,6 +135,9 @@ func VideoProxy(c *gin.Context) {
 		videoProxyError(c, http.StatusForbidden, "server_error", fmt.Sprintf("request blocked: %v", err))
 		return
 	}
+	if proxy == "" {
+		client = service.GetSSRFProtectedHttpClient()
+	}
 
 	req.URL, err = url.Parse(videoURL)
 	if err != nil {
