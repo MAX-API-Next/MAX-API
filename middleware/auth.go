@@ -295,7 +295,7 @@ func freshAuthHelper(c *gin.Context, minRole int) {
 	if apiUserIdStr == "" {
 		apiUserIdStr = c.Request.Header.Get("New-Api-User")
 	}
-	if useAccessToken || apiUserIdStr != "" {
+	if useAccessToken {
 		if apiUserIdStr == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
