@@ -295,30 +295,32 @@ func freshAuthHelper(c *gin.Context, minRole int) {
 	if apiUserIdStr == "" {
 		apiUserIdStr = c.Request.Header.Get("New-Api-User")
 	}
-	if apiUserIdStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdNotProvided),
-		})
-		c.Abort()
-		return
-	}
-	apiUserId, err := strconv.Atoi(apiUserIdStr)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdFormatError),
-		})
-		c.Abort()
-		return
-	}
-	if id != apiUserId {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
-		})
-		c.Abort()
-		return
+	if useAccessToken || apiUserIdStr != "" {
+		if apiUserIdStr == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthUserIdNotProvided),
+			})
+			c.Abort()
+			return
+		}
+		apiUserId, err := strconv.Atoi(apiUserIdStr)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthUserIdFormatError),
+			})
+			c.Abort()
+			return
+		}
+		if id != apiUserId {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
+			})
+			c.Abort()
+			return
+		}
 	}
 	if status == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{

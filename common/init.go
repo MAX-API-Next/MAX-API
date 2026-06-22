@@ -84,7 +84,7 @@ func InitEnv() {
 	LogRequestContentEnabled = GetEnvOrDefaultBool("LOG_REQUEST_CONTENT_ENABLED", false)
 	LogResponseContentEnabled = GetEnvOrDefaultBool("LOG_RESPONSE_CONTENT_ENABLED", false)
 	LogContentMaxCharacters = GetEnvOrDefault("LOG_CONTENT_MAX_CHARACTERS", 12000)
-	SessionCookieSecure = GetEnvOrDefaultBool("SESSION_COOKIE_SECURE", true)
+	SessionCookieSecure = GetEnvOrDefaultBool("SESSION_COOKIE_SECURE", false)
 	TrustedProxies = nil
 	if trustedProxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); trustedProxies != "" {
 		for _, proxy := range strings.Split(trustedProxies, ",") {

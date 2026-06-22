@@ -102,6 +102,32 @@ func TestAdminAuthRejectsDemotedStaleSession(t *testing.T) {
 	require.NotEqual(t, http.StatusNoContent, recorder.Code)
 }
 
+func TestUserAuthAllowsSessionWithoutUserHeader(t *testing.T) {
+	seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusEnabled, "default")
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("user-session-without-header-test"))))
+	cookies := loginMiddlewareSession(t, router, &model.User{
+		Id:       1,
+		Username: "tester",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	})
+	router.GET("/self", UserAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/self", nil)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+}
+
 func TestTokenOrUserAuthRejectsDisabledStaleSession(t *testing.T) {
 	seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusEnabled, "default")
 
