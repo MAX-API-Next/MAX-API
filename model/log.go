@@ -66,16 +66,56 @@ const (
 	LogTypeRefund  = 6
 )
 
+func userVisibleAuditInfo(adminInfoValue interface{}) map[string]interface{} {
+	if !common.LogRequestContentEnabled && !common.LogResponseContentEnabled {
+		return nil
+	}
+	adminInfo, ok := adminInfoValue.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	auditInfo := make(map[string]interface{})
+	copyStringField := func(key string) {
+		if value, ok := adminInfo[key].(string); ok && strings.TrimSpace(value) != "" {
+			auditInfo[key] = value
+		}
+	}
+	copyBoolField := func(key string) {
+		if value, ok := adminInfo[key].(bool); ok && value {
+			auditInfo[key] = value
+		}
+	}
+
+	if common.LogRequestContentEnabled {
+		copyStringField("request_content")
+		copyBoolField("request_content_truncated")
+	}
+	if common.LogResponseContentEnabled {
+		copyStringField("response_content")
+		copyBoolField("response_content_truncated")
+	}
+	if len(auditInfo) == 0 {
+		return nil
+	}
+	return auditInfo
+}
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {
+			auditInfo := userVisibleAuditInfo(otherMap["admin_info"])
 			// Remove admin-only debug fields.
 			delete(otherMap, "admin_info")
+			delete(otherMap, "audit_info")
 			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			if auditInfo != nil {
+				otherMap["audit_info"] = auditInfo
+			}
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1

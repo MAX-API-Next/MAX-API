@@ -90,6 +90,7 @@ export function LogAuditSection({ defaultValues }: LogAuditSectionProps) {
       }
 
       await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      await queryClient.invalidateQueries({ queryKey: ['status'] })
       toast.success(t('Setting updated successfully'))
     } catch (error) {
       const message =
@@ -97,6 +98,7 @@ export function LogAuditSection({ defaultValues }: LogAuditSectionProps) {
       if (didApplyAny) {
         try {
           await queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          await queryClient.invalidateQueries({ queryKey: ['status'] })
         } catch {
           /* empty */
         }
@@ -130,7 +132,7 @@ export function LogAuditSection({ defaultValues }: LogAuditSectionProps) {
                   <FormLabel>{t('Record request content')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'Store request prompts and messages in admin-only usage log details.'
+                      'Store request prompts and messages in usage log details.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -152,9 +154,7 @@ export function LogAuditSection({ defaultValues }: LogAuditSectionProps) {
                 <SettingsSwitchContent>
                   <FormLabel>{t('Record response content')}</FormLabel>
                   <FormDescription>
-                    {t(
-                      'Store model output text in admin-only usage log details.'
-                    )}
+                    {t('Store model output text in usage log details.')}
                   </FormDescription>
                 </SettingsSwitchContent>
                 <FormControl>

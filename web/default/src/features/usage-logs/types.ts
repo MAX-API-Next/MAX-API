@@ -119,7 +119,15 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export interface LogAuditInfo {
+  request_content?: string
+  request_content_truncated?: boolean
+  response_content?: string
+  response_content_truncated?: boolean
+}
+
 export interface LogOtherData {
+  audit_info?: LogAuditInfo
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number
@@ -136,11 +144,7 @@ export interface LogOtherData {
     // Manage audit fields (type=3, admin only)
     admin_username?: string
     admin_id?: number | string
-    request_content?: string
-    request_content_truncated?: boolean
-    response_content?: string
-    response_content_truncated?: boolean
-  }
+  } & LogAuditInfo
   request_path?: string
   request_conversion?: string[]
   ws?: boolean

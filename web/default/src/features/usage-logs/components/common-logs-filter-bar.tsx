@@ -23,6 +23,7 @@ import { type Table } from '@tanstack/react-table'
 import { Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useIsAdmin } from '@/hooks/use-admin'
+import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -37,6 +38,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { StatusBadge } from '@/components/status-badge'
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
@@ -71,8 +73,13 @@ export function CommonLogsFilterBar<TData>(
   const queryClient = useQueryClient()
   const searchParams = route.useSearch()
   const isAdmin = useIsAdmin()
+  const { status } = useStatus()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const logAuditEnabled = Boolean(status?.log_audit_enabled)
+  const logAuditDescription = logAuditEnabled
+    ? t('Request or response content may be recorded for usage log audit.')
+    : t('Request and response content audit is disabled.')
 
   const [filters, setFilters] = useState<CommonLogFilters>(() => {
     const { start, end } = getDefaultTimeRange()
@@ -82,6 +89,7 @@ export function CommonLogsFilterBar<TData>(
 
   useEffect(() => {
     const { start, end } = getDefaultTimeRange()
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFilters({
       startTime: searchParams.startTime
         ? new Date(searchParams.startTime)
@@ -199,6 +207,16 @@ export function CommonLogsFilterBar<TData>(
   const statsBar = (
     <div className='flex flex-wrap items-center gap-2'>
       <CommonLogsStats />
+      <StatusBadge
+        label={
+          logAuditEnabled ? t('Log audit enabled') : t('Log audit disabled')
+        }
+        variant={logAuditEnabled ? 'warning' : 'neutral'}
+        size='sm'
+        copyable={false}
+        title={logAuditDescription}
+        aria-label={logAuditDescription}
+      />
       <Tooltip>
         <TooltipTrigger
           render={

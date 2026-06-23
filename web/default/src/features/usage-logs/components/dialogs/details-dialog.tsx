@@ -464,6 +464,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showAdminIp =
     !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
   const adminInfo = other?.admin_info
+  const auditInfo = props.isAdmin
+    ? (adminInfo ?? other?.audit_info)
+    : other?.audit_info
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
       ? ([
@@ -712,21 +715,21 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </DetailSection>
             )}
 
-            {props.isAdmin && adminInfo?.request_content && (
+            {auditInfo?.request_content && (
               <AuditContentSection
                 label={t('Request Content')}
-                content={adminInfo.request_content}
-                truncated={adminInfo.request_content_truncated}
+                content={auditInfo.request_content}
+                truncated={auditInfo.request_content_truncated}
                 copiedText={copiedText}
                 onCopy={copyToClipboard}
               />
             )}
 
-            {props.isAdmin && adminInfo?.response_content && (
+            {auditInfo?.response_content && (
               <AuditContentSection
                 label={t('Response Content')}
-                content={adminInfo.response_content}
-                truncated={adminInfo.response_content_truncated}
+                content={auditInfo.response_content}
+                truncated={auditInfo.response_content_truncated}
                 copiedText={copiedText}
                 onCopy={copyToClipboard}
               />
