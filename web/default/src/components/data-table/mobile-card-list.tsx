@@ -301,7 +301,11 @@ export function MobileCardList<TData>(props: MobileCardListProps<TData>) {
         return (
           <div
             key={key}
-            className={cn('bg-card px-3 py-2.5', getRowClassName?.(row))}
+            data-state={row.getIsSelected() ? 'selected' : undefined}
+            className={cn(
+              'bg-card px-3 py-2.5 transition-colors data-[state=selected]:bg-muted',
+              getRowClassName?.(row)
+            )}
           >
             <RowComponent row={row} />
           </div>

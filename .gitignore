@@ -13,6 +13,7 @@ web/node_modules
 .env
 one-api
 max-api
+new-api
 /__debug_bin*
 .DS_Store
 tiktoken_cache
@@ -23,6 +24,8 @@ tiktoken_cache
 plans
 .claude
 .cursor
+.agents
+.codex
 
 electron/node_modules
 electron/dist

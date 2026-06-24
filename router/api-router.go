@@ -306,13 +306,31 @@ func SetApiRouter(router *gin.Engine) {
 		}
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
-		logRoute.DELETE("/", middleware.AdminAuth(), controller.DeleteHistoryLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
+		logRoute.DELETE("/", middleware.AdminAuth(), controller.DeleteOldLogsCompat)
+
+		systemTaskRoute := apiRouter.Group("/system-task")
+		systemTaskRoute.POST("/log-cleanup", middleware.AdminAuth(), controller.CreateLogCleanupSystemTask)
+		systemTaskRoute.GET("/log-cleanup/current", middleware.AdminAuth(), controller.GetCurrentLogCleanupSystemTask)
+		systemTaskRoute.GET("/log-cleanup/:task_id", middleware.AdminAuth(), controller.GetLogCleanupSystemTask)
+		systemTaskRoute.Use(middleware.RootAuth())
+		{
+			systemTaskRoute.GET("/current", controller.GetCurrentSystemTask)
+			systemTaskRoute.GET("/list", controller.ListSystemTasks)
+			systemTaskRoute.GET("/:task_id", controller.GetSystemTask)
+		}
+
+		systemInfoRoute := apiRouter.Group("/system-info")
+		systemInfoRoute.Use(middleware.RootAuth())
+		{
+			systemInfoRoute.GET("/instances", controller.ListSystemInstances)
+			systemInfoRoute.DELETE("/instances/:node_name", controller.DeleteSystemInstance)
+		}
 
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)

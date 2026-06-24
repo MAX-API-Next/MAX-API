@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -43,9 +43,15 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Progress } from '@/components/ui/progress'
 import { Switch } from '@/components/ui/switch'
 import { DateTimePicker } from '@/components/datetime-picker'
-import { deleteLogsBefore, updateSystemOption } from '../api'
+import {
+  getCurrentLogCleanupTask,
+  getLogCleanupTask,
+  startLogCleanupTask,
+  updateSystemOption,
+} from '../api'
 import {
   SettingsControlGroup,
   SettingsForm,
@@ -55,6 +61,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
+import type { LogCleanupTask } from '../types'
 
 const logSettingsSchema = z.object({
   LogConsumeEnabled: z.boolean(),
@@ -91,6 +98,10 @@ const quickSelectOptions = [
   },
 ]
 
+function isActiveLogCleanupTask(task: LogCleanupTask | null) {
+  return task?.status === 'pending' || task?.status === 'running'
+}
+
 export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -103,10 +114,34 @@ export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
     getDateDaysAgo(30)
   )
   const [isSaving, setIsSaving] = useState(false)
-  const [isCleaning, setIsCleaning] = useState(false)
+  const [isStartingLogCleanup, setIsStartingLogCleanup] = useState(false)
+  const [logCleanupTask, setLogCleanupTask] = useState<LogCleanupTask | null>(
+    null
+  )
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
 
   useResetForm(form, defaultValues)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchCurrentLogCleanupTask() {
+      try {
+        const res = await getCurrentLogCleanupTask()
+        if (!cancelled && res.success && res.data) {
+          setLogCleanupTask(res.data)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    fetchCurrentLogCleanupTask()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const purgeTimestamp = useMemo(() => {
     if (!purgeDate) return null
@@ -117,6 +152,57 @@ export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
     if (!purgeDate) return ''
     return formatTimestampToDate(purgeDate.getTime(), 'milliseconds')
   }, [purgeDate])
+
+  const logCleanupActive = isActiveLogCleanupTask(logCleanupTask)
+  const logCleanupState = logCleanupTask?.state
+  const logCleanupProgress = Math.min(
+    100,
+    Math.max(0, logCleanupState?.progress ?? 0)
+  )
+  const logCleanupProcessed = logCleanupState?.processed ?? 0
+  const logCleanupTotal = logCleanupState?.total ?? 0
+  const logCleanupTaskId = logCleanupTask?.task_id
+  const logCleanupTaskStatus = logCleanupTask?.status
+
+  useEffect(() => {
+    if (
+      !logCleanupTaskId ||
+      (logCleanupTaskStatus !== 'pending' &&
+        logCleanupTaskStatus !== 'running')
+    ) {
+      return
+    }
+
+    let cancelled = false
+    const interval = window.setInterval(async () => {
+      try {
+        const res = await getLogCleanupTask(logCleanupTaskId)
+        if (cancelled || !res.success || !res.data) return
+
+        setLogCleanupTask(res.data)
+        if (!isActiveLogCleanupTask(res.data)) {
+          if (res.data.status === 'succeeded') {
+            const count =
+              res.data.result?.deleted_count ?? res.data.state?.processed ?? 0
+            toast.success(
+              count > 0
+                ? t('{{count}} log entries removed.', { count })
+                : t('No log entries matched the selected time.')
+            )
+          } else if (res.data.status === 'failed') {
+            toast.error(res.data.error || t('Failed to clean logs'))
+          }
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, 1000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [logCleanupTaskId, logCleanupTaskStatus, t])
 
   const onSubmit = async (values: LogSettingsFormValues) => {
     const updates = Object.entries(values).filter(
@@ -186,24 +272,24 @@ export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
       return
     }
 
-    setIsCleaning(true)
+    setIsStartingLogCleanup(true)
     try {
-      const res = await deleteLogsBefore(purgeTimestamp)
+      const res = await startLogCleanupTask(purgeTimestamp)
       if (!res.success) {
         throw new Error(res.message || t('Failed to clean logs'))
       }
-      const count = res.data ?? 0
-      toast.success(
-        count > 0
-          ? t('{{count}} log entries removed.', { count })
-          : t('No log entries matched the selected time.')
-      )
+      if (!res.data) {
+        throw new Error(t('Failed to clean logs'))
+      }
+      setLogCleanupTask(res.data)
+      setShowConfirmDialog(false)
+      toast.success(t('Log cleanup task started.'))
     } catch (error) {
       const message =
         error instanceof Error ? error.message : t('Failed to clean logs')
       toast.error(message)
     } finally {
-      setIsCleaning(false)
+      setIsStartingLogCleanup(false)
     }
   }
 
@@ -265,11 +351,37 @@ export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
                 type='button'
                 variant='destructive'
                 onClick={handleRequestCleanLogs}
-                disabled={isCleaning}
+                disabled={isStartingLogCleanup || logCleanupActive}
               >
-                {isCleaning ? t('Cleaning...') : t('Clean logs')}
+                {isStartingLogCleanup || logCleanupActive
+                  ? t('Cleaning...')
+                  : t('Clean logs')}
               </Button>
             </div>
+            {logCleanupTask && (
+              <div className='rounded-md border p-3'>
+                <div className='mb-2 flex items-center justify-between gap-3 text-sm'>
+                  <span className='font-medium'>
+                    {t('Log cleanup progress')}
+                  </span>
+                  <span className='text-muted-foreground tabular-nums'>
+                    {logCleanupProgress}%
+                  </span>
+                </div>
+                <Progress value={logCleanupProgress} />
+                <div className='text-muted-foreground mt-2 text-xs'>
+                  {t('{{processed}} of {{total}} log entries processed.', {
+                    processed: logCleanupProcessed,
+                    total: logCleanupTotal,
+                  })}
+                </div>
+                {logCleanupTask.status === 'failed' && logCleanupTask.error && (
+                  <div className='text-destructive mt-2 text-xs'>
+                    {logCleanupTask.error}
+                  </div>
+                )}
+              </div>
+            )}
           </SettingsControlGroup>
         </SettingsForm>
       </Form>
@@ -290,11 +402,14 @@ export function LogSettingsSection({ defaultValues }: LogSettingsSectionProps) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isCleaning}>
+            <AlertDialogCancel disabled={isStartingLogCleanup}>
               {t('Cancel')}
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleCleanLogs} disabled={isCleaning}>
-              {isCleaning ? t('Cleaning...') : t('Delete logs')}
+            <AlertDialogAction
+              onClick={handleCleanLogs}
+              disabled={isStartingLogCleanup}
+            >
+              {isStartingLogCleanup ? t('Cleaning...') : t('Delete logs')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

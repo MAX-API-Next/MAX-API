@@ -115,6 +115,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/system-settings': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
+  '/system-info': { section: 'admin', module: 'setting' },
 }
 
 /**
@@ -307,4 +308,31 @@ export function useSidebarConfig(navGroups: NavGroup[]): NavGroup[] {
   )
 
   return filteredNavGroups
+}
+
+/**
+ * Check whether a single route is visible under the current sidebar_modules
+ * config. Used by entries living outside the sidebar so they honour the same
+ * display switches as sidebar links.
+ */
+export function useIsSidebarModuleVisible(url: string): boolean {
+  const { status } = useStatus()
+  const { auth } = useAuthStore()
+
+  const adminConfig = useMemo(
+    () =>
+      parseSidebarConfig(
+        status?.SidebarModulesAdmin as string | null | undefined
+      ),
+    [status?.SidebarModulesAdmin]
+  )
+
+  const userConfig = useMemo(() => {
+    if (auth?.user?.permissions?.sidebar_settings === false) {
+      return null
+    }
+    return parseUserSidebarConfig(auth?.user?.sidebar_modules)
+  }, [auth?.user?.permissions?.sidebar_settings, auth?.user?.sidebar_modules])
+
+  return isModuleEnabled(url, adminConfig, userConfig)
 }

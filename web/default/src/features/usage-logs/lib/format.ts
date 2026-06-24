@@ -277,6 +277,87 @@ export function getTieredBillingSummary(
   return { tiers, tier, priceEntries }
 }
 
+const AUDIT_TEMPLATES: Record<string, string> = {
+  login: 'Logged in successfully via {{method}}',
+  'user.create': 'Created user {{username}} (role {{role}})',
+  'user.update': 'Updated user {{username}} (ID: {{id}})',
+  'user.delete': 'Deleted user {{username}} (ID: {{id}})',
+  'user.manage': 'Performed {{action}} on user {{username}} (ID: {{id}})',
+  'user.quota_add': 'Increased user quota by {{quota}}',
+  'user.quota_subtract': 'Decreased user quota by {{quota}}',
+  'user.quota_override': 'Overrode user quota from {{from}} to {{to}}',
+  'user.binding_clear': 'Cleared {{bindingType}} binding for user {{username}}',
+  'user.2fa_disable': 'Force-disabled two-factor authentication for the user',
+  'user.passkey_register': 'Registered a passkey',
+  'user.passkey_delete': 'Deleted a passkey',
+  'user.reset_passkey': 'Reset the user passkey',
+  'user.oauth_unbind': 'Removed an OAuth binding for the user',
+  'option.update': 'Updated system setting {{key}}',
+  'option.payment_compliance': 'Confirmed payment compliance',
+  'option.reset_ratio': 'Reset model ratios',
+  'option.clear_affinity_cache': 'Cleared channel affinity cache',
+  'channel.create': 'Created channel {{name}} (type {{type}}, count {{count}})',
+  'channel.update': 'Updated channel {{name}} (ID: {{id}})',
+  'channel.delete': 'Deleted channel {{name}} (ID: {{id}})',
+  'channel.delete_batch': 'Batch deleted {{count}} channels',
+  'channel.delete_disabled': 'Deleted all disabled channels ({{count}})',
+  'channel.key_view': 'Viewed channel key {{name}} (ID: {{id}})',
+  'channel.tag_disable': 'Disabled channels with tag {{tag}}',
+  'channel.tag_enable': 'Enabled channels with tag {{tag}}',
+  'channel.tag_edit': 'Edited channels with tag {{tag}}',
+  'channel.tag_batch_set': 'Batch set tag for {{count}} channels',
+  'channel.copy':
+    'Copied channel (source ID: {{sourceId}}) to {{name}} (new ID: {{id}})',
+  'channel.multi_key_manage':
+    'Multi-key management {{action}} on channel (ID: {{id}})',
+  'channel.upstream_apply':
+    'Applied upstream model changes to channel (ID: {{id}})',
+  'channel.upstream_apply_all':
+    'Applied upstream model changes to {{count}} channels',
+  'channel.upstream_detect_all':
+    'Detected upstream model changes for {{count}} channels',
+  'redemption.create':
+    'Created {{count}} redemption codes named {{name}} ({{quota}} each)',
+  'redemption.update': 'Updated a redemption code',
+  'redemption.delete': 'Deleted a redemption code',
+  'redemption.delete_invalid': 'Deleted invalid redemption codes',
+  'custom_oauth.create': 'Created a custom OAuth provider',
+  'custom_oauth.update': 'Updated a custom OAuth provider',
+  'custom_oauth.delete': 'Deleted a custom OAuth provider',
+  'performance.clear_disk_cache': 'Cleared disk cache',
+  'performance.gc': 'Triggered garbage collection',
+  'performance.clear_logs': 'Cleared log files',
+  'prefill_group.create': 'Created a prefill group',
+  'prefill_group.update': 'Updated a prefill group',
+  'prefill_group.delete': 'Deleted a prefill group',
+  'vendor.create': 'Created a vendor',
+  'vendor.update': 'Updated a vendor',
+  'vendor.delete': 'Deleted a vendor',
+  'model.create': 'Created a model',
+  'model.update': 'Updated a model',
+  'model.delete': 'Deleted a model',
+  'model.sync_upstream': 'Synced upstream models',
+  'deployment.create': 'Created a deployment',
+  'deployment.update': 'Updated a deployment',
+  'deployment.delete': 'Deleted a deployment',
+  'subscription.plan_create': 'Created a subscription plan',
+  'subscription.plan_update': 'Updated a subscription plan',
+  'subscription.bind': 'Bound a subscription',
+  'log.clear': 'Cleared historical logs',
+  generic: '{{method}} {{route}}',
+}
+
+export function renderAuditContent(
+  other: LogOtherData | null | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string | null {
+  const op = other?.op
+  if (!op?.action) return null
+  const template = AUDIT_TEMPLATES[op.action]
+  if (!template) return null
+  return t(template, op.params ?? {})
+}
+
 /**
  * Calculate duration and return formatted result with color variant
  * @param submitTime - Submit timestamp

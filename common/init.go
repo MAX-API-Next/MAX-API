@@ -85,6 +85,8 @@ func InitEnv() {
 	LogResponseContentEnabled = GetEnvOrDefaultBool("LOG_RESPONSE_CONTENT_ENABLED", false)
 	LogContentMaxCharacters = GetEnvOrDefault("LOG_CONTENT_MAX_CHARACTERS", 12000)
 	SessionCookieSecure = GetEnvOrDefaultBool("SESSION_COOKIE_SECURE", false)
+	SMTPStartTLSEnabled = GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
+	SMTPInsecureSkipVerify = GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
 	TrustedProxies = append([]string(nil), DefaultTrustedProxies...)
 	if trustedProxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); trustedProxies != "" {
 		TrustedProxies = nil
@@ -96,7 +98,7 @@ func InitEnv() {
 		}
 	}
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
-	NodeName = os.Getenv("NODE_NAME")
+	initNodeNameIdentity()
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {

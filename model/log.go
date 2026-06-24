@@ -64,6 +64,7 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+	LogTypeLogin   = 7
 )
 
 func userVisibleAuditInfo(adminInfoValue interface{}) map[string]interface{} {
@@ -167,6 +168,61 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	}
 	if err := LOG_DB.Create(log).Error; err != nil {
 		common.SysLog("failed to record log: " + err.Error())
+	}
+}
+
+func buildOpField(action string, params map[string]interface{}) map[string]interface{} {
+	op := map[string]interface{}{
+		"action": action,
+	}
+	if len(params) > 0 {
+		op["params"] = params
+	}
+	return op
+}
+
+func RecordLoginLog(userId int, username string, content string, ip string, action string, params map[string]interface{}, extra map[string]interface{}) {
+	other := map[string]interface{}{}
+	for k, v := range extra {
+		other[k] = v
+	}
+	other["op"] = buildOpField(action, params)
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeLogin,
+		Content:   content,
+		Ip:        ip,
+		Other:     common.MapToJsonStr(other),
+	}
+	if err := LOG_DB.Create(log).Error; err != nil {
+		common.SysLog("failed to record login log: " + err.Error())
+	}
+}
+
+func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+	username, _ := GetUsernameById(logUserId, false)
+	other := map[string]interface{}{
+		"op": buildOpField(action, params),
+	}
+	if len(adminInfo) > 0 {
+		other["admin_info"] = adminInfo
+	}
+	if len(auditInfo) > 0 {
+		other["audit_info"] = auditInfo
+	}
+	log := &Log{
+		UserId:    logUserId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      LogTypeManage,
+		Content:   content,
+		Ip:        ip,
+		Other:     common.MapToJsonStr(other),
+	}
+	if err := LOG_DB.Create(log).Error; err != nil {
+		common.SysLog("failed to record operation audit log: " + err.Error())
 	}
 }
 
@@ -571,25 +627,64 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
-func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
-	var total int64 = 0
+func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	var total int64
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}
 
-	for {
-		if nil != ctx.Err() {
-			return total, ctx.Err()
-		}
-
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
-		}
-
-		total += result.RowsAffected
-
-		if result.RowsAffected < int64(limit) {
-			break
-		}
+func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if nil != ctx.Err() {
+		return 0, ctx.Err()
 	}
 
-	return total, nil
+	ids := make([]int, 0, limit)
+	err := LOG_DB.WithContext(ctx).
+		Model(&Log{}).
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at ASC, id ASC").
+		Limit(limit).
+		Pluck("id", &ids).Error
+	if err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
+	if nil != result.Error {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
+func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+
+		rowsAffected, err := DeleteOldLogBatch(ctx, targetTimestamp, limit)
+		if err != nil {
+			return total, err
+		}
+		total += rowsAffected
+		if rowsAffected < int64(limit) {
+			return total, nil
+		}
+	}
 }

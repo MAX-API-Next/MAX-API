@@ -405,7 +405,6 @@ func GetChannel(c *gin.Context) {
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
-	userId := c.GetInt("id")
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %v", err))
@@ -425,7 +424,10 @@ func GetChannelKey(c *gin.Context) {
 	}
 
 	// 记录操作日志
-	model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("查看渠道密钥信息 (渠道ID: %d)", channelId))
+	recordManageAudit(c, "channel.key_view", map[string]interface{}{
+		"id":   channelId,
+		"name": channel.Name,
+	})
 
 	// 返回渠道密钥
 	c.JSON(http.StatusOK, gin.H{
@@ -679,28 +681,18 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
-	channels := make([]model.Channel, 0, len(keys))
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		localChannel := addChannelRequest.Channel
-		localChannel.Key = key
-		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
-			keyPrefix := localChannel.Key
-			if len(localChannel.Key) > 8 {
-				keyPrefix = localChannel.Key[:8]
-			}
-			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
-		}
-		channels = append(channels, *localChannel)
-	}
+	channels, channelNames := buildChannelsForInsert(addChannelRequest.Channel, keys, addChannelRequest.BatchAddSetKeyPrefix2Name)
 	err = model.BatchInsertChannels(channels)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	service.ResetProxyClientCache()
+	recordManageAudit(c, "channel.create", map[string]interface{}{
+		"name":  strings.Join(channelNames, ", "),
+		"type":  addChannelRequest.Channel.Type,
+		"count": len(channels),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -708,8 +700,34 @@ func AddChannel(c *gin.Context) {
 	return
 }
 
+func buildChannelsForInsert(baseChannel *model.Channel, keys []string, setKeyPrefixToName bool) ([]model.Channel, []string) {
+	channels := make([]model.Channel, 0, len(keys))
+	channelNames := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		localChannel := *baseChannel
+		localChannel.Key = key
+		if setKeyPrefixToName && len(keys) > 1 {
+			keyPrefix := localChannel.Key
+			if len(localChannel.Key) > 8 {
+				keyPrefix = localChannel.Key[:8]
+			}
+			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
+		}
+		channels = append(channels, localChannel)
+		channelNames = append(channelNames, localChannel.Name)
+	}
+	return channels, channelNames
+}
+
 func DeleteChannel(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	channelName := ""
+	if existing, err := model.GetChannelById(id, false); err == nil && existing != nil {
+		channelName = existing.Name
+	}
 	channel := model.Channel{Id: id}
 	err := channel.Delete()
 	if err != nil {
@@ -717,6 +735,10 @@ func DeleteChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.delete", map[string]interface{}{
+		"id":   id,
+		"name": channelName,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -731,6 +753,9 @@ func DeleteDisabledChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.delete_disabled", map[string]interface{}{
+		"count": rows,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -767,6 +792,9 @@ func DisableTagChannels(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.tag_disable", map[string]interface{}{
+		"tag": channelTag.Tag,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -790,6 +818,9 @@ func EnableTagChannels(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.tag_enable", map[string]interface{}{
+		"tag": channelTag.Tag,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -842,6 +873,9 @@ func EditTagChannels(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.tag_edit", map[string]interface{}{
+		"tag": channelTag.Tag,
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -870,6 +904,9 @@ func DeleteChannelBatch(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.delete_batch", map[string]interface{}{
+		"count": len(channelBatch.Ids),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1005,6 +1042,30 @@ func UpdateChannel(c *gin.Context) {
 	}
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
+	changedFields := make([]string, 0)
+	if channel.Status != originChannel.Status {
+		changedFields = append(changedFields, "status")
+	}
+	if channel.Models != originChannel.Models {
+		changedFields = append(changedFields, "models")
+	}
+	if channel.Group != originChannel.Group {
+		changedFields = append(changedFields, "group")
+	}
+	if channel.Type != originChannel.Type {
+		changedFields = append(changedFields, "type")
+	}
+	if !equalStringPtr(channel.BaseURL, originChannel.BaseURL) {
+		changedFields = append(changedFields, "base_url")
+	}
+	if channel.Key != "" && channel.Key != originChannel.Key {
+		changedFields = append(changedFields, "key")
+	}
+	recordManageAudit(c, "channel.update", map[string]interface{}{
+		"id":             channel.Id,
+		"name":           channel.Name,
+		"changed_fields": changedFields,
+	})
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{
@@ -1013,6 +1074,16 @@ func UpdateChannel(c *gin.Context) {
 		"data":    channel,
 	})
 	return
+}
+
+func equalStringPtr(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func FetchModels(c *gin.Context) {
@@ -1151,6 +1222,9 @@ func BatchSetChannelTag(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.tag_batch_set", map[string]interface{}{
+		"count": len(channelBatch.Ids),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1248,6 +1322,11 @@ func CopyChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	recordManageAudit(c, "channel.copy", map[string]interface{}{
+		"sourceId": id,
+		"id":       clone.Id,
+		"name":     clone.Name,
+	})
 	// success
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"id": clone.Id}})
 }
@@ -1307,6 +1386,16 @@ func ManageMultiKeys(c *gin.Context) {
 			"message": "该渠道不是多密钥模式",
 		})
 		return
+	}
+
+	if request.Action == "get_key_status" {
+		markAuditLogged(c)
+	}
+	recordMultiKeyManageAudit := func() {
+		recordManageAudit(c, "channel.multi_key_manage", map[string]interface{}{
+			"action": request.Action,
+			"id":     channel.Id,
+		})
 	}
 
 	lock := model.GetChannelPollingLock(channel.Id)
@@ -1464,6 +1553,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1506,6 +1596,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1530,6 +1621,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1577,6 +1669,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1657,6 +1750,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -1725,6 +1819,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
+		recordMultiKeyManageAudit()
 		model.InitChannelCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,

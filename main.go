@@ -113,6 +113,12 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// System instance heartbeat for multi-node operations visibility
+	service.StartSystemInstanceReporter()
+
+	// Persistent system maintenance task runner
+	service.StartSystemTaskRunner()
+
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)

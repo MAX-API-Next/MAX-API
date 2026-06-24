@@ -66,4 +66,14 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyAuditLogged marks that the current request has already recorded
+	// a structured audit log in the handler. AdminAuth/RootAuth use it to skip
+	// fallback audit logging and avoid duplicate entries.
+	ContextKeyAuditLogged ContextKey = "audit_logged"
+
+	// ContextKeyAuditWrapped marks that the response writer is already wrapped
+	// for fallback admin audit logging. Nested AdminAuth/RootAuth middleware
+	// must not install a second wrapper for the same request.
+	ContextKeyAuditWrapped ContextKey = "audit_wrapped"
 )

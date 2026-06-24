@@ -19,9 +19,11 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { api } from '@/lib/api'
 import type {
   ConfirmPaymentComplianceResponse,
-  DeleteLogsResponse,
   FetchUpstreamRatiosRequest,
+  LogCleanupTask,
   SystemOptionsResponse,
+  SystemTaskListResponse,
+  SystemTaskResponse,
   UpdateOptionRequest,
   UpdateOptionResponse,
   UpstreamChannelsResponse,
@@ -56,9 +58,34 @@ export async function confirmPaymentCompliance() {
   return res.data
 }
 
-export async function deleteLogsBefore(targetTimestamp: number) {
-  const res = await api.delete<DeleteLogsResponse>('/api/log/', {
-    params: { target_timestamp: targetTimestamp },
+export async function startLogCleanupTask(targetTimestamp: number) {
+  const res = await api.post<SystemTaskResponse<LogCleanupTask>>(
+    '/api/system-task/log-cleanup',
+    null,
+    {
+      params: { target_timestamp: targetTimestamp },
+    }
+  )
+  return res.data
+}
+
+export async function getCurrentLogCleanupTask() {
+  const res = await api.get<SystemTaskResponse<LogCleanupTask | null>>(
+    '/api/system-task/log-cleanup/current'
+  )
+  return res.data
+}
+
+export async function getLogCleanupTask(taskId: string) {
+  const res = await api.get<SystemTaskResponse<LogCleanupTask>>(
+    `/api/system-task/log-cleanup/${taskId}`
+  )
+  return res.data
+}
+
+export async function listSystemTasks(limit = 20) {
+  const res = await api.get<SystemTaskListResponse>('/api/system-task/list', {
+    params: { limit },
   })
   return res.data
 }

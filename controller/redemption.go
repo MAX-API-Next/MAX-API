@@ -7,6 +7,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/i18n"
+	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 
@@ -110,6 +111,11 @@ func AddRedemption(c *gin.Context) {
 		}
 		keys = append(keys, key)
 	}
+	recordManageAudit(c, "redemption.create", map[string]interface{}{
+		"name":  redemption.Name,
+		"count": redemption.Count,
+		"quota": logger.LogQuota(redemption.Quota),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

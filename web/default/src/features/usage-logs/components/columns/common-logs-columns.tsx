@@ -46,6 +46,7 @@ import {
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
+  renderAuditContent,
 } from '../../lib/format'
 import {
   isDisplayableLogType,
@@ -100,6 +101,11 @@ function buildDetailSegments(
   other: LogOtherData | null,
   t: (key: string, opts?: Record<string, unknown>) => string
 ): DetailSegment[] {
+  const auditContent = renderAuditContent(other, t)
+  if (auditContent) {
+    return [{ text: auditContent }]
+  }
+
   if (log.type === 6) {
     return [{ text: t('Async task refund') }]
   }

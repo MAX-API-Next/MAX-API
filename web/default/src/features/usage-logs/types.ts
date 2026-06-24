@@ -127,6 +127,10 @@ export interface LogAuditInfo {
 }
 
 export interface LogOtherData {
+  op?: {
+    action?: string
+    params?: Record<string, unknown>
+  }
   audit_info?: LogAuditInfo
   admin_info?: {
     is_multi_key?: boolean

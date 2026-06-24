@@ -36,6 +36,7 @@ const defaultSecuritySettings: SecuritySettings = {
   LogRequestContentEnabled: false,
   LogResponseContentEnabled: false,
   LogContentMaxCharacters: 12000,
+  'token_setting.max_user_tokens': 1000,
   'fetch_setting.enable_ssrf_protection': true,
   'fetch_setting.allow_private_ip': false,
   'fetch_setting.domain_filter_mode': false,

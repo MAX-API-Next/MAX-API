@@ -26,7 +26,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Check, Copy, Info, Loader2, Settings } from 'lucide-react'
+import { Check, CheckCircle2, Copy, Info, Loader2, Settings } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -43,6 +43,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -103,6 +104,13 @@ type TestResult = {
   errorCode?: string
 }
 
+type BatchProgress = {
+  total: number
+  completed: number
+  success: number
+  failed: number
+}
+
 const endpointTypeOptions: Array<{ value: string; label: string }> = [
   { value: 'auto', label: 'Auto detect (default)' },
   { value: 'openai', label: 'OpenAI (/v1/chat/completions)' },
@@ -133,6 +141,12 @@ const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
 
 const MODEL_PRICE_ERROR_CODE = 'model_price_error'
 const FAILURE_SUMMARY_MAX_LENGTH = 96
+const BATCH_TEST_CONCURRENCY = 5
+const BATCH_TEST_DELAY_MS = 100
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+}
 
 type FailureStatusDisplay = {
   summary: string
@@ -228,6 +242,9 @@ export function ChannelTestDialog({
     () => new Set()
   )
   const [isBatchTesting, setIsBatchTesting] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(
+    null
+  )
   const [failureDetails, setFailureDetails] =
     useState<FailureDetailsState | null>(null)
   const [pagination, setPagination] = useState({
@@ -243,6 +260,7 @@ export function ChannelTestDialog({
     setRowSelection({})
     setTestingModels(() => new Set())
     setIsBatchTesting(false)
+    setBatchProgress(null)
     setFailureDetails(null)
     setPagination({ pageIndex: 0, pageSize: 10 })
   }, [])
@@ -278,6 +296,11 @@ export function ChannelTestDialog({
     const keyword = searchTerm.toLowerCase()
     return models.filter((model) => model.toLowerCase().includes(keyword))
   }, [models, searchTerm])
+
+  const successModels = useMemo(
+    () => models.filter((model) => testResults[model]?.status === 'success'),
+    [models, testResults]
+  )
 
   useEffect(() => {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }))
@@ -358,22 +381,62 @@ export function ChannelTestDialog({
 
   const handleBatchTest = useCallback(
     async (modelsToTest: string[]) => {
-      if (!modelsToTest.length) return
+      const uniqueModels = Array.from(
+        new Set(modelsToTest.map((model) => model.trim()).filter(Boolean))
+      )
+      if (!uniqueModels.length) return
 
       setIsBatchTesting(true)
+      setBatchProgress({
+        total: uniqueModels.length,
+        completed: 0,
+        success: 0,
+        failed: 0,
+      })
+
+      let completedCount = 0
+      let successCount = 0
+      let failedCount = 0
+
       try {
-        const settled = await Promise.allSettled(
-          modelsToTest.map((modelName) => testSingleModel(modelName, true))
-        )
-        const results = settled
-          .map((result) =>
-            result.status === 'fulfilled' ? result.value : undefined
+        const recordBatchResult = (result?: TestResult) => {
+          completedCount += 1
+          if (result?.status === 'success') {
+            successCount += 1
+          }
+          failedCount = completedCount - successCount
+
+          setBatchProgress({
+            total: uniqueModels.length,
+            completed: completedCount,
+            success: successCount,
+            failed: failedCount,
+          })
+        }
+
+        for (
+          let startIndex = 0;
+          startIndex < uniqueModels.length;
+          startIndex += BATCH_TEST_CONCURRENCY
+        ) {
+          const batch = uniqueModels.slice(
+            startIndex,
+            startIndex + BATCH_TEST_CONCURRENCY
           )
-          .filter((result): result is TestResult => Boolean(result))
-        const successCount = results.filter(
-          (result) => result.status === 'success'
-        ).length
-        const failedCount = modelsToTest.length - successCount
+          const settled = await Promise.allSettled(
+            batch.map((modelName) => testSingleModel(modelName, true))
+          )
+          for (const result of settled) {
+            recordBatchResult(
+              result.status === 'fulfilled' ? result.value : undefined
+            )
+          }
+
+          if (startIndex + BATCH_TEST_CONCURRENCY < uniqueModels.length) {
+            await sleep(BATCH_TEST_DELAY_MS)
+          }
+        }
+
         if (failedCount > 0) {
           toast.error(
             t(
@@ -393,11 +456,22 @@ export function ChannelTestDialog({
         }
       } finally {
         setIsBatchTesting(false)
+        setBatchProgress(null)
         setRowSelection({})
       }
     },
     [t, testSingleModel]
   )
+
+  const handleSelectSuccessfulModels = useCallback(() => {
+    setRowSelection(() => {
+      const next: RowSelectionState = {}
+      for (const model of successModels) {
+        next[model] = true
+      }
+      return next
+    })
+  }, [successModels])
 
   const handleClose = () => {
     resetState()
@@ -405,6 +479,10 @@ export function ChannelTestDialog({
   }
 
   const isAnyTesting = testingModels.size > 0 || isBatchTesting
+  const isFilteringModels = searchTerm.trim().length > 0
+  const testAllButtonLabel = isFilteringModels
+    ? t('Test {{count}} matching models', { count: filteredModels.length })
+    : t('Test all {{count}} models', { count: filteredModels.length })
 
   const columns = useMemo<ColumnDef<ModelRow>[]>(
     () => [
@@ -412,11 +490,11 @@ export function ChannelTestDialog({
         id: 'select',
         header: ({ table }) => (
           <Checkbox
-            checked={table.getIsAllPageRowsSelected()}
-            indeterminate={table.getIsSomePageRowsSelected()}
-            onCheckedChange={(value) =>
-              table.toggleAllPageRowsSelected(!!value)
+            checked={table.getIsAllRowsSelected()}
+            indeterminate={
+              table.getIsSomeRowsSelected() && !table.getIsAllRowsSelected()
             }
+            onCheckedChange={(value) => table.toggleAllRowsSelected(!!value)}
             aria-label={t('Select all models')}
           />
         ),
@@ -517,6 +595,7 @@ export function ChannelTestDialog({
       pagination,
     },
     enableRowSelection: true,
+    getRowId: (row) => row.model,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onRowSelectionChange: setRowSelection,
@@ -601,13 +680,46 @@ export function ChannelTestDialog({
                     {t('Select models to run batch tests.')}
                   </p>
                 </div>
-                <Input
-                  placeholder={t('Filter models...')}
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className='sm:w-64'
-                />
+                <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
+                  <Input
+                    placeholder={t('Filter models...')}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className='sm:w-64'
+                  />
+                  <Button
+                    type='button'
+                    onClick={() => handleBatchTest(filteredModels)}
+                    disabled={isAnyTesting || filteredModels.length === 0}
+                  >
+                    {isBatchTesting && (
+                      <Loader2
+                        data-icon='inline-start'
+                        className='animate-spin'
+                      />
+                    )}
+                    {isBatchTesting ? t('Testing...') : testAllButtonLabel}
+                  </Button>
+                </div>
               </div>
+
+              {batchProgress && <BatchProgressSummary progress={batchProgress} />}
+
+              {!isAnyTesting && successModels.length > 0 && (
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={handleSelectSuccessfulModels}
+                  >
+                    <CheckCircle2 data-icon='inline-start' />
+                    {t('Select successful models ({{count}})', {
+                      count: successModels.length,
+                    })}
+                  </Button>
+                </div>
+              )}
 
               <div className='space-y-3'>
                 <div
@@ -675,8 +787,8 @@ export function ChannelTestDialog({
                               className='text-muted-foreground h-16 text-center text-sm'
                             >
                               {models.length
-                                ? 'No models matched your search.'
-                                : 'This channel has no configured models.'}
+                                ? t('No models matched your search.')
+                                : t('This channel has no configured models.')}
                             </TableCell>
                           </TableRow>
                         )}
@@ -712,6 +824,35 @@ export function ChannelTestDialog({
         }}
       />
     </>
+  )
+}
+
+function BatchProgressSummary({ progress }: { progress: BatchProgress }) {
+  const { t } = useTranslation()
+  const progressValue =
+    progress.total > 0
+      ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
+      : 0
+
+  return (
+    <div className='bg-muted/30 flex flex-col gap-2 rounded-md border p-3'>
+      <div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
+        <p className='text-sm font-medium'>{t('Batch testing models...')}</p>
+        <p className='text-muted-foreground text-xs tabular-nums'>
+          {t('{{completed}}/{{total}} completed', {
+            completed: progress.completed,
+            total: progress.total,
+          })}
+        </p>
+      </div>
+      <Progress value={progressValue} />
+      <p className='text-muted-foreground text-xs'>
+        {t('{{success}} succeeded, {{failed}} failed', {
+          success: progress.success,
+          failed: progress.failed,
+        })}
+      </p>
+    </div>
   )
 }
 
@@ -906,8 +1047,14 @@ function TestModelsBulkActions({
   onTestSelected: (models: string[]) => void
 }) {
   const { t } = useTranslation()
+  const { copyToClipboard } = useCopyToClipboard()
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedModels = selectedRows.map((row) => row.original.model)
+
+  const handleCopySelected = useCallback(() => {
+    if (selectedModels.length === 0) return
+    void copyToClipboard(selectedModels.join(','))
+  }, [copyToClipboard, selectedModels])
 
   const buttonLabel =
     selectedModels.length > 0
@@ -915,7 +1062,29 @@ function TestModelsBulkActions({
       : t('Test selected models')
 
   return (
-    <BulkActionsToolbar table={table} entityName='model'>
+    <BulkActionsToolbar
+      table={table}
+      entityName={t('Model')}
+      entityNamePlural={t('Models')}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={handleCopySelected}
+              disabled={selectedModels.length === 0}
+            />
+          }
+        >
+          <Copy data-icon='inline-start' />
+          {t('Copy selected models')}
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{t('Copy selected models separated by commas (e.g. a,b)')}</p>
+        </TooltipContent>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger
           render={

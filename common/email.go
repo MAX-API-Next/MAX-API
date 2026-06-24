@@ -3,12 +3,15 @@ package common
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/smtp"
 	"slices"
 	"strings"
 	"time"
 )
+
+var ErrSMTPStartTLSUnsupported = errors.New("smtp server does not support STARTTLS")
 
 func generateMessageID() (string, error) {
 	split := strings.Split(SMTPFrom, "@")
@@ -27,10 +30,65 @@ func shouldUseSMTPLoginAuth() bool {
 }
 
 func getSMTPAuth() smtp.Auth {
-	if shouldUseSMTPLoginAuth() {
-		return LoginAuth(SMTPAccount, SMTPToken)
+	return AutoSMTPAuth(SMTPAccount, SMTPToken)
+}
+
+func shouldAuthenticateSMTP() bool {
+	return SMTPAccount != "" && SMTPToken != ""
+}
+
+func authenticateSMTPIfSupported(client *smtp.Client, receiver string) error {
+	if !shouldAuthenticateSMTP() {
+		return nil
 	}
-	return smtp.PlainAuth("", SMTPAccount, SMTPToken, SMTPServer)
+
+	authSupported, _ := client.Extension("AUTH")
+	if !authSupported {
+		SysLog(fmt.Sprintf("SMTP credentials configured but server does not advertise AUTH; sending email to %s without SMTP authentication", receiver))
+		return nil
+	}
+
+	return client.Auth(getSMTPAuth())
+}
+
+func smtpTLSConfig() *tls.Config {
+	return &tls.Config{
+		ServerName:         SMTPServer,
+		InsecureSkipVerify: SMTPInsecureSkipVerify, // #nosec G402 -- admin-controlled SMTP compatibility option.
+	}
+}
+
+func newSMTPClient(addr string) (*smtp.Client, error) {
+	if SMTPSSLEnabled || SMTPPort == 465 {
+		conn, err := tls.Dial("tcp", addr, smtpTLSConfig())
+		if err != nil {
+			return nil, err
+		}
+		client, err := smtp.NewClient(conn, SMTPServer)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+
+	client, err := smtp.Dial(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	startTLSSupported, _ := client.Extension("STARTTLS")
+	if startTLSSupported {
+		if err := client.StartTLS(smtpTLSConfig()); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+	} else if SMTPStartTLSEnabled {
+		_ = client.Close()
+		return nil, fmt.Errorf("%w: %s", ErrSMTPStartTLSUnsupported, SMTPServer)
+	}
+
+	return client, nil
 }
 
 func SendEmail(subject string, receiver string, content string) error {
@@ -52,53 +110,40 @@ func SendEmail(subject string, receiver string, content string) error {
 		"Message-ID: %s\r\n"+ // 添加 Message-ID 头
 		"Content-Type: text/html; charset=UTF-8\r\n\r\n%s\r\n",
 		receiver, SystemName, SMTPFrom, encodedSubject, time.Now().Format(time.RFC1123Z), id, content))
-	auth := getSMTPAuth()
 	addr := fmt.Sprintf("%s:%d", SMTPServer, SMTPPort)
 	to := strings.Split(receiver, ";")
 	var err error
-	if SMTPPort == 465 || SMTPSSLEnabled {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         SMTPServer,
-		}
-		conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", SMTPServer, SMTPPort), tlsConfig)
-		if err != nil {
-			return err
-		}
-		client, err := smtp.NewClient(conn, SMTPServer)
-		if err != nil {
-			return err
-		}
-		defer client.Close()
-		if err = client.Auth(auth); err != nil {
-			return err
-		}
-		if err = client.Mail(SMTPFrom); err != nil {
-			return err
-		}
-		receiverEmails := strings.Split(receiver, ";")
-		for _, receiver := range receiverEmails {
-			if err = client.Rcpt(receiver); err != nil {
-				return err
-			}
-		}
-		w, err := client.Data()
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(mail)
-		if err != nil {
-			return err
-		}
-		err = w.Close()
-		if err != nil {
-			return err
-		}
-	} else {
-		err = smtp.SendMail(addr, auth, SMTPFrom, to, mail)
+	client, err := newSMTPClient(addr)
+	if err != nil {
+		return err
 	}
+	defer client.Close()
+	if err = authenticateSMTPIfSupported(client, receiver); err != nil {
+		return err
+	}
+	if err = client.Mail(SMTPFrom); err != nil {
+		return err
+	}
+	for _, recipient := range to {
+		if err = client.Rcpt(strings.TrimSpace(recipient)); err != nil {
+			return err
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(mail)
+	if err != nil {
+		return err
+	}
+	err = w.Close()
+	if err != nil {
+		return err
+	}
+	err = client.Quit()
 	if err != nil {
 		SysError(fmt.Sprintf("failed to send email to %s: %v", receiver, err))
 	}
-	return err
+	return nil
 }

@@ -141,6 +141,7 @@ docker run --name max-api -d --restart always \
 - 迁移前必须备份数据库，并在测试环境验证用户、令牌、渠道、倍率、模型映射、任务记录和日志数据。
 - 使用多机部署时，所有节点应配置相同的 `SESSION_SECRET`；启用 Redis 或多机共享加密数据时，应配置相同的 `CRYPTO_SECRET`。
 - 从 New API 镜像迁移时，请将部署镜像替换为 `cscitechtop/max-api:v1.0.0` 或 `cscitechtop/max-api:latest`，并核对容器名、服务名、Pyroscope 应用名、仓库地址和文档入口。
+- SMTP 发送现在默认校验 TLS 证书；如果既有企业邮箱使用自签名证书、IP 证书或主机名不匹配证书，请在后台 SMTP 邮件设置中开启“跳过 SMTP TLS 证书验证”，或通过环境变量 `SMTP_INSECURE_SKIP_VERIFY=true` 显式兼容旧部署。
 - 对已有 Advanced Custom 渠道，建议迁移后重点检查 `advanced_custom` 配置是否能通过当前校验规则，以及每条路由的 `incoming_path` 是否覆盖真实请求路径。
 - 对视频任务渠道，建议先用测试模型验证提交、轮询、状态映射、结果 URL 提取和内容代理，再开放给生产令牌。
 

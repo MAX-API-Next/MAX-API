@@ -27,6 +27,7 @@ import {
   ListTodo,
   MessageSquare,
   Radio,
+  ServerCog,
   Settings,
   Ticket,
   User,
@@ -34,6 +35,8 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import { type SidebarData } from '@/components/layout/types'
 
 /**
@@ -44,6 +47,8 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+  const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
 
   return {
     navGroups: [
@@ -147,6 +152,15 @@ export function useSidebarData(): SidebarData {
             activeUrls: ['/system-settings'],
             icon: Settings,
           },
+          ...(isSuperAdmin
+            ? [
+                {
+                  title: t('System Info'),
+                  url: '/system-info',
+                  icon: ServerCog,
+                },
+              ]
+            : []),
         ],
       },
     ],

@@ -225,7 +225,15 @@ func freshAuthHelper(c *gin.Context, minRole int) {
 	c.Set("group", group)
 	c.Set("user_group", group)
 	c.Set("use_access_token", useAccessToken)
+
+	var auditWriter *auditResponseWriter
+	if minRole >= common.RoleAdminUser {
+		auditWriter = beginAdminAudit(c)
+	}
+
 	c.Next()
+
+	finishAdminAudit(c, auditWriter)
 }
 
 func TryUserAuth() func(c *gin.Context) {

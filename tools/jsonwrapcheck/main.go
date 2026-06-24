@@ -146,7 +146,7 @@ func shouldSkipDir(path string, name string) bool {
 		return true
 	}
 	switch filepath.ToSlash(path) {
-	case "web", "electron/node_modules", "logs", "bin", "upload", "data", "home":
+	case "web", "electron/node_modules", "logs", "bin", "upload", "data", "home", "new-api":
 		return true
 	}
 	return false
