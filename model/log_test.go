@@ -2,6 +2,7 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/require"
@@ -25,11 +26,56 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	})
 
+	logs := createRetryFilterLogs(t)
+
+	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+	require.Len(t, got, 2)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].Id, got[1].Id})
+}
+
+func TestGetUserLogsRetryFilter(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	logs := createRetryFilterLogs(t)
+
+	got, total, err := GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+	require.Len(t, got, 2)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].LogId, got[1].LogId})
+}
+
+func TestSumUsedQuotaRetryFilter(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	createRetryFilterLogs(t)
+
+	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "")
+	require.NoError(t, err)
+	require.Equal(t, 300, stat.Quota)
+	require.Equal(t, 2, stat.Rpm)
+	require.Equal(t, 30, stat.Tpm)
+}
+
+func createRetryFilterLogs(t *testing.T) []Log {
+	t.Helper()
+
 	logs := []Log{
 		{
-			UserId:    1,
-			CreatedAt: 10,
-			Type:      LogTypeConsume,
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 10,
+			Type:             LogTypeConsume,
+			Quota:            100,
+			PromptTokens:     5,
+			CompletionTokens: 10,
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"retry_log": true,
 				"admin_info": map[string]interface{}{
@@ -38,9 +84,12 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 			}),
 		},
 		{
-			UserId:    1,
-			CreatedAt: 20,
-			Type:      LogTypeConsume,
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 20,
+			Type:             LogTypeConsume,
+			Quota:            200,
+			PromptTokens:     7,
+			CompletionTokens: 8,
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"empty_retry": true,
 				"admin_info": map[string]interface{}{
@@ -49,9 +98,12 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 			}),
 		},
 		{
-			UserId:    1,
-			CreatedAt: 30,
-			Type:      LogTypeConsume,
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 30,
+			Type:             LogTypeConsume,
+			Quota:            400,
+			PromptTokens:     11,
+			CompletionTokens: 13,
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"admin_info": map[string]interface{}{
 					"use_channel": []string{"4"},
@@ -60,9 +112,12 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 			}),
 		},
 		{
-			UserId:    1,
-			CreatedAt: 40,
-			Type:      LogTypeConsume,
+			UserId:           2,
+			CreatedAt:        time.Now().Unix() - 40,
+			Type:             LogTypeConsume,
+			Quota:            800,
+			PromptTokens:     17,
+			CompletionTokens: 19,
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"admin_info": map[string]interface{}{
 					"use_channel": []string{"5"},
@@ -72,12 +127,7 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
-	require.NoError(t, err)
-	require.EqualValues(t, 2, total)
-	require.Len(t, got, 2)
-	require.Equal(t, logs[1].Id, got[0].Id)
-	require.Equal(t, logs[0].Id, got[1].Id)
+	return logs
 }
 
 func TestFormatUserLogDetailExposesOnlyUserAuditContent(t *testing.T) {

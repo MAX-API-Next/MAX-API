@@ -19,19 +19,19 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import z from 'zod'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { UsageLogs } from '@/features/usage-logs'
+import { LOG_TYPE_FILTER_VALUES } from '@/features/usage-logs/constants'
 import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
 } from '@/features/usage-logs/section-registry'
 
-const logTypeValues = ['0', 'retry', '1', '2', '3', '4', '5', '6', '7'] as const
 const logTypeSearchSchema = z
   .preprocess(
     (value) => {
       if (value == null || value === '') return undefined
       return Array.isArray(value) ? value : [value]
     },
-    z.array(z.enum(logTypeValues)).optional()
+    z.array(z.enum(LOG_TYPE_FILTER_VALUES)).optional()
   )
   .catch([])
 

@@ -116,6 +116,10 @@ export const LOG_TYPE_FILTERS = [
   ),
 ] as const
 
+export const LOG_TYPE_FILTER_VALUES = LOG_TYPE_FILTERS.map(
+  (type) => type.value
+) as [string, ...string[]]
+
 // ============================================================================
 // Drawing Logs (Midjourney) Constants
 // ============================================================================
