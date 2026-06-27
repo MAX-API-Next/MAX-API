@@ -26,7 +26,7 @@ const STORAGE_KEY = 'home_page_content'
 
 /**
  * Hook to load and manage custom home page content
- * Supports both Markdown/HTML content and iframe URLs
+ * Supports Markdown content, HTML content, and iframe URLs
  */
 export function useHomePageContent(): HomePageContentResult {
   const [content, setContent] = useState<string>('')
@@ -75,13 +75,5 @@ export function useHomePageContent(): HomePageContentResult {
     }
   }, [])
 
-  let isUrl = false
-  try {
-    const url = new URL(content)
-    isUrl = url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    // not a URL
-  }
-
-  return { content, isLoaded, isUrl }
+  return { content, isLoaded }
 }

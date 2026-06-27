@@ -16,23 +16,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-// ============================================================================
-// Home Page Types
-// ============================================================================
+export type RenderableContentKind = 'url' | 'html' | 'markdown'
 
-/**
- * Response from home page content API
- */
-export interface HomePageContentResponse {
-  success: boolean
-  message?: string
-  data?: string
+export function getRenderableContentKind(value: string): RenderableContentKind {
+  const content = value.trim()
+
+  if (isHttpUrl(content)) {
+    return 'url'
+  }
+
+  if (isLikelyHtml(content)) {
+    return 'html'
+  }
+
+  return 'markdown'
 }
 
-/**
- * Home page content result from hook
- */
-export interface HomePageContentResult {
-  content: string
-  isLoaded: boolean
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function isLikelyHtml(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value)
 }

@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
+import { getRenderableContentKind } from '@/lib/renderable-content'
 import { Markdown } from '@/components/ui/markdown'
 import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
@@ -28,7 +29,9 @@ export function Home() {
   const { t } = useTranslation()
   const { auth } = useAuthStore()
   const isAuthenticated = !!auth.user
-  const { content, isLoaded, isUrl } = useHomePageContent()
+  const { content, isLoaded } = useHomePageContent()
+  const customContent = content.trim()
+  const contentKind = getRenderableContentKind(customContent)
 
   if (!isLoaded) {
     return (
@@ -40,19 +43,26 @@ export function Home() {
     )
   }
 
-  if (content) {
+  if (customContent) {
     return (
       <PublicLayout showMainContainer={false}>
         <main className='overflow-x-hidden'>
-          {isUrl ? (
+          {contentKind === 'url' ? (
             <iframe
-              src={content}
-              className='h-screen w-full border-none'
+              src={customContent}
+              className='h-[calc(100vh-3.5rem)] w-full border-none'
               title={t('Custom Home Page')}
+            />
+          ) : contentKind === 'html' ? (
+            <div
+              className='custom-home-content'
+              dangerouslySetInnerHTML={{ __html: customContent }}
             />
           ) : (
             <div className='container mx-auto py-8'>
-              <Markdown className='custom-home-content'>{content}</Markdown>
+              <Markdown className='custom-home-content'>
+                {customContent}
+              </Markdown>
             </div>
           )}
         </main>
