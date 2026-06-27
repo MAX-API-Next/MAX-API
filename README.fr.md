@@ -23,6 +23,7 @@
 
 <p align="center">
   <a href="#-positionnement-du-projet">Positionnement</a> •
+  <a href="#-canaux-de-publication">Canaux de publication</a> •
   <a href="#-cadre-de-gouvernance">Gouvernance</a> •
   <a href="#-cas-dusage">Cas d'usage</a> •
   <a href="#-démarrage-rapide">Démarrage</a> •
@@ -54,6 +55,14 @@ Axes d'investissement continus :
 > - Lors de la fourniture de services publics d'IA générative, les utilisateurs doivent respecter les obligations réglementaires applicables et gérer eux-mêmes les déclarations, licences, sécurité de contenu, vérification d'identité, conservation des journaux, fiscalité, paiement et autorisations amont requises dans leur juridiction.
 > - Les capacités sensibles comme l'audit des journaux et la conservation de contenu ne doivent être activées qu'avec une base légale, une information claire, une isolation des permissions et des mesures de sécurité des données.
 > - MAX API fournit une couche de gouvernance de passerelle pour les charges de travail de modèles et d'Agents. Il ne fournit pas de comptes amont, de clés API, d'entraînement de modèles de base, et ne remplace pas Dify, LangChain, MCP Server ni les frameworks d'orchestration d'Agents.
+
+---
+
+## 🚦 Canaux de publication
+
+Les versions actuelles de MAX API sont divisées entre versions stables et versions Preview. Les versions Preview exposent plus tôt les nouvelles capacités et corrections afin que la communauté et les opérateurs puissent valider la compatibilité, la stabilité et la sécurité en environnement réel. Une version stable est publiée après 1 semaine de fonctionnement stable de la Preview correspondante, afin de réduire les risques de mise à niveau en production et d'améliorer la sécurité et la fiabilité du système.
+
+Pour la production, privilégiez les versions stables. Utilisez les versions Preview dans des environnements de test ou de canary lorsque vous devez valider à l'avance de nouvelles fonctionnalités, corrections ou évolutions de compatibilité, avec sauvegarde de base de données et plan de rollback avant mise à niveau.
 
 ---
 

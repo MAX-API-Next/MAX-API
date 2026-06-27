@@ -31,6 +31,7 @@
 
 <p align="center">
   <a href="#-project-positioning">Positioning</a> •
+  <a href="#-release-channels">Release Channels</a> •
   <a href="#-governance-framework">Governance</a> •
   <a href="#-use-cases">Use Cases</a> •
   <a href="#-quick-start">Quick Start</a> •
@@ -62,6 +63,14 @@ Ongoing investment areas:
 > - When providing public generative AI services, users should comply with applicable regulatory requirements and independently complete filings, licensing, content safety, real-name verification, log retention, tax, payment, and upstream authorization obligations required by their jurisdiction.
 > - Sensitive capabilities such as log audit and content retention should only be enabled when there is a lawful basis, clear notice, permission isolation, and proper data security measures.
 > - MAX API provides a gateway governance layer for model and Agent workloads. It does not provide upstream model accounts, API keys, foundation model training, or replace Agent orchestration/application frameworks such as Dify, LangChain, or MCP Server.
+
+---
+
+## 🚦 Release Channels
+
+Current MAX API releases are divided into stable releases and Preview releases. Preview releases make new capabilities and fixes available early so the community and deployment operators can validate compatibility, stability, and security in real environments. A stable release is published after the corresponding Preview release has run stably for 1 week, reducing production upgrade risk and improving system safety and reliability.
+
+Production deployments should prefer stable releases. Use Preview releases in test or canary environments when you need to validate new features, fixes, or compatibility changes early, and prepare database backups and rollback plans before upgrading.
 
 ---
 
