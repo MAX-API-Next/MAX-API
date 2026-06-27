@@ -28,9 +28,11 @@ import {
   getUserTaskLogs,
 } from '../api'
 import {
+  LOG_TYPE_ALL_VALUE,
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
+  LOG_TYPE_RETRY_VALUE,
 } from '../constants'
 import type {
   GetLogsParams,
@@ -39,6 +41,7 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
 } from '../types'
+import { parseLogOther } from './format'
 
 // ============================================================================
 // Type Checkers & Utilities
@@ -90,6 +93,25 @@ export function getDefaultTimeRange(): { start: Date; end: Date } {
  */
 function timestampToSeconds(ms: number): number {
   return Math.floor(ms / 1000)
+}
+
+export function matchesCommonLogTypeFilter(
+  log: { type: number; other: string },
+  value: unknown
+): boolean {
+  if (!Array.isArray(value) || value.length === 0) return true
+
+  const filterValues = value
+    .map((item) => String(item).trim())
+    .filter((item) => item !== '')
+
+  if (filterValues.length === 0) return true
+  if (filterValues.includes(LOG_TYPE_ALL_VALUE)) return true
+  if (filterValues.includes(LOG_TYPE_RETRY_VALUE)) {
+    const other = parseLogOther(log.other)
+    return other?.retry_log === true || other?.empty_retry === true
+  }
+  return filterValues.includes(String(log.type))
 }
 
 /**
@@ -180,6 +202,32 @@ export function buildApiParams(config: {
 }): GetLogsParams {
   const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
 
+  const applyTypeFilter = (params: GetLogsParams, value: unknown) => {
+    const typeValues = (Array.isArray(value) ? value : [value])
+      .map((item) => String(item).trim())
+      .filter((item) => item !== '')
+
+    if (typeValues.length === 0) {
+      params.type = undefined
+      params.log_filter = undefined
+      return
+    }
+
+    if (typeValues.includes(LOG_TYPE_ALL_VALUE) || typeValues.includes('all')) {
+      params.type = undefined
+      params.log_filter = undefined
+      return
+    }
+
+    if (typeValues.includes(LOG_TYPE_RETRY_VALUE)) {
+      params.log_filter = LOG_TYPE_RETRY_VALUE
+      params.type = undefined
+      return
+    }
+    params.type = processType(typeValues)
+    params.log_filter = undefined
+  }
+
   // Helper to process type parameter (single value from array)
   const processType = (value: unknown): number | undefined => {
     const parseType = (raw: unknown): number | undefined => {
@@ -200,7 +248,6 @@ export function buildApiParams(config: {
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
-    ...(searchParams.type ? { type: processType(searchParams.type) } : {}),
     ...(searchParams.model ? { model_name: String(searchParams.model) } : {}),
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
@@ -218,6 +265,9 @@ export function buildApiParams(config: {
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }
+  if (searchParams.type) {
+    applyTypeFilter(params, searchParams.type)
+  }
 
   // Override with column filters if present
   if (columnFilters.length > 0) {
@@ -226,7 +276,7 @@ export function buildApiParams(config: {
 
       switch (id) {
         case 'type':
-          params.type = processType(value)
+          applyTypeFilter(params, value)
           break
         case 'model_name':
           params.model_name = String(value)

@@ -39,7 +39,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { StatusBadge } from '@/components/status-badge'
-import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
+import {
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_FILTER_VALUES,
+  LOG_TYPE_FILTERS,
+} from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
@@ -53,12 +57,11 @@ import {
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
-const logTypeValues = ['0', '1', '2', '3', '4', '5', '6', '7'] as const
 
-type LogTypeValue = (typeof logTypeValues)[number]
+type LogTypeValue = (typeof LOG_TYPE_FILTER_VALUES)[number]
 
 function isLogTypeValue(value: string): value is LogTypeValue {
-  return (logTypeValues as readonly string[]).includes(value)
+  return LOG_TYPE_FILTER_VALUES.includes(value)
 }
 
 interface CommonLogsFilterBarProps<TData> {

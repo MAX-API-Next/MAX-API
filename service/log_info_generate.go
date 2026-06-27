@@ -33,6 +33,17 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+func AppendRetryLogInfo(ctx *gin.Context, adminInfo map[string]interface{}, other map[string]interface{}) {
+	if ctx == nil || adminInfo == nil || other == nil {
+		return
+	}
+	useChannel := ctx.GetStringSlice("use_channel")
+	adminInfo["use_channel"] = useChannel
+	if len(useChannel) > 1 {
+		other["retry_log"] = true
+	}
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -58,7 +69,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	adminInfo := make(map[string]interface{})
-	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
+	AppendRetryLogInfo(ctx, adminInfo, other)
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true

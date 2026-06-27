@@ -37,7 +37,6 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
-import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import {
   formatModelName,
   getFirstResponseTimeColor,
@@ -53,6 +52,7 @@ import {
   isTimingLogType,
   getLogTypeConfig,
   isPerCallBilling,
+  matchesCommonLogTypeFilter,
 } from '../../lib/utils'
 import type { LogOtherData, UsageLog } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
@@ -294,9 +294,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         )
       },
       filterFn: (row, _id, value) => {
-        if (!Array.isArray(value) || value.length === 0) return true
-        if (value.includes(LOG_TYPE_ALL_VALUE)) return true
-        return value.includes(String(row.original.type))
+        return matchesCommonLogTypeFilter(row.original, value)
       },
       enableHiding: false,
       meta: { label: t('Time') },

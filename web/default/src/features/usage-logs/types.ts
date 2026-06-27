@@ -128,6 +128,8 @@ export interface LogAuditInfo {
 }
 
 export interface LogOtherData {
+  retry_log?: boolean
+  empty_retry?: boolean
   op?: {
     action?: string
     params?: Record<string, unknown>
@@ -300,6 +302,7 @@ export interface GetLogsParams {
   p?: number
   page_size?: number
   type?: number
+  log_filter?: string
   username?: string
   token_name?: string
   model_name?: string
@@ -330,6 +333,7 @@ export interface GetLogDetailResponse {
 
 export interface GetLogStatsParams {
   type?: number
+  log_filter?: string
   username?: string
   token_name?: string
   model_name?: string
