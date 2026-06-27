@@ -19,6 +19,67 @@ func withLogAuditSettings(t *testing.T, requestEnabled bool, responseEnabled boo
 	})
 }
 
+func TestGetAllLogsRetryFilter(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	logs := []Log{
+		{
+			UserId:    1,
+			CreatedAt: 10,
+			Type:      LogTypeConsume,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"retry_log": true,
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"1", "2"},
+				},
+			}),
+		},
+		{
+			UserId:    1,
+			CreatedAt: 20,
+			Type:      LogTypeConsume,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"empty_retry": true,
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"3"},
+				},
+			}),
+		},
+		{
+			UserId:    1,
+			CreatedAt: 30,
+			Type:      LogTypeConsume,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"4"},
+				},
+				"empty_output_types": []string{"message", "function_call"},
+			}),
+		},
+		{
+			UserId:    1,
+			CreatedAt: 40,
+			Type:      LogTypeConsume,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"5"},
+				},
+			}),
+		},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+
+	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+	require.Len(t, got, 2)
+	require.Equal(t, logs[1].Id, got[0].Id)
+	require.Equal(t, logs[0].Id, got[1].Id)
+}
+
 func TestFormatUserLogDetailExposesOnlyUserAuditContent(t *testing.T) {
 	withLogAuditSettings(t, true, true)
 

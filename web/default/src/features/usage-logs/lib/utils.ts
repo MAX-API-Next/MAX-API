@@ -31,6 +31,7 @@ import {
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
+  LOG_TYPE_RETRY_VALUE,
 } from '../constants'
 import type {
   GetLogsParams,
@@ -180,6 +181,17 @@ export function buildApiParams(config: {
 }): GetLogsParams {
   const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
 
+  const applyTypeFilter = (params: GetLogsParams, value: unknown) => {
+    const typeValue = Array.isArray(value) && value.length === 1 ? value[0] : value
+    if (typeValue === LOG_TYPE_RETRY_VALUE) {
+      params.log_filter = LOG_TYPE_RETRY_VALUE
+      params.type = undefined
+      return
+    }
+    params.type = processType(value)
+    params.log_filter = undefined
+  }
+
   // Helper to process type parameter (single value from array)
   const processType = (value: unknown): number | undefined => {
     const parseType = (raw: unknown): number | undefined => {
@@ -200,7 +212,6 @@ export function buildApiParams(config: {
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
-    ...(searchParams.type ? { type: processType(searchParams.type) } : {}),
     ...(searchParams.model ? { model_name: String(searchParams.model) } : {}),
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
@@ -218,6 +229,9 @@ export function buildApiParams(config: {
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }
+  if (searchParams.type) {
+    applyTypeFilter(params, searchParams.type)
+  }
 
   // Override with column filters if present
   if (columnFilters.length > 0) {
@@ -226,7 +240,7 @@ export function buildApiParams(config: {
 
       switch (id) {
         case 'type':
-          params.type = processType(value)
+          applyTypeFilter(params, value)
           break
         case 'model_name':
           params.model_name = String(value)
