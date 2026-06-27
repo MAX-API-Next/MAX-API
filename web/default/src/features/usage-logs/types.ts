@@ -128,6 +128,8 @@ export interface LogAuditInfo {
 }
 
 export interface LogOtherData {
+  retry_log?: boolean
+  empty_retry?: boolean
   op?: {
     action?: string
     params?: Record<string, unknown>

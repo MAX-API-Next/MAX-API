@@ -28,6 +28,7 @@ import {
   getUserTaskLogs,
 } from '../api'
 import {
+  LOG_TYPE_ALL_VALUE,
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
@@ -40,6 +41,7 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
 } from '../types'
+import { parseLogOther } from './format'
 
 // ============================================================================
 // Type Checkers & Utilities
@@ -91,6 +93,25 @@ export function getDefaultTimeRange(): { start: Date; end: Date } {
  */
 function timestampToSeconds(ms: number): number {
   return Math.floor(ms / 1000)
+}
+
+export function matchesCommonLogTypeFilter(
+  log: { type: number; other: string },
+  value: unknown
+): boolean {
+  if (!Array.isArray(value) || value.length === 0) return true
+
+  const filterValues = value
+    .map((item) => String(item).trim())
+    .filter((item) => item !== '')
+
+  if (filterValues.length === 0) return true
+  if (filterValues.includes(LOG_TYPE_ALL_VALUE)) return true
+  if (filterValues.includes(LOG_TYPE_RETRY_VALUE)) {
+    const other = parseLogOther(log.other)
+    return other?.retry_log === true || other?.empty_retry === true
+  }
+  return filterValues.includes(String(log.type))
 }
 
 /**
@@ -182,13 +203,28 @@ export function buildApiParams(config: {
   const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
 
   const applyTypeFilter = (params: GetLogsParams, value: unknown) => {
-    const typeValue = Array.isArray(value) && value.length === 1 ? value[0] : value
-    if (typeValue === LOG_TYPE_RETRY_VALUE) {
+    const typeValues = (Array.isArray(value) ? value : [value])
+      .map((item) => String(item).trim())
+      .filter((item) => item !== '')
+
+    if (typeValues.length === 0) {
+      params.type = undefined
+      params.log_filter = undefined
+      return
+    }
+
+    if (typeValues.includes(LOG_TYPE_ALL_VALUE) || typeValues.includes('all')) {
+      params.type = undefined
+      params.log_filter = undefined
+      return
+    }
+
+    if (typeValues.includes(LOG_TYPE_RETRY_VALUE)) {
       params.log_filter = LOG_TYPE_RETRY_VALUE
       params.type = undefined
       return
     }
-    params.type = processType(value)
+    params.type = processType(typeValues)
     params.log_filter = undefined
   }
 
