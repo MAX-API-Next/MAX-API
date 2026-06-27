@@ -27,7 +27,7 @@ const usersSearchSchema = z.object({
   pageSize: z.number().optional().catch(undefined),
   filter: z.string().optional().catch(''),
   status: z
-    .array(z.enum(['1', '2']))
+    .array(z.enum(['-1', '1', '2']))
     .optional()
     .catch([]),
   role: z
@@ -35,6 +35,10 @@ const usersSearchSchema = z.object({
     .optional()
     .catch([]),
   group: z.string().optional().catch(''),
+  quota_status: z
+    .array(z.enum(['negative', 'zero', 'positive']))
+    .optional()
+    .catch([]),
 })
 
 export const Route = createFileRoute('/_authenticated/users/')({

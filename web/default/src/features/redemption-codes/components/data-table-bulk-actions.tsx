@@ -51,7 +51,7 @@ export function DataTableBulkActions<TData>({
   const contentToCopy = useMemo(() => {
     const selectedCodes = selectedRows.map((row) => {
       const redemption = row.original as Redemption
-      return `${redemption.name}\t${redemption.key}`
+      return redemption.key
     })
     return selectedCodes.join('\n')
   }, [selectedRows])

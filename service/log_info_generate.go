@@ -72,8 +72,10 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 	AppendContentAuditAdminInfo(relayInfo, adminInfo)
+	appendEmptyCompletionAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	appendEmptyCompletionInfo(ctx, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
@@ -81,6 +83,59 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+func appendEmptyCompletionAdminInfo(ctx *gin.Context, adminInfo map[string]interface{}) {
+	if ctx == nil || adminInfo == nil {
+		return
+	}
+	info, ok := common.GetContextKeyType[map[string]any](ctx, constant.ContextKeyEmptyCompletionInfo)
+	if !ok || len(info) == 0 {
+		return
+	}
+	adminInfo["empty_completion"] = info
+}
+
+func appendEmptyCompletionInfo(ctx *gin.Context, other map[string]interface{}) {
+	if ctx == nil || other == nil {
+		return
+	}
+	info, ok := common.GetContextKeyType[map[string]any](ctx, constant.ContextKeyEmptyCompletionInfo)
+	if !ok || len(info) == 0 {
+		return
+	}
+	copyBool := func(key string) {
+		if v, ok := info[key].(bool); ok {
+			other[key] = v
+		}
+	}
+	copyInt := func(key string) {
+		if v, ok := info[key].(int); ok {
+			other[key] = v
+		}
+	}
+	copyString := func(key string) {
+		if v, ok := info[key].(string); ok && v != "" {
+			other[key] = v
+		}
+	}
+	copyBool("empty_completion")
+	copyBool("empty_retry")
+	copyInt("empty_retry_count")
+	copyString("empty_retry_result")
+	copyString("empty_reason")
+	if v, ok := info["empty_output_types"].([]string); ok && len(v) > 0 {
+		other["empty_output_types"] = v
+	}
+	copyInt("first_empty_channel_id")
+	copyInt("last_empty_channel_id")
+	copyInt("first_empty_channel_type")
+	copyInt("last_empty_channel_type")
+	copyInt("first_empty_retry_index")
+	copyInt("last_empty_retry_index")
+	copyInt("final_channel_id")
+	copyInt("final_channel_type")
+	copyInt("final_retry_index")
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

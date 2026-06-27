@@ -17,6 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const maxPendingResponsesStreamEvents = 32
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
@@ -43,9 +45,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
@@ -56,6 +55,20 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
+	emptyCompletion := isEmptyResponsesCompletion(&responsesResponse)
+	if emptyCompletion {
+		willRetry := shouldRetryEmptyCompletion(c, info)
+		recordEmptyCompletion(c, info, &usage, "empty_responses_output", responsesOutputTypes(&responsesResponse), willRetry)
+		if willRetry {
+			return nil, newEmptyCompletionRetryError()
+		}
+	}
+	if !emptyCompletion {
+		recordEmptyCompletionRetrySuccess(c, info, &usage)
+	}
+
+	service.IOCopyBytesGracefully(c, resp, responseBody)
+
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
 	}
@@ -81,8 +94,32 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var streamErr *types.MaxAPIError
+	type pendingResponsesStreamEvent struct {
+		response dto.ResponsesStreamResponse
+		data     string
+	}
+	pendingEvents := make([]pendingResponsesStreamEvent, 0, 4)
+	streamForwarded := false
+	hasVisiblePayload := false
+	emptyCompletionRecorded := false
+
+	flushPendingEvents := func() {
+		for _, event := range pendingEvents {
+			sendResponsesStreamData(c, event.response, event.data)
+		}
+		pendingEvents = pendingEvents[:0]
+		streamForwarded = true
+	}
+	shouldBufferForEmptyRetry := func() bool {
+		return !streamForwarded && shouldRetryEmptyCompletion(c, info)
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
@@ -91,7 +128,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		if responsesStreamHasVisibleOutput(&streamResponse) {
+			hasVisiblePayload = true
+		}
 		switch streamResponse.Type {
 		case "response.completed":
 			if streamResponse.Response != nil {
@@ -115,6 +154,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+			if !hasVisiblePayload {
+				emptyCompletionRecorded = true
+				if retryErr := handleEmptyResponsesStreamCompletion(c, info, usage, "empty_responses_stream_output", responsesOutputTypes(streamResponse.Response)); retryErr != nil {
+					streamErr = retryErr
+					sr.Stop(streamErr)
+					return
+				}
+			}
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
@@ -131,7 +178,38 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		}
+
+		if streamForwarded {
+			sendResponsesStreamData(c, streamResponse, data)
+			return
+		}
+
+		pendingEvents = append(pendingEvents, pendingResponsesStreamEvent{
+			response: streamResponse,
+			data:     data,
+		})
+		switch streamResponse.Type {
+		case "response.completed", "response.error", "response.failed":
+			flushPendingEvents()
+		default:
+			if hasVisiblePayload || len(pendingEvents) >= maxPendingResponsesStreamEvents || !shouldBufferForEmptyRetry() {
+				flushPendingEvents()
+			}
+		}
 	})
+
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if !hasVisiblePayload && !emptyCompletionRecorded {
+		emptyCompletionRecorded = true
+		if retryErr := handleEmptyResponsesStreamCompletion(c, info, usage, "empty_responses_stream_eof", nil); retryErr != nil {
+			return nil, retryErr
+		}
+	}
+	if !streamForwarded && len(pendingEvents) > 0 {
+		flushPendingEvents()
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
@@ -150,6 +228,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, responseTextBuilder.String())
+	}
+	if hasVisiblePayload {
+		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}
 
 	return usage, nil

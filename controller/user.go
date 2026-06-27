@@ -298,8 +298,9 @@ func SearchUsers(c *gin.Context) {
 			status = &parsed
 		}
 	}
+	quotaStatus := c.Query("quota_status")
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(keyword, group, role, status, quotaStatus, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return

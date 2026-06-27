@@ -52,6 +52,7 @@ token.db_error: "無效的令牌，資料庫查詢出錯，請聯繫管理員"
 # Redemption messages
 redemption.name_length: "兌換碼名稱長度必須在1-20之間"
 redemption.count_positive: "兌換碼個數必須大於0"
+redemption.quota_positive: "兌換碼額度必須大於0"
 redemption.count_max: "一次兌換碼批量生成的個數不能大於 100"
 redemption.create_failed: "建立兌換碼失敗，請稍後重試"
 redemption.invalid: "無效的兌換碼"

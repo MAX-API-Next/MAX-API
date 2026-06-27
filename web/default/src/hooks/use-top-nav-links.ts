@@ -28,6 +28,15 @@ export type TopNavLink = {
   disabled?: boolean
   requiresAuth?: boolean
   external?: boolean
+  literalTitle?: boolean
+}
+
+function isExternalHref(href: string): boolean {
+  return /^https?:\/\//i.test(href)
+}
+
+function isSupportedHref(href: string): boolean {
+  return href.startsWith('/') || isExternalHref(href)
 }
 
 /**
@@ -39,7 +48,8 @@ export type TopNavLink = {
  *   pricing: { enabled: true, requireAuth: false },
  *   rankings: { enabled: true, requireAuth: false },
  *   docs: true,
- *   about: true
+ *   about: true,
+ *   custom: { enabled: false, title: "", href: "" }
  * }
  */
 export function useTopNavLinks(): TopNavLink[] {
@@ -97,6 +107,20 @@ export function useTopNavLinks(): TopNavLink[] {
   // About
   if (modules?.about !== false) {
     links.push({ title: t('About'), href: '/about' })
+  }
+
+  const custom = modules?.custom
+  if (custom?.enabled) {
+    const title = custom.title.trim()
+    const href = custom.href.trim()
+    if (title && href && isSupportedHref(href)) {
+      links.push({
+        title,
+        href,
+        external: isExternalHref(href),
+        literalTitle: true,
+      })
+    }
   }
 
   return links

@@ -64,6 +64,14 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	emptyCompletion := isEmptyResponsesCompletion(&responsesResp)
+	if emptyCompletion {
+		willRetry := shouldRetryEmptyCompletion(c, info)
+		recordEmptyCompletion(c, info, usage, "empty_responses_output", responsesOutputTypes(&responsesResp), willRetry)
+		if willRetry {
+			return nil, newEmptyCompletionRetryError()
+		}
+	}
 	if usage == nil || usage.TotalTokens == 0 {
 		outputAuditText := service.ExtractOutputTextFromResponses(&responsesResp)
 		usage = service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
@@ -73,6 +81,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	} else if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.ExtractOutputTextFromResponses(&responsesResp))
+	}
+	if !emptyCompletion {
+		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}
 
 	var responseBody []byte
@@ -106,13 +117,16 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	model := info.UpstreamModelName
 
 	var (
-		usage       = &dto.Usage{}
-		outputText  strings.Builder
-		usageText   strings.Builder
-		sentStart   bool
-		sentStop    bool
-		sawToolCall bool
-		streamErr   *types.MaxAPIError
+		usage                   = &dto.Usage{}
+		outputText              strings.Builder
+		usageText               strings.Builder
+		pendingTextPrefix       strings.Builder
+		sentStart               bool
+		sentStop                bool
+		sawToolCall             bool
+		hasVisiblePayload       bool
+		emptyCompletionRecorded bool
+		streamErr               *types.MaxAPIError
 	)
 
 	toolCallIndexByID := make(map[string]int)
@@ -194,7 +208,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	//}
 
 	sendReasoningSummaryDelta := func(delta string) bool {
-		if delta == "" {
+		if strings.TrimSpace(delta) == "" {
 			return true
 		}
 		if needsReasoningSummarySeparator {
@@ -231,6 +245,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 		hasSentReasoningSummary = true
+		hasVisiblePayload = true
 		return true
 	}
 
@@ -289,6 +304,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 		sawToolCall = true
+		hasVisiblePayload = true
 
 		// Include tool call data in the local builder for fallback token estimation.
 		if tool.Function.Name != "" {
@@ -362,15 +378,23 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		//	}
 
 		case "response.output_text.delta":
-			if !sendStartIfNeeded() {
-				sr.Stop(streamErr)
-				return
-			}
-
 			if streamResp.Delta != "" {
-				outputText.WriteString(streamResp.Delta)
-				usageText.WriteString(streamResp.Delta)
+				if outputText.Len() == 0 && strings.TrimSpace(streamResp.Delta) == "" {
+					pendingTextPrefix.WriteString(streamResp.Delta)
+					break
+				}
 				delta := streamResp.Delta
+				if pendingTextPrefix.Len() > 0 {
+					delta = pendingTextPrefix.String() + delta
+					pendingTextPrefix.Reset()
+				}
+				if !sendStartIfNeeded() {
+					sr.Stop(streamErr)
+					return
+				}
+				outputText.WriteString(delta)
+				usageText.WriteString(delta)
+				hasVisiblePayload = true
 				chunk := &dto.ChatCompletionsStreamResponse{
 					Id:      responseId,
 					Object:  "chat.completion.chunk",
@@ -447,7 +471,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		case "response.function_call_arguments.done":
 
 		case "response.completed":
+			completedOutputTypes := []string(nil)
 			if streamResp.Response != nil {
+				completedOutputTypes = responsesOutputTypes(streamResp.Response)
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
 				}
@@ -476,6 +502,65 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					if streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens != 0 {
 						usage.CompletionTokenDetails.ReasoningTokens = streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens
 					}
+				}
+				if outputText.Len() == 0 {
+					completedText := service.ExtractOutputTextFromResponses(streamResp.Response)
+					if strings.TrimSpace(completedText) != "" {
+						if !sendStartIfNeeded() {
+							sr.Stop(streamErr)
+							return
+						}
+						outputText.WriteString(completedText)
+						usageText.WriteString(completedText)
+						delta := completedText
+						chunk := &dto.ChatCompletionsStreamResponse{
+							Id:      responseId,
+							Object:  "chat.completion.chunk",
+							Created: createAt,
+							Model:   model,
+							Choices: []dto.ChatCompletionsStreamResponseChoice{
+								{
+									Index: 0,
+									Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+										Content: &delta,
+									},
+								},
+							},
+						}
+						if !sendChatChunk(chunk) {
+							sr.Stop(streamErr)
+							return
+						}
+						hasVisiblePayload = true
+					}
+				}
+				if !sawToolCall {
+					for _, out := range streamResp.Response.Output {
+						if out.Type != "function_call" {
+							continue
+						}
+						itemID := strings.TrimSpace(out.ID)
+						callID := strings.TrimSpace(out.CallId)
+						if callID == "" {
+							callID = itemID
+						}
+						if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
+							sr.Stop(streamErr)
+							return
+						}
+					}
+				}
+				if streamResp.Response.HasImageGenerationCall() {
+					hasVisiblePayload = true
+				}
+			}
+
+			if !hasVisiblePayload {
+				emptyCompletionRecorded = true
+				if retryErr := handleEmptyResponsesStreamCompletion(c, info, usage, "empty_responses_stream_output", completedOutputTypes); retryErr != nil {
+					streamErr = retryErr
+					sr.Stop(streamErr)
+					return
 				}
 			}
 
@@ -518,6 +603,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if streamErr != nil {
 		return nil, streamErr
 	}
+	if !hasVisiblePayload && !emptyCompletionRecorded {
+		emptyCompletionRecorded = true
+		if retryErr := handleEmptyResponsesStreamCompletion(c, info, usage, "empty_responses_stream_eof", nil); retryErr != nil {
+			return nil, retryErr
+		}
+	}
 
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
@@ -556,6 +647,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, auditText)
+	}
+	if hasVisiblePayload {
+		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}
 	return usage, nil
 }

@@ -34,6 +34,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import {
   USER_STATUS,
+  USER_QUOTA_STATUS,
   USER_STATUSES,
   USER_ROLES,
   isUserDeleted,
@@ -128,7 +129,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
     {
       accessorKey: 'status',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Status')} />
+        <DataTableColumnHeader column={column} title={t('Account Status')} />
       ),
       cell: ({ row }) => {
         const user = row.original
@@ -163,7 +164,22 @@ export function useUsersColumns(): ColumnDef<User>[] {
         return value.includes(String(row.getValue(id)))
       },
       enableSorting: false,
-      meta: { label: t('Status'), mobileBadge: true },
+      meta: { label: t('Account Status'), mobileBadge: true },
+    },
+    {
+      id: 'quota_status',
+      accessorFn: (user) => {
+        if (user.quota < 0) return USER_QUOTA_STATUS.NEGATIVE
+        if (user.quota === 0) return USER_QUOTA_STATUS.ZERO
+        return USER_QUOTA_STATUS.POSITIVE
+      },
+      header: t('Balance Status'),
+      filterFn: (row, id, value) => {
+        return value.includes(String(row.getValue(id)))
+      },
+      enableHiding: false,
+      enableSorting: false,
+      meta: { label: t('Balance Status'), mobileHidden: true },
     },
     {
       id: 'quota',
@@ -178,6 +194,45 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const total = used + remaining
         const percentage = total > 0 ? (remaining / total) * 100 : 0
 
+        if (remaining < 0) {
+          return (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <div className='flex w-[150px] cursor-help items-center justify-between gap-2' />
+                }
+              >
+                <StatusBadge
+                  label={t('Negative')}
+                  variant='danger'
+                  copyable={false}
+                />
+                <span className='text-destructive font-medium tabular-nums'>
+                  {formatQuota(remaining)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                <div className='flex flex-col gap-1 text-xs'>
+                  <div>
+                    {t('Current Balance')}: {formatQuota(remaining)}
+                  </div>
+                  <div>
+                    {t('Used:')} {formatQuota(used)}
+                  </div>
+                  <div>
+                    {t('Total Granted')}: {formatQuota(total)}
+                  </div>
+                  <div className='text-muted-foreground max-w-[220px]'>
+                    {t(
+                      'May be caused by concurrent billing or manual adjustment.'
+                    )}
+                  </div>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          )
+        }
+
         if (total === 0) {
           return (
             <StatusBadge
@@ -191,7 +246,9 @@ export function useUsersColumns(): ColumnDef<User>[] {
         return (
           <Tooltip>
             <TooltipTrigger
-              render={<div className='w-[150px] cursor-help space-y-1' />}
+              render={
+                <div className='flex w-[150px] cursor-help flex-col gap-1' />
+              }
             >
               <div className='flex justify-between text-xs'>
                 <span className='font-medium tabular-nums'>

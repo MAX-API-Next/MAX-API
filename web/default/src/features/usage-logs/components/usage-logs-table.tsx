@@ -29,7 +29,6 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -68,8 +67,8 @@ interface UsageLogsTableProps {
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
   const isAdmin = useIsAdmin()
-  const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
+  const hasExecutedSearch = searchParams.searchVersion != null
 
   const {
     columnFilters,
@@ -80,7 +79,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   } = useTableUrlState({
     search: route.useSearch(),
     navigate: route.useNavigate(),
-    pagination: { defaultPage: 1, defaultPageSize: isMobile ? 20 : 100 },
+    pagination: { defaultPage: 1, defaultPageSize: 100 },
     globalFilter: { enabled: false },
     columnFilters: [
       {
@@ -120,6 +119,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       searchParams,
       t,
     ],
+    enabled: hasExecutedSearch,
     queryFn: async () => {
       const result = await fetchLogsByCategory({
         logCategory,
@@ -138,6 +138,9 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       return result.data || DEFAULT_LOGS_DATA
     },
     placeholderData: (previousData, previousQuery) => {
+      if (!hasExecutedSearch) {
+        return undefined
+      }
       if (previousQuery?.queryKey[1] === logCategory) {
         return previousData
       }
@@ -148,6 +151,14 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const logs = data?.items || []
   const columns = useColumnsByCategory(logCategory, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
+  const emptyTitle = hasExecutedSearch
+    ? t('No Logs Found')
+    : t('Click Search to load logs')
+  const emptyDescription = hasExecutedSearch
+    ? t(
+        'No usage logs available. Logs will appear here once API calls are made.'
+      )
+    : t('Set filters and click Search to load usage logs.')
 
   const table = useReactTable({
     data: logs as unknown as Record<string, unknown>[],
@@ -182,10 +193,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       columns={columns as ColumnDef<Record<string, unknown>>[]}
       isLoading={isLoadingData}
       isFetching={isFetching}
-      emptyTitle={t('No Logs Found')}
-      emptyDescription={t(
-        'No usage logs available. Logs will appear here once API calls are made.'
-      )}
+      emptyTitle={emptyTitle}
+      emptyDescription={emptyDescription}
       skeletonKeyPrefix='usage-log-skeleton'
       tableClassName={cn(
         'overflow-x-auto',

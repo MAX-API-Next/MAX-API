@@ -1,12 +1,14 @@
 package model
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) {
@@ -77,6 +79,13 @@ func countUserSubscriptionsForPaymentGuardTest(t *testing.T, userID int) int64 {
 	t.Helper()
 	var count int64
 	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
+	return count
+}
+
+func countTopUpsForPaymentGuardTest(t *testing.T, tradeNo string) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, DB.Model(&TopUp{}).Where("trade_no = ?", tradeNo).Count(&count).Error)
 	return count
 }
 
@@ -171,4 +180,197 @@ func TestExpireSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) 
 	order := GetSubscriptionOrderByTradeNo("sub-expire-guard")
 	require.NotNil(t, order)
 	assert.Equal(t, common.TopUpStatusPending, order.Status)
+}
+
+func TestCompleteSubscriptionOrder_IdempotentDoesNotDuplicateSideEffects(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 404, 0)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 501)
+	insertSubscriptionOrderForPaymentGuardTest(t, "sub-idempotent-order", 404, plan.Id, PaymentProviderStripe)
+
+	require.NoError(t, CompleteSubscriptionOrder("sub-idempotent-order", `{"event":"first"}`, PaymentProviderStripe, "card"))
+	require.NoError(t, CompleteSubscriptionOrder("sub-idempotent-order", `{"event":"second"}`, PaymentProviderStripe, "card"))
+
+	order := GetSubscriptionOrderByTradeNo("sub-idempotent-order")
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	assert.Equal(t, "card", order.PaymentMethod)
+	assert.Equal(t, `{"event":"first"}`, order.ProviderPayload)
+	assert.EqualValues(t, 1, countUserSubscriptionsForPaymentGuardTest(t, 404))
+	assert.EqualValues(t, 1, countTopUpsForPaymentGuardTest(t, "sub-idempotent-order"))
+}
+
+func TestPurchaseSubscriptionWithBalance_InsufficientQuotaDoesNotOverdraw(t *testing.T) {
+	truncateTables(t)
+
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 601)
+	requiredQuota, err := calcSubscriptionBalanceQuota(plan.PriceAmount)
+	require.NoError(t, err)
+	require.Greater(t, requiredQuota, 0)
+	insertUserForPaymentGuardTest(t, 505, requiredQuota-1)
+
+	err = PurchaseSubscriptionWithBalance(505, plan.Id)
+	require.Error(t, err)
+	assert.Equal(t, requiredQuota-1, getUserQuotaForPaymentGuardTest(t, 505))
+	assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, 505))
+}
+
+func TestRedeem_UsedCodeDoesNotDoubleCredit(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 606, 0)
+	redemption := &Redemption{
+		Key:         "redeem-guard-code",
+		Status:      common.RedemptionCodeStatusEnabled,
+		Quota:       123,
+		CreatedTime: time.Now().Unix(),
+	}
+	require.NoError(t, DB.Create(redemption).Error)
+
+	quota, err := Redeem("redeem-guard-code", 606)
+	require.NoError(t, err)
+	assert.Equal(t, 123, quota)
+
+	quota, err = Redeem("redeem-guard-code", 606)
+	require.ErrorIs(t, err, ErrRedeemFailed)
+	assert.Zero(t, quota)
+	assert.Equal(t, 123, getUserQuotaForPaymentGuardTest(t, 606))
+
+	var reloaded Redemption
+	require.NoError(t, DB.Where("id = ?", redemption.Id).First(&reloaded).Error)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, reloaded.Status)
+	assert.Equal(t, 606, reloaded.UsedUserId)
+}
+
+func TestEnsureUserUpdateMatchedTx_AllowsNoopRowsAffectedWhenUserExists(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 607, 0)
+	missingErr := errors.New("missing user")
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return ensureUserUpdateMatchedTx(tx, &gorm.DB{RowsAffected: 0}, 607, missingErr)
+	})
+	require.NoError(t, err)
+}
+
+func TestEnsureUserUpdateMatchedTx_ReturnsMissingWhenUserAbsent(t *testing.T) {
+	truncateTables(t)
+
+	missingErr := errors.New("missing user")
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return ensureUserUpdateMatchedTx(tx, &gorm.DB{RowsAffected: 0}, 608, missingErr)
+	})
+	require.ErrorIs(t, err, missingErr)
+}
+
+func TestRedeemRejectsNonPositiveQuotaWithoutUsingCode(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 609, 0)
+	redemption := &Redemption{
+		Key:         "redeem-zero-quota",
+		Status:      common.RedemptionCodeStatusEnabled,
+		Quota:       0,
+		CreatedTime: time.Now().Unix(),
+	}
+	require.NoError(t, DB.Create(redemption).Error)
+	require.NoError(t, DB.Model(redemption).Update("quota", 0).Error)
+
+	quota, err := Redeem("redeem-zero-quota", 609)
+	require.ErrorIs(t, err, ErrRedeemFailed)
+	assert.Zero(t, quota)
+	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 609))
+
+	var reloaded Redemption
+	require.NoError(t, DB.Where("id = ?", redemption.Id).First(&reloaded).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, reloaded.Status)
+	assert.Zero(t, reloaded.UsedUserId)
+}
+
+func TestRechargeCreemRejectsZeroQuotaBeforeCompletingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 610, 0)
+	topUp := &TopUp{
+		UserId:          610,
+		Amount:          0,
+		Money:           9.99,
+		TradeNo:         "creem-zero-quota",
+		PaymentMethod:   PaymentProviderCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := RechargeCreem("creem-zero-quota", "", "", "127.0.0.1")
+	require.Error(t, err)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "creem-zero-quota"))
+	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 610))
+}
+
+func TestRefundSubscriptionPreConsume_IdempotentDoesNotDoubleRefund(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 707, 0)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 701)
+	sub := &UserSubscription{
+		UserId:      707,
+		PlanId:      plan.Id,
+		AmountTotal: 100,
+		AmountUsed:  50,
+		StartTime:   time.Now().Add(-time.Hour).Unix(),
+		EndTime:     time.Now().Add(time.Hour).Unix(),
+		Status:      "active",
+		Source:      "order",
+	}
+	require.NoError(t, DB.Create(sub).Error)
+	record := &SubscriptionPreConsumeRecord{
+		RequestId:          "refund-guard-request",
+		UserId:             707,
+		UserSubscriptionId: sub.Id,
+		PreConsumed:        30,
+		Status:             "consumed",
+	}
+	require.NoError(t, DB.Create(record).Error)
+
+	require.NoError(t, RefundSubscriptionPreConsume("refund-guard-request"))
+	require.NoError(t, RefundSubscriptionPreConsume("refund-guard-request"))
+
+	var reloadedSub UserSubscription
+	require.NoError(t, DB.Where("id = ?", sub.Id).First(&reloadedSub).Error)
+	assert.EqualValues(t, 20, reloadedSub.AmountUsed)
+
+	var reloadedRecord SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("id = ?", record.Id).First(&reloadedRecord).Error)
+	assert.Equal(t, "refunded", reloadedRecord.Status)
+}
+
+func TestPostConsumeUserSubscriptionDelta_ReturnsAppliedNegativeDelta(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 808, 0)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 801)
+	sub := &UserSubscription{
+		UserId:      808,
+		PlanId:      plan.Id,
+		AmountTotal: 100,
+		AmountUsed:  5,
+		StartTime:   time.Now().Add(-time.Hour).Unix(),
+		EndTime:     time.Now().Add(time.Hour).Unix(),
+		Status:      "active",
+		Source:      "order",
+	}
+	require.NoError(t, DB.Create(sub).Error)
+
+	applied, err := PostConsumeUserSubscriptionDelta(sub.Id, -10)
+	require.NoError(t, err)
+	assert.EqualValues(t, -5, applied)
+
+	var reloadedSub UserSubscription
+	require.NoError(t, DB.Where("id = ?", sub.Id).First(&reloadedSub).Error)
+	assert.EqualValues(t, 0, reloadedSub.AmountUsed)
 }

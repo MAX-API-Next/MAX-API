@@ -42,6 +42,7 @@ import {
 import { getUsers, searchUsers } from '../api'
 import {
   USER_STATUS,
+  getUserQuotaStatusOptions,
   getUserStatusOptions,
   getUserRoleOptions,
   isUserDeleted,
@@ -64,7 +65,9 @@ export function UsersTable() {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const [rowSelection, setRowSelection] = useState({})
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
+    quota_status: false,
+  })
 
   const {
     globalFilter,
@@ -81,12 +84,21 @@ export function UsersTable() {
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
+      {
+        columnId: 'quota_status',
+        searchKey: 'quota_status',
+        type: 'array',
+      },
       { columnId: 'role', searchKey: 'role', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'string' },
     ],
   })
   const statusFilter =
     (columnFilters.find((filter) => filter.id === 'status')?.value as
+      | string[]
+      | undefined) ?? []
+  const quotaStatusFilter =
+    (columnFilters.find((filter) => filter.id === 'quota_status')?.value as
       | string[]
       | undefined) ?? []
   const roleFilter =
@@ -97,6 +109,7 @@ export function UsersTable() {
     (columnFilters.find((filter) => filter.id === 'group')?.value as string) ??
     ''
   const selectedStatus = statusFilter[0] ?? ''
+  const selectedQuotaStatus = quotaStatusFilter[0] ?? ''
   const selectedRole = roleFilter[0] ?? ''
 
   // Fetch data with React Query
@@ -107,6 +120,7 @@ export function UsersTable() {
       pagination.pageSize,
       globalFilter,
       selectedStatus,
+      selectedQuotaStatus,
       selectedRole,
       groupFilter,
       refreshTrigger,
@@ -114,7 +128,10 @@ export function UsersTable() {
     queryFn: async () => {
       const hasFilter = globalFilter?.trim()
       const hasColumnFilter =
-        Boolean(selectedStatus) || Boolean(selectedRole) || Boolean(groupFilter)
+        Boolean(selectedStatus) ||
+        Boolean(selectedQuotaStatus) ||
+        Boolean(selectedRole) ||
+        Boolean(groupFilter)
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
@@ -126,6 +143,7 @@ export function UsersTable() {
               ...params,
               keyword: globalFilter,
               status: selectedStatus,
+              quota_status: selectedQuotaStatus,
               role: selectedRole,
               group: groupFilter,
             })
@@ -211,8 +229,14 @@ export function UsersTable() {
         filters: [
           {
             columnId: 'status',
-            title: t('Status'),
+            title: t('Account Status'),
             options: getUserStatusOptions(t),
+            singleSelect: true,
+          },
+          {
+            columnId: 'quota_status',
+            title: t('Balance Status'),
+            options: getUserQuotaStatusOptions(t),
             singleSelect: true,
           },
           {

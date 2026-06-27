@@ -226,7 +226,57 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int) ([]*User, int64, error) {
+const (
+	UserQuotaStatusNegative = "negative"
+	UserQuotaStatusZero     = "zero"
+	UserQuotaStatusPositive = "positive"
+)
+
+func buildSearchUsersQuery(tx *gorm.DB, keyword string, group string, role *int, status *int, quotaStatus string) *gorm.DB {
+	query := tx.Unscoped().Model(&User{})
+
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		// 构建搜索条件
+		likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
+		likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
+
+		// 尝试将关键字转换为整数ID
+		keywordInt, err := strconv.Atoi(keyword)
+		if err == nil {
+			// 如果是数字，同时搜索ID和其他字段
+			likeCondition = "id = ? OR " + likeCondition
+			likeArgs = append([]interface{}{keywordInt}, likeArgs...)
+		}
+
+		query = query.Where("("+likeCondition+")", likeArgs...)
+	}
+	if group != "" {
+		query = query.Where(commonGroupCol+" = ?", group)
+	}
+	if role != nil {
+		query = query.Where("role = ?", *role)
+	}
+	if status != nil {
+		if *status == -1 {
+			query = query.Where("deleted_at IS NOT NULL")
+		} else {
+			query = query.Where("deleted_at IS NULL").Where("status = ?", *status)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(quotaStatus)) {
+	case UserQuotaStatusNegative:
+		query = query.Where("quota < 0")
+	case UserQuotaStatusZero:
+		query = query.Where("quota = 0")
+	case UserQuotaStatusPositive:
+		query = query.Where("quota > 0")
+	}
+
+	return query
+}
+
+func SearchUsers(keyword string, group string, role *int, status *int, quotaStatus string, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -243,34 +293,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	}()
 
 	// 构建基础查询
-	query := tx.Unscoped().Model(&User{})
-
-	// 构建搜索条件
-	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-	likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
-
-	// 尝试将关键字转换为整数ID
-	keywordInt, err := strconv.Atoi(keyword)
-	if err == nil {
-		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
-		likeArgs = append([]interface{}{keywordInt}, likeArgs...)
-	}
-
-	query = query.Where("("+likeCondition+")", likeArgs...)
-	if group != "" {
-		query = query.Where(commonGroupCol+" = ?", group)
-	}
-	if role != nil {
-		query = query.Where("role = ?", *role)
-	}
-	if status != nil {
-		if *status == -1 {
-			query = query.Where("deleted_at IS NOT NULL")
-		} else {
-			query = query.Where("deleted_at IS NULL").Where("status = ?", *status)
-		}
-	}
+	query := buildSearchUsersQuery(tx, keyword, group, role, status, quotaStatus)
 
 	// 获取总数
 	err = query.Count(&total).Error
@@ -360,7 +383,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	defer tx.Rollback() // 确保在函数退出时事务能回滚
 
 	// 加锁查询用户以确保数据一致性
-	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&user, user.Id).Error
+	err := withRowLock(tx).First(user, user.Id).Error
 	if err != nil {
 		return err
 	}
@@ -371,13 +394,19 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	}
 
 	// 更新用户额度
+	result := tx.Model(&User{}).Where("id = ? AND aff_quota >= ?", user.Id, quota).
+		Updates(map[string]interface{}{
+			"aff_quota": gorm.Expr("aff_quota - ?", quota),
+			"quota":     gorm.Expr("quota + ?", quota),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("邀请额度不足！")
+	}
 	user.AffQuota -= quota
 	user.Quota += quota
-
-	// 保存用户状态
-	if err := tx.Save(user).Error; err != nil {
-		return err
-	}
 
 	// 提交事务
 	return tx.Commit().Error

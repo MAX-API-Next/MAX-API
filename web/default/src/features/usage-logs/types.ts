@@ -41,6 +41,7 @@ export interface UsageLog {
   channel: number
   channel_name?: string
   token_id?: number
+  log_id?: number
   group: string
   ip?: string
   request_id?: string
@@ -319,6 +320,12 @@ export interface GetLogsResponse {
     page: number
     page_size: number
   }
+}
+
+export interface GetLogDetailResponse {
+  success: boolean
+  message?: string
+  data?: UsageLog
 }
 
 export interface GetLogStatsParams {

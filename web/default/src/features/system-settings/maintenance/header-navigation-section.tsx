@@ -26,9 +26,11 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
   SettingsControlChildren,
@@ -50,6 +52,9 @@ const headerNavSchema = z.object({
   pricingRequireAuth: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
+  customEnabled: z.boolean(),
+  customTitle: z.string(),
+  customHref: z.string(),
 })
 
 type HeaderNavFormValues = z.infer<typeof headerNavSchema>
@@ -79,6 +84,18 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.about === undefined
       ? HEADER_NAV_DEFAULT.about
       : Boolean(config.about),
+  customEnabled:
+    config.custom?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.custom.enabled
+      : Boolean(config.custom.enabled),
+  customTitle:
+    config.custom?.title === undefined
+      ? HEADER_NAV_DEFAULT.custom.title
+      : config.custom.title,
+  customHref:
+    config.custom?.href === undefined
+      ? HEADER_NAV_DEFAULT.custom.href
+      : config.custom.href,
 })
 
 export function HeaderNavigationSection({
@@ -102,6 +119,12 @@ export function HeaderNavigationSection({
       console: values.console,
       docs: values.docs,
       about: values.about,
+      custom: {
+        ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
+        enabled: values.customEnabled,
+        title: values.customTitle.trim(),
+        href: values.customHref.trim(),
+      },
       pricing: {
         ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
         enabled: values.pricingEnabled,
@@ -113,6 +136,7 @@ export function HeaderNavigationSection({
   const resetToDefault = () => {
     form.reset(toFormValues(HEADER_NAV_DEFAULT))
   }
+  const customEnabled = form.watch('customEnabled')
 
   const simpleModules: Array<{
     key: keyof HeaderNavFormValues
@@ -188,7 +212,7 @@ export function HeaderNavigationSection({
                     </SettingsSwitchContent>
                     <FormControl>
                       <Switch
-                        checked={field.value}
+                        checked={Boolean(field.value)}
                         onCheckedChange={field.onChange}
                       />
                     </FormControl>
@@ -213,7 +237,7 @@ export function HeaderNavigationSection({
                       </SettingsSwitchContent>
                       <FormControl>
                         <Switch
-                          checked={field.value}
+                          checked={Boolean(field.value)}
                           onCheckedChange={field.onChange}
                         />
                       </FormControl>
@@ -236,7 +260,7 @@ export function HeaderNavigationSection({
                         </SettingsSwitchContent>
                         <FormControl>
                           <Switch
-                            checked={field.value}
+                            checked={Boolean(field.value)}
                             onCheckedChange={field.onChange}
                             disabled={!form.watch(module.requireAuthDependsOn)}
                           />
@@ -249,6 +273,76 @@ export function HeaderNavigationSection({
               </SettingsControlGroup>
             ))}
           </div>
+
+          <SettingsControlGroup>
+            <FormField
+              control={form.control}
+              name='customEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Custom navigation item')}</FormLabel>
+                    <FormDescription>
+                      {t('Show one custom link in the top navigation.')}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <SettingsControlChildren>
+              <div className='grid gap-4 md:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='customTitle'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Navigation name')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('Status')}
+                          disabled={!customEnabled}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Displayed label in the top navigation.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='customHref'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Navigation link')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder={t('https://status.example.com')}
+                          disabled={!customEnabled}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Destination path or URL.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </SettingsControlChildren>
+          </SettingsControlGroup>
         </SettingsForm>
       </Form>
     </SettingsSection>

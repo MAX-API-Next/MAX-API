@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useState, useEffect, useCallback } from 'react'
-import { useQueryClient, useIsFetching } from '@tanstack/react-query'
+import { useIsFetching } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
@@ -66,7 +66,6 @@ function setFilterValue(
 export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const searchParams = route.useSearch()
   const isAdmin = useIsAdmin()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
@@ -98,6 +97,7 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
             ...(searchParams.filter ? { taskId: searchParams.filter } : {}),
           }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setFilters(next)
   }, [
     props.logCategory,
@@ -121,11 +121,12 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       params: { section: props.logCategory },
       search: {
         ...filterParams,
+        pageSize: props.table.getState().pagination.pageSize,
         page: 1,
+        searchVersion: Date.now(),
       },
     })
-    queryClient.invalidateQueries({ queryKey: ['logs'] })
-  }, [filters, navigate, props.logCategory, queryClient])
+  }, [filters, navigate, props.logCategory, props.table])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
@@ -137,12 +138,13 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       params: { section: props.logCategory },
       search: {
         page: 1,
+        pageSize: 100,
         startTime: start.getTime(),
         endTime: end.getTime(),
+        searchVersion: undefined,
       },
     })
-    queryClient.invalidateQueries({ queryKey: ['logs'] })
-  }, [navigate, props.logCategory, queryClient])
+  }, [navigate, props.logCategory])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

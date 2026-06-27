@@ -21,6 +21,12 @@ export type HeaderNavAccessConfig = {
   requireAuth: boolean
 }
 
+export type HeaderNavCustomConfig = {
+  enabled: boolean
+  title: string
+  href: string
+}
+
 export type HeaderNavModule = 'rankings' | 'pricing'
 
 export type HeaderNavModulesConfig = {
@@ -30,7 +36,8 @@ export type HeaderNavModulesConfig = {
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  custom: HeaderNavCustomConfig
+  [key: string]: boolean | HeaderNavAccessConfig | HeaderNavCustomConfig
 }
 
 export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
@@ -46,6 +53,11 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   },
   docs: true,
   about: true,
+  custom: {
+    enabled: false,
+    title: '',
+    href: '',
+  },
 }
 
 export const HEADER_NAV_MODULE_DEFAULTS: Record<
@@ -79,6 +91,7 @@ function cloneHeaderNavDefault(): HeaderNavModulesConfig {
     ...HEADER_NAV_DEFAULT,
     pricing: { ...HEADER_NAV_DEFAULT.pricing },
     rankings: { ...HEADER_NAV_DEFAULT.rankings },
+    custom: { ...HEADER_NAV_DEFAULT.custom },
   }
 }
 
@@ -122,6 +135,23 @@ export function parseHeaderNavAccess(
     }
   }
   return { ...fallback }
+}
+
+export function parseHeaderNavCustom(
+  raw: unknown,
+  fallback: HeaderNavCustomConfig
+): HeaderNavCustomConfig {
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback }
+  }
+
+  const record = raw as Record<string, unknown>
+  return {
+    enabled: parseHeaderNavBoolean(record.enabled, fallback.enabled),
+    title:
+      typeof record.title === 'string' ? record.title.trim() : fallback.title,
+    href: typeof record.href === 'string' ? record.href.trim() : fallback.href,
+  }
 }
 
 export function parseHeaderNavAccessOption(
@@ -168,6 +198,10 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModulesConfig {
     if (key === 'rankings') {
       // Legacy fallback only; new admin writes use the standalone RankingsModule option.
       result.rankings = parseHeaderNavAccess(value, result.rankings)
+      return
+    }
+    if (key === 'custom') {
+      result.custom = parseHeaderNavCustom(value, result.custom)
       return
     }
 

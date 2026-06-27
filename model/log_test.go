@@ -19,37 +19,38 @@ func withLogAuditSettings(t *testing.T, requestEnabled bool, responseEnabled boo
 	})
 }
 
-func TestFormatUserLogsExposesOnlyUserAuditContent(t *testing.T) {
+func TestFormatUserLogDetailExposesOnlyUserAuditContent(t *testing.T) {
 	withLogAuditSettings(t, true, true)
 
-	logs := []*Log{
-		{
-			Other: common.MapToJsonStr(map[string]interface{}{
-				"admin_info": map[string]interface{}{
-					"request_content":            "user prompt",
-					"request_content_truncated":  true,
-					"response_content":           "model answer",
-					"response_content_truncated": true,
-					"local_count_tokens":         true,
-					"use_channel":                []int{1, 2},
-				},
-				"audit_info": map[string]interface{}{
-					"request_content": "stale audit content",
-				},
-				"stream_status": map[string]interface{}{
-					"status": "error",
-				},
-			}),
-		},
+	log := &Log{
+		Id:          42,
+		ChannelName: "secret channel",
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"admin_info": map[string]interface{}{
+				"request_content":            "user prompt",
+				"request_content_truncated":  true,
+				"response_content":           "model answer",
+				"response_content_truncated": true,
+				"local_count_tokens":         true,
+				"use_channel":                []int{1, 2},
+			},
+			"audit_info": map[string]interface{}{
+				"request_content": "stale audit content",
+			},
+			"stream_status": map[string]interface{}{
+				"status": "error",
+			},
+		}),
 	}
 
-	formatUserLogs(logs, 10)
+	formatUserLog(log)
 
-	other, err := common.StrToMap(logs[0].Other)
+	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
+	require.Equal(t, 42, log.Id)
+	require.Empty(t, log.ChannelName)
 	require.NotContains(t, other, "admin_info")
 	require.NotContains(t, other, "stream_status")
-	require.Equal(t, 11, logs[0].Id)
 
 	auditInfo, ok := other["audit_info"].(map[string]interface{})
 	require.True(t, ok)
@@ -61,11 +62,75 @@ func TestFormatUserLogsExposesOnlyUserAuditContent(t *testing.T) {
 	require.NotContains(t, auditInfo, "use_channel")
 }
 
+func TestFormatUserLogsStripsAuditContentFromList(t *testing.T) {
+	withLogAuditSettings(t, true, true)
+
+	logs := []*Log{
+		{
+			Id: 42,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"admin_info": map[string]interface{}{
+					"request_content":            "user prompt",
+					"request_content_truncated":  true,
+					"response_content":           "model answer",
+					"response_content_truncated": true,
+					"local_count_tokens":         true,
+					"use_channel":                []int{1, 2},
+				},
+			}),
+		},
+	}
+
+	formatUserLogs(logs, 10)
+
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.Equal(t, 42, logs[0].LogId)
+	require.Equal(t, 11, logs[0].Id)
+	require.NotContains(t, other, "admin_info")
+
+	auditInfo, ok := other["audit_info"].(map[string]interface{})
+	require.True(t, ok)
+	require.NotContains(t, auditInfo, "request_content")
+	require.NotContains(t, auditInfo, "response_content")
+	require.Equal(t, true, auditInfo["request_content_truncated"])
+	require.Equal(t, true, auditInfo["response_content_truncated"])
+}
+
+func TestStripLogAuditContentKeepsAdminMetadata(t *testing.T) {
+	log := &Log{
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"admin_info": map[string]interface{}{
+				"request_content":            "user prompt",
+				"request_content_truncated":  true,
+				"response_content":           "model answer",
+				"response_content_truncated": true,
+				"local_count_tokens":         true,
+				"use_channel":                []int{1, 2},
+			},
+		}),
+	}
+
+	stripLogAuditContent(log)
+
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	require.NotContains(t, adminInfo, "request_content")
+	require.NotContains(t, adminInfo, "response_content")
+	require.Equal(t, true, adminInfo["request_content_truncated"])
+	require.Equal(t, true, adminInfo["response_content_truncated"])
+	require.Equal(t, true, adminInfo["local_count_tokens"])
+	require.Contains(t, adminInfo, "use_channel")
+}
+
 func TestFormatUserLogsHidesAuditContentWhenDisabled(t *testing.T) {
 	withLogAuditSettings(t, false, false)
 
 	logs := []*Log{
 		{
+			Id: 42,
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"admin_info": map[string]interface{}{
 					"request_content":  "user prompt",
@@ -79,6 +144,7 @@ func TestFormatUserLogsHidesAuditContentWhenDisabled(t *testing.T) {
 
 	other, err := common.StrToMap(logs[0].Other)
 	require.NoError(t, err)
+	require.Equal(t, 42, logs[0].LogId)
 	require.NotContains(t, other, "admin_info")
 	require.NotContains(t, other, "audit_info")
 }

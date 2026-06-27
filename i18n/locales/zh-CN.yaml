@@ -52,6 +52,7 @@ token.db_error: "无效的令牌，数据库查询出错，请联系管理员"
 # Redemption messages
 redemption.name_length: "兑换码名称长度必须在1-20之间"
 redemption.count_positive: "兑换码个数必须大于0"
+redemption.quota_positive: "兑换码额度必须大于0"
 redemption.count_max: "一次兑换码批量生成的个数不能大于 100"
 redemption.create_failed: "创建兑换码失败，请稍后重试"
 redemption.invalid: "无效的兑换码"

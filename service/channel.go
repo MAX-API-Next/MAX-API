@@ -49,6 +49,9 @@ func ShouldDisableChannel(err *types.MaxAPIError) bool {
 	if err == nil {
 		return false
 	}
+	if err.GetErrorCode() == types.ErrorCodeEmptyResponse {
+		return false
+	}
 	if types.IsChannelError(err) {
 		return true
 	}

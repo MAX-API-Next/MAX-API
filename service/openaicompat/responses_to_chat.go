@@ -116,6 +116,8 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 		for _, c := range out.Content {
 			if c.Type == "output_text" && c.Text != "" {
 				sb.WriteString(c.Text)
+			} else if c.Refusal != "" {
+				sb.WriteString(c.Refusal)
 			}
 		}
 	}
@@ -126,6 +128,8 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 		for _, c := range out.Content {
 			if c.Text != "" {
 				sb.WriteString(c.Text)
+			} else if c.Refusal != "" {
+				sb.WriteString(c.Refusal)
 			}
 		}
 	}

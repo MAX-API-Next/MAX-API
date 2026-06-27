@@ -21,6 +21,7 @@ import { buildQueryParams } from './lib/utils'
 import type {
   GetLogsParams,
   GetLogsResponse,
+  GetLogDetailResponse,
   GetLogStatsParams,
   GetLogStatsResponse,
   GetMidjourneyLogsParams,
@@ -44,7 +45,7 @@ async function fetchLogs<T>(
   const paramRecord = params as unknown as Record<string, unknown>
   const queryParams = buildQueryParams({
     p: paramRecord.p || 1,
-    page_size: paramRecord.page_size || 20,
+    page_size: paramRecord.page_size || 100,
     ...params,
   })
   const path = buildApiPath(endpoint, isAdmin)
@@ -75,6 +76,18 @@ export const getAllLogs = (params: GetLogsParams = {}) =>
 export const getUserLogs = (
   params: Omit<GetLogsParams, 'username' | 'channel'> = {}
 ) => fetchLogs('/api/log', params, false)
+
+export async function getLogDetail(id: number): Promise<GetLogDetailResponse> {
+  const res = await api.get(`/api/log/detail/${id}`)
+  return res.data
+}
+
+export async function getUserLogDetail(
+  id: number
+): Promise<GetLogDetailResponse> {
+  const res = await api.get(`/api/log/self/detail/${id}`)
+  return res.data
+}
 
 export const getLogStats = (params: GetLogStatsParams = {}) =>
   fetchLogStats('/api/log', params, true)

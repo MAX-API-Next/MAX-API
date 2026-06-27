@@ -324,6 +324,7 @@ export type BillingSettings = {
 
 export type OperationsSettings = {
   RetryTimes: number
+  EmptyCompletionRetryEnabled: boolean
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

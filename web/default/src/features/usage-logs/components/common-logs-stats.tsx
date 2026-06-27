@@ -51,9 +51,11 @@ export function CommonLogsStats() {
   const isAdmin = useIsAdmin()
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
+  const hasExecutedSearch = searchParams.searchVersion != null
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ['usage-logs-stats', isAdmin, searchParams],
+    enabled: hasExecutedSearch,
     queryFn: async () => {
       const params = buildApiParams({
         page: 1,
@@ -73,6 +75,10 @@ export function CommonLogsStats() {
     },
     placeholderData: (previousData) => previousData,
   })
+
+  if (!hasExecutedSearch) {
+    return null
+  }
 
   if (isLoading) {
     return (

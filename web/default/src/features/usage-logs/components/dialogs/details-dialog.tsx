@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useQuery } from '@tanstack/react-query'
 import {
   Copy,
   Check,
@@ -47,6 +48,7 @@ import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
+import { getLogDetail, getUserLogDetail } from '../../api'
 import {
   parseLogOther,
   getParamOverrideActionLabel,
@@ -445,8 +447,40 @@ interface DetailsDialogProps {
 export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
-  const other = parseLogOther(props.log.other)
-  const details = renderAuditContent(other, t) ?? props.log.content ?? ''
+  const detailLoadErrorMessage = t('Failed to load log details')
+  const detailLogId = props.log.log_id ?? props.log.id
+  const shouldLoadDetail = props.open && detailLogId > 0
+  const { data: detailResult } = useQuery({
+    queryKey: [
+      'usage-log-detail',
+      props.isAdmin,
+      detailLogId,
+      detailLoadErrorMessage,
+    ],
+    enabled: shouldLoadDetail,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    queryFn: async () => {
+      const result = props.isAdmin
+        ? await getLogDetail(detailLogId)
+        : await getUserLogDetail(detailLogId)
+      if (!result.success) {
+        throw new Error(result.message || detailLoadErrorMessage)
+      }
+      return result
+    },
+  })
+  const log = detailResult?.data
+    ? {
+        ...props.log,
+        ...detailResult.data,
+        channel_name:
+          detailResult.data.channel_name || props.log.channel_name || undefined,
+        log_id: props.log.log_id ?? detailResult.data.log_id,
+      }
+    : props.log
+  const other = parseLogOther(log.other)
+  const details = renderAuditContent(other, t) ?? log.content ?? ''
   const typeConfig = getLogTypeConfig(props.log.type)
 
   const isViolation = isViolationFeeLog(other)
@@ -580,10 +614,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   value={
                     <span>
                       {props.log.channel}
-                      {props.log.channel_name && (
+                      {log.channel_name && (
                         <span className='text-muted-foreground'>
                           {' '}
-                          ({props.log.channel_name})
+                          ({log.channel_name})
                         </span>
                       )}
                     </span>

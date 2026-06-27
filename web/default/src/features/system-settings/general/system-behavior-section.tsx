@@ -44,6 +44,7 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const behaviorSchema = z.object({
   RetryTimes: z.coerce.number().min(0).max(10),
+  EmptyCompletionRetryEnabled: z.boolean(),
   DefaultCollapseSidebar: z.boolean(),
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
@@ -105,6 +106,29 @@ export function SystemBehaviorSection({
                 </FormDescription>
                 <FormMessage />
               </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='EmptyCompletionRetryEnabled'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Enable Empty Completion Retry')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
             )}
           />
 

@@ -62,6 +62,25 @@ export const getUserStatusOptions = (t: (key: string) => string) => [
 ]
 
 // ============================================================================
+// User Quota Status Configuration
+// ============================================================================
+
+export const USER_QUOTA_STATUS = {
+  NEGATIVE: 'negative',
+  ZERO: 'zero',
+  POSITIVE: 'positive',
+} as const
+
+export type UserQuotaStatus =
+  (typeof USER_QUOTA_STATUS)[keyof typeof USER_QUOTA_STATUS]
+
+export const getUserQuotaStatusOptions = (t: (key: string) => string) => [
+  { label: t('Negative Balance'), value: USER_QUOTA_STATUS.NEGATIVE },
+  { label: t('Zero Balance'), value: USER_QUOTA_STATUS.ZERO },
+  { label: t('Positive Balance'), value: USER_QUOTA_STATUS.POSITIVE },
+]
+
+// ============================================================================
 // User Role Configuration
 // ============================================================================
 

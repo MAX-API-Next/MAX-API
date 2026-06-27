@@ -127,25 +127,43 @@ func Redeem(key string, userId int) (quota int, err error) {
 	}
 	common.RandomSleep()
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
+		err := withRowLock(tx).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
 		if redemption.Status != common.RedemptionCodeStatusEnabled {
 			return errors.New("该兑换码已被使用")
 		}
-		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < common.GetTimestamp() {
+		now := common.GetTimestamp()
+		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < now {
 			return errors.New("该兑换码已过期")
 		}
-		err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
-		if err != nil {
+		if redemption.Quota <= 0 {
+			return errors.New("无效的兑换额度")
+		}
+		result := tx.Model(&Redemption{}).
+			Where("id = ? AND status = ? AND (expired_time = 0 OR expired_time >= ?)", redemption.Id, common.RedemptionCodeStatusEnabled, now).
+			Updates(map[string]interface{}{
+				"redeemed_time": now,
+				"status":        common.RedemptionCodeStatusUsed,
+				"used_user_id":  userId,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("该兑换码已被使用")
+		}
+
+		userResult := tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota))
+		if err := ensureUserUpdateMatchedTx(tx, userResult, userId, errors.New("无效的 user id")); err != nil {
 			return err
 		}
-		redemption.RedeemedTime = common.GetTimestamp()
+		redemption.RedeemedTime = now
 		redemption.Status = common.RedemptionCodeStatusUsed
 		redemption.UsedUserId = userId
-		err = tx.Save(redemption).Error
-		return err
+		quota = redemption.Quota
+		return nil
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())

@@ -1,0 +1,2025 @@
+diff --git a/.gitignore b/.gitignore
+index 621abf7..d4bb9a3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -26,6 +26,7 @@ plans
+ .cursor
+ .agents
+ .codex
++.tmp
+ 
+ electron/node_modules
+ electron/dist
+diff --git a/web/default/src/components/layout/components/mobile-drawer.tsx b/web/default/src/components/layout/components/mobile-drawer.tsx
+index 7471c9b..8e85545 100644
+--- a/web/default/src/components/layout/components/mobile-drawer.tsx
++++ b/web/default/src/components/layout/components/mobile-drawer.tsx
+@@ -259,21 +259,37 @@ export function MobileDrawer({
+                   </div>
+                 ) : (
+                   <AnimatePresence>
+-                    {mobileLinksList.map((link, index) => (
+-                      <motion.div
+-                        key={`${link.href}-${index}`}
+-                        className='border-border border-b p-2.5 last:border-b-0'
+-                        variants={MOBILE_DRAWER_ANIMATION.menuItem as Variants}
+-                      >
+-                        <Link
+-                          to={link.href}
+-                          className='text-primary/60 hover:text-primary/80 transition-colors'
+-                          onClick={onClose}
++                    {mobileLinksList.map((link, index) => {
++                      const className =
++                        'text-primary/60 hover:text-primary/80 transition-colors'
++                      return (
++                        <motion.div
++                          key={`${link.href}-${index}`}
++                          className='border-border border-b p-2.5 last:border-b-0'
++                          variants={MOBILE_DRAWER_ANIMATION.menuItem as Variants}
+                         >
+-                          {link.title}
+-                        </Link>
+-                      </motion.div>
+-                    ))}
++                          {link.external ? (
++                            <a
++                              href={link.href}
++                              target='_blank'
++                              rel='noopener noreferrer'
++                              className={className}
++                              onClick={onClose}
++                            >
++                              {link.title}
++                            </a>
++                          ) : (
++                            <Link
++                              to={link.href}
++                              className={className}
++                              onClick={onClose}
++                            >
++                              {link.title}
++                            </Link>
++                          )}
++                        </motion.div>
++                      )
++                    })}
+                   </AnimatePresence>
+                 )}
+               </motion.div>
+diff --git a/web/default/src/components/layout/components/public-header.tsx b/web/default/src/components/layout/components/public-header.tsx
+index 5aa19ce..5146416 100644
+--- a/web/default/src/components/layout/components/public-header.tsx
++++ b/web/default/src/components/layout/components/public-header.tsx
+@@ -149,6 +149,11 @@ export function PublicHeader(props: PublicHeaderProps) {
+     navigate({ to: '/sign-in', search: { redirect } })
+   }, [authPromptTarget?.href, navigate])
+ 
++  const getLinkTitle = useCallback(
++    (link: TopNavLink) => (link.literalTitle ? link.title : t(link.title)),
++    [t]
++  )
++
+   const handleNavLinkClick = useCallback(
+     (
+       event: React.MouseEvent<HTMLAnchorElement>,
+@@ -167,7 +172,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+         }
+         setAuthPromptSecondsLeft(AUTH_PROMPT_SECONDS)
+         setAuthPromptTarget({
+-          title: t(link.title),
++          title: getLinkTitle(link),
+           href: link.href,
+         })
+         return
+@@ -177,7 +182,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+         setMobileOpen(false)
+       }
+     },
+-    [t]
++    [getLinkTitle]
+   )
+ 
+   return (
+@@ -240,7 +245,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+                         link.disabled && 'pointer-events-none opacity-50'
+                       )}
+                     >
+-                      {t(link.title)}
++                      {getLinkTitle(link)}
+                     </a>
+                   )
+                 }
+@@ -258,7 +263,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+                       link.disabled && 'pointer-events-none opacity-50'
+                     )}
+                   >
+-                    {t(link.title)}
++                    {getLinkTitle(link)}
+                   </Link>
+                 )
+               })}
+@@ -379,7 +384,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+                     className={linkClassName}
+                     style={transitionStyle}
+                   >
+-                    {t(link.title)}
++                    {getLinkTitle(link)}
+                   </a>
+                 )
+               }
+@@ -392,7 +397,7 @@ export function PublicHeader(props: PublicHeaderProps) {
+                   className={linkClassName}
+                   style={transitionStyle}
+                 >
+-                  {t(link.title)}
++                  {getLinkTitle(link)}
+                 </Link>
+               )
+             })}
+diff --git a/web/default/src/components/layout/types.ts b/web/default/src/components/layout/types.ts
+index 81113b2..12b079e 100644
+--- a/web/default/src/components/layout/types.ts
++++ b/web/default/src/components/layout/types.ts
+@@ -91,6 +91,7 @@ export type TopNavLink = {
+   disabled?: boolean
+   requiresAuth?: boolean
+   external?: boolean
++  literalTitle?: boolean
+ }
+ 
+ /**
+diff --git a/web/default/src/features/redemption-codes/components/data-table-bulk-actions.tsx b/web/default/src/features/redemption-codes/components/data-table-bulk-actions.tsx
+index 7f5411c..137267f 100644
+--- a/web/default/src/features/redemption-codes/components/data-table-bulk-actions.tsx
++++ b/web/default/src/features/redemption-codes/components/data-table-bulk-actions.tsx
+@@ -51,7 +51,7 @@ export function DataTableBulkActions<TData>({
+   const contentToCopy = useMemo(() => {
+     const selectedCodes = selectedRows.map((row) => {
+       const redemption = row.original as Redemption
+-      return `${redemption.name}\t${redemption.key}`
++      return redemption.key
+     })
+     return selectedCodes.join('\n')
+   }, [selectedRows])
+diff --git a/web/default/src/features/system-settings/general/system-behavior-section.tsx b/web/default/src/features/system-settings/general/system-behavior-section.tsx
+index 6e2ad24..1421a1e 100644
+--- a/web/default/src/features/system-settings/general/system-behavior-section.tsx
++++ b/web/default/src/features/system-settings/general/system-behavior-section.tsx
+@@ -44,6 +44,7 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
+ 
+ const behaviorSchema = z.object({
+   RetryTimes: z.coerce.number().min(0).max(10),
++  EmptyCompletionRetryEnabled: z.boolean(),
+   DefaultCollapseSidebar: z.boolean(),
+   DemoSiteEnabled: z.boolean(),
+   SelfUseModeEnabled: z.boolean(),
+@@ -108,6 +109,29 @@ export function SystemBehaviorSection({
+             )}
+           />
+ 
++          <FormField
++            control={form.control}
++            name='EmptyCompletionRetryEnabled'
++            render={({ field }) => (
++              <SettingsSwitchItem>
++                <SettingsSwitchContent>
++                  <FormLabel>{t('Enable Empty Completion Retry')}</FormLabel>
++                  <FormDescription>
++                    {t(
++                      'Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.'
++                    )}
++                  </FormDescription>
++                </SettingsSwitchContent>
++                <FormControl>
++                  <Switch
++                    checked={field.value}
++                    onCheckedChange={field.onChange}
++                  />
++                </FormControl>
++              </SettingsSwitchItem>
++            )}
++          />
++
+           <FormField
+             control={form.control}
+             name='DefaultCollapseSidebar'
+diff --git a/web/default/src/features/system-settings/maintenance/header-navigation-section.tsx b/web/default/src/features/system-settings/maintenance/header-navigation-section.tsx
+index 54f308f..87193f2 100644
+--- a/web/default/src/features/system-settings/maintenance/header-navigation-section.tsx
++++ b/web/default/src/features/system-settings/maintenance/header-navigation-section.tsx
+@@ -26,9 +26,11 @@ import {
+   FormControl,
+   FormDescription,
+   FormField,
++  FormItem,
+   FormLabel,
+   FormMessage,
+ } from '@/components/ui/form'
++import { Input } from '@/components/ui/input'
+ import { Switch } from '@/components/ui/switch'
+ import {
+   SettingsControlChildren,
+@@ -50,6 +52,9 @@ const headerNavSchema = z.object({
+   pricingRequireAuth: z.boolean(),
+   docs: z.boolean(),
+   about: z.boolean(),
++  customEnabled: z.boolean(),
++  customTitle: z.string(),
++  customHref: z.string(),
+ })
+ 
+ type HeaderNavFormValues = z.infer<typeof headerNavSchema>
+@@ -79,6 +84,18 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
+     config.about === undefined
+       ? HEADER_NAV_DEFAULT.about
+       : Boolean(config.about),
++  customEnabled:
++    config.custom?.enabled === undefined
++      ? HEADER_NAV_DEFAULT.custom.enabled
++      : Boolean(config.custom.enabled),
++  customTitle:
++    config.custom?.title === undefined
++      ? HEADER_NAV_DEFAULT.custom.title
++      : config.custom.title,
++  customHref:
++    config.custom?.href === undefined
++      ? HEADER_NAV_DEFAULT.custom.href
++      : config.custom.href,
+ })
+ 
+ export function HeaderNavigationSection({
+@@ -102,6 +119,12 @@ export function HeaderNavigationSection({
+       console: values.console,
+       docs: values.docs,
+       about: values.about,
++      custom: {
++        ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
++        enabled: values.customEnabled,
++        title: values.customTitle.trim(),
++        href: values.customHref.trim(),
++      },
+       pricing: {
+         ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
+         enabled: values.pricingEnabled,
+@@ -113,6 +136,7 @@ export function HeaderNavigationSection({
+   const resetToDefault = () => {
+     form.reset(toFormValues(HEADER_NAV_DEFAULT))
+   }
++  const customEnabled = form.watch('customEnabled')
+ 
+   const simpleModules: Array<{
+     key: keyof HeaderNavFormValues
+@@ -188,7 +212,7 @@ export function HeaderNavigationSection({
+                     </SettingsSwitchContent>
+                     <FormControl>
+                       <Switch
+-                        checked={field.value}
++                        checked={Boolean(field.value)}
+                         onCheckedChange={field.onChange}
+                       />
+                     </FormControl>
+@@ -213,7 +237,7 @@ export function HeaderNavigationSection({
+                       </SettingsSwitchContent>
+                       <FormControl>
+                         <Switch
+-                          checked={field.value}
++                          checked={Boolean(field.value)}
+                           onCheckedChange={field.onChange}
+                         />
+                       </FormControl>
+@@ -236,7 +260,7 @@ export function HeaderNavigationSection({
+                         </SettingsSwitchContent>
+                         <FormControl>
+                           <Switch
+-                            checked={field.value}
++                            checked={Boolean(field.value)}
+                             onCheckedChange={field.onChange}
+                             disabled={!form.watch(module.requireAuthDependsOn)}
+                           />
+@@ -249,6 +273,76 @@ export function HeaderNavigationSection({
+               </SettingsControlGroup>
+             ))}
+           </div>
++
++          <SettingsControlGroup>
++            <FormField
++              control={form.control}
++              name='customEnabled'
++              render={({ field }) => (
++                <SettingsSwitchItem>
++                  <SettingsSwitchContent>
++                    <FormLabel>{t('Custom navigation item')}</FormLabel>
++                    <FormDescription>
++                      {t('Show one custom link in the top navigation.')}
++                    </FormDescription>
++                  </SettingsSwitchContent>
++                  <FormControl>
++                    <Switch
++                      checked={field.value}
++                      onCheckedChange={field.onChange}
++                    />
++                  </FormControl>
++                  <FormMessage />
++                </SettingsSwitchItem>
++              )}
++            />
++
++            <SettingsControlChildren>
++              <div className='grid gap-4 md:grid-cols-2'>
++                <FormField
++                  control={form.control}
++                  name='customTitle'
++                  render={({ field }) => (
++                    <FormItem>
++                      <FormLabel>{t('Navigation name')}</FormLabel>
++                      <FormControl>
++                        <Input
++                          placeholder={t('Status')}
++                          disabled={!customEnabled}
++                          {...field}
++                        />
++                      </FormControl>
++                      <FormDescription>
++                        {t('Displayed label in the top navigation.')}
++                      </FormDescription>
++                      <FormMessage />
++                    </FormItem>
++                  )}
++                />
++
++                <FormField
++                  control={form.control}
++                  name='customHref'
++                  render={({ field }) => (
++                    <FormItem>
++                      <FormLabel>{t('Navigation link')}</FormLabel>
++                      <FormControl>
++                        <Input
++                          placeholder={t('https://status.example.com')}
++                          disabled={!customEnabled}
++                          {...field}
++                        />
++                      </FormControl>
++                      <FormDescription>
++                        {t('Destination path or URL.')}
++                      </FormDescription>
++                      <FormMessage />
++                    </FormItem>
++                  )}
++                />
++              </div>
++            </SettingsControlChildren>
++          </SettingsControlGroup>
+         </SettingsForm>
+       </Form>
+     </SettingsSection>
+diff --git a/web/default/src/features/system-settings/operations/index.tsx b/web/default/src/features/system-settings/operations/index.tsx
+index 0e98a1b..900769a 100644
+--- a/web/default/src/features/system-settings/operations/index.tsx
++++ b/web/default/src/features/system-settings/operations/index.tsx
+@@ -27,6 +27,7 @@ import {
+ 
+ const defaultOperationsSettings: OperationsSettings = {
+   RetryTimes: 0,
++  EmptyCompletionRetryEnabled: false,
+   DefaultCollapseSidebar: false,
+   DemoSiteEnabled: false,
+   SelfUseModeEnabled: false,
+diff --git a/web/default/src/features/system-settings/operations/section-registry.tsx b/web/default/src/features/system-settings/operations/section-registry.tsx
+index f5ecc52..30983f7 100644
+--- a/web/default/src/features/system-settings/operations/section-registry.tsx
++++ b/web/default/src/features/system-settings/operations/section-registry.tsx
+@@ -34,6 +34,7 @@ const OPERATIONS_SECTIONS = [
+       <SystemBehaviorSection
+         defaultValues={{
+           RetryTimes: settings.RetryTimes,
++          EmptyCompletionRetryEnabled: settings.EmptyCompletionRetryEnabled,
+           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
+           DemoSiteEnabled: settings.DemoSiteEnabled,
+           SelfUseModeEnabled: settings.SelfUseModeEnabled,
+diff --git a/web/default/src/features/system-settings/types.ts b/web/default/src/features/system-settings/types.ts
+index abaf11a..8cb2f06 100644
+--- a/web/default/src/features/system-settings/types.ts
++++ b/web/default/src/features/system-settings/types.ts
+@@ -324,6 +324,7 @@ export type BillingSettings = {
+ 
+ export type OperationsSettings = {
+   RetryTimes: number
++  EmptyCompletionRetryEnabled: boolean
+   DefaultCollapseSidebar: boolean
+   DemoSiteEnabled: boolean
+   SelfUseModeEnabled: boolean
+diff --git a/web/default/src/features/usage-logs/api.ts b/web/default/src/features/usage-logs/api.ts
+index 51a2436..7df45ec 100644
+--- a/web/default/src/features/usage-logs/api.ts
++++ b/web/default/src/features/usage-logs/api.ts
+@@ -21,6 +21,7 @@ import { buildQueryParams } from './lib/utils'
+ import type {
+   GetLogsParams,
+   GetLogsResponse,
++  GetLogDetailResponse,
+   GetLogStatsParams,
+   GetLogStatsResponse,
+   GetMidjourneyLogsParams,
+@@ -44,7 +45,7 @@ async function fetchLogs<T>(
+   const paramRecord = params as unknown as Record<string, unknown>
+   const queryParams = buildQueryParams({
+     p: paramRecord.p || 1,
+-    page_size: paramRecord.page_size || 20,
++    page_size: paramRecord.page_size || 100,
+     ...params,
+   })
+   const path = buildApiPath(endpoint, isAdmin)
+@@ -76,6 +77,18 @@ export const getUserLogs = (
+   params: Omit<GetLogsParams, 'username' | 'channel'> = {}
+ ) => fetchLogs('/api/log', params, false)
+ 
++export async function getLogDetail(id: number): Promise<GetLogDetailResponse> {
++  const res = await api.get(`/api/log/detail/${id}`)
++  return res.data
++}
++
++export async function getUserLogDetail(
++  id: number
++): Promise<GetLogDetailResponse> {
++  const res = await api.get(`/api/log/self/detail/${id}`)
++  return res.data
++}
++
+ export const getLogStats = (params: GetLogStatsParams = {}) =>
+   fetchLogStats('/api/log', params, true)
+ 
+diff --git a/web/default/src/features/usage-logs/components/common-logs-filter-bar.tsx b/web/default/src/features/usage-logs/components/common-logs-filter-bar.tsx
+index fd4a50f..84e1cc1 100644
+--- a/web/default/src/features/usage-logs/components/common-logs-filter-bar.tsx
++++ b/web/default/src/features/usage-logs/components/common-logs-filter-bar.tsx
+@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
+ */
+ import { useState, useEffect, useCallback, useMemo } from 'react'
+-import { useQueryClient, useIsFetching } from '@tanstack/react-query'
++import { useIsFetching } from '@tanstack/react-query'
+ import { useNavigate, getRouteApi } from '@tanstack/react-router'
+ import { type Table } from '@tanstack/react-table'
+ import { Eye, EyeOff } from 'lucide-react'
+@@ -70,7 +70,6 @@ export function CommonLogsFilterBar<TData>(
+ ) {
+   const { t } = useTranslation()
+   const navigate = useNavigate()
+-  const queryClient = useQueryClient()
+   const searchParams = route.useSearch()
+   const isAdmin = useIsAdmin()
+   const { status } = useStatus()
+@@ -140,12 +139,12 @@ export function CommonLogsFilterBar<TData>(
+       search: {
+         ...filterParams,
+         type: [logType],
++        pageSize: props.table.getState().pagination.pageSize,
+         page: 1,
++        searchVersion: Date.now(),
+       },
+     })
+-    queryClient.invalidateQueries({ queryKey: ['logs'] })
+-    queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
+-  }, [filters, logType, navigate, queryClient])
++  }, [filters, logType, navigate, props.table])
+ 
+   const handleReset = useCallback(() => {
+     const { start, end } = getDefaultTimeRange()
+@@ -158,14 +157,14 @@ export function CommonLogsFilterBar<TData>(
+       params: { section: 'common' },
+       search: {
+         page: 1,
++        pageSize: 100,
+         type: [LOG_TYPE_ALL_VALUE],
+         startTime: start.getTime(),
+         endTime: end.getTime(),
++        searchVersion: undefined,
+       },
+     })
+-    queryClient.invalidateQueries({ queryKey: ['logs'] })
+-    queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
+-  }, [navigate, queryClient])
++  }, [navigate])
+ 
+   const handleKeyDown = useCallback(
+     (e: React.KeyboardEvent) => {
+diff --git a/web/default/src/features/usage-logs/components/common-logs-stats.tsx b/web/default/src/features/usage-logs/components/common-logs-stats.tsx
+index 67c38b9..f4cf231 100644
+--- a/web/default/src/features/usage-logs/components/common-logs-stats.tsx
++++ b/web/default/src/features/usage-logs/components/common-logs-stats.tsx
+@@ -51,9 +51,11 @@ export function CommonLogsStats() {
+   const isAdmin = useIsAdmin()
+   const searchParams = route.useSearch()
+   const { sensitiveVisible } = useUsageLogsContext()
++  const hasExecutedSearch = searchParams.searchVersion != null
+ 
+   const { data: stats, isLoading } = useQuery({
+     queryKey: ['usage-logs-stats', isAdmin, searchParams],
++    enabled: hasExecutedSearch,
+     queryFn: async () => {
+       const params = buildApiParams({
+         page: 1,
+@@ -74,6 +76,10 @@ export function CommonLogsStats() {
+     placeholderData: (previousData) => previousData,
+   })
+ 
++  if (!hasExecutedSearch) {
++    return null
++  }
++
+   if (isLoading) {
+     return (
+       <div className='flex items-center gap-2'>
+diff --git a/web/default/src/features/usage-logs/components/dialogs/details-dialog.tsx b/web/default/src/features/usage-logs/components/dialogs/details-dialog.tsx
+index 7511aee..60131ca 100644
+--- a/web/default/src/features/usage-logs/components/dialogs/details-dialog.tsx
++++ b/web/default/src/features/usage-logs/components/dialogs/details-dialog.tsx
+@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ 
+ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
+ */
++import { useQuery } from '@tanstack/react-query'
+ import {
+   Copy,
+   Check,
+@@ -47,6 +48,7 @@ import { Label } from '@/components/ui/label'
+ import { ScrollArea } from '@/components/ui/scroll-area'
+ import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
++import { getLogDetail, getUserLogDetail } from '../../api'
+ import {
+   parseLogOther,
+   getParamOverrideActionLabel,
+@@ -445,8 +447,40 @@ interface DetailsDialogProps {
+ export function DetailsDialog(props: DetailsDialogProps) {
+   const { t } = useTranslation()
+   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
+-  const other = parseLogOther(props.log.other)
+-  const details = renderAuditContent(other, t) ?? props.log.content ?? ''
++  const detailLoadErrorMessage = t('Failed to load log details')
++  const detailLogId = props.log.log_id ?? props.log.id
++  const shouldLoadDetail = props.open && detailLogId > 0
++  const { data: detailResult } = useQuery({
++    queryKey: [
++      'usage-log-detail',
++      props.isAdmin,
++      detailLogId,
++      detailLoadErrorMessage,
++    ],
++    enabled: shouldLoadDetail,
++    staleTime: 5 * 60 * 1000,
++    retry: false,
++    queryFn: async () => {
++      const result = props.isAdmin
++        ? await getLogDetail(detailLogId)
++        : await getUserLogDetail(detailLogId)
++      if (!result.success) {
++        throw new Error(result.message || detailLoadErrorMessage)
++      }
++      return result
++    },
++  })
++  const log = detailResult?.data
++    ? {
++        ...props.log,
++        ...detailResult.data,
++        channel_name:
++          detailResult.data.channel_name || props.log.channel_name || undefined,
++        log_id: props.log.log_id ?? detailResult.data.log_id,
++      }
++    : props.log
++  const other = parseLogOther(log.other)
++  const details = renderAuditContent(other, t) ?? log.content ?? ''
+   const typeConfig = getLogTypeConfig(props.log.type)
+ 
+   const isViolation = isViolationFeeLog(other)
+@@ -580,10 +614,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
+                   value={
+                     <span>
+                       {props.log.channel}
+-                      {props.log.channel_name && (
++                      {log.channel_name && (
+                         <span className='text-muted-foreground'>
+                           {' '}
+-                          ({props.log.channel_name})
++                          ({log.channel_name})
+                         </span>
+                       )}
+                     </span>
+diff --git a/web/default/src/features/usage-logs/components/task-logs-filter-bar.tsx b/web/default/src/features/usage-logs/components/task-logs-filter-bar.tsx
+index 1c50f50..8e79029 100644
+--- a/web/default/src/features/usage-logs/components/task-logs-filter-bar.tsx
++++ b/web/default/src/features/usage-logs/components/task-logs-filter-bar.tsx
+@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
+ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
+ */
+ import { useState, useEffect, useCallback } from 'react'
+-import { useQueryClient, useIsFetching } from '@tanstack/react-query'
++import { useIsFetching } from '@tanstack/react-query'
+ import { useNavigate, getRouteApi } from '@tanstack/react-router'
+ import { type Table } from '@tanstack/react-table'
+ import { useTranslation } from 'react-i18next'
+@@ -66,7 +66,6 @@ function setFilterValue(
+ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
+   const { t } = useTranslation()
+   const navigate = useNavigate()
+-  const queryClient = useQueryClient()
+   const searchParams = route.useSearch()
+   const isAdmin = useIsAdmin()
+   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+@@ -98,6 +97,7 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
+             ...(searchParams.filter ? { taskId: searchParams.filter } : {}),
+           }
+ 
++    // eslint-disable-next-line react-hooks/set-state-in-effect
+     setFilters(next)
+   }, [
+     props.logCategory,
+@@ -121,11 +121,12 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
+       params: { section: props.logCategory },
+       search: {
+         ...filterParams,
++        pageSize: props.table.getState().pagination.pageSize,
+         page: 1,
++        searchVersion: Date.now(),
+       },
+     })
+-    queryClient.invalidateQueries({ queryKey: ['logs'] })
+-  }, [filters, navigate, props.logCategory, queryClient])
++  }, [filters, navigate, props.logCategory, props.table])
+ 
+   const handleReset = useCallback(() => {
+     const { start, end } = getDefaultTimeRange()
+@@ -137,12 +138,13 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
+       params: { section: props.logCategory },
+       search: {
+         page: 1,
++        pageSize: 100,
+         startTime: start.getTime(),
+         endTime: end.getTime(),
++        searchVersion: undefined,
+       },
+     })
+-    queryClient.invalidateQueries({ queryKey: ['logs'] })
+-  }, [navigate, props.logCategory, queryClient])
++  }, [navigate, props.logCategory])
+ 
+   const handleKeyDown = useCallback(
+     (e: React.KeyboardEvent) => {
+diff --git a/web/default/src/features/usage-logs/components/usage-logs-table.tsx b/web/default/src/features/usage-logs/components/usage-logs-table.tsx
+index 0d7dbe6..136cced 100644
+--- a/web/default/src/features/usage-logs/components/usage-logs-table.tsx
++++ b/web/default/src/features/usage-logs/components/usage-logs-table.tsx
+@@ -29,7 +29,6 @@ import {
+   getPaginationRowModel,
+   useReactTable,
+ } from '@tanstack/react-table'
+-import { useMediaQuery } from '@/hooks'
+ import { useTranslation } from 'react-i18next'
+ import { toast } from 'sonner'
+ import { cn } from '@/lib/utils'
+@@ -68,8 +67,8 @@ interface UsageLogsTableProps {
+ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+   const { t } = useTranslation()
+   const isAdmin = useIsAdmin()
+-  const isMobile = useMediaQuery('(max-width: 640px)')
+   const searchParams = route.useSearch()
++  const hasExecutedSearch = searchParams.searchVersion != null
+ 
+   const {
+     columnFilters,
+@@ -80,7 +79,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+   } = useTableUrlState({
+     search: route.useSearch(),
+     navigate: route.useNavigate(),
+-    pagination: { defaultPage: 1, defaultPageSize: isMobile ? 20 : 100 },
++    pagination: { defaultPage: 1, defaultPageSize: 100 },
+     globalFilter: { enabled: false },
+     columnFilters: [
+       {
+@@ -120,6 +119,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+       searchParams,
+       t,
+     ],
++    enabled: hasExecutedSearch,
+     queryFn: async () => {
+       const result = await fetchLogsByCategory({
+         logCategory,
+@@ -138,6 +138,9 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+       return result.data || DEFAULT_LOGS_DATA
+     },
+     placeholderData: (previousData, previousQuery) => {
++      if (!hasExecutedSearch) {
++        return undefined
++      }
+       if (previousQuery?.queryKey[1] === logCategory) {
+         return previousData
+       }
+@@ -148,6 +151,14 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+   const logs = data?.items || []
+   const columns = useColumnsByCategory(logCategory, isAdmin)
+   const isLoadingData = isLoading || (isFetching && !data)
++  const emptyTitle = hasExecutedSearch
++    ? t('No Logs Found')
++    : t('Click Search to load logs')
++  const emptyDescription = hasExecutedSearch
++    ? t(
++        'No usage logs available. Logs will appear here once API calls are made.'
++      )
++    : t('Set filters and click Search to load usage logs.')
+ 
+   const table = useReactTable({
+     data: logs as unknown as Record<string, unknown>[],
+@@ -182,10 +193,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
+       columns={columns as ColumnDef<Record<string, unknown>>[]}
+       isLoading={isLoadingData}
+       isFetching={isFetching}
+-      emptyTitle={t('No Logs Found')}
+-      emptyDescription={t(
+-        'No usage logs available. Logs will appear here once API calls are made.'
+-      )}
++      emptyTitle={emptyTitle}
++      emptyDescription={emptyDescription}
+       skeletonKeyPrefix='usage-log-skeleton'
+       tableClassName={cn(
+         'overflow-x-auto',
+diff --git a/web/default/src/features/usage-logs/types.ts b/web/default/src/features/usage-logs/types.ts
+index c307a6d..cac1452 100644
+--- a/web/default/src/features/usage-logs/types.ts
++++ b/web/default/src/features/usage-logs/types.ts
+@@ -41,6 +41,7 @@ export interface UsageLog {
+   channel: number
+   channel_name?: string
+   token_id?: number
++  log_id?: number
+   group: string
+   ip?: string
+   request_id?: string
+@@ -321,6 +322,12 @@ export interface GetLogsResponse {
+   }
+ }
+ 
++export interface GetLogDetailResponse {
++  success: boolean
++  message?: string
++  data?: UsageLog
++}
++
+ export interface GetLogStatsParams {
+   type?: number
+   username?: string
+diff --git a/web/default/src/features/users/api.ts b/web/default/src/features/users/api.ts
+index 04d65ee..85ec882 100644
+--- a/web/default/src/features/users/api.ts
++++ b/web/default/src/features/users/api.ts
+@@ -54,6 +54,7 @@ export async function searchUsers(
+     group = '',
+     role = '',
+     status = '',
++    quota_status = '',
+     p = 1,
+     page_size = 10,
+   } = params
+@@ -62,6 +63,7 @@ export async function searchUsers(
+   queryParams.set('group', group)
+   if (role) queryParams.set('role', role)
+   if (status) queryParams.set('status', status)
++  if (quota_status) queryParams.set('quota_status', quota_status)
+   queryParams.set('p', String(p))
+   queryParams.set('page_size', String(page_size))
+   const res = await api.get(`/api/user/search?${queryParams.toString()}`)
+diff --git a/web/default/src/features/users/components/users-columns.tsx b/web/default/src/features/users/components/users-columns.tsx
+index c8e1c2b..c9bfe1d 100644
+--- a/web/default/src/features/users/components/users-columns.tsx
++++ b/web/default/src/features/users/components/users-columns.tsx
+@@ -34,6 +34,7 @@ import { StatusBadge } from '@/components/status-badge'
+ import { TableId } from '@/components/table-id'
+ import {
+   USER_STATUS,
++  USER_QUOTA_STATUS,
+   USER_STATUSES,
+   USER_ROLES,
+   isUserDeleted,
+@@ -128,7 +129,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
+     {
+       accessorKey: 'status',
+       header: ({ column }) => (
+-        <DataTableColumnHeader column={column} title={t('Status')} />
++        <DataTableColumnHeader column={column} title={t('Account Status')} />
+       ),
+       cell: ({ row }) => {
+         const user = row.original
+@@ -163,7 +164,22 @@ export function useUsersColumns(): ColumnDef<User>[] {
+         return value.includes(String(row.getValue(id)))
+       },
+       enableSorting: false,
+-      meta: { label: t('Status'), mobileBadge: true },
++      meta: { label: t('Account Status'), mobileBadge: true },
++    },
++    {
++      id: 'quota_status',
++      accessorFn: (user) => {
++        if (user.quota < 0) return USER_QUOTA_STATUS.NEGATIVE
++        if (user.quota === 0) return USER_QUOTA_STATUS.ZERO
++        return USER_QUOTA_STATUS.POSITIVE
++      },
++      header: t('Balance Status'),
++      filterFn: (row, id, value) => {
++        return value.includes(String(row.getValue(id)))
++      },
++      enableHiding: false,
++      enableSorting: false,
++      meta: { label: t('Balance Status'), mobileHidden: true },
+     },
+     {
+       id: 'quota',
+@@ -178,6 +194,45 @@ export function useUsersColumns(): ColumnDef<User>[] {
+         const total = used + remaining
+         const percentage = total > 0 ? (remaining / total) * 100 : 0
+ 
++        if (remaining < 0) {
++          return (
++            <Tooltip>
++              <TooltipTrigger
++                render={
++                  <div className='flex w-[150px] cursor-help items-center justify-between gap-2' />
++                }
++              >
++                <StatusBadge
++                  label={t('Negative')}
++                  variant='danger'
++                  copyable={false}
++                />
++                <span className='text-destructive font-medium tabular-nums'>
++                  {formatQuota(remaining)}
++                </span>
++              </TooltipTrigger>
++              <TooltipContent>
++                <div className='flex flex-col gap-1 text-xs'>
++                  <div>
++                    {t('Current Balance')}: {formatQuota(remaining)}
++                  </div>
++                  <div>
++                    {t('Used:')} {formatQuota(used)}
++                  </div>
++                  <div>
++                    {t('Total Granted')}: {formatQuota(total)}
++                  </div>
++                  <div className='text-muted-foreground max-w-[220px]'>
++                    {t(
++                      'May be caused by concurrent billing or manual adjustment.'
++                    )}
++                  </div>
++                </div>
++              </TooltipContent>
++            </Tooltip>
++          )
++        }
++
+         if (total === 0) {
+           return (
+             <StatusBadge
+@@ -191,7 +246,9 @@ export function useUsersColumns(): ColumnDef<User>[] {
+         return (
+           <Tooltip>
+             <TooltipTrigger
+-              render={<div className='w-[150px] cursor-help space-y-1' />}
++              render={
++                <div className='flex w-[150px] cursor-help flex-col gap-1' />
++              }
+             >
+               <div className='flex justify-between text-xs'>
+                 <span className='font-medium tabular-nums'>
+diff --git a/web/default/src/features/users/components/users-table.tsx b/web/default/src/features/users/components/users-table.tsx
+index 5d30c86..0a9a545 100644
+--- a/web/default/src/features/users/components/users-table.tsx
++++ b/web/default/src/features/users/components/users-table.tsx
+@@ -42,6 +42,7 @@ import {
+ import { getUsers, searchUsers } from '../api'
+ import {
+   USER_STATUS,
++  getUserQuotaStatusOptions,
+   getUserStatusOptions,
+   getUserRoleOptions,
+   isUserDeleted,
+@@ -64,7 +65,9 @@ export function UsersTable() {
+   const isMobile = useMediaQuery('(max-width: 640px)')
+   const [rowSelection, setRowSelection] = useState({})
+   const [sorting, setSorting] = useState<SortingState>([])
+-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
++  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
++    quota_status: false,
++  })
+ 
+   const {
+     globalFilter,
+@@ -81,6 +84,11 @@ export function UsersTable() {
+     globalFilter: { enabled: true, key: 'filter' },
+     columnFilters: [
+       { columnId: 'status', searchKey: 'status', type: 'array' },
++      {
++        columnId: 'quota_status',
++        searchKey: 'quota_status',
++        type: 'array',
++      },
+       { columnId: 'role', searchKey: 'role', type: 'array' },
+       { columnId: 'group', searchKey: 'group', type: 'string' },
+     ],
+@@ -89,6 +97,10 @@ export function UsersTable() {
+     (columnFilters.find((filter) => filter.id === 'status')?.value as
+       | string[]
+       | undefined) ?? []
++  const quotaStatusFilter =
++    (columnFilters.find((filter) => filter.id === 'quota_status')?.value as
++      | string[]
++      | undefined) ?? []
+   const roleFilter =
+     (columnFilters.find((filter) => filter.id === 'role')?.value as
+       | string[]
+@@ -97,6 +109,7 @@ export function UsersTable() {
+     (columnFilters.find((filter) => filter.id === 'group')?.value as string) ??
+     ''
+   const selectedStatus = statusFilter[0] ?? ''
++  const selectedQuotaStatus = quotaStatusFilter[0] ?? ''
+   const selectedRole = roleFilter[0] ?? ''
+ 
+   // Fetch data with React Query
+@@ -107,6 +120,7 @@ export function UsersTable() {
+       pagination.pageSize,
+       globalFilter,
+       selectedStatus,
++      selectedQuotaStatus,
+       selectedRole,
+       groupFilter,
+       refreshTrigger,
+@@ -114,7 +128,10 @@ export function UsersTable() {
+     queryFn: async () => {
+       const hasFilter = globalFilter?.trim()
+       const hasColumnFilter =
+-        Boolean(selectedStatus) || Boolean(selectedRole) || Boolean(groupFilter)
++        Boolean(selectedStatus) ||
++        Boolean(selectedQuotaStatus) ||
++        Boolean(selectedRole) ||
++        Boolean(groupFilter)
+       const params = {
+         p: pagination.pageIndex + 1,
+         page_size: pagination.pageSize,
+@@ -126,6 +143,7 @@ export function UsersTable() {
+               ...params,
+               keyword: globalFilter,
+               status: selectedStatus,
++              quota_status: selectedQuotaStatus,
+               role: selectedRole,
+               group: groupFilter,
+             })
+@@ -211,10 +229,16 @@ export function UsersTable() {
+         filters: [
+           {
+             columnId: 'status',
+-            title: t('Status'),
++            title: t('Account Status'),
+             options: getUserStatusOptions(t),
+             singleSelect: true,
+           },
++          {
++            columnId: 'quota_status',
++            title: t('Balance Status'),
++            options: getUserQuotaStatusOptions(t),
++            singleSelect: true,
++          },
+           {
+             columnId: 'role',
+             title: t('Role'),
+diff --git a/web/default/src/features/users/constants.ts b/web/default/src/features/users/constants.ts
+index fb4e198..63335a8 100644
+--- a/web/default/src/features/users/constants.ts
++++ b/web/default/src/features/users/constants.ts
+@@ -61,6 +61,25 @@ export const getUserStatusOptions = (t: (key: string) => string) => [
+   { label: t('Deleted'), value: String(USER_STATUS.DELETED) },
+ ]
+ 
++// ============================================================================
++// User Quota Status Configuration
++// ============================================================================
++
++export const USER_QUOTA_STATUS = {
++  NEGATIVE: 'negative',
++  ZERO: 'zero',
++  POSITIVE: 'positive',
++} as const
++
++export type UserQuotaStatus =
++  (typeof USER_QUOTA_STATUS)[keyof typeof USER_QUOTA_STATUS]
++
++export const getUserQuotaStatusOptions = (t: (key: string) => string) => [
++  { label: t('Negative Balance'), value: USER_QUOTA_STATUS.NEGATIVE },
++  { label: t('Zero Balance'), value: USER_QUOTA_STATUS.ZERO },
++  { label: t('Positive Balance'), value: USER_QUOTA_STATUS.POSITIVE },
++]
++
+ // ============================================================================
+ // User Role Configuration
+ // ============================================================================
+diff --git a/web/default/src/features/users/types.ts b/web/default/src/features/users/types.ts
+index c03349f..1fc6cd0 100644
+--- a/web/default/src/features/users/types.ts
++++ b/web/default/src/features/users/types.ts
+@@ -94,6 +94,7 @@ export interface SearchUsersParams {
+   group?: string
+   role?: string
+   status?: string
++  quota_status?: string
+   p?: number
+   page_size?: number
+ }
+diff --git a/web/default/src/hooks/use-top-nav-links.ts b/web/default/src/hooks/use-top-nav-links.ts
+index 02f8a05..7a2834c 100644
+--- a/web/default/src/hooks/use-top-nav-links.ts
++++ b/web/default/src/hooks/use-top-nav-links.ts
+@@ -28,6 +28,15 @@ export type TopNavLink = {
+   disabled?: boolean
+   requiresAuth?: boolean
+   external?: boolean
++  literalTitle?: boolean
++}
++
++function isExternalHref(href: string): boolean {
++  return /^https?:\/\//i.test(href)
++}
++
++function isSupportedHref(href: string): boolean {
++  return href.startsWith('/') || isExternalHref(href)
+ }
+ 
+ /**
+@@ -39,7 +48,8 @@ export type TopNavLink = {
+  *   pricing: { enabled: true, requireAuth: false },
+  *   rankings: { enabled: true, requireAuth: false },
+  *   docs: true,
+- *   about: true
++ *   about: true,
++ *   custom: { enabled: false, title: "", href: "" }
+  * }
+  */
+ export function useTopNavLinks(): TopNavLink[] {
+@@ -99,5 +109,19 @@ export function useTopNavLinks(): TopNavLink[] {
+     links.push({ title: t('About'), href: '/about' })
+   }
+ 
++  const custom = modules?.custom
++  if (custom?.enabled) {
++    const title = custom.title.trim()
++    const href = custom.href.trim()
++    if (title && href && isSupportedHref(href)) {
++      links.push({
++        title,
++        href,
++        external: isExternalHref(href),
++        literalTitle: true,
++      })
++    }
++  }
++
+   return links
+ }
+diff --git a/web/default/src/i18n/locales/en.json b/web/default/src/i18n/locales/en.json
+index 414470c..dd0943d 100644
+--- a/web/default/src/i18n/locales/en.json
++++ b/web/default/src/i18n/locales/en.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "Account deleted successfully",
+     "Account ID *": "Account ID *",
+     "Account Info": "Account Info",
++    "Account Status": "Account Status",
+     "Account used when authenticating with the SMTP server": "Account used when authenticating with the SMTP server",
+     "acknowledge the related legal risks": "acknowledge the related legal risks",
+     "Across all groups": "Across all groups",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "Balance depleted",
+     "Balance is shown in quota units": "Balance is shown in quota units",
+     "Balance queried successfully": "Balance queried successfully",
++    "Balance Status": "Balance Status",
+     "Balance updated successfully": "Balance updated successfully",
+     "Balance updated: {{balance}}": "Balance updated: {{balance}}",
+     "Bar Chart": "Bar Chart",
+@@ -861,6 +863,7 @@
+     "Click for details": "Click for details",
+     "Click save when you're done.": "Click save when you're done.",
+     "Click save when you&apos;re done.": "Click save when you&apos;re done.",
++    "Click Search to load logs": "Click Search to load logs",
+     "Click the button below to bind your Telegram account": "Click the button below to bind your Telegram account",
+     "Click to open deployment": "Click to open deployment",
+     "Click to preview audio": "Click to preview audio",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "Custom model (comma-separated)",
+     "Custom module": "Custom module",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.",
++    "Custom navigation item": "Custom navigation item",
+     "Custom OAuth": "Custom OAuth",
+     "Custom OAuth Providers": "Custom OAuth Providers",
+     "Custom Seconds": "Custom Seconds",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "Designed and Developed by",
+     "designed for scale": "designed for scale",
+     "Designed for the continuous operation of AI models and Agents": "Designed for the continuous operation of AI models and Agents",
++    "Destination path or URL.": "Destination path or URL.",
+     "Destroyed": "Destroyed",
+     "Detailed request logs for investigations.": "Detailed request logs for investigations.",
+     "Details": "Details",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "Display Options",
+     "Display Token Statistics": "Display Token Statistics",
+     "Displayed in": "Displayed in",
++    "Displayed label in the top navigation.": "Displayed label in the top navigation.",
+     "Displays the mobile sidebar.": "Displays the mobile sidebar.",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.",
+     "Do not repeat check-in; only once per day": "Do not repeat check-in; only once per day",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "Enable Discord OAuth",
+     "Enable Disk Cache": "Enable Disk Cache",
+     "Enable drawing features": "Enable drawing features",
++    "Enable Empty Completion Retry": "Enable Empty Completion Retry",
+     "Enable filtering": "Enable filtering",
+     "Enable FunctionCall thoughtSignature Fill": "Enable FunctionCall thoughtSignature Fill",
+     "Enable GitHub OAuth": "Enable GitHub OAuth",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "Failed to load home page content",
+     "Failed to load image": "Failed to load image",
+     "Failed to load key status": "Failed to load key status",
++    "Failed to load log details": "Failed to load log details",
+     "Failed to load logs": "Failed to load logs",
+     "Failed to load Passkey status": "Failed to load Passkey status",
+     "Failed to load playground groups": "Failed to load playground groups",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "Maximum tokens including hidden reasoning tokens",
+     "Maximum tokens per response": "Maximum tokens per response",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647",
++    "May be caused by concurrent billing or manual adjustment.": "May be caused by concurrent billing or manual adjustment.",
+     "May be used for training by upstream provider": "May be used for training by upstream provider",
+     "Media pricing": "Media pricing",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "Median time-to-first-token (TTFT) sampled hourly per group",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "Native format",
+     "Native forwarding": "Native forwarding",
++    "Navigation link": "Navigation link",
++    "Navigation name": "Navigation name",
+     "Need a redemption code?": "Need a redemption code?",
+     "Needs API key": "Needs API key",
++    "Negative": "Negative",
++    "Negative Balance": "Negative Balance",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.",
+     "Nested JSON: source group →": "Nested JSON: source group →",
+     "Network proxy for this channel (supports socks5 protocol)": "Network proxy for this channel (supports socks5 protocol)",
+@@ -3344,6 +3357,7 @@
+     "Port": "Port",
+     "Port must be a positive integer": "Port must be a positive integer",
+     "Position in the stack": "Position in the stack",
++    "Positive Balance": "Positive Balance",
+     "Post Delta": "Post Delta",
+     "PostgreSQL detected": "PostgreSQL detected",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL offers advanced reliability and data integrity for production workloads.",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "Retention days",
+     "Retry": "Retry",
+     "Retry Chain": "Retry Chain",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.",
+     "Retry policy": "Retry policy",
+     "Retry Suggestion": "Retry Suggestion",
+     "Retry Times": "Retry Times",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "Set API key access restrictions",
+     "Set API key basic information": "Set API key basic information",
+     "Set Field": "Set Field",
++    "Set filters and click Search to load usage logs.": "Set filters and click Search to load usage logs.",
+     "Set filters to customize your dashboard statistics and charts.": "Set filters to customize your dashboard statistics and charts.",
+     "Set filters to narrow down your log search results.": "Set filters to narrow down your log search results.",
+     "Set Header": "Set Header",
+@@ -4097,6 +4113,7 @@
+     "Show": "Show",
+     "Show All": "Show All",
+     "Show all providers including unbound": "Show all providers including unbound",
++    "Show one custom link in the top navigation.": "Show one custom link in the top navigation.",
+     "Show only bound providers": "Show only bound providers",
+     "Show prices in currency instead of quota.": "Show prices in currency instead of quota.",
+     "Show setup guide": "Show setup guide",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "Total earned",
+     "Total Earned": "Total Earned",
+     "Total GPUs": "Total GPUs",
++    "Total Granted": "Total Granted",
+     "Total invitation revenue": "Total invitation revenue",
+     "Total Log Size": "Total Log Size",
+     "Total Quota": "Total Quota",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "Your transaction history will appear here",
+     "Your Turnstile secret key": "Your Turnstile secret key",
+     "Your Turnstile site key": "Your Turnstile site key",
++    "Zero Balance": "Zero Balance",
+     "Zero retention": "Zero retention",
+     "Zhipu": "Zhipu",
+     "Zhipu V4": "Zhipu V4",
+diff --git a/web/default/src/i18n/locales/fr.json b/web/default/src/i18n/locales/fr.json
+index 1f4e5dd..f617796 100644
+--- a/web/default/src/i18n/locales/fr.json
++++ b/web/default/src/i18n/locales/fr.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "Compte supprimé avec succès",
+     "Account ID *": "ID de compte *",
+     "Account Info": "Informations du compte",
++    "Account Status": "Statut du compte",
+     "Account used when authenticating with the SMTP server": "Compte utilisé lors de l'authentification auprès du serveur SMTP",
+     "acknowledge the related legal risks": "reconnais les risques juridiques associés",
+     "Across all groups": "Tous groupes confondus",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "Solde épuisé",
+     "Balance is shown in quota units": "Le solde est affiché en unités de quota",
+     "Balance queried successfully": "Solde interrogé avec succès",
++    "Balance Status": "Statut du solde",
+     "Balance updated successfully": "Solde mis à jour avec succès",
+     "Balance updated: {{balance}}": "Solde mis à jour : {{balance}}",
+     "Bar Chart": "Graphique en barres",
+@@ -861,6 +863,7 @@
+     "Click for details": "Cliquez pour les détails",
+     "Click save when you're done.": "Cliquez sur Enregistrer lorsque vous avez terminé.",
+     "Click save when you&apos;re done.": "Cliquez sur Enregistrer lorsque vous avez terminé.",
++    "Click Search to load logs": "Cliquez sur Rechercher pour charger les journaux",
+     "Click the button below to bind your Telegram account": "Cliquez sur le bouton ci-dessous pour lier votre compte Telegram",
+     "Click to open deployment": "Cliquez pour ouvrir le déploiement",
+     "Click to preview audio": "Cliquer pour prévisualiser l'audio",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "Modèle personnalisé (séparé par des virgules)",
+     "Custom module": "Module personnalisé",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "Multiplicateurs personnalisés lorsque des groupes d'utilisateurs spécifiques utilisent des groupes de jetons spécifiques. Exemple : les utilisateurs VIP obtiennent un taux de 0,9x lorsqu'ils utilisent les jetons du groupe \"edit_this\".",
++    "Custom navigation item": "Élément de navigation personnalisé",
+     "Custom OAuth": "OAuth personnalisé",
+     "Custom OAuth Providers": "Fournisseurs OAuth personnalisés",
+     "Custom Seconds": "Secondes personnalisées",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "Conçu et développé par",
+     "designed for scale": "conçu pour la scalabilité",
+     "Designed for the continuous operation of AI models and Agents": "Designed for the continuous operation of AI models and Agents",
++    "Destination path or URL.": "Chemin ou URL de destination.",
+     "Destroyed": "Détruit",
+     "Detailed request logs for investigations.": "Journaux détaillés des requêtes pour les enquêtes.",
+     "Details": "Détails",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "Options d'affichage",
+     "Display Token Statistics": "Afficher les statistiques des jetons",
+     "Displayed in": "Affiché en",
++    "Displayed label in the top navigation.": "Libellé affiché dans la navigation supérieure.",
+     "Displays the mobile sidebar.": "Affiche la barre latérale mobile.",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "Ne faites pas trop confiance à cette fonctionnalité. L'IP peut être usurpée. Veuillez l'utiliser avec nginx, CDN et autres passerelles.",
+     "Do not repeat check-in; only once per day": "Ne répétez pas le check-in ; une seule fois par jour",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "Activer OAuth Discord",
+     "Enable Disk Cache": "Activer le cache disque",
+     "Enable drawing features": "Activer les fonctionnalités de dessin",
++    "Enable Empty Completion Retry": "Activer la relance des complétions vides",
+     "Enable filtering": "Activer le filtrage",
+     "Enable FunctionCall thoughtSignature Fill": "Activer le remplissage de thoughtSignature pour FunctionCall",
+     "Enable GitHub OAuth": "Activer GitHub OAuth",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "Échec du chargement du contenu de la page d'accueil",
+     "Failed to load image": "Échec du chargement de l'image",
+     "Failed to load key status": "Échec du chargement du statut des clés",
++    "Failed to load log details": "Échec du chargement des détails du journal",
+     "Failed to load logs": "Échec du chargement des journaux",
+     "Failed to load Passkey status": "Échec du chargement du statut Passkey",
+     "Failed to load playground groups": "Échec du chargement des groupes du playground",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "Jetons maximum, y compris les jetons de raisonnement masqués",
+     "Maximum tokens per response": "Nombre maximal de jetons par réponse",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0, maxSuccess ≥ 1, les deux ≤ 2 147 483 647",
++    "May be caused by concurrent billing or manual adjustment.": "Peut être causé par une facturation concurrente ou un ajustement manuel.",
+     "May be used for training by upstream provider": "Peut être utilisé pour l'entraînement par le fournisseur amont",
+     "Media pricing": "Tarification multimédia",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "Latence médiane jusqu'au premier jeton (TTFT) échantillonnée par heure et par groupe",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "Format natif",
+     "Native forwarding": "Transfert natif",
++    "Navigation link": "Lien de navigation",
++    "Navigation name": "Nom de navigation",
+     "Need a redemption code?": "Besoin d'un code d'échange ?",
+     "Needs API key": "Clé API requise",
++    "Negative": "Négatif",
++    "Negative Balance": "Solde négatif",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "JSON imbriqué définissant des règles par groupe pour ajouter (+:), supprimer (-:), ou ajouter des groupes utilisables.",
+     "Nested JSON: source group →": "JSON imbriqué : groupe source →",
+     "Network proxy for this channel (supports socks5 protocol)": "Proxy réseau pour ce canal (supporte le protocole socks5)",
+@@ -3344,6 +3357,7 @@
+     "Port": "Port",
+     "Port must be a positive integer": "Le port doit être un entier positif",
+     "Position in the stack": "Position dans la pile",
++    "Positive Balance": "Solde positif",
+     "Post Delta": "Delta post-calcul",
+     "PostgreSQL detected": "PostgreSQL détecté",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL offre une fiabilité avancée et une intégrité des données pour les charges de travail en production.",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "Jours de rétention",
+     "Retry": "Réessayer",
+     "Retry Chain": "Chaîne de tentatives",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "Réessaie une fois lorsque l'amont renvoie une complétion Chat ou Responses vide avant l'envoi de données de flux. Nécessite un nombre de tentatives supérieur à 0.",
+     "Retry policy": "Politique de reprise",
+     "Retry Suggestion": "Suggestion de relance",
+     "Retry Times": "Nombre de tentatives",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "Définir les restrictions d'accès de la clé API",
+     "Set API key basic information": "Définir les informations de base de la clé API",
+     "Set Field": "Définir le champ",
++    "Set filters and click Search to load usage logs.": "Définissez les filtres puis cliquez sur Rechercher pour charger les journaux d'utilisation.",
+     "Set filters to customize your dashboard statistics and charts.": "Définir des filtres pour personnaliser les statistiques et les graphiques de votre tableau de bord.",
+     "Set filters to narrow down your log search results.": "Définir des filtres pour affiner vos résultats de recherche de journaux.",
+     "Set Header": "Définir l'en-tête",
+@@ -4097,6 +4113,7 @@
+     "Show": "Afficher",
+     "Show All": "Tout afficher",
+     "Show all providers including unbound": "Afficher tous les fournisseurs (y compris non liés)",
++    "Show one custom link in the top navigation.": "Afficher un lien personnalisé dans la navigation supérieure.",
+     "Show only bound providers": "Afficher uniquement les fournisseurs liés",
+     "Show prices in currency instead of quota.": "Afficher les prix en devise au lieu du quota.",
+     "Show setup guide": "Afficher le guide de configuration",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "Total gagné",
+     "Total Earned": "Total gagné",
+     "Total GPUs": "GPUs totaux",
++    "Total Granted": "Quota total accordé",
+     "Total invitation revenue": "Revenu total des invitations",
+     "Total Log Size": "Taille totale des journaux",
+     "Total Quota": "Quota total",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "Votre historique de transactions apparaîtra ici",
+     "Your Turnstile secret key": "Votre clé secrète Turnstile",
+     "Your Turnstile site key": "Votre clé de site Turnstile",
++    "Zero Balance": "Solde nul",
+     "Zero retention": "Aucune rétention",
+     "Zhipu": "Zhipu",
+     "Zhipu V4": "Zhipu V4",
+diff --git a/web/default/src/i18n/locales/ja.json b/web/default/src/i18n/locales/ja.json
+index 54042d8..981e037 100644
+--- a/web/default/src/i18n/locales/ja.json
++++ b/web/default/src/i18n/locales/ja.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "アカウントが正常に削除されました",
+     "Account ID *": "アカウントID *",
+     "Account Info": "アカウント情報",
++    "Account Status": "アカウント状態",
+     "Account used when authenticating with the SMTP server": "SMTPサーバーで認証する際に使用されるアカウント",
+     "acknowledge the related legal risks": "関連する法的リスクを認識します",
+     "Across all groups": "全グループを通じて",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "残高なし",
+     "Balance is shown in quota units": "残高はクォータ単位で表示されます",
+     "Balance queried successfully": "残高の取得に成功しました",
++    "Balance Status": "残高状態",
+     "Balance updated successfully": "残高が正常に更新されました",
+     "Balance updated: {{balance}}": "残高更新：{{balance}}",
+     "Bar Chart": "棒グラフ",
+@@ -861,6 +863,7 @@
+     "Click for details": "クリックして詳細を表示",
+     "Click save when you're done.": "完了したら「保存」をクリックしてください。",
+     "Click save when you&apos;re done.": "完了したら保存をクリックしてください。",
++    "Click Search to load logs": "検索をクリックしてログを読み込む",
+     "Click the button below to bind your Telegram account": "下のボタンをクリックしてTelegramアカウントをバインドしてください",
+     "Click to open deployment": "クリックして展開を開く",
+     "Click to preview audio": "クリックして音声をプレビュー",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "カスタムモデル (コンマ区切り)",
+     "Custom module": "カスタムモジュール",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "特定のユーザーグループが特定のトークングループを使用する場合のカスタム乗数。例: VIPユーザーが「edit_this」グループトークンを使用する場合、0.9倍のレートが適用されます。",
++    "Custom navigation item": "カスタムナビゲーション項目",
+     "Custom OAuth": "カスタム OAuth",
+     "Custom OAuth Providers": "カスタムOAuthプロバイダー",
+     "Custom Seconds": "カスタム秒数",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "設計・開発",
+     "designed for scale": "スケールのために設計",
+     "Designed for the continuous operation of AI models and Agents": "Designed for the continuous operation of AI models and Agents",
++    "Destination path or URL.": "移動先のパスまたは URL。",
+     "Destroyed": "破棄済み",
+     "Detailed request logs for investigations.": "調査のための詳細なリクエストログ。",
+     "Details": "詳細",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "表示オプション",
+     "Display Token Statistics": "トークン統計を表示",
+     "Displayed in": "表示単位",
++    "Displayed label in the top navigation.": "トップナビゲーションに表示されるラベルです。",
+     "Displays the mobile sidebar.": "モバイルサイドバーを表示します。",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "この機能を過信しないでください。IPは偽装される可能性があります。nginx、CDNなどのゲートウェイと併用してください。",
+     "Do not repeat check-in; only once per day": "チェックインを繰り返さないでください；1日1回のみ",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "Discord OAuthを有効にする",
+     "Enable Disk Cache": "ディスクキャッシュを有効にする",
+     "Enable drawing features": "描画機能を有効にする",
++    "Enable Empty Completion Retry": "空の補完の再試行を有効化",
+     "Enable filtering": "フィルタリングを有効にする",
+     "Enable FunctionCall thoughtSignature Fill": "FunctionCall用のthoughtSignature自動付与を有効化",
+     "Enable GitHub OAuth": "GitHub OAuthを有効にする",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "ホームページの内容の読み込みに失敗しました",
+     "Failed to load image": "画像の読み込みに失敗しました",
+     "Failed to load key status": "キー状態の読み込みに失敗しました",
++    "Failed to load log details": "ログ詳細の読み込みに失敗しました",
+     "Failed to load logs": "ログの読み込みに失敗しました",
+     "Failed to load Passkey status": "Passkeyのステータスの読み込みに失敗しました",
+     "Failed to load playground groups": "Playground グループの読み込みに失敗しました",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "隠れ推論トークンを含む最大トークン数",
+     "Maximum tokens per response": "1 回の応答あたりの最大トークン数",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0、maxSuccess ≥ 1、両方とも ≤ 2,147,483,647",
++    "May be caused by concurrent billing or manual adjustment.": "同時課金または手動調整によって発生した可能性があります。",
+     "May be used for training by upstream provider": "上流プロバイダーが学習に利用する可能性があります",
+     "Media pricing": "メディア料金",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "グループ別に毎時サンプリングした最初のトークンまでの中央値レイテンシ (TTFT)",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "ネイティブ形式",
+     "Native forwarding": "ネイティブ転送",
++    "Navigation link": "ナビゲーションリンク",
++    "Navigation name": "ナビゲーション名",
+     "Need a redemption code?": "引き換えコードが必要ですか？",
+     "Needs API key": "API キーが必要",
++    "Negative": "マイナス",
++    "Negative Balance": "マイナス残高",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "追加 (+:)、削除 (-:)、または使用可能なグループの追加を行うグループごとのルールを定義するネストされたJSON。",
+     "Nested JSON: source group →": "ネストされたJSON: ソースグループ →",
+     "Network proxy for this channel (supports socks5 protocol)": "このチャネルのネットワークプロキシ (socks5プロトコルをサポート)",
+@@ -3344,6 +3357,7 @@
+     "Port": "ポート",
+     "Port must be a positive integer": "ポートは正の整数でなければなりません",
+     "Position in the stack": "スタック内の位置",
++    "Positive Balance": "プラス残高",
+     "Post Delta": "事後差額",
+     "PostgreSQL detected": "PostgreSQLが検出されました",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL は本番ワークロード向けの高度な信頼性とデータ整合性を提供します。",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "保持日数",
+     "Retry": "再試行",
+     "Retry Chain": "リトライチェーン",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "ストリームデータを送信する前に上流が空の Chat または Responses 補完を返した場合に 1 回だけ再試行します。Retry Times は 0 より大きくする必要があります。",
+     "Retry policy": "リトライポリシー",
+     "Retry Suggestion": "リトライ提案",
+     "Retry Times": "再試行回数",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "API キーのアクセス制限を設定",
+     "Set API key basic information": "API キーの基本情報を設定",
+     "Set Field": "フィールドを設定",
++    "Set filters and click Search to load usage logs.": "フィルターを設定し、検索をクリックして使用ログを読み込んでください。",
+     "Set filters to customize your dashboard statistics and charts.": "ダッシュボードの統計とグラフをカスタマイズするためにフィルターを設定します。",
+     "Set filters to narrow down your log search results.": "ログ検索結果を絞り込むためにフィルターを設定します。",
+     "Set Header": "ヘッダーを設定",
+@@ -4097,6 +4113,7 @@
+     "Show": "表示",
+     "Show All": "すべて表示",
+     "Show all providers including unbound": "未バインドを含むすべてのプロバイダーを表示",
++    "Show one custom link in the top navigation.": "トップナビゲーションにカスタムリンクを1つ表示します。",
+     "Show only bound providers": "バインド済みのプロバイダーのみ表示",
+     "Show prices in currency instead of quota.": "クォータではなく通貨で価格を表示。",
+     "Show setup guide": "セットアップガイドを表示",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "总收入",
+     "Total Earned": "総収益",
+     "Total GPUs": "合計 GPU",
++    "Total Granted": "付与総額",
+     "Total invitation revenue": "招待による総収益",
+     "Total Log Size": "ログ合計サイズ",
+     "Total Quota": "合計クォータ",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "取引履歴はここに表示されます",
+     "Your Turnstile secret key": "あなたのTurnstileシークレットキー",
+     "Your Turnstile site key": "あなたのTurnstileサイトキー",
++    "Zero Balance": "ゼロ残高",
+     "Zero retention": "データ保持なし",
+     "Zhipu": "Zhipu",
+     "Zhipu V4": "Zhipu V 4",
+diff --git a/web/default/src/i18n/locales/ru.json b/web/default/src/i18n/locales/ru.json
+index f9a9f56..d2ca6cd 100644
+--- a/web/default/src/i18n/locales/ru.json
++++ b/web/default/src/i18n/locales/ru.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "Аккаунт успешно удалён",
+     "Account ID *": "ID аккаунта *",
+     "Account Info": "Информация об аккаунте",
++    "Account Status": "Статус аккаунта",
+     "Account used when authenticating with the SMTP server": "Учетная запись, используемая при аутентификации с SMTP-сервером",
+     "acknowledge the related legal risks": "признаю связанные правовые риски",
+     "Across all groups": "По всем группам",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "Баланс исчерпан",
+     "Balance is shown in quota units": "Баланс показан в единицах квоты",
+     "Balance queried successfully": "Баланс успешно запрошен",
++    "Balance Status": "Статус баланса",
+     "Balance updated successfully": "Баланс успешно обновлён",
+     "Balance updated: {{balance}}": "Баланс обновлён: {{balance}}",
+     "Bar Chart": "Столбчатая диаграмма",
+@@ -861,6 +863,7 @@
+     "Click for details": "Нажмите для подробностей",
+     "Click save when you're done.": "Нажмите «Сохранить», когда закончите.",
+     "Click save when you&apos;re done.": "Нажмите сохранить, когда закончите.",
++    "Click Search to load logs": "Нажмите «Поиск», чтобы загрузить логи",
+     "Click the button below to bind your Telegram account": "Нажмите кнопку ниже, чтобы привязать ваш аккаунт Telegram",
+     "Click to open deployment": "Нажмите, чтобы открыть развертывание",
+     "Click to preview audio": "Нажмите для предпросмотра аудио",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "Пользовательская модель (через запятую)",
+     "Custom module": "Пользовательский модуль",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "Пользовательские множители, когда определенные группы пользователей используют определенные группы токенов. Пример: VIP-пользователи получают ставку 0.9x при использовании токенов группы \"edit_this\".",
++    "Custom navigation item": "Пользовательский пункт навигации",
+     "Custom OAuth": "Пользовательский OAuth",
+     "Custom OAuth Providers": "Пользовательские OAuth-провайдеры",
+     "Custom Seconds": "Пользовательские секунды",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "Разработано и создано",
+     "designed for scale": "спроектировано для масштабирования",
+     "Designed for the continuous operation of AI models and Agents": "Designed for the continuous operation of AI models and Agents",
++    "Destination path or URL.": "Путь назначения или URL.",
+     "Destroyed": "Уничтожено",
+     "Detailed request logs for investigations.": "Подробные журналы запросов для расследований.",
+     "Details": "Детали",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "Параметры отображения",
+     "Display Token Statistics": "Показать статистику токенов",
+     "Displayed in": "Отображается в",
++    "Displayed label in the top navigation.": "Метка, отображаемая в верхней навигации.",
+     "Displays the mobile sidebar.": "Отображает мобильную боковую панель.",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "Не доверяйте этой функции слишком сильно. IP может быть подделан. Используйте с nginx, CDN и другими шлюзами.",
+     "Do not repeat check-in; only once per day": "Не повторяйте отметку; только один раз в день",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "Включить Discord OAuth",
+     "Enable Disk Cache": "Включить дисковый кэш",
+     "Enable drawing features": "Включить функции рисования",
++    "Enable Empty Completion Retry": "Включить повтор пустых завершений",
+     "Enable filtering": "Включить фильтрацию",
+     "Enable FunctionCall thoughtSignature Fill": "Включить автозаполнение thoughtSignature для FunctionCall",
+     "Enable GitHub OAuth": "Включить GitHub OAuth",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "Не удалось загрузить содержимое главной страницы",
+     "Failed to load image": "Не удалось загрузить изображение",
+     "Failed to load key status": "Не удалось загрузить статус ключей",
++    "Failed to load log details": "Не удалось загрузить сведения лога",
+     "Failed to load logs": "Не удалось загрузить логи",
+     "Failed to load Passkey status": "Не удалось загрузить статус Passkey",
+     "Failed to load playground groups": "Не удалось загрузить группы Playground",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "Максимум токенов с учётом скрытых reasoning-токенов",
+     "Maximum tokens per response": "Максимум токенов на ответ",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0, maxSuccess ≥ 1, оба ≤ 2,147,483,647",
++    "May be caused by concurrent billing or manual adjustment.": "Может быть вызвано параллельным списанием или ручной корректировкой.",
+     "May be used for training by upstream provider": "Может использоваться поставщиком для обучения",
+     "Media pricing": "Цены для медиа",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "Медианная задержка первого токена (TTFT), измеряемая ежечасно по группам",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "Собственный формат",
+     "Native forwarding": "Нативная пересылка",
++    "Navigation link": "Ссылка навигации",
++    "Navigation name": "Название навигации",
+     "Need a redemption code?": "Нужен код активации?",
+     "Needs API key": "Нужен API-ключ",
++    "Negative": "Отрицательный",
++    "Negative Balance": "Отрицательный баланс",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "Вложенный JSON, определяющий правила для каждой группы для добавления (+:), удаления (-:) или добавления используемых групп.",
+     "Nested JSON: source group →": "Вложенный JSON: исходная группа →",
+     "Network proxy for this channel (supports socks5 protocol)": "Сетевой прокси для этого канала (поддерживает протокол socks5)",
+@@ -3344,6 +3357,7 @@
+     "Port": "Порт",
+     "Port must be a positive integer": "Порт должен быть положительным целым числом",
+     "Position in the stack": "Позиция в стеке",
++    "Positive Balance": "Положительный баланс",
+     "Post Delta": "Дельта после расчёта",
+     "PostgreSQL detected": "PostgreSQL обнаружен",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL обеспечивает высокую надёжность и целостность данных для продакшен-нагрузок.",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "Дней хранения",
+     "Retry": "Повторить попытку",
+     "Retry Chain": "Цепочка повторов",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "Повторяет запрос один раз, если апстрим вернул пустое завершение Chat или Responses до отправки потоковых данных. Требуется, чтобы Retry Times было больше 0.",
+     "Retry policy": "Политика повторов",
+     "Retry Suggestion": "Рекомендация по повтору",
+     "Retry Times": "Количество повторных попыток",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "Настройте ограничения доступа API-ключа",
+     "Set API key basic information": "Настройте основные сведения API-ключа",
+     "Set Field": "Установить поле",
++    "Set filters and click Search to load usage logs.": "Задайте фильтры и нажмите «Поиск», чтобы загрузить логи использования.",
+     "Set filters to customize your dashboard statistics and charts.": "Установите фильтры, чтобы настроить статистику и диаграммы вашей панели управления.",
+     "Set filters to narrow down your log search results.": "Установите фильтры, чтобы сузить результаты поиска по журналам.",
+     "Set Header": "Установить заголовок",
+@@ -4097,6 +4113,7 @@
+     "Show": "Показать",
+     "Show All": "Показать все",
+     "Show all providers including unbound": "Показать всех провайдеров (включая непривязанные)",
++    "Show one custom link in the top navigation.": "Показывать одну пользовательскую ссылку в верхней навигации.",
+     "Show only bound providers": "Показать только привязанных провайдеров",
+     "Show prices in currency instead of quota.": "Показывать цены в валюте вместо квоты.",
+     "Show setup guide": "Показать руководство по настройке",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "Итого заработано",
+     "Total Earned": "Всего заработано",
+     "Total GPUs": "Всего GPU",
++    "Total Granted": "Всего предоставлено",
+     "Total invitation revenue": "Общий доход от приглашений",
+     "Total Log Size": "Общий размер журналов",
+     "Total Quota": "Общая квота",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "Ваша история транзакций появится здесь",
+     "Your Turnstile secret key": "Секретный ключ Turnstile",
+     "Your Turnstile site key": "Ключ сайта Turnstile",
++    "Zero Balance": "Нулевой баланс",
+     "Zero retention": "Без хранения данных",
+     "Zhipu": "Zhipu",
+     "Zhipu V4": "Zhipu V4",
+diff --git a/web/default/src/i18n/locales/vi.json b/web/default/src/i18n/locales/vi.json
+index 2d8bb7f..8883192 100644
+--- a/web/default/src/i18n/locales/vi.json
++++ b/web/default/src/i18n/locales/vi.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "Tài khoản đã được xóa thành công",
+     "Account ID *": "ID tài khoản *",
+     "Account Info": "Thông tin tài khoản",
++    "Account Status": "Trạng thái tài khoản",
+     "Account used when authenticating with the SMTP server": "Tài khoản được sử dụng khi xác thực với máy chủ SMTP",
+     "acknowledge the related legal risks": "thừa nhận các rủi ro pháp lý liên quan",
+     "Across all groups": "Trên mọi nhóm",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "Đã hết số dư",
+     "Balance is shown in quota units": "Số dư được hiển thị theo đơn vị hạn mức",
+     "Balance queried successfully": "Truy vấn số dư thành công",
++    "Balance Status": "Trạng thái số dư",
+     "Balance updated successfully": "Đã cập nhật số dư thành công",
+     "Balance updated: {{balance}}": "Số dư đã cập nhật: {{balance}}",
+     "Bar Chart": "Biểu đồ cột",
+@@ -861,6 +863,7 @@
+     "Click for details": "Nhấp để xem chi tiết",
+     "Click save when you're done.": "Nhấn lưu khi bạn hoàn tất.",
+     "Click save when you&apos;re done.": "Nhấn lưu khi bạn hoàn tất.",
++    "Click Search to load logs": "Nhấp Tìm kiếm để tải nhật ký",
+     "Click the button below to bind your Telegram account": "Nhấp vào nút bên dưới để liên kết tài khoản Telegram của bạn",
+     "Click to open deployment": "Nhấp để mở triển khai",
+     "Click to preview audio": "Nhấp để xem trước âm thanh",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "Mô hình tùy chỉnh (phân tách bằng dấu phẩy)",
+     "Custom module": "Module tùy chỉnh",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "Các hệ số nhân tùy chỉnh khi các nhóm người dùng cụ thể sử dụng các nhóm token cụ thể. Ví dụ: Người dùng VIP được hưởng tỷ lệ 0.9x khi sử dụng các token thuộc nhóm \"edit_this\".",
++    "Custom navigation item": "Mục điều hướng tùy chỉnh",
+     "Custom OAuth": "OAuth tùy chỉnh",
+     "Custom OAuth Providers": "Nhà cung cấp OAuth tùy chỉnh",
+     "Custom Seconds": "Giây tùy chỉnh",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "Thiết kế và Phát triển bởi",
+     "designed for scale": "thiết kế cho quy mô lớn",
+     "Designed for the continuous operation of AI models and Agents": "Designed for the continuous operation of AI models and Agents",
++    "Destination path or URL.": "Đường dẫn hoặc URL đích.",
+     "Destroyed": "Đã hủy",
+     "Detailed request logs for investigations.": "Nhật ký yêu cầu chi tiết cho các cuộc điều tra.",
+     "Details": "Chi tiết",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "Tùy chọn hiển thị",
+     "Display Token Statistics": "Hiển thị Thống kê Token",
+     "Displayed in": "Hiển thị theo",
++    "Displayed label in the top navigation.": "Nhãn hiển thị trên thanh điều hướng đầu trang.",
+     "Displays the mobile sidebar.": "Hiển thị thanh bên di động.",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "Đừng tin tưởng quá mức vào tính năng này. IP có thể bị giả mạo. Hãy sử dụng cùng với nginx, CDN và các gateway khác.",
+     "Do not repeat check-in; only once per day": "Không lặp lại check-in; chỉ một lần mỗi ngày",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "Bật Discord OAuth",
+     "Enable Disk Cache": "Bật bộ nhớ đệm đĩa",
+     "Enable drawing features": "Bật tính năng vẽ",
++    "Enable Empty Completion Retry": "Bật thử lại khi phản hồi trống",
+     "Enable filtering": "Bật lọc",
+     "Enable FunctionCall thoughtSignature Fill": "Bật tính năng điền FunctionCall thoughtSignature",
+     "Enable GitHub OAuth": "Kích hoạt GitHub OAuth",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "Không thể tải nội dung trang chủ",
+     "Failed to load image": "Không thể tải ảnh",
+     "Failed to load key status": "Không thể tải trạng thái khóa",
++    "Failed to load log details": "Không tải được chi tiết nhật ký",
+     "Failed to load logs": "Không tải được nhật ký",
+     "Failed to load Passkey status": "Không thể tải trạng thái Passkey",
+     "Failed to load playground groups": "Tải nhóm playground thất bại",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "Số token tối đa bao gồm token suy luận ẩn",
+     "Maximum tokens per response": "Số token tối đa mỗi phản hồi",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0, maxSuccess ≥ 1, cả hai đều ≤ 2,147,483,647",
++    "May be caused by concurrent billing or manual adjustment.": "Có thể do tính phí đồng thời hoặc điều chỉnh thủ công.",
+     "May be used for training by upstream provider": "Có thể được nhà cung cấp dùng để huấn luyện",
+     "Media pricing": "Giá phương tiện",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "Độ trễ token đầu tiên trung vị (TTFT) lấy mẫu mỗi giờ theo nhóm",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "Định dạng gốc",
+     "Native forwarding": "Chuyển tiếp nguyên bản",
++    "Navigation link": "Liên kết điều hướng",
++    "Navigation name": "Tên điều hướng",
+     "Need a redemption code?": "Cần mã đổi thưởng?",
+     "Needs API key": "Cần khóa API",
++    "Negative": "Âm",
++    "Negative Balance": "Số dư âm",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "JSON lồng nhau xác định quy tắc theo nhóm để thêm (+:), xóa (-:), hoặc nối các nhóm có thể sử dụng.",
+     "Nested JSON: source group →": "JSON lồng nhau: nhóm nguồn →",
+     "Network proxy for this channel (supports socks5 protocol)": "Proxy mạng cho kênh này (hỗ trợ giao thức socks5)",
+@@ -3344,6 +3357,7 @@
+     "Port": "Cảng",
+     "Port must be a positive integer": "Cổng phải là số nguyên dương",
+     "Position in the stack": "Vị trí trong stack",
++    "Positive Balance": "Số dư dương",
+     "Post Delta": "Chênh lệch sau",
+     "PostgreSQL detected": "Phát hiện PostgreSQL",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL cung cấp độ tin cậy cao và tính toàn vẹn dữ liệu cho khối lượng công việc production.",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "Số ngày lưu giữ",
+     "Retry": "Thử lại",
+     "Retry Chain": "Chuỗi thử lại",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "Thử lại một lần khi upstream trả về phần hoàn thành Chat hoặc Responses trống trước khi gửi bất kỳ dữ liệu stream nào. Yêu cầu Retry Times lớn hơn 0.",
+     "Retry policy": "Chính sách retry",
+     "Retry Suggestion": "Gợi ý thử lại",
+     "Retry Times": "Số lần thử lại",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "Thiết lập hạn chế truy cập cho khóa API",
+     "Set API key basic information": "Thiết lập thông tin cơ bản cho khóa API",
+     "Set Field": "Đặt trường",
++    "Set filters and click Search to load usage logs.": "Thiết lập bộ lọc rồi nhấp Tìm kiếm để tải nhật ký sử dụng.",
+     "Set filters to customize your dashboard statistics and charts.": "Đặt bộ lọc để tùy chỉnh số liệu thống kê và biểu đồ trên bảng điều khiển của bạn.",
+     "Set filters to narrow down your log search results.": "Đặt bộ lọc để thu hẹp kết quả tìm kiếm nhật ký của bạn.",
+     "Set Header": "Đặt tiêu đề",
+@@ -4097,6 +4113,7 @@
+     "Show": "Hiển thị",
+     "Show All": "Hiển thị tất cả",
+     "Show all providers including unbound": "Hiển thị tất cả nhà cung cấp (bao gồm chưa liên kết)",
++    "Show one custom link in the top navigation.": "Hiển thị một liên kết tùy chỉnh trên thanh điều hướng đầu trang.",
+     "Show only bound providers": "Chỉ hiển thị nhà cung cấp đã liên kết",
+     "Show prices in currency instead of quota.": "Hiển thị giá bằng tiền tệ thay vì hạn ngạch.",
+     "Show setup guide": "Hiển thị hướng dẫn thiết lập",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "Tổng thu nhập",
+     "Total Earned": "Total income",
+     "Total GPUs": "Tổng GPU",
++    "Total Granted": "Tổng hạn mức đã cấp",
+     "Total invitation revenue": "Tổng doanh thu mời",
+     "Total Log Size": "Tổng dung lượng nhật ký",
+     "Total Quota": "Tổng hạn mức",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "Lịch sử giao dịch của bạn sẽ xuất hiện ở đây",
+     "Your Turnstile secret key": "Khóa bí mật Turnstile của bạn",
+     "Your Turnstile site key": "Khóa site Turnstile của bạn",
++    "Zero Balance": "Số dư bằng không",
+     "Zero retention": "Không lưu dữ liệu",
+     "Zhipu": "Zhipu",
+     "Zhipu V4": "Zhipu V4",
+diff --git a/web/default/src/i18n/locales/zh.json b/web/default/src/i18n/locales/zh.json
+index 34bedf6..15ba178 100644
+--- a/web/default/src/i18n/locales/zh.json
++++ b/web/default/src/i18n/locales/zh.json
+@@ -133,6 +133,7 @@
+     "Account deleted successfully": "账户删除成功",
+     "Account ID *": "账户 ID *",
+     "Account Info": "账户信息",
++    "Account Status": "账号状态",
+     "Account used when authenticating with the SMTP server": "用于与 SMTP 服务器进行身份验证的账户",
+     "acknowledge the related legal risks": "确认相关法律风险",
+     "Across all groups": "跨所有分组",
+@@ -590,6 +591,7 @@
+     "Balance depleted": "余额已耗尽",
+     "Balance is shown in quota units": "余额以额度单位显示",
+     "Balance queried successfully": "余额查询成功",
++    "Balance Status": "余额状态",
+     "Balance updated successfully": "余额更新成功",
+     "Balance updated: {{balance}}": "余额已更新：{{balance}}",
+     "Bar Chart": "柱状图",
+@@ -861,6 +863,7 @@
+     "Click for details": "点击查看详情",
+     "Click save when you're done.": "完成後點擊保存。",
+     "Click save when you&apos;re done.": "完成后点击保存。",
++    "Click Search to load logs": "点击搜索加载日志",
+     "Click the button below to bind your Telegram account": "点击下方按钮绑定您的 Telegram 账户",
+     "Click to open deployment": "点击打开部署",
+     "Click to preview audio": "点击预览音乐",
+@@ -1215,6 +1218,7 @@
+     "Custom model (comma-separated)": "自定义模型（逗号分隔）",
+     "Custom module": "自定义模块",
+     "Custom multipliers when specific user groups use specific token groups. Example: VIP users get 0.9x rate when using \"edit_this\" group tokens.": "当特定用户分组使用特定令牌分组时的自定义乘数。示例：VIP 用户在使用“edit_this”分组令牌时获得 0.9 倍费率。",
++    "Custom navigation item": "自定义导航项",
+     "Custom OAuth": "自定义 OAuth",
+     "Custom OAuth Providers": "自定义OAuth提供商",
+     "Custom Seconds": "自定义秒数",
+@@ -1333,6 +1337,7 @@
+     "Designed and Developed by": "设计与开发",
+     "designed for scale": "为规模而设计",
+     "Designed for the continuous operation of AI models and Agents": "为 AI 模型与 Agent 的持续运营而设计",
++    "Destination path or URL.": "目标路径或 URL。",
+     "Destroyed": "已销毁",
+     "Detailed request logs for investigations.": "用于调查的详细请求日志。",
+     "Details": "详情",
+@@ -1403,6 +1408,7 @@
+     "Display Options": "显示选项",
+     "Display Token Statistics": "显示 Token 统计信息",
+     "Displayed in": "显示单位",
++    "Displayed label in the top navigation.": "顶部导航中显示的名称。",
+     "Displays the mobile sidebar.": "显示移动侧边栏。",
+     "Do not over-trust this feature. IP may be spoofed. Please use with nginx, CDN and other gateways.": "请勿过度信任此功能，IP 可能被伪造，请配合 nginx 和 cdn 等网关使用",
+     "Do not repeat check-in; only once per day": "请勿重复签到；每天仅一次",
+@@ -1538,6 +1544,7 @@
+     "Enable Discord OAuth": "启用 Discord OAuth",
+     "Enable Disk Cache": "启用磁盘缓存",
+     "Enable drawing features": "启用绘制功能",
++    "Enable Empty Completion Retry": "启用空补全重试",
+     "Enable filtering": "启用过滤",
+     "Enable FunctionCall thoughtSignature Fill": "启用 FunctionCall 思维签名填充",
+     "Enable GitHub OAuth": "启用 GitHub OAuth",
+@@ -1807,6 +1814,7 @@
+     "Failed to load home page content": "加载首页内容失败",
+     "Failed to load image": "无法加载图像",
+     "Failed to load key status": "加载密钥状态失败",
++    "Failed to load log details": "加载日志详情失败",
+     "Failed to load logs": "加载日志失败",
+     "Failed to load Passkey status": "加载 Passkey 状态失败",
+     "Failed to load playground groups": "加载 Playground 分组失败",
+@@ -2561,6 +2569,7 @@
+     "Maximum tokens including hidden reasoning tokens": "最大 token 数（含隐藏的推理 token）",
+     "Maximum tokens per response": "单次响应最大 token 数",
+     "maxRequests ≥ 0, maxSuccess ≥ 1, both ≤ 2,147,483,647": "maxRequests ≥ 0, maxSuccess ≥ 1，两者均 ≤ 2,147,483,647",
++    "May be caused by concurrent billing or manual adjustment.": "可能由并发扣费或手动调整导致。",
+     "May be used for training by upstream provider": "可能被上游提供商用于训练",
+     "Media pricing": "媒体定价",
+     "Median time-to-first-token (TTFT) sampled hourly per group": "按小时采样的各分组首 token 延迟（TTFT）中位数",
+@@ -2762,8 +2771,12 @@
+     "name@example.com": "name@example.com",
+     "Native format": "原生格式",
+     "Native forwarding": "原生转发",
++    "Navigation link": "导航链接",
++    "Navigation name": "导航名称",
+     "Need a redemption code?": "需要兑换码？",
+     "Needs API key": "需要 API 密钥",
++    "Negative": "负余额",
++    "Negative Balance": "负余额",
+     "Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.": "嵌套 JSON，定义按分组添加（+:）、移除（-:）或追加可用分组的规则。",
+     "Nested JSON: source group →": "嵌套 JSON：源分组 →",
+     "Network proxy for this channel (supports socks5 protocol)": "此渠道的网络代理（支持 socks5 协议）",
+@@ -3344,6 +3357,7 @@
+     "Port": "端口",
+     "Port must be a positive integer": "端口必须为正整数",
+     "Position in the stack": "系统栈定位",
++    "Positive Balance": "正常余额",
+     "Post Delta": "结算差额",
+     "PostgreSQL detected": "检测到 PostgreSQL",
+     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL 为生产工作负载提供高级可靠性和数据完整性。",
+@@ -3781,6 +3795,7 @@
+     "Retention days": "保留天数",
+     "Retry": "重试",
+     "Retry Chain": "重试链路",
++    "Retry once when upstream returns an empty Chat or Responses completion before any stream data is sent. Requires Retry Times greater than 0.": "当上游在发送任何流数据前返回空的 Chat 或 Responses 补全时重试一次。需要将重试次数设置为大于 0。",
+     "Retry policy": "重试策略",
+     "Retry Suggestion": "重试建议",
+     "Retry Times": "重试次数",
+@@ -4063,6 +4078,7 @@
+     "Set API key access restrictions": "设置令牌的访问限制",
+     "Set API key basic information": "设置令牌的基本信息",
+     "Set Field": "设置字段",
++    "Set filters and click Search to load usage logs.": "设置筛选条件后点击搜索加载使用日志。",
+     "Set filters to customize your dashboard statistics and charts.": "设置筛选器以自定义您的仪表板统计数据和图表。",
+     "Set filters to narrow down your log search results.": "设置筛选器以缩小日志搜索结果范围。",
+     "Set Header": "设请求头",
+@@ -4097,6 +4113,7 @@
+     "Show": "显示",
+     "Show All": "显示全部",
+     "Show all providers including unbound": "显示所有提供商（包括未绑定）",
++    "Show one custom link in the top navigation.": "在顶部导航中显示一个自定义链接。",
+     "Show only bound providers": "仅显示已绑定的提供商",
+     "Show prices in currency instead of quota.": "以货币而非配额显示价格。",
+     "Show setup guide": "显示设置引导",
+@@ -4603,6 +4620,7 @@
+     "Total earned": "累计获得",
+     "Total Earned": "总收入",
+     "Total GPUs": "总 GPU",
++    "Total Granted": "总授予额度",
+     "Total invitation revenue": "总邀请收入",
+     "Total Log Size": "日志总大小",
+     "Total Quota": "总额度",
+@@ -5087,6 +5105,7 @@
+     "Your transaction history will appear here": "您的交易历史会显示在这里",
+     "Your Turnstile secret key": "您的 Turnstile 密钥",
+     "Your Turnstile site key": "您的 Turnstile 站点密钥",
++    "Zero Balance": "零余额",
+     "Zero retention": "零数据保留",
+     "Zhipu": "智谱",
+     "Zhipu V4": "智谱 V4",
+diff --git a/web/default/src/lib/header-nav-modules.ts b/web/default/src/lib/header-nav-modules.ts
+index bee15be..740769e 100644
+--- a/web/default/src/lib/header-nav-modules.ts
++++ b/web/default/src/lib/header-nav-modules.ts
+@@ -21,6 +21,12 @@ export type HeaderNavAccessConfig = {
+   requireAuth: boolean
+ }
+ 
++export type HeaderNavCustomConfig = {
++  enabled: boolean
++  title: string
++  href: string
++}
++
+ export type HeaderNavModule = 'rankings' | 'pricing'
+ 
+ export type HeaderNavModulesConfig = {
+@@ -30,7 +36,8 @@ export type HeaderNavModulesConfig = {
+   rankings: HeaderNavAccessConfig
+   docs: boolean
+   about: boolean
+-  [key: string]: boolean | HeaderNavAccessConfig
++  custom: HeaderNavCustomConfig
++  [key: string]: boolean | HeaderNavAccessConfig | HeaderNavCustomConfig
+ }
+ 
+ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
+@@ -46,6 +53,11 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
+   },
+   docs: true,
+   about: true,
++  custom: {
++    enabled: false,
++    title: '',
++    href: '',
++  },
+ }
+ 
+ export const HEADER_NAV_MODULE_DEFAULTS: Record<
+@@ -79,6 +91,7 @@ function cloneHeaderNavDefault(): HeaderNavModulesConfig {
+     ...HEADER_NAV_DEFAULT,
+     pricing: { ...HEADER_NAV_DEFAULT.pricing },
+     rankings: { ...HEADER_NAV_DEFAULT.rankings },
++    custom: { ...HEADER_NAV_DEFAULT.custom },
+   }
+ }
+ 
+@@ -124,6 +137,23 @@ export function parseHeaderNavAccess(
+   return { ...fallback }
+ }
+ 
++export function parseHeaderNavCustom(
++  raw: unknown,
++  fallback: HeaderNavCustomConfig
++): HeaderNavCustomConfig {
++  if (!raw || typeof raw !== 'object') {
++    return { ...fallback }
++  }
++
++  const record = raw as Record<string, unknown>
++  return {
++    enabled: parseHeaderNavBoolean(record.enabled, fallback.enabled),
++    title:
++      typeof record.title === 'string' ? record.title.trim() : fallback.title,
++    href: typeof record.href === 'string' ? record.href.trim() : fallback.href,
++  }
++}
++
+ export function parseHeaderNavAccessOption(
+   raw: unknown,
+   fallback: HeaderNavAccessConfig
+@@ -170,6 +200,10 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModulesConfig {
+       result.rankings = parseHeaderNavAccess(value, result.rankings)
+       return
+     }
++    if (key === 'custom') {
++      result.custom = parseHeaderNavCustom(value, result.custom)
++      return
++    }
+ 
+     const fallback = result[key]
+     if (
+diff --git a/web/default/src/routes/_authenticated/usage-logs/$section.tsx b/web/default/src/routes/_authenticated/usage-logs/$section.tsx
+index e75005d..b378934 100644
+--- a/web/default/src/routes/_authenticated/usage-logs/$section.tsx
++++ b/web/default/src/routes/_authenticated/usage-logs/$section.tsx
+@@ -38,6 +38,7 @@ const logTypeSearchSchema = z
+ const usageLogsSearchSchema = z.object({
+   page: z.number().optional().catch(1),
+   pageSize: z.number().optional().catch(undefined),
++  searchVersion: z.coerce.number().optional().catch(undefined),
+   type: logTypeSearchSchema.optional(),
+   filter: z.string().optional().catch(''),
+   model: z.string().optional().catch(''),
+diff --git a/web/default/src/routes/_authenticated/users/index.tsx b/web/default/src/routes/_authenticated/users/index.tsx
+index 2b9a29c..e4fed0b 100644
+--- a/web/default/src/routes/_authenticated/users/index.tsx
++++ b/web/default/src/routes/_authenticated/users/index.tsx
+@@ -27,7 +27,7 @@ const usersSearchSchema = z.object({
+   pageSize: z.number().optional().catch(undefined),
+   filter: z.string().optional().catch(''),
+   status: z
+-    .array(z.enum(['1', '2']))
++    .array(z.enum(['-1', '1', '2']))
+     .optional()
+     .catch([]),
+   role: z
+@@ -35,6 +35,10 @@ const usersSearchSchema = z.object({
+     .optional()
+     .catch([]),
+   group: z.string().optional().catch(''),
++  quota_status: z
++    .array(z.enum(['negative', 'zero', 'positive']))
++    .optional()
++    .catch([]),
+ })
+ 
+ export const Route = createFileRoute('/_authenticated/users/')({

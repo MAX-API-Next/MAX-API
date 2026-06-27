@@ -53,6 +53,7 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+	LogId             int    `json:"log_id,omitempty" gorm:"-"`
 }
 
 // don't use iota, avoid change log type value
@@ -102,23 +103,75 @@ func userVisibleAuditInfo(adminInfoValue interface{}) map[string]interface{} {
 	return auditInfo
 }
 
+func stripAuditContentFields(auditInfo map[string]interface{}) {
+	if auditInfo == nil {
+		return
+	}
+	delete(auditInfo, "request_content")
+	delete(auditInfo, "response_content")
+}
+
+func stripAuditContentValue(value interface{}) {
+	auditInfo, ok := value.(map[string]interface{})
+	if !ok {
+		return
+	}
+	stripAuditContentFields(auditInfo)
+}
+
+func stripLogAuditContent(log *Log) {
+	if log == nil || strings.TrimSpace(log.Other) == "" {
+		return
+	}
+	otherMap, err := common.StrToMap(log.Other)
+	if err != nil || otherMap == nil {
+		return
+	}
+	stripAuditContentValue(otherMap["admin_info"])
+	stripAuditContentValue(otherMap["audit_info"])
+	log.Other = common.MapToJsonStr(otherMap)
+}
+
+func stripLogsAuditContent(logs []*Log) {
+	for _, log := range logs {
+		stripLogAuditContent(log)
+	}
+}
+
+func formatUserLog(log *Log) {
+	if log == nil {
+		return
+	}
+	log.ChannelName = ""
+	log.Other = formatUserLogOther(log.Other, false)
+}
+
+func formatUserLogOther(other string, stripAuditContent bool) string {
+	var otherMap map[string]interface{}
+	otherMap, _ = common.StrToMap(other)
+	if otherMap != nil {
+		auditInfo := userVisibleAuditInfo(otherMap["admin_info"])
+		// Remove admin-only debug fields.
+		delete(otherMap, "admin_info")
+		delete(otherMap, "audit_info")
+		// delete(otherMap, "reject_reason")
+		delete(otherMap, "stream_status")
+		if auditInfo != nil {
+			if stripAuditContent {
+				stripAuditContentFields(auditInfo)
+			}
+			otherMap["audit_info"] = auditInfo
+		}
+	}
+	return common.MapToJsonStr(otherMap)
+}
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
+		realId := logs[i].Id
 		logs[i].ChannelName = ""
-		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
-		if otherMap != nil {
-			auditInfo := userVisibleAuditInfo(otherMap["admin_info"])
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			delete(otherMap, "audit_info")
-			// delete(otherMap, "reject_reason")
-			delete(otherMap, "stream_status")
-			if auditInfo != nil {
-				otherMap["audit_info"] = auditInfo
-			}
-		}
-		logs[i].Other = common.MapToJsonStr(otherMap)
+		logs[i].Other = formatUserLogOther(logs[i].Other, true)
+		logs[i].LogId = realId
 		logs[i].Id = startIdx + i + 1
 	}
 }
@@ -495,6 +548,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		}
 	}
 
+	stripLogsAuditContent(logs)
 	return logs, total, err
 }
 
@@ -542,6 +596,37 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 
 	formatUserLogs(logs, startIdx)
 	return logs, total, err
+}
+
+func GetLogById(id int) (*Log, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid log id")
+	}
+	log := &Log{}
+	err := LOG_DB.Where("id = ?", id).First(log).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errors.New("log not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return log, nil
+}
+
+func GetUserLogById(userId int, id int) (*Log, error) {
+	if id <= 0 {
+		return nil, errors.New("invalid log id")
+	}
+	log := &Log{}
+	err := LOG_DB.Where("id = ? AND user_id = ?", id, userId).First(log).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, errors.New("log not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	formatUserLog(log)
+	return log, nil
 }
 
 type Stat struct {
