@@ -101,8 +101,10 @@ const queryClient = new QueryClient({
 const router = createRouter({
   routeTree,
   context: { queryClient },
-  defaultPreload: 'intent',
-  defaultPreloadStaleTime: 0,
+  // TanStack Router's intent preload can race with route replacement and
+  // occasionally warn from load-matches when a preloaded match is no longer
+  // present. Keep navigation loading on click, but avoid hover/focus preloads.
+  defaultPreload: false,
 })
 
 // Register the router instance for type safety

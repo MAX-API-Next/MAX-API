@@ -16,16 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Label } from '@/components/ui/label'
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from '@/components/ui/field'
 import type { SystemStatus } from '../types'
 
 interface LegalConsentProps {
   status: SystemStatus | null
   checked: boolean
   onCheckedChange: (nextValue: boolean) => void
+  invalid?: boolean
+  errorMessage?: string
   className?: string
 }
 
@@ -33,11 +41,15 @@ export function LegalConsent({
   status,
   checked,
   onCheckedChange,
+  invalid = false,
+  errorMessage,
   className,
 }: LegalConsentProps) {
   const { t } = useTranslation()
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
+  const showError = invalid && !checked
+  const errorId = showError ? 'legal-consent-error' : undefined
 
   if (!hasUserAgreement && !hasPrivacyPolicy) {
     return null
@@ -47,10 +59,27 @@ export function LegalConsent({
     onCheckedChange(value === true)
   }
 
+  const linkClassName =
+    'text-primary font-medium underline-offset-4 hover:underline'
+
+  let consentKey =
+    'I have read and agree to the <agreement>User Agreement</agreement>.'
+  if (hasUserAgreement && hasPrivacyPolicy) {
+    consentKey =
+      'I have read and agree to the <agreement>User Agreement</agreement> and <privacy>Privacy Policy</privacy>.'
+  } else if (hasPrivacyPolicy) {
+    consentKey =
+      'I have read and agree to the <privacy>Privacy Policy</privacy>.'
+  }
+
   return (
-    <div
+    <Field
+      data-invalid={showError ? true : undefined}
+      orientation='horizontal'
       className={cn(
-        'border-border/60 bg-muted/40 flex items-start gap-3 rounded-md border p-3',
+        'border-primary/30 bg-primary/5 rounded-lg border p-3 shadow-sm transition-colors',
+        showError && 'border-destructive/70 bg-destructive/10',
+        checked && 'border-primary/50 bg-primary/10',
         className
       )}
     >
@@ -58,38 +87,44 @@ export function LegalConsent({
         id='legal-consent'
         checked={checked}
         onCheckedChange={handleChange}
-        className='mt-0.5'
+        aria-invalid={showError ? true : undefined}
+        aria-describedby={errorId}
+        className='mt-0.5 size-5'
       />
-      <Label
-        htmlFor='legal-consent'
-        className='text-muted-foreground items-start gap-1 text-left text-xs leading-5 font-normal'
-      >
-        <span>
-          {t('I have read and agree to the')}{' '}
-          {hasUserAgreement && (
-            <a
-              href='/user-agreement'
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-primary hover:underline'
-            >
-              {t('User Agreement')}
-            </a>
-          )}
-          {hasUserAgreement && hasPrivacyPolicy && ' and the '}
-          {hasPrivacyPolicy && (
-            <a
-              href='/privacy-policy'
-              target='_blank'
-              rel='noopener noreferrer'
-              className='text-primary hover:underline'
-            >
-              {t('Privacy Policy')}
-            </a>
-          )}
-          .
-        </span>
-      </Label>
-    </div>
+      <FieldContent className='gap-1'>
+        <FieldLabel
+          htmlFor='legal-consent'
+          className='w-full cursor-pointer text-left text-sm leading-5 font-medium'
+        >
+          <span>
+            <Trans
+              i18nKey={consentKey}
+              components={{
+                agreement: (
+                  <a
+                    href='/user-agreement'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className={linkClassName}
+                  />
+                ),
+                privacy: (
+                  <a
+                    href='/privacy-policy'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className={linkClassName}
+                  />
+                ),
+              }}
+            />
+          </span>
+        </FieldLabel>
+        <FieldDescription className='text-xs leading-5'>
+          {t('Required before you continue.')}
+        </FieldDescription>
+        <FieldError id={errorId}>{showError ? errorMessage : null}</FieldError>
+      </FieldContent>
+    </Field>
   )
 }
