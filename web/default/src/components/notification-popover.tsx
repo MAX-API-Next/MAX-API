@@ -53,6 +53,7 @@ interface AnnouncementItem {
 interface NotificationPopoverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onCloseForToday: () => void
   unreadCount: number
   activeTab: 'notice' | 'announcements'
   onTabChange: (tab: 'notice' | 'announcements') => void
@@ -271,6 +272,7 @@ function AnnouncementsContent({
 export function NotificationPopover({
   open,
   onOpenChange,
+  onCloseForToday,
   unreadCount,
   activeTab,
   onTabChange,
@@ -343,7 +345,10 @@ export function NotificationPopover({
           </TabsContent>
         </Tabs>
 
-        <div className='flex justify-end'>
+        <div className='flex justify-end gap-2'>
+          <Button size='sm' variant='outline' onClick={onCloseForToday}>
+            {t('Close Today')}
+          </Button>
           <Button size='sm' onClick={() => onOpenChange(false)}>
             {t('Close')}
           </Button>

@@ -134,3 +134,13 @@ For request structs that are parsed from client JSON and then re-marshaled to up
 ### Rule 7: Billing Expression System — Read `pkg/billingexpr/expr.md`
 
 When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
+
+### Rule 8: Process Documents — Keep Them Under `.tmp/`
+
+All non-project process documents MUST be created and kept under `.tmp/`.
+
+This includes investigation notes, review outputs, scratch plans, working drafts, temporary release-note or PR-copy drafts, one-off deployment notes, private operation notes, temporary diff or patch files, and any document that records internal work process rather than public project documentation.
+
+Do NOT place these files in the repository root, `docs/`, `.github/`, or source directories unless the content is explicitly intended to be public project documentation. `.tmp/` is ignored by Git; use it to prevent accidental publication of sensitive or internal process information to the open-source GitHub repository. If process documents are found outside `.tmp/`, move them into `.tmp/` before committing.
+
+Project-owned agent workflows and reusable skill instructions, such as files under `.agents/skills/`, are part of the project tooling contract and MUST remain in the tracked project tree unless explicitly retired.

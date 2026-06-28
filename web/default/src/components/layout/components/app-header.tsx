@@ -130,6 +130,7 @@ export function AppHeader({
               <NotificationPopover
                 open={notifications.popoverOpen}
                 onOpenChange={notifications.setPopoverOpen}
+                onCloseForToday={notifications.closeForToday}
                 unreadCount={notifications.unreadCount}
                 activeTab={notifications.activeTab}
                 onTabChange={notifications.setActiveTab}

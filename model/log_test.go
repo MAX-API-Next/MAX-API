@@ -47,7 +47,9 @@ func TestGetUserLogsRetryFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, total)
 	require.Len(t, got, 2)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].LogId, got[1].LogId})
+	gotLogIds := []int{got[0].LogId, got[1].LogId}
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, gotLogIds)
+	require.NotContains(t, gotLogIds, logs[4].Id)
 	for _, log := range got {
 		require.Equal(t, 1, log.UserId)
 	}

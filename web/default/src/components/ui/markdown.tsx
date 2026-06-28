@@ -129,6 +129,13 @@ const sanitizeOptions = {
   ADD_TAGS: allowedTags,
 } as const
 
+type DomPurifySanitizer = {
+  isSupported?: boolean
+  sanitize: (dirty: string, config?: typeof sanitizeOptions) => string
+}
+
+type DomPurifyFactory = (window: Window) => DomPurifySanitizer
+
 type FlowNode = {
   id: string
   label: string
@@ -167,6 +174,56 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
+}
+
+const allowedUrlProtocols = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+const urlProtocolPattern = /^[a-z][a-z\d+.-]*:/i
+
+function normalizeUrl(value: string): string | null {
+  try {
+    const normalized = encodeURI(value).replace(/%25/g, '%')
+    const protocol = urlProtocolPattern.exec(normalized.trimStart())?.[0].toLowerCase()
+
+    if (protocol && !allowedUrlProtocols.has(protocol)) {
+      return null
+    }
+
+    return normalized
+  } catch {
+    return null
+  }
+}
+
+function isUsableSanitizer(value: unknown): value is DomPurifySanitizer {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return false
+  }
+
+  const sanitizer = value as Partial<DomPurifySanitizer>
+  return (
+    sanitizer.isSupported !== false &&
+    typeof sanitizer.sanitize === 'function'
+  )
+}
+
+function sanitizeHtml(html: string): string {
+  const purify = DOMPurify as unknown as
+    | DomPurifySanitizer
+    | DomPurifyFactory
+
+  if (isUsableSanitizer(purify)) {
+    return purify.sanitize(html, sanitizeOptions)
+  }
+
+  if (typeof window !== 'undefined' && typeof purify === 'function') {
+    const browserSanitizer = purify(window)
+
+    if (isUsableSanitizer(browserSanitizer)) {
+      return browserSanitizer.sanitize(html, sanitizeOptions)
+    }
+  }
+
+  return ''
 }
 
 function normalizeMathSource(source: string): string {
@@ -566,7 +623,6 @@ function renderSequenceDiagram(source: string): string {
 function createMarkdownRenderer() {
   const renderer = new Renderer()
   const renderDefaultCode = renderer.code.bind(renderer)
-  const renderDefaultLink = renderer.link.bind(renderer)
 
   renderer.code = (token: Tokens.Code): string => {
     const language = token.lang?.toLowerCase()
@@ -586,13 +642,17 @@ function createMarkdownRenderer() {
     return renderDefaultCode(token)
   }
 
-  renderer.link = (token: Tokens.Link): string => {
-    const html = renderDefaultLink(token)
+  renderer.link = function (this: Renderer, token: Tokens.Link): string {
+    const text = this.parser.parseInline(token.tokens)
+    const href = normalizeUrl(token.href)
 
-    return html.replace(
-      /^<a /,
-      '<a target="_blank" rel="noopener noreferrer" '
-    )
+    if (href === null) {
+      return text
+    }
+
+    const title = token.title ? ` title="${escapeHtml(token.title)}"` : ''
+
+    return `<a href="${escapeHtml(href)}"${title} target="_blank" rel="noopener noreferrer">${text}</a>`
   }
 
   return renderer
@@ -695,14 +755,17 @@ function createMarkdownParser() {
   return parser
 }
 
-function renderMarkdown(markdown: string): string {
+export function renderMarkdownForTest(markdown: string): string {
   const markdownParser = createMarkdownParser()
   const parsedHtml = markdownParser.parse(markdown, markdownOptions)
-  return DOMPurify.sanitize(parsedHtml, sanitizeOptions)
+  return sanitizeHtml(parsedHtml)
 }
 
 export function Markdown(props: MarkdownProps) {
-  const html = useMemo(() => renderMarkdown(props.children), [props.children])
+  const html = useMemo(
+    () => renderMarkdownForTest(props.children),
+    [props.children]
+  )
 
   return (
     <div
