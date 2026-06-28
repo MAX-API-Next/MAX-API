@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { useNotificationStore } from '@/stores/notification-store'
 import { getNotice } from '@/lib/api'
 import { useStatus } from '@/hooks/use-status'
@@ -25,18 +25,40 @@ import {
   getAnnouncementKey,
   getAutoNotificationTab,
   getNotificationContentSignature,
+  getLastAutoOpenedNotificationSignature,
+  rememberAutoOpenedNotificationSignature,
   shouldAutoOpenNotifications,
   type NotificationTab,
 } from './notification-utils'
+
+type RefetchNotice = UseQueryResult<
+  Awaited<ReturnType<typeof getNotice>>
+>['refetch']
+
+export type UseNotificationsResult = {
+  activeTab: NotificationTab
+  announcements: Record<string, unknown>[]
+  closeForToday: () => void
+  closePopover: () => void
+  loading: boolean
+  notice: string
+  openPopover: (tab?: NotificationTab) => void
+  popoverOpen: boolean
+  refetchNotice: RefetchNotice
+  setActiveTab: (tab: NotificationTab) => void
+  setPopoverOpen: (open: boolean) => void
+  unreadAnnouncementsCount: number
+  unreadCount: number
+  unreadNoticeCount: number
+}
 
 /**
  * Hook to manage notifications (Notice + Announcements)
  * Provides unread counts and read status management
  */
-export function useNotifications() {
+export function useNotifications(): UseNotificationsResult {
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<NotificationTab>('notice')
-  const lastAutoOpenedSignatureRef = useRef<string | null>(null)
 
   // Fetch Notice from API
   const {
@@ -160,11 +182,16 @@ export function useNotifications() {
   )
 
   useEffect(() => {
+    if (popoverOpen && contentSignature !== '') {
+      rememberAutoOpenedNotificationSignature(contentSignature)
+      return
+    }
+
     if (
       !shouldAutoOpenNotifications({
         contentSignature,
         isClosedToday: isNoticeClosed(),
-        lastAutoOpenedSignature: lastAutoOpenedSignatureRef.current,
+        lastAutoOpenedSignature: getLastAutoOpenedNotificationSignature(),
         loading,
         popoverOpen,
       })
@@ -182,8 +209,11 @@ export function useNotifications() {
       return
     }
 
-    lastAutoOpenedSignatureRef.current = contentSignature
     const timeoutId = window.setTimeout(() => {
+      if (!rememberAutoOpenedNotificationSignature(contentSignature)) {
+        return
+      }
+
       handleOpenPopover(autoTab)
     }, 0)
 

@@ -130,8 +130,11 @@ const sanitizeOptions = {
 } as const
 
 type DomPurifySanitizer = {
+  isSupported?: boolean
   sanitize: (dirty: string, config?: typeof sanitizeOptions) => string
 }
+
+type DomPurifyFactory = (window: Window) => DomPurifySanitizer
 
 type FlowNode = {
   id: string
@@ -173,28 +176,54 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;')
 }
 
+const allowedUrlProtocols = new Set(['http:', 'https:', 'mailto:', 'tel:'])
+const urlProtocolPattern = /^[a-z][a-z\d+.-]*:/i
+
 function normalizeUrl(value: string): string | null {
   try {
-    return encodeURI(value).replace(/%25/g, '%')
+    const normalized = encodeURI(value).replace(/%25/g, '%')
+    const protocol = urlProtocolPattern.exec(normalized.trimStart())?.[0].toLowerCase()
+
+    if (protocol && !allowedUrlProtocols.has(protocol)) {
+      return null
+    }
+
+    return normalized
   } catch {
     return null
   }
 }
 
+function isUsableSanitizer(value: unknown): value is DomPurifySanitizer {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return false
+  }
+
+  const sanitizer = value as Partial<DomPurifySanitizer>
+  return (
+    sanitizer.isSupported !== false &&
+    typeof sanitizer.sanitize === 'function'
+  )
+}
+
 function sanitizeHtml(html: string): string {
   const purify = DOMPurify as unknown as
     | DomPurifySanitizer
-    | ((window: Window) => DomPurifySanitizer)
+    | DomPurifyFactory
 
-  if ('sanitize' in purify && typeof purify.sanitize === 'function') {
+  if (isUsableSanitizer(purify)) {
     return purify.sanitize(html, sanitizeOptions)
   }
 
   if (typeof window !== 'undefined' && typeof purify === 'function') {
-    return purify(window).sanitize(html, sanitizeOptions)
+    const browserSanitizer = purify(window)
+
+    if (isUsableSanitizer(browserSanitizer)) {
+      return browserSanitizer.sanitize(html, sanitizeOptions)
+    }
   }
 
-  return html
+  return ''
 }
 
 function normalizeMathSource(source: string): string {

@@ -18,7 +18,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import { JSDOM } from 'jsdom'
 import { renderMarkdownForTest } from './markdown'
+
+const dom = new JSDOM('')
+Object.defineProperty(globalThis, 'window', {
+  configurable: true,
+  value: dom.window,
+})
 
 describe('renderMarkdownForTest', () => {
   test('renders markdown links without losing the marked parser context', () => {
@@ -35,5 +42,51 @@ describe('renderMarkdownForTest', () => {
     const html = renderMarkdownForTest(`[Broken](${badHref})`)
 
     assert.equal(html, '<p>Broken</p>\n')
+  })
+
+  test('sanitizes hostile html when rendered outside the browser', () => {
+    const html = renderMarkdownForTest('<img src=x onerror=alert(1)>')
+
+    assert.doesNotMatch(html, /onerror/i)
+    assert.doesNotMatch(html, /alert\(1\)/i)
+  })
+
+  test('removes unsafe link protocols when rendered outside the browser', () => {
+    const cases = [
+      {
+        label: 'XSS',
+        markdown: '[XSS](javascript:alert(1))',
+        unsafe: /javascript:|alert\(1\)/i,
+      },
+      {
+        label: 'Data',
+        markdown: '[Data](data:text/html,<script>alert(1)</script>)',
+        unsafe: /data:text\/html|<script|alert\(1\)/i,
+      },
+    ]
+
+    cases.forEach(({ label, markdown, unsafe }) => {
+      const html = renderMarkdownForTest(markdown)
+
+      assert.doesNotMatch(html, unsafe)
+      assert.doesNotMatch(html, /href=/i)
+      assert.match(html, new RegExp(`>${label}<`))
+    })
+  })
+
+  test('fails closed when no DOM is available', () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: undefined,
+    })
+
+    try {
+      assert.equal(renderMarkdownForTest('<img src=x onerror=alert(1)>'), '')
+    } finally {
+      if (windowDescriptor) {
+        Object.defineProperty(globalThis, 'window', windowDescriptor)
+      }
+    }
   })
 })

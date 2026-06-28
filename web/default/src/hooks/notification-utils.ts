@@ -38,6 +38,9 @@ interface GetAutoNotificationTabOptions {
   unreadCounts: NotificationUnreadCounts
 }
 
+const autoOpenedSignatureStorageKey = 'notification-auto-opened-signature'
+let memoryLastAutoOpenedSignature: string | null = null
+
 function hashString(input: string): string {
   let hash = 0
   if (!input) return '0'
@@ -130,4 +133,58 @@ export function shouldAutoOpenNotifications(
     options.contentSignature !== '' &&
     options.contentSignature !== options.lastAutoOpenedSignature
   )
+}
+
+function getSessionStorage(): Storage | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+export function getLastAutoOpenedNotificationSignature(): string | null {
+  const storage = getSessionStorage()
+
+  if (!storage) {
+    return memoryLastAutoOpenedSignature
+  }
+
+  try {
+    const storedSignature = storage.getItem(autoOpenedSignatureStorageKey)
+    return memoryLastAutoOpenedSignature ?? storedSignature
+  } catch {
+    return memoryLastAutoOpenedSignature
+  }
+}
+
+export function rememberAutoOpenedNotificationSignature(
+  contentSignature: string
+): boolean {
+  if (!contentSignature) {
+    return false
+  }
+
+  const lastSignature = getLastAutoOpenedNotificationSignature()
+
+  if (lastSignature === contentSignature) {
+    return false
+  }
+
+  memoryLastAutoOpenedSignature = contentSignature
+
+  const storage = getSessionStorage()
+  if (storage) {
+    try {
+      storage.setItem(autoOpenedSignatureStorageKey, contentSignature)
+    } catch {
+      // Keep the in-memory fallback above for restricted storage contexts.
+    }
+  }
+
+  return true
 }

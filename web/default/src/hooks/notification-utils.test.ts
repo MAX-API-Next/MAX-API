@@ -21,7 +21,9 @@ import { describe, test } from 'node:test'
 import {
   getAnnouncementKey,
   getAutoNotificationTab,
+  getLastAutoOpenedNotificationSignature,
   getNotificationContentSignature,
+  rememberAutoOpenedNotificationSignature,
   shouldAutoOpenNotifications,
 } from './notification-utils'
 
@@ -165,5 +167,63 @@ describe('notification auto open helpers', () => {
       }),
       false
     )
+  })
+
+  test('remembers auto opened content across hook remounts in the same page session', () => {
+    const contentSignature = getNotificationContentSignature('existing notice', [])
+
+    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
+    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), false)
+  })
+
+  test('does not auto open content already seen while the popover was open', () => {
+    const contentSignature = getNotificationContentSignature(
+      'manually opened notice',
+      []
+    )
+
+    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
+    assert.equal(
+      shouldAutoOpenNotifications({
+        contentSignature,
+        isClosedToday: false,
+        lastAutoOpenedSignature: getLastAutoOpenedNotificationSignature(),
+        loading: false,
+        popoverOpen: false,
+      }),
+      false
+    )
+  })
+
+  test('uses memory fallback when session storage writes fail', () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    const contentSignature = getNotificationContentSignature(
+      'restricted storage notice',
+      []
+    )
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        sessionStorage: {
+          getItem: () => null,
+          setItem: () => {
+            throw new Error('storage disabled')
+          },
+        },
+      },
+    })
+
+    try {
+      assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
+      assert.equal(getLastAutoOpenedNotificationSignature(), contentSignature)
+      assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), false)
+    } finally {
+      if (windowDescriptor) {
+        Object.defineProperty(globalThis, 'window', windowDescriptor)
+      } else {
+        delete (globalThis as { window?: unknown }).window
+      }
+    }
   })
 })
