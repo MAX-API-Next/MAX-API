@@ -277,6 +277,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                 <NotificationPopover
                   open={notifications.popoverOpen}
                   onOpenChange={notifications.setPopoverOpen}
+                  onCloseForToday={notifications.closeForToday}
                   unreadCount={notifications.unreadCount}
                   activeTab={notifications.activeTab}
                   onTabChange={notifications.setActiveTab}
