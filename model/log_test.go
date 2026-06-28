@@ -30,9 +30,9 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 
 	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 2, total)
-	require.Len(t, got, 2)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].Id, got[1].Id})
+	require.EqualValues(t, 3, total)
+	require.Len(t, got, 3)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[4].Id}, []int{got[0].Id, got[1].Id, got[2].Id})
 }
 
 func TestGetUserLogsRetryFilter(t *testing.T) {
@@ -48,6 +48,9 @@ func TestGetUserLogsRetryFilter(t *testing.T) {
 	require.EqualValues(t, 2, total)
 	require.Len(t, got, 2)
 	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].LogId, got[1].LogId})
+	for _, log := range got {
+		require.Equal(t, 1, log.UserId)
+	}
 }
 
 func TestSumUsedQuotaRetryFilter(t *testing.T) {
@@ -60,9 +63,9 @@ func TestSumUsedQuotaRetryFilter(t *testing.T) {
 
 	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "")
 	require.NoError(t, err)
-	require.Equal(t, 300, stat.Quota)
-	require.Equal(t, 2, stat.Rpm)
-	require.Equal(t, 30, stat.Tpm)
+	require.Equal(t, 1200, stat.Quota)
+	require.Equal(t, 3, stat.Rpm)
+	require.Equal(t, 71, stat.Tpm)
 }
 
 func createRetryFilterLogs(t *testing.T) []Log {
@@ -121,6 +124,20 @@ func createRetryFilterLogs(t *testing.T) []Log {
 			Other: common.MapToJsonStr(map[string]interface{}{
 				"admin_info": map[string]interface{}{
 					"use_channel": []string{"5"},
+				},
+			}),
+		},
+		{
+			UserId:           2,
+			CreatedAt:        time.Now().Unix() - 50,
+			Type:             LogTypeConsume,
+			Quota:            900,
+			PromptTokens:     23,
+			CompletionTokens: 18,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"retry_log": true,
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"6", "7"},
 				},
 			}),
 		},
