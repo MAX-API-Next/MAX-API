@@ -39,6 +39,7 @@ export function Playground() {
     setModels,
     setGroups,
     updateConfig,
+    clearMessages,
   } = usePlaygroundState()
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
@@ -53,38 +54,40 @@ export function Playground() {
   )
 
   // Load models
-  const { data: modelsData, isLoading: isLoadingModels } = useQuery({
+  const {
+    data: modelsData,
+    error: modelsError,
+    isLoading: isLoadingModels,
+  } = useQuery({
     queryKey: ['playground-models'],
-    queryFn: async () => {
-      try {
-        return await getUserModels()
-      } catch (error) {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to load playground models')
-        )
-        return []
-      }
-    },
+    queryFn: getUserModels,
   })
 
   // Load groups
-  const { data: groupsData } = useQuery({
+  const { data: groupsData, error: groupsError } = useQuery({
     queryKey: ['playground-groups'],
-    queryFn: async () => {
-      try {
-        return await getUserGroups()
-      } catch (error) {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to load playground groups')
-        )
-        return []
-      }
-    },
+    queryFn: getUserGroups,
   })
+
+  useEffect(() => {
+    if (!modelsError) return
+
+    toast.error(
+      modelsError instanceof Error
+        ? modelsError.message
+        : t('Failed to load playground models')
+    )
+  }, [modelsError, t])
+
+  useEffect(() => {
+    if (!groupsError) return
+
+    toast.error(
+      groupsError instanceof Error
+        ? groupsError.message
+        : t('Failed to load playground groups')
+    )
+  }, [groupsError, t])
 
   // Update models when data changes
   useEffect(() => {
@@ -188,6 +191,14 @@ export function Playground() {
     updateMessages(newMessages)
   }
 
+  const handleClearHistory = useCallback(() => {
+    if (isGenerating || messages.length === 0) return
+
+    clearMessages()
+    setEditingMessageKey(null)
+    toast.success(t('Chat history cleared'))
+  }, [clearMessages, isGenerating, messages.length, t])
+
   return (
     <div className='relative flex size-full flex-col overflow-hidden'>
       {/* Full-width scroll container: scrolling works even over side whitespace */}
@@ -216,7 +227,9 @@ export function Playground() {
           isModelLoading={isLoadingModels}
           modelValue={config.model}
           models={models}
+          hasMessages={messages.length > 0}
           onGroupChange={(value) => updateConfig('group', value)}
+          onClearHistory={handleClearHistory}
           onModelChange={(value) => updateConfig('model', value)}
           onStop={stopGeneration}
           onSubmit={handleSendMessage}
