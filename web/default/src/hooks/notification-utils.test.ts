@@ -169,7 +169,7 @@ describe('notification auto open helpers', () => {
     )
   })
 
-  test('remembers auto opened content across hook remounts in the same page session', () => {
+  test('remembers auto opened content across hook remounts in the same page load', () => {
     const contentSignature = getNotificationContentSignature('existing notice', [])
 
     assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
@@ -193,37 +193,5 @@ describe('notification auto open helpers', () => {
       }),
       false
     )
-  })
-
-  test('uses memory fallback when session storage writes fail', () => {
-    const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window')
-    const contentSignature = getNotificationContentSignature(
-      'restricted storage notice',
-      []
-    )
-
-    Object.defineProperty(globalThis, 'window', {
-      configurable: true,
-      value: {
-        sessionStorage: {
-          getItem: () => null,
-          setItem: () => {
-            throw new Error('storage disabled')
-          },
-        },
-      },
-    })
-
-    try {
-      assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
-      assert.equal(getLastAutoOpenedNotificationSignature(), contentSignature)
-      assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), false)
-    } finally {
-      if (windowDescriptor) {
-        Object.defineProperty(globalThis, 'window', windowDescriptor)
-      } else {
-        delete (globalThis as { window?: unknown }).window
-      }
-    }
   })
 })

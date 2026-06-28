@@ -38,7 +38,6 @@ interface GetAutoNotificationTabOptions {
   unreadCounts: NotificationUnreadCounts
 }
 
-const autoOpenedSignatureStorageKey = 'notification-auto-opened-signature'
 let memoryLastAutoOpenedSignature: string | null = null
 
 function hashString(input: string): string {
@@ -135,31 +134,8 @@ export function shouldAutoOpenNotifications(
   )
 }
 
-function getSessionStorage(): Storage | null {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  try {
-    return window.sessionStorage
-  } catch {
-    return null
-  }
-}
-
 export function getLastAutoOpenedNotificationSignature(): string | null {
-  const storage = getSessionStorage()
-
-  if (!storage) {
-    return memoryLastAutoOpenedSignature
-  }
-
-  try {
-    const storedSignature = storage.getItem(autoOpenedSignatureStorageKey)
-    return memoryLastAutoOpenedSignature ?? storedSignature
-  } catch {
-    return memoryLastAutoOpenedSignature
-  }
+  return memoryLastAutoOpenedSignature
 }
 
 export function rememberAutoOpenedNotificationSignature(
@@ -176,15 +152,6 @@ export function rememberAutoOpenedNotificationSignature(
   }
 
   memoryLastAutoOpenedSignature = contentSignature
-
-  const storage = getSessionStorage()
-  if (storage) {
-    try {
-      storage.setItem(autoOpenedSignatureStorageKey, contentSignature)
-    } catch {
-      // Keep the in-memory fallback above for restricted storage contexts.
-    }
-  }
 
   return true
 }
