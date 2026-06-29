@@ -24,7 +24,9 @@ tiktoken_cache
 plans
 .claude
 .cursor
-.agents
+.agents/*
+!.agents/upstream-sync/
+!.agents/upstream-sync/**
 .codex
 .tmp
 

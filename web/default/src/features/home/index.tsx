@@ -17,9 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useTranslation } from 'react-i18next'
+import { RichContent } from '@/components/rich-content'
 import { useAuthStore } from '@/stores/auth-store'
 import { getRenderableContentKind } from '@/lib/renderable-content'
-import { Markdown } from '@/components/ui/markdown'
 import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
 import { CTA, Features, Hero, HowItWorks, Stats } from './components'
@@ -52,17 +52,15 @@ export function Home() {
               src={customContent}
               className='h-[calc(100vh-3.5rem)] w-full border-none'
               title={t('Custom Home Page')}
-            />
-          ) : contentKind === 'html' ? (
-            <div
-              className='custom-home-content'
-              dangerouslySetInnerHTML={{ __html: customContent }}
+              sandbox='allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts'
             />
           ) : (
             <div className='container mx-auto py-8'>
-              <Markdown className='custom-home-content'>
-                {customContent}
-              </Markdown>
+              <RichContent
+                mode={contentKind === 'html' ? 'html' : 'markdown'}
+                content={customContent}
+                className='custom-home-content'
+              />
             </div>
           )}
         </main>

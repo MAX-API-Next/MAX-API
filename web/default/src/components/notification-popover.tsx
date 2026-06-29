@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import type { TFunction } from 'i18next'
 import { Bell, Megaphone } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { RichContent } from '@/components/rich-content'
 import { getAnnouncementColorClass } from '@/lib/colors'
 import { formatDateTimeObject } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -31,7 +32,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import { Markdown } from '@/components/ui/markdown'
 import {
   Popover,
   PopoverContent,
@@ -185,7 +185,7 @@ function NoticeContent({
 
   return (
     <ScrollArea className='h-[min(52vh,28rem)] pr-3'>
-      <Markdown>{notice}</Markdown>
+      <RichContent content={notice} />
     </ScrollArea>
   )
 }
@@ -239,12 +239,12 @@ function AnnouncementsContent({
                   <AnnouncementDot type={item.type} />
                   <div className='flex min-w-0 flex-1 flex-col gap-2'>
                     <div className='text-sm'>
-                      <Markdown>{item.content || ''}</Markdown>
+                      <RichContent content={item.content || ''} />
                     </div>
 
                     {item.extra ? (
                       <div className='text-muted-foreground text-xs'>
-                        <Markdown>{item.extra}</Markdown>
+                        <RichContent content={item.extra} />
                       </div>
                     ) : null}
 

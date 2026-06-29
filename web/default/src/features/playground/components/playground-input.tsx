@@ -204,7 +204,9 @@ export function PlaygroundInput({
                     variant='outline'
                   >
                     <Trash2Icon size={16} />
-                    <span className='hidden sm:inline'>{t('Clear')}</span>
+                    <span className='hidden sm:inline'>
+                      {t('Clear chat history')}
+                    </span>
                     <span className='sr-only sm:hidden'>
                       {t('Clear chat history')}
                     </span>

@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import { getUserModels, getUserGroups } from './api'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
@@ -72,22 +73,14 @@ export function Playground() {
   useEffect(() => {
     if (!modelsError) return
 
-    toast.error(
-      modelsError instanceof Error
-        ? modelsError.message
-        : t('Failed to load playground models')
-    )
-  }, [modelsError, t])
+    handleServerError(modelsError)
+  }, [modelsError])
 
   useEffect(() => {
     if (!groupsError) return
 
-    toast.error(
-      groupsError instanceof Error
-        ? groupsError.message
-        : t('Failed to load playground groups')
-    )
-  }, [groupsError, t])
+    handleServerError(groupsError)
+  }, [groupsError])
 
   // Update models when data changes
   useEffect(() => {
