@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,6 +26,7 @@ import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import { createUserMessage, createLoadingAssistantMessage } from './lib'
+import { queryDataOrEmptyOnError } from './lib/query-state'
 import type { Message as MessageType } from './types'
 
 export function Playground() {
@@ -69,6 +70,14 @@ export function Playground() {
     queryKey: ['playground-groups'],
     queryFn: getUserGroups,
   })
+  const effectiveModelsData = useMemo(
+    () => queryDataOrEmptyOnError(modelsData, modelsError),
+    [modelsData, modelsError]
+  )
+  const effectiveGroupsData = useMemo(
+    () => queryDataOrEmptyOnError(groupsData, groupsError),
+    [groupsData, groupsError]
+  )
 
   useEffect(() => {
     if (!modelsError) return
@@ -84,31 +93,35 @@ export function Playground() {
 
   // Update models when data changes
   useEffect(() => {
-    if (!modelsData) return
+    if (!effectiveModelsData) return
 
-    setModels(modelsData)
+    setModels(effectiveModelsData)
 
     // Set default model if current model is not available
-    const isCurrentModelValid = modelsData.some((m) => m.value === config.model)
-    if (modelsData.length > 0 && !isCurrentModelValid) {
-      updateConfig('model', modelsData[0].value)
+    const isCurrentModelValid = effectiveModelsData.some(
+      (m) => m.value === config.model
+    )
+    if (effectiveModelsData.length > 0 && !isCurrentModelValid) {
+      updateConfig('model', effectiveModelsData[0].value)
     }
-  }, [modelsData, config.model, setModels, updateConfig])
+  }, [effectiveModelsData, config.model, setModels, updateConfig])
 
   // Update groups when data changes
   useEffect(() => {
-    if (!groupsData) return
+    if (!effectiveGroupsData) return
 
-    setGroups(groupsData)
+    setGroups(effectiveGroupsData)
 
-    const hasCurrentGroup = groupsData.some((g) => g.value === config.group)
-    if (!hasCurrentGroup && groupsData.length > 0) {
+    const hasCurrentGroup = effectiveGroupsData.some(
+      (g) => g.value === config.group
+    )
+    if (!hasCurrentGroup && effectiveGroupsData.length > 0) {
       const fallback =
-        groupsData.find((g) => g.value === 'default')?.value ??
-        groupsData[0].value
+        effectiveGroupsData.find((g) => g.value === 'default')?.value ??
+        effectiveGroupsData[0].value
       updateConfig('group', fallback)
     }
-  }, [groupsData, setGroups, config.group, updateConfig])
+  }, [effectiveGroupsData, setGroups, config.group, updateConfig])
 
   const handleSendMessage = (text: string) => {
     const userMessage = createUserMessage(text)

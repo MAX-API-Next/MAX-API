@@ -75,6 +75,13 @@ describe('getRenderableContentKind', () => {
 })
 
 describe('getSafeIframeEmbedSrc', () => {
+  test('accepts a complete http URL as an iframe src', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc('https://example.com/home.html'),
+      'https://example.com/home.html'
+    )
+  })
+
   test('extracts an https iframe src from a pure embed snippet', () => {
     assert.equal(
       getSafeIframeEmbedSrc(

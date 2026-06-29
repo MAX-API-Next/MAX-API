@@ -22,7 +22,7 @@ import DOMPurify from 'dompurify'
 import { JSDOM } from 'jsdom'
 import { sanitizeHtmlContent } from '@/lib/html-sanitizer'
 
-const dom = new JSDOM('')
+const dom = new JSDOM('', { url: 'http://localhost/' })
 const previousWindowDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   'window'

@@ -53,7 +53,25 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+	IsRetry           bool   `json:"is_retry" gorm:"default:false;index"`
 	LogId             int    `json:"log_id,omitempty" gorm:"-"`
+}
+
+func (log *Log) BeforeCreate(*gorm.DB) error {
+	log.syncRetryMarker()
+	return nil
+}
+
+func (log *Log) BeforeSave(*gorm.DB) error {
+	log.syncRetryMarker()
+	return nil
+}
+
+func (log *Log) syncRetryMarker() {
+	if log == nil {
+		return
+	}
+	log.IsRetry = logOtherHasRetryMarker(log.Other)
 }
 
 // don't use iota, avoid change log type value
@@ -78,11 +96,7 @@ func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 }
 
 func applyRetryLogFilter(tx *gorm.DB) *gorm.DB {
-	retryPatterns := []string{
-		`%"retry_log":true%`,
-		`%"empty_retry":true%`,
-	}
-	return tx.Where("(logs.other LIKE ? OR logs.other LIKE ?)", retryPatterns[0], retryPatterns[1])
+	return tx.Where("logs.is_retry = ?", true)
 }
 
 func applyLogFilter(tx *gorm.DB, filter string) *gorm.DB {
@@ -162,6 +176,23 @@ func stripLogsAuditContent(logs []*Log) {
 	for _, log := range logs {
 		stripLogAuditContent(log)
 	}
+}
+
+func logOtherHasRetryMarker(other string) bool {
+	if strings.TrimSpace(other) == "" {
+		return false
+	}
+	otherMap, err := common.StrToMap(other)
+	if err != nil || otherMap == nil {
+		return false
+	}
+	if retryLog, ok := otherMap["retry_log"].(bool); ok && retryLog {
+		return true
+	}
+	if emptyRetry, ok := otherMap["empty_retry"].(bool); ok && emptyRetry {
+		return true
+	}
+	return false
 }
 
 func formatUserLog(log *Log) {

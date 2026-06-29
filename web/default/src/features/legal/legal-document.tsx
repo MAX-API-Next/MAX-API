@@ -24,7 +24,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PublicLayout } from '@/components/layout'
-import { getRenderableContentKind } from '@/lib/renderable-content'
+import {
+  getRenderableContentKind,
+  getSafeIframeEmbedSrc,
+} from '@/lib/renderable-content'
 import type { LegalDocumentResponse } from './types'
 
 type LegalDocumentProps = {
@@ -52,6 +55,7 @@ export function LegalDocument({
   const contentKind = hasContent
     ? getRenderableContentKind(rawContent)
     : 'markdown'
+  const iframeEmbedSrc = getSafeIframeEmbedSrc(rawContent)
   const success = data?.success ?? false
 
   if (isLoading) {
@@ -85,6 +89,19 @@ export function LegalDocument({
             </CardHeader>
           </Card>
         </div>
+      </PublicLayout>
+    )
+  }
+
+  if (iframeEmbedSrc && contentKind !== 'url') {
+    return (
+      <PublicLayout showMainContainer={false}>
+        <iframe
+          src={iframeEmbedSrc}
+          className='h-[calc(100vh-3.5rem)] w-full border-0'
+          title={title}
+          sandbox='allow-forms allow-popups allow-scripts'
+        />
       </PublicLayout>
     )
   }

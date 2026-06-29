@@ -19,17 +19,17 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { JSDOM } from 'jsdom'
-import { renderMarkdownForTest } from './markdown'
+import { renderMarkdown } from './markdown'
 
-const dom = new JSDOM('')
+const dom = new JSDOM('', { url: 'http://localhost/' })
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: dom.window,
 })
 
-describe('renderMarkdownForTest', () => {
+describe('renderMarkdown', () => {
   test('renders markdown links without losing the marked parser context', () => {
-    const html = renderMarkdownForTest('[MAX API](https://example.com)')
+    const html = renderMarkdown('[MAX API](https://example.com)')
 
     assert.match(html, /<a href="https:\/\/example\.com"/)
     assert.match(html, /target="_blank"/)
@@ -39,13 +39,13 @@ describe('renderMarkdownForTest', () => {
 
   test('falls back to link text for invalid href values', () => {
     const badHref = `http://example.com/${String.fromCharCode(0xd800)}`
-    const html = renderMarkdownForTest(`[Broken](${badHref})`)
+    const html = renderMarkdown(`[Broken](${badHref})`)
 
     assert.equal(html, '<p>Broken</p>\n')
   })
 
   test('sanitizes hostile html when rendered outside the browser', () => {
-    const html = renderMarkdownForTest('<img src=x onerror=alert(1)>')
+    const html = renderMarkdown('<img src=x onerror=alert(1)>')
 
     assert.doesNotMatch(html, /onerror/i)
     assert.doesNotMatch(html, /alert\(1\)/i)
@@ -66,7 +66,7 @@ describe('renderMarkdownForTest', () => {
     ]
 
     cases.forEach(({ label, markdown, unsafe }) => {
-      const html = renderMarkdownForTest(markdown)
+      const html = renderMarkdown(markdown)
 
       assert.doesNotMatch(html, unsafe)
       assert.doesNotMatch(html, /href=/i)
@@ -82,7 +82,7 @@ describe('renderMarkdownForTest', () => {
     })
 
     try {
-      assert.equal(renderMarkdownForTest('<img src=x onerror=alert(1)>'), '')
+      assert.equal(renderMarkdown('<img src=x onerror=alert(1)>'), '')
     } finally {
       if (windowDescriptor) {
         Object.defineProperty(globalThis, 'window', windowDescriptor)

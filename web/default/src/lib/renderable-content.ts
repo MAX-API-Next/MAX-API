@@ -33,10 +33,13 @@ export function getRenderableContentKind(value: string): RenderableContentKind {
 }
 
 export function getSafeIframeEmbedSrc(content: string): string | null {
+  const trimmed = content.trim()
+
+  if (isHttpUrl(trimmed)) return trimmed
   if (!/<iframe[\s>]/i.test(content)) return null
   if (typeof DOMParser === 'undefined') return null
 
-  const document = new DOMParser().parseFromString(content, 'text/html')
+  const document = new DOMParser().parseFromString(trimmed, 'text/html')
   const iframes = document.querySelectorAll('iframe')
 
   if (iframes.length !== 1) return null

@@ -16,11 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import DOMPurify from 'dompurify'
 import * as katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { Marked, Renderer, type MarkedExtension, type Tokens } from 'marked'
 import { useMemo } from 'react'
+import { sanitizeHtmlWithOptions } from '@/lib/sanitize-core'
 import { cn } from '@/lib/utils'
 
 interface MarkdownProps {
@@ -129,13 +129,6 @@ const sanitizeOptions = {
   ADD_TAGS: allowedTags,
 } as const
 
-type DomPurifySanitizer = {
-  isSupported?: boolean
-  sanitize: (dirty: string, config?: typeof sanitizeOptions) => string
-}
-
-type DomPurifyFactory = (window: Window) => DomPurifySanitizer
-
 type FlowNode = {
   id: string
   label: string
@@ -194,36 +187,8 @@ function normalizeUrl(value: string): string | null {
   }
 }
 
-function isUsableSanitizer(value: unknown): value is DomPurifySanitizer {
-  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
-    return false
-  }
-
-  const sanitizer = value as Partial<DomPurifySanitizer>
-  return (
-    sanitizer.isSupported !== false &&
-    typeof sanitizer.sanitize === 'function'
-  )
-}
-
 function sanitizeHtml(html: string): string {
-  const purify = DOMPurify as unknown as
-    | DomPurifySanitizer
-    | DomPurifyFactory
-
-  if (isUsableSanitizer(purify)) {
-    return purify.sanitize(html, sanitizeOptions)
-  }
-
-  if (typeof window !== 'undefined' && typeof purify === 'function') {
-    const browserSanitizer = purify(window)
-
-    if (isUsableSanitizer(browserSanitizer)) {
-      return browserSanitizer.sanitize(html, sanitizeOptions)
-    }
-  }
-
-  return ''
+  return sanitizeHtmlWithOptions(html, sanitizeOptions)
 }
 
 function normalizeMathSource(source: string): string {
@@ -755,17 +720,14 @@ function createMarkdownParser() {
   return parser
 }
 
-export function renderMarkdownForTest(markdown: string): string {
+export function renderMarkdown(markdown: string): string {
   const markdownParser = createMarkdownParser()
   const parsedHtml = markdownParser.parse(markdown, markdownOptions)
   return sanitizeHtml(parsedHtml)
 }
 
 export function Markdown(props: MarkdownProps) {
-  const html = useMemo(
-    () => renderMarkdownForTest(props.children),
-    [props.children]
-  )
+  const html = useMemo(() => renderMarkdown(props.children), [props.children])
 
   return (
     <div

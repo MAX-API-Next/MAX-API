@@ -22,7 +22,10 @@ import { useTranslation } from 'react-i18next'
 import { RichContent } from '@/components/rich-content'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PublicLayout } from '@/components/layout'
-import { getRenderableContentKind } from '@/lib/renderable-content'
+import {
+  getRenderableContentKind,
+  getSafeIframeEmbedSrc,
+} from '@/lib/renderable-content'
 import { getAboutContent } from './api'
 
 function EmptyAboutState() {
@@ -122,6 +125,7 @@ export function About() {
   const contentKind = hasContent
     ? getRenderableContentKind(rawContent)
     : 'markdown'
+  const iframeEmbedSrc = getSafeIframeEmbedSrc(rawContent)
 
   if (isLoading) {
     return (
@@ -144,11 +148,11 @@ export function About() {
     )
   }
 
-  if (contentKind === 'url') {
+  if (iframeEmbedSrc) {
     return (
       <PublicLayout showMainContainer={false}>
         <iframe
-          src={rawContent}
+          src={iframeEmbedSrc}
           className='h-[calc(100vh-3.5rem)] w-full border-0'
           title={t('About')}
           sandbox='allow-forms allow-popups allow-scripts'

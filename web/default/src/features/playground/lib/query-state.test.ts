@@ -16,12 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { sanitizeHtmlWithOptions } from './sanitize-core'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { queryDataOrEmptyOnError } from './query-state'
 
-const htmlSanitizeOptions = {
-  USE_PROFILES: { html: true },
-} as const
+describe('queryDataOrEmptyOnError', () => {
+  test('preserves successful query data when a refetch errors', () => {
+    assert.deepEqual(
+      queryDataOrEmptyOnError([{ value: 'stale' }], new Error('failed')),
+      [{ value: 'stale' }]
+    )
+  })
 
-export function sanitizeHtmlContent(content: string): string {
-  return sanitizeHtmlWithOptions(content, htmlSanitizeOptions)
-}
+  test('clears selectors when the query errors before any data loads', () => {
+    assert.deepEqual(queryDataOrEmptyOnError(undefined, new Error('failed')), [])
+  })
+
+  test('preserves undefined while the query has not loaded or errored', () => {
+    assert.equal(queryDataOrEmptyOnError(undefined, null), undefined)
+  })
+})

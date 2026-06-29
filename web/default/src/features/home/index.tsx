@@ -35,8 +35,7 @@ export function Home() {
   const { content, isLoaded } = useHomePageContent()
   const customContent = content.trim()
   const contentKind = getRenderableContentKind(customContent)
-  const iframeEmbedSrc =
-    contentKind === 'url' ? customContent : getSafeIframeEmbedSrc(customContent)
+  const iframeEmbedSrc = getSafeIframeEmbedSrc(customContent)
 
   if (!isLoaded) {
     return (

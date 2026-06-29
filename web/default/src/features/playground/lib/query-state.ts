@@ -16,12 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { sanitizeHtmlWithOptions } from './sanitize-core'
+export function queryDataOrEmptyOnError<T>(
+  data: T[] | undefined,
+  error: unknown
+): T[] | undefined {
+  if (error) {
+    return data ?? []
+  }
 
-const htmlSanitizeOptions = {
-  USE_PROFILES: { html: true },
-} as const
-
-export function sanitizeHtmlContent(content: string): string {
-  return sanitizeHtmlWithOptions(content, htmlSanitizeOptions)
+  return data
 }

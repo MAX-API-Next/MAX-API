@@ -87,6 +87,12 @@ describe('buildApiParams', () => {
 describe('matchesCommonLogTypeFilter', () => {
   test('matches retry filters against row retry markers', () => {
     assert.equal(
+      matchesCommonLogTypeFilter({ type: 2, other: '{}', is_retry: true }, [
+        'retry',
+      ]),
+      true
+    )
+    assert.equal(
       matchesCommonLogTypeFilter(
         { type: 2, other: JSON.stringify({ retry_log: true }) },
         ['retry']
