@@ -32,6 +32,35 @@ export function getRenderableContentKind(value: string): RenderableContentKind {
   return 'markdown'
 }
 
+export function getSafeIframeEmbedSrc(content: string): string | null {
+  if (!/<iframe[\s>]/i.test(content)) return null
+  if (typeof DOMParser === 'undefined') return null
+
+  const document = new DOMParser().parseFromString(content, 'text/html')
+  const iframes = document.querySelectorAll('iframe')
+
+  if (iframes.length !== 1) return null
+
+  const iframe = iframes[0]
+  iframe.remove()
+
+  if (document.body.textContent?.trim()) return null
+  if (!hasOnlyEmptyWrapperElements(document.body)) return null
+
+  const src = iframe.getAttribute('src')?.trim()
+  if (!src) return null
+
+  return isHttpUrl(src) ? src : null
+}
+
+function hasOnlyEmptyWrapperElements(body: HTMLElement): boolean {
+  const allowedWrapperTags = new Set(['ARTICLE', 'DIV', 'MAIN', 'SECTION'])
+
+  return [...body.querySelectorAll('*')].every((element) =>
+    allowedWrapperTags.has(element.tagName)
+  )
+}
+
 function isHttpUrl(value: string): boolean {
   try {
     const url = new URL(value)

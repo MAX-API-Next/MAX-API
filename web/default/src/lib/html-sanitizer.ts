@@ -44,16 +44,20 @@ function isUsableHtmlSanitizer(value: unknown): value is HtmlSanitizer {
 export function sanitizeHtmlContent(content: string): string {
   const purify = DOMPurify as unknown as HtmlSanitizer | HtmlSanitizerFactory
 
-  if (isUsableHtmlSanitizer(purify)) {
-    return purify.sanitize(content, htmlSanitizeOptions)
-  }
-
-  if (typeof window !== 'undefined' && typeof purify === 'function') {
-    const browserSanitizer = purify(window)
-
-    if (isUsableHtmlSanitizer(browserSanitizer)) {
-      return browserSanitizer.sanitize(content, htmlSanitizeOptions)
+  try {
+    if (isUsableHtmlSanitizer(purify)) {
+      return purify.sanitize(content, htmlSanitizeOptions)
     }
+
+    if (typeof window !== 'undefined' && typeof purify === 'function') {
+      const browserSanitizer = purify(window)
+
+      if (isUsableHtmlSanitizer(browserSanitizer)) {
+        return browserSanitizer.sanitize(content, htmlSanitizeOptions)
+      }
+    }
+  } catch {
+    return ''
   }
 
   return ''

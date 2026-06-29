@@ -19,7 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useTranslation } from 'react-i18next'
 import { RichContent } from '@/components/rich-content'
 import { useAuthStore } from '@/stores/auth-store'
-import { getRenderableContentKind } from '@/lib/renderable-content'
+import {
+  getRenderableContentKind,
+  getSafeIframeEmbedSrc,
+} from '@/lib/renderable-content'
 import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
 import { CTA, Features, Hero, HowItWorks, Stats } from './components'
@@ -32,6 +35,8 @@ export function Home() {
   const { content, isLoaded } = useHomePageContent()
   const customContent = content.trim()
   const contentKind = getRenderableContentKind(customContent)
+  const iframeEmbedSrc =
+    contentKind === 'url' ? customContent : getSafeIframeEmbedSrc(customContent)
 
   if (!isLoaded) {
     return (
@@ -47,12 +52,12 @@ export function Home() {
     return (
       <PublicLayout showMainContainer={false}>
         <main className='overflow-x-hidden'>
-          {contentKind === 'url' ? (
+          {iframeEmbedSrc ? (
             <iframe
-              src={customContent}
+              src={iframeEmbedSrc}
               className='h-[calc(100vh-3.5rem)] w-full border-none'
               title={t('Custom Home Page')}
-              sandbox='allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts'
+              sandbox='allow-forms allow-popups allow-scripts'
             />
           ) : (
             <div className='container mx-auto py-8'>

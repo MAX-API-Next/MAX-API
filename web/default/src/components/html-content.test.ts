@@ -17,24 +17,103 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { after, describe, test } from 'node:test'
+import DOMPurify from 'dompurify'
 import { JSDOM } from 'jsdom'
 import { sanitizeHtmlContent } from '@/lib/html-sanitizer'
 
 const dom = new JSDOM('')
+const previousWindowDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  'window'
+)
+
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: dom.window,
 })
 
+after(() => {
+  if (previousWindowDescriptor) {
+    Object.defineProperty(globalThis, 'window', previousWindowDescriptor)
+    return
+  }
+
+  delete (globalThis as Partial<typeof globalThis>).window
+})
+
 describe('sanitizeHtmlContentForTest', () => {
   test('removes executable attributes from custom HTML content', () => {
     const html = sanitizeHtmlContent(
-      '<div><img src=x onerror=alert(1)><script>alert(2)</script></div>'
+      '<div>safe<img src="x" onerror=alert(1)><script>alert(2)</script></div>'
     )
 
+    assert.match(html, /safe/)
+    assert.match(html, /<img/i)
     assert.doesNotMatch(html, /onerror/i)
     assert.doesNotMatch(html, /<script/i)
     assert.doesNotMatch(html, /alert\(/i)
+  })
+
+  test('fails closed when the sanitizer throws', () => {
+    const originalIsSupported = Object.getOwnPropertyDescriptor(
+      DOMPurify,
+      'isSupported'
+    )
+    const originalSanitize = Object.getOwnPropertyDescriptor(
+      DOMPurify,
+      'sanitize'
+    )
+
+    Object.defineProperty(DOMPurify, 'isSupported', {
+      configurable: true,
+      value: true,
+    })
+    Object.defineProperty(DOMPurify, 'sanitize', {
+      configurable: true,
+      value: () => {
+        throw new Error('sanitize failed')
+      },
+    })
+
+    try {
+      assert.equal(sanitizeHtmlContent('<p>safe</p>'), '')
+    } finally {
+      if (originalSanitize) {
+        Object.defineProperty(DOMPurify, 'sanitize', originalSanitize)
+      } else {
+        delete (DOMPurify as Partial<typeof DOMPurify>).sanitize
+      }
+
+      if (originalIsSupported) {
+        Object.defineProperty(DOMPurify, 'isSupported', originalIsSupported)
+      } else {
+        delete (DOMPurify as Partial<typeof DOMPurify>).isSupported
+      }
+    }
+  })
+
+  test('fails closed when sanitizer factory setup throws', () => {
+    const windowDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'window'
+    )
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      get() {
+        throw new Error('window unavailable')
+      },
+    })
+
+    try {
+      assert.equal(sanitizeHtmlContent('<p>safe</p>'), '')
+    } finally {
+      if (windowDescriptor) {
+        Object.defineProperty(globalThis, 'window', windowDescriptor)
+      } else {
+        delete (globalThis as Partial<typeof globalThis>).window
+      }
+    }
   })
 })

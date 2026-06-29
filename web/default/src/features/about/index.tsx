@@ -151,7 +151,7 @@ export function About() {
           src={rawContent}
           className='h-[calc(100vh-3.5rem)] w-full border-0'
           title={t('About')}
-          sandbox='allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts'
+          sandbox='allow-forms allow-popups allow-scripts'
         />
       </PublicLayout>
     )
