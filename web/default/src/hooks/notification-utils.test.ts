@@ -21,14 +21,14 @@ import { describe, test } from 'node:test'
 import {
   getAnnouncementKey,
   getAutoNotificationTab,
-  getLastAutoOpenedNotificationSignature,
   getNotificationContentSignature,
-  rememberAutoOpenedNotificationSignature,
+  getScopedNotificationAutoOpenSignature,
   shouldAutoOpenNotifications,
+  shouldRememberOpenNotificationSignature,
 } from './notification-utils'
 
 describe('notification auto open helpers', () => {
-  test('treats edited announcements with the same id as new keys', () => {
+  test('keeps announcement keys stable when an existing announcement is edited', () => {
     const originalKey = getAnnouncementKey({
       id: 10,
       content: 'Initial announcement',
@@ -40,9 +40,23 @@ describe('notification auto open helpers', () => {
       publishDate: '2026-06-28T08:00:00Z',
     })
 
+    assert.equal(originalKey, 'id:10')
+    assert.equal(editedKey, originalKey)
+  })
+
+  test('keeps content-hash keys for announcements without ids', () => {
+    const originalKey = getAnnouncementKey({
+      content: 'Initial announcement',
+      publishDate: '2026-06-28T08:00:00Z',
+    })
+    const editedKey = getAnnouncementKey({
+      content: 'Edited announcement',
+      publishDate: '2026-06-28T08:00:00Z',
+    })
+
     assert.notEqual(originalKey, editedKey)
-    assert.match(originalKey, /^id:10:hash:/)
-    assert.match(editedKey, /^id:10:hash:/)
+    assert.match(originalKey, /^hash:/)
+    assert.match(editedKey, /^hash:/)
   })
 
   test('keeps content signatures stable when announcement order changes', () => {
@@ -75,9 +89,9 @@ describe('notification auto open helpers', () => {
     )
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [],
         contentSignature: getNotificationContentSignature('new notice', []),
         isClosedToday: false,
-        lastAutoOpenedSignature: null,
         loading: false,
         popoverOpen: false,
       }),
@@ -102,11 +116,11 @@ describe('notification auto open helpers', () => {
     )
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [],
         contentSignature: getNotificationContentSignature('', [
           { id: 10, content: 'new timeline item' },
         ]),
         isClosedToday: false,
-        lastAutoOpenedSignature: null,
         loading: false,
         popoverOpen: false,
       }),
@@ -131,9 +145,9 @@ describe('notification auto open helpers', () => {
     )
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [],
         contentSignature: getNotificationContentSignature('existing notice', []),
         isClosedToday: false,
-        lastAutoOpenedSignature: null,
         loading: false,
         popoverOpen: false,
       }),
@@ -144,9 +158,9 @@ describe('notification auto open helpers', () => {
   test('does not auto open after closing for today', () => {
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [],
         contentSignature: getNotificationContentSignature('new notice', []),
         isClosedToday: true,
-        lastAutoOpenedSignature: null,
         loading: false,
         popoverOpen: false,
       }),
@@ -155,13 +169,16 @@ describe('notification auto open helpers', () => {
   })
 
   test('does not repeatedly auto open the same notification content', () => {
-    const contentSignature = getNotificationContentSignature('new notice', [])
+    const contentSignature = getScopedNotificationAutoOpenSignature(
+      1,
+      getNotificationContentSignature('new notice', [])
+    )
 
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [contentSignature],
         contentSignature,
         isClosedToday: false,
-        lastAutoOpenedSignature: contentSignature,
         loading: false,
         popoverOpen: false,
       }),
@@ -169,27 +186,85 @@ describe('notification auto open helpers', () => {
     )
   })
 
-  test('remembers auto opened content across hook remounts in the same page load', () => {
+  test('scopes auto-open signatures by user', () => {
     const contentSignature = getNotificationContentSignature('existing notice', [])
+    const userOneSignature = getScopedNotificationAutoOpenSignature(
+      1,
+      contentSignature
+    )
+    const userTwoSignature = getScopedNotificationAutoOpenSignature(
+      2,
+      contentSignature
+    )
 
-    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
-    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), false)
+    assert.notEqual(userOneSignature, userTwoSignature)
+    assert.equal(
+      shouldAutoOpenNotifications({
+        autoOpenedSignatures: [userOneSignature],
+        contentSignature: userTwoSignature,
+        isClosedToday: false,
+        loading: false,
+        popoverOpen: false,
+      }),
+      true
+    )
   })
 
   test('does not auto open content already seen while the popover was open', () => {
-    const contentSignature = getNotificationContentSignature(
-      'manually opened notice',
-      []
+    const contentSignature = getScopedNotificationAutoOpenSignature(
+      1,
+      getNotificationContentSignature('manually opened notice', [])
     )
 
-    assert.equal(rememberAutoOpenedNotificationSignature(contentSignature), true)
     assert.equal(
       shouldAutoOpenNotifications({
+        autoOpenedSignatures: [contentSignature],
         contentSignature,
         isClosedToday: false,
-        lastAutoOpenedSignature: getLastAutoOpenedNotificationSignature(),
         loading: false,
         popoverOpen: false,
+      }),
+      false
+    )
+  })
+
+  test('remembers content that arrives while the same user has the popover open', () => {
+    const contentSignature = getScopedNotificationAutoOpenSignature(
+      1,
+      getNotificationContentSignature('loaded while open', [])
+    )
+
+    assert.equal(
+      shouldRememberOpenNotificationSignature({
+        contentSignature,
+        openedUserScope: 'user:1',
+        userScope: 'user:1',
+      }),
+      true
+    )
+    assert.equal(
+      shouldAutoOpenNotifications({
+        autoOpenedSignatures: [contentSignature],
+        contentSignature,
+        isClosedToday: false,
+        loading: false,
+        popoverOpen: false,
+      }),
+      false
+    )
+  })
+
+  test('does not remember loaded content for a different user scope', () => {
+    const contentSignature = getScopedNotificationAutoOpenSignature(
+      2,
+      getNotificationContentSignature('loaded after auth switch', [])
+    )
+
+    assert.equal(
+      shouldRememberOpenNotificationSignature({
+        contentSignature,
+        openedUserScope: 'user:1',
+        userScope: 'user:2',
       }),
       false
     )

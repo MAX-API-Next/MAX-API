@@ -17,8 +17,36 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
-import { getRenderableContentKind } from './renderable-content'
+import { after, describe, test } from 'node:test'
+import { JSDOM } from 'jsdom'
+import {
+  getRenderableContentKind,
+  getSafeIframeEmbedSrc,
+} from './renderable-content'
+
+const dom = new JSDOM('')
+const previousDOMParserDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  'DOMParser'
+)
+
+Object.defineProperty(globalThis, 'DOMParser', {
+  configurable: true,
+  value: dom.window.DOMParser,
+})
+
+after(() => {
+  if (previousDOMParserDescriptor) {
+    Object.defineProperty(
+      globalThis,
+      'DOMParser',
+      previousDOMParserDescriptor
+    )
+    return
+  }
+
+  delete (globalThis as Partial<typeof globalThis>).DOMParser
+})
 
 describe('getRenderableContentKind', () => {
   test('treats a complete http URL as iframe content', () => {
@@ -43,5 +71,48 @@ describe('getRenderableContentKind', () => {
 
   test('treats plain text as Markdown content', () => {
     assert.equal(getRenderableContentKind('# Welcome'), 'markdown')
+  })
+})
+
+describe('getSafeIframeEmbedSrc', () => {
+  test('accepts a complete http URL as an iframe src', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc('https://example.com/home.html'),
+      'https://example.com/home.html'
+    )
+  })
+
+  test('extracts an https iframe src from a pure embed snippet', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc(
+        '<iframe src="https://example.com/home.html"></iframe>'
+      ),
+      'https://example.com/home.html'
+    )
+  })
+
+  test('extracts an iframe src when the snippet only has wrapper elements', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc(
+        '<div><iframe src="https://example.com/home.html"></iframe></div>'
+      ),
+      'https://example.com/home.html'
+    )
+  })
+
+  test('rejects iframe snippets with additional HTML content', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc(
+        '<section><h1>Welcome</h1><iframe src="https://example.com"></iframe></section>'
+      ),
+      null
+    )
+  })
+
+  test('rejects non-http iframe src values', () => {
+    assert.equal(
+      getSafeIframeEmbedSrc('<iframe src="javascript:alert(1)"></iframe>'),
+      null
+    )
   })
 })

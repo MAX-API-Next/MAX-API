@@ -19,20 +19,82 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-interface NotificationState {
-  // Last read Notice content signature (full trimmed message)
+interface NotificationUserState {
   lastReadNotice: string
-  // Array of read announcement keys (id or content hash)
   readAnnouncementKeys: string[]
-  // Timestamp of last "Close Today" action
   closedUntilDate: string | null
+}
+
+interface NotificationState {
+  byUser: Record<string, NotificationUserState>
+  // Auto-opened content signatures for the current page session.
+  autoOpenedSignatures: string[]
 
   // Actions
-  markNoticeRead: (noticeContent: string) => void
-  markAnnouncementsRead: (keys: string[]) => void
-  setClosedUntilDate: (date: string | null) => void
-  isAnnouncementRead: (key: string) => boolean
-  isNoticeClosed: () => boolean
+  markNoticeRead: (userScope: string, noticeContent: string) => void
+  markAnnouncementsRead: (userScope: string, keys: string[]) => void
+  rememberAutoOpenedSignature: (contentSignature: string) => boolean
+  setClosedUntilDate: (userScope: string, date: string | null) => void
+  getUserState: (userScope: string) => NotificationUserState
+  isAnnouncementRead: (userScope: string, key: string) => boolean
+  isNoticeClosed: (userScope: string) => boolean
+}
+
+const defaultNotificationUserState: NotificationUserState = {
+  lastReadNotice: '',
+  readAnnouncementKeys: [],
+  closedUntilDate: null,
+}
+
+function getStoredUserState(
+  byUser: Record<string, NotificationUserState>,
+  userScope: string
+): NotificationUserState {
+  return byUser[userScope] ?? defaultNotificationUserState
+}
+
+function setUserState(
+  state: NotificationState,
+  userScope: string,
+  patch: Partial<NotificationUserState>
+): Pick<NotificationState, 'byUser'> {
+  const current = getStoredUserState(state.byUser, userScope)
+
+  return {
+    byUser: {
+      ...state.byUser,
+      [userScope]: {
+        ...current,
+        ...patch,
+      },
+    },
+  }
+}
+
+function migratePersistedNotificationState(
+  persisted: unknown,
+  version: number
+): Partial<NotificationState> {
+  if (
+    version >= 1 ||
+    !persisted ||
+    typeof persisted !== 'object' ||
+    'byUser' in persisted
+  ) {
+    return persisted as Partial<NotificationState>
+  }
+
+  const legacy = persisted as Partial<NotificationUserState>
+
+  return {
+    byUser: {
+      anonymous: {
+        lastReadNotice: legacy.lastReadNotice ?? '',
+        readAnnouncementKeys: legacy.readAnnouncementKeys ?? [],
+        closedUntilDate: legacy.closedUntilDate ?? null,
+      },
+    },
+  }
 }
 
 /**
@@ -42,34 +104,65 @@ interface NotificationState {
 export const useNotificationStore = create<NotificationState>()(
   persist(
     (set, get) => ({
-      lastReadNotice: '',
-      readAnnouncementKeys: [],
-      closedUntilDate: null,
+      byUser: {},
+      autoOpenedSignatures: [],
 
-      markNoticeRead: (noticeContent: string) => {
+      markNoticeRead: (userScope: string, noticeContent: string) => {
         // Persist the full trimmed content so edits beyond 100 chars register
         const normalizedContent = noticeContent.trim()
-        set({ lastReadNotice: normalizedContent })
+        set((state) =>
+          setUserState(state, userScope, {
+            lastReadNotice: normalizedContent,
+          })
+        )
       },
 
-      markAnnouncementsRead: (keys: string[]) => {
+      markAnnouncementsRead: (userScope: string, keys: string[]) => {
+        set((state) => {
+          const current = getStoredUserState(state.byUser, userScope)
+
+          return setUserState(state, userScope, {
+            readAnnouncementKeys: [
+              ...new Set([...current.readAnnouncementKeys, ...keys]),
+            ],
+          })
+        })
+      },
+
+      rememberAutoOpenedSignature: (contentSignature: string) => {
+        if (!contentSignature) {
+          return false
+        }
+
+        if (get().autoOpenedSignatures.includes(contentSignature)) {
+          return false
+        }
+
         set((state) => ({
-          readAnnouncementKeys: [
-            ...new Set([...state.readAnnouncementKeys, ...keys]),
+          autoOpenedSignatures: [
+            ...state.autoOpenedSignatures,
+            contentSignature,
           ],
         }))
+        return true
       },
 
-      setClosedUntilDate: (date: string | null) => {
-        set({ closedUntilDate: date })
+      setClosedUntilDate: (userScope: string, date: string | null) => {
+        set((state) => setUserState(state, userScope, { closedUntilDate: date }))
       },
 
-      isAnnouncementRead: (key: string) => {
-        return get().readAnnouncementKeys.includes(key)
+      getUserState: (userScope: string) => {
+        return getStoredUserState(get().byUser, userScope)
       },
 
-      isNoticeClosed: () => {
-        const { closedUntilDate } = get()
+      isAnnouncementRead: (userScope: string, key: string) => {
+        return get()
+          .getUserState(userScope)
+          .readAnnouncementKeys.includes(key)
+      },
+
+      isNoticeClosed: (userScope: string) => {
+        const { closedUntilDate } = get().getUserState(userScope)
         if (!closedUntilDate) return false
 
         const today = new Date().toDateString()
@@ -78,10 +171,10 @@ export const useNotificationStore = create<NotificationState>()(
     }),
     {
       name: 'notification-storage',
+      version: 1,
+      migrate: migratePersistedNotificationState,
       partialize: (state) => ({
-        lastReadNotice: state.lastReadNotice,
-        readAnnouncementKeys: state.readAnnouncementKeys,
-        closedUntilDate: state.closedUntilDate,
+        byUser: state.byUser,
       }),
     }
   )

@@ -26,6 +26,7 @@ import {
   GlobeIcon,
   SendIcon,
   SquareIcon,
+  Trash2Icon,
   BarChartIcon,
   BoxIcon,
   NotepadTextIcon,
@@ -48,6 +49,12 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 import type { ModelOption, GroupOption } from '../types'
@@ -56,6 +63,7 @@ interface PlaygroundInputProps {
   onSubmit: (text: string) => void
   onStop?: () => void
   disabled?: boolean
+  isSubmitDisabled?: boolean
   isGenerating?: boolean
   models: ModelOption[]
   modelValue: string
@@ -64,6 +72,8 @@ interface PlaygroundInputProps {
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
+  hasMessages?: boolean
+  onClearHistory?: () => void
 }
 
 const suggestions = [
@@ -79,6 +89,7 @@ export function PlaygroundInput({
   onSubmit,
   onStop,
   disabled,
+  isSubmitDisabled,
   isGenerating,
   models,
   modelValue,
@@ -87,6 +98,8 @@ export function PlaygroundInput({
   groups,
   groupValue,
   onGroupChange,
+  hasMessages = false,
+  onClearHistory,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -94,9 +107,10 @@ export function PlaygroundInput({
   const isModelSelectDisabled =
     disabled || isModelLoading || models.length === 0
   const isGroupSelectDisabled = disabled || groups.length === 0
+  const isClearHistoryDisabled = disabled || isGenerating || !hasMessages
 
   const handleSubmit = (message: PromptInputMessage) => {
-    if (!message.text?.trim() || disabled) return
+    if (!message.text?.trim() || disabled || isSubmitDisabled) return
     onSubmit(message.text)
     setText('')
   }
@@ -108,6 +122,7 @@ export function PlaygroundInput({
   }
 
   const handleSuggestionClick = (suggestion: string) => {
+    if (disabled || isSubmitDisabled) return
     onSubmit(suggestion)
   }
 
@@ -180,6 +195,31 @@ export function PlaygroundInput({
               <span className='hidden sm:inline'>{t('Search')}</span>
               <span className='sr-only sm:hidden'>{t('Search')}</span>
             </PromptInputButton>
+
+            <TooltipProvider delay={300}>
+              <Tooltip>
+                <TooltipTrigger render={<span className='inline-flex' />}>
+                  <PromptInputButton
+                    aria-label={t('Clear chat history')}
+                    className='border font-medium'
+                    disabled={isClearHistoryDisabled}
+                    onClick={onClearHistory}
+                    variant='outline'
+                  >
+                    <Trash2Icon size={16} />
+                    <span className='hidden sm:inline'>
+                      {t('Clear chat history')}
+                    </span>
+                    <span className='sr-only sm:hidden'>
+                      {t('Clear chat history')}
+                    </span>
+                  </PromptInputButton>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{t('Clear chat history')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>
@@ -206,7 +246,7 @@ export function PlaygroundInput({
             ) : (
               <PromptInputButton
                 className='text-foreground font-medium'
-                disabled={disabled || !text.trim()}
+                disabled={disabled || isSubmitDisabled || !text.trim()}
                 type='submit'
                 variant='secondary'
               >

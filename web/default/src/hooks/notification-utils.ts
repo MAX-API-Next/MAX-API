@@ -25,11 +25,17 @@ export interface NotificationUnreadCounts {
 }
 
 interface ShouldAutoOpenNotificationsOptions {
+  autoOpenedSignatures: string[]
   contentSignature: string
   isClosedToday: boolean
-  lastAutoOpenedSignature: string | null
   loading: boolean
   popoverOpen: boolean
+}
+
+interface ShouldRememberOpenNotificationSignatureOptions {
+  contentSignature: string
+  openedUserScope: string | null
+  userScope: string
 }
 
 interface GetAutoNotificationTabOptions {
@@ -37,8 +43,6 @@ interface GetAutoNotificationTabOptions {
   hasNotice: boolean
   unreadCounts: NotificationUnreadCounts
 }
-
-let memoryLastAutoOpenedSignature: string | null = null
 
 function hashString(input: string): string {
   let hash = 0
@@ -66,17 +70,16 @@ function getAnnouncementFingerprint(item: Record<string, unknown>): string {
 
 /**
  * Generate a unique key for an announcement.
- * Prefer backend id but include a content version so edits register.
+ * Prefer a stable backend id so trivial edits do not reset read state.
  */
 export function getAnnouncementKey(item: Record<string, unknown>): string {
   if (!item) return ''
 
-  const version = hashString(getAnnouncementFingerprint(item))
-
   if (item.id !== undefined && item.id !== null) {
-    return `id:${item.id}:hash:${version}`
+    return `id:${item.id}`
   }
 
+  const version = hashString(getAnnouncementFingerprint(item))
   return `hash:${version}`
 }
 
@@ -98,6 +101,24 @@ export function getNotificationContentSignature(
     notice,
     announcements: announcementKeys,
   })
+}
+
+export function getScopedNotificationAutoOpenSignature(
+  userId: number | null,
+  contentSignature: string
+): string {
+  if (!contentSignature) {
+    return ''
+  }
+
+  return JSON.stringify({
+    userScope: getNotificationUserScope(userId),
+    contentSignature,
+  })
+}
+
+export function getNotificationUserScope(userId: number | null): string {
+  return userId === null ? 'anonymous' : `user:${userId}`
 }
 
 export function getAutoNotificationTab(
@@ -130,28 +151,16 @@ export function shouldAutoOpenNotifications(
     !options.popoverOpen &&
     !options.isClosedToday &&
     options.contentSignature !== '' &&
-    options.contentSignature !== options.lastAutoOpenedSignature
+    !options.autoOpenedSignatures.includes(options.contentSignature)
   )
 }
 
-export function getLastAutoOpenedNotificationSignature(): string | null {
-  return memoryLastAutoOpenedSignature
-}
-
-export function rememberAutoOpenedNotificationSignature(
-  contentSignature: string
+export function shouldRememberOpenNotificationSignature(
+  options: ShouldRememberOpenNotificationSignatureOptions
 ): boolean {
-  if (!contentSignature) {
-    return false
-  }
-
-  const lastSignature = getLastAutoOpenedNotificationSignature()
-
-  if (lastSignature === contentSignature) {
-    return false
-  }
-
-  memoryLastAutoOpenedSignature = contentSignature
-
-  return true
+  return (
+    options.contentSignature !== '' &&
+    options.openedUserScope !== null &&
+    options.openedUserScope === options.userScope
+  )
 }

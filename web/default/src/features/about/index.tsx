@@ -19,23 +19,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useQuery } from '@tanstack/react-query'
 import { Construction } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Markdown } from '@/components/ui/markdown'
+import { RichContent } from '@/components/rich-content'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PublicLayout } from '@/components/layout'
+import {
+  getRenderableContentKind,
+  getSafeIframeEmbedSrc,
+} from '@/lib/renderable-content'
 import { getAboutContent } from './api'
-
-function isValidUrl(value: string) {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
-function isLikelyHtml(value: string) {
-  return /<\/?[a-z][\s\S]*>/i.test(value)
-}
 
 function EmptyAboutState() {
   const { t } = useTranslation()
@@ -131,8 +122,10 @@ export function About() {
 
   const rawContent = data?.data?.trim() ?? ''
   const hasContent = rawContent.length > 0
-  const isUrl = hasContent && isValidUrl(rawContent)
-  const isHtml = hasContent && !isUrl && isLikelyHtml(rawContent)
+  const contentKind = hasContent
+    ? getRenderableContentKind(rawContent)
+    : 'markdown'
+  const iframeEmbedSrc = getSafeIframeEmbedSrc(rawContent)
 
   if (isLoading) {
     return (
@@ -155,13 +148,14 @@ export function About() {
     )
   }
 
-  if (isUrl) {
+  if (iframeEmbedSrc) {
     return (
       <PublicLayout showMainContainer={false}>
         <iframe
-          src={rawContent}
+          src={iframeEmbedSrc}
           className='h-[calc(100vh-3.5rem)] w-full border-0'
           title={t('About')}
+          sandbox='allow-forms allow-popups allow-scripts'
         />
       </PublicLayout>
     )
@@ -170,16 +164,11 @@ export function About() {
   return (
     <PublicLayout>
       <div className='mx-auto max-w-6xl px-4 py-8'>
-        {isHtml ? (
-          <div
-            className='prose prose-neutral dark:prose-invert max-w-none'
-            dangerouslySetInnerHTML={{ __html: rawContent }}
-          />
-        ) : (
-          <Markdown className='prose-neutral dark:prose-invert max-w-none'>
-            {rawContent}
-          </Markdown>
-        )}
+        <RichContent
+          mode={contentKind === 'html' ? 'html' : 'markdown'}
+          content={rawContent}
+          className='prose-neutral dark:prose-invert max-w-none'
+        />
       </div>
     </PublicLayout>
   )

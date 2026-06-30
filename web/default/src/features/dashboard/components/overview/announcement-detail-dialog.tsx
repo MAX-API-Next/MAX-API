@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useTranslation } from 'react-i18next'
+import { RichContent } from '@/components/rich-content'
+import { getRenderableContentKind } from '@/lib/renderable-content'
 import { formatDateTimeObject } from '@/lib/time'
 import {
   Dialog,
@@ -25,8 +27,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Markdown } from '@/components/ui/markdown'
 import { ScrollArea } from '@/components/ui/scroll-area'
+
+function getRichContentMode(content: string): 'html' | 'markdown' {
+  return getRenderableContentKind(content) === 'html' ? 'html' : 'markdown'
+}
 
 interface AnnouncementDetailModalProps {
   open: boolean
@@ -63,7 +68,10 @@ export function AnnouncementDetailModal({
             {announcement?.content && (
               <div>
                 <h4 className='mb-2 font-medium'>{t('Content')}</h4>
-                <Markdown>{announcement.content}</Markdown>
+                <RichContent
+                  content={announcement.content}
+                  mode={getRichContentMode(announcement.content)}
+                />
               </div>
             )}
             {announcement?.extra && (
@@ -71,9 +79,11 @@ export function AnnouncementDetailModal({
                 <h4 className='mb-2 font-medium'>
                   {t('Additional Information')}
                 </h4>
-                <Markdown className='text-muted-foreground'>
-                  {announcement.extra}
-                </Markdown>
+                <RichContent
+                  content={announcement.extra}
+                  mode={getRichContentMode(announcement.extra)}
+                  className='text-muted-foreground'
+                />
               </div>
             )}
           </div>

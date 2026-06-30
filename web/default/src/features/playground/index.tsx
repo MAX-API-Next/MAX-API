@@ -16,15 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import { getUserModels, getUserGroups } from './api'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import { createUserMessage, createLoadingAssistantMessage } from './lib'
+import { queryDataOrEmptyOnError } from './lib/query-state'
+import {
+  getAvailableOptionValue,
+  isOptionValueAvailable,
+} from './lib/selection-state'
 import type { Message as MessageType } from './types'
 
 export function Playground() {
@@ -39,6 +45,7 @@ export function Playground() {
     setModels,
     setGroups,
     updateConfig,
+    clearMessages,
   } = usePlaygroundState()
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
@@ -53,68 +60,81 @@ export function Playground() {
   )
 
   // Load models
-  const { data: modelsData, isLoading: isLoadingModels } = useQuery({
+  const {
+    data: modelsData,
+    error: modelsError,
+    isLoading: isLoadingModels,
+  } = useQuery({
     queryKey: ['playground-models'],
-    queryFn: async () => {
-      try {
-        return await getUserModels()
-      } catch (error) {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to load playground models')
-        )
-        return []
-      }
-    },
+    queryFn: getUserModels,
   })
 
   // Load groups
-  const { data: groupsData } = useQuery({
+  const { data: groupsData, error: groupsError } = useQuery({
     queryKey: ['playground-groups'],
-    queryFn: async () => {
-      try {
-        return await getUserGroups()
-      } catch (error) {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Failed to load playground groups')
-        )
-        return []
-      }
-    },
+    queryFn: getUserGroups,
   })
+  const effectiveModelsData = useMemo(
+    () => queryDataOrEmptyOnError(modelsData, modelsError),
+    [modelsData, modelsError]
+  )
+  const effectiveGroupsData = useMemo(
+    () => queryDataOrEmptyOnError(groupsData, groupsError),
+    [groupsData, groupsError]
+  )
+  const canSendChat = useMemo(() => {
+    return (
+      isOptionValueAvailable(effectiveModelsData, config.model) &&
+      isOptionValueAvailable(effectiveGroupsData, config.group)
+    )
+  }, [effectiveModelsData, effectiveGroupsData, config.model, config.group])
+
+  useEffect(() => {
+    if (!modelsError) return
+
+    handleServerError(modelsError)
+  }, [modelsError])
+
+  useEffect(() => {
+    if (!groupsError) return
+
+    handleServerError(groupsError)
+  }, [groupsError])
 
   // Update models when data changes
   useEffect(() => {
-    if (!modelsData) return
+    if (!effectiveModelsData) return
 
-    setModels(modelsData)
+    setModels(effectiveModelsData)
 
-    // Set default model if current model is not available
-    const isCurrentModelValid = modelsData.some((m) => m.value === config.model)
-    if (modelsData.length > 0 && !isCurrentModelValid) {
-      updateConfig('model', modelsData[0].value)
+    const nextModel = getAvailableOptionValue(
+      effectiveModelsData,
+      config.model
+    )
+    if (nextModel !== config.model) {
+      updateConfig('model', nextModel)
     }
-  }, [modelsData, config.model, setModels, updateConfig])
+  }, [effectiveModelsData, config.model, setModels, updateConfig])
 
   // Update groups when data changes
   useEffect(() => {
-    if (!groupsData) return
+    if (!effectiveGroupsData) return
 
-    setGroups(groupsData)
+    setGroups(effectiveGroupsData)
 
-    const hasCurrentGroup = groupsData.some((g) => g.value === config.group)
-    if (!hasCurrentGroup && groupsData.length > 0) {
-      const fallback =
-        groupsData.find((g) => g.value === 'default')?.value ??
-        groupsData[0].value
-      updateConfig('group', fallback)
+    const nextGroup = getAvailableOptionValue(
+      effectiveGroupsData,
+      config.group,
+      'default'
+    )
+    if (nextGroup !== config.group) {
+      updateConfig('group', nextGroup)
     }
-  }, [groupsData, setGroups, config.group, updateConfig])
+  }, [effectiveGroupsData, setGroups, config.group, updateConfig])
 
   const handleSendMessage = (text: string) => {
+    if (!canSendChat) return
+
     const userMessage = createUserMessage(text)
     const assistantMessage = createLoadingAssistantMessage()
 
@@ -132,6 +152,8 @@ export function Playground() {
   }
 
   const handleRegenerateMessage = (message: MessageType) => {
+    if (!canSendChat) return
+
     // Find the message index and regenerate from there
     const messageIndex = messages.findIndex((m) => m.key === message.key)
     if (messageIndex === -1) return
@@ -173,6 +195,11 @@ export function Playground() {
         return
       }
 
+      if (!canSendChat) {
+        updateMessages(updated)
+        return
+      }
+
       const toSubmit = [
         ...updated.slice(0, index + 1),
         createLoadingAssistantMessage(),
@@ -180,13 +207,21 @@ export function Playground() {
       updateMessages(toSubmit)
       sendChat(toSubmit)
     },
-    [editingMessageKey, messages, updateMessages, sendChat]
+    [editingMessageKey, messages, updateMessages, sendChat, canSendChat]
   )
 
   const handleDeleteMessage = (message: MessageType) => {
     const newMessages = messages.filter((m) => m.key !== message.key)
     updateMessages(newMessages)
   }
+
+  const handleClearHistory = useCallback(() => {
+    if (isGenerating || messages.length === 0) return
+
+    clearMessages()
+    setEditingMessageKey(null)
+    toast.success(t('Chat history cleared'))
+  }, [clearMessages, isGenerating, messages.length, t])
 
   return (
     <div className='relative flex size-full flex-col overflow-hidden'>
@@ -214,9 +249,12 @@ export function Playground() {
           groupValue={config.group}
           isGenerating={isGenerating}
           isModelLoading={isLoadingModels}
+          isSubmitDisabled={!canSendChat}
           modelValue={config.model}
           models={models}
+          hasMessages={messages.length > 0}
           onGroupChange={(value) => updateConfig('group', value)}
+          onClearHistory={handleClearHistory}
           onModelChange={(value) => updateConfig('model', value)}
           onStop={stopGeneration}
           onSubmit={handleSendMessage}

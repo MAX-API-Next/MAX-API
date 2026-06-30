@@ -96,7 +96,7 @@ function timestampToSeconds(ms: number): number {
 }
 
 export function matchesCommonLogTypeFilter(
-  log: { type: number; other: string },
+  log: { type: number; other: string; is_retry?: boolean },
   value: unknown
 ): boolean {
   if (!Array.isArray(value) || value.length === 0) return true
@@ -108,6 +108,9 @@ export function matchesCommonLogTypeFilter(
   if (filterValues.length === 0) return true
   if (filterValues.includes(LOG_TYPE_ALL_VALUE)) return true
   if (filterValues.includes(LOG_TYPE_RETRY_VALUE)) {
+    if (log.is_retry === true) {
+      return true
+    }
     const other = parseLogOther(log.other)
     return other?.retry_log === true || other?.empty_retry === true
   }

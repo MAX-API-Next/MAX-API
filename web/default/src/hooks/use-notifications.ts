@@ -16,18 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { useNotificationStore } from '@/stores/notification-store'
+import { useAuthStore } from '@/stores/auth-store'
 import { getNotice } from '@/lib/api'
 import { useStatus } from '@/hooks/use-status'
 import {
   getAnnouncementKey,
   getAutoNotificationTab,
   getNotificationContentSignature,
-  getLastAutoOpenedNotificationSignature,
-  rememberAutoOpenedNotificationSignature,
+  getNotificationUserScope,
+  getScopedNotificationAutoOpenSignature,
   shouldAutoOpenNotifications,
+  shouldRememberOpenNotificationSignature,
   type NotificationTab,
 } from './notification-utils'
 
@@ -59,6 +61,9 @@ export type UseNotificationsResult = {
 export function useNotifications(): UseNotificationsResult {
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<NotificationTab>('notice')
+  const openedUserScopeRef = useRef<string | null>(null)
+  const userId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const userScope = getNotificationUserScope(userId)
 
   // Fetch Notice from API
   const {
@@ -83,13 +88,17 @@ export function useNotifications(): UseNotificationsResult {
 
   // Notification store
   const {
-    lastReadNotice,
     markNoticeRead,
     markAnnouncementsRead,
+    autoOpenedSignatures,
+    rememberAutoOpenedSignature,
     setClosedUntilDate,
     isAnnouncementRead,
     isNoticeClosed,
   } = useNotificationStore()
+  const { lastReadNotice } = useNotificationStore((state) =>
+    state.getUserState(userScope)
+  )
 
   // Extract notice content
   const noticeContent = noticeResponse?.success
@@ -104,7 +113,7 @@ export function useNotifications(): UseNotificationsResult {
     const announcementsUnread = announcements.filter(
       (item: Record<string, unknown>) => {
         const key = getAnnouncementKey(item)
-        return !isAnnouncementRead(key)
+        return !isAnnouncementRead(userScope, key)
       }
     ).length
 
@@ -113,12 +122,22 @@ export function useNotifications(): UseNotificationsResult {
       announcements: announcementsUnread,
       total: noticeUnread + announcementsUnread,
     }
-  }, [noticeContent, lastReadNotice, announcements, isAnnouncementRead])
+  }, [
+    noticeContent,
+    lastReadNotice,
+    announcements,
+    isAnnouncementRead,
+    userScope,
+  ])
 
   const loading = noticeLoading || statusLoading
   const contentSignature = useMemo(
     () => getNotificationContentSignature(noticeContent, announcements),
     [noticeContent, announcements]
+  )
+  const autoOpenSignature = useMemo(
+    () => getScopedNotificationAutoOpenSignature(userId, contentSignature),
+    [contentSignature, userId]
   )
 
   const markAnnouncementsAsRead = useCallback(() => {
@@ -126,21 +145,21 @@ export function useNotifications(): UseNotificationsResult {
       const allKeys = announcements.map((item: Record<string, unknown>) =>
         getAnnouncementKey(item)
       )
-      markAnnouncementsRead(allKeys)
+      markAnnouncementsRead(userScope, allKeys)
     }
-  }, [announcements, markAnnouncementsRead])
+  }, [announcements, markAnnouncementsRead, userScope])
 
   const markTabAsRead = useCallback(
     (tab: NotificationTab) => {
       if (tab === 'notice' && noticeContent) {
-        markNoticeRead(noticeContent)
+        markNoticeRead(userScope, noticeContent)
       }
 
       if (tab === 'announcements') {
         markAnnouncementsAsRead()
       }
     },
-    [markAnnouncementsAsRead, markNoticeRead, noticeContent]
+    [markAnnouncementsAsRead, markNoticeRead, noticeContent, userScope]
   )
 
   // Handle popover open
@@ -148,11 +167,21 @@ export function useNotifications(): UseNotificationsResult {
     (tab?: NotificationTab) => {
       const nextTab = tab || activeTab
 
+      if (autoOpenSignature !== '') {
+        rememberAutoOpenedSignature(autoOpenSignature)
+      }
       markTabAsRead(nextTab)
       setActiveTab(nextTab)
+      openedUserScopeRef.current = userScope
       setPopoverOpen(true)
     },
-    [activeTab, markTabAsRead]
+    [
+      activeTab,
+      autoOpenSignature,
+      markTabAsRead,
+      rememberAutoOpenedSignature,
+      userScope,
+    ]
   )
 
   const handlePopoverOpenChange = useCallback(
@@ -163,14 +192,16 @@ export function useNotifications(): UseNotificationsResult {
       }
 
       setPopoverOpen(false)
+      openedUserScopeRef.current = null
     },
     [activeTab, handleOpenPopover]
   )
 
   const closeForToday = useCallback(() => {
-    setClosedUntilDate(new Date().toDateString())
+    setClosedUntilDate(userScope, new Date().toDateString())
+    openedUserScopeRef.current = null
     setPopoverOpen(false)
-  }, [setClosedUntilDate])
+  }, [setClosedUntilDate, userScope])
 
   // Handle tab change - mark announcements as read when switching to that tab
   const handleTabChange = useCallback(
@@ -182,16 +213,24 @@ export function useNotifications(): UseNotificationsResult {
   )
 
   useEffect(() => {
-    if (popoverOpen && contentSignature !== '') {
-      rememberAutoOpenedNotificationSignature(contentSignature)
-      return
+    if (
+      popoverOpen &&
+      shouldRememberOpenNotificationSignature({
+        contentSignature: autoOpenSignature,
+        openedUserScope: openedUserScopeRef.current,
+        userScope,
+      })
+    ) {
+      rememberAutoOpenedSignature(autoOpenSignature)
     }
+  }, [autoOpenSignature, popoverOpen, rememberAutoOpenedSignature, userScope])
 
+  useEffect(() => {
     if (
       !shouldAutoOpenNotifications({
-        contentSignature,
-        isClosedToday: isNoticeClosed(),
-        lastAutoOpenedSignature: getLastAutoOpenedNotificationSignature(),
+        autoOpenedSignatures,
+        contentSignature: autoOpenSignature,
+        isClosedToday: isNoticeClosed(userScope),
         loading,
         popoverOpen,
       })
@@ -210,7 +249,7 @@ export function useNotifications(): UseNotificationsResult {
     }
 
     const timeoutId = window.setTimeout(() => {
-      if (!rememberAutoOpenedNotificationSignature(contentSignature)) {
+      if (!rememberAutoOpenedSignature(autoOpenSignature)) {
         return
       }
 
@@ -221,14 +260,17 @@ export function useNotifications(): UseNotificationsResult {
       window.clearTimeout(timeoutId)
     }
   }, [
-    contentSignature,
+    autoOpenSignature,
+    autoOpenedSignatures,
     announcements.length,
     handleOpenPopover,
     isNoticeClosed,
     loading,
     noticeContent,
     popoverOpen,
+    rememberAutoOpenedSignature,
     unreadCounts,
+    userScope,
   ])
 
   return {
@@ -250,7 +292,10 @@ export function useNotifications(): UseNotificationsResult {
 
     // Actions
     openPopover: handleOpenPopover,
-    closePopover: () => setPopoverOpen(false),
+    closePopover: () => {
+      openedUserScopeRef.current = null
+      setPopoverOpen(false)
+    },
     closeForToday,
     refetchNotice,
   }

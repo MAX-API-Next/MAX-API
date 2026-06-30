@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 		&User{},
 		&Token{},
 		&Log{},
+		&Option{},
 		&Channel{},
 		&Ability{},
 		&Redemption{},
