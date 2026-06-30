@@ -27,6 +27,10 @@ import { PlaygroundInput } from './components/playground-input'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import { createUserMessage, createLoadingAssistantMessage } from './lib'
 import { queryDataOrEmptyOnError } from './lib/query-state'
+import {
+  getAvailableOptionValue,
+  isOptionValueAvailable,
+} from './lib/selection-state'
 import type { Message as MessageType } from './types'
 
 export function Playground() {
@@ -78,6 +82,12 @@ export function Playground() {
     () => queryDataOrEmptyOnError(groupsData, groupsError),
     [groupsData, groupsError]
   )
+  const canSendChat = useMemo(() => {
+    return (
+      isOptionValueAvailable(effectiveModelsData, config.model) &&
+      isOptionValueAvailable(effectiveGroupsData, config.group)
+    )
+  }, [effectiveModelsData, effectiveGroupsData, config.model, config.group])
 
   useEffect(() => {
     if (!modelsError) return
@@ -97,12 +107,12 @@ export function Playground() {
 
     setModels(effectiveModelsData)
 
-    // Set default model if current model is not available
-    const isCurrentModelValid = effectiveModelsData.some(
-      (m) => m.value === config.model
+    const nextModel = getAvailableOptionValue(
+      effectiveModelsData,
+      config.model
     )
-    if (effectiveModelsData.length > 0 && !isCurrentModelValid) {
-      updateConfig('model', effectiveModelsData[0].value)
+    if (nextModel !== config.model) {
+      updateConfig('model', nextModel)
     }
   }, [effectiveModelsData, config.model, setModels, updateConfig])
 
@@ -112,18 +122,19 @@ export function Playground() {
 
     setGroups(effectiveGroupsData)
 
-    const hasCurrentGroup = effectiveGroupsData.some(
-      (g) => g.value === config.group
+    const nextGroup = getAvailableOptionValue(
+      effectiveGroupsData,
+      config.group,
+      'default'
     )
-    if (!hasCurrentGroup && effectiveGroupsData.length > 0) {
-      const fallback =
-        effectiveGroupsData.find((g) => g.value === 'default')?.value ??
-        effectiveGroupsData[0].value
-      updateConfig('group', fallback)
+    if (nextGroup !== config.group) {
+      updateConfig('group', nextGroup)
     }
   }, [effectiveGroupsData, setGroups, config.group, updateConfig])
 
   const handleSendMessage = (text: string) => {
+    if (!canSendChat) return
+
     const userMessage = createUserMessage(text)
     const assistantMessage = createLoadingAssistantMessage()
 
@@ -141,6 +152,8 @@ export function Playground() {
   }
 
   const handleRegenerateMessage = (message: MessageType) => {
+    if (!canSendChat) return
+
     // Find the message index and regenerate from there
     const messageIndex = messages.findIndex((m) => m.key === message.key)
     if (messageIndex === -1) return
@@ -182,6 +195,11 @@ export function Playground() {
         return
       }
 
+      if (!canSendChat) {
+        updateMessages(updated)
+        return
+      }
+
       const toSubmit = [
         ...updated.slice(0, index + 1),
         createLoadingAssistantMessage(),
@@ -189,7 +207,7 @@ export function Playground() {
       updateMessages(toSubmit)
       sendChat(toSubmit)
     },
-    [editingMessageKey, messages, updateMessages, sendChat]
+    [editingMessageKey, messages, updateMessages, sendChat, canSendChat]
   )
 
   const handleDeleteMessage = (message: MessageType) => {
@@ -231,6 +249,7 @@ export function Playground() {
           groupValue={config.group}
           isGenerating={isGenerating}
           isModelLoading={isLoadingModels}
+          isSubmitDisabled={!canSendChat}
           modelValue={config.model}
           models={models}
           hasMessages={messages.length > 0}

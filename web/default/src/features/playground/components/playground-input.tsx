@@ -63,6 +63,7 @@ interface PlaygroundInputProps {
   onSubmit: (text: string) => void
   onStop?: () => void
   disabled?: boolean
+  isSubmitDisabled?: boolean
   isGenerating?: boolean
   models: ModelOption[]
   modelValue: string
@@ -88,6 +89,7 @@ export function PlaygroundInput({
   onSubmit,
   onStop,
   disabled,
+  isSubmitDisabled,
   isGenerating,
   models,
   modelValue,
@@ -108,7 +110,7 @@ export function PlaygroundInput({
   const isClearHistoryDisabled = disabled || isGenerating || !hasMessages
 
   const handleSubmit = (message: PromptInputMessage) => {
-    if (!message.text?.trim() || disabled) return
+    if (!message.text?.trim() || disabled || isSubmitDisabled) return
     onSubmit(message.text)
     setText('')
   }
@@ -120,6 +122,7 @@ export function PlaygroundInput({
   }
 
   const handleSuggestionClick = (suggestion: string) => {
+    if (disabled || isSubmitDisabled) return
     onSubmit(suggestion)
   }
 
@@ -243,7 +246,7 @@ export function PlaygroundInput({
             ) : (
               <PromptInputButton
                 className='text-foreground font-medium'
-                disabled={disabled || !text.trim()}
+                disabled={disabled || isSubmitDisabled || !text.trim()}
                 type='submit'
                 variant='secondary'
               >

@@ -17,14 +17,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { after, describe, test } from 'node:test'
 import { JSDOM } from 'jsdom'
 import { renderMarkdown } from './markdown'
 
 const dom = new JSDOM('', { url: 'http://localhost/' })
+const previousWindowDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  'window'
+)
+
 Object.defineProperty(globalThis, 'window', {
   configurable: true,
   value: dom.window,
+})
+
+after(() => {
+  if (previousWindowDescriptor) {
+    Object.defineProperty(globalThis, 'window', previousWindowDescriptor)
+    return
+  }
+
+  delete (globalThis as Partial<typeof globalThis>).window
 })
 
 describe('renderMarkdown', () => {
