@@ -7,6 +7,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -66,6 +67,166 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, messageSummary.CacheCreationTokens1h, chatSummary.CacheCreationTokens1h)
 	require.True(t, chatSummary.IsClaudeUsageSemantic)
 	require.Equal(t, 1488, chatSummary.Quota)
+}
+
+func TestStreamFallbackQuotaUsesPreConsumedQuotaOnAbnormalStreamEnd(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		IsStream:              true,
+		FinalPreConsumedQuota: 300,
+		PriceData: types.PriceData{
+			QuotaToPreConsume: 500,
+		},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+
+	quota, ok := streamFallbackQuota(relayInfo, 0)
+
+	require.True(t, ok)
+	require.Equal(t, 300, quota)
+}
+
+func TestStreamFallbackQuotaFallsBackToPriceDataPreConsume(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		IsStream: true,
+		PriceData: types.PriceData{
+			QuotaToPreConsume: 500,
+		},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, nil)
+
+	quota, ok := streamFallbackQuota(relayInfo, 0)
+
+	require.True(t, ok)
+	require.Equal(t, 500, quota)
+}
+
+func TestStreamFallbackQuotaSkipsNormalEndAndExistingQuota(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		IsStream:              true,
+		FinalPreConsumedQuota: 300,
+		PriceData: types.PriceData{
+			QuotaToPreConsume: 500,
+		},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+
+	quota, ok := streamFallbackQuota(relayInfo, 0)
+	require.False(t, ok)
+	require.Equal(t, 0, quota)
+
+	relayInfo.StreamStatus = relaycommon.NewStreamStatus()
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+	quota, ok = streamFallbackQuota(relayInfo, 200)
+	require.False(t, ok)
+	require.Equal(t, 200, quota)
+}
+
+func TestPostTextConsumeQuotaUpdatesUsageStatsForStreamFallback(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	const userID = 101
+	const channelID = 201
+	const fallbackQuota = 300
+
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:                  userID,
+		OriginModelName:         "test-model",
+		StartTime:               time.Now(),
+		IsStream:                true,
+		IsPlayground:            true,
+		FinalPreConsumedQuota:   fallbackQuota,
+		StreamStatus:            relaycommon.NewStreamStatus(),
+		UsingGroup:              "default",
+		FinalRequestRelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		PriceData: types.PriceData{
+			ModelRatio: 1,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+	}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{}, nil)
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", userID).First(&user).Error)
+	require.Equal(t, fallbackQuota, user.UsedQuota)
+	require.Equal(t, 1, user.RequestCount)
+
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", channelID).First(&channel).Error)
+	require.Equal(t, int64(fallbackQuota), channel.UsedQuota)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, model.LogTypeConsume, log.Type)
+	require.Equal(t, fallbackQuota, log.Quota)
+}
+
+func TestPostTextConsumeQuotaUsesFallbackForNilUsageWithEstimate(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	const userID = 102
+	const channelID = 202
+	const fallbackQuota = 300
+
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:                  userID,
+		OriginModelName:         "test-model",
+		StartTime:               time.Now(),
+		IsStream:                true,
+		IsPlayground:            true,
+		FinalPreConsumedQuota:   fallbackQuota,
+		StreamStatus:            relaycommon.NewStreamStatus(),
+		UsingGroup:              "default",
+		FinalRequestRelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		PriceData: types.PriceData{
+			ModelRatio: 2,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+	}
+	relayInfo.SetEstimatePromptTokens(20)
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+
+	PostTextConsumeQuota(ctx, relayInfo, nil, nil)
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", userID).First(&user).Error)
+	require.Equal(t, fallbackQuota, user.UsedQuota)
+	require.Equal(t, 1, user.RequestCount)
+
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", channelID).First(&channel).Error)
+	require.Equal(t, int64(fallbackQuota), channel.UsedQuota)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, fallbackQuota, log.Quota)
+	require.Equal(t, 20, log.PromptTokens)
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {

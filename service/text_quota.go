@@ -319,6 +319,29 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool) {
+	if quota != 0 || relayInfo == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+		return quota, false
+	}
+	switch relayInfo.StreamStatus.EndReason {
+	case relaycommon.StreamEndReasonTimeout,
+		relaycommon.StreamEndReasonClientGone,
+		relaycommon.StreamEndReasonScannerErr,
+		relaycommon.StreamEndReasonPanic,
+		relaycommon.StreamEndReasonPingFail:
+	default:
+		return quota, false
+	}
+	fallbackQuota := relayInfo.FinalPreConsumedQuota
+	if fallbackQuota == 0 {
+		fallbackQuota = relayInfo.PriceData.QuotaToPreConsume
+	}
+	if fallbackQuota <= 0 {
+		return quota, false
+	}
+	return fallbackQuota, true
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	if usage == nil {
@@ -362,10 +385,22 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
 
+	shouldUpdateUsageStats := summary.TotalTokens != 0
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	}
+	fallbackBaseQuota := summary.Quota
+	if originUsage == nil {
+		fallbackBaseQuota = 0
+	}
+	if fallbackQuota, ok := streamFallbackQuota(relayInfo, fallbackBaseQuota); ok {
+		summary.Quota = fallbackQuota
+		shouldUpdateUsageStats = true
+		extraContent = append(extraContent, fmt.Sprintf("stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota))
+		logger.LogError(ctx, fmt.Sprintf("stream ended abnormally without billable usage, billing fallback quota, userId %d, channelId %d, tokenId %d, model %s, reason %s, fallback quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.StreamStatus.EndReason, fallbackQuota))
+	}
+	if shouldUpdateUsageStats {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}

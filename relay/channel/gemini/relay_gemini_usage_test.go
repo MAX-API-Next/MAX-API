@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
-	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -71,12 +70,6 @@ func TestGeminiStreamHandlerCompletionTokensExcludeToolUsePromptTokens(t *testin
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-
-	oldStreamingTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 300
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldStreamingTimeout
-	})
 
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "gemini-3-flash-preview",
@@ -229,12 +222,6 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-
-	oldStreamingTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 300
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldStreamingTimeout
-	})
 
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "gemini-3-flash-preview",

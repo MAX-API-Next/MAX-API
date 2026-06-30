@@ -95,16 +95,35 @@ func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 	return tx.Where("logs.type = ?", logType)
 }
 
-func applyRetryLogFilter(tx *gorm.DB) *gorm.DB {
-	return tx.Where("logs.is_retry = ?", true)
+var ensureLogRetryMarkerBackfillCompletedForRead = ensureLogRetryMarkerBackfillCompletedForReadDefault
+
+func applyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
+	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
+		return nil, err
+	}
+	return tx.Where("logs.is_retry = ?", true), nil
 }
 
-func applyLogFilter(tx *gorm.DB, filter string) *gorm.DB {
+func ensureLogRetryMarkerBackfillCompletedForReadDefault() error {
+	completed, err := isLogRetryMarkerBackfillCompleted()
+	if err != nil {
+		return fmt.Errorf("failed to check log retry marker backfill status before retry log read: %w", err)
+	}
+	if completed {
+		return nil
+	}
+	if err := backfillLogRetryMarker(); err != nil {
+		return fmt.Errorf("failed to backfill log retry markers before retry log read: %w", err)
+	}
+	return nil
+}
+
+func applyLogFilter(tx *gorm.DB, filter string) (*gorm.DB, error) {
 	switch filter {
 	case LogFilterRetry:
 		return applyRetryLogFilter(tx)
 	default:
-		return tx
+		return tx, nil
 	}
 }
 
@@ -522,7 +541,10 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 }
 
 func GetAllLogs(logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
-	tx := applyLogFilter(applyLogTypeFilter(LOG_DB, logType), logFilter)
+	tx, err := applyLogFilter(applyLogTypeFilter(LOG_DB, logType), logFilter)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
 		return nil, 0, err
@@ -607,7 +629,10 @@ func GetAllLogs(logType int, logFilter string, startTimestamp int64, endTimestam
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
-	tx := applyLogFilter(applyLogTypeFilter(LOG_DB.Where("logs.user_id = ?", userId), logType), logFilter)
+	tx, err := applyLogFilter(applyLogTypeFilter(LOG_DB.Where("logs.user_id = ?", userId), logType), logFilter)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
 		return nil, 0, err
@@ -688,8 +713,14 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	// 为rpm和tpm创建单独的查询
 	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
 
-	tx = applyLogFilter(tx, logFilter)
-	rpmTpmQuery = applyLogFilter(rpmTpmQuery, logFilter)
+	tx, err = applyLogFilter(tx, logFilter)
+	if err != nil {
+		return stat, err
+	}
+	rpmTpmQuery, err = applyLogFilter(rpmTpmQuery, logFilter)
+	if err != nil {
+		return stat, err
+	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -703,9 +734,11 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)
+		rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", startTimestamp)
 	}
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
+		rpmTpmQuery = rpmTpmQuery.Where("created_at <= ?", endTimestamp)
 	}
 	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
 		return stat, err
@@ -722,8 +755,13 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
+		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", logType)
+	} else if logFilter != LogFilterRetry {
+		tx = tx.Where("logs.type = ?", LogTypeConsume)
+		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", LogTypeConsume)
+	}
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())

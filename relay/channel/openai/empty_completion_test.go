@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
-	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -143,14 +142,11 @@ func TestOaiResponsesStreamHandlerRetriesEmptyBeforeWriting(t *testing.T) {
 
 	oldRetryTimes := common.RetryTimes
 	oldEmptyCompletionRetryEnabled := common.EmptyCompletionRetryEnabled
-	oldStreamingTimeout := constant.StreamingTimeout
 	common.RetryTimes = 1
 	common.EmptyCompletionRetryEnabled = true
-	constant.StreamingTimeout = 300
 	defer func() {
 		common.RetryTimes = oldRetryTimes
 		common.EmptyCompletionRetryEnabled = oldEmptyCompletionRetryEnabled
-		constant.StreamingTimeout = oldStreamingTimeout
 	}()
 
 	resp := &http.Response{
@@ -194,14 +190,11 @@ func TestOaiResponsesStreamHandlerRetriesEmptyOnEOFBeforeWriting(t *testing.T) {
 
 	oldRetryTimes := common.RetryTimes
 	oldEmptyCompletionRetryEnabled := common.EmptyCompletionRetryEnabled
-	oldStreamingTimeout := constant.StreamingTimeout
 	common.RetryTimes = 1
 	common.EmptyCompletionRetryEnabled = true
-	constant.StreamingTimeout = 300
 	defer func() {
 		common.RetryTimes = oldRetryTimes
 		common.EmptyCompletionRetryEnabled = oldEmptyCompletionRetryEnabled
-		constant.StreamingTimeout = oldStreamingTimeout
 	}()
 
 	resp := &http.Response{
@@ -243,14 +236,11 @@ func TestOaiResponsesStreamHandlerFlushesImmediatelyWhenEmptyRetryDisabled(t *te
 
 	oldRetryTimes := common.RetryTimes
 	oldEmptyCompletionRetryEnabled := common.EmptyCompletionRetryEnabled
-	oldStreamingTimeout := constant.StreamingTimeout
 	common.RetryTimes = 1
 	common.EmptyCompletionRetryEnabled = false
-	constant.StreamingTimeout = 300
 	defer func() {
 		common.RetryTimes = oldRetryTimes
 		common.EmptyCompletionRetryEnabled = oldEmptyCompletionRetryEnabled
-		constant.StreamingTimeout = oldStreamingTimeout
 	}()
 
 	resp := &http.Response{
@@ -285,14 +275,11 @@ func TestOaiResponsesStreamHandlerCapsPendingEvents(t *testing.T) {
 
 	oldRetryTimes := common.RetryTimes
 	oldEmptyCompletionRetryEnabled := common.EmptyCompletionRetryEnabled
-	oldStreamingTimeout := constant.StreamingTimeout
 	common.RetryTimes = 1
 	common.EmptyCompletionRetryEnabled = true
-	constant.StreamingTimeout = 300
 	defer func() {
 		common.RetryTimes = oldRetryTimes
 		common.EmptyCompletionRetryEnabled = oldEmptyCompletionRetryEnabled
-		constant.StreamingTimeout = oldStreamingTimeout
 	}()
 
 	events := make([]string, 0, maxPendingResponsesStreamEvents+2)
@@ -329,14 +316,11 @@ func TestOaiResponsesToChatStreamHandlerRetriesEmptyOnEOFBeforeWriting(t *testin
 
 	oldRetryTimes := common.RetryTimes
 	oldEmptyCompletionRetryEnabled := common.EmptyCompletionRetryEnabled
-	oldStreamingTimeout := constant.StreamingTimeout
 	common.RetryTimes = 1
 	common.EmptyCompletionRetryEnabled = true
-	constant.StreamingTimeout = 300
 	defer func() {
 		common.RetryTimes = oldRetryTimes
 		common.EmptyCompletionRetryEnabled = oldEmptyCompletionRetryEnabled
-		constant.StreamingTimeout = oldStreamingTimeout
 	}()
 
 	resp := &http.Response{

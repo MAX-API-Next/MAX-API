@@ -12,6 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -27,6 +28,12 @@ var logKeyCol string
 var logGroupCol string
 
 const logRetryMarkerBackfillOptionKey = "LogRetryMarkerBackfillCompleted"
+
+var logRetryMarkerBackfillMu sync.Mutex
+
+var logRetryMarkerBackfillAsyncRunner = func(fn func()) {
+	gopool.Go(fn)
+}
 
 func logRetryMarkerBackfillCompletionKey() string {
 	logDSN := strings.TrimSpace(os.Getenv("LOG_SQL_DSN"))
@@ -315,9 +322,7 @@ func migrateDB() error {
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
-		if err := backfillLogRetryMarker(); err != nil {
-			return err
-		}
+		scheduleLogRetryMarkerBackfill()
 	}
 	return nil
 }
@@ -399,13 +404,34 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
-	if err = backfillLogRetryMarker(); err != nil {
-		return err
-	}
+	scheduleLogRetryMarkerBackfill()
 	return nil
 }
 
+func scheduleLogRetryMarkerBackfill() {
+	if LOG_DB == nil || !LOG_DB.Migrator().HasColumn(&Log{}, "is_retry") {
+		return
+	}
+	if completed, err := isLogRetryMarkerBackfillCompleted(); err == nil && completed {
+		return
+	} else if err != nil {
+		common.SysLog("failed to check log retry marker backfill status: " + err.Error())
+	}
+
+	logRetryMarkerBackfillAsyncRunner(func() {
+		common.SysLog("log retry marker backfill started")
+		if err := backfillLogRetryMarker(); err != nil {
+			common.SysLog("log retry marker backfill failed: " + err.Error())
+			return
+		}
+		common.SysLog("log retry marker backfill finished")
+	})
+}
+
 func backfillLogRetryMarker() error {
+	logRetryMarkerBackfillMu.Lock()
+	defer logRetryMarkerBackfillMu.Unlock()
+
 	if LOG_DB == nil || !LOG_DB.Migrator().HasColumn(&Log{}, "is_retry") {
 		return nil
 	}
