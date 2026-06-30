@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -217,6 +218,31 @@ func TestRetryFilterUsesIsRetryAfterBackfillCompletion(t *testing.T) {
 	var reloaded Log
 	require.NoError(t, LOG_DB.First(&reloaded, log.Id).Error)
 	require.False(t, reloaded.IsRetry)
+}
+
+func TestRetryFilterReadPathsReturnReadinessError(t *testing.T) {
+	originalEnsure := ensureLogRetryMarkerBackfillCompletedForRead
+	expectedErr := errors.New("readiness unavailable")
+	ensureLogRetryMarkerBackfillCompletedForRead = func() error {
+		return expectedErr
+	}
+	t.Cleanup(func() {
+		ensureLogRetryMarkerBackfillCompletedForRead = originalEnsure
+	})
+
+	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.ErrorIs(t, err, expectedErr)
+	require.Nil(t, got)
+	require.Zero(t, total)
+
+	got, total, err = GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "")
+	require.ErrorIs(t, err, expectedErr)
+	require.Nil(t, got)
+	require.Zero(t, total)
+
+	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "")
+	require.ErrorIs(t, err, expectedErr)
+	require.Zero(t, stat)
 }
 
 func TestBackfillLogRetryMarkerUsesTopLevelMarkersOnly(t *testing.T) {

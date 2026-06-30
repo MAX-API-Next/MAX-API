@@ -176,6 +176,59 @@ func TestPostTextConsumeQuotaUpdatesUsageStatsForStreamFallback(t *testing.T) {
 	require.Equal(t, fallbackQuota, log.Quota)
 }
 
+func TestPostTextConsumeQuotaUsesFallbackForNilUsageWithEstimate(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	const userID = 102
+	const channelID = 202
+	const fallbackQuota = 300
+
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:                  userID,
+		OriginModelName:         "test-model",
+		StartTime:               time.Now(),
+		IsStream:                true,
+		IsPlayground:            true,
+		FinalPreConsumedQuota:   fallbackQuota,
+		StreamStatus:            relaycommon.NewStreamStatus(),
+		UsingGroup:              "default",
+		FinalRequestRelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: channelID,
+		},
+		PriceData: types.PriceData{
+			ModelRatio: 2,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+	}
+	relayInfo.SetEstimatePromptTokens(20)
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+
+	PostTextConsumeQuota(ctx, relayInfo, nil, nil)
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", userID).First(&user).Error)
+	require.Equal(t, fallbackQuota, user.UsedQuota)
+	require.Equal(t, 1, user.RequestCount)
+
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", channelID).First(&channel).Error)
+	require.Equal(t, int64(fallbackQuota), channel.UsedQuota)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, fallbackQuota, log.Quota)
+	require.Equal(t, 20, log.PromptTokens)
+}
+
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

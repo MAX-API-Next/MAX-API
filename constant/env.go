@@ -11,24 +11,32 @@ const (
 	DefaultNotificationLimitDurationMinute = 10
 	DefaultTaskQueryLimit                  = 1000
 	DefaultTaskTimeoutMinutes              = 1440
+	DefaultDifyDebug                       = true
+	DefaultForceStreamOption               = true
+	DefaultCountToken                      = true
+	DefaultGetMediaToken                   = true
+	DefaultGetMediaTokenNotStream          = false
+	DefaultUpdateTask                      = true
+	DefaultGenerateDefaultToken            = false
+	DefaultErrorLogEnabled                 = false
 )
 
 var StreamingTimeout = DefaultStreamingTimeout
-var DifyDebug = true
+var DifyDebug = DefaultDifyDebug
 var MaxFileDownloadMB = DefaultMaxFileDownloadMB
 var StreamScannerMaxBufferMB = DefaultStreamScannerMaxBufferMB
-var ForceStreamOption = true
-var CountToken = true
-var GetMediaToken = true
-var GetMediaTokenNotStream bool
-var UpdateTask = true
+var ForceStreamOption = DefaultForceStreamOption
+var CountToken = DefaultCountToken
+var GetMediaToken = DefaultGetMediaToken
+var GetMediaTokenNotStream = DefaultGetMediaTokenNotStream
+var UpdateTask = DefaultUpdateTask
 var MaxRequestBodyMB = DefaultMaxRequestBodyMB
 var AnonymousRequestBodyLimitKB = DefaultAnonymousRequestBodyLimitKB
 var AzureDefaultAPIVersion = DefaultAzureDefaultAPIVersion
 var NotifyLimitCount = DefaultNotifyLimitCount
 var NotificationLimitDurationMinute = DefaultNotificationLimitDurationMinute
-var GenerateDefaultToken bool
-var ErrorLogEnabled bool
+var GenerateDefaultToken = DefaultGenerateDefaultToken
+var ErrorLogEnabled = DefaultErrorLogEnabled
 var TaskQueryLimit = DefaultTaskQueryLimit
 var TaskTimeoutMinutes = DefaultTaskTimeoutMinutes
 

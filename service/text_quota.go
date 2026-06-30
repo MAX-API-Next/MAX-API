@@ -390,7 +390,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}
-	if fallbackQuota, ok := streamFallbackQuota(relayInfo, summary.Quota); ok {
+	fallbackBaseQuota := summary.Quota
+	if originUsage == nil {
+		fallbackBaseQuota = 0
+	}
+	if fallbackQuota, ok := streamFallbackQuota(relayInfo, fallbackBaseQuota); ok {
 		summary.Quota = fallbackQuota
 		shouldUpdateUsageStats = true
 		extraContent = append(extraContent, fmt.Sprintf("stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota))
