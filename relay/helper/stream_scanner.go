@@ -40,6 +40,14 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	return scanner
 }
 
+func newStreamingTimeoutTicker(timeoutSeconds int) (*time.Ticker, <-chan time.Time) {
+	if timeoutSeconds <= 0 {
+		return nil, nil
+	}
+	ticker := time.NewTicker(time.Duration(timeoutSeconds) * time.Second)
+	return ticker, ticker.C
+}
+
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
 
 	if resp == nil || dataHandler == nil {
@@ -58,12 +66,13 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}
 	}()
 
-	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
+	streamingTimeoutSeconds := constant.StreamingTimeout
+	streamingTimeout := time.Duration(streamingTimeoutSeconds) * time.Second
+	ticker, timeoutChan := newStreamingTimeoutTicker(streamingTimeoutSeconds)
 
 	var (
 		stopChan   = make(chan bool, 3) // 增加缓冲区避免阻塞
 		scanner    = NewStreamScanner(resp.Body)
-		ticker     = time.NewTicker(streamingTimeout)
 		pingTicker *time.Ticker
 		writeMutex sync.Mutex     // Mutex to protect concurrent writes
 		wg         sync.WaitGroup // 用于等待所有 goroutine 退出
@@ -91,7 +100,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		// 通知所有 goroutine 停止
 		common.SafeSendBool(stopChan, true)
 
-		ticker.Stop()
+		if ticker != nil {
+			ticker.Stop()
+		}
 		if pingTicker != nil {
 			pingTicker.Stop()
 		}
@@ -233,7 +244,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			default:
 			}
 
-			ticker.Reset(streamingTimeout)
+			if ticker != nil {
+				ticker.Reset(streamingTimeout)
+			}
 			data := scanner.Text()
 			logger.LogDebug(c, "stream scanner data: %s", data)
 
@@ -277,7 +290,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	// 主循环等待完成或超时
 	select {
-	case <-ticker.C:
+	case <-timeoutChan:
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan

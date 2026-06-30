@@ -214,6 +214,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	// record all the consume log even if quota is 0
+	shouldUpdateUsageStats := totalTokens != 0
 	if totalTokens == 0 {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
@@ -221,7 +222,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	}
+	if fallbackQuota, ok := streamFallbackQuota(relayInfo, quota); ok {
+		quota = fallbackQuota
+		shouldUpdateUsageStats = true
+		logContent += fmt.Sprintf(", stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota)
+		logger.LogError(ctx, fmt.Sprintf("stream ended abnormally without billable usage, billing fallback quota, userId %d, channelId %d, tokenId %d, model %s, reason %s, fallback quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.StreamStatus.EndReason, fallbackQuota))
+	}
+	if shouldUpdateUsageStats {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
@@ -335,6 +343,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	// record all the consume log even if quota is 0
+	shouldUpdateUsageStats := totalTokens != 0
 	if totalTokens == 0 {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
@@ -342,7 +351,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
-	} else {
+	}
+	if fallbackQuota, ok := streamFallbackQuota(relayInfo, quota); ok {
+		quota = fallbackQuota
+		shouldUpdateUsageStats = true
+		logContent += fmt.Sprintf(", stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota)
+		logger.LogError(ctx, fmt.Sprintf("stream ended abnormally without billable usage, billing fallback quota, userId %d, channelId %d, tokenId %d, model %s, reason %s, fallback quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.StreamStatus.EndReason, fallbackQuota))
+	}
+	if shouldUpdateUsageStats {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}

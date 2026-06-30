@@ -33,9 +33,9 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 
 	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 3, total)
-	require.Len(t, got, 3)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[4].Id}, []int{got[0].Id, got[1].Id, got[2].Id})
+	require.EqualValues(t, 4, total)
+	require.Len(t, got, 4)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[4].Id, logs[5].Id}, []int{got[0].Id, got[1].Id, got[2].Id, got[3].Id})
 }
 
 func TestGetUserLogsRetryFilter(t *testing.T) {
@@ -48,10 +48,10 @@ func TestGetUserLogsRetryFilter(t *testing.T) {
 
 	got, total, err := GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 2, total)
-	require.Len(t, got, 2)
-	gotLogIds := []int{got[0].LogId, got[1].LogId}
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, gotLogIds)
+	require.EqualValues(t, 3, total)
+	require.Len(t, got, 3)
+	gotLogIds := []int{got[0].LogId, got[1].LogId, got[2].LogId}
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[5].Id}, gotLogIds)
 	require.NotContains(t, gotLogIds, logs[4].Id)
 	for _, log := range got {
 		require.Equal(t, 1, log.UserId)
@@ -69,8 +69,23 @@ func TestSumUsedQuotaRetryFilter(t *testing.T) {
 	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "")
 	require.NoError(t, err)
 	require.Equal(t, 1200, stat.Quota)
-	require.Equal(t, 3, stat.Rpm)
+	require.Equal(t, 4, stat.Rpm)
 	require.Equal(t, 71, stat.Tpm)
+}
+
+func TestSumUsedQuotaAppliesExplicitLogType(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	createRetryFilterLogs(t)
+
+	stat, err := SumUsedQuota(LogTypeError, "", 0, 0, "", "", "", 0, "")
+	require.NoError(t, err)
+	require.Equal(t, 0, stat.Quota)
+	require.Equal(t, 1, stat.Rpm)
+	require.Equal(t, 0, stat.Tpm)
 }
 
 func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
@@ -119,6 +134,89 @@ func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
 	require.Equal(t, 200, stat.Quota)
 	require.Equal(t, 1, stat.Rpm)
 	require.Equal(t, 16, stat.Tpm)
+}
+
+func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
+	markerKey := logRetryMarkerBackfillCompletionKey()
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+		require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	})
+
+	logs := []Log{
+		{
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 10,
+			Type:             LogTypeConsume,
+			Quota:            100,
+			PromptTokens:     3,
+			CompletionTokens: 5,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"retry_log": true,
+			}),
+		},
+		{
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 20,
+			Type:             LogTypeConsume,
+			Quota:            200,
+			PromptTokens:     7,
+			CompletionTokens: 11,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"admin_info": map[string]interface{}{
+					"retry_log": true,
+				},
+			}),
+		},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("1 = 1").UpdateColumn("is_retry", false).Error)
+
+	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, got, 1)
+	require.Equal(t, logs[0].Id, got[0].Id)
+
+	var reloaded []Log
+	require.NoError(t, LOG_DB.Order("id asc").Find(&reloaded).Error)
+	require.Len(t, reloaded, 2)
+	require.True(t, reloaded[0].IsRetry)
+	require.False(t, reloaded[1].IsRetry)
+}
+
+func TestRetryFilterUsesIsRetryAfterBackfillCompletion(t *testing.T) {
+	markerKey := logRetryMarkerBackfillCompletionKey()
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+		require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	})
+
+	log := Log{
+		UserId:    1,
+		CreatedAt: time.Now().Unix() - 10,
+		Type:      LogTypeConsume,
+		Quota:     100,
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"retry_log": true,
+		}),
+	}
+	require.NoError(t, LOG_DB.Create(&log).Error)
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("id = ?", log.Id).UpdateColumn("is_retry", false).Error)
+	require.NoError(t, markLogRetryMarkerBackfillCompleted())
+
+	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 0, total)
+	require.Empty(t, got)
+
+	var reloaded Log
+	require.NoError(t, LOG_DB.First(&reloaded, log.Id).Error)
+	require.False(t, reloaded.IsRetry)
 }
 
 func TestBackfillLogRetryMarkerUsesTopLevelMarkersOnly(t *testing.T) {
@@ -246,6 +344,89 @@ func TestBackfillLogRetryMarkerCompletionIsScopedToLogDBIdentity(t *testing.T) {
 	reloaded = Log{}
 	require.NoError(t, logTwoDB.First(&reloaded, logTwo.Id).Error)
 	require.True(t, reloaded.IsRetry)
+}
+
+func TestMigrateLOGDBSchedulesRetryMarkerBackfillWithoutRunningInline(t *testing.T) {
+	originalDB := DB
+	originalLOGDB := LOG_DB
+	originalRunner := logRetryMarkerBackfillAsyncRunner
+	originalLogSQLType := common.LogSqlType
+	t.Cleanup(func() {
+		DB = originalDB
+		LOG_DB = originalLOGDB
+		logRetryMarkerBackfillAsyncRunner = originalRunner
+		common.LogSqlType = originalLogSQLType
+		initCol()
+	})
+
+	mainDB := newRetryBackfillTestDB(t, &Option{})
+	logDB := newRetryBackfillTestDB(t)
+
+	DB = mainDB
+	LOG_DB = logDB
+	common.LogSqlType = common.DatabaseTypeSQLite
+	t.Setenv("LOG_SQL_DSN", "sqlite://async-backfill")
+	initCol()
+
+	var scheduled []func()
+	logRetryMarkerBackfillAsyncRunner = func(fn func()) {
+		scheduled = append(scheduled, fn)
+	}
+
+	require.NoError(t, migrateLOGDB())
+	require.Len(t, scheduled, 1)
+
+	log := Log{
+		UserId: 1,
+		Type:   LogTypeConsume,
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"retry_log": true,
+		}),
+	}
+	require.NoError(t, LOG_DB.Create(&log).Error)
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("1 = 1").UpdateColumn("is_retry", false).Error)
+
+	var reloaded Log
+	require.NoError(t, LOG_DB.First(&reloaded, log.Id).Error)
+	require.False(t, reloaded.IsRetry)
+
+	scheduled[0]()
+
+	reloaded = Log{}
+	require.NoError(t, LOG_DB.First(&reloaded, log.Id).Error)
+	require.True(t, reloaded.IsRetry)
+}
+
+func TestScheduleLogRetryMarkerBackfillSkipsCompletedMarker(t *testing.T) {
+	originalDB := DB
+	originalLOGDB := LOG_DB
+	originalRunner := logRetryMarkerBackfillAsyncRunner
+	originalLogSQLType := common.LogSqlType
+	t.Cleanup(func() {
+		DB = originalDB
+		LOG_DB = originalLOGDB
+		logRetryMarkerBackfillAsyncRunner = originalRunner
+		common.LogSqlType = originalLogSQLType
+		initCol()
+	})
+
+	mainDB := newRetryBackfillTestDB(t, &Option{})
+	logDB := newRetryBackfillTestDB(t, &Log{})
+
+	DB = mainDB
+	LOG_DB = logDB
+	common.LogSqlType = common.DatabaseTypeSQLite
+	t.Setenv("LOG_SQL_DSN", "sqlite://completed-backfill")
+	initCol()
+	require.NoError(t, markLogRetryMarkerBackfillCompleted())
+
+	called := false
+	logRetryMarkerBackfillAsyncRunner = func(fn func()) {
+		called = true
+	}
+
+	scheduleLogRetryMarkerBackfill()
+	require.False(t, called)
 }
 
 func TestLogRetryMarkerCompletionKeyUsesHashedLogDBIdentity(t *testing.T) {
@@ -382,6 +563,20 @@ func createRetryFilterLogs(t *testing.T) []Log {
 				"retry_log": true,
 				"admin_info": map[string]interface{}{
 					"use_channel": []string{"6", "7"},
+				},
+			}),
+		},
+		{
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 5,
+			Type:             LogTypeError,
+			Quota:            0,
+			PromptTokens:     0,
+			CompletionTokens: 0,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"retry_log": true,
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"8"},
 				},
 			}),
 		},

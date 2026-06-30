@@ -27,12 +27,6 @@ func init() {
 func setupStreamTest(t *testing.T, body io.Reader) (*gin.Context, *http.Response, *relaycommon.RelayInfo) {
 	t.Helper()
 
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldTimeout
-	})
-
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -96,6 +90,13 @@ func TestNewStreamScanner_AllowsLargeStreamLine(t *testing.T) {
 	require.True(t, scanner.Scan())
 	assert.Equal(t, "data: "+payload, scanner.Text())
 	require.NoError(t, scanner.Err())
+}
+
+func TestNewStreamingTimeoutTicker_DisabledWhenZero(t *testing.T) {
+	ticker, timeoutChan := newStreamingTimeoutTicker(0)
+
+	assert.Nil(t, ticker)
+	assert.Nil(t, timeoutChan)
 }
 
 func TestStreamScannerHandler_EmptyBody(t *testing.T) {
@@ -269,10 +270,6 @@ func TestStreamScannerHandler_ScannerDecoupledFromSlowHandler(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
-
 	resp := &http.Response{Body: pr}
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
@@ -366,12 +363,6 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldTimeout
-	})
-
 	resp := &http.Response{Body: pr}
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
@@ -425,12 +416,6 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldTimeout
-	})
 
 	resp := &http.Response{Body: pr}
 	info := &relaycommon.RelayInfo{
@@ -638,6 +623,36 @@ func TestStreamScannerHandler_StreamStatus_InitializedIfNil(t *testing.T) {
 	assert.NotNil(t, info.StreamStatus)
 }
 
+func TestStreamScannerHandler_AllowsDisabledStreamingTimeout(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 0
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	resp := &http.Response{
+		Body: io.NopCloser(strings.NewReader(buildSSEBody(1))),
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	var count atomic.Int64
+	require.NotPanics(t, func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			count.Add(1)
+		})
+	})
+
+	assert.Equal(t, int64(1), count.Load())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+}
+
 func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {
 	t.Parallel()
 
@@ -679,12 +694,6 @@ func TestStreamScannerHandler_PingInterleavesWithSlowUpstream(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = oldTimeout
-	})
 
 	resp := &http.Response{Body: pr}
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}

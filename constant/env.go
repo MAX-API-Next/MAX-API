@@ -1,23 +1,36 @@
 package constant
 
-var StreamingTimeout int
-var DifyDebug bool
-var MaxFileDownloadMB int
-var StreamScannerMaxBufferMB int
-var ForceStreamOption bool
-var CountToken bool
-var GetMediaToken bool
+const (
+	DefaultStreamingTimeout                = 300
+	DefaultMaxFileDownloadMB               = 64
+	DefaultStreamScannerMaxBufferMB        = 128
+	DefaultMaxRequestBodyMB                = 128
+	DefaultAnonymousRequestBodyLimitKB     = 512
+	DefaultAzureDefaultAPIVersion          = "2025-04-01-preview"
+	DefaultNotifyLimitCount                = 2
+	DefaultNotificationLimitDurationMinute = 10
+	DefaultTaskQueryLimit                  = 1000
+	DefaultTaskTimeoutMinutes              = 1440
+)
+
+var StreamingTimeout = DefaultStreamingTimeout
+var DifyDebug = true
+var MaxFileDownloadMB = DefaultMaxFileDownloadMB
+var StreamScannerMaxBufferMB = DefaultStreamScannerMaxBufferMB
+var ForceStreamOption = true
+var CountToken = true
+var GetMediaToken = true
 var GetMediaTokenNotStream bool
-var UpdateTask bool
-var MaxRequestBodyMB int
-var AnonymousRequestBodyLimitKB int
-var AzureDefaultAPIVersion string
-var NotifyLimitCount int
-var NotificationLimitDurationMinute int
+var UpdateTask = true
+var MaxRequestBodyMB = DefaultMaxRequestBodyMB
+var AnonymousRequestBodyLimitKB = DefaultAnonymousRequestBodyLimitKB
+var AzureDefaultAPIVersion = DefaultAzureDefaultAPIVersion
+var NotifyLimitCount = DefaultNotifyLimitCount
+var NotificationLimitDurationMinute = DefaultNotificationLimitDurationMinute
 var GenerateDefaultToken bool
 var ErrorLogEnabled bool
-var TaskQueryLimit int
-var TaskTimeoutMinutes int
+var TaskQueryLimit = DefaultTaskQueryLimit
+var TaskTimeoutMinutes = DefaultTaskTimeoutMinutes
 
 // temporary variable for sora patch, will be removed in future
 var TaskPricePatches []string

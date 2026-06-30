@@ -96,7 +96,22 @@ func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 }
 
 func applyRetryLogFilter(tx *gorm.DB) *gorm.DB {
+	ensureLogRetryMarkerBackfillCompletedForRead()
 	return tx.Where("logs.is_retry = ?", true)
+}
+
+func ensureLogRetryMarkerBackfillCompletedForRead() {
+	completed, err := isLogRetryMarkerBackfillCompleted()
+	if err != nil {
+		common.SysLog("failed to check log retry marker backfill status before retry log read: " + err.Error())
+		return
+	}
+	if completed {
+		return
+	}
+	if err := backfillLogRetryMarker(); err != nil {
+		common.SysLog("failed to backfill log retry markers before retry log read: " + err.Error())
+	}
 }
 
 func applyLogFilter(tx *gorm.DB, filter string) *gorm.DB {
@@ -703,9 +718,11 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)
+		rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", startTimestamp)
 	}
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
+		rpmTpmQuery = rpmTpmQuery.Where("created_at <= ?", endTimestamp)
 	}
 	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
 		return stat, err
@@ -722,8 +739,13 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	if logType != LogTypeUnknown {
+		tx = tx.Where("logs.type = ?", logType)
+		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", logType)
+	} else if logFilter != LogFilterRetry {
+		tx = tx.Where("logs.type = ?", LogTypeConsume)
+		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", LogTypeConsume)
+	}
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MAX-API-Next/MAX-API/constant"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -36,10 +35,6 @@ func TestOpenaiImageStreamHandlerForwardsSSEAndUsage(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
-
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 
 	body := strings.Join([]string{
 		`event: image_generation.partial_image`,
@@ -129,10 +124,6 @@ func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
-
-	oldTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
 
 	body := strings.Join([]string{
 		`event: image_generation.partial_image`,
