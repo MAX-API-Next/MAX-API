@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -269,6 +270,63 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	require.Equal(t, 110, usage.TotalTokens)
 }
 
+func TestGeminiResponsesStreamHandlerEstimatesUsageAndAuditWhenUpstreamUsageMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	originalLogResponseContentEnabled := common.LogResponseContentEnabled
+	common.LogResponseContentEnabled = true
+	t.Cleanup(func() {
+		common.LogResponseContentEnabled = originalLogResponseContentEnabled
+	})
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-3-flash-preview",
+		},
+	}
+	info.SetEstimatePromptTokens(20)
+
+	chunk := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{
+			{
+				Content: dto.GeminiChatContent{
+					Role: "model",
+					Parts: []dto.GeminiPart{
+						{Text: "partial"},
+					},
+				},
+			},
+		},
+	}
+	chunkData, err := common.Marshal(chunk)
+	require.NoError(t, err)
+
+	streamBody := []byte("data: " + string(chunkData) + "\n" + "data: [DONE]\n")
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewReader(streamBody)),
+	}
+
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, maxAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 20, usage.PromptTokens)
+	require.Positive(t, usage.CompletionTokens)
+	require.Positive(t, usage.TotalTokens)
+	require.Equal(t, "partial", info.AuditResponseContent)
+
+	var completed dto.ResponsesStreamResponse
+	require.NoError(t, common.UnmarshalJsonStr(sseDataForEvent(t, recorder.Body.String(), "response.completed"), &completed))
+	require.NotNil(t, completed.Response)
+	require.NotNil(t, completed.Response.Usage)
+	require.Equal(t, 20, completed.Response.Usage.InputTokens)
+	require.Positive(t, completed.Response.Usage.OutputTokens)
+	require.Positive(t, completed.Response.Usage.TotalTokens)
+}
+
 func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
 	t.Parallel()
 
@@ -317,4 +375,20 @@ func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMiss
 	require.Equal(t, 20, usage.PromptTokens)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
+}
+
+func sseDataForEvent(t *testing.T, body string, eventType string) string {
+	t.Helper()
+	for _, event := range strings.Split(body, "\n\n") {
+		if !strings.Contains(event, "event: "+eventType) {
+			continue
+		}
+		for _, line := range strings.Split(event, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+			}
+		}
+	}
+	t.Fatalf("event %q not found in body:\n%s", eventType, body)
+	return ""
 }

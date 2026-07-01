@@ -615,24 +615,23 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	for _, choice := range openAIResponse.Choices {
 		stopReason = stopReasonOpenAI2Claude(choice.FinishReason)
-		if choice.FinishReason == "tool_calls" {
-			for _, toolUse := range choice.Message.ParseToolCalls() {
-				claudeContent := dto.ClaudeMediaMessage{}
-				claudeContent.Type = "tool_use"
-				claudeContent.Id = toolUse.ID
-				claudeContent.Name = toolUse.Function.Name
-				var mapParams map[string]interface{}
-				if err := common.Unmarshal([]byte(toolUse.Function.Arguments), &mapParams); err == nil {
-					claudeContent.Input = mapParams
-				} else {
-					claudeContent.Input = toolUse.Function.Arguments
-				}
-				contents = append(contents, claudeContent)
-			}
-		} else {
+		if text := choice.Message.StringContent(); text != "" {
 			claudeContent := dto.ClaudeMediaMessage{}
 			claudeContent.Type = "text"
-			claudeContent.SetText(choice.Message.StringContent())
+			claudeContent.SetText(text)
+			contents = append(contents, claudeContent)
+		}
+		for _, toolUse := range choice.Message.ParseToolCalls() {
+			claudeContent := dto.ClaudeMediaMessage{}
+			claudeContent.Type = "tool_use"
+			claudeContent.Id = toolUse.ID
+			claudeContent.Name = toolUse.Function.Name
+			var mapParams map[string]interface{}
+			if err := common.Unmarshal([]byte(toolUse.Function.Arguments), &mapParams); err == nil {
+				claudeContent.Input = mapParams
+			} else {
+				claudeContent.Input = map[string]interface{}{"arguments": toolUse.Function.Arguments}
+			}
 			contents = append(contents, claudeContent)
 		}
 	}
@@ -863,6 +862,12 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 			Parts: make([]dto.GeminiPart, 0),
 		}
 
+		// 处理文本内容
+		textContent := choice.Message.StringContent()
+		if textContent != "" {
+			content.Parts = append(content.Parts, dto.GeminiPart{Text: textContent})
+		}
+
 		// 处理工具调用
 		toolCalls := choice.Message.ParseToolCalls()
 		if len(toolCalls) > 0 {
@@ -882,15 +887,6 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 						FunctionName: toolCall.Function.Name,
 						Arguments:    args,
 					},
-				}
-				content.Parts = append(content.Parts, part)
-			}
-		} else {
-			// 处理文本内容
-			textContent := choice.Message.StringContent()
-			if textContent != "" {
-				part := dto.GeminiPart{
-					Text: textContent,
 				}
 				content.Parts = append(content.Parts, part)
 			}

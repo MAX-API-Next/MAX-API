@@ -54,6 +54,8 @@ type Log struct {
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
 	IsRetry           bool   `json:"is_retry" gorm:"default:false;index"`
+	IsErrorRetry      bool   `json:"is_error_retry" gorm:"default:false;index"`
+	IsEmptyRetry      bool   `json:"is_empty_retry" gorm:"default:false;index"`
 	LogId             int    `json:"log_id,omitempty" gorm:"-"`
 }
 
@@ -71,7 +73,10 @@ func (log *Log) syncRetryMarker() {
 	if log == nil {
 		return
 	}
-	log.IsRetry = logOtherHasRetryMarker(log.Other)
+	errorRetry, emptyRetry := logOtherRetryMarkers(log.Other)
+	log.IsErrorRetry = errorRetry
+	log.IsEmptyRetry = emptyRetry
+	log.IsRetry = errorRetry || emptyRetry
 }
 
 // don't use iota, avoid change log type value
@@ -86,7 +91,11 @@ const (
 	LogTypeLogin   = 7
 )
 
-const LogFilterRetry = "retry"
+const (
+	LogFilterRetry      = "retry"
+	LogFilterErrorRetry = "error_retry"
+	LogFilterEmptyRetry = "empty_retry"
+)
 
 func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 	if logType == LogTypeUnknown {
@@ -102,6 +111,20 @@ func applyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
 		return nil, err
 	}
 	return tx.Where("logs.is_retry = ?", true), nil
+}
+
+func applyErrorRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
+	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
+		return nil, err
+	}
+	return tx.Where("logs.is_error_retry = ?", true), nil
+}
+
+func applyEmptyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
+	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
+		return nil, err
+	}
+	return tx.Where("logs.is_empty_retry = ?", true), nil
 }
 
 func ensureLogRetryMarkerBackfillCompletedForReadDefault() error {
@@ -122,8 +145,21 @@ func applyLogFilter(tx *gorm.DB, filter string) (*gorm.DB, error) {
 	switch filter {
 	case LogFilterRetry:
 		return applyRetryLogFilter(tx)
+	case LogFilterErrorRetry:
+		return applyErrorRetryLogFilter(tx)
+	case LogFilterEmptyRetry:
+		return applyEmptyRetryLogFilter(tx)
 	default:
 		return tx, nil
+	}
+}
+
+func isRetryLogFilter(filter string) bool {
+	switch filter {
+	case LogFilterRetry, LogFilterErrorRetry, LogFilterEmptyRetry:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -198,20 +234,25 @@ func stripLogsAuditContent(logs []*Log) {
 }
 
 func logOtherHasRetryMarker(other string) bool {
+	errorRetry, emptyRetry := logOtherRetryMarkers(other)
+	return errorRetry || emptyRetry
+}
+
+func logOtherRetryMarkers(other string) (errorRetry bool, emptyRetry bool) {
 	if strings.TrimSpace(other) == "" {
-		return false
+		return false, false
 	}
 	otherMap, err := common.StrToMap(other)
 	if err != nil || otherMap == nil {
-		return false
+		return false, false
+	}
+	if marker, ok := otherMap["empty_retry"].(bool); ok && marker {
+		return false, true
 	}
 	if retryLog, ok := otherMap["retry_log"].(bool); ok && retryLog {
-		return true
+		errorRetry = true
 	}
-	if emptyRetry, ok := otherMap["empty_retry"].(bool); ok && emptyRetry {
-		return true
-	}
-	return false
+	return errorRetry, emptyRetry
 }
 
 func formatUserLog(log *Log) {
@@ -491,8 +532,20 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
+		createdAt := common.GetTimestamp()
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    userId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				TokenUsed: params.PromptTokens + params.CompletionTokens,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
 		})
 	}
 }
@@ -507,6 +560,7 @@ type RecordTaskBillingLogParams struct {
 	TokenId   int
 	Group     string
 	Other     map[string]interface{}
+	NodeName  string // 任务发起节点；为空时回退当前节点
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -520,10 +574,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			tokenName = token.Name
 		}
 	}
+	createdAt := common.GetTimestamp()
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
-		CreatedAt: common.GetTimestamp(),
+		CreatedAt: createdAt,
 		Type:      params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
@@ -537,6 +592,25 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+	}
+	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+		nodeName := params.NodeName
+		if nodeName == "" {
+			nodeName = common.NodeName
+		}
+		gopool.Go(func() {
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    params.UserId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  nodeName,
+			})
+		})
 	}
 }
 
@@ -758,7 +832,7 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
 		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", logType)
-	} else if logFilter != LogFilterRetry {
+	} else if !isRetryLogFilter(logFilter) {
 		tx = tx.Where("logs.type = ?", LogTypeConsume)
 		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", LogTypeConsume)
 	}

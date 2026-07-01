@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -52,13 +53,15 @@ type requestPayload struct {
 	Tools                 []struct {
 		Type string `json:"type,omitempty"`
 	} `json:"tools,omitempty"`
-	Resolution  string         `json:"resolution,omitempty"`
-	Ratio       string         `json:"ratio,omitempty"`
-	Duration    *dto.IntValue  `json:"duration,omitempty"`
-	Frames      *dto.IntValue  `json:"frames,omitempty"`
-	Seed        *dto.IntValue  `json:"seed,omitempty"`
-	CameraFixed *dto.BoolValue `json:"camera_fixed,omitempty"`
-	Watermark   *dto.BoolValue `json:"watermark,omitempty"`
+	SafetyIdentifier *string        `json:"safety_identifier,omitempty"`
+	Priority         *dto.IntValue  `json:"priority,omitempty"`
+	Resolution       string         `json:"resolution,omitempty"`
+	Ratio            string         `json:"ratio,omitempty"`
+	Duration         *dto.IntValue  `json:"duration,omitempty"`
+	Frames           *dto.IntValue  `json:"frames,omitempty"`
+	Seed             *dto.IntValue  `json:"seed,omitempty"`
+	CameraFixed      *dto.BoolValue `json:"camera_fixed,omitempty"`
+	Watermark        *dto.BoolValue `json:"watermark,omitempty"`
 }
 
 type responsePayload struct {
@@ -147,18 +150,52 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 	return nil
 }
 
-// EstimateBilling 检测请求 metadata 中是否包含视频输入，返回视频折扣 OtherRatio。
+// EstimateBilling 根据请求 metadata 中的输出分辨率与是否包含视频输入，返回相对基准价的计费 OtherRatio。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil
 	}
-	if hasVideoInMetadata(req.Metadata) {
-		if ratio, ok := GetVideoInputRatio(info.OriginModelName); ok {
-			return map[string]float64{"video_input": ratio}
+	resolution, hasVideo := a.resolveSeedanceBillingInputs(c, &req)
+	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
+	if !ok || ratio == 1.0 {
+		return nil
+	}
+	return map[string]float64{"video_input": ratio}
+}
+
+func (a *TaskAdaptor) resolveSeedanceBillingInputs(c *gin.Context, req *relaycommon.TaskSubmitReq) (string, bool) {
+	if req == nil {
+		return "", false
+	}
+	hasVideo := hasVideoInMetadata(req.Metadata) || hasVideoInMetadata(getSeedanceMediaRawRequest(c))
+	resolution := req.Resolution
+	if !a.useSeedanceMediaProtocol() {
+		payload, err := a.convertToRequestPayload(req)
+		if err == nil && payload != nil {
+			if payload.Resolution != "" {
+				resolution = payload.Resolution
+			}
+			hasVideo = hasVideo || hasVideoInContent(payload.Content)
+		}
+		return resolution, hasVideo
+	}
+	if payload, err := a.convertToGenericMediaRequest(req); err == nil && payload != nil {
+		applySeedanceMediaRawFields(payload, getSeedanceMediaRawRequest(c))
+		if payload.Resolution != "" {
+			resolution = payload.Resolution
 		}
 	}
-	return nil
+	return resolution, hasVideo
+}
+
+func hasVideoInContent(content []ContentItem) bool {
+	for _, item := range content {
+		if item.VideoURL != nil && hasUsableVideoInput(item.VideoURL.URL) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
@@ -166,6 +203,12 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 func hasVideoInMetadata(metadata map[string]interface{}) bool {
 	if metadata == nil {
 		return false
+	}
+	if videoURL, has := metadata["video_url"]; has && hasUsableVideoInput(videoURL) {
+		return true
+	}
+	if video, has := metadata["video"]; has && hasUsableVideoInput(video) {
+		return true
 	}
 	contentRaw, ok := metadata["content"]
 	if !ok {
@@ -180,14 +223,37 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 		if !ok {
 			continue
 		}
-		if itemMap["type"] == "video_url" {
+		if itemMap["type"] == "video_url" && hasUsableVideoInput(itemMap["video_url"]) {
 			return true
 		}
-		if _, has := itemMap["video_url"]; has {
+		if videoURL, has := itemMap["video_url"]; has && hasUsableVideoInput(videoURL) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasUsableVideoInput(value interface{}) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(v) != ""
+	case bool:
+		return v
+	case map[string]interface{}:
+		if url, has := v["url"]; has {
+			return hasUsableVideoInput(url)
+		}
+		return len(v) > 0
+	case map[string]string:
+		if url, has := v["url"]; has {
+			return strings.TrimSpace(url) != ""
+		}
+		return len(v) > 0
+	default:
+		return true
+	}
 }
 
 // BuildRequestBody converts request into Doubao specific format.

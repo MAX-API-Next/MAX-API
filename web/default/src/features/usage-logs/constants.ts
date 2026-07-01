@@ -67,6 +67,8 @@ export const LOG_TYPE_ENUM = {
  */
 export const LOG_TYPE_ALL_VALUE = '0' as const
 export const LOG_TYPE_RETRY_VALUE = 'retry' as const
+export const LOG_TYPE_ERROR_RETRY_VALUE = 'error_retry' as const
+export const LOG_TYPE_EMPTY_RETRY_VALUE = 'empty_retry' as const
 
 // ============================================================================
 // Time Range Presets
@@ -107,7 +109,8 @@ export const LOG_TYPES = [
  */
 export const LOG_TYPE_FILTERS = [
   { label: 'All Types', value: LOG_TYPE_ALL_VALUE },
-  { label: 'Retry', value: LOG_TYPE_RETRY_VALUE },
+  { label: 'Empty Completion Retry', value: LOG_TYPE_EMPTY_RETRY_VALUE },
+  { label: 'Error Retry', value: LOG_TYPE_ERROR_RETRY_VALUE },
   ...LOG_TYPES.filter((type) => type.value !== LOG_TYPE_ENUM.UNKNOWN).map(
     (type) => ({
       label: type.label,
@@ -116,9 +119,23 @@ export const LOG_TYPE_FILTERS = [
   ),
 ] as const
 
-export const LOG_TYPE_FILTER_VALUES = LOG_TYPE_FILTERS.map(
-  (type) => type.value
-) as [string, ...string[]]
+export const LOG_TYPE_FILTER_VALUES = [
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_EMPTY_RETRY_VALUE,
+  LOG_TYPE_ERROR_RETRY_VALUE,
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+] as const
+
+export const LOG_TYPE_SEARCH_VALUES = [
+  ...LOG_TYPE_FILTER_VALUES,
+  LOG_TYPE_RETRY_VALUE,
+] as [string, ...string[]]
 
 // ============================================================================
 // Drawing Logs (Midjourney) Constants

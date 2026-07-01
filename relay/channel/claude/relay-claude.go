@@ -464,9 +464,10 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				if message.ToolCalls != nil {
 					for _, toolCall := range message.ParseToolCalls() {
 						inputObj := make(map[string]any)
-						if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &inputObj); err != nil {
-							common.SysLog("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
-							continue
+						if args := toolCall.Function.Arguments; args != "" {
+							if err := common.Unmarshal([]byte(args), &inputObj); err != nil {
+								return nil, fmt.Errorf("tool call function arguments is not valid JSON object: %w", err)
+							}
 						}
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 							Type:  "tool_use",

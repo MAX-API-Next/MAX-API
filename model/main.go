@@ -27,7 +27,7 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
-const logRetryMarkerBackfillOptionKey = "LogRetryMarkerBackfillCompleted"
+const logRetryMarkerBackfillOptionKey = "LogRetryMarkerBackfillCompletedV2"
 
 var logRetryMarkerBackfillMu sync.Mutex
 
@@ -446,8 +446,8 @@ func backfillLogRetryMarker() error {
 	for {
 		var logs []Log
 		if err := LOG_DB.
-			Select("id", "other", "is_retry").
-			Where("id > ? AND is_retry = ?", lastId, false).
+			Select("id", "other", "is_retry", "is_error_retry", "is_empty_retry").
+			Where("id > ? AND (is_retry = ? OR is_error_retry = ? OR is_empty_retry = ?)", lastId, false, false, false).
 			Order("id asc").
 			Limit(batchSize).
 			Find(&logs).Error; err != nil {
@@ -457,20 +457,21 @@ func backfillLogRetryMarker() error {
 			return markLogRetryMarkerBackfillCompleted()
 		}
 
-		retryIds := make([]int, 0, len(logs))
 		for _, log := range logs {
 			lastId = log.Id
-			if log.IsRetry {
+			errorRetry, emptyRetry := logOtherRetryMarkers(log.Other)
+			if log.IsRetry == (errorRetry || emptyRetry) &&
+				log.IsErrorRetry == errorRetry &&
+				log.IsEmptyRetry == emptyRetry {
 				continue
 			}
-			if logOtherHasRetryMarker(log.Other) {
-				retryIds = append(retryIds, log.Id)
-			}
-		}
-		if len(retryIds) > 0 {
 			if err := LOG_DB.Model(&Log{}).
-				Where("id IN ?", retryIds).
-				Update("is_retry", true).Error; err != nil {
+				Where("id = ?", log.Id).
+				Updates(map[string]interface{}{
+					"is_retry":       errorRetry || emptyRetry,
+					"is_error_retry": errorRetry,
+					"is_empty_retry": emptyRetry,
+				}).Error; err != nil {
 				return err
 			}
 		}
