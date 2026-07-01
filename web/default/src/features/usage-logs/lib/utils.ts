@@ -45,6 +45,18 @@ import type {
 } from '../types'
 import { parseLogOther } from './format'
 
+const RETRY_LOG_FILTER_VALUES = [
+  LOG_TYPE_RETRY_VALUE,
+  LOG_TYPE_ERROR_RETRY_VALUE,
+  LOG_TYPE_EMPTY_RETRY_VALUE,
+] as const
+
+type RetryLogFilterValue = (typeof RETRY_LOG_FILTER_VALUES)[number]
+
+function isRetryLogFilterValue(value: string): value is RetryLogFilterValue {
+  return (RETRY_LOG_FILTER_VALUES as readonly string[]).includes(value)
+}
+
 // ============================================================================
 // Type Checkers & Utilities
 // ============================================================================
@@ -246,13 +258,7 @@ export function buildApiParams(config: {
       return
     }
 
-    const retryFilter = typeValues.find((type) =>
-      [
-        LOG_TYPE_RETRY_VALUE,
-        LOG_TYPE_ERROR_RETRY_VALUE,
-        LOG_TYPE_EMPTY_RETRY_VALUE,
-      ].includes(type)
-    )
+    const retryFilter = typeValues.find(isRetryLogFilterValue)
     if (retryFilter) {
       params.log_filter = retryFilter
       params.type = undefined
