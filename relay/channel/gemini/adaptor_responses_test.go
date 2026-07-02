@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -58,12 +59,18 @@ func TestConvertOpenAIResponsesRequestToGeminiSkipsCustomToolCalls(t *testing.T)
 			},
 		}),
 		Tools: mustGeminiRawMessage(t, []map[string]any{
-			{"type": "custom", "name": "apply_patch"},
-			{"type": "unknown", "name": "unknown"},
+			{
+				"type":        "function",
+				"name":        "lookup",
+				"description": "Lookup data",
+				"parameters": map[string]any{
+					"type": "object",
+				},
+			},
 		}),
 	})
 
-	assert.Empty(t, got.GetTools())
+	require.Len(t, got.GetTools(), 1)
 	require.Len(t, got.Contents, 2)
 	assert.Equal(t, "model", got.Contents[0].Role)
 	require.Len(t, got.Contents[0].Parts, 1)
@@ -76,8 +83,28 @@ func TestConvertOpenAIResponsesRequestToGeminiSkipsCustomToolCalls(t *testing.T)
 	assert.Nil(t, got.Contents[1].Parts[0].FunctionResponse)
 }
 
+func TestConvertOpenAIResponsesRequestToGeminiRejectsUnsupportedTools(t *testing.T) {
+	got, err := convertResponsesToGemini(dto.OpenAIResponsesRequest{
+		Model: "gemini-test",
+		Input: mustGeminiRawMessage(t, "hello"),
+		Tools: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "web_search_preview"},
+		}),
+	})
+
+	require.Error(t, err)
+	require.Nil(t, got)
+	assert.Contains(t, err.Error(), `tool type "web_search_preview"`)
+}
+
 func mustConvertResponsesToGemini(t *testing.T, req dto.OpenAIResponsesRequest) *dto.GeminiChatRequest {
 	t.Helper()
+	got, err := convertResponsesToGemini(req)
+	require.NoError(t, err)
+	return got
+}
+
+func convertResponsesToGemini(req dto.OpenAIResponsesRequest) (*dto.GeminiChatRequest, error) {
 	info := &relaycommon.RelayInfo{
 		OriginModelName: req.Model,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -85,10 +112,14 @@ func mustConvertResponsesToGemini(t *testing.T, req dto.OpenAIResponsesRequest) 
 		},
 	}
 	got, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, req)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	geminiReq, ok := got.(*dto.GeminiChatRequest)
-	require.True(t, ok)
-	return geminiReq
+	if !ok {
+		return nil, fmt.Errorf("unexpected converted request type %T", got)
+	}
+	return geminiReq, nil
 }
 
 func mustGeminiRawMessage(t *testing.T, value any) []byte {

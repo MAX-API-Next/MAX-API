@@ -84,9 +84,9 @@ func TestGetAllLogsRetrySubtypeFilters(t *testing.T) {
 
 	errorLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 3, total)
-	require.Len(t, errorLogs, 3)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[4].Id, logs[5].Id}, []int{errorLogs[0].Id, errorLogs[1].Id, errorLogs[2].Id})
+	require.EqualValues(t, 4, total)
+	require.Len(t, errorLogs, 4)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[4].Id, logs[5].Id, logs[6].Id}, []int{errorLogs[0].Id, errorLogs[1].Id, errorLogs[2].Id, errorLogs[3].Id})
 
 	emptyLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
@@ -105,9 +105,9 @@ func TestSumUsedQuotaRetrySubtypeFilters(t *testing.T) {
 
 	errorStat, err := SumUsedQuota(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, "")
 	require.NoError(t, err)
-	require.Equal(t, 1000, errorStat.Quota)
-	require.Equal(t, 3, errorStat.Rpm)
-	require.Equal(t, 56, errorStat.Tpm)
+	require.Equal(t, 1350, errorStat.Quota)
+	require.Equal(t, 4, errorStat.Rpm)
+	require.Equal(t, 81, errorStat.Tpm)
 
 	emptyStat, err := SumUsedQuota(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, "")
 	require.NoError(t, err)

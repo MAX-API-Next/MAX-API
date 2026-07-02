@@ -139,10 +139,10 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 		usage.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
 		usage.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
 		usage.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
+		usage.PromptTokensDetails.CachedCreationTokens = src.InputTokensDetails.CachedCreationTokens
+		usage.PromptTokensDetails.TextTokens = src.InputTokensDetails.TextTokens
 	}
-	if src.CompletionTokenDetails.ReasoningTokens != 0 {
-		usage.CompletionTokenDetails.ReasoningTokens = src.CompletionTokenDetails.ReasoningTokens
-	}
+	usage.CompletionTokenDetails = src.CompletionTokenDetails
 	return usage
 }
 

@@ -50,6 +50,19 @@ func TestResponseOpenAI2GeminiPreservesTextWithToolCalls(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"q": "max-api"}, parts[1].FunctionCall.Arguments)
 }
 
+func TestResponseOpenAI2GeminiWrapsMalformedToolArguments(t *testing.T) {
+	resp := openAIResponseWithToolCallArguments(t, "{")
+	resp.Choices[0].Message.Content = ""
+	got := ResponseOpenAI2Gemini(resp, &relaycommon.RelayInfo{})
+
+	require.NotNil(t, got)
+	require.Len(t, got.Candidates, 1)
+	parts := got.Candidates[0].Content.Parts
+	require.Len(t, parts, 1)
+	require.NotNil(t, parts[0].FunctionCall)
+	assert.Equal(t, map[string]interface{}{"arguments": "{"}, parts[0].FunctionCall.Arguments)
+}
+
 func openAIResponseWithTextAndToolCall(t *testing.T) *dto.OpenAITextResponse {
 	return openAIResponseWithToolCallArguments(t, `{"q":"max-api"}`)
 }

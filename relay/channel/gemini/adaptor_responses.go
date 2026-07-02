@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -41,8 +42,9 @@ func filterGeminiResponsesTools(raw []byte) ([]byte, error) {
 
 	filtered := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
-		if strings.TrimSpace(common.Interface2String(tool["type"])) != "function" {
-			continue
+		toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
+		if toolType != "function" {
+			return nil, fmt.Errorf("gemini responses conversion does not support tool type %q", toolType)
 		}
 		filtered = append(filtered, tool)
 	}

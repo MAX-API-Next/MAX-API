@@ -267,5 +267,32 @@ func TestConvertToRequestPayloadPreservesSeedanceFields(t *testing.T) {
 	assert.Equal(t, "safety-123", *payload.SafetyIdentifier)
 	require.NotNil(t, payload.Priority)
 	assert.Equal(t, 0, int(*payload.Priority))
-	assert.Equal(t, "4k", payload.Resolution)
+	require.NotNil(t, payload.Resolution)
+	assert.Equal(t, "4k", *payload.Resolution)
+}
+
+func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing.T) {
+	var req relaycommon.TaskSubmitReq
+	err := common.Unmarshal([]byte(`{
+		"model": "doubao-seedance-2-0-260128",
+		"prompt": "test",
+		"metadata": {
+			"resolution": "",
+			"ratio": ""
+		}
+	}`), &req)
+	require.NoError(t, err)
+
+	payload, err := (&TaskAdaptor{}).convertToRequestPayload(&req)
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+	require.NotNil(t, payload.Resolution)
+	assert.Equal(t, "", *payload.Resolution)
+	require.NotNil(t, payload.Ratio)
+	assert.Equal(t, "", *payload.Ratio)
+
+	data, err := common.Marshal(payload)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"resolution":""`)
+	assert.Contains(t, string(data), `"ratio":""`)
 }

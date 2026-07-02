@@ -55,8 +55,8 @@ type requestPayload struct {
 	} `json:"tools,omitempty"`
 	SafetyIdentifier *string        `json:"safety_identifier,omitempty"`
 	Priority         *dto.IntValue  `json:"priority,omitempty"`
-	Resolution       string         `json:"resolution,omitempty"`
-	Ratio            string         `json:"ratio,omitempty"`
+	Resolution       *string        `json:"resolution,omitempty"`
+	Ratio            *string        `json:"ratio,omitempty"`
 	Duration         *dto.IntValue  `json:"duration,omitempty"`
 	Frames           *dto.IntValue  `json:"frames,omitempty"`
 	Seed             *dto.IntValue  `json:"seed,omitempty"`
@@ -173,8 +173,8 @@ func (a *TaskAdaptor) resolveSeedanceBillingInputs(c *gin.Context, req *relaycom
 	if !a.useSeedanceMediaProtocol() {
 		payload, err := a.convertToRequestPayload(req)
 		if err == nil && payload != nil {
-			if payload.Resolution != "" {
-				resolution = payload.Resolution
+			if payload.Resolution != nil && *payload.Resolution != "" {
+				resolution = *payload.Resolution
 			}
 			hasVideo = hasVideo || hasVideoInContent(payload.Content)
 		}

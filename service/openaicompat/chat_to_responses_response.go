@@ -109,11 +109,7 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 		})
 	}
 	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, status)
-		if err != nil {
-			return nil, nil, err
-		}
-		out.Output = append(out.Output, toolOutput)
+		out.Output = append(out.Output, chatToolCallToResponsesOutput(toolCall, id, i, status))
 	}
 
 	return out, usage, nil
@@ -532,7 +528,7 @@ func responseOutputStatus(resp *dto.OpenAIResponsesResponse) string {
 	return "incomplete"
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) dto.ResponsesOutput {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
@@ -545,7 +541,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 			CallId:    callID,
 			Name:      toolCall.Function.Name,
 			Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
-		}, nil
+		}
 	}
 	return dto.ResponsesOutput{
 		Type:      toolCall.Type,
@@ -553,7 +549,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 		Status:    status,
 		CallId:    callID,
 		Arguments: toolCall.Custom,
-	}, nil
+	}
 }
 
 func chatArgumentsRawMessage(arguments string) []byte {

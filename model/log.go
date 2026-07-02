@@ -247,7 +247,7 @@ func logOtherRetryMarkers(other string) (errorRetry bool, emptyRetry bool) {
 		return false, false
 	}
 	if marker, ok := otherMap["empty_retry"].(bool); ok && marker {
-		return false, true
+		emptyRetry = true
 	}
 	if retryLog, ok := otherMap["retry_log"].(bool); ok && retryLog {
 		errorRetry = true

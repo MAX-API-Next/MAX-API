@@ -188,6 +188,47 @@ func TestResponsesRequestToChatCompletionsRequestRejectsCustomToolCallItems(t *t
 	assert.Contains(t, err.Error(), "custom_tool_call")
 }
 
+func TestResponsesRequestToChatCompletionsRequestRejectsMissingToolCallIDs(t *testing.T) {
+	cases := []struct {
+		name string
+		item map[string]any
+		want string
+	}{
+		{
+			name: "function call",
+			item: map[string]any{
+				"type":      "function_call",
+				"name":      "lookup",
+				"arguments": map[string]any{"q": "x"},
+			},
+			want: "function_call item is missing call_id",
+		},
+		{
+			name: "function call output",
+			item: map[string]any{
+				"type":   "function_call_output",
+				"output": map[string]any{"ok": true},
+			},
+			want: "function_call_output item is missing call_id",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+				Model: "gpt-test",
+				Input: mustCompatRawMessage(t, []map[string]any{
+					tc.item,
+				}),
+			})
+
+			require.Error(t, err)
+			require.Nil(t, got)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func TestResponsesRequestToChatCompletionsRequestRejectsUnsupportedToolTypes(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",
@@ -233,6 +274,58 @@ func TestChatCompletionsResponseToResponsesResponsePreservesToolCallsAndIncomple
 	assert.Equal(t, "call_1", resp.Output[1].CallId)
 	assert.Equal(t, "lookup", resp.Output[1].Name)
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(resp.Output[1].Arguments))
+}
+
+func TestResponsesResponseToChatCompletionsResponsePreservesUsageDetails(t *testing.T) {
+	resp, usage, err := ResponsesResponseToChatCompletionsResponse(&dto.OpenAIResponsesResponse{
+		ID:        "resp_1",
+		Model:     "gpt-test",
+		CreatedAt: 456,
+		Status:    []byte(`"completed"`),
+		Usage: &dto.Usage{
+			InputTokens:  7,
+			OutputTokens: 11,
+			TotalTokens:  18,
+			InputTokensDetails: &dto.InputTokenDetails{
+				CachedTokens:         1,
+				CachedCreationTokens: 2,
+				TextTokens:           3,
+				AudioTokens:          4,
+				ImageTokens:          5,
+			},
+			CompletionTokenDetails: dto.OutputTokenDetails{
+				ReasoningTokens: 6,
+				TextTokens:      7,
+				AudioTokens:     8,
+				ImageTokens:     9,
+			},
+		},
+		Output: []dto.ResponsesOutput{{
+			Type: responsesOutputTypeMessage,
+			Role: "assistant",
+			Content: []dto.ResponsesOutputContent{{
+				Type: "output_text",
+				Text: "done",
+			}},
+		}},
+	}, "chatcmpl_1")
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+
+	assert.Equal(t, 7, usage.PromptTokens)
+	assert.Equal(t, 11, usage.CompletionTokens)
+	assert.Equal(t, 18, usage.TotalTokens)
+	assert.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 2, usage.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 3, usage.PromptTokensDetails.TextTokens)
+	assert.Equal(t, 4, usage.PromptTokensDetails.AudioTokens)
+	assert.Equal(t, 5, usage.PromptTokensDetails.ImageTokens)
+	assert.Equal(t, 6, usage.CompletionTokenDetails.ReasoningTokens)
+	assert.Equal(t, 7, usage.CompletionTokenDetails.TextTokens)
+	assert.Equal(t, 8, usage.CompletionTokenDetails.AudioTokens)
+	assert.Equal(t, 9, usage.CompletionTokenDetails.ImageTokens)
+	assert.Equal(t, usage.PromptTokensDetails, resp.Usage.PromptTokensDetails)
+	assert.Equal(t, usage.CompletionTokenDetails, resp.Usage.CompletionTokenDetails)
 }
 
 func TestChatCompletionsStreamToResponsesEventsAggregatesUsage(t *testing.T) {

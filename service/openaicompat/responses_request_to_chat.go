@@ -159,6 +159,9 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		return nil, errors.New("responses to chat conversion does not support custom_tool_call items")
 	case responsesInputTypeFunctionCallOutput:
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
+		if callID == "" {
+			return nil, errors.New("function_call_output item is missing call_id")
+		}
 		content := responseToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
 	}
@@ -200,12 +203,6 @@ func responsesInputContentToChatContent(content any) (any, error) {
 		return value, nil
 	case []any:
 		return responsesContentPartsToChatContent(value)
-	case []map[string]any:
-		parts := make([]any, 0, len(value))
-		for _, part := range value {
-			parts = append(parts, part)
-		}
-		return responsesContentPartsToChatContent(parts)
 	default:
 		return content, nil
 	}
@@ -257,8 +254,12 @@ func responsesFunctionCallItemToChatToolCall(item map[string]any) (dto.ToolCallR
 	if name == "" {
 		return dto.ToolCallRequest{}, errors.New("function_call item is missing name")
 	}
+	callID := responsesCallID(item)
+	if callID == "" {
+		return dto.ToolCallRequest{}, errors.New("function_call item is missing call_id")
+	}
 	return dto.ToolCallRequest{
-		ID:   responsesCallID(item),
+		ID:   callID,
 		Type: "function",
 		Function: dto.FunctionRequest{
 			Name:      name,
