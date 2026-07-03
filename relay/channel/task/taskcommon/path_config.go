@@ -24,6 +24,9 @@ func ValidateTaskProtocolSettings(otherSettings string) error {
 	if err := common.UnmarshalJsonStr(otherSettings, &settings); err != nil {
 		return nil
 	}
+	if strings.TrimSpace(settings.TaskProtocol) != "" && !UseConfiguredTaskProtocol(settings) {
+		return fmt.Errorf("task_protocol must be %s", TaskProtocolGenericVideo)
+	}
 	cfg := settings.TaskProtocolConfig
 	if cfg == nil {
 		return nil
@@ -45,7 +48,7 @@ func WithTaskProtocolConfig(body map[string]any, settings dto.ChannelOtherSettin
 		body = map[string]any{}
 	}
 	if UseConfiguredTaskProtocol(settings) {
-		body[taskProtocolConfigBodyKey] = NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
+		body[taskProtocolConfigBodyKey] = EffectiveTaskProtocolConfig(settings)
 	} else if settings.TaskProtocolConfig != nil {
 		body[taskProtocolConfigBodyKey] = settings.TaskProtocolConfig
 	}
@@ -72,7 +75,7 @@ func BuildTaskSubmitURL(info *relaycommon.RelayInfo, fallback string) string {
 	}
 	path := ""
 	if UseConfiguredTaskProtocol(info.ChannelOtherSettings) {
-		cfg := NormalizeTaskProtocolConfig(info.ChannelOtherSettings.TaskProtocolConfig)
+		cfg := EffectiveTaskProtocolConfig(info.ChannelOtherSettings)
 		path = cfg.SubmitPath
 	} else if info.ChannelOtherSettings.TaskProtocolConfig != nil {
 		path = info.ChannelOtherSettings.TaskProtocolConfig.SubmitPath
@@ -109,7 +112,30 @@ func BuildConfiguredTaskURL(baseURL string, path string, values map[string]strin
 	if strings.HasPrefix(path, "?") {
 		return baseURL + path
 	}
+	path = trimDuplicatedBasePath(baseURL, path)
+	if path == "" {
+		return baseURL
+	}
 	return baseURL + "/" + strings.TrimLeft(path, "/")
+}
+
+func trimDuplicatedBasePath(baseURL string, path string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return strings.TrimLeft(path, "/")
+	}
+	basePath := strings.Trim(parsed.EscapedPath(), "/")
+	if basePath == "" {
+		return strings.TrimLeft(path, "/")
+	}
+	path = strings.TrimLeft(path, "/")
+	if path == basePath {
+		return ""
+	}
+	if strings.HasPrefix(path, basePath+"/") {
+		return strings.TrimPrefix(path, basePath+"/")
+	}
+	return path
 }
 
 func taskProtocolConfigFromBody(body map[string]any) *dto.TaskProtocolConfig {

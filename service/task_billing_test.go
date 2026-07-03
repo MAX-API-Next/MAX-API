@@ -51,6 +51,21 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestShouldApplyTaskResultProgressSkipsNonTerminalCompleteProgress(t *testing.T) {
+	assert.False(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusInProgress),
+		Progress: "100%",
+	}))
+	assert.True(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusInProgress),
+		Progress: "75%",
+	}))
+	assert.True(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusSuccess),
+		Progress: "100%",
+	}))
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------
@@ -182,6 +197,13 @@ func countLogs(t *testing.T) int64 {
 	var count int64
 	model.LOG_DB.Model(&model.Log{}).Count(&count)
 	return count
+}
+
+func resetQuotaDataCache(t *testing.T) {
+	t.Helper()
+	model.CacheQuotaDataLock.Lock()
+	defer model.CacheQuotaDataLock.Unlock()
+	model.CacheQuotaData = make(map[string]*model.QuotaData)
 }
 
 // ===========================================================================
@@ -324,6 +346,52 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeConsume, log.Type)
 	assert.Equal(t, actualQuota-preConsumed, log.Quota)
+}
+
+func TestRecalculate_PositiveDeltaAttributesQuotaDataToSubmitNode(t *testing.T) {
+	truncate(t)
+	resetQuotaDataCache(t)
+	ctx := context.Background()
+
+	originalDataExportEnabled := common.DataExportEnabled
+	originalNodeName := common.NodeName
+	common.DataExportEnabled = true
+	common.NodeName = "polling-node"
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExportEnabled
+		common.NodeName = originalNodeName
+		resetQuotaDataCache(t)
+	})
+
+	const userID, tokenID, channelID = 110, 110, 110
+	const initQuota, preConsumed = 10000, 2000
+	const actualQuota = 3500
+	const tokenRemain = 5000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-recalc-node", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.NodeName = "submit-node"
+
+	RecalculateTaskQuota(ctx, task, actualQuota, "node attribution")
+
+	require.Eventually(t, func() bool {
+		model.CacheQuotaDataLock.Lock()
+		defer model.CacheQuotaDataLock.Unlock()
+		for _, quotaData := range model.CacheQuotaData {
+			if quotaData.UserID == userID &&
+				quotaData.ModelName == "test-model" &&
+				quotaData.Quota == actualQuota-preConsumed &&
+				quotaData.TokenID == tokenID &&
+				quotaData.ChannelID == channelID &&
+				quotaData.UseGroup == "default" {
+				return quotaData.NodeName == "submit-node"
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestRecalculate_NegativeDelta(t *testing.T) {

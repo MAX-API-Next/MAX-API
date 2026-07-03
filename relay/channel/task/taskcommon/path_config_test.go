@@ -1,9 +1,12 @@
 package taskcommon
 
 import (
+	"bytes"
+	"io"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -61,12 +64,110 @@ func TestBuildConfiguredTaskURLUsesQueryEscaping(t *testing.T) {
 	assert.Equal(t, "https://upstream.example.com/v1/videos?operation=models%2Fveo-3%2Foperations%2Fa%26b&model=video+model&id=task%2Fabc%26x%3D1", got)
 }
 
+func TestBuildConfiguredTaskURLDeduplicatesBasePath(t *testing.T) {
+	got := BuildConfiguredTaskURL("https://upstream.example.com/v1", "/v1/videos/create", nil)
+
+	assert.Equal(t, "https://upstream.example.com/v1/videos/create", got)
+}
+
 func TestBuildTaskQueryURLKeepsFallbackWithoutConfig(t *testing.T) {
 	got := BuildTaskQueryURL("https://upstream.example.com", map[string]any{
 		"task_id": "task_abc",
 	}, "https://fallback.example.com/task_abc")
 
 	assert.Equal(t, "https://fallback.example.com/task_abc", got)
+}
+
+func TestBuildConfiguredTaskPassThroughBodyUsesChannelPassThrough(t *testing.T) {
+	c := newJSONTaskContext(`{
+		"model": "local-model",
+		"prompt": "test",
+		"duration_seconds": 0,
+		"with_audio": false
+	}`)
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "upstream-model",
+			IsModelMapped:     true,
+			ChannelSetting:    dto.ChannelSettings{PassThroughBodyEnabled: true},
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				TaskProtocol: TaskProtocolGenericVideo,
+			},
+		},
+	}
+
+	reader, handled, err := BuildConfiguredTaskPassThroughBody(c, info)
+
+	require.NoError(t, err)
+	require.True(t, handled)
+	body := readJSONBody(t, reader)
+	assert.Equal(t, "upstream-model", gjson.GetBytes(body, "model").String())
+	assert.Equal(t, "test", gjson.GetBytes(body, "prompt").String())
+	assert.Equal(t, int64(0), gjson.GetBytes(body, "duration_seconds").Int())
+	assert.False(t, gjson.GetBytes(body, "with_audio").Bool())
+}
+
+func TestBuildConfiguredTaskPassThroughBodyFallsBackWithoutChannelPassThrough(t *testing.T) {
+	c := newJSONTaskContext(`{"model":"video-model","prompt":"test"}`)
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				TaskProtocol: TaskProtocolGenericVideo,
+			},
+		},
+	}
+
+	reader, handled, err := BuildConfiguredTaskPassThroughBody(c, info)
+
+	require.NoError(t, err)
+	assert.False(t, handled)
+	assert.Nil(t, reader)
+}
+
+func TestApplyTaskParamOverrideRewritesJSONBody(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"path":  "prompt",
+						"mode":  "set",
+						"value": "rewritten",
+					},
+				},
+			},
+		},
+	}
+
+	reader, err := ApplyTaskParamOverride(bytes.NewBufferString(`{"model":"video-model","prompt":"original"}`), info)
+
+	require.NoError(t, err)
+	body := readJSONBody(t, reader)
+	assert.Equal(t, "rewritten", gjson.GetBytes(body, "prompt").String())
+	assert.Equal(t, "video-model", gjson.GetBytes(body, "model").String())
+}
+
+func TestApplyTaskParamOverrideSkipsNonJSONObjectBody(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"path":  "prompt",
+						"mode":  "set",
+						"value": "rewritten",
+					},
+				},
+			},
+		},
+	}
+
+	reader, err := ApplyTaskParamOverride(bytes.NewBufferString(`not-json`), info)
+
+	require.NoError(t, err)
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, `not-json`, string(body))
 }
 
 func TestStripTaskProtocolConfig(t *testing.T) {
@@ -120,6 +221,27 @@ func TestParseConfiguredTaskResultUsesGenericProtocol(t *testing.T) {
 	assert.Equal(t, "https://example.com/video.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultPromotesResultURLToSuccess(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+	}
+	body := []byte(`{
+		"task_id": "upstream_task_1",
+		"status": "in_progress",
+		"progress": 100,
+		"result": {"video_url": "https://example.com/video.mp4"}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "100%", result.Progress)
+	assert.Equal(t, "https://example.com/video.mp4", result.Url)
+}
+
 func TestParseConfiguredTaskResultRequiresProtocol(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocolConfig: &dto.TaskProtocolConfig{
@@ -145,6 +267,8 @@ func TestValidateTaskProtocolSettings(t *testing.T) {
 		{name: "empty settings", settings: "", wantErr: false},
 		{name: "no task protocol config", settings: `{"azure_responses_version":"v1"}`, wantErr: false},
 		{name: "empty query path uses default", settings: `{"task_protocol_config":{"submit_path":"/v1/videos/create"}}`, wantErr: false},
+		{name: "stale request body config ignored", settings: `{"task_protocol":"generic_video_task","task_protocol_config":{"request_body_mode":"media_generation","request_body_mapping":{"model":"model"},"query_path":"/v1/videos/{task_id}"}}`, wantErr: false},
+		{name: "unknown task protocol rejected", settings: `{"task_protocol":"unsupported_video_task","task_protocol_config":{"query_path":"/v1/videos/{task_id}"}}`, wantErr: true},
 		{name: "task_id placeholder", settings: `{"task_protocol_config":{"query_path":"/v1/videos/{task_id}"}}`, wantErr: false},
 		{name: "operation_name placeholder", settings: `{"task_protocol_config":{"query_path":"/v1beta/{operation_name}"}}`, wantErr: false},
 		{name: "upstream_task_id placeholder", settings: `{"task_protocol_config":{"query_path":"/v1/tasks?id={upstream_task_id}"}}`, wantErr: false},
@@ -161,6 +285,23 @@ func TestValidateTaskProtocolSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newJSONTaskContext(body string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("POST", "/v1/videos", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	return c
+}
+
+func readJSONBody(t *testing.T, reader io.Reader) []byte {
+	t.Helper()
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.True(t, common.IsJsonObject(string(body)))
+	return body
 }
 
 func TestTryHandleConfiguredSubmitResponseKlingRouteUsesKlingFormat(t *testing.T) {

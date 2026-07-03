@@ -61,7 +61,7 @@ const route = getRouteApi('/_authenticated/usage-logs/$section')
 type LogTypeValue = (typeof LOG_TYPE_FILTER_VALUES)[number]
 
 function isLogTypeValue(value: string): value is LogTypeValue {
-  return LOG_TYPE_FILTER_VALUES.includes(value)
+  return (LOG_TYPE_FILTER_VALUES as readonly string[]).includes(value)
 }
 
 interface CommonLogsFilterBarProps<TData> {

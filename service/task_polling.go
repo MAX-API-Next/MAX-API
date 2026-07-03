@@ -475,7 +475,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	default:
 		return fmt.Errorf("unknown task status %s for task %s", taskResult.Status, task.TaskID)
 	}
-	if taskResult.Progress != "" {
+	if shouldApplyTaskResultProgress(taskResult) {
 		task.Progress = taskResult.Progress
 	}
 
@@ -508,6 +508,20 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {
+	if taskResult == nil || strings.TrimSpace(taskResult.Progress) == "" {
+		return false
+	}
+	switch taskResult.Status {
+	case model.TaskStatusSuccess, model.TaskStatusFailure:
+		return true
+	case model.TaskStatusSubmitted, model.TaskStatusQueued, model.TaskStatusInProgress:
+		return strings.TrimSpace(taskResult.Progress) != taskcommon.ProgressComplete
+	default:
+		return true
+	}
 }
 
 func redactVideoResponseBody(body []byte) []byte {

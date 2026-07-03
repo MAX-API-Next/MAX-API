@@ -13,6 +13,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -481,27 +482,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
 				if streamResp.Response.Usage != nil {
-					if streamResp.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResp.Response.Usage.InputTokens
-						usage.InputTokens = streamResp.Response.Usage.InputTokens
-					}
-					if streamResp.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResp.Response.Usage.OutputTokens
-						usage.OutputTokens = streamResp.Response.Usage.OutputTokens
-					}
-					if streamResp.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResp.Response.Usage.TotalTokens
-					} else {
-						usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-					}
-					if streamResp.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResp.Response.Usage.InputTokensDetails.CachedTokens
-						usage.PromptTokensDetails.ImageTokens = streamResp.Response.Usage.InputTokensDetails.ImageTokens
-						usage.PromptTokensDetails.AudioTokens = streamResp.Response.Usage.InputTokensDetails.AudioTokens
-					}
-					if streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens != 0 {
-						usage.CompletionTokenDetails.ReasoningTokens = streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens
-					}
+					usage = openaicompat.UsageFromResponsesUsage(streamResp.Response.Usage)
 				}
 				if outputText.Len() == 0 {
 					completedText := service.ExtractOutputTextFromResponses(streamResp.Response)

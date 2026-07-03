@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 ![max-api](/web/default/public/logo.png)
 
@@ -98,7 +98,7 @@ MAX API brings AI model and AI Agent execution into a configurable, observable, 
 | Upstream channels | Provider channels, weights, groups, status, keys, Base URL, path overrides, capability matrix, configuration validation, model discovery, and failure retry | Reduce risks from single-provider outages, price changes, rate limits, misconfiguration, or API changes |
 | Protocol formats | OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime, generic video task protocol, and protocol conversion | Let applications face stable interfaces instead of directly handling provider-specific protocol differences |
 | Agent tokens | API keys, token groups, model scopes, quota limits, expiration, and access control | Assign independent, revocable, and quota-limited credentials to Agents, workflows, and tool calls |
-| Usage and cost | Request logs, usage statistics, expression billing, tiered billing JSON, task rate-cards, pre-charge, and failure refund | Attribute model costs to users, tokens, models, channels, and groups |
+| Usage and cost | Request logs, usage statistics, expression billing, tiered billing JSON, task rate-cards, pre-charge, and failure refund | Attribute model costs to users, groups, tokens, models, channels, and nodes |
 | Asynchronous tasks | Video task submission, polling, status mapping, result proxying, and task billing | Govern long-running, multi-state, multi-provider multimodal tasks uniformly |
 | Audit and security | Admin-side log audit, error logs, request limits, streaming timeout, login, and permission control | Provide controlled audit boundaries in private deployment and compliance scenarios; sensitive content audit is managed under Security & Limits |
 | Organization operations | Users, groups, balance, payment, system settings, dashboards, and operations configuration | Support continuous operations for teams, research institutions, enterprises, or community services |
@@ -163,8 +163,8 @@ docker compose up -d
 | Channel capability matrix | Channel editing view shows capability status for `chat/completions`, `responses`, `Claude Messages`, `Gemini native`, `embeddings`, `images`, `audio`, `rerank`, `video tasks`, `model discovery`, and more |
 | Channel configuration validation | Checks API Key, model list, Base URL, extra configuration, JSON objects, Vertex AI region, Codex credentials, model discovery capability, and video task path placeholders before saving |
 | Multimodal model governance | Supports chat, images, video, audio, embeddings, rerank, realtime conversation, and submission/polling/status mapping/result proxying for asynchronous video tasks |
-| Generic video task protocol | Allows task submission, query, progress, status mapping, error message, and result URL paths from different video upstreams to be configured uniformly in a channel; default paths are `/v1/videos/create` and `/v1/videos/{task_id}` |
-| Protocol conversion and custom upstreams | Supports conversion and adaptation among OpenAI Compatible, Claude Messages, Gemini, and other formats, as well as legally authorized upstream URLs, path overrides, and task protocol parsing rules |
+| Generic video task protocol | Allows task submission, query, progress, status mapping, error message, and result URL paths from different video upstreams to be configured uniformly in a channel; request-body passthrough and rewrites use the existing channel settings; default paths are `/v1/videos/create` and `/v1/videos/{task_id}` |
+| Protocol conversion and custom upstreams | Supports conversion and adaptation among OpenAI Compatible, Responses, Chat Completions, Claude Messages, Gemini, and other formats, as well as legally authorized upstream URLs, path overrides, and task protocol parsing rules |
 
 ### AI Agent Governance / AgentOps
 
@@ -173,7 +173,7 @@ docker compose up -d
 | Agent token isolation | Create independent API keys for Agents, workflows, plugins, tool calls, or users, with model scope, quota, expiration, and group settings |
 | Model access control | Control which models an Agent can call, which channels it can use, and how much quota it can consume through users, tokens, groups, model restrictions, and channel policies |
 | Call-chain observability | Provides request logs, usage statistics, channel hits, latency, errors, and retry information to diagnose Agent failures, cost anomalies, and upstream instability |
-| Cost attribution | Tracks cost and usage by model, channel, user, group, and token, making it easier to calculate costs for different Agents or business lines |
+| Cost attribution | Tracks cost and usage by model, channel, user, group, token, and node, making it easier to calculate costs for different Agents, business lines, or deployment nodes |
 | Admin audit | Private deployments can enable admin-side log audit according to compliance requirements; normal user log APIs filter admin-only audit fields |
 | Operations dashboard | Provides admin-facing analytics, user management, channel management, system settings, and operations analysis |
 
@@ -275,17 +275,17 @@ flowchart LR
 | Type | Description |
 |------|------|
 | OpenAI-Compatible | Compatible APIs such as Chat Completions, Embeddings, Images, and Audio, usable as a general model entry point for most applications and Agents |
-| OpenAI Responses | Responses-format requests, relay, and compatibility support for gradually adopting newer OpenAI application protocols |
+| OpenAI Responses | Responses-format requests, relay, and Responses ↔ Chat Completions compatibility conversion for gradually adopting newer OpenAI application protocols |
 | Claude Messages | Conversion between Claude Messages and OpenAI-compatible formats to reduce multi-protocol maintenance on the application side |
-| Google Gemini | Gemini chat, text, and partial conversion capabilities |
+| Google Gemini | Gemini chat, text, and `/v1/responses` compatibility conversion |
 | Azure OpenAI | Azure OpenAI and Realtime related APIs |
 | AWS Bedrock | Bedrock Runtime model access |
 | Upstream platforms and application ecosystem | AWS, Azure, Vertex, Ollama, Codex, Dify, RAGFlow, Kling, Seedance, and similar platforms or applications can be governed according to channel capabilities |
 | Domestic models and platforms | Built-in adapters or compatible access for DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, SiliconFlow, and more |
 | `rerank` | Reranking models such as Cohere and Jina for retrieval augmentation and Agent retrieval chains |
 | Midjourney / Suno / Dify | Adapters for image, music, workflow, and related services |
-| Video task APIs | Supports submission, polling, status mapping, result proxying, and parameterized billing for video generation tasks such as `/v1/videos/create` and `/v1/videos/{task_id}` |
-| Custom upstreams | Supports legally authorized upstream URLs, protocol adaptation rules, path overrides, status mapping, error message paths, and task result parsing |
+| Video task APIs | Supports submission, body passthrough or parameter overrides, polling, status mapping, result proxying, and parameterized billing for video generation tasks such as `/v1/videos/create` and `/v1/videos/{task_id}` |
+| Custom upstreams | Supports legally authorized upstream URLs, protocol adaptation rules, Responses / Chat conversion, path overrides, status mapping, error message paths, and task result parsing |
 
 ### Main Supported Interfaces
 
@@ -365,10 +365,11 @@ Validation covers common issues including:
 
 Video model providers often differ in paths, task IDs, status fields, progress fields, error fields, and result URL fields. MAX API extends the task protocol capability from a single-model feature into a generic video task protocol for OpenAI, Ali, Gemini, MiniMax, Vertex AI, VolcEngine, Kling, Jimeng, Vidu, Doubao Video, Sora, and other video task channels.
 
-Two configuration levels are supported:
+Supported configuration levels:
 
 - **Path override only**: configure only `submit_path` and `query_path`; the system still uses the official response parser of the corresponding channel. This is suitable for compatible channels that only change upstream paths.
 - **Full protocol parsing**: set `task_protocol = "generic_video_task"` and configure paths for task ID, status, progress, result URL, error message, and status mapping. This is suitable for non-standard video task responses.
+- **Request-body handling**: the generic video task protocol no longer defines a separate request-body generation mode. Use the channel-level `Pass Through Body` setting to forward client JSON as-is, and use the existing `Param Override` feature for field rewrites, defaults, or header coordination.
 
 Default task paths:
 
@@ -408,6 +409,8 @@ Model billing in system settings supports two unified JSON maintenance entries:
 
 - **Tiered billing JSON**: maintain `{ enabled, expr }` configuration for multiple models in one `Tiered billing JSON` window; saving updates `billing_mode` and `billing_expr` together.
 - **Task rate-card JSON**: maintain asynchronous task billing rules through `task_billing_setting.rate_cards`, with `vendor` partitions for video models such as Sora, Veo, Seedance, and Kling.
+
+Video models such as Seedance 2.0 can use request parameters such as resolution and video input in multiplier or rate-card billing. When using passthrough or parameter overrides, keep the final upstream request fields aligned with the billing fields.
 
 Example structure:
 
@@ -490,7 +493,7 @@ A task rate-card can match prices by request parameters:
 | `MAX_REQUEST_BODY_MB` | Maximum request body size after decompression; returns `413` when exceeded | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Default Azure API version | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | Error log switch | `false` |
-| `NODE_NAME` | Node name for multi-node log identification | - |
+| `NODE_NAME` | Node name for multi-node log identification and asynchronous task settlement attribution | - |
 | `PYROSCOPE_URL` | Pyroscope service URL | - |
 | `PYROSCOPE_APP_NAME` | Pyroscope application name | `max-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Auth username | - |
@@ -553,7 +556,7 @@ docker build -t cscitechtop/max-api:latest .
 > [!WARNING]
 > - All nodes must use the same `SESSION_SECRET`; otherwise login state will be inconsistent across nodes.
 > - If shared Redis is used, all nodes must use the same `CRYPTO_SECRET`; otherwise encrypted data cannot be decrypted.
-> - Set `NODE_NAME` for each node to locate source nodes in logs and audit information.
+> - Set a stable `NODE_NAME` for each node to locate source nodes in logs, audit information, and asynchronous task settlement.
 > - Production environments should use an external database, external Redis, HTTPS reverse proxy, and reliable backup strategy.
 
 ---

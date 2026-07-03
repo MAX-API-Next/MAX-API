@@ -34,9 +34,9 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 
 	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 4, total)
-	require.Len(t, got, 4)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[4].Id, logs[5].Id}, []int{got[0].Id, got[1].Id, got[2].Id, got[3].Id})
+	require.EqualValues(t, 5, total)
+	require.Len(t, got, 5)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[4].Id, logs[5].Id, logs[6].Id}, []int{got[0].Id, got[1].Id, got[2].Id, got[3].Id, got[4].Id})
 }
 
 func TestGetUserLogsRetryFilter(t *testing.T) {
@@ -49,10 +49,10 @@ func TestGetUserLogsRetryFilter(t *testing.T) {
 
 	got, total, err := GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 3, total)
-	require.Len(t, got, 3)
-	gotLogIds := []int{got[0].LogId, got[1].LogId, got[2].LogId}
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[5].Id}, gotLogIds)
+	require.EqualValues(t, 4, total)
+	require.Len(t, got, 4)
+	gotLogIds := []int{got[0].LogId, got[1].LogId, got[2].LogId, got[3].LogId}
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id, logs[5].Id, logs[6].Id}, gotLogIds)
 	require.NotContains(t, gotLogIds, logs[4].Id)
 	for _, log := range got {
 		require.Equal(t, 1, log.UserId)
@@ -69,9 +69,51 @@ func TestSumUsedQuotaRetryFilter(t *testing.T) {
 
 	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "")
 	require.NoError(t, err)
-	require.Equal(t, 1200, stat.Quota)
-	require.Equal(t, 4, stat.Rpm)
-	require.Equal(t, 71, stat.Tpm)
+	require.Equal(t, 1550, stat.Quota)
+	require.Equal(t, 5, stat.Rpm)
+	require.Equal(t, 96, stat.Tpm)
+}
+
+func TestGetAllLogsRetrySubtypeFilters(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	logs := createRetryFilterLogs(t)
+
+	errorLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 4, total)
+	require.Len(t, errorLogs, 4)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[4].Id, logs[5].Id, logs[6].Id}, []int{errorLogs[0].Id, errorLogs[1].Id, errorLogs[2].Id, errorLogs[3].Id})
+
+	emptyLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total)
+	require.Len(t, emptyLogs, 2)
+	require.ElementsMatch(t, []int{logs[1].Id, logs[6].Id}, []int{emptyLogs[0].Id, emptyLogs[1].Id})
+}
+
+func TestSumUsedQuotaRetrySubtypeFilters(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	createRetryFilterLogs(t)
+
+	errorStat, err := SumUsedQuota(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, "")
+	require.NoError(t, err)
+	require.Equal(t, 1350, errorStat.Quota)
+	require.Equal(t, 4, errorStat.Rpm)
+	require.Equal(t, 81, errorStat.Tpm)
+
+	emptyStat, err := SumUsedQuota(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, "")
+	require.NoError(t, err)
+	require.Equal(t, 550, emptyStat.Quota)
+	require.Equal(t, 2, emptyStat.Rpm)
+	require.Equal(t, 40, emptyStat.Tpm)
 }
 
 func TestSumUsedQuotaAppliesExplicitLogType(t *testing.T) {
@@ -87,6 +129,41 @@ func TestSumUsedQuotaAppliesExplicitLogType(t *testing.T) {
 	require.Equal(t, 0, stat.Quota)
 	require.Equal(t, 1, stat.Rpm)
 	require.Equal(t, 0, stat.Tpm)
+}
+
+func TestSumUsedQuotaKeepsRpmTpmLiveForHistoricalWindow(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	now := time.Now().Unix()
+	logs := []Log{
+		{
+			UserId:           1,
+			CreatedAt:        now - 10,
+			Type:             LogTypeConsume,
+			Quota:            100,
+			PromptTokens:     3,
+			CompletionTokens: 7,
+		},
+		{
+			UserId:           1,
+			CreatedAt:        now - 86400,
+			Type:             LogTypeConsume,
+			Quota:            200,
+			PromptTokens:     11,
+			CompletionTokens: 13,
+		},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+
+	stat, err := SumUsedQuota(LogTypeUnknown, "", now-90000, now-80000, "", "", "", 0, "")
+
+	require.NoError(t, err)
+	require.Equal(t, 200, stat.Quota)
+	require.Equal(t, 1, stat.Rpm)
+	require.Equal(t, 10, stat.Tpm)
 }
 
 func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
@@ -166,9 +243,7 @@ func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
 			PromptTokens:     7,
 			CompletionTokens: 11,
 			Other: common.MapToJsonStr(map[string]interface{}{
-				"admin_info": map[string]interface{}{
-					"retry_log": true,
-				},
+				"empty_retry": true,
 			}),
 		},
 	}
@@ -177,15 +252,19 @@ func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
 
 	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "")
 	require.NoError(t, err)
-	require.EqualValues(t, 1, total)
-	require.Len(t, got, 1)
-	require.Equal(t, logs[0].Id, got[0].Id)
+	require.EqualValues(t, 2, total)
+	require.Len(t, got, 2)
+	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].Id, got[1].Id})
 
 	var reloaded []Log
 	require.NoError(t, LOG_DB.Order("id asc").Find(&reloaded).Error)
 	require.Len(t, reloaded, 2)
 	require.True(t, reloaded[0].IsRetry)
-	require.False(t, reloaded[1].IsRetry)
+	require.True(t, reloaded[0].IsErrorRetry)
+	require.False(t, reloaded[0].IsEmptyRetry)
+	require.True(t, reloaded[1].IsRetry)
+	require.False(t, reloaded[1].IsErrorRetry)
+	require.True(t, reloaded[1].IsEmptyRetry)
 }
 
 func TestRetryFilterUsesIsRetryAfterBackfillCompletion(t *testing.T) {
@@ -281,7 +360,11 @@ func TestBackfillLogRetryMarkerUsesTopLevelMarkersOnly(t *testing.T) {
 	require.NoError(t, LOG_DB.Order("id asc").Find(&reloaded).Error)
 	require.Len(t, reloaded, 2)
 	require.True(t, reloaded[0].IsRetry)
+	require.True(t, reloaded[0].IsErrorRetry)
+	require.False(t, reloaded[0].IsEmptyRetry)
 	require.False(t, reloaded[1].IsRetry)
+	require.False(t, reloaded[1].IsErrorRetry)
+	require.False(t, reloaded[1].IsEmptyRetry)
 }
 
 func TestBackfillLogRetryMarkerSkipsAfterCompletionMarker(t *testing.T) {
@@ -603,6 +686,21 @@ func createRetryFilterLogs(t *testing.T) []Log {
 				"retry_log": true,
 				"admin_info": map[string]interface{}{
 					"use_channel": []string{"8"},
+				},
+			}),
+		},
+		{
+			UserId:           1,
+			CreatedAt:        time.Now().Unix() - 60,
+			Type:             LogTypeConsume,
+			Quota:            350,
+			PromptTokens:     12,
+			CompletionTokens: 13,
+			Other: common.MapToJsonStr(map[string]interface{}{
+				"retry_log":   true,
+				"empty_retry": true,
+				"admin_info": map[string]interface{}{
+					"use_channel": []string{"9", "10"},
 				},
 			}),
 		},

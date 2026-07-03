@@ -177,6 +177,53 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 	assert.Equal(t, "100%", reloaded.Progress)
 }
 
+func TestGetAllUnFinishSyncTasksIncludesNonTerminalHundredProgress(t *testing.T) {
+	truncateTables(t)
+
+	insertTask(t, &Task{
+		TaskID:   "task_stuck_progress",
+		Status:   TaskStatusInProgress,
+		Progress: "100%",
+		Data:     json.RawMessage(`{}`),
+	})
+	insertTask(t, &Task{
+		TaskID:   "task_done",
+		Status:   TaskStatusSuccess,
+		Progress: "100%",
+		Data:     json.RawMessage(`{}`),
+	})
+
+	tasks := GetAllUnFinishSyncTasks(10)
+
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "task_stuck_progress", tasks[0].TaskID)
+}
+
+func TestGetTimedOutUnfinishedTasksIncludesNonTerminalHundredProgress(t *testing.T) {
+	truncateTables(t)
+
+	now := time.Now().Unix()
+	insertTask(t, &Task{
+		TaskID:     "task_timeout_stuck_progress",
+		Status:     TaskStatusInProgress,
+		Progress:   "100%",
+		SubmitTime: now - 60,
+		Data:       json.RawMessage(`{}`),
+	})
+	insertTask(t, &Task{
+		TaskID:     "task_timeout_done",
+		Status:     TaskStatusSuccess,
+		Progress:   "100%",
+		SubmitTime: now - 60,
+		Data:       json.RawMessage(`{}`),
+	})
+
+	tasks := GetTimedOutUnfinishedTasks(now, 10)
+
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "task_timeout_stuck_progress", tasks[0].TaskID)
+}
+
 func TestUpdateWithStatus_Lose(t *testing.T) {
 	truncateTables(t)
 

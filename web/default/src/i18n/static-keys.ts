@@ -51,6 +51,8 @@ export const STATIC_I18N_KEYS = [
   'Token-based',
   'Per Request',
   'All Types',
+  'Empty Completion Retry',
+  'Error Retry',
   'Chat',
   'Response',
   'Anthropic',

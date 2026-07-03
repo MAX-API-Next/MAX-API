@@ -33,6 +33,26 @@ describe('buildApiParams', () => {
     assert.equal(params.type, undefined)
   })
 
+  test('maps retry subtype filters to log_filter', () => {
+    const emptyParams = buildApiParams({
+      page: 1,
+      pageSize: 100,
+      searchParams: { type: ['empty_retry'] },
+      isAdmin: true,
+    })
+    assert.equal(emptyParams.log_filter, 'empty_retry')
+    assert.equal(emptyParams.type, undefined)
+
+    const errorParams = buildApiParams({
+      page: 1,
+      pageSize: 100,
+      searchParams: { type: ['error_retry'] },
+      isAdmin: true,
+    })
+    assert.equal(errorParams.log_filter, 'error_retry')
+    assert.equal(errorParams.type, undefined)
+  })
+
   test('treats mixed retry and numeric column filters as retry filters', () => {
     const params = buildApiParams({
       page: 1,
@@ -110,6 +130,71 @@ describe('matchesCommonLogTypeFilter', () => {
       matchesCommonLogTypeFilter(
         { type: 2, other: JSON.stringify({ admin_info: { use_channel: ['1'] } }) },
         ['retry']
+      ),
+      false
+    )
+  })
+
+  test('matches retry subtype filters against row retry markers', () => {
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: '{}', is_error_retry: true },
+        ['error_retry']
+      ),
+      true
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: JSON.stringify({ retry_log: true }) },
+        ['error_retry']
+      ),
+      true
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        {
+          type: 2,
+          other: JSON.stringify({ retry_log: true, empty_retry: true }),
+        },
+        ['error_retry']
+      ),
+      false
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: JSON.stringify({ empty_retry: true }) },
+        ['error_retry']
+      ),
+      false
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: '{}', is_empty_retry: true },
+        ['empty_retry']
+      ),
+      true
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: JSON.stringify({ empty_retry: true }) },
+        ['empty_retry']
+      ),
+      true
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        {
+          type: 2,
+          other: JSON.stringify({ retry_log: true, empty_retry: true }),
+        },
+        ['empty_retry']
+      ),
+      true
+    )
+    assert.equal(
+      matchesCommonLogTypeFilter(
+        { type: 2, other: JSON.stringify({ retry_log: true }) },
+        ['empty_retry']
       ),
       false
     )

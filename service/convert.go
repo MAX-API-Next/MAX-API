@@ -615,24 +615,18 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	for _, choice := range openAIResponse.Choices {
 		stopReason = stopReasonOpenAI2Claude(choice.FinishReason)
-		if choice.FinishReason == "tool_calls" {
-			for _, toolUse := range choice.Message.ParseToolCalls() {
-				claudeContent := dto.ClaudeMediaMessage{}
-				claudeContent.Type = "tool_use"
-				claudeContent.Id = toolUse.ID
-				claudeContent.Name = toolUse.Function.Name
-				var mapParams map[string]interface{}
-				if err := common.Unmarshal([]byte(toolUse.Function.Arguments), &mapParams); err == nil {
-					claudeContent.Input = mapParams
-				} else {
-					claudeContent.Input = toolUse.Function.Arguments
-				}
-				contents = append(contents, claudeContent)
-			}
-		} else {
+		if text := choice.Message.StringContent(); text != "" {
 			claudeContent := dto.ClaudeMediaMessage{}
 			claudeContent.Type = "text"
-			claudeContent.SetText(choice.Message.StringContent())
+			claudeContent.SetText(text)
+			contents = append(contents, claudeContent)
+		}
+		for _, toolUse := range choice.Message.ParseToolCalls() {
+			claudeContent := dto.ClaudeMediaMessage{}
+			claudeContent.Type = "tool_use"
+			claudeContent.Id = toolUse.ID
+			claudeContent.Name = toolUse.Function.Name
+			claudeContent.Input = parseToolCallArguments(toolUse.Function.Arguments)
 			contents = append(contents, claudeContent)
 		}
 	}
@@ -641,6 +635,17 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	claudeResponse.Usage = buildClaudeUsageFromOpenAIUsage(&openAIResponse.Usage)
 
 	return claudeResponse
+}
+
+func parseToolCallArguments(rawArgs string) map[string]interface{} {
+	if rawArgs == "" {
+		return make(map[string]interface{})
+	}
+	var args map[string]interface{}
+	if err := common.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return map[string]interface{}{"arguments": rawArgs}
+	}
+	return args
 }
 
 func stopReasonOpenAI2Claude(reason string) string {
@@ -863,34 +868,22 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 			Parts: make([]dto.GeminiPart, 0),
 		}
 
+		// 处理文本内容
+		textContent := choice.Message.StringContent()
+		if textContent != "" {
+			content.Parts = append(content.Parts, dto.GeminiPart{Text: textContent})
+		}
+
 		// 处理工具调用
 		toolCalls := choice.Message.ParseToolCalls()
 		if len(toolCalls) > 0 {
 			for _, toolCall := range toolCalls {
 				// 解析参数
-				var args map[string]interface{}
-				if toolCall.Function.Arguments != "" {
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						args = map[string]interface{}{"arguments": toolCall.Function.Arguments}
-					}
-				} else {
-					args = make(map[string]interface{})
-				}
-
 				part := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
 						FunctionName: toolCall.Function.Name,
-						Arguments:    args,
+						Arguments:    parseToolCallArguments(toolCall.Function.Arguments),
 					},
-				}
-				content.Parts = append(content.Parts, part)
-			}
-		} else {
-			// 处理文本内容
-			textContent := choice.Message.StringContent()
-			if textContent != "" {
-				part := dto.GeminiPart{
-					Text: textContent,
 				}
 				content.Parts = append(content.Parts, part)
 			}
@@ -971,19 +964,10 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		if choice.Delta.ToolCalls != nil {
 			for _, toolCall := range choice.Delta.ToolCalls {
 				// 解析参数
-				var args map[string]interface{}
-				if toolCall.Function.Arguments != "" {
-					if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						args = map[string]interface{}{"arguments": toolCall.Function.Arguments}
-					}
-				} else {
-					args = make(map[string]interface{})
-				}
-
 				part := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
 						FunctionName: toolCall.Function.Name,
-						Arguments:    args,
+						Arguments:    parseToolCallArguments(toolCall.Function.Arguments),
 					},
 				}
 				content.Parts = append(content.Parts, part)

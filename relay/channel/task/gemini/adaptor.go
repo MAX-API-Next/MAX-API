@@ -173,8 +173,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 
-	seconds := ResolveVeoDuration(req.Metadata, req.Duration, req.Seconds)
-	resolution := ResolveVeoResolution(req.Metadata, req.Size)
+	seconds, resolution := ResolveVeoBillingInputs(c, req)
 	resRatio := VeoResolutionRatio(info.UpstreamModelName, resolution)
 
 	return map[string]float64{

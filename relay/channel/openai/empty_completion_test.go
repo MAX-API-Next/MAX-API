@@ -354,3 +354,47 @@ func TestOaiResponsesToChatStreamHandlerRetriesEmptyOnEOFBeforeWriting(t *testin
 		t.Fatalf("response body = %q, want empty before retry", body)
 	}
 }
+
+func TestOaiResponsesToChatStreamHandlerCopiesDetailedUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test","output":[]}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":2,"cached_creation_tokens":3,"text_tokens":4,"image_tokens":1,"audio_tokens":0},"completion_tokens_details":{"text_tokens":5,"reasoning_tokens":6}}}}`,
+			`data: [DONE]`,
+			``,
+		}, "\n"))),
+	}
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-test",
+		},
+	}
+
+	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage == nil {
+		t.Fatal("usage is nil")
+	}
+	if usage.PromptTokens != 10 || usage.CompletionTokens != 5 || usage.TotalTokens != 15 {
+		t.Fatalf("usage tokens = %#v", usage)
+	}
+	if usage.PromptTokensDetails.CachedTokens != 2 ||
+		usage.PromptTokensDetails.CachedCreationTokens != 3 ||
+		usage.PromptTokensDetails.TextTokens != 4 ||
+		usage.PromptTokensDetails.ImageTokens != 1 {
+		t.Fatalf("prompt details = %#v", usage.PromptTokensDetails)
+	}
+	if usage.CompletionTokenDetails.TextTokens != 5 ||
+		usage.CompletionTokenDetails.ReasoningTokens != 6 {
+		t.Fatalf("completion details = %#v", usage.CompletionTokenDetails)
+	}
+}

@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	TaskProtocolGenericVideo        = "generic_video_task"
-	TaskProtocolLegacySeedanceMedia = "seedance_official_media"
+	TaskProtocolGenericVideo = "generic_video_task"
 )
 
 var videoTaskChannelTypes = map[int]struct{}{
@@ -41,7 +40,7 @@ func HasTaskProtocolConfig(settings dto.ChannelOtherSettings) bool {
 
 func UseConfiguredTaskProtocol(settings dto.ChannelOtherSettings) bool {
 	protocol := strings.ToLower(strings.TrimSpace(settings.TaskProtocol))
-	return protocol == TaskProtocolGenericVideo || protocol == TaskProtocolLegacySeedanceMedia
+	return protocol == TaskProtocolGenericVideo
 }
 
 func IsVideoTaskChannelType(channelType int) bool {
@@ -51,15 +50,14 @@ func IsVideoTaskChannelType(channelType int) bool {
 
 func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocolConfig {
 	cfg := dto.TaskProtocolConfig{
-		SubmitPath:       "/v1/videos/create",
-		QueryPath:        "/v1/videos/{task_id}",
-		TaskIDPath:       "task_id",
-		StatusPath:       "status",
-		ProgressPath:     "progress",
-		ResultURLPaths:   []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
-		ErrorMessagePath: "error_message",
-		CreatedAtPath:    "created_at",
-		UpdatedAtPath:    "updated_at",
+		SubmitPath:     "/v1/videos/create",
+		QueryPath:      "/v1/videos/{task_id}",
+		TaskIDPath:     "task_id",
+		StatusPath:     "status",
+		ProgressPath:   "progress",
+		ResultURLPaths: []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
+		CreatedAtPath:  "created_at",
+		UpdatedAtPath:  "updated_at",
 		StatusMap: map[string]string{
 			"queued":      string(model.TaskStatusQueued),
 			"pending":     string(model.TaskStatusQueued),
@@ -76,6 +74,7 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 			"failure":     string(model.TaskStatusFailure),
 			"error":       string(model.TaskStatusFailure),
 		},
+		ErrorMessagePath: "error_message",
 	}
 	if input == nil {
 		return cfg
@@ -113,11 +112,15 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 	return cfg
 }
 
+func EffectiveTaskProtocolConfig(settings dto.ChannelOtherSettings) dto.TaskProtocolConfig {
+	return NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
+}
+
 func TryHandleConfiguredSubmitResponse(c *gin.Context, responseBody []byte, info *relaycommon.RelayInfo) (string, bool, *dto.TaskError) {
 	if info == nil || info.ChannelMeta == nil || !UseConfiguredTaskProtocol(info.ChannelOtherSettings) {
 		return "", false, nil
 	}
-	cfg := NormalizeTaskProtocolConfig(info.ChannelOtherSettings.TaskProtocolConfig)
+	cfg := EffectiveTaskProtocolConfig(info.ChannelOtherSettings)
 	taskID := StringFromGJSONPath(responseBody, cfg.TaskIDPath)
 	if taskID == "" {
 		taskID = StringFromGJSONPath(responseBody, "id")
@@ -158,7 +161,7 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	if !UseConfiguredTaskProtocol(settings) {
 		return nil, false, nil
 	}
-	cfg := NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
+	cfg := EffectiveTaskProtocolConfig(settings)
 	taskID := StringFromGJSONPath(respBody, cfg.TaskIDPath)
 	statusRaw := StringFromGJSONPath(respBody, cfg.StatusPath)
 	progressRaw := StringFromGJSONPath(respBody, cfg.ProgressPath)
@@ -172,6 +175,9 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	status := MapConfiguredTaskStatus(statusRaw, cfg)
 	if statusRaw == "" {
 		status = inferConfiguredTaskStatus(resultURL, reason)
+	}
+	if resultURL != "" && status != string(model.TaskStatusFailure) {
+		status = string(model.TaskStatusSuccess)
 	}
 	progress := NormalizeConfiguredProgress(progressRaw, status)
 
@@ -226,7 +232,7 @@ func TaskProtocolConfigFromTask(task *model.Task) (dto.TaskProtocolConfig, bool)
 	if !UseConfiguredTaskProtocol(settings) {
 		return dto.TaskProtocolConfig{}, false
 	}
-	return NormalizeTaskProtocolConfig(settings.TaskProtocolConfig), true
+	return EffectiveTaskProtocolConfig(settings), true
 }
 
 func StringFromGJSONPath(data []byte, path string) string {

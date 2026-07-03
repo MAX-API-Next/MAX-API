@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/stretchr/testify/require"
 )
@@ -304,14 +305,89 @@ func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T)
 
 	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
 	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
+	require.NotEmpty(t, claudeRequest.Messages)
 
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
+	claudeMessage := claudeRequest.Messages[len(claudeRequest.Messages)-1]
+	require.Equal(t, "user", claudeMessage.Role)
+	content, ok := claudeMessage.Content.([]dto.ClaudeMediaMessage)
 	require.True(t, ok)
 	require.Len(t, content, 1)
 	require.Equal(t, "text", content[0].Type)
 	require.NotNil(t, content[0].Text)
 	require.Equal(t, "see attachment", *content[0].Text)
+}
+
+func TestRequestOpenAI2ClaudeMessage_PreservesToolUseWithEmptyArguments(t *testing.T) {
+	rawToolCalls, err := common.Marshal([]dto.ToolCallRequest{
+		{
+			ID:   "call_1",
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:      "lookup",
+				Arguments: "",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	request := dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []dto.Message{
+			{
+				Role:      "assistant",
+				ToolCalls: rawToolCalls,
+			},
+		},
+	}
+
+	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
+	require.NoError(t, err)
+	require.NotEmpty(t, claudeRequest.Messages)
+
+	assistantMessage := claudeRequest.Messages[len(claudeRequest.Messages)-1]
+	require.Equal(t, "assistant", assistantMessage.Role)
+	content, ok := assistantMessage.Content.([]dto.ClaudeMediaMessage)
+	require.True(t, ok)
+	var toolUse *dto.ClaudeMediaMessage
+	for i := range content {
+		if content[i].Type == "tool_use" {
+			toolUse = &content[i]
+			break
+		}
+	}
+	require.NotNil(t, toolUse)
+	require.Equal(t, "call_1", toolUse.Id)
+	require.Equal(t, "lookup", toolUse.Name)
+	require.Empty(t, toolUse.Input)
+}
+
+func TestRequestOpenAI2ClaudeMessage_ReturnsErrorForMalformedToolArguments(t *testing.T) {
+	rawToolCalls, err := common.Marshal([]dto.ToolCallRequest{
+		{
+			ID:   "call_1",
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:      "lookup",
+				Arguments: "{",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	request := dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Messages: []dto.Message{
+			{
+				Role:      "assistant",
+				ToolCalls: rawToolCalls,
+			},
+		},
+	}
+
+	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
+	require.Error(t, err)
+	require.Nil(t, claudeRequest)
+	require.Contains(t, err.Error(), "tool call function arguments is not valid JSON object")
 }
 
 func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {

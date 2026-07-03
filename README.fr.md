@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 ![max-api](/web/default/public/logo.png)
 
@@ -9,7 +9,7 @@
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
   <a href="./README.zh_TW.md">繁體中文</a> |
-  <a href="./README.md">English</a> |
+  <a href="./README.en.md">English</a> |
   <strong>Français</strong> |
   <a href="./README.ja.md">日本語</a>
 </p>
@@ -90,7 +90,7 @@ MAX API place l'exécution des modèles IA et des AI Agents dans un cadre config
 | Canaux amont | Fournisseurs, poids, groupes, état, clés, Base URL, overrides de chemins, matrice de capacités, validation, découverte et retry | Réduire les risques d'indisponibilité, hausse de prix, limites, erreurs de configuration ou changements d'API |
 | Formats de protocole | OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime, protocole vidéo générique et conversions | Donner aux applications des interfaces stables plutôt que les exposer aux différences de fournisseurs |
 | Jetons Agent | API Key, groupes de jetons, périmètre de modèles, quotas, expiration et contrôle d'accès | Fournir aux Agents et workflows des identifiants indépendants, révocables et limitables |
-| Usage et coûts | Journaux, statistiques, facturation par expression, JSON par paliers, rate-card de tâches, préfacturation et remboursements | Attribuer les coûts par utilisateur, jeton, modèle, canal et groupe |
+| Usage et coûts | Journaux, statistiques, facturation par expression, JSON par paliers, rate-card de tâches, préfacturation et remboursements | Attribuer les coûts par utilisateur, groupe, jeton, modèle, canal et nœud |
 | Tâches asynchrones | Soumission, polling, mapping d'état, proxy de résultat et facturation de tâches vidéo | Gouverner les tâches multimodales longues, multi-états et multi-fournisseurs |
 | Audit et sécurité | Audit admin, journaux d'erreurs, limites de requêtes, timeout streaming, login et permissions | Fournir une frontière d'audit contrôlée en déploiement privé et contexte conforme |
 | Exploitation organisationnelle | Utilisateurs, groupes, solde, paiement, paramètres système, tableaux de bord et configuration ops | Soutenir l'exploitation continue d'équipes, institutions, entreprises ou communautés |
@@ -155,8 +155,8 @@ docker compose up -d
 | Matrice de capacités des canaux | Affiche `chat/completions`, `responses`, `Claude Messages`, `Gemini native`, `embeddings`, `images`, `audio`, `rerank`, `video tasks`, `model discovery` |
 | Validation des canaux | Vérifie API Key, modèles, Base URL, configuration JSON, région Vertex AI, identifiants Codex, découverte de modèles et placeholders vidéo |
 | Gouvernance multimodale | Chat, image, vidéo, audio, embeddings, rerank, temps réel, et gestion des tâches asynchrones vidéo |
-| Protocole vidéo générique | Configure soumission, requête, progression, mapping d'état, erreur et chemins de résultats ; chemins par défaut `/v1/videos/create` et `/v1/videos/{task_id}` |
-| Conversion protocolaire et amonts personnalisés | Conversions OpenAI Compatible, Claude Messages, Gemini, ainsi que URL amont autorisées, overrides et règles de parsing de tâches |
+| Protocole vidéo générique | Configure soumission, requête, progression, mapping d'état, erreur et chemins de résultats ; le passthrough et les réécritures du corps utilisent les paramètres de canal existants ; chemins par défaut `/v1/videos/create` et `/v1/videos/{task_id}` |
+| Conversion protocolaire et amonts personnalisés | Conversions OpenAI Compatible, Responses, Chat Completions, Claude Messages, Gemini, ainsi que URL amont autorisées, overrides et règles de parsing de tâches |
 
 ### Gouvernance AI Agent / AgentOps
 
@@ -165,7 +165,7 @@ docker compose up -d
 | Isolation des jetons Agent | Créer des API Key indépendantes pour Agents, workflows, plugins, appels d'outils ou utilisateurs |
 | Contrôle d'accès modèle | Contrôler modèles, canaux et quota par utilisateur, jeton, groupe, restriction de modèle et politique de canal |
 | Observabilité de chaîne d'appels | Journaux, statistiques, canal touché, latence, erreurs et retries pour diagnostiquer les Agents |
-| Attribution des coûts | Statistiques par modèle, canal, utilisateur, groupe et jeton |
+| Attribution des coûts | Statistiques par modèle, canal, utilisateur, groupe, jeton et nœud |
 | Audit administrateur | Audit côté admin en déploiement privé ; les API de journaux utilisateur filtrent les champs réservés aux administrateurs |
 | Tableau de bord ops | Analyses, gestion utilisateurs, gestion canaux, paramètres système et analyse d'exploitation |
 
@@ -267,17 +267,17 @@ flowchart LR
 | Type | Description |
 |------|------|
 | OpenAI-Compatible | Chat Completions, Embeddings, Images, Audio et interfaces compatibles |
-| OpenAI Responses | Requêtes Responses, relay et compatibilité pour les nouveaux protocoles OpenAI |
+| OpenAI Responses | Requêtes Responses, relay et conversion compatible Responses ↔ Chat Completions |
 | Claude Messages | Conversion Claude Messages ↔ format OpenAI-compatible |
-| Google Gemini | Chat, texte et conversions partielles Gemini |
+| Google Gemini | Chat, texte et conversion compatible `/v1/responses` |
 | Azure OpenAI | Azure OpenAI et Realtime |
 | AWS Bedrock | Accès Bedrock Runtime |
 | Plateformes et applications amont | AWS, Azure, Vertex, Ollama, Codex, Dify, RAGFlow, Kling, Seedance, etc. |
 | Modèles et plateformes chinoises | DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, SiliconFlow, etc. |
 | `rerank` | Modèles Cohere, Jina et autres pour RAG et chaînes de recherche Agent |
 | Midjourney / Suno / Dify | Adaptateurs image, musique et workflow |
-| API de tâches vidéo | `/v1/videos/create`, `/v1/videos/{task_id}` : soumission, polling, mapping d'état, proxy de résultat et facturation paramétrée |
-| Amonts personnalisés | URL autorisées, règles d'adaptation, overrides, mapping d'état, chemin d'erreur et parsing de résultat |
+| API de tâches vidéo | `/v1/videos/create`, `/v1/videos/{task_id}` : soumission, passthrough du corps ou overrides de paramètres, polling, mapping d'état, proxy de résultat et facturation paramétrée |
+| Amonts personnalisés | URL autorisées, règles d'adaptation, conversion Responses / Chat, overrides, mapping d'état, chemin d'erreur et parsing de résultat |
 
 ### Interfaces principales
 
@@ -336,6 +336,7 @@ Les fournisseurs vidéo diffèrent souvent par chemins, task ID, état, progress
 
 - **Override de chemins uniquement** : configurer `submit_path` et `query_path` tout en conservant le parseur officiel du canal.
 - **Parsing complet** : définir `task_protocol = "generic_video_task"` et configurer task ID, état, progression, URL de résultat, erreur et mapping d'état.
+- **Traitement du corps** : le protocole vidéo générique ne définit plus de mode de génération du corps séparé. Utilisez `Pass Through Body` au niveau du canal pour transmettre le JSON client tel quel, et `Param Override` pour les réécritures, valeurs par défaut ou coordinations de headers.
 
 Chemins par défaut :
 
@@ -361,6 +362,8 @@ Les chemins de requête prennent en charge `{task_id}`, `{operation_name}` et `{
 
 - **Tiered billing JSON** : maintient plusieurs règles `{ enabled, expr }` et synchronise `billing_mode` / `billing_expr`.
 - **Task rate-card JSON** : maintient `task_billing_setting.rate_cards` pour les tâches asynchrones, avec partition `vendor` pour Sora, Veo, Seedance, Kling, etc.
+
+Les modèles vidéo comme Seedance 2.0 peuvent utiliser la résolution, l'entrée vidéo et d'autres paramètres de requête dans les multiplicateurs ou les rate-cards. Avec le passthrough ou les overrides de paramètres, gardez les champs finaux envoyés en amont alignés avec les champs de facturation.
 
 ```json
 {
@@ -427,7 +430,7 @@ Les chemins de requête prennent en charge `{task_id}`, `{operation_name}` et `{
 | `MAX_REQUEST_BODY_MB` | Taille max du body décompressé | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Version API Azure par défaut | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | Activation des journaux d'erreurs | `false` |
-| `NODE_NAME` | Nom du nœud | - |
+| `NODE_NAME` | Nom du nœud pour logs multi-nœuds et attribution des règlements de tâches asynchrones | - |
 | `PYROSCOPE_URL` | URL Pyroscope | - |
 | `PYROSCOPE_APP_NAME` | Nom d'application Pyroscope | `max-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Utilisateur Basic Auth | - |
@@ -482,7 +485,7 @@ docker build -t cscitechtop/max-api:latest .
 > [!WARNING]
 > - Tous les nœuds doivent partager `SESSION_SECRET`.
 > - Avec Redis partagé, tous les nœuds doivent partager `CRYPTO_SECRET`.
-> - Définissez `NODE_NAME` pour identifier les nœuds dans logs et audit.
+> - Définissez un `NODE_NAME` stable pour identifier les nœuds dans les logs, l'audit et les règlements de tâches asynchrones.
 > - En production, utilisez DB externe, Redis externe, HTTPS et sauvegardes fiables.
 
 ---

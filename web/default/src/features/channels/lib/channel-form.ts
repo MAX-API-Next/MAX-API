@@ -39,11 +39,7 @@ import {
 } from './channel-config-rules'
 
 const VIDEO_TASK_PROTOCOL = 'generic_video_task'
-const LEGACY_SEEDANCE_MEDIA_PROTOCOL = 'seedance_official_media'
-const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([
-  VIDEO_TASK_PROTOCOL,
-  LEGACY_SEEDANCE_MEDIA_PROTOCOL,
-])
+const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([VIDEO_TASK_PROTOCOL])
 const DEFAULT_VIDEO_TASK_SUBMIT_PATH = '/v1/videos/create'
 const DEFAULT_VIDEO_TASK_QUERY_PATH = '/v1/videos/{task_id}'
 const DEFAULT_VIDEO_TASK_TASK_ID_PATH = 'task_id'
@@ -378,6 +374,7 @@ export const channelFormSchema = z
         )
       }
     }
+
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -623,7 +620,9 @@ export function transformChannelToFormDefaults(
         taskProtocolConfig.submit_path || ''
       ).trim()
       const parsedQueryPath = String(taskProtocolConfig.query_path || '').trim()
-      const taskProtocol = String(parsed.task_protocol || '').trim()
+      const taskProtocol = String(parsed.task_protocol || '')
+        .trim()
+        .toLowerCase()
       const hasConfiguredVideoTaskProtocol =
         CONFIGURED_VIDEO_TASK_PROTOCOLS.has(taskProtocol)
       const hasConfiguredVideoTaskPaths = Boolean(
@@ -902,11 +901,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       'FAILURE'
     )
 
-    const existingProtocol = String(settingsObj.task_protocol || '').trim()
-    settingsObj.task_protocol =
-      existingProtocol === LEGACY_SEEDANCE_MEDIA_PROTOCOL
-        ? LEGACY_SEEDANCE_MEDIA_PROTOCOL
-        : VIDEO_TASK_PROTOCOL
+    settingsObj.task_protocol = VIDEO_TASK_PROTOCOL
     settingsObj.task_protocol_config = {
       submit_path:
         formData.video_task_submit_path?.trim() ||
@@ -932,13 +927,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       status_map: statusMap,
     }
   } else if (enableVideoTaskPathOverride) {
-    if (
-      CONFIGURED_VIDEO_TASK_PROTOCOLS.has(
-        String(settingsObj.task_protocol || '').trim()
-      )
-    ) {
-      delete settingsObj.task_protocol
-    }
+    delete settingsObj.task_protocol
     settingsObj.task_protocol_config = {
       submit_path:
         formData.video_task_submit_path?.trim() ||
@@ -952,12 +941,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.task_protocol_config
   }
 
-  if (
-    !enableVideoTaskProtocol &&
-    CONFIGURED_VIDEO_TASK_PROTOCOLS.has(
-      String(settingsObj.task_protocol || '').trim()
-    )
-  ) {
+  if (!enableVideoTaskProtocol && 'task_protocol' in settingsObj) {
     delete settingsObj.task_protocol
   }
 

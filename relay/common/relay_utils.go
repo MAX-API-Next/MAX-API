@@ -64,6 +64,35 @@ func StoreTaskRequest(c *gin.Context, info *RelayInfo, action string, requestObj
 	storeTaskRequest(c, info, action, requestObj)
 }
 
+func StoreTaskSubmitRequestBody(c *gin.Context, body []byte) {
+	if c == nil {
+		return
+	}
+	c.Set("task_submit_request_body", append([]byte(nil), body...))
+}
+
+func GetTaskSubmitRequestBody(c *gin.Context) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	v, exists := c.Get("task_submit_request_body")
+	if !exists {
+		return nil, false
+	}
+	body, ok := v.([]byte)
+	if !ok {
+		return nil, false
+	}
+	return body, true
+}
+
+func ClearTaskSubmitRequestBody(c *gin.Context) {
+	if c == nil || c.Keys == nil {
+		return
+	}
+	delete(c.Keys, "task_submit_request_body")
+}
+
 func GetTaskRequest(c *gin.Context) (TaskSubmitReq, error) {
 	v, exists := c.Get("task_request")
 	if !exists {

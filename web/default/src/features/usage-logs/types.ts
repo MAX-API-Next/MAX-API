@@ -39,6 +39,8 @@ export interface UsageLog {
   use_time: number
   is_stream: boolean
   is_retry?: boolean
+  is_error_retry?: boolean
+  is_empty_retry?: boolean
   channel: number
   channel_name?: string
   token_id?: number

@@ -33,6 +33,8 @@ import {
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
   LOG_TYPE_RETRY_VALUE,
+  LOG_TYPE_ERROR_RETRY_VALUE,
+  LOG_TYPE_EMPTY_RETRY_VALUE,
 } from '../constants'
 import type {
   GetLogsParams,
@@ -42,6 +44,18 @@ import type {
   GetTaskLogsParams,
 } from '../types'
 import { parseLogOther } from './format'
+
+const RETRY_LOG_FILTER_VALUES = [
+  LOG_TYPE_RETRY_VALUE,
+  LOG_TYPE_ERROR_RETRY_VALUE,
+  LOG_TYPE_EMPTY_RETRY_VALUE,
+] as const
+
+type RetryLogFilterValue = (typeof RETRY_LOG_FILTER_VALUES)[number]
+
+function isRetryLogFilterValue(value: string): value is RetryLogFilterValue {
+  return (RETRY_LOG_FILTER_VALUES as readonly string[]).includes(value)
+}
 
 // ============================================================================
 // Type Checkers & Utilities
@@ -96,7 +110,13 @@ function timestampToSeconds(ms: number): number {
 }
 
 export function matchesCommonLogTypeFilter(
-  log: { type: number; other: string; is_retry?: boolean },
+  log: {
+    type: number
+    other: string
+    is_retry?: boolean
+    is_error_retry?: boolean
+    is_empty_retry?: boolean
+  },
   value: unknown
 ): boolean {
   if (!Array.isArray(value) || value.length === 0) return true
@@ -107,7 +127,23 @@ export function matchesCommonLogTypeFilter(
 
   if (filterValues.length === 0) return true
   if (filterValues.includes(LOG_TYPE_ALL_VALUE)) return true
-  if (filterValues.includes(LOG_TYPE_RETRY_VALUE)) {
+  if (
+    filterValues.includes(LOG_TYPE_RETRY_VALUE) ||
+    filterValues.includes(LOG_TYPE_ERROR_RETRY_VALUE) ||
+    filterValues.includes(LOG_TYPE_EMPTY_RETRY_VALUE)
+  ) {
+    if (filterValues.includes(LOG_TYPE_ERROR_RETRY_VALUE)) {
+      if (log.is_error_retry === true) return true
+      if (log.is_empty_retry === true) return false
+      const other = parseLogOther(log.other)
+      if (other?.empty_retry === true) return false
+      return other?.retry_log === true
+    }
+    if (filterValues.includes(LOG_TYPE_EMPTY_RETRY_VALUE)) {
+      if (log.is_empty_retry === true) return true
+      const other = parseLogOther(log.other)
+      return other?.empty_retry === true
+    }
     if (log.is_retry === true) {
       return true
     }
@@ -222,8 +258,9 @@ export function buildApiParams(config: {
       return
     }
 
-    if (typeValues.includes(LOG_TYPE_RETRY_VALUE)) {
-      params.log_filter = LOG_TYPE_RETRY_VALUE
+    const retryFilter = typeValues.find(isRetryLogFilterValue)
+    if (retryFilter) {
+      params.log_filter = retryFilter
       params.type = undefined
       return
     }
