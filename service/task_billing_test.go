@@ -51,6 +51,21 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestShouldApplyTaskResultProgressSkipsNonTerminalCompleteProgress(t *testing.T) {
+	assert.False(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusInProgress),
+		Progress: "100%",
+	}))
+	assert.True(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusInProgress),
+		Progress: "75%",
+	}))
+	assert.True(t, shouldApplyTaskResultProgress(&relaycommon.TaskInfo{
+		Status:   string(model.TaskStatusSuccess),
+		Progress: "100%",
+	}))
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------

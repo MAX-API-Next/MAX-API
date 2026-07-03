@@ -279,19 +279,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 }
 
 func buildTaskSubmitRequestBody(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor) (io.Reader, error) {
-	var taskReq *relaycommon.TaskSubmitReq
-	if req, err := relaycommon.GetTaskRequest(c); err == nil {
-		taskReq = &req
-	}
-
-	requestBody, handled, err := taskcommon.BuildConfiguredTaskRequestBody(c, info, taskReq)
+	requestBody, handled, err := taskcommon.BuildConfiguredTaskPassThroughBody(c, info)
 	if err != nil {
 		return nil, err
 	}
-	if handled {
-		return requestBody, nil
+	if !handled {
+		requestBody, err = adaptor.BuildRequestBody(c, info)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return adaptor.BuildRequestBody(c, info)
+	return taskcommon.ApplyTaskParamOverride(requestBody, info)
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。

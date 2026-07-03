@@ -39,22 +39,7 @@ import {
 } from './channel-config-rules'
 
 const VIDEO_TASK_PROTOCOL = 'generic_video_task'
-const LEGACY_VIDEO_TASK_PROTOCOL = 'seedance_official_media'
-const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([
-  VIDEO_TASK_PROTOCOL,
-  LEGACY_VIDEO_TASK_PROTOCOL,
-])
-const VIDEO_TASK_REQUEST_BODY_MODES = [
-  'adapter',
-  'pass_through',
-  'field_mapping',
-  'media_generation',
-] as const
-type VideoTaskRequestBodyMode = (typeof VIDEO_TASK_REQUEST_BODY_MODES)[number]
-const VIDEO_TASK_REQUEST_BODY_MODE_SET = new Set<string>(
-  VIDEO_TASK_REQUEST_BODY_MODES
-)
-const DEFAULT_VIDEO_TASK_REQUEST_BODY_MODE = VIDEO_TASK_REQUEST_BODY_MODES[0]
+const CONFIGURED_VIDEO_TASK_PROTOCOLS = new Set([VIDEO_TASK_PROTOCOL])
 const DEFAULT_VIDEO_TASK_SUBMIT_PATH = '/v1/videos/create'
 const DEFAULT_VIDEO_TASK_QUERY_PATH = '/v1/videos/{task_id}'
 const DEFAULT_VIDEO_TASK_TASK_ID_PATH = 'task_id'
@@ -63,8 +48,6 @@ const DEFAULT_VIDEO_TASK_PROGRESS_PATH = 'progress'
 const DEFAULT_VIDEO_TASK_RESULT_URL_PATHS =
   'result.primary_url,result.urls.0,result.url,result.video_url,result.output_url,data.result.primary_url,data.result.urls.0,data.result.url,data.result.video_url,data.result.output_url,url,video_url,output_url,file_url,download_url,result'
 const DEFAULT_VIDEO_TASK_ERROR_MESSAGE_PATH = 'error_message'
-const DEFAULT_VIDEO_TASK_REQUEST_BODY_MAPPING = ''
-const DEFAULT_VIDEO_TASK_REQUEST_BODY_DEFAULTS = ''
 const DEFAULT_VIDEO_TASK_STATUS_SUBMITTED = 'submitted,created'
 const DEFAULT_VIDEO_TASK_STATUS_QUEUED = 'queued,pending'
 const DEFAULT_VIDEO_TASK_STATUS_RUNNING = 'running,processing,in_progress'
@@ -261,20 +244,6 @@ export const channelFormSchema = z
     // Video task protocol settings (stored in settings JSON)
     video_task_path_override_enabled: z.boolean().optional(),
     video_task_protocol_enabled: z.boolean().optional(),
-    video_task_request_body_mode: z
-      .enum(VIDEO_TASK_REQUEST_BODY_MODES)
-      .optional(),
-    video_task_request_body_mapping: z
-      .string()
-      .optional()
-      .refine(
-        isOptionalModelMapping,
-        'Request body mapping must be a JSON object with string values'
-      ),
-    video_task_request_body_defaults: z
-      .string()
-      .optional()
-      .refine(isOptionalJsonObject, ERROR_MESSAGES.INVALID_JSON),
     video_task_submit_path: z.string().optional(),
     video_task_query_path: z.string().optional(),
     video_task_task_id_path: z.string().optional(),
@@ -406,31 +375,6 @@ export const channelFormSchema = z
       }
     }
 
-    if (
-      VIDEO_TASK_CHANNEL_TYPES.has(data.type) &&
-      data.video_task_protocol_enabled === true &&
-      data.video_task_request_body_mode === 'field_mapping'
-    ) {
-      const hasRequestBodyMapping = (() => {
-        try {
-          return Boolean(
-            parseOptionalStringRecordInput(
-              data.video_task_request_body_mapping
-            ) ||
-            parseOptionalJsonObjectInput(data.video_task_request_body_defaults)
-          )
-        } catch {
-          return false
-        }
-      })()
-      if (!hasRequestBodyMapping) {
-        addRequiredIssue(
-          ctx,
-          'video_task_request_body_mapping',
-          'Request body mapping or defaults are required for field mapping mode'
-        )
-      }
-    }
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -491,9 +435,6 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_ignored_models: '',
   video_task_path_override_enabled: false,
   video_task_protocol_enabled: false,
-  video_task_request_body_mode: DEFAULT_VIDEO_TASK_REQUEST_BODY_MODE,
-  video_task_request_body_mapping: DEFAULT_VIDEO_TASK_REQUEST_BODY_MAPPING,
-  video_task_request_body_defaults: DEFAULT_VIDEO_TASK_REQUEST_BODY_DEFAULTS,
   video_task_submit_path: DEFAULT_VIDEO_TASK_SUBMIT_PATH,
   video_task_query_path: DEFAULT_VIDEO_TASK_QUERY_PATH,
   video_task_task_id_path: DEFAULT_VIDEO_TASK_TASK_ID_PATH,
@@ -527,43 +468,6 @@ function joinCSV(values: unknown, fallback: string): string {
     return values.trim()
   }
   return fallback
-}
-
-function stringifyOptionalJsonObject(value: unknown): string {
-  if (!isJsonObjectValue(value) || Object.keys(value).length === 0) {
-    return ''
-  }
-  return JSON.stringify(value, null, 2)
-}
-
-function hasJsonObjectEntries(value: unknown): boolean {
-  return isJsonObjectValue(value) && Object.keys(value).length > 0
-}
-
-function parseOptionalJsonObjectInput(
-  value: string | undefined
-): Record<string, unknown> | undefined {
-  const parsed = parseOptionalJson(value)
-  if (!isJsonObjectValue(parsed) || Object.keys(parsed).length === 0) {
-    return undefined
-  }
-  return parsed
-}
-
-function parseOptionalStringRecordInput(
-  value: string | undefined
-): Record<string, string> | undefined {
-  const parsed = parseOptionalJson(value)
-  if (!isJsonObjectValue(parsed)) {
-    return undefined
-  }
-  const out: Record<string, string> = {}
-  for (const [key, item] of Object.entries(parsed)) {
-    if (key.trim() && typeof item === 'string' && item.trim()) {
-      out[key] = item
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function normalizeTaskStatus(value: unknown): string {
@@ -613,25 +517,6 @@ function setVideoTaskStatusMap(
   for (const status of splitCSV(statuses)) {
     statusMap[status] = targetStatus
   }
-}
-
-function normalizeVideoTaskRequestBodyMode(
-  value: unknown,
-  taskProtocol = '',
-  hasImplicitFieldMappingConfig = false
-) {
-  if (taskProtocol === LEGACY_VIDEO_TASK_PROTOCOL) {
-    return 'media_generation'
-  }
-  const mode = String(value || '')
-    .trim()
-    .toLowerCase()
-  if (VIDEO_TASK_REQUEST_BODY_MODE_SET.has(mode)) {
-    return mode as VideoTaskRequestBodyMode
-  }
-  return !mode && hasImplicitFieldMappingConfig
-    ? 'field_mapping'
-    : DEFAULT_VIDEO_TASK_REQUEST_BODY_MODE
 }
 
 // ============================================================================
@@ -688,10 +573,6 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let videoTaskPathOverrideEnabled = false
   let videoTaskProtocolEnabled = false
-  let videoTaskRequestBodyMode: VideoTaskRequestBodyMode =
-    DEFAULT_VIDEO_TASK_REQUEST_BODY_MODE
-  let videoTaskRequestBodyMapping = DEFAULT_VIDEO_TASK_REQUEST_BODY_MAPPING
-  let videoTaskRequestBodyDefaults = DEFAULT_VIDEO_TASK_REQUEST_BODY_DEFAULTS
   let videoTaskSubmitPath = DEFAULT_VIDEO_TASK_SUBMIT_PATH
   let videoTaskQueryPath = DEFAULT_VIDEO_TASK_QUERY_PATH
   let videoTaskIDPath = DEFAULT_VIDEO_TASK_TASK_ID_PATH
@@ -747,23 +628,9 @@ export function transformChannelToFormDefaults(
       const hasConfiguredVideoTaskPaths = Boolean(
         parsedSubmitPath || parsedQueryPath
       )
-      const hasImplicitFieldMappingConfig =
-        hasJsonObjectEntries(taskProtocolConfig.request_body_mapping) ||
-        hasJsonObjectEntries(taskProtocolConfig.request_body_defaults)
       videoTaskProtocolEnabled = hasConfiguredVideoTaskProtocol
       videoTaskPathOverrideEnabled =
         hasConfiguredVideoTaskProtocol || hasConfiguredVideoTaskPaths
-      videoTaskRequestBodyMode = normalizeVideoTaskRequestBodyMode(
-        taskProtocolConfig.request_body_mode,
-        taskProtocol,
-        hasImplicitFieldMappingConfig
-      )
-      videoTaskRequestBodyMapping = stringifyOptionalJsonObject(
-        taskProtocolConfig.request_body_mapping
-      )
-      videoTaskRequestBodyDefaults = stringifyOptionalJsonObject(
-        taskProtocolConfig.request_body_defaults
-      )
       videoTaskSubmitPath = parsedSubmitPath || DEFAULT_VIDEO_TASK_SUBMIT_PATH
       videoTaskQueryPath = parsedQueryPath || DEFAULT_VIDEO_TASK_QUERY_PATH
 
@@ -862,9 +729,6 @@ export function transformChannelToFormDefaults(
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     video_task_path_override_enabled: videoTaskPathOverrideEnabled,
     video_task_protocol_enabled: videoTaskProtocolEnabled,
-    video_task_request_body_mode: videoTaskRequestBodyMode,
-    video_task_request_body_mapping: videoTaskRequestBodyMapping,
-    video_task_request_body_defaults: videoTaskRequestBodyDefaults,
     video_task_submit_path: videoTaskSubmitPath,
     video_task_query_path: videoTaskQueryPath,
     video_task_task_id_path: videoTaskIDPath,
@@ -1010,17 +874,6 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       enableVideoTaskProtocol)
 
   if (enableVideoTaskProtocol) {
-    const requestBodyMapping = parseOptionalStringRecordInput(
-      formData.video_task_request_body_mapping
-    )
-    const requestBodyDefaults = parseOptionalJsonObjectInput(
-      formData.video_task_request_body_defaults
-    )
-    const requestBodyMode =
-      formData.video_task_request_body_mode ||
-      (requestBodyMapping || requestBodyDefaults
-        ? 'field_mapping'
-        : DEFAULT_VIDEO_TASK_REQUEST_BODY_MODE)
     const statusMap: Record<string, string> = {}
     setVideoTaskStatusMap(
       statusMap,
@@ -1055,13 +908,6 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
         DEFAULT_VIDEO_TASK_SUBMIT_PATH,
       query_path:
         formData.video_task_query_path?.trim() || DEFAULT_VIDEO_TASK_QUERY_PATH,
-      request_body_mode: requestBodyMode,
-      ...(requestBodyMapping
-        ? { request_body_mapping: requestBodyMapping }
-        : {}),
-      ...(requestBodyDefaults
-        ? { request_body_defaults: requestBodyDefaults }
-        : {}),
       task_id_path:
         formData.video_task_task_id_path?.trim() ||
         DEFAULT_VIDEO_TASK_TASK_ID_PATH,
@@ -1081,9 +927,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       status_map: statusMap,
     }
   } else if (enableVideoTaskPathOverride) {
-    if ('task_protocol' in settingsObj) {
-      delete settingsObj.task_protocol
-    }
+    delete settingsObj.task_protocol
     settingsObj.task_protocol_config = {
       submit_path:
         formData.video_task_submit_path?.trim() ||

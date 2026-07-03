@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 ![max-api](/web/default/public/logo.png)
 
@@ -9,7 +9,7 @@
 <p align="center">
   <a href="./README.zh_CN.md">簡體中文</a> |
   <strong>繁體中文</strong> |
-  <a href="./README.md">English</a> |
+  <a href="./README.en.md">English</a> |
   <a href="./README.fr.md">Français</a> |
   <a href="./README.ja.md">日本語</a>
 </p>
@@ -98,7 +98,7 @@ MAX API 的設計把 AI 模型和 AI Agent 的運行過程納入可配置、可�
 | 上游渠道 | 供應商渠道、權重、分組、狀態、密鑰、Base URL、路徑覆蓋、能力矩陣、配置校驗、模型發現和失敗重試 | 降低單一供應商不可用、漲價、限流、誤配置或介面變化帶來的風險 |
 | 協議格式 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、通用視頻任務協議等協議入口和轉換 | 讓應用側盡量面對穩定介面，而不是直接承擔各家協議差異 |
 | Agent 令牌 | API Key、令牌分組、模型范圍、額度限制、過期時間和訪問控制 | 為 Agent、工作流和工具調用分配獨立、可回收、可限額的訪問憑據 |
-| 用量與成本 | 請求日志、用量統計、表達式計費、分階段計費 JSON、任務 rate-card、預扣費和失敗退款 | 把模型調用成本拆到使用者、令牌、模型、渠道和分組維度 |
+| 用量與成本 | 請求日志、用量統計、表達式計費、分階段計費 JSON、任務 rate-card、預扣費和失敗退款 | 把模型調用成本拆到使用者、分組、令牌、模型、渠道和節點維度 |
 | 異步任務 | 視頻等任務提交、輪詢、狀態映射、結果代理和任務計費 | 統一治理長耗時、多狀態、多上游格式的多模態任務 |
 | 審計與安全 | 管理員側日志審計、錯誤日志、請求限制、流式超時、登錄與權限控制 | 在私有化部署和合規場景中提供可控的審計邊界，敏感內容審計集中放在安全與限制中管理 |
 | 組織營運 | 使用者、分組、余額、支付、系統設置、資料看板和運維配置 | 支撐團隊、研究機構、企業或社區服務的持續營運 |
@@ -163,8 +163,8 @@ docker compose up -d
 | 渠道能力矩陣 | 渠道編輯界面展示 `chat/completions`、`responses`、`Claude Messages`、`Gemini native`、`embeddings`、`images`、`audio`、`rerank`、`video tasks`、`model discovery` 等能力狀態，減少管理員對渠道能力的猜測 |
 | 渠道配置校驗 | 在保存前檢查 API Key、模型列表、Base URL、額外配置、JSON 對象、Vertex AI 區域、Codex 憑證、模型發現能力和視頻任務路徑占位符等常見問題 |
 | 多模態模型治理 | 支持聊天、圖像、視頻、音頻、嵌入、重排序、實時對話等場景，并對視頻等異步任務提供提交、輪詢、狀態映射和結果代理 |
-| 通用視頻任務協議 | 支持將不同視頻上游的任務提交、查詢、進度、狀態映射、錯誤消息和結果 URL 路徑統一配置到渠道中，默認使用 `/v1/videos/create` 與 `/v1/videos/{task_id}` |
-| 協議轉換與自定義上游 | 支持 OpenAI Compatible、Claude Messages、Gemini 等格式之間的轉換與適配，也支持配置合法授權的上游地址、路徑覆蓋和任務協議解析規則 |
+| 通用視頻任務協議 | 支持將不同視頻上游的任務提交、查詢、進度、狀態映射、錯誤消息和結果 URL 路徑統一配置到渠道中；請求體透傳和改寫復用渠道設置，默認路徑為 `/v1/videos/create` 與 `/v1/videos/{task_id}` |
+| 協議轉換與自定義上游 | 支持 OpenAI Compatible、Responses、Chat Completions、Claude Messages、Gemini 等格式之間的轉換與適配，也支持配置合法授權的上游地址、路徑覆蓋和任務協議解析規則 |
 
 ### AI Agent 治理 / AgentOps
 
@@ -173,7 +173,7 @@ docker compose up -d
 | Agent 令牌隔離 | 可為 Agent、工作流、插件、工具調用或使用者創建獨立 API Key，并配置模型范圍、額度、過期時間和分組 |
 | 模型訪問控制 | 通過使用者、令牌、分組、模型限制和渠道策略控制 Agent 能調用哪些模型、走哪些渠道、消耗多少額度 |
 | 調用鏈路觀測 | 提供請求日志、用量統計、渠道命中、耗時、錯誤和重試信息，幫助定位 Agent 調用失敗、成本異常和上游波動 |
-| 成本歸因 | 支持按模型、渠道、使用者、分組和令牌維度統計成本與用量，方便核算不同 Agent 或業務線成本 |
+| 成本歸因 | 支持按模型、渠道、使用者、分組、令牌和節點維度統計成本與用量，方便核算不同 Agent、業務線或部署節點成本 |
 | 管理員審計 | 私有部署場景可按合規要求啟用管理員側日志審計能力，普通使用者日志介面會過濾管理員專用審計字段 |
 | 營運看板 | 提供面向管理員的統計分析、使用者管理、渠道管理、系統設置和運維分析能力 |
 
@@ -275,17 +275,17 @@ flowchart LR
 | 類型 | 說明 |
 |------|------|
 | OpenAI-Compatible | Chat Completions、Embeddings、Images、Audio 等兼容介面，可作為多數應用和 Agent 的通用模型入口 |
-| OpenAI Responses | Responses 格式請求、中繼與兼容能力，適合逐步接入新的 OpenAI 應用協議 |
+| OpenAI Responses | Responses 格式請求、中繼與 Responses ↔ Chat Completions 兼容轉換，適合逐步接入新的 OpenAI 應用協議 |
 | Claude Messages | Claude Messages 格式與 OpenAI 兼容格式轉換，降低應用側多協議維護成本 |
-| Google Gemini | Gemini 聊天、文本和部分轉換能力 |
+| Google Gemini | Gemini 聊天、文本，以及 `/v1/responses` 兼容轉換能力 |
 | Azure OpenAI | Azure OpenAI 與 Realtime 相關介面 |
 | AWS Bedrock | Bedrock Runtime 相關模型接入 |
 | 上游平臺和應用生態 | AWS、Azure、Vertex、Ollama、Codex、Dify、RAGFlow、Kling、Seedance 等平臺或應用形態可按渠道能力接入治理 |
 | 國產模型與平臺 | 內置 DeepSeek、通義千問 / 阿里云百煉、智譜 GLM、Kimi、豆包 / 火山引擎、騰訊混元、百度文心 / 千帆、訊飛星火、MiniMax、零一萬物、硅基流動等適配器或兼容接入能力 |
 | `rerank` | Cohere、Jina 等重排序模型，可用于檢索增強和 Agent 檢索鏈路 |
 | Midjourney / Suno / Dify | 圖像、音樂、工作流等服務適配 |
-| 視頻任務介面 | 支持 `/v1/videos/create`、`/v1/videos/{task_id}` 等視頻生成任務的提交、輪詢、狀態映射、結果代理和參數化任務計費 |
-| 自定義上游 | 支持配置合法授權的上游介面地址、協議適配規則、路徑覆蓋、狀態映射、錯誤消息路徑和任務結果解析 |
+| 視頻任務介面 | 支持 `/v1/videos/create`、`/v1/videos/{task_id}` 等視頻生成任務的提交、請求體透傳或參數覆蓋、輪詢、狀態映射、結果代理和參數化任務計費 |
+| 自定義上游 | 支持配置合法授權的上游介面地址、協議適配規則、Responses / Chat 轉換、路徑覆蓋、狀態映射、錯誤消息路徑和任務結果解析 |
 
 ### 支持的主要介面
 
@@ -365,10 +365,11 @@ flowchart LR
 
 視頻模型供應商的介面經常在路徑、任務 ID、狀態字段、進度字段、錯誤字段和結果 URL 字段上不一致。MAX API 將原先面向單一模型的任務協議能力擴展為通用視頻任務協議，適用于 OpenAI、Ali、Gemini、MiniMax、Vertex AI、VolcEngine、Kling、Jimeng、Vidu、Doubao Video、Sora 等視頻任務渠道。
 
-支持兩種配置層級：
+支持的配置層級：
 
 - **僅路徑覆蓋**：只配置 `submit_path` 和 `query_path`，系統仍使用對應渠道的官方響應解析邏輯，適合只改上游路徑的兼容渠道。
 - **完整協議解析**：設置 `task_protocol = "generic_video_task"`，同時配置任務 ID、狀態、進度、結果 URL、錯誤消息和狀態映射路徑，適合非標準視頻任務響應。
+- **請求體處理**：通用視頻任務協議不再單獨定義請求體生成模式。需要原樣透傳客戶端 JSON 時使用渠道設置里的 `Pass Through Body`；需要字段改寫、默認值或 header 聯動時使用已有的 `Param Override`。
 
 默認任務路徑：
 
@@ -408,6 +409,8 @@ flowchart LR
 
 - **分階段計費 JSON**：通過 `Tiered billing JSON` 統一維護多個模型的 `{ enabled, expr }` 配置，保存時同步更新 `billing_mode` 與 `billing_expr`。
 - **任務 rate-card JSON**：通過 `task_billing_setting.rate_cards` 統一維護異步任務計費規則，可按 `vendor` 分區維護 Sora、Veo、Seedance、Kling 等視頻模型的不同計費表。
+
+Seedance 2.0 等視頻模型可按分辨率、視頻輸入等請求參數參與倍率或 rate-card 計算；使用透傳或參數覆蓋時，應確保最終提交給上游的字段與計費字段保持一致。
 
 示例結構：
 
@@ -490,7 +493,7 @@ flowchart LR
 | `MAX_REQUEST_BODY_MB` | 請求體最大大小，按解壓后大小計算，超出返回 `413` | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Azure API 默認版本 | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | 錯誤日志開關 | `false` |
-| `NODE_NAME` | 節點名稱，多機部署時便于日志定位 | - |
+| `NODE_NAME` | 節點名稱，多機部署時用于日志定位和異步任務結算歸屬 | - |
 | `PYROSCOPE_URL` | Pyroscope 服務地址 | - |
 | `PYROSCOPE_APP_NAME` | Pyroscope 應用名 | `max-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Auth 使用者名 | - |
@@ -553,7 +556,7 @@ docker build -t cscitechtop/max-api:latest .
 > [!WARNING]
 > - 必須設置相同的 `SESSION_SECRET`，否則不同節點之間登錄狀態不一致。
 > - 使用共享 Redis 時必須設置相同的 `CRYPTO_SECRET`，否則加密資料無法解密。
-> - 多節點建議設置 `NODE_NAME`，便于在日志和審計信息中定位來源節點。
+> - 多節點建議設置穩定的 `NODE_NAME`，便于在日志、審計信息和異步任務結算中定位來源節點。
 > - 生產環境應使用外部資料庫、外部 Redis、HTTPS 反向代理和可靠的備份策略。
 
 ---

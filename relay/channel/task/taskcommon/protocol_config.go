@@ -17,13 +17,7 @@ import (
 )
 
 const (
-	TaskProtocolGenericVideo        = "generic_video_task"
-	TaskProtocolLegacySeedanceMedia = "seedance_official_media"
-
-	TaskRequestBodyModeAdapter         = "adapter"
-	TaskRequestBodyModePassThrough     = "pass_through"
-	TaskRequestBodyModeFieldMapping    = "field_mapping"
-	TaskRequestBodyModeMediaGeneration = "media_generation"
+	TaskProtocolGenericVideo = "generic_video_task"
 )
 
 var videoTaskChannelTypes = map[int]struct{}{
@@ -46,26 +40,7 @@ func HasTaskProtocolConfig(settings dto.ChannelOtherSettings) bool {
 
 func UseConfiguredTaskProtocol(settings dto.ChannelOtherSettings) bool {
 	protocol := strings.ToLower(strings.TrimSpace(settings.TaskProtocol))
-	return protocol == TaskProtocolGenericVideo || protocol == TaskProtocolLegacySeedanceMedia
-}
-
-func UseLegacySeedanceMediaProtocol(settings dto.ChannelOtherSettings) bool {
-	return strings.EqualFold(strings.TrimSpace(settings.TaskProtocol), TaskProtocolLegacySeedanceMedia)
-}
-
-func NormalizeTaskRequestBodyMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", TaskRequestBodyModeAdapter:
-		return TaskRequestBodyModeAdapter
-	case TaskRequestBodyModePassThrough:
-		return TaskRequestBodyModePassThrough
-	case TaskRequestBodyModeFieldMapping:
-		return TaskRequestBodyModeFieldMapping
-	case TaskRequestBodyModeMediaGeneration:
-		return TaskRequestBodyModeMediaGeneration
-	default:
-		return TaskRequestBodyModeAdapter
-	}
+	return protocol == TaskProtocolGenericVideo
 }
 
 func IsVideoTaskChannelType(channelType int) bool {
@@ -75,15 +50,14 @@ func IsVideoTaskChannelType(channelType int) bool {
 
 func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocolConfig {
 	cfg := dto.TaskProtocolConfig{
-		SubmitPath:      "/v1/videos/create",
-		QueryPath:       "/v1/videos/{task_id}",
-		RequestBodyMode: TaskRequestBodyModeAdapter,
-		TaskIDPath:      "task_id",
-		StatusPath:      "status",
-		ProgressPath:    "progress",
-		ResultURLPaths:  []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
-		CreatedAtPath:   "created_at",
-		UpdatedAtPath:   "updated_at",
+		SubmitPath:     "/v1/videos/create",
+		QueryPath:      "/v1/videos/{task_id}",
+		TaskIDPath:     "task_id",
+		StatusPath:     "status",
+		ProgressPath:   "progress",
+		ResultURLPaths: []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
+		CreatedAtPath:  "created_at",
+		UpdatedAtPath:  "updated_at",
 		StatusMap: map[string]string{
 			"queued":      string(model.TaskStatusQueued),
 			"pending":     string(model.TaskStatusQueued),
@@ -110,18 +84,6 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 	}
 	if input.QueryPath != "" {
 		cfg.QueryPath = input.QueryPath
-	}
-	if input.RequestBodyMode != "" {
-		cfg.RequestBodyMode = NormalizeTaskRequestBodyMode(input.RequestBodyMode)
-	}
-	if len(input.RequestBodyMapping) > 0 {
-		cfg.RequestBodyMapping = copyStringMap(input.RequestBodyMapping)
-	}
-	if len(input.RequestBodyDefaults) > 0 {
-		cfg.RequestBodyDefaults = copyAnyMap(input.RequestBodyDefaults)
-	}
-	if input.RequestBodyMode == "" && (len(cfg.RequestBodyMapping) > 0 || len(cfg.RequestBodyDefaults) > 0) {
-		cfg.RequestBodyMode = TaskRequestBodyModeFieldMapping
 	}
 	if input.TaskIDPath != "" {
 		cfg.TaskIDPath = input.TaskIDPath
@@ -151,33 +113,7 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 }
 
 func EffectiveTaskProtocolConfig(settings dto.ChannelOtherSettings) dto.TaskProtocolConfig {
-	cfg := NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
-	if UseLegacySeedanceMediaProtocol(settings) {
-		cfg.RequestBodyMode = TaskRequestBodyModeMediaGeneration
-	}
-	return cfg
-}
-
-func copyStringMap(input map[string]string) map[string]string {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(input))
-	for k, v := range input {
-		out[k] = v
-	}
-	return out
-}
-
-func copyAnyMap(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(input))
-	for k, v := range input {
-		out[k] = v
-	}
-	return out
+	return NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
 }
 
 func TryHandleConfiguredSubmitResponse(c *gin.Context, responseBody []byte, info *relaycommon.RelayInfo) (string, bool, *dto.TaskError) {
@@ -239,6 +175,9 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	status := MapConfiguredTaskStatus(statusRaw, cfg)
 	if statusRaw == "" {
 		status = inferConfiguredTaskStatus(resultURL, reason)
+	}
+	if resultURL != "" && status != string(model.TaskStatusFailure) {
+		status = string(model.TaskStatusSuccess)
 	}
 	progress := NormalizeConfiguredProgress(progressRaw, status)
 

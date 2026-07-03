@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 ![max-api](/web/default/public/logo.png)
 
@@ -9,7 +9,7 @@
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
   <a href="./README.zh_TW.md">繁體中文</a> |
-  <a href="./README.md">English</a> |
+  <a href="./README.en.md">English</a> |
   <a href="./README.fr.md">Français</a> |
   <strong>日本語</strong>
 </p>
@@ -90,7 +90,7 @@ MAX API は、AI モデルと AI Agent の実行プロセスを、設定可能�
 | 上流チャネル | プロバイダーチャネル、重み、グループ、状態、キー、Base URL、パス上書き、能力マトリクス、設定検証、モデル発見、失敗時 retry | 単一プロバイダー障害、値上げ、制限、設定ミス、API 変更のリスクを下げる |
 | プロトコル形式 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、汎用動画タスクプロトコルなど | アプリケーション側が各社の差分を直接負担しないようにする |
 | Agent トークン | API Key、トークングループ、モデル範囲、クォータ、期限、アクセス制御 | Agent、ワークフロー、ツール呼び出しに独立・回収可能・制限可能な認証情報を割り当てる |
-| 利用量とコスト | リクエストログ、利用統計、式ベース課金、段階課金 JSON、タスク rate-card、事前課金、失敗時返金 | コストをユーザー、トークン、モデル、チャネル、グループ単位に分解する |
+| 利用量とコスト | リクエストログ、利用統計、式ベース課金、段階課金 JSON、タスク rate-card、事前課金、失敗時返金 | コストをユーザー、グループ、トークン、モデル、チャネル、ノード単位に分解する |
 | 非同期タスク | 動画タスク送信、ポーリング、状態マッピング、結果プロキシ、タスク課金 | 長時間・多状態・多プロバイダー形式のマルチモーダルタスクを統一管理する |
 | 監査と安全 | 管理者側ログ監査、エラーログ、リクエスト制限、ストリーミング timeout、ログインと権限制御 | プライベートデプロイとコンプライアンス環境に制御可能な監査境界を提供する |
 | 組織運用 | ユーザー、グループ、残高、決済、システム設定、ダッシュボード、運用設定 | チーム、研究機関、企業、コミュニティサービスの継続運用を支える |
@@ -155,8 +155,8 @@ docker compose up -d
 | チャネル能力マトリクス | `chat/completions`、`responses`、`Claude Messages`、`Gemini native`、`embeddings`、`images`、`audio`、`rerank`、`video tasks`、`model discovery` を表示 |
 | チャネル設定検証 | API Key、モデル一覧、Base URL、JSON、Vertex AI リージョン、Codex 認証情報、モデル発見、動画タスクパスを保存前に検証 |
 | マルチモーダル治理 | chat、images、video、audio、embeddings、rerank、realtime と非同期動画タスクを管理 |
-| 汎用動画タスクプロトコル | 送信、問い合わせ、進捗、状態マッピング、エラー、結果 URL のパスを統一設定。既定は `/v1/videos/create` と `/v1/videos/{task_id}` |
-| プロトコル変換とカスタム上流 | OpenAI Compatible、Claude Messages、Gemini 間の変換、合法的に認可された上流 URL、パス上書き、タスク解析ルール |
+| 汎用動画タスクプロトコル | 送信、問い合わせ、進捗、状態マッピング、エラー、結果 URL のパスを統一設定。body の透過送信と書き換えは既存のチャネル設定を利用します。既定は `/v1/videos/create` と `/v1/videos/{task_id}` |
+| プロトコル変換とカスタム上流 | OpenAI Compatible、Responses、Chat Completions、Claude Messages、Gemini 間の変換、合法的に認可された上流 URL、パス上書き、タスク解析ルール |
 
 ### AI Agent ガバナンス / AgentOps
 
@@ -165,7 +165,7 @@ docker compose up -d
 | Agent トークン分離 | Agent、ワークフロー、プラグイン、ツール呼び出し、ユーザーごとに独立 API Key を作成 |
 | モデルアクセス制御 | ユーザー、トークン、グループ、モデル制限、チャネルポリシーで利用可能モデル・チャネル・クォータを制御 |
 | 呼び出しチェーン観測 | リクエストログ、利用統計、チャネル命中、遅延、エラー、retry 情報 |
-| コスト帰属 | モデル、チャネル、ユーザー、グループ、トークン単位でコストと利用量を集計 |
+| コスト帰属 | モデル、チャネル、ユーザー、グループ、トークン、ノード単位でコストと利用量を集計 |
 | 管理者監査 | プライベートデプロイで管理者側ログ監査を有効化可能。通常ユーザーログ API は管理者専用フィールドを除外 |
 | 運用ダッシュボード | 管理者向け統計、ユーザー管理、チャネル管理、システム設定、運用分析 |
 
@@ -267,17 +267,17 @@ flowchart LR
 | 種別 | 説明 |
 |------|------|
 | OpenAI-Compatible | Chat Completions、Embeddings、Images、Audio などの互換 API |
-| OpenAI Responses | Responses 形式のリクエスト、relay、互換能力 |
+| OpenAI Responses | Responses 形式のリクエスト、relay、Responses ↔ Chat Completions 互換変換 |
 | Claude Messages | Claude Messages と OpenAI-compatible 形式の変換 |
-| Google Gemini | Gemini chat、text、一部変換能力 |
+| Google Gemini | Gemini chat、text、`/v1/responses` 互換変換 |
 | Azure OpenAI | Azure OpenAI と Realtime 関連 API |
 | AWS Bedrock | Bedrock Runtime モデル接続 |
 | 上流平台・アプリケーションエコシステム | AWS、Azure、Vertex、Ollama、Codex、Dify、RAGFlow、Kling、Seedance など |
 | 中国国内モデル・平台 | DeepSeek、Qwen / Alibaba Cloud Model Studio、Zhipu GLM、Kimi、Doubao / Volcano Engine、Tencent Hunyuan、Baidu ERNIE / Qianfan、iFlytek Spark、MiniMax、01.AI、SiliconFlow など |
 | `rerank` | Cohere、Jina などの rerank モデル。RAG や Agent 検索チェーンに利用 |
 | Midjourney / Suno / Dify | 画像、音楽、ワークフローなどのサービス適応 |
-| 動画タスク API | `/v1/videos/create`、`/v1/videos/{task_id}` による送信、ポーリング、状態マッピング、結果プロキシ、パラメータ化課金 |
-| カスタム上流 | 認可済み上流 URL、プロトコル適応、パス上書き、状態マッピング、エラー経路、結果解析 |
+| 動画タスク API | `/v1/videos/create`、`/v1/videos/{task_id}` による送信、body 透過送信またはパラメータ上書き、ポーリング、状態マッピング、結果プロキシ、パラメータ化課金 |
+| カスタム上流 | 認可済み上流 URL、プロトコル適応、Responses / Chat 変換、パス上書き、状態マッピング、エラー経路、結果解析 |
 
 ### 主な対応インターフェース
 
@@ -336,6 +336,7 @@ flowchart LR
 
 - **パス上書きのみ**：`submit_path` と `query_path` のみを設定し、公式レスポンスパーサーを継続利用します。
 - **完全プロトコル解析**：`task_protocol = "generic_video_task"` を設定し、task ID、状態、進捗、結果 URL、エラー、状態マッピングのパスを設定します。
+- **リクエスト body 処理**：汎用動画タスクプロトコルは個別の body 生成モードを持ちません。クライアント JSON をそのまま上流へ送る場合はチャネル設定の `Pass Through Body` を使い、フィールド書き換え、既定値、header 連動には既存の `Param Override` を使います。
 
 既定パス：
 
@@ -361,6 +362,8 @@ flowchart LR
 
 - **Tiered billing JSON**：複数モデルの `{ enabled, expr }` を一括管理し、`billing_mode` と `billing_expr` を同期更新します。
 - **Task rate-card JSON**：`task_billing_setting.rate_cards` で非同期タスク課金ルールを管理し、`vendor` で Sora、Veo、Seedance、Kling などを分けます。
+
+Seedance 2.0 などの動画モデルでは、解像度や動画入力などのリクエストパラメータを倍率または rate-card 課金に利用できます。透過送信またはパラメータ上書きを使う場合は、最終的に上流へ送るフィールドと課金フィールドを揃えてください。
 
 ```json
 {
@@ -427,7 +430,7 @@ flowchart LR
 | `MAX_REQUEST_BODY_MB` | 解凍後リクエストボディ最大サイズ。超過時 `413` | `32` |
 | `AZURE_DEFAULT_API_VERSION` | Azure API 既定バージョン | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | エラーログスイッチ | `false` |
-| `NODE_NAME` | 複数ノード時のノード名 | - |
+| `NODE_NAME` | 複数ノード時のログ識別と非同期タスク精算帰属に使うノード名 | - |
 | `PYROSCOPE_URL` | Pyroscope サービス URL | - |
 | `PYROSCOPE_APP_NAME` | Pyroscope アプリ名 | `max-api` |
 | `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Auth ユーザー名 | - |
@@ -490,7 +493,7 @@ docker build -t cscitechtop/max-api:latest .
 > [!WARNING]
 > - 全ノードで同じ `SESSION_SECRET` を設定してください。異なるとログイン状態がノード間で一致しません。
 > - 共有 Redis を使用する場合は、全ノードで同じ `CRYPTO_SECRET` を設定してください。異なると暗号化データを復号できません。
-> - ログと監査情報でノードを特定しやすくするため、`NODE_NAME` を設定することを推奨します。
+> - ログ、監査情報、非同期タスク精算でノードを特定しやすくするため、安定した `NODE_NAME` を設定することを推奨します。
 > - 本番環境では外部データベース、外部 Redis、HTTPS リバースプロキシ、信頼できるバックアップ戦略を使用してください。
 
 ---

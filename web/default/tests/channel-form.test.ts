@@ -77,7 +77,7 @@ function legacyChannel(): Channel {
   }
 }
 
-function fieldMappingOnlyChannel(): Channel {
+function genericVideoTaskChannel(): Channel {
   return {
     ...legacyChannel(),
     settings: JSON.stringify({
@@ -85,146 +85,51 @@ function fieldMappingOnlyChannel(): Channel {
       task_protocol_config: {
         submit_path: '/v1/videos',
         query_path: '/v1/videos/{task_id}',
+        request_body_mode: 'media_generation',
         request_body_mapping: {
           model: 'model',
-          prompt: 'prompt',
         },
-        request_body_defaults: {
-          response_format: 'url',
-        },
+        task_id_path: 'data.id',
+        status_path: 'data.status',
       },
       keep_existing: true,
     }),
   }
 }
 
-function genericVideoTaskChannel(
-  requestBodyMode: string,
-  requestBodyConfig: Record<string, unknown> = {}
-): Channel {
-  return {
-    ...legacyChannel(),
-    settings: JSON.stringify({
-      task_protocol: 'generic_video_task',
-      task_protocol_config: {
-        submit_path: '/v1/videos',
-        query_path: '/v1/videos/{task_id}',
-        request_body_mode: requestBodyMode,
-        ...requestBodyConfig,
-      },
-      keep_existing: true,
-    }),
-  }
-}
-
-test('loads legacy video task protocol as configured generic protocol', () => {
+test('loads legacy video task protocol as path override only', () => {
   const defaults = transformChannelToFormDefaults(legacyChannel())
 
-  assert.equal(defaults.video_task_protocol_enabled, true)
+  assert.equal(defaults.video_task_protocol_enabled, false)
   assert.equal(defaults.video_task_path_override_enabled, true)
-  assert.equal(defaults.video_task_request_body_mode, 'media_generation')
   assert.equal(defaults.video_task_submit_path, '/legacy/videos/create')
   assert.equal(defaults.video_task_query_path, '/legacy/videos/{task_id}')
 })
 
-test('saves legacy video task protocol as generic media generation protocol', () => {
+test('clears legacy video task protocol when saving path override', () => {
   const defaults = transformChannelToFormDefaults(legacyChannel())
   const savedSettings = buildSettings(defaults)
 
   assert.equal(savedSettings.keep_existing, true)
-  assert.equal(savedSettings.task_protocol, 'generic_video_task')
+  assert.equal(savedSettings.task_protocol, undefined)
   assert.deepEqual(savedSettings.task_protocol_config, {
     submit_path: '/legacy/videos/create',
     query_path: '/legacy/videos/{task_id}',
-    request_body_mode: 'media_generation',
-    task_id_path: 'task_id',
-    status_path: 'status',
-    progress_path: 'progress',
-    result_url_paths: [
-      'result.primary_url',
-      'result.urls.0',
-      'result.url',
-      'result.video_url',
-      'result.output_url',
-      'data.result.primary_url',
-      'data.result.urls.0',
-      'data.result.url',
-      'data.result.video_url',
-      'data.result.output_url',
-      'url',
-      'video_url',
-      'output_url',
-      'file_url',
-      'download_url',
-      'result',
-    ],
-    error_message_path: 'error_message',
-    status_map: {
-      submitted: 'SUBMITTED',
-      created: 'SUBMITTED',
-      queued: 'QUEUED',
-      pending: 'QUEUED',
-      running: 'IN_PROGRESS',
-      processing: 'IN_PROGRESS',
-      in_progress: 'IN_PROGRESS',
-      succeeded: 'SUCCESS',
-      success: 'SUCCESS',
-      completed: 'SUCCESS',
-      complete: 'SUCCESS',
-      failed: 'FAILURE',
-      failure: 'FAILURE',
-      error: 'FAILURE',
-    },
   })
 })
 
-test('normalizes configured request body mode casing when saving channel', () => {
-  const cases = [
-    {
-      rawMode: 'PASS_THROUGH',
-      expectedMode: 'pass_through',
-    },
-    {
-      rawMode: 'FiElD_MaPpInG',
-      expectedMode: 'field_mapping',
-      requestBodyConfig: {
-        request_body_mapping: {
-          model: 'model',
-        },
-      },
-    },
-  ]
-
-  for (const { rawMode, expectedMode, requestBodyConfig } of cases) {
-    const defaults = transformChannelToFormDefaults(
-      genericVideoTaskChannel(rawMode, requestBodyConfig)
-    )
-    const savedSettings = buildSettings(defaults)
-    const taskProtocolConfig = savedSettings.task_protocol_config as Record<
-      string,
-      unknown
-    >
-
-    assert.equal(defaults.video_task_request_body_mode, expectedMode)
-    assert.equal(taskProtocolConfig.request_body_mode, expectedMode)
-  }
-})
-
-test('preserves implicit field mapping request body mode when saving channel', () => {
-  const defaults = transformChannelToFormDefaults(fieldMappingOnlyChannel())
+test('drops stale request body config when saving generic video task channel', () => {
+  const defaults = transformChannelToFormDefaults(genericVideoTaskChannel())
   const savedSettings = buildSettings(defaults)
   const taskProtocolConfig = savedSettings.task_protocol_config as Record<
     string,
     unknown
   >
 
-  assert.equal(defaults.video_task_request_body_mode, 'field_mapping')
-  assert.equal(taskProtocolConfig.request_body_mode, 'field_mapping')
-  assert.deepEqual(taskProtocolConfig.request_body_mapping, {
-    model: 'model',
-    prompt: 'prompt',
-  })
-  assert.deepEqual(taskProtocolConfig.request_body_defaults, {
-    response_format: 'url',
-  })
+  assert.equal(defaults.video_task_protocol_enabled, true)
+  assert.equal(taskProtocolConfig.request_body_mode, undefined)
+  assert.equal(taskProtocolConfig.request_body_mapping, undefined)
+  assert.equal(taskProtocolConfig.request_body_defaults, undefined)
+  assert.equal(taskProtocolConfig.task_id_path, 'data.id')
+  assert.equal(taskProtocolConfig.status_path, 'data.status')
 })

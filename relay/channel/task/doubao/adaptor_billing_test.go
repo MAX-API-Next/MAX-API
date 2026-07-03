@@ -264,11 +264,9 @@ func TestValidateConfiguredTaskProtocolAllowsPromptlessMediaRequest(t *testing.T
 	info := &relaycommon.RelayInfo{
 		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
 		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true},
 			ChannelOtherSettings: dto.ChannelOtherSettings{
 				TaskProtocol: taskcommon.TaskProtocolGenericVideo,
-				TaskProtocolConfig: &dto.TaskProtocolConfig{
-					RequestBodyMode: taskcommon.TaskRequestBodyModeMediaGeneration,
-				},
 			},
 		},
 	}

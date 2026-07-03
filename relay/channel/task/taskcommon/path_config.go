@@ -31,25 +31,6 @@ func ValidateTaskProtocolSettings(otherSettings string) error {
 	if cfg == nil {
 		return nil
 	}
-	if strings.TrimSpace(cfg.RequestBodyMode) != "" {
-		if !UseConfiguredTaskProtocol(settings) {
-			return fmt.Errorf("task_protocol_config.request_body_mode requires task_protocol=%s", TaskProtocolGenericVideo)
-		}
-		switch strings.ToLower(strings.TrimSpace(cfg.RequestBodyMode)) {
-		case TaskRequestBodyModeAdapter, TaskRequestBodyModePassThrough, TaskRequestBodyModeFieldMapping, TaskRequestBodyModeMediaGeneration:
-		default:
-			return fmt.Errorf("task_protocol_config.request_body_mode must be one of %s, %s, %s, %s", TaskRequestBodyModeAdapter, TaskRequestBodyModePassThrough, TaskRequestBodyModeFieldMapping, TaskRequestBodyModeMediaGeneration)
-		}
-	}
-	if len(cfg.RequestBodyMapping) > 0 || len(cfg.RequestBodyDefaults) > 0 {
-		if !UseConfiguredTaskProtocol(settings) {
-			return fmt.Errorf("task_protocol_config request body mapping requires task_protocol=%s", TaskProtocolGenericVideo)
-		}
-	}
-	if strings.EqualFold(strings.TrimSpace(cfg.RequestBodyMode), TaskRequestBodyModeFieldMapping) &&
-		len(cfg.RequestBodyMapping) == 0 && len(cfg.RequestBodyDefaults) == 0 {
-		return fmt.Errorf("task_protocol_config.request_body_mapping or request_body_defaults is required when request_body_mode=%s", TaskRequestBodyModeFieldMapping)
-	}
 	queryPath := strings.TrimSpace(cfg.QueryPath)
 	if queryPath == "" {
 		return nil

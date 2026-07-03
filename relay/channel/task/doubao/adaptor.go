@@ -120,7 +120,7 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
 	if info != nil && info.ChannelMeta != nil && taskcommon.UseConfiguredTaskProtocol(info.ChannelMeta.ChannelOtherSettings) &&
-		taskcommon.EffectiveTaskProtocolConfig(info.ChannelMeta.ChannelOtherSettings).RequestBodyMode != taskcommon.TaskRequestBodyModeAdapter {
+		info.ChannelMeta.ChannelSetting.PassThroughBodyEnabled {
 		var req relaycommon.TaskSubmitReq
 		if err := common.UnmarshalBodyReusable(c, &req); err != nil {
 			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
