@@ -194,6 +194,10 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 	}
 
 	headerOverrideSource := common.GetEffectiveHeaderOverride(info)
+	apiKey := ""
+	if info.ChannelMeta != nil {
+		apiKey = info.ApiKey
+	}
 
 	passAll := false
 	var passthroughRegex []*regexp.Regexp
@@ -274,7 +278,7 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			continue
 		}
 
-		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey)
+		value, include, err := applyHeaderOverridePlaceholders(str, c, apiKey)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
 		}
@@ -589,6 +593,11 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	headerOverride, err := processHeaderOverride(info, c)
+	if err != nil {
+		return nil, err
+	}
+	applyHeaderOverrideToRequest(req, headerOverride)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

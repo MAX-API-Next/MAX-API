@@ -182,6 +182,9 @@ func (a *TaskAdaptor) resolveBillingInputs(c *gin.Context, req *relaycommon.Task
 	if c != nil && c.Request != nil && c.Request.Body != nil {
 		_ = common.UnmarshalBodyReusable(c, &raw)
 	}
+	if finalBody, ok := relaycommon.GetTaskSubmitRequestBody(c); ok {
+		_ = common.Unmarshal(finalBody, &raw)
+	}
 	hasVideo := hasVideoInMetadata(req.Metadata)
 	hasVideo = hasVideo || hasVideoInMetadata(raw)
 	resolution := req.Resolution

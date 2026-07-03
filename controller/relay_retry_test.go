@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -84,4 +85,14 @@ func TestShouldRetryGenericEmptyResponseDoesNotRequireEmptyCompletionFlag(t *tes
 	err := types.NewOpenAIError(errors.New("empty response"), types.ErrorCodeEmptyResponse, http.StatusInternalServerError)
 
 	require.True(t, shouldRetry(c, err, 1))
+}
+
+func TestShouldRetryTaskRelaySkipsLocalServerError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	require.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{
+		StatusCode: http.StatusInternalServerError,
+		LocalError: true,
+	}, 1))
 }

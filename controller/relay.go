@@ -631,6 +631,9 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
+	if taskErr.LocalError {
+		return false
+	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		return true
 	}
@@ -649,9 +652,6 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	}
 	if taskErr.StatusCode == 408 {
 		// azure处理超时不重试
-		return false
-	}
-	if taskErr.LocalError {
 		return false
 	}
 	if taskErr.StatusCode/100 == 2 {

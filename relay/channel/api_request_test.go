@@ -7,10 +7,66 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type taskHeaderAdaptor struct {
+	taskcommon.BaseBilling
+	url string
+}
+
+func (a taskHeaderAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a taskHeaderAdaptor) ValidateRequestAndSetAction(*gin.Context, *relaycommon.RelayInfo) *dto.TaskError {
+	return nil
+}
+
+func (a taskHeaderAdaptor) BuildRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+
+func (a taskHeaderAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *relaycommon.RelayInfo) error {
+	req.Header.Set("X-Default", "default")
+	return nil
+}
+
+func (a taskHeaderAdaptor) BuildRequestBody(*gin.Context, *relaycommon.RelayInfo) (io.Reader, error) {
+	return nil, nil
+}
+
+func (a taskHeaderAdaptor) DoRequest(*gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error) {
+	return nil, nil
+}
+
+func (a taskHeaderAdaptor) DoResponse(*gin.Context, *http.Response, *relaycommon.RelayInfo) (string, []byte, *dto.TaskError) {
+	return "", nil, nil
+}
+
+func (a taskHeaderAdaptor) GetModelList() []string {
+	return nil
+}
+
+func (a taskHeaderAdaptor) GetChannelName() string {
+	return "test"
+}
+
+func (a taskHeaderAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+
+func (a taskHeaderAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return nil, nil
+}
+
+func (a taskHeaderAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
 
 type countingReader struct {
 	reads int
@@ -252,4 +308,41 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+func TestDoTaskApiRequestAppliesRuntimeHeaderOverride(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	var gotDefault string
+	var gotRuntime string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotDefault = r.Header.Get("X-Default")
+		gotRuntime = r.Header.Get("X-Task-Runtime")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"task_123"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"prompt":"test"}`))
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:               &relaycommon.ChannelMeta{},
+		UseRuntimeHeadersOverride: true,
+		RuntimeHeadersOverride: map[string]interface{}{
+			"X-Default":      "overridden",
+			"X-Task-Runtime": "enabled",
+		},
+	}
+
+	resp, err := DoTaskApiRequest(taskHeaderAdaptor{url: server.URL}, ctx, info, strings.NewReader(`{"prompt":"test"}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, "overridden", gotDefault)
+	require.Equal(t, "enabled", gotRuntime)
 }

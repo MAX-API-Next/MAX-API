@@ -3,6 +3,10 @@ package gemini
 import (
 	"strconv"
 	"strings"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/gin-gonic/gin"
 )
 
 // ParseVeoDurationSeconds extracts durationSeconds from metadata.
@@ -77,6 +81,23 @@ func ResolveVeoResolution(metadata map[string]any, stdSize string) string {
 		return SizeToVeoResolution(stdSize)
 	}
 	return "720p"
+}
+
+func ResolveVeoBillingInputs(c *gin.Context, req relaycommon.TaskSubmitReq) (int, string) {
+	seconds := ResolveVeoDuration(req.Metadata, req.Duration, req.Seconds)
+	resolution := ResolveVeoResolution(req.Metadata, req.Size)
+	if finalBody, ok := relaycommon.GetTaskSubmitRequestBody(c); ok {
+		var body VeoRequestPayload
+		if err := common.Unmarshal(finalBody, &body); err == nil && body.Parameters != nil {
+			if body.Parameters.DurationSeconds > 0 {
+				seconds = body.Parameters.DurationSeconds
+			}
+			if body.Parameters.Resolution != "" {
+				resolution = strings.ToLower(body.Parameters.Resolution)
+			}
+		}
+	}
+	return seconds, resolution
 }
 
 // SizeToVeoResolution converts a "WxH" size string to a Veo resolution label.

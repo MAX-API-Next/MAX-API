@@ -214,10 +214,19 @@ func TaskErrorFromAPIError(apiErr *types.MaxAPIError) *dto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
+	message := apiErr.Error()
 	return &dto.TaskError{
 		Code:       string(apiErr.GetErrorCode()),
-		Message:    apiErr.Err.Error(),
+		Message:    message,
 		StatusCode: apiErr.StatusCode,
 		Error:      apiErr.Err,
 	}
+}
+
+func TaskErrorLocalFromAPIError(apiErr *types.MaxAPIError) *dto.TaskError {
+	taskErr := TaskErrorFromAPIError(apiErr)
+	if taskErr != nil {
+		taskErr.LocalError = true
+	}
+	return taskErr
 }

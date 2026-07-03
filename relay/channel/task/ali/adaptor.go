@@ -658,7 +658,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 
-	aliReq, err := a.convertToAliRequest(info, taskReq)
+	aliReq, err := a.resolveBillingAliRequest(c, info, taskReq)
 	if err != nil {
 		return nil
 	}
@@ -682,7 +682,7 @@ func (a *TaskAdaptor) EstimateTaskBilling(c *gin.Context, info *relaycommon.Rela
 		return nil, err
 	}
 
-	aliReq, err := a.convertToAliRequest(info, taskReq)
+	aliReq, err := a.resolveBillingAliRequest(c, info, taskReq)
 	if err != nil {
 		return nil, err
 	}
@@ -735,6 +735,23 @@ func (a *TaskAdaptor) EstimateTaskBilling(c *gin.Context, info *relaycommon.Rela
 	input.SetField("video_count", strconv.Itoa(videoCount))
 	input.SetField("capability", "video_generation")
 	return task_billing_setting.Calculate(input, info.PriceData.GroupRatioInfo.GroupRatio)
+}
+
+func (a *TaskAdaptor) resolveBillingAliRequest(c *gin.Context, info *relaycommon.RelayInfo, taskReq relaycommon.TaskSubmitReq) (*AliVideoRequest, error) {
+	if finalBody, ok := relaycommon.GetTaskSubmitRequestBody(c); ok {
+		var aliReq AliVideoRequest
+		if err := common.Unmarshal(finalBody, &aliReq); err == nil && looksLikeAliVideoRequest(&aliReq) {
+			if aliReq.Parameters == nil {
+				aliReq.Parameters = &AliVideoParameters{}
+			}
+			return &aliReq, nil
+		}
+	}
+	return a.convertToAliRequest(info, taskReq)
+}
+
+func looksLikeAliVideoRequest(req *AliVideoRequest) bool {
+	return req != nil && (strings.TrimSpace(req.Model) != "" || strings.TrimSpace(req.Input.Prompt) != "" || req.Parameters != nil)
 }
 
 func countAliBillingMedia(aliReq *AliVideoRequest, metadata map[string]interface{}) (int, int) {
