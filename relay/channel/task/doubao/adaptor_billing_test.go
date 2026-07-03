@@ -1,88 +1,21 @@
 package doubao
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/gin-gonic/gin"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestConvertToGenericMediaRequestFromTopLevelFields(t *testing.T) {
-	var req relaycommon.TaskSubmitReq
-	err := common.Unmarshal([]byte(`{
-		"aspect_ratio": "16:9",
-		"duration_seconds": 5,
-		"end_image": "https://example.com/last-frame.png",
-		"image": "https://example.com/first-frame.png",
-		"input_mode": "single_image",
-		"model": "doubao-seedance-2-0-260128",
-		"prompt": "让人物自然转身并看向镜头",
-		"resolution": "720p",
-		"with_audio": true
-	}`), &req)
-	require.NoError(t, err)
-
-	payload, err := (&TaskAdaptor{}).convertToGenericMediaRequest(&req)
-	require.NoError(t, err)
-
-	assert.Equal(t, "doubao-seedance-2-0-260128", payload.Model)
-	assert.Equal(t, "让人物自然转身并看向镜头", payload.Prompt)
-	assert.Equal(t, "16:9", payload.AspectRatio)
-	assert.Equal(t, "video_generation", payload.Capability)
-	assert.Equal(t, "end_frame", payload.ControlMode)
-	assert.Equal(t, "single_image", payload.InputMode)
-	assert.Equal(t, "https://example.com/first-frame.png", payload.Image)
-	assert.Equal(t, "https://example.com/last-frame.png", payload.EndImage)
-	assert.Equal(t, "720p", payload.Resolution)
-	require.NotNil(t, payload.DurationSeconds)
-	assert.Equal(t, 5, *payload.DurationSeconds)
-	require.NotNil(t, payload.WithAudio)
-	assert.True(t, *payload.WithAudio)
-}
-
-func TestConvertToGenericMediaRequestReferenceImages(t *testing.T) {
-	var req relaycommon.TaskSubmitReq
-	err := common.Unmarshal([]byte(`{
-		"model": "doubao-seedance-2-0-260128",
-		"prompt": "参考图片中的人物在海边回眸",
-		"reference_images": ["asset://asset-a", "asset://asset-b"],
-		"with_audio": false
-	}`), &req)
-	require.NoError(t, err)
-
-	payload, err := (&TaskAdaptor{}).convertToGenericMediaRequest(&req)
-	require.NoError(t, err)
-
-	assert.Equal(t, "multi_image", payload.InputMode)
-	assert.Equal(t, "reference", payload.ControlMode)
-	assert.Equal(t, []string{"asset://asset-a", "asset://asset-b"}, payload.ReferenceImages)
-	require.NotNil(t, payload.WithAudio)
-	assert.False(t, *payload.WithAudio)
-}
-
-func TestParseSeedanceMediaTaskResult(t *testing.T) {
-	taskInfo, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
-		"object": "media.task",
-		"task_id": "6c1a4eeaaee14736a78170ddbfff8361",
-		"status": "succeeded",
-		"progress": 100,
-		"result": {
-			"url": "https://example.com/result.mp4",
-			"duration_seconds": 5
-		}
-	}`))
-	require.NoError(t, err)
-
-	assert.Equal(t, model.TaskStatusSuccess, taskInfo.Status)
-	assert.Equal(t, "100%", taskInfo.Progress)
-	assert.Equal(t, "https://example.com/result.mp4", taskInfo.Url)
-	assert.Equal(t, "6c1a4eeaaee14736a78170ddbfff8361", taskInfo.TaskID)
-}
 
 func TestGetVideoInputRatioUsesResolutionAndVideoInput(t *testing.T) {
 	ratio, ok := GetVideoInputRatio("doubao-seedance-2-0-260128", "", false)
@@ -207,7 +140,7 @@ func TestEstimateBillingIgnoresUnusableVideoInput(t *testing.T) {
 	}
 }
 
-func TestEstimateBillingUsesTopLevelSeedanceMediaResolution(t *testing.T) {
+func TestEstimateBillingUsesTopLevelVideoResolution(t *testing.T) {
 	c, _ := gin.CreateTestContext(nil)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "doubao-seedance-2-0-260128",
@@ -221,6 +154,28 @@ func TestEstimateBillingUsesTopLevelSeedanceMediaResolution(t *testing.T) {
 	ratios := (&TaskAdaptor{}).EstimateBilling(c, info)
 	require.NotNil(t, ratios)
 	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-9)
+}
+
+func TestEstimateBillingUsesTopLevelRawVideoInput(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model": "doubao-seedance-2-0-260128",
+		"prompt": "test",
+		"resolution": "1080p",
+		"video_url": "https://example.com/input.mp4"
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "doubao-seedance-2-0-260128",
+	}
+	c.Set("task_request", relaycommon.TaskSubmitReq{
+		Model:  "doubao-seedance-2-0-260128",
+		Prompt: "test",
+	})
+
+	ratios := (&TaskAdaptor{}).EstimateBilling(c, info)
+	require.NotNil(t, ratios)
+	assert.InDelta(t, 31.0/46.0, ratios["video_input"], 1e-9)
 }
 
 func TestEstimateBillingUsesLegacyRequestPayloadResolution(t *testing.T) {
@@ -241,7 +196,7 @@ func TestEstimateBillingUsesLegacyRequestPayloadResolution(t *testing.T) {
 	require.Nil(t, ratios)
 }
 
-func TestConvertToRequestPayloadPreservesSeedanceFields(t *testing.T) {
+func TestConvertToRequestPayloadPreservesDoubaoVideoFields(t *testing.T) {
 	var req relaycommon.TaskSubmitReq
 	err := common.Unmarshal([]byte(`{
 		"model": "doubao-seedance-2-0-260128",
@@ -295,4 +250,72 @@ func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"resolution":""`)
 	assert.Contains(t, string(data), `"ratio":""`)
+}
+
+func TestValidateConfiguredTaskProtocolAllowsPromptlessMediaRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model": "doubao-seedance-2-0-260128",
+		"image": "https://example.com/frame.png"
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				TaskProtocol: taskcommon.TaskProtocolGenericVideo,
+				TaskProtocolConfig: &dto.TaskProtocolConfig{
+					RequestBodyMode: taskcommon.TaskRequestBodyModeMediaGeneration,
+				},
+			},
+		},
+	}
+
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
+
+	require.Nil(t, taskErr)
+	require.Equal(t, "generate", info.Action)
+	req, err := relaycommon.GetTaskRequest(c)
+	require.NoError(t, err)
+	require.Equal(t, "doubao-seedance-2-0-260128", req.Model)
+	require.Equal(t, []string{"https://example.com/frame.png"}, req.Images)
+}
+
+func TestParseSeedanceMediaTaskResultByShape(t *testing.T) {
+	taskInfo, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"object": "media.task",
+		"task_id": "task_123",
+		"status": "succeeded",
+		"progress": 100,
+		"result": {
+			"url": "https://example.com/result.mp4"
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, taskInfo)
+	assert.Equal(t, "task_123", taskInfo.TaskID)
+	assert.Equal(t, model.TaskStatusSuccess, taskInfo.Status)
+	assert.Equal(t, "100%", taskInfo.Progress)
+	assert.Equal(t, "https://example.com/result.mp4", taskInfo.Url)
+}
+
+func TestConvertSeedanceMediaTaskToOpenAIVideoByShape(t *testing.T) {
+	body, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(&model.Task{
+		TaskID:    "task_123",
+		Status:    model.TaskStatusSuccess,
+		Progress:  "100%",
+		Data:      []byte(`{"object":"media.task","task_id":"task_123","status":"succeeded","result":{"url":"https://example.com/result.mp4"}}`),
+		CreatedAt: 1710000000,
+		UpdatedAt: 1710000100,
+		Properties: model.Properties{
+			OriginModelName: "doubao-seedance-2-0-260128",
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"url":"https://example.com/result.mp4"`)
+	assert.Contains(t, string(body), `"task_id":"task_123"`)
 }

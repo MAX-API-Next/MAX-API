@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 )
 
 // ============================
@@ -105,26 +106,38 @@ type responseTask struct {
 
 type TaskAdaptor struct {
 	taskcommon.BaseBilling
-	ChannelType        int
-	apiKey             string
-	baseURL            string
-	taskProtocol       string
-	taskProtocolConfig dto.TaskProtocolConfig
+	ChannelType int
+	apiKey      string
+	baseURL     string
 }
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl
 	a.apiKey = info.ApiKey
-	a.taskProtocol = info.ChannelOtherSettings.TaskProtocol
-	a.taskProtocolConfig = normalizeSeedanceMediaProtocolConfig(info.ChannelOtherSettings.TaskProtocolConfig)
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	if a.useSeedanceMediaProtocol() {
-		return a.validateSeedanceMediaTaskRequest(c, info)
+	if info != nil && info.ChannelMeta != nil && taskcommon.UseConfiguredTaskProtocol(info.ChannelMeta.ChannelOtherSettings) &&
+		taskcommon.EffectiveTaskProtocolConfig(info.ChannelMeta.ChannelOtherSettings).RequestBodyMode != taskcommon.TaskRequestBodyModeAdapter {
+		var req relaycommon.TaskSubmitReq
+		if err := common.UnmarshalBodyReusable(c, &req); err != nil {
+			return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+		}
+		if strings.TrimSpace(req.Model) == "" {
+			return service.TaskErrorWrapperLocal(fmt.Errorf("model field is required"), "missing_model", http.StatusBadRequest)
+		}
+		if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
+			req.Images = []string{req.Image}
+		}
+		if len(req.Images) == 0 && len(req.ReferenceImages) > 0 {
+			req.Images = append([]string{}, req.ReferenceImages...)
+		}
+		relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, req)
+		return nil
 	}
+
 	// Accept only POST /v1/video/generations as "generate" action.
 	taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
 	if taskErr != nil {
@@ -135,9 +148,6 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	if a.useSeedanceMediaProtocol() {
-		return buildSeedanceMediaURL(a.baseURL, a.taskProtocolConfig.SubmitPath), nil
-	}
 	fallback := fmt.Sprintf("%s/api/v3/contents/generations/tasks", a.baseURL)
 	return taskcommon.BuildTaskSubmitURL(info, fallback), nil
 }
@@ -156,7 +166,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	if err != nil {
 		return nil
 	}
-	resolution, hasVideo := a.resolveSeedanceBillingInputs(c, &req)
+	resolution, hasVideo := a.resolveBillingInputs(c, &req)
 	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
 	if !ok || ratio == 1.0 {
 		return nil
@@ -164,27 +174,26 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	return map[string]float64{"video_input": ratio}
 }
 
-func (a *TaskAdaptor) resolveSeedanceBillingInputs(c *gin.Context, req *relaycommon.TaskSubmitReq) (string, bool) {
+func (a *TaskAdaptor) resolveBillingInputs(c *gin.Context, req *relaycommon.TaskSubmitReq) (string, bool) {
 	if req == nil {
 		return "", false
 	}
-	hasVideo := hasVideoInMetadata(req.Metadata) || hasVideoInMetadata(getSeedanceMediaRawRequest(c))
-	resolution := req.Resolution
-	if !a.useSeedanceMediaProtocol() {
-		payload, err := a.convertToRequestPayload(req)
-		if err == nil && payload != nil {
-			if payload.Resolution != nil && *payload.Resolution != "" {
-				resolution = *payload.Resolution
-			}
-			hasVideo = hasVideo || hasVideoInContent(payload.Content)
-		}
-		return resolution, hasVideo
+	raw := map[string]any{}
+	if c != nil && c.Request != nil && c.Request.Body != nil {
+		_ = common.UnmarshalBodyReusable(c, &raw)
 	}
-	if payload, err := a.convertToGenericMediaRequest(req); err == nil && payload != nil {
-		applySeedanceMediaRawFields(payload, getSeedanceMediaRawRequest(c))
-		if payload.Resolution != "" {
-			resolution = payload.Resolution
+	hasVideo := hasVideoInMetadata(req.Metadata)
+	hasVideo = hasVideo || hasVideoInMetadata(raw)
+	resolution := req.Resolution
+	if rawResolution := strings.TrimSpace(common.Interface2String(raw["resolution"])); rawResolution != "" {
+		resolution = rawResolution
+	}
+	payload, err := a.convertToRequestPayload(req)
+	if err == nil && payload != nil {
+		if payload.Resolution != nil && *payload.Resolution != "" {
+			resolution = *payload.Resolution
 		}
+		hasVideo = hasVideo || hasVideoInContent(payload.Content)
 	}
 	return resolution, hasVideo
 }
@@ -263,23 +272,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
-	if a.useSeedanceMediaProtocol() {
-		body, err := a.convertToSeedanceMediaRequest(c, &req)
-		if err != nil {
-			return nil, errors.Wrap(err, "convert seedance media request failed")
-		}
-		if info.IsModelMapped {
-			body.Model = info.UpstreamModelName
-		} else {
-			info.UpstreamModelName = body.Model
-		}
-		data, err := common.Marshal(body.ToMap())
-		if err != nil {
-			return nil, err
-		}
-		return bytes.NewReader(data), nil
-	}
-
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
@@ -314,10 +306,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return taskID, responseBody, configuredErr
 	}
 
-	if a.useSeedanceMediaProtocol() {
-		return a.doSeedanceMediaResponse(c, responseBody, info)
-	}
-
 	// Parse Doubao response
 	var dResp responsePayload
 	if err := common.Unmarshal(responseBody, &dResp); err != nil {
@@ -348,9 +336,6 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	}
 
 	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
-	if a.useSeedanceMediaProtocol() {
-		uri = a.seedanceMediaQueryURL(baseUrl, taskID)
-	}
 	uri = taskcommon.BuildTaskQueryURL(baseUrl, body, uri)
 
 	req, err := http.NewRequest(http.MethodGet, uri, nil)
@@ -414,8 +399,14 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
-	if a.useSeedanceMediaProtocol() || looksLikeSeedanceMediaTask(respBody) {
-		return a.parseSeedanceMediaTaskResult(respBody)
+	if looksLikeSeedanceMediaTask(respBody) {
+		if taskResult, ok, err := taskcommon.ParseConfiguredTaskResult(respBody, dto.ChannelOtherSettings{
+			TaskProtocol: taskcommon.TaskProtocolGenericVideo,
+		}); err != nil {
+			return nil, err
+		} else if ok {
+			return taskResult, nil
+		}
 	}
 
 	resTask := responseTask{}
@@ -456,8 +447,36 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {
-	if a.useSeedanceMediaProtocol() || looksLikeSeedanceMediaTask(originTask.Data) {
-		return a.convertSeedanceMediaToOpenAIVideo(originTask)
+	if body, ok, err := taskcommon.ConvertConfiguredTaskToOpenAIVideo(originTask); ok || err != nil {
+		return body, err
+	}
+	if originTask != nil && looksLikeSeedanceMediaTask(originTask.Data) {
+		cfg := taskcommon.NormalizeTaskProtocolConfig(nil)
+		openAIVideo := dto.NewOpenAIVideo()
+		openAIVideo.ID = originTask.TaskID
+		openAIVideo.TaskID = originTask.TaskID
+		openAIVideo.Status = originTask.Status.ToVideoStatus()
+		openAIVideo.SetProgressStr(originTask.Progress)
+		urlValue := originTask.GetResultURL()
+		if urlValue == "" {
+			urlValue = taskcommon.ExtractConfiguredResultURL(originTask.Data, cfg.ResultURLPaths)
+		}
+		openAIVideo.SetMetadata("url", urlValue)
+		openAIVideo.CreatedAt = originTask.CreatedAt
+		openAIVideo.CompletedAt = originTask.UpdatedAt
+		openAIVideo.Model = originTask.Properties.OriginModelName
+
+		if originTask.Status == model.TaskStatusFailure {
+			message := originTask.FailReason
+			if message == "" {
+				message = taskcommon.StringFromGJSONPath(originTask.Data, cfg.ErrorMessagePath)
+			}
+			openAIVideo.Error = &dto.OpenAIVideoError{
+				Message: message,
+				Code:    "upstream_error",
+			}
+		}
+		return common.Marshal(openAIVideo)
 	}
 
 	var dResp responseTask
@@ -483,4 +502,12 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	}
 
 	return common.Marshal(openAIVideo)
+}
+
+func looksLikeSeedanceMediaTask(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return gjson.GetBytes(data, "task_id").Exists() &&
+		(gjson.GetBytes(data, "status").Exists() || gjson.GetBytes(data, "object").String() == "media.task")
 }

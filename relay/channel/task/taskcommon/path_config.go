@@ -24,9 +24,31 @@ func ValidateTaskProtocolSettings(otherSettings string) error {
 	if err := common.UnmarshalJsonStr(otherSettings, &settings); err != nil {
 		return nil
 	}
+	if strings.TrimSpace(settings.TaskProtocol) != "" && !UseConfiguredTaskProtocol(settings) {
+		return fmt.Errorf("task_protocol must be %s", TaskProtocolGenericVideo)
+	}
 	cfg := settings.TaskProtocolConfig
 	if cfg == nil {
 		return nil
+	}
+	if strings.TrimSpace(cfg.RequestBodyMode) != "" {
+		if !UseConfiguredTaskProtocol(settings) {
+			return fmt.Errorf("task_protocol_config.request_body_mode requires task_protocol=%s", TaskProtocolGenericVideo)
+		}
+		switch strings.ToLower(strings.TrimSpace(cfg.RequestBodyMode)) {
+		case TaskRequestBodyModeAdapter, TaskRequestBodyModePassThrough, TaskRequestBodyModeFieldMapping, TaskRequestBodyModeMediaGeneration:
+		default:
+			return fmt.Errorf("task_protocol_config.request_body_mode must be one of %s, %s, %s, %s", TaskRequestBodyModeAdapter, TaskRequestBodyModePassThrough, TaskRequestBodyModeFieldMapping, TaskRequestBodyModeMediaGeneration)
+		}
+	}
+	if len(cfg.RequestBodyMapping) > 0 || len(cfg.RequestBodyDefaults) > 0 {
+		if !UseConfiguredTaskProtocol(settings) {
+			return fmt.Errorf("task_protocol_config request body mapping requires task_protocol=%s", TaskProtocolGenericVideo)
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.RequestBodyMode), TaskRequestBodyModeFieldMapping) &&
+		len(cfg.RequestBodyMapping) == 0 && len(cfg.RequestBodyDefaults) == 0 {
+		return fmt.Errorf("task_protocol_config.request_body_mapping or request_body_defaults is required when request_body_mode=%s", TaskRequestBodyModeFieldMapping)
 	}
 	queryPath := strings.TrimSpace(cfg.QueryPath)
 	if queryPath == "" {
@@ -45,7 +67,7 @@ func WithTaskProtocolConfig(body map[string]any, settings dto.ChannelOtherSettin
 		body = map[string]any{}
 	}
 	if UseConfiguredTaskProtocol(settings) {
-		body[taskProtocolConfigBodyKey] = NormalizeTaskProtocolConfig(settings.TaskProtocolConfig)
+		body[taskProtocolConfigBodyKey] = EffectiveTaskProtocolConfig(settings)
 	} else if settings.TaskProtocolConfig != nil {
 		body[taskProtocolConfigBodyKey] = settings.TaskProtocolConfig
 	}
@@ -72,7 +94,7 @@ func BuildTaskSubmitURL(info *relaycommon.RelayInfo, fallback string) string {
 	}
 	path := ""
 	if UseConfiguredTaskProtocol(info.ChannelOtherSettings) {
-		cfg := NormalizeTaskProtocolConfig(info.ChannelOtherSettings.TaskProtocolConfig)
+		cfg := EffectiveTaskProtocolConfig(info.ChannelOtherSettings)
 		path = cfg.SubmitPath
 	} else if info.ChannelOtherSettings.TaskProtocolConfig != nil {
 		path = info.ChannelOtherSettings.TaskProtocolConfig.SubmitPath
@@ -109,7 +131,30 @@ func BuildConfiguredTaskURL(baseURL string, path string, values map[string]strin
 	if strings.HasPrefix(path, "?") {
 		return baseURL + path
 	}
+	path = trimDuplicatedBasePath(baseURL, path)
+	if path == "" {
+		return baseURL
+	}
 	return baseURL + "/" + strings.TrimLeft(path, "/")
+}
+
+func trimDuplicatedBasePath(baseURL string, path string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return strings.TrimLeft(path, "/")
+	}
+	basePath := strings.Trim(parsed.EscapedPath(), "/")
+	if basePath == "" {
+		return strings.TrimLeft(path, "/")
+	}
+	path = strings.TrimLeft(path, "/")
+	if path == basePath {
+		return ""
+	}
+	if strings.HasPrefix(path, basePath+"/") {
+		return strings.TrimPrefix(path, basePath+"/")
+	}
+	return path
 }
 
 func taskProtocolConfigFromBody(body map[string]any) *dto.TaskProtocolConfig {

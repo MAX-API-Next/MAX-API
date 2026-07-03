@@ -532,18 +532,57 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return resp, nil
 }
 
+func newTaskHTTPRequest(method string, fullRequestURL string, requestBody io.Reader, info *common.RelayInfo) (*http.Request, error) {
+	req, err := http.NewRequest(method, fullRequestURL, requestBody)
+	if err != nil {
+		return nil, err
+	}
+	applyUpstreamContentLength(req, info)
+	if req.GetBody == nil {
+		attachSeekableGetBody(req, requestBody)
+	}
+	return req, nil
+}
+
+func attachSeekableGetBody(req *http.Request, reader io.Reader) {
+	if req == nil {
+		return
+	}
+	seeker, ok := reader.(io.ReadSeeker)
+	if !ok {
+		return
+	}
+	start, err := seeker.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return
+	}
+	end, err := seeker.Seek(0, io.SeekEnd)
+	if err != nil {
+		_, _ = seeker.Seek(start, io.SeekStart)
+		return
+	}
+	if _, err := seeker.Seek(start, io.SeekStart); err != nil {
+		return
+	}
+	if req.ContentLength <= 0 && end >= start {
+		req.ContentLength = end - start
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		if _, err := seeker.Seek(start, io.SeekStart); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(seeker), nil
+	}
+}
+
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.BuildRequestURL(info)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, err := newTaskHTTPRequest(c.Request.Method, fullRequestURL, requestBody, info)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
-	}
-	applyUpstreamContentLength(req, info)
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(requestBody), nil
 	}
 
 	err = a.BuildRequestHeader(c, req, info)

@@ -53,16 +53,19 @@ type ChannelOtherSettings struct {
 }
 
 type TaskProtocolConfig struct {
-	SubmitPath       string            `json:"submit_path,omitempty"`
-	QueryPath        string            `json:"query_path,omitempty"`
-	TaskIDPath       string            `json:"task_id_path,omitempty"`
-	StatusPath       string            `json:"status_path,omitempty"`
-	ProgressPath     string            `json:"progress_path,omitempty"`
-	ResultURLPaths   []string          `json:"result_url_paths,omitempty"`
-	ErrorMessagePath string            `json:"error_message_path,omitempty"`
-	CreatedAtPath    string            `json:"created_at_path,omitempty"`
-	UpdatedAtPath    string            `json:"updated_at_path,omitempty"`
-	StatusMap        map[string]string `json:"status_map,omitempty"`
+	SubmitPath          string            `json:"submit_path,omitempty"`
+	QueryPath           string            `json:"query_path,omitempty"`
+	RequestBodyMode     string            `json:"request_body_mode,omitempty"`
+	RequestBodyMapping  map[string]string `json:"request_body_mapping,omitempty"`
+	RequestBodyDefaults map[string]any    `json:"request_body_defaults,omitempty"`
+	TaskIDPath          string            `json:"task_id_path,omitempty"`
+	StatusPath          string            `json:"status_path,omitempty"`
+	ProgressPath        string            `json:"progress_path,omitempty"`
+	ResultURLPaths      []string          `json:"result_url_paths,omitempty"`
+	ErrorMessagePath    string            `json:"error_message_path,omitempty"`
+	CreatedAtPath       string            `json:"created_at_path,omitempty"`
+	UpdatedAtPath       string            `json:"updated_at_path,omitempty"`
+	StatusMap           map[string]string `json:"status_map,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

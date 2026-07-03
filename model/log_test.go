@@ -131,6 +131,41 @@ func TestSumUsedQuotaAppliesExplicitLogType(t *testing.T) {
 	require.Equal(t, 0, stat.Tpm)
 }
 
+func TestSumUsedQuotaKeepsRpmTpmLiveForHistoricalWindow(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	now := time.Now().Unix()
+	logs := []Log{
+		{
+			UserId:           1,
+			CreatedAt:        now - 10,
+			Type:             LogTypeConsume,
+			Quota:            100,
+			PromptTokens:     3,
+			CompletionTokens: 7,
+		},
+		{
+			UserId:           1,
+			CreatedAt:        now - 86400,
+			Type:             LogTypeConsume,
+			Quota:            200,
+			PromptTokens:     11,
+			CompletionTokens: 13,
+		},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+
+	stat, err := SumUsedQuota(LogTypeUnknown, "", now-90000, now-80000, "", "", "", 0, "")
+
+	require.NoError(t, err)
+	require.Equal(t, 200, stat.Quota)
+	require.Equal(t, 1, stat.Rpm)
+	require.Equal(t, 10, stat.Tpm)
+}
+
 func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	t.Cleanup(func() {

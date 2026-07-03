@@ -59,11 +59,6 @@ type Log struct {
 	LogId             int    `json:"log_id,omitempty" gorm:"-"`
 }
 
-func (log *Log) BeforeCreate(*gorm.DB) error {
-	log.syncRetryMarker()
-	return nil
-}
-
 func (log *Log) BeforeSave(*gorm.DB) error {
 	log.syncRetryMarker()
 	return nil
@@ -808,11 +803,9 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)
-		rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", startTimestamp)
 	}
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
-		rpmTpmQuery = rpmTpmQuery.Where("created_at <= ?", endTimestamp)
 	}
 	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
 		return stat, err

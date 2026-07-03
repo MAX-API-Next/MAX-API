@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -83,12 +84,14 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 
-		var errorResp dto.OpenAITextResponse
-		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
-			if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-				streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
-				sr.Stop(streamErr)
-				return
+		if strings.Contains(data, `"error"`) {
+			var errorResp dto.OpenAITextResponse
+			if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
+				if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+					streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+					sr.Stop(streamErr)
+					return
+				}
 			}
 		}
 

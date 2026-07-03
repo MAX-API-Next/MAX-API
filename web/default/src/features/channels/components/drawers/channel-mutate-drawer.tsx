@@ -229,6 +229,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.claude_beta_query ||
     values.video_task_path_override_enabled ||
     values.video_task_protocol_enabled ||
+    values.video_task_request_body_mapping?.trim() ||
+    values.video_task_request_body_defaults?.trim() ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -393,6 +395,7 @@ export function ChannelMutateDrawer({
     'video_task_path_override_enabled'
   )
   const videoTaskProtocolEnabled = form.watch('video_task_protocol_enabled')
+  const videoTaskRequestBodyMode = form.watch('video_task_request_body_mode')
   const currentAdvancedCustom = form.watch('advanced_custom')
   const formSnapshot = form.watch() as ChannelFormValues
   const showVideoTaskPathFields =
@@ -3080,6 +3083,109 @@ export function ChannelMutateDrawer({
                       )}
                       {isVideoTaskChannel && videoTaskProtocolEnabled && (
                         <div className='border-border/60 flex flex-col gap-4 border-y py-4'>
+                          <SubHeading
+                            title={t('Request Body Mapping')}
+                            icon={<Video className='h-3.5 w-3.5' />}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name='video_task_request_body_mode'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Request Body Mode')}</FormLabel>
+                                <Select
+                                  value={field.value || 'adapter'}
+                                  onValueChange={field.onChange}
+                                >
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent alignItemWithTrigger={false}>
+                                    <SelectGroup>
+                                      <SelectItem value='adapter'>
+                                        {t('Adapter default')}
+                                      </SelectItem>
+                                      <SelectItem value='pass_through'>
+                                        {t('Pass through request body')}
+                                      </SelectItem>
+                                      <SelectItem value='field_mapping'>
+                                        {t('Field mapping')}
+                                      </SelectItem>
+                                      <SelectItem value='media_generation'>
+                                        {t('Media generation fields')}
+                                      </SelectItem>
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                                <FormDescription>
+                                  {t(
+                                    'Choose how the generic task protocol builds the upstream request body'
+                                  )}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          {videoTaskRequestBodyMode === 'field_mapping' && (
+                            <div className='grid gap-4 lg:grid-cols-2'>
+                              <FormField
+                                control={form.control}
+                                name='video_task_request_body_mapping'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Request Body Field Mapping')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Textarea
+                                        rows={6}
+                                        className='font-mono text-xs'
+                                        placeholder='{"model":"model","prompt":"prompt","duration_seconds":"duration_seconds,seconds,duration"}'
+                                        {...field}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'JSON object mapping upstream request fields to source request paths'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='video_task_request_body_defaults'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Request Body Defaults')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Textarea
+                                        rows={6}
+                                        className='font-mono text-xs'
+                                        placeholder='{"capability":"video_generation","control_mode":"none","input_mode":"text"}'
+                                        {...field}
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'JSON object merged into the upstream request body before mapped fields'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+                          )}
+
                           <SubHeading
                             title={t('Response Mapping')}
                             icon={<Video className='h-3.5 w-3.5' />}

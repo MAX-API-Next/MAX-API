@@ -114,6 +114,13 @@ export interface ChannelOtherSettings {
 export interface TaskProtocolConfig {
   submit_path?: string
   query_path?: string
+  request_body_mode?:
+    | 'adapter'
+    | 'pass_through'
+    | 'field_mapping'
+    | 'media_generation'
+  request_body_mapping?: Record<string, string>
+  request_body_defaults?: Record<string, unknown>
   task_id_path?: string
   status_path?: string
   progress_path?: string

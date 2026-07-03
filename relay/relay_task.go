@@ -229,7 +229,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 8. 构建请求体
-	requestBody, err := adaptor.BuildRequestBody(c, info)
+	requestBody, err := buildTaskSubmitRequestBody(c, info, adaptor)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 	}
@@ -276,6 +276,22 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+func buildTaskSubmitRequestBody(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor) (io.Reader, error) {
+	var taskReq *relaycommon.TaskSubmitReq
+	if req, err := relaycommon.GetTaskRequest(c); err == nil {
+		taskReq = &req
+	}
+
+	requestBody, handled, err := taskcommon.BuildConfiguredTaskRequestBody(c, info, taskReq)
+	if err != nil {
+		return nil, err
+	}
+	if handled {
+		return requestBody, nil
+	}
+	return adaptor.BuildRequestBody(c, info)
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
