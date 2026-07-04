@@ -55,7 +55,7 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 		TaskIDPath:     "task_id",
 		StatusPath:     "status",
 		ProgressPath:   "progress",
-		ResultURLPaths: []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
+		ResultURLPaths: []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "metadata.url", "metadata.video_url", "metadata.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "data.metadata.url", "data.metadata.video_url", "data.metadata.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
 		CreatedAtPath:  "created_at",
 		UpdatedAtPath:  "updated_at",
 		StatusMap: map[string]string{
