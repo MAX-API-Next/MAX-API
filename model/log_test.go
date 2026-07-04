@@ -605,10 +605,11 @@ func newRetryBackfillTestDB(t *testing.T, models ...interface{}) *gorm.DB {
 func createRetryFilterLogs(t *testing.T) []Log {
 	t.Helper()
 
+	now := time.Now().Unix()
 	logs := []Log{
 		{
 			UserId:           1,
-			CreatedAt:        time.Now().Unix() - 10,
+			CreatedAt:        now - 10,
 			Type:             LogTypeConsume,
 			Quota:            100,
 			PromptTokens:     5,
@@ -622,7 +623,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           1,
-			CreatedAt:        time.Now().Unix() - 20,
+			CreatedAt:        now - 20,
 			Type:             LogTypeConsume,
 			Quota:            200,
 			PromptTokens:     7,
@@ -636,7 +637,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           1,
-			CreatedAt:        time.Now().Unix() - 30,
+			CreatedAt:        now - 30,
 			Type:             LogTypeConsume,
 			Quota:            400,
 			PromptTokens:     11,
@@ -650,7 +651,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           2,
-			CreatedAt:        time.Now().Unix() - 40,
+			CreatedAt:        now - 40,
 			Type:             LogTypeConsume,
 			Quota:            800,
 			PromptTokens:     17,
@@ -663,7 +664,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           2,
-			CreatedAt:        time.Now().Unix() - 50,
+			CreatedAt:        now - 50,
 			Type:             LogTypeConsume,
 			Quota:            900,
 			PromptTokens:     23,
@@ -677,7 +678,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           1,
-			CreatedAt:        time.Now().Unix() - 5,
+			CreatedAt:        now - 5,
 			Type:             LogTypeError,
 			Quota:            0,
 			PromptTokens:     0,
@@ -691,7 +692,7 @@ func createRetryFilterLogs(t *testing.T) []Log {
 		},
 		{
 			UserId:           1,
-			CreatedAt:        time.Now().Unix() - 60,
+			CreatedAt:        now - 55,
 			Type:             LogTypeConsume,
 			Quota:            350,
 			PromptTokens:     12,

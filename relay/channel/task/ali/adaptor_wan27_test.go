@@ -43,6 +43,24 @@ func TestConvertToAliRequestWan27I2VBuildsMediaFromImage(t *testing.T) {
 	assert.NotContains(t, string(body), `"img_url"`)
 }
 
+func TestConvertToAliRequestWan27I2VPrefersInputReferenceOverImage(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:          "wan2.7-i2v",
+		Prompt:         "animate the validated input reference",
+		Image:          "https://example.com/direct-image.png",
+		InputReference: "https://example.com/input-reference.png",
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]interface{}{
+		{"type": "first_frame", "url": "https://example.com/input-reference.png"},
+	}, aliReq.Input.Media)
+	assert.Empty(t, aliReq.Input.ImgURL)
+}
+
 func TestConvertToAliRequestWan27I2VBuildsFirstAndLastFrameFromImages(t *testing.T) {
 	adaptor := &TaskAdaptor{}
 	req := relaycommon.TaskSubmitReq{
@@ -94,6 +112,33 @@ func TestConvertToAliRequestWan27I2VKeepsExplicitMetadataMedia(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"media"`)
 	assert.NotContains(t, string(body), `"img_url"`)
+}
+
+func TestConvertToAliRequestWan27I2VRejectsMediaWithoutPrimaryInput(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:  "wan2.7-i2v",
+		Prompt: "continue without a primary frame or clip",
+		Metadata: map[string]interface{}{
+			"input": map[string]interface{}{
+				"media": []interface{}{
+					map[string]interface{}{
+						"type": "last_frame",
+						"url":  "https://example.com/last.png",
+					},
+					map[string]interface{}{
+						"type": "driving_audio",
+						"url":  "https://example.com/audio.mp3",
+					},
+				},
+			},
+		},
+	}
+
+	_, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "first_frame or first_clip")
 }
 
 func TestConvertToAliRequestWan27I2VRequiresMedia(t *testing.T) {

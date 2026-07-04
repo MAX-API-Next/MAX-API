@@ -221,15 +221,15 @@ func isWan27I2VModel(model string) bool {
 }
 
 func firstTaskImage(req relaycommon.TaskSubmitReq) string {
-	if image := strings.TrimSpace(req.Image); image != "" {
-		return image
+	if inputReference := strings.TrimSpace(req.InputReference); inputReference != "" {
+		return inputReference
 	}
 	for _, image := range req.Images {
 		if trimmed := strings.TrimSpace(image); trimmed != "" {
 			return trimmed
 		}
 	}
-	return strings.TrimSpace(req.InputReference)
+	return strings.TrimSpace(req.Image)
 }
 
 func secondTaskImage(req relaycommon.TaskSubmitReq) string {
@@ -245,6 +245,20 @@ func secondTaskImage(req relaycommon.TaskSubmitReq) string {
 		}
 	}
 	return ""
+}
+
+func hasWan27PrimaryMedia(media []map[string]interface{}) bool {
+	for _, item := range media {
+		mediaType, ok := item["type"].(string)
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(mediaType)) {
+		case "first_frame", "first_clip":
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
@@ -279,6 +293,9 @@ func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitR
 
 	if len(aliReq.Input.Media) == 0 {
 		return fmt.Errorf("wan2.7-i2v requires image, images, input_reference, or input.media")
+	}
+	if !hasWan27PrimaryMedia(aliReq.Input.Media) {
+		return fmt.Errorf("wan2.7-i2v input.media requires first_frame or first_clip")
 	}
 
 	// Wan2.7 image-to-video uses the new input.media protocol. Avoid sending
