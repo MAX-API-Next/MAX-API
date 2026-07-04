@@ -686,25 +686,40 @@ type TaskRelayInfo struct {
 }
 
 type TaskSubmitReq struct {
-	Prompt          string                 `json:"prompt"`
-	Model           string                 `json:"model,omitempty"`
-	Mode            string                 `json:"mode,omitempty"`
-	Image           string                 `json:"image,omitempty"`
-	Images          []string               `json:"images,omitempty"`
-	Size            string                 `json:"size,omitempty"`
-	Duration        int                    `json:"duration,omitempty"`
-	Seconds         string                 `json:"seconds,omitempty"`
-	InputReference  string                 `json:"input_reference,omitempty"`
-	AspectRatio     string                 `json:"aspect_ratio,omitempty"`
-	Capability      string                 `json:"capability,omitempty"`
-	ControlMode     string                 `json:"control_mode,omitempty"`
-	DurationSeconds *int                   `json:"duration_seconds,omitempty"`
-	EndImage        string                 `json:"end_image,omitempty"`
-	InputMode       string                 `json:"input_mode,omitempty"`
-	ReferenceImages []string               `json:"reference_images,omitempty"`
-	Resolution      string                 `json:"resolution,omitempty"`
-	WithAudio       *bool                  `json:"with_audio,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	Prompt                string                 `json:"prompt"`
+	Model                 string                 `json:"model,omitempty"`
+	Mode                  string                 `json:"mode,omitempty"`
+	Image                 string                 `json:"image,omitempty"`
+	Images                []string               `json:"images,omitempty"`
+	Size                  string                 `json:"size,omitempty"`
+	Duration              int                    `json:"duration,omitempty"`
+	Seconds               string                 `json:"seconds,omitempty"`
+	InputReference        string                 `json:"input_reference,omitempty"`
+	AspectRatio           string                 `json:"aspect_ratio,omitempty"`
+	Ratio                 string                 `json:"ratio,omitempty"`
+	Content               []map[string]any       `json:"content,omitempty"`
+	CallbackURL           string                 `json:"callback_url,omitempty"`
+	ReturnLastFrame       *bool                  `json:"return_last_frame,omitempty"`
+	ServiceTier           string                 `json:"service_tier,omitempty"`
+	ExecutionExpiresAfter *int                   `json:"execution_expires_after,omitempty"`
+	Capability            string                 `json:"capability,omitempty"`
+	ControlMode           string                 `json:"control_mode,omitempty"`
+	DurationSeconds       *int                   `json:"duration_seconds,omitempty"`
+	EndImage              string                 `json:"end_image,omitempty"`
+	InputMode             string                 `json:"input_mode,omitempty"`
+	ReferenceImages       []string               `json:"reference_images,omitempty"`
+	Resolution            string                 `json:"resolution,omitempty"`
+	WithAudio             *bool                  `json:"with_audio,omitempty"`
+	GenerateAudio         *bool                  `json:"generate_audio,omitempty"`
+	Draft                 *bool                  `json:"draft,omitempty"`
+	Tools                 []map[string]any       `json:"tools,omitempty"`
+	SafetyIdentifier      string                 `json:"safety_identifier,omitempty"`
+	Priority              *int                   `json:"priority,omitempty"`
+	Frames                *int                   `json:"frames,omitempty"`
+	Seed                  *int                   `json:"seed,omitempty"`
+	CameraFixed           *bool                  `json:"camera_fixed,omitempty"`
+	Watermark             *bool                  `json:"watermark,omitempty"`
+	Metadata              map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {

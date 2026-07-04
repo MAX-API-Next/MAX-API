@@ -71,10 +71,10 @@ func ApplyTaskParamOverrideBytes(requestBody io.Reader, info *relaycommon.RelayI
 }
 
 func SyncTaskRequestContext(c *gin.Context, data []byte) error {
-	relaycommon.StoreTaskSubmitRequestBody(c, data)
 	if c == nil || c.Request == nil || len(bytes.TrimSpace(data)) == 0 || !common.IsJsonObject(string(data)) {
 		return nil
 	}
+	relaycommon.StoreTaskSubmitRequestBody(c, data)
 	var raw map[string]any
 	if err := common.Unmarshal(data, &raw); err != nil {
 		return err
@@ -107,8 +107,16 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	copyString(raw, "image_tail", &req.EndImage)
 	copyString(raw, "size", &req.Size)
 	copyString(raw, "aspect_ratio", &req.Size)
+	copyString(raw, "ratio", &req.Ratio)
 	copyString(raw, "seconds", &req.Seconds)
 	copyString(raw, "input_reference", &req.InputReference)
+	if content, ok := mapSliceValue(raw["content"]); ok {
+		req.Content = content
+	}
+	copyString(raw, "callback_url", &req.CallbackURL)
+	copyBoolPtr(raw, "return_last_frame", &req.ReturnLastFrame)
+	copyString(raw, "service_tier", &req.ServiceTier)
+	copyIntPtr(raw, "execution_expires_after", &req.ExecutionExpiresAfter)
 	copyString(raw, "capability", &req.Capability)
 	copyString(raw, "control_mode", &req.ControlMode)
 	copyString(raw, "input_mode", &req.InputMode)
@@ -117,6 +125,17 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	copyIntPtr(raw, "duration_seconds", &req.DurationSeconds)
 	copyBoolPtr(raw, "with_audio", &req.WithAudio)
 	copyBoolPtr(raw, "generate_audio", &req.WithAudio)
+	copyBoolPtr(raw, "generate_audio", &req.GenerateAudio)
+	copyBoolPtr(raw, "draft", &req.Draft)
+	if tools, ok := mapSliceValue(raw["tools"]); ok {
+		req.Tools = tools
+	}
+	copyString(raw, "safety_identifier", &req.SafetyIdentifier)
+	copyIntPtr(raw, "priority", &req.Priority)
+	copyIntPtr(raw, "frames", &req.Frames)
+	copyIntPtr(raw, "seed", &req.Seed)
+	copyBoolPtr(raw, "camera_fixed", &req.CameraFixed)
+	copyBoolPtr(raw, "watermark", &req.Watermark)
 	if images, ok := stringSliceValue(raw["images"]); ok {
 		req.Images = images
 	}
@@ -272,6 +291,22 @@ func stringSliceValue(value any) ([]string, bool) {
 		if s, ok := stringValue(item); ok {
 			result = append(result, s)
 		}
+	}
+	return result, true
+}
+
+func mapSliceValue(value any) ([]map[string]any, bool) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		m, ok := mapValue(item)
+		if !ok {
+			return nil, false
+		}
+		result = append(result, m)
 	}
 	return result, true
 }

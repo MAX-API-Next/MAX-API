@@ -7,13 +7,43 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
+	t.Helper()
+	original := task_billing_setting.GetRateCardsCopy()
+	originalData, err := common.Marshal(original)
+	require.NoError(t, err)
+	data, err := common.Marshal(cards)
+	require.NoError(t, err)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"task_billing_setting.rate_cards": string(data),
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"task_billing_setting.rate_cards": string(originalData),
+		}))
+	})
+}
+
+func withRelayTaskQuotaPerUnit(t *testing.T, value float64) {
+	t.Helper()
+	original := common.QuotaPerUnit
+	common.QuotaPerUnit = value
+	t.Cleanup(func() {
+		common.QuotaPerUnit = original
+	})
+}
 
 func TestPrepareTaskSubmitRequestBodyMakesParamOverrideVisibleToBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -58,6 +88,61 @@ func TestPrepareTaskSubmitRequestBodyMakesParamOverrideVisibleToBilling(t *testi
 	ratios := (&doubao.TaskAdaptor{}).EstimateBilling(c, info)
 	require.NotNil(t, ratios)
 	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-9)
+}
+
+func TestEstimateTaskBillingFallsBackToGenericRateCard(t *testing.T) {
+	withRelayTaskQuotaPerUnit(t, 1000)
+	withRelayTaskRateCards(t, map[string]task_billing_setting.RateCard{
+		"custom-video-model": {
+			Vendor:          "custom",
+			Unit:            "second",
+			QuantityField:   "duration",
+			DefaultQuantity: 5,
+			Strict:          true,
+			Defaults: map[string]string{
+				"resolution":      "720p",
+				"has_audio":       "false",
+				"has_video_input": "false",
+			},
+			Rows: []task_billing_setting.RateCardRow{
+				{
+					ID: "720p_no_audio",
+					Match: map[string]string{
+						"resolution": "720p",
+						"has_audio":  "false",
+					},
+					UnitPrice: 0.5,
+				},
+			},
+		},
+	})
+
+	duration := 6
+	audio := false
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "custom-video-model",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "custom-video-model"},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
+		Model:           "custom-video-model",
+		DurationSeconds: &duration,
+		Resolution:      "720p",
+		GenerateAudio:   &audio,
+	})
+
+	got, err := estimateTaskBilling(c, info, &doubao.TaskAdaptor{}, constant.TaskPlatform("custom-video"))
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "custom-video-model", got.RuleKey)
+	assert.Equal(t, "720p_no_audio", got.RowID)
+	assert.InDelta(t, 6.0, got.Quantity, 1e-9)
+	assert.Equal(t, 3000, got.Quota)
 }
 
 func TestPrepareTaskSubmitRequestBodyParamOverrideReturnErrorIsLocal(t *testing.T) {
