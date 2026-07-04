@@ -141,8 +141,8 @@ export function PlaygroundInput({
           value={text}
         />
 
-        <PromptInputFooter className='p-2.5'>
-          <PromptInputTools>
+        <PromptInputFooter className='flex-wrap p-2.5'>
+          <PromptInputTools className='min-w-0 flex-wrap'>
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
@@ -222,8 +222,9 @@ export function PlaygroundInput({
             </TooltipProvider>
           </PromptInputTools>
 
-          <div className='flex items-center gap-1.5 md:gap-2'>
+          <div className='ml-auto flex min-w-0 items-center gap-1.5 md:gap-2'>
             <ModelGroupSelector
+              className='min-w-0'
               selectedModel={modelValue}
               models={models}
               onModelChange={onModelChange}
@@ -235,7 +236,7 @@ export function PlaygroundInput({
 
             {isGenerating && onStop ? (
               <PromptInputButton
-                className='text-foreground font-medium'
+                className='text-foreground shrink-0 font-medium'
                 onClick={onStop}
                 variant='secondary'
               >
@@ -245,7 +246,7 @@ export function PlaygroundInput({
               </PromptInputButton>
             ) : (
               <PromptInputButton
-                className='text-foreground font-medium'
+                className='text-foreground shrink-0 font-medium'
                 disabled={disabled || isSubmitDisabled || !text.trim()}
                 type='submit'
                 variant='secondary'

@@ -92,6 +92,7 @@ const ModelTriggerButton = React.forwardRef<
       'flex h-8 items-center gap-2 border px-3 font-medium',
       'justify-center p-0 sm:w-auto sm:justify-start sm:px-3',
       'w-8',
+      'min-w-0 sm:max-w-48 md:max-w-64',
       'bg-background text-foreground',
       'hover:bg-accent transition-colors',
       'focus:!ring-0 focus:!outline-none',
@@ -128,6 +129,7 @@ const GroupTriggerButton = React.forwardRef<
       'flex h-8 items-center gap-2 border px-3 font-medium',
       'justify-center p-0 sm:w-auto sm:justify-start sm:px-3',
       'w-8',
+      'min-w-0 sm:max-w-40 md:max-w-52',
       'bg-background text-foreground',
       'hover:bg-accent transition-colors',
       'focus:!ring-0 focus:!outline-none',
@@ -569,7 +571,7 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
   disabled = false,
 }) => {
   return (
-    <div className={cn('flex items-center gap-2', className)}>
+    <div className={cn('flex min-w-0 items-center gap-2', className)}>
       <GroupSelector
         selectedGroup={selectedGroup}
         groups={groups}
