@@ -45,9 +45,9 @@ type MediaURL struct {
 type requestPayload struct {
 	Model                 string         `json:"model"`
 	Content               []ContentItem  `json:"content,omitempty"`
-	CallbackURL           string         `json:"callback_url,omitempty"`
+	CallbackURL           *string        `json:"callback_url,omitempty"`
 	ReturnLastFrame       *dto.BoolValue `json:"return_last_frame,omitempty"`
-	ServiceTier           string         `json:"service_tier,omitempty"`
+	ServiceTier           *string        `json:"service_tier,omitempty"`
 	ExecutionExpiresAfter *dto.IntValue  `json:"execution_expires_after,omitempty"`
 	GenerateAudio         *dto.BoolValue `json:"generate_audio,omitempty"`
 	Draft                 *dto.BoolValue `json:"draft,omitempty"`
@@ -138,11 +138,24 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		return nil
 	}
 
-	// Accept only POST /v1/video/generations as "generate" action.
-	taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
-	if taskErr != nil {
-		return taskErr
+	if strings.HasPrefix(c.GetHeader("Content-Type"), "multipart/form-data") {
+		return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
 	}
+
+	var req relaycommon.TaskSubmitReq
+	if err := common.UnmarshalBodyReusable(c, &req); err != nil {
+		return service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("model field is required"), "missing_model", http.StatusBadRequest)
+	}
+	if strings.TrimSpace(req.Prompt) == "" && !hasUsableOfficialContent(req.Content) {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("prompt or content is required"), "invalid_request", http.StatusBadRequest)
+	}
+	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
+		req.Images = []string{req.Image}
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, req)
 	return nil
 }
 
@@ -205,6 +218,34 @@ func hasVideoInContent(content []ContentItem) bool {
 	for _, item := range content {
 		if item.VideoURL != nil && hasUsableVideoInput(item.VideoURL.URL) {
 			return true
+		}
+	}
+	return false
+}
+
+func hasUsableOfficialContent(content []map[string]any) bool {
+	items, err := topLevelContentItems(content)
+	if err != nil {
+		return false
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "text":
+			if strings.TrimSpace(item.Text) != "" {
+				return true
+			}
+		case "image_url":
+			if item.ImageURL != nil && strings.TrimSpace(item.ImageURL.URL) != "" {
+				return true
+			}
+		case "video_url":
+			if item.VideoURL != nil && strings.TrimSpace(item.VideoURL.URL) != "" {
+				return true
+			}
+		case "audio_url":
+			if item.AudioURL != nil && strings.TrimSpace(item.AudioURL.URL) != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -382,6 +423,9 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 			})
 		}
 	}
+	if err := applyTopLevelSeedanceOptions(req, &r); err != nil {
+		return nil, err
+	}
 
 	metadata := req.Metadata
 	if err := taskcommon.UnmarshalMetadata(metadata, &r); err != nil {
@@ -392,13 +436,126 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		r.Duration = lo.ToPtr(dto.IntValue(sec))
 	}
 
-	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
-	r.Content = append(r.Content, ContentItem{
-		Type: "text",
-		Text: req.Prompt,
-	})
+	if strings.TrimSpace(req.Prompt) != "" {
+		r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
+		r.Content = append(r.Content, ContentItem{
+			Type: "text",
+			Text: req.Prompt,
+		})
+	}
 
 	return &r, nil
+}
+
+func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayload) error {
+	if req == nil || r == nil {
+		return nil
+	}
+	if len(req.Content) > 0 {
+		items, err := topLevelContentItems(req.Content)
+		if err != nil {
+			return err
+		}
+		r.Content = items
+	}
+	if req.CallbackURL != nil {
+		r.CallbackURL = req.CallbackURL
+	}
+	if req.ReturnLastFrame != nil {
+		r.ReturnLastFrame = lo.ToPtr(dto.BoolValue(*req.ReturnLastFrame))
+	}
+	if req.ServiceTier != nil {
+		r.ServiceTier = req.ServiceTier
+	}
+	if req.ExecutionExpiresAfter != nil {
+		r.ExecutionExpiresAfter = lo.ToPtr(dto.IntValue(*req.ExecutionExpiresAfter))
+	}
+	if req.Resolution != "" {
+		r.Resolution = lo.ToPtr(req.Resolution)
+	}
+	if req.Ratio != nil {
+		ratio := strings.TrimSpace(*req.Ratio)
+		r.Ratio = lo.ToPtr(ratio)
+	} else if ratio := firstNonEmptyString(req.AspectRatio, req.Size); ratio != "" {
+		r.Ratio = lo.ToPtr(ratio)
+	}
+	if req.Duration > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
+	}
+	if req.DurationSeconds != nil {
+		r.Duration = lo.ToPtr(dto.IntValue(*req.DurationSeconds))
+	}
+	if req.GenerateAudio != nil {
+		r.GenerateAudio = lo.ToPtr(dto.BoolValue(*req.GenerateAudio))
+	} else if req.WithAudio != nil {
+		r.GenerateAudio = lo.ToPtr(dto.BoolValue(*req.WithAudio))
+	}
+	if req.Draft != nil {
+		r.Draft = lo.ToPtr(dto.BoolValue(*req.Draft))
+	}
+	if len(req.Tools) > 0 {
+		tools, err := topLevelTools(req.Tools)
+		if err != nil {
+			return err
+		}
+		r.Tools = tools
+	}
+	if req.SafetyIdentifier != nil {
+		r.SafetyIdentifier = req.SafetyIdentifier
+	}
+	if req.Priority != nil {
+		r.Priority = lo.ToPtr(dto.IntValue(*req.Priority))
+	}
+	if req.Frames != nil {
+		r.Frames = lo.ToPtr(dto.IntValue(*req.Frames))
+	}
+	if req.Seed != nil {
+		r.Seed = lo.ToPtr(dto.IntValue(*req.Seed))
+	}
+	if req.CameraFixed != nil {
+		r.CameraFixed = lo.ToPtr(dto.BoolValue(*req.CameraFixed))
+	}
+	if req.Watermark != nil {
+		r.Watermark = lo.ToPtr(dto.BoolValue(*req.Watermark))
+	}
+	return nil
+}
+
+func topLevelContentItems(raw []map[string]any) ([]ContentItem, error) {
+	data, err := common.Marshal(raw)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshal top-level content failed")
+	}
+	var items []ContentItem
+	if err := common.Unmarshal(data, &items); err != nil {
+		return nil, errors.Wrap(err, "unmarshal top-level content failed")
+	}
+	return items, nil
+}
+
+func topLevelTools(raw []map[string]any) ([]struct {
+	Type string `json:"type,omitempty"`
+}, error) {
+	data, err := common.Marshal(raw)
+	if err != nil {
+		return nil, errors.Wrap(err, "marshal top-level tools failed")
+	}
+	var tools []struct {
+		Type string `json:"type,omitempty"`
+	}
+	if err := common.Unmarshal(data, &tools); err != nil {
+		return nil, errors.Wrap(err, "unmarshal top-level tools failed")
+	}
+	return tools, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {

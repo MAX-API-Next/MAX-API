@@ -107,6 +107,35 @@ func TestBuildConfiguredTaskPassThroughBodyUsesChannelPassThrough(t *testing.T) 
 	assert.False(t, gjson.GetBytes(body, "with_audio").Bool())
 }
 
+func TestSyncTaskRequestContextReadsOfficialSeedanceFields(t *testing.T) {
+	c := newJSONTaskContext(`{}`)
+
+	err := SyncTaskRequestContext(c, []byte(`{
+		"model": "video-model",
+		"content": [
+			{ "type": "text", "text": "official prompt" }
+		],
+		"ratio": "16:9",
+		"generate_audio": false,
+		"priority": 0,
+		"seed": 0
+	}`))
+
+	require.NoError(t, err)
+	req, err := relaycommon.GetTaskRequest(c)
+	require.NoError(t, err)
+	require.NotNil(t, req.Ratio)
+	assert.Equal(t, "16:9", *req.Ratio)
+	require.NotNil(t, req.GenerateAudio)
+	assert.False(t, *req.GenerateAudio)
+	require.NotNil(t, req.Priority)
+	assert.Equal(t, 0, *req.Priority)
+	require.NotNil(t, req.Seed)
+	assert.Equal(t, 0, *req.Seed)
+	require.Len(t, req.Content, 1)
+	assert.Equal(t, "official prompt", req.Content[0]["text"])
+}
+
 func TestBuildConfiguredTaskPassThroughBodyFallsBackWithoutChannelPassThrough(t *testing.T) {
 	c := newJSONTaskContext(`{"model":"video-model","prompt":"test"}`)
 	info := &relaycommon.RelayInfo{

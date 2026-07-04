@@ -198,16 +198,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 6. Prefer a parameterized rate card when the adaptor can normalize the
 	// request. Legacy task models continue to use OtherRatios.
 	taskBillingOverride := false
-	if estimator, ok := adaptor.(taskBillingEstimator); ok {
-		taskBilling, err := estimator.EstimateTaskBilling(c, info)
-		if err != nil {
-			return nil, service.TaskErrorWrapper(err, "task_billing_rule_error", http.StatusBadRequest)
-		}
-		if taskBilling != nil {
-			info.TaskBilling = taskBilling
-			info.PriceData.Quota = taskBilling.Quota
-			taskBillingOverride = true
-		}
+	taskBilling, err := estimateTaskBilling(c, info, adaptor, platform)
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "task_billing_rule_error", http.StatusBadRequest)
+	}
+	if taskBilling != nil {
+		info.TaskBilling = taskBilling
+		info.PriceData.Quota = taskBilling.Quota
+		taskBillingOverride = true
 	}
 
 	if !taskBillingOverride {
@@ -281,13 +279,34 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
+func estimateTaskBilling(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor, platform constant.TaskPlatform) (*types.TaskBillingResult, error) {
+	if estimator, ok := adaptor.(taskBillingEstimator); ok {
+		taskBilling, err := estimator.EstimateTaskBilling(c, info)
+		if err != nil || taskBilling != nil {
+			return taskBilling, err
+		}
+	}
+	channelName := ""
+	if adaptor != nil {
+		channelName = adaptor.GetChannelName()
+	}
+	if channelName == "" {
+		channelName = string(platform)
+	}
+	return taskcommon.EstimateGenericTaskBilling(c, info, channelName)
+}
+
 func prepareTaskSubmitRequestBody(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor) (io.Reader, *dto.TaskError) {
 	relaycommon.ClearTaskSubmitRequestBody(c)
 	requestBody, err := buildTaskSubmitRequestBody(c, info, adaptor)
 	if err != nil {
 		return nil, taskErrorFromBuildRequestError(err)
 	}
-	if info == nil || len(info.ParamOverride) == 0 {
+	if c == nil || c.Request == nil {
+		return requestBody, nil
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Type"))), "application/json") &&
+		(info == nil || len(info.ParamOverride) == 0) {
 		return requestBody, nil
 	}
 	bodyBytes, err := io.ReadAll(requestBody)
