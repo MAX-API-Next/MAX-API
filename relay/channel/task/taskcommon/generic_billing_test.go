@@ -235,3 +235,50 @@ func TestEstimateGenericTaskBillingVideoInputRequiresUsableMedia(t *testing.T) {
 	assert.Equal(t, "has_video", got.RowID)
 	assert.Equal(t, "1", got.Fields["video_count"])
 }
+
+func TestEstimateGenericTaskBillingDoesNotDoubleCountRawImages(t *testing.T) {
+	withGenericBillingQuotaPerUnit(t, 1000)
+	withGenericTaskRateCards(t, map[string]task_billing_setting.RateCard{
+		"image-count-video-model": {
+			Vendor:          "custom",
+			Unit:            "call",
+			DefaultQuantity: 1,
+			Strict:          true,
+			Defaults: map[string]string{
+				"image_count": "0",
+			},
+			Rows: []task_billing_setting.RateCardRow{
+				{ID: "three_images", Match: map[string]string{"image_count": "3"}, UnitPrice: 1},
+			},
+		},
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"model":"image-count-video-model"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "image-count-video-model",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "image-count-video-model"},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
+		Model:           "image-count-video-model",
+		Images:          []string{"https://example.com/a.png", "https://example.com/b.png"},
+		ReferenceImages: []string{"https://example.com/ref.png"},
+	})
+	require.NoError(t, SyncTaskRequestContext(c, []byte(`{
+		"model": "image-count-video-model",
+		"images": ["https://example.com/a.png", "https://example.com/b.png"],
+		"reference_images": ["https://example.com/ref.png"]
+	}`)))
+
+	got, err := EstimateGenericTaskBilling(c, info, "custom-video")
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "three_images", got.RowID)
+	assert.Equal(t, "3", got.Fields["image_count"])
+}

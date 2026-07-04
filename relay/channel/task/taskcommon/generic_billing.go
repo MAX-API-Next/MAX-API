@@ -227,8 +227,11 @@ func genericBillingMediaCount(req relaycommon.TaskSubmitReq, raw map[string]any,
 		count += contentMediaCount(req.Metadata["content"], urlKey)
 	}
 	if singleKey == "image" {
-		count += len(req.Images) + len(req.ReferenceImages)
-		if strings.TrimSpace(req.Image) != "" {
+		count += len(req.ReferenceImages)
+		if len(raw) == 0 || raw[listKey] == nil {
+			count += len(req.Images)
+		}
+		if (len(raw) == 0 || raw[singleKey] == nil) && strings.TrimSpace(req.Image) != "" {
 			count++
 		}
 	}

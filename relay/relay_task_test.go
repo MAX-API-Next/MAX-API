@@ -90,6 +90,50 @@ func TestPrepareTaskSubmitRequestBodyMakesParamOverrideVisibleToBilling(t *testi
 	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-9)
 }
 
+func TestPrepareTaskSubmitRequestBodyMakesMultipartParamOverrideVisibleToBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(`--boundary--`))
+	c.Request.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "doubao-seedance-2-0-260128",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"path":  "resolution",
+						"mode":  "set",
+						"value": "1080p",
+					},
+				},
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
+		Model:  "doubao-seedance-2-0-260128",
+		Prompt: "test",
+		Metadata: map[string]interface{}{
+			"resolution": "720p",
+		},
+	})
+
+	requestBody, taskErr := prepareTaskSubmitRequestBody(c, info, &doubao.TaskAdaptor{})
+
+	require.Nil(t, taskErr)
+	body, err := io.ReadAll(requestBody)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"resolution":"1080p"`)
+
+	finalBody, ok := relaycommon.GetTaskSubmitRequestBody(c)
+	require.True(t, ok)
+	assert.Contains(t, string(finalBody), `"resolution":"1080p"`)
+	ratios := (&doubao.TaskAdaptor{}).EstimateBilling(c, info)
+	require.NotNil(t, ratios)
+	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-9)
+}
+
 func TestEstimateTaskBillingFallsBackToGenericRateCard(t *testing.T) {
 	withRelayTaskQuotaPerUnit(t, 1000)
 	withRelayTaskRateCards(t, map[string]task_billing_setting.RateCard{

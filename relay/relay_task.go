@@ -302,7 +302,11 @@ func prepareTaskSubmitRequestBody(c *gin.Context, info *relaycommon.RelayInfo, a
 	if err != nil {
 		return nil, taskErrorFromBuildRequestError(err)
 	}
-	if c == nil || c.Request == nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Type"))), "application/json") {
+	if c == nil || c.Request == nil {
+		return requestBody, nil
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Content-Type"))), "application/json") &&
+		(info == nil || len(info.ParamOverride) == 0) {
 		return requestBody, nil
 	}
 	bodyBytes, err := io.ReadAll(requestBody)
