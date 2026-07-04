@@ -696,11 +696,11 @@ type TaskSubmitReq struct {
 	Seconds               string                 `json:"seconds,omitempty"`
 	InputReference        string                 `json:"input_reference,omitempty"`
 	AspectRatio           string                 `json:"aspect_ratio,omitempty"`
-	Ratio                 string                 `json:"ratio,omitempty"`
+	Ratio                 *string                `json:"ratio,omitempty"`
 	Content               []map[string]any       `json:"content,omitempty"`
-	CallbackURL           string                 `json:"callback_url,omitempty"`
+	CallbackURL           *string                `json:"callback_url,omitempty"`
 	ReturnLastFrame       *bool                  `json:"return_last_frame,omitempty"`
-	ServiceTier           string                 `json:"service_tier,omitempty"`
+	ServiceTier           *string                `json:"service_tier,omitempty"`
 	ExecutionExpiresAfter *int                   `json:"execution_expires_after,omitempty"`
 	Capability            string                 `json:"capability,omitempty"`
 	ControlMode           string                 `json:"control_mode,omitempty"`
@@ -713,7 +713,7 @@ type TaskSubmitReq struct {
 	GenerateAudio         *bool                  `json:"generate_audio,omitempty"`
 	Draft                 *bool                  `json:"draft,omitempty"`
 	Tools                 []map[string]any       `json:"tools,omitempty"`
-	SafetyIdentifier      string                 `json:"safety_identifier,omitempty"`
+	SafetyIdentifier      *string                `json:"safety_identifier,omitempty"`
 	Priority              *int                   `json:"priority,omitempty"`
 	Frames                *int                   `json:"frames,omitempty"`
 	Seed                  *int                   `json:"seed,omitempty"`

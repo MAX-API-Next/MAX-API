@@ -45,9 +45,9 @@ type MediaURL struct {
 type requestPayload struct {
 	Model                 string         `json:"model"`
 	Content               []ContentItem  `json:"content,omitempty"`
-	CallbackURL           string         `json:"callback_url,omitempty"`
+	CallbackURL           *string        `json:"callback_url,omitempty"`
 	ReturnLastFrame       *dto.BoolValue `json:"return_last_frame,omitempty"`
-	ServiceTier           string         `json:"service_tier,omitempty"`
+	ServiceTier           *string        `json:"service_tier,omitempty"`
 	ExecutionExpiresAfter *dto.IntValue  `json:"execution_expires_after,omitempty"`
 	GenerateAudio         *dto.BoolValue `json:"generate_audio,omitempty"`
 	Draft                 *dto.BoolValue `json:"draft,omitempty"`
@@ -458,13 +458,13 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 		}
 		r.Content = items
 	}
-	if req.CallbackURL != "" {
+	if req.CallbackURL != nil {
 		r.CallbackURL = req.CallbackURL
 	}
 	if req.ReturnLastFrame != nil {
 		r.ReturnLastFrame = lo.ToPtr(dto.BoolValue(*req.ReturnLastFrame))
 	}
-	if req.ServiceTier != "" {
+	if req.ServiceTier != nil {
 		r.ServiceTier = req.ServiceTier
 	}
 	if req.ExecutionExpiresAfter != nil {
@@ -473,7 +473,10 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 	if req.Resolution != "" {
 		r.Resolution = lo.ToPtr(req.Resolution)
 	}
-	if ratio := firstNonEmptyString(req.Ratio, req.AspectRatio, req.Size); ratio != "" {
+	if req.Ratio != nil {
+		ratio := strings.TrimSpace(*req.Ratio)
+		r.Ratio = lo.ToPtr(ratio)
+	} else if ratio := firstNonEmptyString(req.AspectRatio, req.Size); ratio != "" {
 		r.Ratio = lo.ToPtr(ratio)
 	}
 	if req.Duration > 0 {
@@ -497,8 +500,8 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 		}
 		r.Tools = tools
 	}
-	if req.SafetyIdentifier != "" {
-		r.SafetyIdentifier = lo.ToPtr(req.SafetyIdentifier)
+	if req.SafetyIdentifier != nil {
+		r.SafetyIdentifier = req.SafetyIdentifier
 	}
 	if req.Priority != nil {
 		r.Priority = lo.ToPtr(dto.IntValue(*req.Priority))
@@ -548,8 +551,8 @@ func topLevelTools(raw []map[string]any) ([]struct {
 
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""

@@ -108,16 +108,7 @@ func TestBuildConfiguredTaskPassThroughBodyUsesChannelPassThrough(t *testing.T) 
 }
 
 func TestSyncTaskRequestContextReadsOfficialSeedanceFields(t *testing.T) {
-	c := newJSONTaskContext(`{
-		"model": "video-model",
-		"content": [
-			{ "type": "text", "text": "official prompt" }
-		],
-		"ratio": "16:9",
-		"generate_audio": false,
-		"priority": 0,
-		"seed": 0
-	}`)
+	c := newJSONTaskContext(`{}`)
 
 	err := SyncTaskRequestContext(c, []byte(`{
 		"model": "video-model",
@@ -133,7 +124,8 @@ func TestSyncTaskRequestContextReadsOfficialSeedanceFields(t *testing.T) {
 	require.NoError(t, err)
 	req, err := relaycommon.GetTaskRequest(c)
 	require.NoError(t, err)
-	assert.Equal(t, "16:9", req.Ratio)
+	require.NotNil(t, req.Ratio)
+	assert.Equal(t, "16:9", *req.Ratio)
 	require.NotNil(t, req.GenerateAudio)
 	assert.False(t, *req.GenerateAudio)
 	require.NotNil(t, req.Priority)

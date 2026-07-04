@@ -360,10 +360,12 @@ func TestConvertToRequestPayloadUsesTopLevelSeedanceFields(t *testing.T) {
 	require.NotNil(t, payload.Content[1].ImageURL)
 	assert.Equal(t, "https://example.com/first.png", payload.Content[1].ImageURL.URL)
 	assert.Equal(t, "first_frame", payload.Content[1].Role)
-	assert.Equal(t, "https://example.com/callback", payload.CallbackURL)
+	require.NotNil(t, payload.CallbackURL)
+	assert.Equal(t, "https://example.com/callback", *payload.CallbackURL)
 	require.NotNil(t, payload.ReturnLastFrame)
 	assert.False(t, bool(*payload.ReturnLastFrame))
-	assert.Equal(t, "default", payload.ServiceTier)
+	require.NotNil(t, payload.ServiceTier)
+	assert.Equal(t, "default", *payload.ServiceTier)
 	require.NotNil(t, payload.ExecutionExpiresAfter)
 	assert.Equal(t, 3600, int(*payload.ExecutionExpiresAfter))
 	require.NotNil(t, payload.Ratio)
@@ -413,9 +415,12 @@ func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing
 	err := common.Unmarshal([]byte(`{
 		"model": "doubao-seedance-2-0-260128",
 		"prompt": "test",
+		"ratio": "",
+		"callback_url": "",
+		"service_tier": "",
+		"safety_identifier": "",
 		"metadata": {
-			"resolution": "",
-			"ratio": ""
+			"resolution": ""
 		}
 	}`), &req)
 	require.NoError(t, err)
@@ -423,15 +428,24 @@ func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing
 	payload, err := (&TaskAdaptor{}).convertToRequestPayload(&req)
 	require.NoError(t, err)
 	require.NotNil(t, payload)
+	require.NotNil(t, payload.CallbackURL)
+	assert.Equal(t, "", *payload.CallbackURL)
+	require.NotNil(t, payload.ServiceTier)
+	assert.Equal(t, "", *payload.ServiceTier)
 	require.NotNil(t, payload.Resolution)
 	assert.Equal(t, "", *payload.Resolution)
 	require.NotNil(t, payload.Ratio)
 	assert.Equal(t, "", *payload.Ratio)
+	require.NotNil(t, payload.SafetyIdentifier)
+	assert.Equal(t, "", *payload.SafetyIdentifier)
 
 	data, err := common.Marshal(payload)
 	require.NoError(t, err)
+	assert.Contains(t, string(data), `"callback_url":""`)
+	assert.Contains(t, string(data), `"service_tier":""`)
 	assert.Contains(t, string(data), `"resolution":""`)
 	assert.Contains(t, string(data), `"ratio":""`)
+	assert.Contains(t, string(data), `"safety_identifier":""`)
 }
 
 func TestValidateConfiguredTaskProtocolAllowsPromptlessMediaRequest(t *testing.T) {

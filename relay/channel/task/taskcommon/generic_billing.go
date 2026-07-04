@@ -89,7 +89,7 @@ func genericBillingFields(req relaycommon.TaskSubmitReq, raw map[string]any) map
 	if params, ok := billingMap(raw, "parameters"); ok {
 		setIfPresent(fields, "resolution", firstBillingString(params, "resolution"), "")
 	}
-	setIfPresent(fields, "ratio", firstBillingString(raw, "ratio", "aspect_ratio", "aspectRatio", "size"), req.Ratio, req.AspectRatio, req.Size, firstBillingString(req.Metadata, "ratio", "aspect_ratio", "aspectRatio", "size"))
+	setIfPresent(fields, "ratio", firstBillingString(raw, "ratio", "aspect_ratio", "aspectRatio", "size"), stringPtrValue(req.Ratio), req.AspectRatio, req.Size, firstBillingString(req.Metadata, "ratio", "aspect_ratio", "aspectRatio", "size"))
 	if params, ok := billingMap(raw, "parameters"); ok {
 		setIfPresent(fields, "ratio", firstBillingString(params, "ratio", "aspect_ratio", "aspectRatio", "size"), "")
 	}
@@ -270,6 +270,13 @@ func setIfPresent(fields map[string]string, key string, values ...string) {
 		fields[key] = value
 		return
 	}
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func setCountField(fields map[string]string, key string, count int) {

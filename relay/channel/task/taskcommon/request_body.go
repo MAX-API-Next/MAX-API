@@ -107,15 +107,15 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	copyString(raw, "image_tail", &req.EndImage)
 	copyString(raw, "size", &req.Size)
 	copyString(raw, "aspect_ratio", &req.Size)
-	copyString(raw, "ratio", &req.Ratio)
+	copyStringPtr(raw, "ratio", &req.Ratio)
 	copyString(raw, "seconds", &req.Seconds)
 	copyString(raw, "input_reference", &req.InputReference)
 	if content, ok := mapSliceValue(raw["content"]); ok {
 		req.Content = content
 	}
-	copyString(raw, "callback_url", &req.CallbackURL)
+	copyStringPtr(raw, "callback_url", &req.CallbackURL)
 	copyBoolPtr(raw, "return_last_frame", &req.ReturnLastFrame)
-	copyString(raw, "service_tier", &req.ServiceTier)
+	copyStringPtr(raw, "service_tier", &req.ServiceTier)
 	copyIntPtr(raw, "execution_expires_after", &req.ExecutionExpiresAfter)
 	copyString(raw, "capability", &req.Capability)
 	copyString(raw, "control_mode", &req.ControlMode)
@@ -124,13 +124,12 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	copyInt(raw, "duration", &req.Duration)
 	copyIntPtr(raw, "duration_seconds", &req.DurationSeconds)
 	copyBoolPtr(raw, "with_audio", &req.WithAudio)
-	copyBoolPtr(raw, "generate_audio", &req.WithAudio)
 	copyBoolPtr(raw, "generate_audio", &req.GenerateAudio)
 	copyBoolPtr(raw, "draft", &req.Draft)
 	if tools, ok := mapSliceValue(raw["tools"]); ok {
 		req.Tools = tools
 	}
-	copyString(raw, "safety_identifier", &req.SafetyIdentifier)
+	copyStringPtr(raw, "safety_identifier", &req.SafetyIdentifier)
 	copyIntPtr(raw, "priority", &req.Priority)
 	copyIntPtr(raw, "frames", &req.Frames)
 	copyIntPtr(raw, "seed", &req.Seed)
@@ -209,6 +208,15 @@ func copyString(raw map[string]any, key string, target *string) bool {
 		return false
 	}
 	*target = value
+	return true
+}
+
+func copyStringPtr(raw map[string]any, key string, target **string) bool {
+	value, ok := stringValue(raw[key])
+	if !ok {
+		return false
+	}
+	*target = &value
 	return true
 }
 
