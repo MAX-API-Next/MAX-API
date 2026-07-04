@@ -1,0 +1,130 @@
+package ali
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func testRelayInfo() *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+}
+
+func TestConvertToAliRequestWan27I2VBuildsMediaFromImage(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:    "wan2.7-i2v",
+		Prompt:   "animate the first frame",
+		Image:    "https://example.com/first.png",
+		Size:     "720p",
+		Duration: 10,
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "wan2.7-i2v", aliReq.Model)
+	assert.Equal(t, "720P", aliReq.Parameters.Resolution)
+	assert.Equal(t, 10, aliReq.Parameters.Duration)
+	assert.Equal(t, []map[string]interface{}{
+		{"type": "first_frame", "url": "https://example.com/first.png"},
+	}, aliReq.Input.Media)
+	assert.Empty(t, aliReq.Input.ImgURL)
+
+	body, err := common.Marshal(aliReq)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"media"`)
+	assert.NotContains(t, string(body), `"img_url"`)
+}
+
+func TestConvertToAliRequestWan27I2VBuildsFirstAndLastFrameFromImages(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:  "wan2.7-i2v",
+		Prompt: "interpolate between frames",
+		Images: []string{
+			"https://example.com/first.png",
+			"https://example.com/last.png",
+		},
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]interface{}{
+		{"type": "first_frame", "url": "https://example.com/first.png"},
+		{"type": "last_frame", "url": "https://example.com/last.png"},
+	}, aliReq.Input.Media)
+}
+
+func TestConvertToAliRequestWan27I2VKeepsExplicitMetadataMedia(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:          "wan2.7-i2v",
+		Prompt:         "continue the clip",
+		Image:          "https://example.com/direct.png",
+		InputReference: "https://example.com/input-reference.png",
+		Metadata: map[string]interface{}{
+			"input": map[string]interface{}{
+				"media": []interface{}{
+					map[string]interface{}{
+						"type": "first_clip",
+						"url":  "https://example.com/input.mp4",
+					},
+				},
+			},
+		},
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]interface{}{
+		{"type": "first_clip", "url": "https://example.com/input.mp4"},
+	}, aliReq.Input.Media)
+	assert.Empty(t, aliReq.Input.ImgURL)
+
+	body, err := common.Marshal(aliReq)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"media"`)
+	assert.NotContains(t, string(body), `"img_url"`)
+}
+
+func TestConvertToAliRequestWan27I2VRequiresMedia(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:  "wan2.7-i2v",
+		Prompt: "animate without a frame",
+	}
+
+	_, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "requires image"))
+}
+
+func TestConvertToAliRequestWan25I2VKeepsLegacyImgURL(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:  "wan2.5-i2v-preview",
+		Prompt: "animate the first frame",
+		Image:  "https://example.com/first.png",
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://example.com/first.png", aliReq.Input.ImgURL)
+	assert.Empty(t, aliReq.Input.Media)
+
+	body, err := common.Marshal(aliReq)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"img_url"`)
+	assert.NotContains(t, string(body), `"media"`)
+}

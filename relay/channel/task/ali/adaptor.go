@@ -208,11 +208,86 @@ func (a *TaskAdaptor) tryValidateAliOfficialRequest(c *gin.Context, info *relayc
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
-		if value != "" {
-			return value
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""
+}
+
+func isWan27I2VModel(model string) bool {
+	return strings.HasPrefix(model, "wan2.7-i2v")
+}
+
+func firstTaskImage(req relaycommon.TaskSubmitReq) string {
+	if image := strings.TrimSpace(req.Image); image != "" {
+		return image
+	}
+	for _, image := range req.Images {
+		if trimmed := strings.TrimSpace(image); trimmed != "" {
+			return trimmed
+		}
+	}
+	return strings.TrimSpace(req.InputReference)
+}
+
+func secondTaskImage(req relaycommon.TaskSubmitReq) string {
+	nonEmptyImages := 0
+	for _, image := range req.Images {
+		trimmed := strings.TrimSpace(image)
+		if trimmed == "" {
+			continue
+		}
+		nonEmptyImages++
+		if nonEmptyImages == 2 {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
+	if !isWan27I2VModel(aliReq.Model) {
+		return nil
+	}
+
+	if len(aliReq.Input.Media) == 0 {
+		firstFrameURL := firstNonEmpty(aliReq.Input.FirstFrameURL, aliReq.Input.ImgURL, firstTaskImage(req))
+		lastFrameURL := firstNonEmpty(aliReq.Input.LastFrameURL, secondTaskImage(req))
+		audioURL := strings.TrimSpace(aliReq.Input.AudioURL)
+
+		if firstFrameURL != "" {
+			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+				"type": "first_frame",
+				"url":  firstFrameURL,
+			})
+		}
+		if lastFrameURL != "" {
+			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+				"type": "last_frame",
+				"url":  lastFrameURL,
+			})
+		}
+		if audioURL != "" {
+			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+				"type": "driving_audio",
+				"url":  audioURL,
+			})
+		}
+	}
+
+	if len(aliReq.Input.Media) == 0 {
+		return fmt.Errorf("wan2.7-i2v requires image, images, input_reference, or input.media")
+	}
+
+	// Wan2.7 image-to-video uses the new input.media protocol. Avoid sending
+	// legacy fields that belong to wan2.6 and earlier image-to-video APIs.
+	aliReq.Input.ImgURL = ""
+	aliReq.Input.FirstFrameURL = ""
+	aliReq.Input.LastFrameURL = ""
+	aliReq.Input.AudioURL = ""
+	return nil
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -356,7 +431,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		Model: upstreamModel,
 		Input: AliVideoInput{
 			Prompt: req.Prompt,
-			ImgURL: req.InputReference,
+			ImgURL: firstTaskImage(req),
 		},
 		Parameters: &AliVideoParameters{
 			PromptExtend: true, // 默认开启智能改写
@@ -421,6 +496,10 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 
 	// 从 metadata 中提取额外参数
 	if err := applyAliMetadata(req.Metadata, aliReq); err != nil {
+		return nil, err
+	}
+
+	if err := normalizeWan27I2VInput(aliReq, req); err != nil {
 		return nil, err
 	}
 
