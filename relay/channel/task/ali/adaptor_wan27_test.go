@@ -162,6 +162,37 @@ func TestConvertToAliRequestWan27I2VKeepsExplicitMetadataMedia(t *testing.T) {
 	assert.NotContains(t, string(body), `"img_url"`)
 }
 
+func TestConvertToAliRequestWan27I2VMergesLegacyMediaFieldsIntoPartialMedia(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	req := relaycommon.TaskSubmitReq{
+		Model:  "wan2.7-i2v",
+		Prompt: "continue the clip with ending frame and audio",
+		Metadata: map[string]interface{}{
+			"input": map[string]interface{}{
+				"media": []interface{}{
+					map[string]interface{}{
+						"type": "first_clip",
+						"url":  "https://example.com/input.mp4",
+					},
+				},
+				"last_frame_url": "https://example.com/last.png",
+				"audio_url":      "https://example.com/audio.mp3",
+			},
+		},
+	}
+
+	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []map[string]interface{}{
+		{"type": "first_clip", "url": "https://example.com/input.mp4"},
+		{"type": "last_frame", "url": "https://example.com/last.png"},
+		{"type": "driving_audio", "url": "https://example.com/audio.mp3"},
+	}, aliReq.Input.Media)
+	assert.Empty(t, aliReq.Input.LastFrameURL)
+	assert.Empty(t, aliReq.Input.AudioURL)
+}
+
 func TestConvertToAliRequestWan27I2VRejectsMediaWithoutPrimaryInput(t *testing.T) {
 	adaptor := &TaskAdaptor{}
 	req := relaycommon.TaskSubmitReq{

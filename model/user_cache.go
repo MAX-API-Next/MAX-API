@@ -83,6 +83,9 @@ func updateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
+	if err := updateUserRoleCache(user.Id, user.Role); err != nil {
+		return err
+	}
 	if err := updateUserGroupCache(user.Id, user.Group); err != nil {
 		return err
 	}
@@ -237,6 +240,13 @@ func updateUserGroupCache(userId int, group string) error {
 		return nil
 	}
 	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+}
+
+func updateUserRoleCache(userId int, role int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	return common.RedisHSetField(getUserCacheKey(userId), "Role", fmt.Sprintf("%d", role))
 }
 
 func UpdateUserGroupCache(userId int, group string) error {

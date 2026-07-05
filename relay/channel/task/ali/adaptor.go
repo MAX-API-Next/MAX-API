@@ -253,13 +253,23 @@ func secondTaskImage(req relaycommon.TaskSubmitReq) string {
 }
 
 func hasWan27PrimaryMedia(media []map[string]interface{}) bool {
+	return hasWan27MediaType(media, "first_frame", "first_clip")
+}
+
+func hasWan27MediaType(media []map[string]interface{}, mediaTypes ...string) bool {
+	wanted := make(map[string]struct{}, len(mediaTypes))
+	for _, mediaType := range mediaTypes {
+		trimmed := strings.ToLower(strings.TrimSpace(mediaType))
+		if trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
 	for _, item := range media {
 		mediaType, ok := item["type"].(string)
 		if !ok {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(mediaType)) {
-		case "first_frame", "first_clip":
+		if _, ok := wanted[strings.ToLower(strings.TrimSpace(mediaType))]; ok {
 			return true
 		}
 	}
@@ -271,29 +281,27 @@ func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitR
 		return nil
 	}
 
-	if len(aliReq.Input.Media) == 0 {
-		firstFrameURL := firstNonEmpty(aliReq.Input.FirstFrameURL, aliReq.Input.ImgURL, firstTaskImage(req))
-		lastFrameURL := firstNonEmpty(aliReq.Input.LastFrameURL, secondTaskImage(req))
-		audioURL := strings.TrimSpace(aliReq.Input.AudioURL)
+	firstFrameURL := firstNonEmpty(aliReq.Input.FirstFrameURL, aliReq.Input.ImgURL, firstTaskImage(req))
+	lastFrameURL := firstNonEmpty(aliReq.Input.LastFrameURL, secondTaskImage(req))
+	audioURL := strings.TrimSpace(aliReq.Input.AudioURL)
 
-		if firstFrameURL != "" {
-			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
-				"type": "first_frame",
-				"url":  firstFrameURL,
-			})
-		}
-		if lastFrameURL != "" {
-			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
-				"type": "last_frame",
-				"url":  lastFrameURL,
-			})
-		}
-		if audioURL != "" {
-			aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
-				"type": "driving_audio",
-				"url":  audioURL,
-			})
-		}
+	if firstFrameURL != "" && !hasWan27MediaType(aliReq.Input.Media, "first_frame", "first_clip") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "first_frame",
+			"url":  firstFrameURL,
+		})
+	}
+	if lastFrameURL != "" && !hasWan27MediaType(aliReq.Input.Media, "last_frame") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "last_frame",
+			"url":  lastFrameURL,
+		})
+	}
+	if audioURL != "" && !hasWan27MediaType(aliReq.Input.Media, "driving_audio") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "driving_audio",
+			"url":  audioURL,
+		})
 	}
 
 	if len(aliReq.Input.Media) == 0 {
