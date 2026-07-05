@@ -233,9 +233,7 @@ func main() {
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
-	}
+	shutdownHTTPServer(ctx, srv)
 	if common.DataExportEnabled {
 		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
 		if !runWithTimeout(saveTimeout, model.SaveQuotaDataCache) {
@@ -243,6 +241,15 @@ func main() {
 		}
 	}
 	common.SysLog("server exited")
+}
+
+func shutdownHTTPServer(ctx context.Context, srv *http.Server) {
+	if err := srv.Shutdown(ctx); err != nil {
+		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
+		if closeErr := srv.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			common.SysError(fmt.Sprintf("server close after forced shutdown failed: %v", closeErr))
+		}
+	}
 }
 
 func runWithTimeout(timeout time.Duration, fn func()) bool {

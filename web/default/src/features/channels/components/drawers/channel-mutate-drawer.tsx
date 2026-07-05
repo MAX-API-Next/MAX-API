@@ -1549,19 +1549,22 @@ export function ChannelMutateDrawer({
     ]
   )
 
-  const handleAdvancedSettingsOpenChange = useCallback((nextOpen: boolean) => {
-    if (!nextOpen) {
-      advancedNavScrollPendingRef.current = false
-      setExpandedEditorNavItemId(undefined)
-    }
-    setAdvancedSettingsOpen(nextOpen)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(
-        ADVANCED_SETTINGS_EXPANDED_KEY,
-        String(nextOpen)
-      )
-    }
-  }, [])
+  const handleAdvancedSettingsOpenChange = useCallback(
+    (nextOpen: boolean, persist = true) => {
+      if (!nextOpen) {
+        advancedNavScrollPendingRef.current = false
+        setExpandedEditorNavItemId(undefined)
+      }
+      setAdvancedSettingsOpen(nextOpen)
+      if (persist && typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          ADVANCED_SETTINGS_EXPANDED_KEY,
+          String(nextOpen)
+        )
+      }
+    },
+    []
+  )
 
   const handleEditorNavNavigate = useCallback(
     (targetId: string) => {
@@ -1571,7 +1574,7 @@ export function ChannelMutateDrawer({
 
       if (isAdvancedTarget) {
         advancedNavScrollPendingRef.current = true
-        handleAdvancedSettingsOpenChange(true)
+        handleAdvancedSettingsOpenChange(true, false)
         setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.advanced)
         setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
       } else {
@@ -1649,7 +1652,7 @@ export function ChannelMutateDrawer({
   const onInvalid: SubmitErrorHandler<ChannelFormValues> = useCallback(
     (errors) => {
       if (ADVANCED_ERROR_FIELDS.some((field) => Boolean(errors[field]))) {
-        handleAdvancedSettingsOpenChange(true)
+        handleAdvancedSettingsOpenChange(true, false)
       }
       toast.error(t('Please fix the highlighted fields before saving'))
     },
@@ -4327,19 +4330,48 @@ export function ChannelMutateDrawer({
 
                           <div
                             id={ADVANCED_SETTINGS_SECTION_IDS.extraSettings}
-                            className='divide-border scroll-mt-4 space-y-0 divide-y border-y'
+                            className='flex scroll-mt-4 flex-col gap-4'
                           >
-                            {currentType === 1 && (
+                            <div className='divide-border space-y-0 divide-y border-y'>
+                              {currentType === 1 && (
+                                <FormField
+                                  control={form.control}
+                                  name='force_format'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Force Format')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Force format response to OpenAI standard (OpenAI channel only)'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              )}
+
                               <FormField
                                 control={form.control}
-                                name='force_format'
+                                name='thinking_to_content'
                                 render={({ field }) => (
                                   <FormItem className='flex items-center justify-between px-4 py-3'>
                                     <div className='space-y-0.5'>
-                                      <FormLabel>{t('Force Format')}</FormLabel>
+                                      <FormLabel>
+                                        {t('Thinking to Content')}
+                                      </FormLabel>
                                       <FormDescription>
                                         {t(
-                                          'Force format response to OpenAI standard (OpenAI channel only)'
+                                          'Convert reasoning_content to <think> tag in content'
                                         )}
                                       </FormDescription>
                                     </div>
@@ -4352,45 +4384,94 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
-                            )}
+
+                              <FormField
+                                control={form.control}
+                                name='pass_through_body_enabled'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>
+                                        {t('Pass Through Body')}
+                                      </FormLabel>
+                                      <FormDescription>
+                                        {t(
+                                          'Pass request body directly to upstream'
+                                        )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
 
                             <FormField
                               control={form.control}
-                              name='thinking_to_content'
+                              name='proxy'
                               render={({ field }) => (
-                                <FormItem className='flex items-center justify-between px-4 py-3'>
-                                  <div className='space-y-0.5'>
-                                    <FormLabel>
-                                      {t('Thinking to Content')}
-                                    </FormLabel>
-                                    <FormDescription>
-                                      {t(
-                                        'Convert reasoning_content to <think> tag in content'
-                                      )}
-                                    </FormDescription>
-                                  </div>
+                                <FormItem>
+                                  <FormLabel>{t('Proxy Address')}</FormLabel>
                                   <FormControl>
-                                    <Switch
-                                      checked={field.value}
-                                      onCheckedChange={field.onChange}
+                                    <Input
+                                      placeholder={t(
+                                        'socks5://user:pass@host:port'
+                                      )}
+                                      {...field}
                                     />
                                   </FormControl>
+                                  <FormDescription>
+                                    {t(
+                                      'Network proxy for this channel (supports socks5 protocol)'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
                                 </FormItem>
                               )}
                             />
 
                             <FormField
                               control={form.control}
-                              name='pass_through_body_enabled'
+                              name='system_prompt'
                               render={({ field }) => (
-                                <FormItem className='flex items-center justify-between px-4 py-3'>
+                                <FormItem>
+                                  <FormLabel>{t('System Prompt')}</FormLabel>
+                                  <FormControl>
+                                    <Textarea
+                                      placeholder={t(
+                                        'Enter system prompt (user prompt takes priority)'
+                                      )}
+                                      rows={3}
+                                      {...field}
+                                    />
+                                  </FormControl>
+                                  <FormDescription>
+                                    {t(
+                                      'Default system prompt for this channel'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='system_prompt_override'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between'>
                                   <div className='space-y-0.5'>
                                     <FormLabel>
-                                      {t('Pass Through Body')}
+                                      {t('System Prompt Concatenation')}
                                     </FormLabel>
                                     <FormDescription>
                                       {t(
-                                        'Pass request body directly to upstream'
+                                        "Concatenate channel system prompt with user's prompt"
                                       )}
                                     </FormDescription>
                                   </div>
@@ -4404,78 +4485,6 @@ export function ChannelMutateDrawer({
                               )}
                             />
                           </div>
-
-                          <FormField
-                            control={form.control}
-                            name='proxy'
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>{t('Proxy Address')}</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    placeholder={t(
-                                      'socks5://user:pass@host:port'
-                                    )}
-                                    {...field}
-                                  />
-                                </FormControl>
-                                <FormDescription>
-                                  {t(
-                                    'Network proxy for this channel (supports socks5 protocol)'
-                                  )}
-                                </FormDescription>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-
-                          <FormField
-                            control={form.control}
-                            name='system_prompt'
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>{t('System Prompt')}</FormLabel>
-                                <FormControl>
-                                  <Textarea
-                                    placeholder={t(
-                                      'Enter system prompt (user prompt takes priority)'
-                                    )}
-                                    rows={3}
-                                    {...field}
-                                  />
-                                </FormControl>
-                                <FormDescription>
-                                  {t('Default system prompt for this channel')}
-                                </FormDescription>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-
-                          <FormField
-                            control={form.control}
-                            name='system_prompt_override'
-                            render={({ field }) => (
-                              <FormItem className='flex items-center justify-between'>
-                                <div className='space-y-0.5'>
-                                  <FormLabel>
-                                    {t('System Prompt Concatenation')}
-                                  </FormLabel>
-                                  <FormDescription>
-                                    {t(
-                                      "Concatenate channel system prompt with user's prompt"
-                                    )}
-                                  </FormDescription>
-                                </div>
-                                <FormControl>
-                                  <Switch
-                                    checked={field.value}
-                                    onCheckedChange={field.onChange}
-                                  />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
 
                           {MODEL_FETCHABLE_TYPES.has(currentType) && (
                             <div
