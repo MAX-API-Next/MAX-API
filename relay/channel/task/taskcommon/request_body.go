@@ -100,15 +100,19 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	}
 
 	copyString(raw, "model", &req.Model)
-	copyString(raw, "model_name", &req.Model)
+	if req.Model == "" {
+		copyString(raw, "model_name", &req.Model)
+	}
 	copyString(raw, "prompt", &req.Prompt)
 	copyString(raw, "mode", &req.Mode)
 	copyString(raw, "image", &req.Image)
 	copyString(raw, "image_tail", &req.EndImage)
 	copyString(raw, "size", &req.Size)
-	copyString(raw, "aspect_ratio", &req.Size)
+	if req.Size == "" {
+		copyString(raw, "aspect_ratio", &req.Size)
+	}
 	copyStringPtr(raw, "ratio", &req.Ratio)
-	copyString(raw, "seconds", &req.Seconds)
+	secondsExplicit := copyString(raw, "seconds", &req.Seconds)
 	copyString(raw, "input_reference", &req.InputReference)
 	if content, ok := mapSliceValue(raw["content"]); ok {
 		req.Content = content
@@ -121,7 +125,7 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 	copyString(raw, "control_mode", &req.ControlMode)
 	copyString(raw, "input_mode", &req.InputMode)
 	copyString(raw, "resolution", &req.Resolution)
-	copyInt(raw, "duration", &req.Duration)
+	copyDuration(raw, "duration", req, !secondsExplicit)
 	copyIntPtr(raw, "duration_seconds", &req.DurationSeconds)
 	copyBoolPtr(raw, "with_audio", &req.WithAudio)
 	copyBoolPtr(raw, "generate_audio", &req.GenerateAudio)
@@ -164,13 +168,20 @@ func mergeTaskSubmitReq(req *relaycommon.TaskSubmitReq, raw map[string]any) {
 			}
 		}
 		copyString(params, "resolution", &req.Resolution)
-		copyInt(params, "duration", &req.Duration)
-		copyInt(params, "durationSeconds", &req.Duration)
+		var paramsDuration *int
+		if value, ok := intValue(params["duration"]); ok {
+			req.Duration = &value
+			paramsDuration = &value
+		}
+		if value, ok := intValue(params["durationSeconds"]); ok {
+			req.Duration = &value
+			paramsDuration = &value
+		}
+		if !secondsExplicit && paramsDuration != nil && *paramsDuration > 0 {
+			req.Seconds = strconv.Itoa(*paramsDuration)
+		}
 		copyBoolPtr(params, "audio", &req.WithAudio)
-		copyBoolPtr(params, "generateAudio", &req.WithAudio)
-	}
-	if duration, ok := intValue(raw["duration"]); ok && duration > 0 {
-		req.Seconds = strconv.Itoa(duration)
+		copyBoolPtr(params, "generateAudio", &req.GenerateAudio)
 	}
 }
 
@@ -235,6 +246,18 @@ func copyIntPtr(raw map[string]any, key string, target **int) bool {
 		return false
 	}
 	*target = &value
+	return true
+}
+
+func copyDuration(raw map[string]any, key string, req *relaycommon.TaskSubmitReq, updateSeconds bool) bool {
+	value, ok := intValue(raw[key])
+	if !ok {
+		return false
+	}
+	req.Duration = &value
+	if updateSeconds && value > 0 {
+		req.Seconds = strconv.Itoa(value)
+	}
 	return true
 }
 

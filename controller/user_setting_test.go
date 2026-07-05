@@ -1,0 +1,128 @@
+package controller
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func setupUserSettingControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLOGDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+
+	common.RedisEnabled = false
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLOGDB
+		common.RedisEnabled = oldRedisEnabled
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+	})
+
+	return db
+}
+
+func TestUpdateUserSettingPreservesUnrelatedSettings(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	initialSettings := dto.UserSetting{
+		NotifyType:                       dto.NotifyTypeWebhook,
+		QuotaWarningThreshold:            0.5,
+		WebhookUrl:                       "https://example.com/old-webhook",
+		WebhookSecret:                    "old-secret",
+		BarkUrl:                          "https://example.com/old-bark",
+		GotifyUrl:                        "https://example.com/old-gotify",
+		GotifyToken:                      "old-token",
+		GotifyPriority:                   7,
+		UpstreamModelUpdateNotifyEnabled: true,
+		SidebarModules:                   `{"chat":{"enabled":true}}`,
+		BillingPreference:                "subscription",
+		Language:                         "zh",
+	}
+	initialSettingBytes, err := common.Marshal(initialSettings)
+	require.NoError(t, err)
+
+	user := model.User{
+		Id:       1001,
+		Username: "notification-setting-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Setting:  string(initialSettingBytes),
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	payload := map[string]any{
+		"notify_type":                    dto.NotifyTypeEmail,
+		"quota_warning_threshold":        0.75,
+		"notification_email":             "new@example.com",
+		"accept_unset_model_ratio_model": true,
+		"record_ip_log":                  true,
+	}
+	payloadBytes, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	UpdateUserSetting(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var got model.User
+	require.NoError(t, db.First(&got, user.Id).Error)
+	setting := got.GetSetting()
+	assert.Equal(t, "zh", setting.Language)
+	assert.Equal(t, `{"chat":{"enabled":true}}`, setting.SidebarModules)
+	assert.Equal(t, "subscription", setting.BillingPreference)
+	assert.True(t, setting.UpstreamModelUpdateNotifyEnabled)
+	assert.Equal(t, dto.NotifyTypeEmail, setting.NotifyType)
+	assert.Equal(t, 0.75, setting.QuotaWarningThreshold)
+	assert.Equal(t, "new@example.com", setting.NotificationEmail)
+	assert.True(t, setting.AcceptUnsetRatioModel)
+	assert.True(t, setting.RecordIpLog)
+	assert.Empty(t, setting.WebhookUrl)
+	assert.Empty(t, setting.WebhookSecret)
+	assert.Empty(t, setting.BarkUrl)
+	assert.Empty(t, setting.GotifyUrl)
+	assert.Empty(t, setting.GotifyToken)
+	assert.Zero(t, setting.GotifyPriority)
+}

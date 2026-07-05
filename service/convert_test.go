@@ -36,6 +36,16 @@ func TestResponseOpenAI2ClaudeWrapsMalformedToolArguments(t *testing.T) {
 	assert.Equal(t, map[string]interface{}{"arguments": "{"}, got.Content[1].Input)
 }
 
+func TestResponseOpenAI2ClaudeTreatsNullToolArgumentsAsEmptyObject(t *testing.T) {
+	resp := openAIResponseWithToolCallArguments(t, "null")
+	got := ResponseOpenAI2Claude(resp, &relaycommon.RelayInfo{})
+
+	require.NotNil(t, got)
+	require.Len(t, got.Content, 2)
+	assert.Equal(t, "tool_use", got.Content[1].Type)
+	assert.Equal(t, map[string]interface{}{}, got.Content[1].Input)
+}
+
 func TestResponseOpenAI2GeminiPreservesTextWithToolCalls(t *testing.T) {
 	resp := openAIResponseWithTextAndToolCall(t)
 	got := ResponseOpenAI2Gemini(resp, &relaycommon.RelayInfo{})
@@ -61,6 +71,19 @@ func TestResponseOpenAI2GeminiWrapsMalformedToolArguments(t *testing.T) {
 	require.Len(t, parts, 1)
 	require.NotNil(t, parts[0].FunctionCall)
 	assert.Equal(t, map[string]interface{}{"arguments": "{"}, parts[0].FunctionCall.Arguments)
+}
+
+func TestResponseOpenAI2GeminiTreatsNullToolArgumentsAsEmptyObject(t *testing.T) {
+	resp := openAIResponseWithToolCallArguments(t, "null")
+	resp.Choices[0].Message.Content = ""
+	got := ResponseOpenAI2Gemini(resp, &relaycommon.RelayInfo{})
+
+	require.NotNil(t, got)
+	require.Len(t, got.Candidates, 1)
+	parts := got.Candidates[0].Content.Parts
+	require.Len(t, parts, 1)
+	require.NotNil(t, parts[0].FunctionCall)
+	assert.Equal(t, map[string]interface{}{}, parts[0].FunctionCall.Arguments)
 }
 
 func openAIResponseWithTextAndToolCall(t *testing.T) *dto.OpenAITextResponse {

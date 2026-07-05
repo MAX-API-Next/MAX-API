@@ -271,6 +271,60 @@ func TestParseConfiguredTaskResultPromotesResultURLToSuccess(t *testing.T) {
 	assert.Equal(t, "https://example.com/video.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultReadsOpenAIVideoMetadataURL(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+	}
+	body := []byte(`{
+		"id": "task_public_1",
+		"task_id": "upstream_task_1",
+		"object": "video",
+		"status": "completed",
+		"progress": 100,
+		"metadata": {
+			"url": "https://videos.example.com/upstream-result.mp4"
+		}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "100%", result.Progress)
+	assert.Equal(t, "https://videos.example.com/upstream-result.mp4", result.Url)
+}
+
+func TestNormalizeTaskProtocolConfigDefaultResultURLPaths(t *testing.T) {
+	cfg := NormalizeTaskProtocolConfig(nil)
+
+	assert.Equal(t, []string{
+		"result.primary_url",
+		"result.urls.0",
+		"result.url",
+		"result.video_url",
+		"result.output_url",
+		"metadata.url",
+		"metadata.video_url",
+		"metadata.output_url",
+		"data.result.primary_url",
+		"data.result.urls.0",
+		"data.result.url",
+		"data.result.video_url",
+		"data.result.output_url",
+		"data.metadata.url",
+		"data.metadata.video_url",
+		"data.metadata.output_url",
+		"url",
+		"video_url",
+		"output_url",
+		"file_url",
+		"download_url",
+		"result",
+	}, cfg.ResultURLPaths)
+}
+
 func TestParseConfiguredTaskResultRequiresProtocol(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocolConfig: &dto.TaskProtocolConfig{

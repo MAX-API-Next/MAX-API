@@ -19,6 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { z } from 'zod'
 import {
   CHANNEL_STATUS,
+  CHANNEL_TYPE_VOLCENGINE,
+  CHANNEL_TYPE_XUNFEI,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
@@ -447,6 +449,18 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   video_task_status_running: DEFAULT_VIDEO_TASK_STATUS_RUNNING,
   video_task_status_succeeded: DEFAULT_VIDEO_TASK_STATUS_SUCCEEDED,
   video_task_status_failed: DEFAULT_VIDEO_TASK_STATUS_FAILED,
+}
+
+export function getChannelTypeScopedFieldDefaults(
+  type: number
+): Pick<ChannelFormValues, 'base_url' | 'other'> {
+  return {
+    base_url:
+      type === CHANNEL_TYPE_VOLCENGINE
+        ? 'https://ark.cn-beijing.volces.com'
+        : '',
+    other: type === CHANNEL_TYPE_XUNFEI ? 'v2.1' : '',
+  }
 }
 
 function splitCSV(value: string | undefined, fallback = ''): string[] {

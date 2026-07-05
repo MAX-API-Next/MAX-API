@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -36,7 +35,7 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 
 	if isOpenRouter {
 		if effort := claudeRequest.GetEfforts(); effort != "" {
-			effortBytes, _ := json.Marshal(effort)
+			effortBytes, _ := common.Marshal(effort)
 			openAIRequest.Verbosity = effortBytes
 		}
 		if claudeRequest.Thinking != nil {
@@ -51,7 +50,7 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 					Enabled: true,
 				}
 			}
-			reasoningJSON, err := json.Marshal(reasoning)
+			reasoningJSON, err := common.Marshal(reasoning)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal reasoning: %w", err)
 			}
@@ -645,6 +644,9 @@ func parseToolCallArguments(rawArgs string) map[string]interface{} {
 	if err := common.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return map[string]interface{}{"arguments": rawArgs}
 	}
+	if args == nil {
+		return make(map[string]interface{})
+	}
 	return args
 }
 
@@ -653,7 +655,7 @@ func stopReasonOpenAI2Claude(reason string) string {
 }
 
 func toJSONString(v interface{}) string {
-	b, err := json.Marshal(v)
+	b, err := common.Marshal(v)
 	if err != nil {
 		return "{}"
 	}

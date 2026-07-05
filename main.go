@@ -2,13 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -202,12 +207,66 @@ func main() {
 		port = strconv.Itoa(*common.Port)
 	}
 
-	// Log startup success message
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: server,
+	}
+
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		common.FatalLog("failed to bind HTTP server: " + err.Error())
+	}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			common.FatalLog("failed to start HTTP server: " + err.Error())
+		}
+	}()
+
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
-	if err != nil {
-		common.FatalLog("failed to start HTTP server: " + err.Error())
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	common.SysLog(fmt.Sprintf("received signal: %v, shutting down...", sig))
+
+	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	shutdownHTTPServer(ctx, srv)
+	if common.DataExportEnabled {
+		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
+		if !runWithTimeout(saveTimeout, model.SaveQuotaDataCache) {
+			common.SysError(fmt.Sprintf("timed out waiting for quota data cache save after %s", saveTimeout))
+		}
+	}
+	common.SysLog("server exited")
+}
+
+func shutdownHTTPServer(ctx context.Context, srv *http.Server) {
+	if err := srv.Shutdown(ctx); err != nil {
+		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
+		if closeErr := srv.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			common.SysError(fmt.Sprintf("server close after forced shutdown failed: %v", closeErr))
+		}
+	}
+}
+
+func runWithTimeout(timeout time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

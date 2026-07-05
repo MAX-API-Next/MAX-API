@@ -120,8 +120,8 @@ func genericBillingDuration(req relaycommon.TaskSubmitReq, raw map[string]any, f
 	if req.DurationSeconds != nil && *req.DurationSeconds > 0 {
 		return float64(*req.DurationSeconds)
 	}
-	if req.Duration > 0 {
-		return float64(req.Duration)
+	if duration := req.DurationValue(); duration > 0 {
+		return float64(duration)
 	}
 	if seconds := positiveBillingNumber(map[string]any{"seconds": req.Seconds}, "seconds"); seconds > 0 {
 		return seconds
@@ -202,7 +202,10 @@ func contentHasVideo(value any) bool {
 			continue
 		}
 		if strings.EqualFold(firstBillingString(itemMap, "type"), "video_url") {
-			return usableBillingMedia(itemMap["video_url"]) || usableBillingMedia(itemMap["video"]) || usableBillingMedia(itemMap["url"])
+			if usableBillingMedia(itemMap["video_url"]) || usableBillingMedia(itemMap["video"]) || usableBillingMedia(itemMap["url"]) {
+				return true
+			}
+			continue
 		}
 		if usableBillingMedia(itemMap["video_url"]) || usableBillingMedia(itemMap["video"]) {
 			return true

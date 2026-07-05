@@ -193,7 +193,7 @@ func (a *TaskAdaptor) tryValidateAliOfficialRequest(c *gin.Context, info *relayc
 		action = constant.TaskActionGenerate
 	}
 	if aliReq.Parameters != nil {
-		req.Duration = aliReq.Parameters.Duration
+		req.Duration = &aliReq.Parameters.Duration
 		req.Mode = aliReq.Parameters.Mode
 		if aliReq.Parameters.AspectRatio != "" {
 			req.Size = aliReq.Parameters.AspectRatio
@@ -208,11 +208,116 @@ func (a *TaskAdaptor) tryValidateAliOfficialRequest(c *gin.Context, info *relayc
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
-		if value != "" {
-			return value
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""
+}
+
+func isWan27I2VModel(model string) bool {
+	return strings.HasPrefix(model, "wan2.7-i2v")
+}
+
+func firstTaskImage(req relaycommon.TaskSubmitReq) string {
+	if inputReference := strings.TrimSpace(req.InputReference); inputReference != "" {
+		return inputReference
+	}
+	for _, image := range req.Images {
+		if trimmed := strings.TrimSpace(image); trimmed != "" {
+			return trimmed
+		}
+	}
+	return strings.TrimSpace(req.Image)
+}
+
+func secondTaskImage(req relaycommon.TaskSubmitReq) string {
+	firstCameFromImages := strings.TrimSpace(req.InputReference) == ""
+	wantedIndex := 2
+	if !firstCameFromImages {
+		wantedIndex = 1
+	}
+	nonEmptyImages := 0
+	for _, image := range req.Images {
+		trimmed := strings.TrimSpace(image)
+		if trimmed == "" {
+			continue
+		}
+		nonEmptyImages++
+		if nonEmptyImages == wantedIndex {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func hasWan27PrimaryMedia(media []map[string]interface{}) bool {
+	return hasWan27MediaType(media, "first_frame", "first_clip")
+}
+
+func hasWan27MediaType(media []map[string]interface{}, mediaTypes ...string) bool {
+	wanted := make(map[string]struct{}, len(mediaTypes))
+	for _, mediaType := range mediaTypes {
+		trimmed := strings.ToLower(strings.TrimSpace(mediaType))
+		if trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
+	for _, item := range media {
+		mediaType, ok := item["type"].(string)
+		if !ok {
+			continue
+		}
+		if _, ok := wanted[strings.ToLower(strings.TrimSpace(mediaType))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeWan27I2VInput(aliReq *AliVideoRequest, req relaycommon.TaskSubmitReq) error {
+	if !isWan27I2VModel(aliReq.Model) {
+		return nil
+	}
+
+	firstFrameURL := firstNonEmpty(aliReq.Input.FirstFrameURL, aliReq.Input.ImgURL, firstTaskImage(req))
+	lastFrameURL := firstNonEmpty(aliReq.Input.LastFrameURL, secondTaskImage(req))
+	audioURL := strings.TrimSpace(aliReq.Input.AudioURL)
+
+	if firstFrameURL != "" && !hasWan27MediaType(aliReq.Input.Media, "first_frame", "first_clip") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "first_frame",
+			"url":  firstFrameURL,
+		})
+	}
+	if lastFrameURL != "" && !hasWan27MediaType(aliReq.Input.Media, "last_frame") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "last_frame",
+			"url":  lastFrameURL,
+		})
+	}
+	if audioURL != "" && !hasWan27MediaType(aliReq.Input.Media, "driving_audio") {
+		aliReq.Input.Media = append(aliReq.Input.Media, map[string]interface{}{
+			"type": "driving_audio",
+			"url":  audioURL,
+		})
+	}
+
+	if len(aliReq.Input.Media) == 0 {
+		return fmt.Errorf("wan2.7-i2v requires image, images, input_reference, or input.media")
+	}
+	if !hasWan27PrimaryMedia(aliReq.Input.Media) {
+		return fmt.Errorf("wan2.7-i2v input.media requires first_frame or first_clip")
+	}
+
+	// Wan2.7 image-to-video uses the new input.media protocol. Avoid sending
+	// legacy fields that belong to wan2.6 and earlier image-to-video APIs.
+	aliReq.Input.ImgURL = ""
+	aliReq.Input.FirstFrameURL = ""
+	aliReq.Input.LastFrameURL = ""
+	aliReq.Input.AudioURL = ""
+	return nil
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -356,7 +461,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		Model: upstreamModel,
 		Input: AliVideoInput{
 			Prompt: req.Prompt,
-			ImgURL: req.InputReference,
+			ImgURL: firstTaskImage(req),
 		},
 		Parameters: &AliVideoParameters{
 			PromptExtend: true, // 默认开启智能改写
@@ -406,8 +511,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	}
 
 	// 处理时长
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
+	if duration := req.DurationValue(); duration > 0 {
+		aliReq.Parameters.Duration = duration
 	} else if req.Seconds != "" {
 		seconds, err := strconv.Atoi(req.Seconds)
 		if err != nil {
@@ -421,6 +526,10 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 
 	// 从 metadata 中提取额外参数
 	if err := applyAliMetadata(req.Metadata, aliReq); err != nil {
+		return nil, err
+	}
+
+	if err := normalizeWan27I2VInput(aliReq, req); err != nil {
 		return nil, err
 	}
 
@@ -447,8 +556,8 @@ func (a *TaskAdaptor) convertToAliKlingRequest(upstreamModel string, req relayco
 		},
 	}
 
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
+	if duration := req.DurationValue(); duration > 0 {
+		aliReq.Parameters.Duration = duration
 	} else if req.Seconds != "" {
 		seconds, err := strconv.Atoi(req.Seconds)
 		if err != nil {

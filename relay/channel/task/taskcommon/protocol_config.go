@@ -34,6 +34,29 @@ var videoTaskChannelTypes = map[int]struct{}{
 	constant.ChannelTypeSora:        {},
 }
 
+var (
+	defaultResultURLFullLeafKeys     = []string{"primary_url", "urls.0", "url", "video_url", "output_url"}
+	defaultResultURLMetadataLeafKeys = []string{"url", "video_url", "output_url"}
+	defaultResultURLTopLevelPaths    = []string{"url", "video_url", "output_url", "file_url", "download_url", "result"}
+)
+
+func defaultResultURLPaths() []string {
+	paths := make([]string, 0, 2*len(defaultResultURLFullLeafKeys)+2*len(defaultResultURLMetadataLeafKeys)+len(defaultResultURLTopLevelPaths))
+	paths = appendPrefixedResultURLPaths(paths, "result.", defaultResultURLFullLeafKeys)
+	paths = appendPrefixedResultURLPaths(paths, "metadata.", defaultResultURLMetadataLeafKeys)
+	paths = appendPrefixedResultURLPaths(paths, "data.result.", defaultResultURLFullLeafKeys)
+	paths = appendPrefixedResultURLPaths(paths, "data.metadata.", defaultResultURLMetadataLeafKeys)
+	paths = append(paths, defaultResultURLTopLevelPaths...)
+	return paths
+}
+
+func appendPrefixedResultURLPaths(paths []string, prefix string, leafKeys []string) []string {
+	for _, key := range leafKeys {
+		paths = append(paths, prefix+key)
+	}
+	return paths
+}
+
 func HasTaskProtocolConfig(settings dto.ChannelOtherSettings) bool {
 	return settings.TaskProtocolConfig != nil || UseConfiguredTaskProtocol(settings)
 }
@@ -55,7 +78,7 @@ func NormalizeTaskProtocolConfig(input *dto.TaskProtocolConfig) dto.TaskProtocol
 		TaskIDPath:     "task_id",
 		StatusPath:     "status",
 		ProgressPath:   "progress",
-		ResultURLPaths: []string{"result.primary_url", "result.urls.0", "result.url", "result.video_url", "result.output_url", "data.result.primary_url", "data.result.urls.0", "data.result.url", "data.result.video_url", "data.result.output_url", "url", "video_url", "output_url", "file_url", "download_url", "result"},
+		ResultURLPaths: defaultResultURLPaths(),
 		CreatedAtPath:  "created_at",
 		UpdatedAtPath:  "updated_at",
 		StatusMap: map[string]string{

@@ -235,7 +235,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Model:             taskcommon.DefaultString(info.UpstreamModelName, "viduq1"),
 		Images:            req.Images,
 		Prompt:            req.Prompt,
-		Duration:          taskcommon.DefaultInt(req.Duration, 5),
+		Duration:          taskcommon.DefaultInt(req.DurationValue(), 5),
 		Resolution:        taskcommon.DefaultString(req.Size, "1080p"),
 		MovementAmplitude: "auto",
 		Bgm:               false,

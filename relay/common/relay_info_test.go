@@ -3,6 +3,7 @@ package common
 import (
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 )
@@ -37,4 +38,16 @@ func TestRelayInfoGetFinalRequestRelayFormatFallsBackToRelayFormat(t *testing.T)
 func TestRelayInfoGetFinalRequestRelayFormatNilReceiver(t *testing.T) {
 	var info *RelayInfo
 	require.Equal(t, types.RelayFormat(""), info.GetFinalRequestRelayFormat())
+}
+
+func TestTaskSubmitReqPreservesExplicitZeroDuration(t *testing.T) {
+	var req TaskSubmitReq
+	require.NoError(t, common.Unmarshal([]byte(`{"model":"video-model","duration":0}`), &req))
+
+	require.NotNil(t, req.Duration)
+	require.Equal(t, 0, *req.Duration)
+
+	data, err := common.Marshal(req)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"duration":0`)
 }

@@ -479,8 +479,8 @@ func applyTopLevelSeedanceOptions(req *relaycommon.TaskSubmitReq, r *requestPayl
 	} else if ratio := firstNonEmptyString(req.AspectRatio, req.Size); ratio != "" {
 		r.Ratio = lo.ToPtr(ratio)
 	}
-	if req.Duration > 0 {
-		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
+	if duration := req.DurationValue(); duration > 0 {
+		r.Duration = lo.ToPtr(dto.IntValue(duration))
 	}
 	if req.DurationSeconds != nil {
 		r.Duration = lo.ToPtr(dto.IntValue(*req.DurationSeconds))

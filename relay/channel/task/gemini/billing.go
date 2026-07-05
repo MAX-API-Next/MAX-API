@@ -84,7 +84,7 @@ func ResolveVeoResolution(metadata map[string]any, stdSize string) string {
 }
 
 func ResolveVeoBillingInputs(c *gin.Context, req relaycommon.TaskSubmitReq) (int, string) {
-	seconds := ResolveVeoDuration(req.Metadata, req.Duration, req.Seconds)
+	seconds := ResolveVeoDuration(req.Metadata, req.DurationValue(), req.Seconds)
 	resolution := ResolveVeoResolution(req.Metadata, req.Size)
 	if finalBody, ok := relaycommon.GetTaskSubmitRequestBody(c); ok {
 		var body VeoRequestPayload
