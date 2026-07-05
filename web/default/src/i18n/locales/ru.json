@@ -3988,6 +3988,8 @@
     "Select a group": "Выбрать группу",
     "Select a group type": "Выбрать тип группы",
     "Select a model to edit pricing": "Выберите модель для редактирования тарифа",
+    "Select a valid model and group before regenerating": "Выберите допустимую модель и группу перед повторной генерацией",
+    "Select a valid model and group before sending": "Выберите допустимую модель и группу перед отправкой",
     "Select a preset...": "Выберите предустановку...",
     "Select a product": "Выберите продукт",
     "Select a role": "Выбрать роль",

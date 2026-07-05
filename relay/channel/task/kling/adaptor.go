@@ -380,7 +380,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Prompt:         req.Prompt,
 		Image:          req.Image,
 		Mode:           taskcommon.DefaultString(req.Mode, "std"),
-		Duration:       fmt.Sprintf("%d", taskcommon.DefaultInt(req.Duration, 5)),
+		Duration:       fmt.Sprintf("%d", taskcommon.DefaultInt(req.DurationValue(), 5)),
 		ModelName:      info.UpstreamModelName,
 		StaticMask:     "",
 		DynamicMasks:   []DynamicMask{},

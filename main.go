@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -211,8 +212,13 @@ func main() {
 		Handler: server,
 	}
 
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		common.FatalLog("failed to bind HTTP server: " + err.Error())
+	}
+
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start HTTP server: " + err.Error())
 		}
 	}()

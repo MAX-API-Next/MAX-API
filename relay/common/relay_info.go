@@ -692,7 +692,7 @@ type TaskSubmitReq struct {
 	Image                 string                 `json:"image,omitempty"`
 	Images                []string               `json:"images,omitempty"`
 	Size                  string                 `json:"size,omitempty"`
-	Duration              int                    `json:"duration,omitempty"`
+	Duration              *int                   `json:"duration,omitempty"`
 	Seconds               string                 `json:"seconds,omitempty"`
 	InputReference        string                 `json:"input_reference,omitempty"`
 	AspectRatio           string                 `json:"aspect_ratio,omitempty"`
@@ -726,6 +726,13 @@ func (t *TaskSubmitReq) GetPrompt() string {
 	return t.Prompt
 }
 
+func (t *TaskSubmitReq) DurationValue() int {
+	if t == nil || t.Duration == nil {
+		return 0
+	}
+	return *t.Duration
+}
+
 func (t *TaskSubmitReq) HasImage() bool {
 	return len(t.Images) > 0
 }
@@ -747,12 +754,12 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	if len(aux.Duration) > 0 {
 		var durationInt int
 		if err := common.Unmarshal(aux.Duration, &durationInt); err == nil {
-			t.Duration = durationInt
+			t.Duration = &durationInt
 		} else {
 			var durationStr string
 			if err := common.Unmarshal(aux.Duration, &durationStr); err == nil && durationStr != "" {
 				if v, err := strconv.Atoi(durationStr); err == nil {
-					t.Duration = v
+					t.Duration = &v
 				}
 			}
 		}

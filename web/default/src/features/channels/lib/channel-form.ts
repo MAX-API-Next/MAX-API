@@ -449,6 +449,15 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   video_task_status_failed: DEFAULT_VIDEO_TASK_STATUS_FAILED,
 }
 
+export function getChannelTypeScopedFieldDefaults(
+  type: number
+): Pick<ChannelFormValues, 'base_url' | 'other'> {
+  return {
+    base_url: type === 45 ? 'https://ark.cn-beijing.volces.com' : '',
+    other: type === 18 ? 'v2.1' : '',
+  }
+}
+
 function splitCSV(value: string | undefined, fallback = ''): string[] {
   const source = value?.trim() ? value : fallback
   return String(source || '')

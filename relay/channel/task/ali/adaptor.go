@@ -193,7 +193,7 @@ func (a *TaskAdaptor) tryValidateAliOfficialRequest(c *gin.Context, info *relayc
 		action = constant.TaskActionGenerate
 	}
 	if aliReq.Parameters != nil {
-		req.Duration = aliReq.Parameters.Duration
+		req.Duration = &aliReq.Parameters.Duration
 		req.Mode = aliReq.Parameters.Mode
 		if aliReq.Parameters.AspectRatio != "" {
 			req.Size = aliReq.Parameters.AspectRatio
@@ -233,6 +233,11 @@ func firstTaskImage(req relaycommon.TaskSubmitReq) string {
 }
 
 func secondTaskImage(req relaycommon.TaskSubmitReq) string {
+	firstCameFromImages := strings.TrimSpace(req.InputReference) == ""
+	wantedIndex := 2
+	if !firstCameFromImages {
+		wantedIndex = 1
+	}
 	nonEmptyImages := 0
 	for _, image := range req.Images {
 		trimmed := strings.TrimSpace(image)
@@ -240,7 +245,7 @@ func secondTaskImage(req relaycommon.TaskSubmitReq) string {
 			continue
 		}
 		nonEmptyImages++
-		if nonEmptyImages == 2 {
+		if nonEmptyImages == wantedIndex {
 			return trimmed
 		}
 	}
@@ -498,8 +503,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	}
 
 	// 处理时长
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
+	if duration := req.DurationValue(); duration > 0 {
+		aliReq.Parameters.Duration = duration
 	} else if req.Seconds != "" {
 		seconds, err := strconv.Atoi(req.Seconds)
 		if err != nil {
@@ -543,8 +548,8 @@ func (a *TaskAdaptor) convertToAliKlingRequest(upstreamModel string, req relayco
 		},
 	}
 
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
+	if duration := req.DurationValue(); duration > 0 {
+		aliReq.Parameters.Duration = duration
 	} else if req.Seconds != "" {
 		seconds, err := strconv.Atoi(req.Seconds)
 		if err != nil {

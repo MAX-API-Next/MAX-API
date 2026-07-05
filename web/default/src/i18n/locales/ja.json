@@ -3988,6 +3988,8 @@
     "Select a group": "グループを選択",
     "Select a group type": "グループタイプを選択",
     "Select a model to edit pricing": "料金を編集するモデルを選択",
+    "Select a valid model and group before regenerating": "再生成する前に有効なモデルとグループを選択してください",
+    "Select a valid model and group before sending": "送信する前に有効なモデルとグループを選択してください",
     "Select a preset...": "プリセットを選択...",
     "Select a product": "商品を選択",
     "Select a role": "ロールを選択",

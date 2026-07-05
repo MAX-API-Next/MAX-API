@@ -3988,6 +3988,8 @@
     "Select a group": "选择一个分组",
     "Select a group type": "选择分组类型",
     "Select a model to edit pricing": "选择一个模型编辑定价",
+    "Select a valid model and group before regenerating": "请先选择有效的模型和分组再重新生成",
+    "Select a valid model and group before sending": "请先选择有效的模型和分组再发送",
     "Select a preset...": "选择一个预设...",
     "Select a product": "选择产品",
     "Select a role": "选择角色",

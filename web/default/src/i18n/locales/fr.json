@@ -3988,6 +3988,8 @@
     "Select a group": "Sélectionner un groupe",
     "Select a group type": "Sélectionner un type de groupe",
     "Select a model to edit pricing": "Sélectionnez un modèle pour modifier sa tarification",
+    "Select a valid model and group before regenerating": "Sélectionnez un modèle et un groupe valides avant de régénérer",
+    "Select a valid model and group before sending": "Sélectionnez un modèle et un groupe valides avant d'envoyer",
     "Select a preset...": "Sélectionner un préréglage...",
     "Select a product": "Sélectionner un produit",
     "Select a role": "Sélectionner un rôle",

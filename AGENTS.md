@@ -143,4 +143,4 @@ This includes investigation notes, review outputs, scratch plans, working drafts
 
 Do NOT place these files in the repository root, `docs/`, `.github/`, or source directories unless the content is explicitly intended to be public project documentation. `.tmp/` is ignored by Git; use it to prevent accidental publication of sensitive or internal process information to the open-source GitHub repository. If process documents are found outside `.tmp/`, move them into `.tmp/` before committing.
 
-Project-owned agent workflows and reusable skill instructions, such as files under `.agents/skills/`, are part of the project tooling contract and MUST remain in the tracked project tree unless explicitly retired.
+Local agent workflow files, including `.agents/skills/` and `.agents/upstream-sync/`, are private project-maintenance material for this workspace and MUST NOT be committed to the public GitHub repository. Keep reusable private agent instructions there locally, or move public-safe documentation into normal project docs when it is intentionally meant to be open source.

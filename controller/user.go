@@ -1022,6 +1022,9 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
+			}
 			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
 				"from": logger.LogQuota(oldQuota),
 				"to":   logger.LogQuota(req.Value),

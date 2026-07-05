@@ -152,7 +152,10 @@ export function Playground() {
   }
 
   const handleRegenerateMessage = (message: MessageType) => {
-    if (!canSendChat) return
+    if (!canSendChat) {
+      toast.error(t('Select a valid model and group before regenerating'))
+      return
+    }
 
     // Find the message index and regenerate from there
     const messageIndex = messages.findIndex((m) => m.key === message.key)
@@ -197,6 +200,7 @@ export function Playground() {
 
       if (!canSendChat) {
         updateMessages(updated)
+        toast.error(t('Select a valid model and group before sending'))
         return
       }
 
@@ -207,7 +211,7 @@ export function Playground() {
       updateMessages(toSubmit)
       sendChat(toSubmit)
     },
-    [editingMessageKey, messages, updateMessages, sendChat, canSendChat]
+    [editingMessageKey, messages, updateMessages, sendChat, canSendChat, t]
   )
 
   const handleDeleteMessage = (message: MessageType) => {

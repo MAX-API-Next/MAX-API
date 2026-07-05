@@ -1,10 +1,14 @@
 package model
 
 import (
+	"context"
+	"errors"
+	"net"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -22,6 +26,26 @@ func setupUserUpdateTestState(t *testing.T) {
 	t.Cleanup(func() {
 		common.RedisEnabled = oldRedisEnabled
 		common.BatchUpdateEnabled = oldBatchUpdateEnabled
+	})
+}
+
+func useFailingUserUpdateRedis(t *testing.T) {
+	t.Helper()
+	oldRedisEnabled := common.RedisEnabled
+	oldRDB := common.RDB
+	client := redis.NewClient(&redis.Options{
+		Addr:       "cache-unavailable",
+		MaxRetries: 0,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nil, errors.New("cache unavailable")
+		},
+	})
+	common.RedisEnabled = true
+	common.RDB = client
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RedisEnabled = oldRedisEnabled
+		common.RDB = oldRDB
 	})
 }
 
@@ -60,6 +84,27 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	assert.Equal(t, 4, got.RequestCount)
 }
 
+func TestUserUpdateIgnoresCacheWriteFailure(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:          3,
+		Username:    "cache-failure-user",
+		Password:    "password",
+		DisplayName: "before",
+		Status:      common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	useFailingUserUpdateRedis(t)
+
+	user.DisplayName = "after"
+	require.NoError(t, user.Update(false))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, "after", got.DisplayName)
+}
+
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	setupUserUpdateTestState(t)
 
@@ -88,4 +133,34 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	assert.Equal(t, 270, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
 	assert.Equal(t, "zh", got.GetSetting().Language)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+}
+
+func TestUpdateUserSettingIgnoresCacheWriteFailure(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:       4,
+		Username: "setting-cache-failure-user",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	useFailingUserUpdateRedis(t)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, "zh", got.GetSetting().Language)
+}
+
+func TestUpdateUserSettingMissingUserReturnsError(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	err := UpdateUserSetting(999999, dto.UserSetting{Language: "zh"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "用户不存在")
 }

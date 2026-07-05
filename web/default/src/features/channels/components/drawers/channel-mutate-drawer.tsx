@@ -149,6 +149,7 @@ import {
   findMissingModelsInMapping,
   validateModelMappingJson,
   getChannelConfigValidationIssues,
+  getChannelTypeScopedFieldDefaults,
   BASE_URL_REQUIRED_TYPES,
   OTHER_REQUIRED_TYPES,
   VIDEO_TASK_CHANNEL_TYPES,
@@ -1145,18 +1146,19 @@ export function ChannelMutateDrawer({
     if (isEditing) return // Don't auto-set defaults when editing
 
     // Type 45 (VolcEngine) - set default base_url
-    if (currentType === 45) {
+    const scopedDefaults = getChannelTypeScopedFieldDefaults(currentType)
+    if (scopedDefaults.base_url) {
       const currentBaseUrlValue = form.getValues('base_url')
       if (!currentBaseUrlValue || currentBaseUrlValue === '') {
-        form.setValue('base_url', 'https://ark.cn-beijing.volces.com')
+        form.setValue('base_url', scopedDefaults.base_url)
       }
     }
 
     // Type 18 (Xunfei) - set default other (version)
-    if (currentType === 18) {
+    if (scopedDefaults.other) {
       const currentOther = form.getValues('other')
       if (!currentOther || currentOther === '') {
-        form.setValue('other', 'v2.1')
+        form.setValue('other', scopedDefaults.other)
       }
     }
   }, [currentType, isEditing, form])
@@ -1619,14 +1621,13 @@ export function ChannelMutateDrawer({
 
     if (nextActiveSectionId === CHANNEL_EDITOR_SECTION_IDS.advanced) {
       advancedNavScrollPendingRef.current = false
-      setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
-      if (!advancedSettingsOpen) {
-        handleAdvancedSettingsOpenChange(true)
-      }
+      setExpandedEditorNavItemId(
+        advancedSettingsOpen ? CHANNEL_EDITOR_SECTION_IDS.advanced : undefined
+      )
     } else if (!advancedNavScrollPendingRef.current) {
       setExpandedEditorNavItemId(undefined)
     }
-  }, [advancedSettingsOpen, handleAdvancedSettingsOpenChange])
+  }, [advancedSettingsOpen])
 
   useEffect(() => {
     if (!open || isChannelDetailLoading) return
@@ -1764,6 +1765,30 @@ export function ChannelMutateDrawer({
                                         nextType > 0
                                       ) {
                                         field.onChange(nextType)
+                                        if (nextType !== field.value) {
+                                          const scopedDefaults =
+                                            getChannelTypeScopedFieldDefaults(
+                                              nextType
+                                            )
+                                          form.setValue(
+                                            'base_url',
+                                            scopedDefaults.base_url,
+                                            {
+                                              shouldDirty: true,
+                                              shouldTouch: true,
+                                              shouldValidate: true,
+                                            }
+                                          )
+                                          form.setValue(
+                                            'other',
+                                            scopedDefaults.other,
+                                            {
+                                              shouldDirty: true,
+                                              shouldTouch: true,
+                                              shouldValidate: true,
+                                            }
+                                          )
+                                        }
                                       }
                                     }}
                                     placeholder={t('Select channel type')}
@@ -3676,10 +3701,7 @@ export function ChannelMutateDrawer({
                         </div>
 
                         {/* ── Extra Settings ── */}
-                        <div
-                          id={ADVANCED_SETTINGS_SECTION_IDS.extraSettings}
-                          className={sideDrawerSectionClassName('scroll-mt-4')}
-                        >
+                        <div className={sideDrawerSectionClassName()}>
                           <CardHeading
                             title={t('Channel Extra Settings')}
                             icon={<Settings className='h-4 w-4' />}
@@ -4300,7 +4322,10 @@ export function ChannelMutateDrawer({
                             </div>
                           )}
 
-                          <div className='divide-border space-y-0 divide-y border-y'>
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.extraSettings}
+                            className='divide-border scroll-mt-4 space-y-0 divide-y border-y'
+                          >
                             {currentType === 1 && (
                               <FormField
                                 control={form.control}

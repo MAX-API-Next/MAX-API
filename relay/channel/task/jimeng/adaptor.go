@@ -390,7 +390,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Prompt: req.Prompt,
 	}
 
-	switch req.Duration {
+	switch req.DurationValue() {
 	case 10:
 		r.Frames = 241 // 24*10+1 = 241
 	default:

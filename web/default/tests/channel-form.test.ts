@@ -3,6 +3,7 @@ import { test } from 'bun:test'
 
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
+  getChannelTypeScopedFieldDefaults,
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
   type ChannelFormValues,
@@ -132,4 +133,19 @@ test('drops stale request body config when saving generic video task channel', (
   assert.equal(taskProtocolConfig.request_body_defaults, undefined)
   assert.equal(taskProtocolConfig.task_id_path, 'data.id')
   assert.equal(taskProtocolConfig.status_path, 'data.status')
+})
+
+test('channel type switch clears scoped base url and other values', () => {
+  assert.deepEqual(getChannelTypeScopedFieldDefaults(49), {
+    base_url: '',
+    other: '',
+  })
+  assert.deepEqual(getChannelTypeScopedFieldDefaults(45), {
+    base_url: 'https://ark.cn-beijing.volces.com',
+    other: '',
+  })
+  assert.deepEqual(getChannelTypeScopedFieldDefaults(18), {
+    base_url: '',
+    other: 'v2.1',
+  })
 })

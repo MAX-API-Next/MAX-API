@@ -130,7 +130,8 @@ func validateMultipartTaskRequest(c *gin.Context, info *RelayInfo, action string
 
 	if durationStr := formData.Get("seconds"); durationStr != "" {
 		if duration, err := strconv.Atoi(durationStr); err == nil {
-			req.Duration = duration
+			req.Duration = &duration
+			req.Seconds = durationStr
 		}
 	}
 
@@ -169,7 +170,7 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	size = req.Size
 	seconds, _ = strconv.Atoi(req.Seconds)
 	if seconds == 0 {
-		seconds = req.Duration
+		seconds = req.DurationValue()
 	}
 	if req.InputReference != "" {
 		req.Images = []string{req.InputReference}
@@ -252,7 +253,7 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 
 	if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
 		// 兼容单图上传
-		req.Images = []string{req.Image}
+		req.Images = []string{strings.TrimSpace(req.Image)}
 	}
 
 	storeTaskRequest(c, info, action, req)

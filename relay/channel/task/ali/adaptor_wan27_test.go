@@ -18,12 +18,13 @@ func testRelayInfo() *relaycommon.RelayInfo {
 
 func TestConvertToAliRequestWan27I2VBuildsMediaFromImage(t *testing.T) {
 	adaptor := &TaskAdaptor{}
+	duration := 10
 	req := relaycommon.TaskSubmitReq{
 		Model:    "wan2.7-i2v",
 		Prompt:   "animate the first frame",
 		Image:    "https://example.com/first.png",
 		Size:     "720p",
-		Duration: 10,
+		Duration: &duration,
 	}
 
 	aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
@@ -79,6 +80,53 @@ func TestConvertToAliRequestWan27I2VBuildsFirstAndLastFrameFromImages(t *testing
 		{"type": "first_frame", "url": "https://example.com/first.png"},
 		{"type": "last_frame", "url": "https://example.com/last.png"},
 	}, aliReq.Input.Media)
+}
+
+func TestConvertToAliRequestWan27I2VUsesImagesAsLastFrameWhenInputReferenceIsFirstFrame(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+
+	tests := []struct {
+		name  string
+		input []string
+		want  []map[string]interface{}
+	}{
+		{
+			name:  "single image becomes last frame",
+			input: []string{"https://example.com/last.png"},
+			want: []map[string]interface{}{
+				{"type": "first_frame", "url": "https://example.com/input-reference.png"},
+				{"type": "last_frame", "url": "https://example.com/last.png"},
+			},
+		},
+		{
+			name: "first non-empty image becomes last frame",
+			input: []string{
+				" ",
+				"https://example.com/last.png",
+				"https://example.com/ignored.png",
+			},
+			want: []map[string]interface{}{
+				{"type": "first_frame", "url": "https://example.com/input-reference.png"},
+				{"type": "last_frame", "url": "https://example.com/last.png"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := relaycommon.TaskSubmitReq{
+				Model:          "wan2.7-i2v",
+				Prompt:         "interpolate from input reference",
+				InputReference: "https://example.com/input-reference.png",
+				Images:         tt.input,
+			}
+
+			aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), req)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, aliReq.Input.Media)
+		})
+	}
 }
 
 func TestConvertToAliRequestWan27I2VKeepsExplicitMetadataMedia(t *testing.T) {

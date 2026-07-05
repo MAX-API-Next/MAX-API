@@ -108,10 +108,14 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 		return err
 	}
 	settingValue := string(settingBytes)
-	if err = DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue).Error; err != nil {
+	result := DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue)
+	if err = ensureUserUpdateMatchedTx(DB, result, userId, errors.New("用户不存在")); err != nil {
 		return err
 	}
-	return updateUserSettingCache(userId, settingValue)
+	if err = updateUserSettingCache(userId, settingValue); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update user setting cache: user_id=%d, error=%v", userId, err))
+	}
+	return nil
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -554,14 +558,18 @@ func (user *User) Update(updatePassword bool) error {
 	if err = DB.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-	if err = DB.Model(&current).Omit("quota", "used_quota", "request_count").Updates(newUser).Error; err != nil {
+	result := DB.Model(&current).Omit("quota", "used_quota", "request_count").Updates(newUser)
+	if err = ensureUserUpdateMatchedTx(DB, result, user.Id, errors.New("用户不存在")); err != nil {
 		return err
 	}
 	if err = DB.First(user, user.Id).Error; err != nil {
 		return err
 	}
 
-	return updateUserCache(*user)
+	if err = updateUserCache(*user); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
+	}
+	return nil
 }
 
 func (user *User) Edit(updatePassword bool) error {

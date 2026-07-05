@@ -160,9 +160,10 @@ func TestEstimateGenericTaskBillingUsesFinalRequestBody(t *testing.T) {
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
 		},
 	}
+	storedDuration := 5
 	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
 		Model:      "mapped-video-model",
-		Duration:   5,
+		Duration:   &storedDuration,
 		Resolution: "720p",
 	})
 	require.NoError(t, SyncTaskRequestContext(c, []byte(`{
@@ -225,6 +226,7 @@ func TestEstimateGenericTaskBillingVideoInputRequiresUsableMedia(t *testing.T) {
 	require.NoError(t, SyncTaskRequestContext(c, []byte(`{
 		"model": "content-video-model",
 		"content": [
+			{ "type": "video_url", "video_url": "" },
 			{ "type": "video_url", "video_url": { "url": "https://example.com/input.mp4" } }
 		]
 	}`)))
@@ -233,6 +235,7 @@ func TestEstimateGenericTaskBillingVideoInputRequiresUsableMedia(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "has_video", got.RowID)
+	assert.Equal(t, "true", got.Fields["has_video_input"])
 	assert.Equal(t, "1", got.Fields["video_count"])
 }
 
