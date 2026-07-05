@@ -237,9 +237,30 @@ func main() {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}
 	if common.DataExportEnabled {
-		model.SaveQuotaDataCache()
+		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
+		if !runWithTimeout(saveTimeout, model.SaveQuotaDataCache) {
+			common.SysError(fmt.Sprintf("timed out waiting for quota data cache save after %s", saveTimeout))
+		}
 	}
 	common.SysLog("server exited")
+}
+
+func runWithTimeout(timeout time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func InjectUmamiAnalytics() {

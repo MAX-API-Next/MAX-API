@@ -308,6 +308,8 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if len(toolCalls) > 0 {
 		if rawToolCalls, err := common.Marshal(toolCalls); err == nil {
 			msg.ToolCalls = rawToolCalls
+		} else {
+			logger.LogError(c, "ollama non-stream tool_calls marshal error: "+err.Error())
 		}
 	}
 	if rc := reasoningBuilder.String(); rc != "" {

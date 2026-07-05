@@ -19,6 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { z } from 'zod'
 import {
   CHANNEL_STATUS,
+  CHANNEL_TYPE_VOLCENGINE,
+  CHANNEL_TYPE_XUNFEI,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
@@ -453,8 +455,11 @@ export function getChannelTypeScopedFieldDefaults(
   type: number
 ): Pick<ChannelFormValues, 'base_url' | 'other'> {
   return {
-    base_url: type === 45 ? 'https://ark.cn-beijing.volces.com' : '',
-    other: type === 18 ? 'v2.1' : '',
+    base_url:
+      type === CHANNEL_TYPE_VOLCENGINE
+        ? 'https://ark.cn-beijing.volces.com'
+        : '',
+    other: type === CHANNEL_TYPE_XUNFEI ? 'v2.1' : '',
   }
 }
 

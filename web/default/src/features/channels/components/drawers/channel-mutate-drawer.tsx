@@ -1765,7 +1765,10 @@ export function ChannelMutateDrawer({
                                         nextType > 0
                                       ) {
                                         field.onChange(nextType)
-                                        if (nextType !== field.value) {
+                                        if (
+                                          !isEditing &&
+                                          nextType !== field.value
+                                        ) {
                                           const scopedDefaults =
                                             getChannelTypeScopedFieldDefaults(
                                               nextType
@@ -4460,7 +4463,7 @@ export function ChannelMutateDrawer({
                                   </FormLabel>
                                   <FormDescription>
                                     {t(
-                                      'Concatenate channel system prompt with user&apos;s prompt'
+                                      "Concatenate channel system prompt with user's prompt"
                                     )}
                                   </FormDescription>
                                 </div>
