@@ -212,6 +212,11 @@ func GetDefaultAutoRouteKey() string {
 	return DefaultAutoRouteKey
 }
 
+func ValidateAutoGroupsJsonString(jsonString string) error {
+	_, err := parseAutoGroupsJSON(jsonString)
+	return err
+}
+
 func parseAutoGroupsJSON(jsonString string) ([]string, error) {
 	var groups []string
 	if err := common.Unmarshal([]byte(jsonString), &groups); err != nil {

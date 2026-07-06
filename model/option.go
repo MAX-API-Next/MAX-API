@@ -270,11 +270,40 @@ func UpdateOptionsBulk(values map[string]string) error {
 
 func validateOptionUpdate(key string, value string) error {
 	switch key {
+	case "Chats":
+		return validateJSONOption[[]map[string]string](value)
+	case "AutoGroups":
+		return setting.ValidateAutoGroupsJsonString(value)
+	case "AutoGroupRoutes":
+		_, err := setting.ParseAutoGroupRoutesConfig(value)
+		return err
+	case "TopupGroupRatio":
+		return validateJSONOption[map[string]float64](value)
+	case "ModelRequestRateLimitGroup":
+		return setting.CheckModelRequestRateLimitGroup(value)
+	case "ModelRatio", "ModelPrice", "CacheRatio", "CreateCacheRatio", "CompletionRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
+		return validateJSONOption[map[string]float64](value)
 	case "GroupRatio", "group_ratio_setting.group_ratio":
 		return ratio_setting.CheckGroupRatio(value)
+	case "GroupGroupRatio":
+		return validateJSONOption[map[string]map[string]float64](value)
+	case "UserUsableGroups":
+		return validateJSONOption[map[string]string](value)
+	case "AutomaticDisableStatusCodes", "AutomaticRetryStatusCodes":
+		_, err := operation_setting.ParseHTTPStatusCodeRanges(value)
+		return err
+	case "PayMethods":
+		return validateJSONOption[[]map[string]string](value)
+	case "task_billing_setting.rate_cards":
+		return task_billing_setting.ValidateRateCardsJSON(value)
 	default:
 		return nil
 	}
+}
+
+func validateJSONOption[T any](value string) error {
+	var target T
+	return common.UnmarshalJsonStr(value, &target)
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -577,10 +606,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "ModelRatio":
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":
-		err = ratio_setting.CheckGroupRatio(value)
-		if err == nil {
-			err = ratio_setting.UpdateGroupRatioByJSONString(value)
-		}
+		err = ratio_setting.UpdateGroupRatioByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
 	case "UserUsableGroups":
