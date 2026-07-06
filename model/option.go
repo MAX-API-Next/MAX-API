@@ -211,6 +211,10 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if err := validateOptionUpdate(key, value); err != nil {
+		return err
+	}
+
 	// Save to database first
 	option := Option{
 		Key: key,
@@ -234,6 +238,11 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	for k, v := range values {
+		if err := validateOptionUpdate(k, v); err != nil {
+			return err
+		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
@@ -259,14 +268,27 @@ func UpdateOptionsBulk(values map[string]string) error {
 	return nil
 }
 
+func validateOptionUpdate(key string, value string) error {
+	switch key {
+	case "GroupRatio", "group_ratio_setting.group_ratio":
+		return ratio_setting.CheckGroupRatio(value)
+	default:
+		return nil
+	}
+}
+
 func updateOptionMap(key string, value string) (err error) {
+	if err := validateOptionUpdate(key, value); err != nil {
+		return err
+	}
+
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
-	if handleConfigUpdate(key, value) {
-		return nil // 已由配置系统处理
+	if handled, err := handleConfigUpdate(key, value); handled {
+		return err // 已由配置系统处理
 	}
 
 	// 处理传统配置项...
@@ -555,7 +577,10 @@ func updateOptionMap(key string, value string) (err error) {
 	case "ModelRatio":
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":
-		err = ratio_setting.UpdateGroupRatioByJSONString(value)
+		err = ratio_setting.CheckGroupRatio(value)
+		if err == nil {
+			err = ratio_setting.UpdateGroupRatioByJSONString(value)
+		}
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
 	case "UserUsableGroups":
@@ -605,10 +630,10 @@ func updateOptionMap(key string, value string) (err error) {
 }
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
-func handleConfigUpdate(key, value string) bool {
+func handleConfigUpdate(key, value string) (bool, error) {
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
-		return false // 不是分层配置
+		return false, nil // 不是分层配置
 	}
 
 	configName := parts[0]
@@ -617,7 +642,7 @@ func handleConfigUpdate(key, value string) bool {
 	// 获取配置对象
 	cfg := config.GlobalConfig.Get(configName)
 	if cfg == nil {
-		return false // 未注册的配置
+		return false, nil // 未注册的配置
 	}
 
 	// 更新配置
@@ -643,5 +668,5 @@ func handleConfigUpdate(key, value string) bool {
 		system_setting.UpdateAndSyncTheme()
 	}
 
-	return true // 已处理
+	return true, nil // 已处理
 }
