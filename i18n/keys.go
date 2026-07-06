@@ -47,6 +47,7 @@ const (
 	MsgTokenQuotaExceedMax       = "token.quota_exceed_max"
 	MsgTokenGenerateFailed       = "token.generate_failed"
 	MsgTokenGetInfoFailed        = "token.get_info_failed"
+	MsgTokenGroupNotAssignable   = "token.group_not_assignable"
 	MsgTokenExpiredCannotEnable  = "token.expired_cannot_enable"
 	MsgTokenExhaustedCannotEable = "token.exhausted_cannot_enable"
 	MsgTokenInvalid              = "token.invalid"

@@ -24,6 +24,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
+  type AutoGroupRoutesConfig,
   getDefaultAutoRouteGroups,
   parseAutoGroupRoutesConfig,
   parseAutoGroupRoutesConfigStrict,
@@ -452,9 +453,19 @@ export function RatioSettingsCard({
 
   const saveGroupRatios = useCallback(
     async (values: GroupFormValues) => {
-      const autoRoutesConfig = parseAutoGroupRoutesConfigStrict(
-        values.AutoGroupRoutes
-      )
+      let autoRoutesConfig: AutoGroupRoutesConfig
+      try {
+        autoRoutesConfig = parseAutoGroupRoutesConfigStrict(
+          values.AutoGroupRoutes
+        )
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t('Invalid auto route config')
+        )
+        return
+      }
       const normalized = {
         GroupRatio: normalizeJsonString(values.GroupRatio),
         TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
@@ -485,7 +496,7 @@ export function RatioSettingsCard({
         await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
       }
     },
-    [updateOption]
+    [t, updateOption]
   )
 
   const handleResetRatios = useCallback(() => {

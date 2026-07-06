@@ -44,7 +44,7 @@ func validateAssignableTokenGroup(c *gin.Context, group string) bool {
 	if service.CanUseTokenGroup(userGroup, group) {
 		return true
 	}
-	common.ApiErrorMsg(c, fmt.Sprintf("无权访问 %s 分组", group))
+	common.ApiErrorI18n(c, i18n.MsgTokenGroupNotAssignable, map[string]any{"Group": group})
 	return false
 }
 

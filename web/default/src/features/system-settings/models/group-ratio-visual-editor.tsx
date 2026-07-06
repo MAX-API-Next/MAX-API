@@ -903,8 +903,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
                           onClick={() =>
                             handleAutoRouteGroupMove(route.key, index, 'up')
                           }
+                          aria-label={t('Move up')}
                         >
-                          ↑
+                          <span aria-hidden='true'>↑</span>
                         </Button>
                         <Button
                           variant='ghost'
@@ -913,8 +914,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
                           onClick={() =>
                             handleAutoRouteGroupMove(route.key, index, 'down')
                           }
+                          aria-label={t('Move down')}
                         >
-                          ↓
+                          <span aria-hidden='true'>↓</span>
                         </Button>
                         <Button
                           variant='ghost'
@@ -923,8 +925,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
                           onClick={() =>
                             handleAutoRouteGroupDelete(route.key, index)
                           }
+                          aria-label={t('Delete')}
                         >
-                          <Trash2 className='h-4 w-4' />
+                          <Trash2 className='h-4 w-4' aria-hidden='true' />
                         </Button>
                       </div>
                     ))}

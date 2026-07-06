@@ -21,7 +21,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { ArrowLeft, Code2, HeartPulse, Info, Timer } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { AutoGroupRoute } from '@/lib/auto-routes'
+import { DEFAULT_AUTO_ROUTE_KEY, type AutoGroupRoute } from '@/lib/auto-routes'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -753,8 +753,7 @@ function AutoGroupChain(props: {
       ? props.autoRoutes
       : [
           {
-            key: 'auto',
-            name: 'Auto',
+            key: DEFAULT_AUTO_ROUTE_KEY,
             enabled: true,
             user_selectable: true,
             groups: props.autoGroups,
@@ -770,6 +769,17 @@ function AutoGroupChain(props: {
 
   if (routeChains.length === 0) return null
 
+  const getRouteLabelOverride = (route: AutoGroupRoute) => {
+    const name = route.name?.trim()
+    if (
+      route.key === DEFAULT_AUTO_ROUTE_KEY &&
+      (!name || name === 'Auto' || name === DEFAULT_AUTO_ROUTE_KEY)
+    ) {
+      return undefined
+    }
+    return name || route.key
+  }
+
   return (
     <div className='text-muted-foreground mb-3 flex flex-col gap-1.5 text-xs'>
       <span className='font-medium'>{t('Auto Route Chains')}</span>
@@ -777,7 +787,7 @@ function AutoGroupChain(props: {
         <div key={route.key} className='flex flex-wrap items-center gap-1'>
           <GroupBadge
             group={route.key}
-            label={route.name || route.key}
+            label={getRouteLabelOverride(route)}
             size='sm'
           />
           <span className='text-muted-foreground/40'>→</span>

@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import i18next from 'i18next'
+
 export const DEFAULT_AUTO_ROUTE_KEY = 'auto'
 
 export type AutoGroupRoute = {
@@ -34,8 +36,39 @@ export type AutoGroupRoutesConfig = {
 
 const AUTO_ROUTE_KEY_PATTERN = /^auto(?::[A-Za-z0-9][A-Za-z0-9._-]{0,58})?$/
 
+type ValidationMessageValues = Record<string, number | string>
+
+function formatValidationMessage(
+  template: string,
+  values: ValidationMessageValues = {}
+) {
+  return template.replace(/{{\s*([A-Za-z0-9_]+)\s*}}/g, (match, key) => {
+    const value = values[key]
+    return value === undefined ? match : String(value)
+  })
+}
+
+function autoRouteValidationMessage(
+  key: string,
+  values: ValidationMessageValues = {}
+) {
+  const fallback = formatValidationMessage(key, values)
+  if (!i18next.isInitialized) return fallback
+  const translated = i18next.t(key, values)
+  return typeof translated === 'string' && translated ? translated : fallback
+}
+
+function autoRouteValidationError(
+  key: string,
+  values?: ValidationMessageValues
+) {
+  return new Error(autoRouteValidationMessage(key, values))
+}
+
 function normalizeRouteName(route: AutoGroupRoute) {
-  return route.name?.trim() || route.key
+  const name = typeof route.name === 'string' ? route.name.trim() : ''
+  if (name) return name
+  return route.key === DEFAULT_AUTO_ROUTE_KEY ? undefined : route.key
 }
 
 function normalizeGroupList(groups: unknown): string[] {
@@ -54,31 +87,49 @@ function normalizeGroupList(groups: unknown): string[] {
 
 function normalizeGroupListStrict(groups: unknown, context: string): string[] {
   if (!Array.isArray(groups)) {
-    throw new Error(`${context} groups must be an array`)
+    throw autoRouteValidationError(
+      '{{routeContext}} groups must be an array',
+      { routeContext: context }
+    )
   }
   if (groups.length === 0) {
-    throw new Error(`${context} groups must not be empty`)
+    throw autoRouteValidationError(
+      '{{routeContext}} groups must not be empty',
+      { routeContext: context }
+    )
   }
   if (groups.length > 64) {
-    throw new Error(`${context} groups must not exceed 64 entries`)
+    throw autoRouteValidationError(
+      '{{routeContext}} groups must not exceed 64 entries',
+      { routeContext: context }
+    )
   }
   const seen = new Set<string>()
   const normalized: string[] = []
   for (const item of groups) {
     if (typeof item !== 'string') {
-      throw new Error(`${context} groups must contain strings only`)
+      throw autoRouteValidationError(
+        '{{routeContext}} groups must contain strings only',
+        { routeContext: context }
+      )
     }
     const group = item.trim()
     if (!group) continue
     if (isAutoRouteKey(group)) {
-      throw new Error(`${context} groups must contain real groups only`)
+      throw autoRouteValidationError(
+        '{{routeContext}} groups must contain real groups only',
+        { routeContext: context }
+      )
     }
     if (seen.has(group)) continue
     seen.add(group)
     normalized.push(group)
   }
   if (normalized.length === 0) {
-    throw new Error(`${context} groups must contain at least one real group`)
+    throw autoRouteValidationError(
+      '{{routeContext}} groups must contain at least one real group',
+      { routeContext: context }
+    )
   }
   return normalized
 }
@@ -102,7 +153,6 @@ export function createLegacyAutoRouteConfig(
     routes: [
       {
         key: DEFAULT_AUTO_ROUTE_KEY,
-        name: 'Auto',
         enabled: true,
         user_selectable: true,
         groups: normalizedGroups.length > 0 ? normalizedGroups : ['default'],
@@ -128,10 +178,11 @@ export function normalizeAutoGroupRoutesConfig(
     if (!isValidAutoRouteKey(key) || seen.has(key)) continue
     const groups = normalizeGroupList(route.groups)
     if (groups.length === 0) continue
+    const name = normalizeRouteName({ ...route, key })
     seen.add(key)
     routes.push({
       key,
-      name: normalizeRouteName({ ...route, key }),
+      ...(name ? { name } : {}),
       enabled: route.enabled !== false,
       user_selectable: route.user_selectable !== false,
       groups,
@@ -139,9 +190,11 @@ export function normalizeAutoGroupRoutesConfig(
   }
 
   if (!seen.has(defaultRoute)) {
+    const name =
+      defaultRoute === DEFAULT_AUTO_ROUTE_KEY ? undefined : defaultRoute
     routes.unshift({
       key: defaultRoute,
-      name: defaultRoute === DEFAULT_AUTO_ROUTE_KEY ? 'Auto' : defaultRoute,
+      ...(name ? { name } : {}),
       enabled: true,
       user_selectable: true,
       groups: ['default'],
@@ -163,29 +216,38 @@ export function normalizeAutoGroupRoutesConfigStrict(
     return createLegacyAutoRouteConfig(groups)
   }
   if (!config || typeof config !== 'object') {
-    throw new Error('auto group routes config must be an object')
+    throw autoRouteValidationError(
+      'auto group routes config must be an object'
+    )
   }
   const rawConfig = config as Record<string, unknown>
   const version =
     typeof rawConfig.version === 'number' ? rawConfig.version : 1
   if (version !== 1) {
-    throw new Error(`unsupported auto group routes config version: ${version}`)
+    throw autoRouteValidationError(
+      'unsupported auto group routes config version: {{version}}',
+      { version }
+    )
   }
   const defaultRoute =
     typeof rawConfig.default_route === 'string'
       ? rawConfig.default_route.trim()
       : DEFAULT_AUTO_ROUTE_KEY
   if (!isValidAutoRouteKey(defaultRoute)) {
-    throw new Error(`invalid default auto route key: ${defaultRoute}`)
+    throw autoRouteValidationError('invalid default auto route key: {{key}}', {
+      key: defaultRoute,
+    })
   }
   if (!Array.isArray(rawConfig.routes)) {
-    throw new Error('auto group routes must be an array')
+    throw autoRouteValidationError('auto group routes must be an array')
   }
   if (rawConfig.routes.length === 0) {
-    throw new Error('auto group routes must not be empty')
+    throw autoRouteValidationError('auto group routes must not be empty')
   }
   if (rawConfig.routes.length > 32) {
-    throw new Error('auto group routes must not exceed 32 entries')
+    throw autoRouteValidationError(
+      'auto group routes must not exceed 32 entries'
+    )
   }
 
   const seen = new Set<string>()
@@ -194,15 +256,19 @@ export function normalizeAutoGroupRoutesConfigStrict(
   let defaultEnabled = false
   for (const item of rawConfig.routes) {
     if (!item || typeof item !== 'object') {
-      throw new Error('auto route must be an object')
+      throw autoRouteValidationError('auto route must be an object')
     }
     const rawRoute = item as Record<string, unknown>
     const key = typeof rawRoute.key === 'string' ? rawRoute.key.trim() : ''
     if (!isValidAutoRouteKey(key)) {
-      throw new Error(`invalid auto route key: ${key}`)
+      throw autoRouteValidationError('invalid auto route key: {{key}}', {
+        key,
+      })
     }
     if (seen.has(key)) {
-      throw new Error(`duplicate auto route key: ${key}`)
+      throw autoRouteValidationError('duplicate auto route key: {{key}}', {
+        key,
+      })
     }
     seen.add(key)
     const enabled = rawRoute.enabled !== false
@@ -213,21 +279,32 @@ export function normalizeAutoGroupRoutesConfigStrict(
 
     const name = typeof rawRoute.name === 'string' ? rawRoute.name.trim() : ''
     if ([...name].length > 64) {
-      throw new Error(`auto route ${key} name must not exceed 64 characters`)
+      throw autoRouteValidationError(
+        'auto route {{key}} name must not exceed 64 characters',
+        { key }
+      )
     }
+    const normalizedName =
+      name || (key === DEFAULT_AUTO_ROUTE_KEY ? undefined : key)
     routes.push({
       key,
-      name: name || key,
+      ...(normalizedName ? { name: normalizedName } : {}),
       enabled,
       user_selectable: rawRoute.user_selectable !== false,
       groups: normalizeGroupListStrict(rawRoute.groups, `auto route ${key}`),
     })
   }
   if (!hasDefault) {
-    throw new Error(`default auto route ${defaultRoute} is not defined`)
+    throw autoRouteValidationError(
+      'default auto route {{key}} is not defined',
+      { key: defaultRoute }
+    )
   }
   if (!defaultEnabled) {
-    throw new Error(`default auto route ${defaultRoute} must be enabled`)
+    throw autoRouteValidationError(
+      'default auto route {{key}} must be enabled',
+      { key: defaultRoute }
+    )
   }
   return {
     version: 1,
@@ -274,9 +351,16 @@ export function parseAutoGroupRoutesConfigStrict(
 ): AutoGroupRoutesConfig {
   const raw = value?.trim()
   if (!raw) {
-    throw new Error('auto group routes config is empty')
+    throw autoRouteValidationError('auto group routes config is empty')
   }
-  return normalizeAutoGroupRoutesConfigStrict(JSON.parse(raw))
+  try {
+    return normalizeAutoGroupRoutesConfigStrict(JSON.parse(raw))
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw autoRouteValidationError('Invalid auto route config')
+    }
+    throw error
+  }
 }
 
 export function validateAutoGroupRoutesConfigString(
@@ -289,7 +373,9 @@ export function validateAutoGroupRoutesConfigString(
     return {
       valid: false,
       message:
-        error instanceof Error ? error.message : 'Invalid auto route config',
+        error instanceof Error
+          ? error.message
+          : autoRouteValidationMessage('Invalid auto route config'),
     }
   }
 }

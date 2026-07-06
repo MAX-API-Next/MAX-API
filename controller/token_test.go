@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	appi18n "github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/gin-gonic/gin"
@@ -524,6 +525,9 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
 
 	body := map[string]any{
 		"name":                 "hidden-route-token",
@@ -538,6 +542,7 @@ func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
 	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
 	AddToken(ctx)
 
 	response := decodeAPIResponse(t, recorder)
@@ -546,6 +551,9 @@ func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	}
 	if !strings.Contains(response.Message, "auto:internal") {
 		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
+	}
+	if !strings.Contains(response.Message, "无权访问") {
+		t.Fatalf("expected localized denial message, got %q", response.Message)
 	}
 
 	var count int64
@@ -596,6 +604,9 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
 	token := seedToken(t, db, 1, "editable-token", "reject1234route5678")
 
 	body := map[string]any{
@@ -612,6 +623,7 @@ func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
 	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
 	UpdateToken(ctx)
 
 	response := decodeAPIResponse(t, recorder)
@@ -620,6 +632,9 @@ func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	}
 	if !strings.Contains(response.Message, "auto:internal") {
 		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
+	}
+	if !strings.Contains(response.Message, "无权访问") {
+		t.Fatalf("expected localized denial message, got %q", response.Message)
 	}
 
 	var stored model.Token

@@ -58,6 +58,10 @@ interface GroupOption {
   description?: string
 }
 
+function shouldShowGroupRatio(ratio: GroupOption['ratio']) {
+  return ratio !== undefined && ratio !== 0 && ratio !== '0'
+}
+
 interface ModelSelectorProps {
   selectedModel: string
   models: ModelOption[]
@@ -423,7 +427,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                     {(group.desc || group.description) && (
                       <div className='text-muted-foreground truncate text-[9px] leading-tight'>
                         {group.desc || group.description}
-                        {group.ratio && (
+                        {shouldShowGroupRatio(group.ratio) && (
                           <>
                             {' · '}
                             {t('Ratio: {{value}}', { value: group.ratio })}
@@ -485,7 +489,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                           {(group.desc || group.description) && (
                             <div className='text-muted-foreground mt-0.5 text-xs'>
                               {group.desc || group.description}
-                              {group.ratio && (
+                              {shouldShowGroupRatio(group.ratio) && (
                                 <>
                                   {' · '}
                                   {t('Ratio: {{value}}', {

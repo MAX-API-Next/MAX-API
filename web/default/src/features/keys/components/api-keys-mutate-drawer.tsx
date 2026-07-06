@@ -24,7 +24,7 @@ import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels, getUserGroups } from '@/lib/api'
-import { isAutoRouteKey } from '@/lib/auto-routes'
+import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -103,7 +103,7 @@ export function ApiKeysMutateDrawer({
   const defaultAutoRoute =
     typeof status?.default_auto_route === 'string'
       ? status.default_auto_route
-      : 'auto'
+      : DEFAULT_AUTO_ROUTE_KEY
 
   // Fetch models
   const { data: modelsData } = useQuery({

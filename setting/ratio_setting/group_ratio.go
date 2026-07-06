@@ -1,8 +1,8 @@
 package ratio_setting
 
 import (
-	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
@@ -14,6 +14,11 @@ var defaultGroupRatio = map[string]float64{
 	"vip":     1,
 	"svip":    1,
 }
+
+const (
+	defaultAutoRouteGroupName = "auto"
+	autoRouteGroupNamePrefix  = "auto:"
+)
 
 var groupRatioMap = types.NewRWMap[string, float64]()
 
@@ -112,14 +117,22 @@ func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
 
 func CheckGroupRatio(jsonStr string) error {
 	checkGroupRatio := make(map[string]float64)
-	err := json.Unmarshal([]byte(jsonStr), &checkGroupRatio)
+	err := common.Unmarshal([]byte(jsonStr), &checkGroupRatio)
 	if err != nil {
 		return err
 	}
 	for name, ratio := range checkGroupRatio {
+		trimmedName := strings.TrimSpace(name)
+		if isReservedAutoRouteGroupName(trimmedName) {
+			return errors.New("group name conflicts with auto route namespace: " + trimmedName)
+		}
 		if ratio < 0 {
 			return errors.New("group ratio must be not less than 0: " + name)
 		}
 	}
 	return nil
+}
+
+func isReservedAutoRouteGroupName(name string) bool {
+	return name == defaultAutoRouteGroupName || strings.HasPrefix(name, autoRouteGroupNamePrefix)
 }

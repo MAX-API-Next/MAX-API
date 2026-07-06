@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { z } from 'zod'
 import type { TFunction } from 'i18next'
-import { isAutoRouteKey } from '@/lib/auto-routes'
+import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { DEFAULT_GROUP } from '../constants'
 import { type ApiKeyFormData, type ApiKey } from '../types'
@@ -78,7 +78,7 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
 
 export function getApiKeyFormDefaultValues(
   defaultUseAutoGroup: boolean,
-  defaultAutoRoute = 'auto'
+  defaultAutoRoute: string = DEFAULT_AUTO_ROUTE_KEY
 ): ApiKeyFormValues {
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
