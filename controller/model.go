@@ -18,6 +18,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -178,7 +179,7 @@ type modelListGroups struct {
 func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	if userGroup == "" && (tokenGroup == "" || tokenGroup == "auto") {
+	if userGroup == "" && (tokenGroup == "" || setting.IsAutoRouteKey(tokenGroup)) {
 		var err error
 		userGroup, err = model.GetUserGroup(c.GetInt("id"), false)
 		if err != nil {
@@ -196,11 +197,11 @@ func getContextModelListGroups(c *gin.Context) modelListGroups {
 }
 
 func buildModelListGroups(userGroup string, tokenGroup string) modelListGroups {
-	if tokenGroup == "auto" {
+	if setting.IsAutoRouteKey(tokenGroup) {
 		return modelListGroups{
 			userGroup:   userGroup,
 			tokenGroup:  tokenGroup,
-			ownerGroups: service.GetUserAutoGroup(userGroup),
+			ownerGroups: service.GetUserAutoGroupByRoute(userGroup, tokenGroup),
 		}
 	}
 
@@ -269,7 +270,7 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	} else {
 		var models []string
-		if groups.tokenGroup == "auto" {
+		if setting.IsAutoRouteKey(groups.tokenGroup) {
 			for _, autoGroup := range ownerGroups {
 				groupModels := model.GetGroupEnabledModels(autoGroup)
 				for _, g := range groupModels {

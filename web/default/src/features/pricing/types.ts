@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { AutoGroupRoute } from '@/lib/auto-routes'
+
 // ----------------------------------------------------------------------------
 // Pricing Types
 // ----------------------------------------------------------------------------
@@ -117,9 +119,13 @@ export type PricingData = {
   data: PricingModel[]
   vendors: PricingVendor[]
   group_ratio: Record<string, number>
-  usable_group: Record<string, { desc: string; ratio: number }>
+  usable_group: Record<
+    string,
+    { desc: string; ratio: number | string; auto?: boolean; groups?: string[] }
+  >
   supported_endpoint: Record<string, string>
   auto_groups: string[]
+  auto_routes?: AutoGroupRoute[]
 }
 
 export type TokenUnit = 'M' | 'K'

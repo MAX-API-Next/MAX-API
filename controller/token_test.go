@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	appi18n "github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -114,6 +116,51 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func setupHiddenAutoRouteForTokenTest(t *testing.T) {
+	t.Helper()
+
+	userGroupsSnapshot := setting.GetUserUsableGroupsCopy()
+	userGroupsBytes, err := common.Marshal(userGroupsSnapshot)
+	if err != nil {
+		t.Fatalf("failed to marshal user group snapshot: %v", err)
+	}
+	autoRoutesSnapshot := setting.AutoGroupRoutes2JsonString()
+	t.Cleanup(func() {
+		if err := setting.UpdateUserUsableGroupsByJSONString(string(userGroupsBytes)); err != nil {
+			t.Fatalf("failed to restore user groups: %v", err)
+		}
+		if err := setting.UpdateAutoGroupRoutesByJsonString(autoRoutesSnapshot); err != nil {
+			t.Fatalf("failed to restore auto routes: %v", err)
+		}
+	})
+
+	if err := setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`); err != nil {
+		t.Fatalf("failed to set user usable groups: %v", err)
+	}
+	if err := setting.UpdateAutoGroupRoutesByJsonString(`{
+		"version": 1,
+		"default_route": "auto",
+		"routes": [
+			{
+				"key": "auto",
+				"name": "Auto",
+				"enabled": true,
+				"user_selectable": true,
+				"groups": ["default"]
+			},
+			{
+				"key": "auto:internal",
+				"name": "Internal",
+				"enabled": true,
+				"user_selectable": false,
+				"groups": ["vip"]
+			}
+		]
+	}`); err != nil {
+		t.Fatalf("failed to set auto routes: %v", err)
+	}
+}
+
 func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*gorm.DB, *bool) {
 	t.Helper()
 
@@ -204,6 +251,11 @@ func newAuthenticatedContext(t *testing.T, method string, target string, body an
 	}
 	ctx.Set("id", userID)
 	return ctx, recorder
+}
+
+func setAuthenticatedUserGroup(ctx *gin.Context, group string) {
+	ctx.Set("group", group)
+	ctx.Set("user_group", group)
 }
 
 func decodeAPIResponse(t *testing.T, recorder *httptest.ResponseRecorder) tokenAPIResponse {
@@ -470,6 +522,49 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	setupHiddenAutoRouteForTokenTest(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
+
+	body := map[string]any{
+		"name":                 "hidden-route-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "auto:internal",
+		"cross_group_retry":    true,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if response.Success {
+		t.Fatalf("expected hidden auto route token creation to fail")
+	}
+	if !strings.Contains(response.Message, "auto:internal") {
+		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
+	}
+	if !strings.Contains(response.Message, "无权访问") {
+		t.Fatalf("expected localized denial message, got %q", response.Message)
+	}
+
+	var count int64
+	if err := db.Model(&model.Token{}).Count(&count).Error; err != nil {
+		t.Fatalf("failed to count tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no token to be created, got %d", count)
+	}
+}
+
 func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "editable-token", "yzab1234cdef5678")
@@ -503,6 +598,51 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
+	}
+}
+
+func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	setupHiddenAutoRouteForTokenTest(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
+	token := seedToken(t, db, 1, "editable-token", "reject1234route5678")
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "updated-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "auto:internal",
+		"cross_group_retry":    true,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if response.Success {
+		t.Fatalf("expected hidden auto route token update to fail")
+	}
+	if !strings.Contains(response.Message, "auto:internal") {
+		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
+	}
+	if !strings.Contains(response.Message, "无权访问") {
+		t.Fatalf("expected localized denial message, got %q", response.Message)
+	}
+
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if stored.Group != "default" {
+		t.Fatalf("expected token group to remain default, got %q", stored.Group)
 	}
 }
 

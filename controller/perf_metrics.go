@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	perfmetrics "github.com/MAX-API-Next/MAX-API/pkg/perf_metrics"
+	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -19,7 +20,10 @@ func GetPerfMetricsSummary(c *gin.Context) {
 		}
 	}
 
-	activeGroups := append(lo.Keys(ratio_setting.GetGroupRatioCopy()), "auto")
+	activeGroups := lo.Keys(ratio_setting.GetGroupRatioCopy())
+	for _, route := range setting.GetAutoRoutes() {
+		activeGroups = append(activeGroups, route.Key)
+	}
 	result, err := perfmetrics.QuerySummaryAll(hours, activeGroups)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -77,6 +81,6 @@ func filterActiveGroups(groups []perfmetrics.GroupResult) []perfmetrics.GroupRes
 	activeRatios := ratio_setting.GetGroupRatioCopy()
 	return lo.Filter(groups, func(g perfmetrics.GroupResult, _ int) bool {
 		_, ok := activeRatios[g.Group]
-		return ok || g.Group == "auto"
+		return ok || setting.IsAutoRouteKey(g.Group)
 	})
 }

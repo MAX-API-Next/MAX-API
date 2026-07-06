@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { getUserGroups } from '@/lib/api'
+import { isAutoRouteKey } from '@/lib/auto-routes'
 import { formatQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -199,9 +200,10 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       cell: ({ row }) => {
         const apiKey = row.original
         const group = row.getValue('group') as string
-        const ratio = group && group !== 'auto' ? groupRatios[group] : undefined
+        const isAutoRoute = isAutoRouteKey(group)
+        const ratio = group && !isAutoRoute ? groupRatios[group] : undefined
 
-        if (group === 'auto') {
+        if (isAutoRoute) {
           return (
             <Tooltip>
               <TooltipTrigger
@@ -209,7 +211,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                   <span className='inline-flex items-center gap-1.5 text-xs' />
                 }
               >
-                <GroupBadge group='auto' />
+                <GroupBadge group={group} />
                 {apiKey.cross_group_retry && (
                   <StatusBadge
                     label={t('Cross-group')}

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useTranslation } from 'react-i18next'
+import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { cn } from '@/lib/utils'
 import { StatusBadge, type StatusBadgeProps } from './status-badge'
 
@@ -48,7 +49,9 @@ function getGroupLabel(params: {
 }): string {
   if (params.labelOverride) return params.labelOverride
   if (params.isEmptyGroup) return params.t('User Group')
-  if (params.isAutoGroup) return params.t('Auto')
+  if (params.isAutoGroup && params.groupName === DEFAULT_AUTO_ROUTE_KEY) {
+    return params.t('Auto')
+  }
   return params.groupName ?? ''
 }
 
@@ -63,7 +66,7 @@ export function GroupBadge(props: GroupBadgeProps) {
     ...badgeProps
   } = props
   const groupName = group?.trim()
-  const isAutoGroup = groupName === 'auto'
+  const isAutoGroup = isAutoRouteKey(groupName)
   const isEmptyGroup = !groupName
   const isSpecialGroup = isAutoGroup || isEmptyGroup
   const label = getGroupLabel({

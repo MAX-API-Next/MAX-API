@@ -24,6 +24,7 @@ import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels, getUserGroups } from '@/lib/api'
+import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -99,6 +100,10 @@ export function ApiKeysMutateDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const defaultUseAutoGroup = status?.default_use_auto_group === true
+  const defaultAutoRoute =
+    typeof status?.default_auto_route === 'string'
+      ? status.default_auto_route
+      : DEFAULT_AUTO_ROUTE_KEY
 
   // Fetch models
   const { data: modelsData } = useQuery({
@@ -124,12 +129,17 @@ export function ApiKeysMutateDrawer({
       ratio: info.ratio,
     })
   )
-  const backendHasAuto = groups.some((g) => g.value === 'auto')
+  const backendHasDefaultAutoRoute = groups.some(
+    (g) => g.value === defaultAutoRoute
+  )
   const schema = getApiKeyFormSchema(t)
 
   const form = useForm<ApiKeyFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: getApiKeyFormDefaultValues(defaultUseAutoGroup),
+    defaultValues: getApiKeyFormDefaultValues(
+      defaultUseAutoGroup,
+      defaultAutoRoute
+    ),
   })
 
   // Load existing data when updating
@@ -142,10 +152,21 @@ export function ApiKeysMutateDrawer({
       })
     } else if (open && !isUpdate) {
       form.reset(
-        getApiKeyFormDefaultValues(defaultUseAutoGroup && backendHasAuto)
+        getApiKeyFormDefaultValues(
+          defaultUseAutoGroup && backendHasDefaultAutoRoute,
+          defaultAutoRoute
+        )
       )
     }
-  }, [open, isUpdate, currentRow, form, defaultUseAutoGroup, backendHasAuto])
+  }, [
+    open,
+    isUpdate,
+    currentRow,
+    form,
+    defaultUseAutoGroup,
+    backendHasDefaultAutoRoute,
+    defaultAutoRoute,
+  ])
 
   // Correct group after groups load: if the form value is not in available groups, fall back
   useEffect(() => {
@@ -157,7 +178,7 @@ export function ApiKeysMutateDrawer({
         groups[0]?.value ??
         ''
       form.setValue('group', fallback)
-      if (currentGroup === 'auto') {
+      if (isAutoRouteKey(currentGroup)) {
         form.setValue('cross_group_retry', false)
       }
     }
@@ -314,7 +335,7 @@ export function ApiKeysMutateDrawer({
                 )}
               />
 
-              {selectedGroup === 'auto' && (
+              {isAutoRouteKey(selectedGroup) && (
                 <FormField
                   control={form.control}
                   name='cross_group_retry'

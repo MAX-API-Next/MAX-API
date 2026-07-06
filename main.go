@@ -256,6 +256,11 @@ func runWithTimeout(timeout time.Duration, fn func()) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				common.SysError(fmt.Sprintf("runWithTimeout: recovered panic: %v", r))
+			}
+		}()
 		fn()
 	}()
 

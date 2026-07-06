@@ -24,6 +24,12 @@ func TestRunWithTimeoutTimesOut(t *testing.T) {
 	assert.Less(t, time.Since(start), 250*time.Millisecond)
 }
 
+func TestRunWithTimeoutRecoversPanic(t *testing.T) {
+	assert.True(t, runWithTimeout(time.Second, func() {
+		panic("quota save failed")
+	}))
+}
+
 func TestShutdownHTTPServerClosesActiveHandlersAfterTimeout(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	handlerDone := make(chan struct{})

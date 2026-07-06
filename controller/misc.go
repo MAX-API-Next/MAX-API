@@ -92,6 +92,7 @@ func GetStatus(c *gin.Context) {
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"default_auto_route":            setting.GetDefaultAutoRouteKey(),
 		"log_audit_enabled":             common.LogRequestContentEnabled || common.LogResponseContentEnabled,
 		"log_request_content_enabled":   common.LogRequestContentEnabled,
 		"log_response_content_enabled":  common.LogResponseContentEnabled,

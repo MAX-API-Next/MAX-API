@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { z } from 'zod'
 import type { TFunction } from 'i18next'
+import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { DEFAULT_GROUP } from '../constants'
 import { type ApiKeyFormData, type ApiKey } from '../types'
@@ -76,11 +77,12 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
 }
 
 export function getApiKeyFormDefaultValues(
-  defaultUseAutoGroup: boolean
+  defaultUseAutoGroup: boolean,
+  defaultAutoRoute: string = DEFAULT_AUTO_ROUTE_KEY
 ): ApiKeyFormValues {
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
-    group: defaultUseAutoGroup ? 'auto' : DEFAULT_GROUP,
+    group: defaultUseAutoGroup ? defaultAutoRoute : DEFAULT_GROUP,
     cross_group_retry: defaultUseAutoGroup,
   }
 }
@@ -108,7 +110,9 @@ export function transformFormDataToPayload(
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
     group: data.group || '',
-    cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
+    cross_group_retry: isAutoRouteKey(data.group)
+      ? !!data.cross_group_retry
+      : false,
   }
 }
 
