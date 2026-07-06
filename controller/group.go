@@ -5,7 +5,6 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
-	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -38,10 +37,12 @@ func GetUserGroups(c *gin.Context) {
 			}
 		}
 	}
-	if _, ok := userUsableGroups["auto"]; ok {
-		usableGroups["auto"] = map[string]interface{}{
-			"ratio": "自动",
-			"desc":  setting.GetUsableGroupDescription("auto"),
+	for _, route := range service.GetUserAutoRoutes(userGroup, true) {
+		usableGroups[route.Key] = map[string]interface{}{
+			"ratio":  "自动",
+			"desc":   route.Name,
+			"auto":   true,
+			"groups": route.Groups,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{

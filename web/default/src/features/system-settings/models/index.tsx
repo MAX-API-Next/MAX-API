@@ -61,6 +61,7 @@ const defaultModelSettings: ModelSettings = {
   UserUsableGroups: '',
   GroupGroupRatio: '',
   AutoGroups: '',
+  AutoGroupRoutes: '',
   DefaultUseAutoGroup: false,
   'group_ratio_setting.group_special_usable_group': '{}',
   'channel_affinity_setting.enabled': false,

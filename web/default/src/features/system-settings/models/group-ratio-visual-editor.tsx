@@ -19,6 +19,16 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useState, useMemo, useEffect, useCallback, memo } from 'react'
 import { Pencil, Plus, Trash2, GripVertical, ChevronDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import {
+  getDefaultAutoRouteGroups,
+  isValidAutoRouteKey,
+  parseAutoGroupRoutesConfig,
+  stringifyAutoGroupRoutesConfig,
+  type AutoGroupRoute,
+  type AutoGroupRoutesConfig,
+} from '@/lib/auto-routes'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -51,6 +61,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
 import { safeJsonParse } from '../utils/json-parser'
 
 type GroupRatioVisualEditorProps = {
@@ -59,6 +70,7 @@ type GroupRatioVisualEditorProps = {
   userUsableGroups: string
   groupGroupRatio: string
   autoGroups: string
+  autoGroupRoutes: string
   onChange: (field: string, value: string) => void
 }
 
@@ -78,6 +90,12 @@ type GroupPricingRow = {
 type GroupOverride = {
   targetGroup: string
   ratio: number
+}
+
+type AutoRouteDialogData = {
+  key: string
+  name: string
+  groupsText: string
 }
 
 const sectionCardClassName =
@@ -164,12 +182,42 @@ function sourceGroupPricingSignature(
   })
 }
 
+function routeGroupsToText(groups: string[]) {
+  return groups.join('\n')
+}
+
+function parseRouteGroupsText(value: string) {
+  const seen = new Set<string>()
+  const groups: string[] = []
+  for (const part of value.split(/[\n,]/)) {
+    const group = part.trim()
+    if (!group || seen.has(group)) continue
+    seen.add(group)
+    groups.push(group)
+  }
+  return groups
+}
+
+function cloneAutoRoutesConfig(
+  config: AutoGroupRoutesConfig
+): AutoGroupRoutesConfig {
+  return {
+    version: config.version,
+    default_route: config.default_route,
+    routes: config.routes.map((route) => ({
+      ...route,
+      groups: [...route.groups],
+    })),
+  }
+}
+
 export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   groupRatio,
   topupGroupRatio,
   userUsableGroups,
   groupGroupRatio,
   autoGroups,
+  autoGroupRoutes,
   onChange,
 }: GroupRatioVisualEditorProps) {
   const { t } = useTranslation()
@@ -179,8 +227,14 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   >(null)
   const [simpleEditData, setSimpleEditData] = useState<SimpleGroup | null>(null)
 
-  const [autoGroupDialogOpen, setAutoGroupDialogOpen] = useState(false)
-  const [autoGroupInput, setAutoGroupInput] = useState('')
+  const [autoRouteDialogOpen, setAutoRouteDialogOpen] = useState(false)
+  const [autoRouteEditKey, setAutoRouteEditKey] = useState<string | null>(null)
+  const [autoRouteDialogData, setAutoRouteDialogData] =
+    useState<AutoRouteDialogData>({
+      key: '',
+      name: '',
+      groupsText: '',
+    })
 
   const [groupOverrideDialogOpen, setGroupOverrideDialogOpen] = useState(false)
   const [groupOverrideUserGroup, setGroupOverrideUserGroup] = useState<
@@ -204,13 +258,10 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     }))
   }, [topupGroupRatio])
 
-  // Parse auto groups
-  const autoGroupsList = useMemo(() => {
-    return safeJsonParse<string[]>(autoGroups, {
-      fallback: [],
-      context: 'auto groups',
-    })
-  }, [autoGroups])
+  const autoRoutesConfig = useMemo(
+    () => parseAutoGroupRoutesConfig(autoGroupRoutes, autoGroups),
+    [autoGroupRoutes, autoGroups]
+  )
 
   // Parse group-group ratios
   const groupGroupRatioList = useMemo(() => {
@@ -283,32 +334,153 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     onChange(field, JSON.stringify(map, null, 2))
   }
 
-  // Auto groups handlers
-  const handleAutoGroupAdd = () => {
-    setAutoGroupInput('')
-    setAutoGroupDialogOpen(true)
+  const emitAutoRoutesConfig = useCallback(
+    (nextConfig: AutoGroupRoutesConfig) => {
+      const serialized = stringifyAutoGroupRoutesConfig(nextConfig, 2)
+      const normalized = parseAutoGroupRoutesConfig(serialized)
+      onChange('AutoGroupRoutes', stringifyAutoGroupRoutesConfig(normalized, 2))
+      onChange(
+        'AutoGroups',
+        JSON.stringify(getDefaultAutoRouteGroups(normalized), null, 2)
+      )
+    },
+    [onChange]
+  )
+
+  const handleAutoRouteAdd = () => {
+    setAutoRouteEditKey(null)
+    setAutoRouteDialogData({
+      key: 'auto:fast',
+      name: '',
+      groupsText: '',
+    })
+    setAutoRouteDialogOpen(true)
   }
 
-  const handleAutoGroupSave = () => {
-    if (!autoGroupInput.trim()) return
-
-    const list = [...autoGroupsList, autoGroupInput.trim()]
-    onChange('AutoGroups', JSON.stringify(list, null, 2))
-    setAutoGroupDialogOpen(false)
+  const handleAutoRouteEdit = (route: AutoGroupRoute) => {
+    setAutoRouteEditKey(route.key)
+    setAutoRouteDialogData({
+      key: route.key,
+      name: route.name ?? '',
+      groupsText: routeGroupsToText(route.groups),
+    })
+    setAutoRouteDialogOpen(true)
   }
 
-  const handleAutoGroupDelete = (index: number) => {
-    const list = autoGroupsList.filter((_, i) => i !== index)
-    onChange('AutoGroups', JSON.stringify(list, null, 2))
+  const handleAutoRouteSave = () => {
+    const key = autoRouteDialogData.key.trim()
+    const groups = parseRouteGroupsText(autoRouteDialogData.groupsText)
+    if (!isValidAutoRouteKey(key)) {
+      toast.error(t('Invalid auto route key'))
+      return
+    }
+    if (groups.length === 0) {
+      toast.error(t('Route is required'))
+      return
+    }
+
+    const nextConfig = cloneAutoRoutesConfig(autoRoutesConfig)
+    const duplicateKeyIndex = nextConfig.routes.findIndex(
+      (item) => item.key === key
+    )
+    if (
+      duplicateKeyIndex >= 0 &&
+      (!autoRouteEditKey || key !== autoRouteEditKey)
+    ) {
+      toast.error(t('Auto route key already exists'))
+      return
+    }
+    const route: AutoGroupRoute = {
+      key,
+      name: autoRouteDialogData.name.trim() || key,
+      enabled: true,
+      user_selectable: true,
+      groups,
+    }
+    const existingIndex = autoRouteEditKey
+      ? nextConfig.routes.findIndex((item) => item.key === autoRouteEditKey)
+      : -1
+    if (existingIndex >= 0) {
+      route.enabled = nextConfig.routes[existingIndex].enabled
+      route.user_selectable = nextConfig.routes[existingIndex].user_selectable
+      nextConfig.routes[existingIndex] = route
+    } else {
+      nextConfig.routes.push(route)
+    }
+    if (!nextConfig.default_route) {
+      nextConfig.default_route = key
+    }
+    emitAutoRoutesConfig(nextConfig)
+    setAutoRouteDialogOpen(false)
   }
 
-  const handleAutoGroupMove = (index: number, direction: 'up' | 'down') => {
-    const list = [...autoGroupsList]
-    const newIndex = direction === 'up' ? index - 1 : index + 1
+  const handleAutoRouteDelete = (routeKey: string) => {
+    const nextConfig = cloneAutoRoutesConfig(autoRoutesConfig)
+    if (nextConfig.routes.length <= 1) return
+    nextConfig.routes = nextConfig.routes.filter(
+      (route) => route.key !== routeKey
+    )
+    if (nextConfig.default_route === routeKey) {
+      nextConfig.default_route = nextConfig.routes[0]?.key ?? 'auto'
+    }
+    emitAutoRoutesConfig(nextConfig)
+  }
 
-    if (newIndex < 0 || newIndex >= list.length) return
-    ;[list[index], list[newIndex]] = [list[newIndex], list[index]]
-    onChange('AutoGroups', JSON.stringify(list, null, 2))
+  const handleAutoRouteToggle = (
+    routeKey: string,
+    field: 'enabled' | 'user_selectable',
+    checked: boolean
+  ) => {
+    if (
+      field === 'enabled' &&
+      !checked &&
+      routeKey === autoRoutesConfig.default_route
+    ) {
+      toast.error(t('Default auto route must be enabled'))
+      return
+    }
+    const nextConfig = cloneAutoRoutesConfig(autoRoutesConfig)
+    nextConfig.routes = nextConfig.routes.map((route) =>
+      route.key === routeKey ? { ...route, [field]: checked } : route
+    )
+    emitAutoRoutesConfig(nextConfig)
+  }
+
+  const handleDefaultAutoRouteChange = (routeKey: string) => {
+    const route = autoRoutesConfig.routes.find((item) => item.key === routeKey)
+    if (!route?.enabled) {
+      toast.error(t('Default auto route must be enabled'))
+      return
+    }
+    emitAutoRoutesConfig({
+      ...cloneAutoRoutesConfig(autoRoutesConfig),
+      default_route: routeKey,
+    })
+  }
+
+  const handleAutoRouteGroupDelete = (routeKey: string, index: number) => {
+    const nextConfig = cloneAutoRoutesConfig(autoRoutesConfig)
+    const route = nextConfig.routes.find((item) => item.key === routeKey)
+    if (!route || route.groups.length <= 1) return
+    route.groups = route.groups.filter((_, itemIndex) => itemIndex !== index)
+    emitAutoRoutesConfig(nextConfig)
+  }
+
+  const handleAutoRouteGroupMove = (
+    routeKey: string,
+    index: number,
+    direction: 'up' | 'down'
+  ) => {
+    const nextConfig = cloneAutoRoutesConfig(autoRoutesConfig)
+    const route = nextConfig.routes.find((item) => item.key === routeKey)
+    if (!route) return
+    const nextIndex = direction === 'up' ? index - 1 : index + 1
+    if (nextIndex < 0 || nextIndex >= route.groups.length) return
+    ;[route.groups[index], route.groups[nextIndex]] = [
+      route.groups[nextIndex],
+      route.groups[index],
+    ]
+    emitAutoRoutesConfig(nextConfig)
   }
 
   // Group-group ratio handlers
@@ -609,60 +781,157 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
         </CardContent>
       </Card>
 
-      {/* Auto Groups */}
+      {/* Auto Routes */}
       <Card className={sectionCardClassName}>
         <CardHeader className={sectionHeaderClassName}>
-          <CardTitle>{t('Auto assignment order')}</CardTitle>
+          <CardTitle>{t('Auto route chains')}</CardTitle>
           <CardDescription>
             {t(
-              'Priority order for automatic group assignment. New tokens rotate through this list.'
+              'Configure named automatic routes. Tokens can use auto, auto:fast, auto:cheap, or any custom route key.'
             )}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className='space-y-4'>
-            <Button onClick={handleAutoGroupAdd} size='sm'>
+            <Button onClick={handleAutoRouteAdd} size='sm'>
               <Plus className='mr-2 h-4 w-4' />
-              {t('Add group')}
+              {t('Add auto route')}
             </Button>
-            {autoGroupsList.length > 0 && (
-              <div className='space-y-2'>
-                {autoGroupsList.map((group, index) => (
-                  <div
-                    key={index}
-                    className='flex items-center gap-2 rounded-md border p-3'
-                  >
-                    <GripVertical className='text-muted-foreground h-4 w-4' />
-                    <span className='flex-1 font-medium'>{group}</span>
-                    <div className='flex gap-1'>
+            <div className='space-y-3'>
+              {autoRoutesConfig.routes.map((route) => (
+                <div key={route.key} className='rounded-lg border p-4'>
+                  <div className='flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between'>
+                    <div className='min-w-0'>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <span className='font-semibold'>{route.key}</span>
+                        {route.key === autoRoutesConfig.default_route && (
+                          <Badge variant='secondary'>{t('Default')}</Badge>
+                        )}
+                        {!route.enabled && (
+                          <Badge variant='outline'>{t('Disabled')}</Badge>
+                        )}
+                        {!route.user_selectable && (
+                          <Badge variant='outline'>{t('Admin only')}</Badge>
+                        )}
+                      </div>
+                      <p className='text-muted-foreground mt-1 text-sm'>
+                        {route.name || route.key}
+                      </p>
+                    </div>
+                    <div className='flex flex-wrap gap-2'>
                       <Button
-                        variant='ghost'
+                        variant={
+                          route.key === autoRoutesConfig.default_route
+                            ? 'secondary'
+                            : 'outline'
+                        }
                         size='sm'
-                        disabled={index === 0}
-                        onClick={() => handleAutoGroupMove(index, 'up')}
+                        disabled={
+                          route.key === autoRoutesConfig.default_route ||
+                          !route.enabled
+                        }
+                        onClick={() => handleDefaultAutoRouteChange(route.key)}
                       >
-                        ↑
+                        {t('Set default')}
                       </Button>
                       <Button
-                        variant='ghost'
+                        variant='outline'
                         size='sm'
-                        disabled={index === autoGroupsList.length - 1}
-                        onClick={() => handleAutoGroupMove(index, 'down')}
+                        onClick={() => handleAutoRouteEdit(route)}
                       >
-                        ↓
+                        <Pencil className='h-4 w-4' />
                       </Button>
                       <Button
-                        variant='ghost'
+                        variant='outline'
                         size='sm'
-                        onClick={() => handleAutoGroupDelete(index)}
+                        disabled={autoRoutesConfig.routes.length <= 1}
+                        onClick={() => handleAutoRouteDelete(route.key)}
                       >
                         <Trash2 className='h-4 w-4' />
                       </Button>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+                  <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+                    <label className='flex items-center gap-2 text-sm'>
+                      <Checkbox
+                        checked={route.enabled}
+                        disabled={
+                          route.key === autoRoutesConfig.default_route &&
+                          route.enabled
+                        }
+                        onCheckedChange={(checked) =>
+                          handleAutoRouteToggle(
+                            route.key,
+                            'enabled',
+                            checked === true
+                          )
+                        }
+                      />
+                      {t('Enabled')}
+                    </label>
+                    <label className='flex items-center gap-2 text-sm'>
+                      <Checkbox
+                        checked={route.user_selectable}
+                        onCheckedChange={(checked) =>
+                          handleAutoRouteToggle(
+                            route.key,
+                            'user_selectable',
+                            checked === true
+                          )
+                        }
+                      />
+                      {t('User selectable')}
+                    </label>
+                  </div>
+                  <div className='mt-4 space-y-2'>
+                    <p className='text-muted-foreground text-xs font-medium'>
+                      {t('Route group order')}
+                    </p>
+                    {route.groups.map((group, index) => (
+                      <div
+                        key={`${route.key}-${group}-${index}`}
+                        className='flex items-center gap-2 rounded-md border px-3 py-2'
+                      >
+                        <GripVertical className='text-muted-foreground h-4 w-4' />
+                        <span className='min-w-0 flex-1 truncate font-medium'>
+                          {group}
+                        </span>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          disabled={index === 0}
+                          onClick={() =>
+                            handleAutoRouteGroupMove(route.key, index, 'up')
+                          }
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          disabled={index === route.groups.length - 1}
+                          onClick={() =>
+                            handleAutoRouteGroupMove(route.key, index, 'down')
+                          }
+                        >
+                          ↓
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          size='sm'
+                          disabled={route.groups.length <= 1}
+                          onClick={() =>
+                            handleAutoRouteGroupDelete(route.key, index)
+                          }
+                        >
+                          <Trash2 className='h-4 w-4' />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -676,33 +945,77 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
         type={simpleDialogType}
       />
 
-      {/* Auto Group Dialog */}
-      <Dialog open={autoGroupDialogOpen} onOpenChange={setAutoGroupDialogOpen}>
+      {/* Auto Route Dialog */}
+      <Dialog open={autoRouteDialogOpen} onOpenChange={setAutoRouteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('Add auto group')}</DialogTitle>
+            <DialogTitle>
+              {autoRouteEditKey ? t('Edit auto route') : t('Add auto route')}
+            </DialogTitle>
             <DialogDescription>
-              {t('Add a group identifier to the auto assignment list.')}
+              {t(
+                'Use route keys like auto, auto:fast, or auto:cheap. Groups must be real billing groups.'
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className='space-y-4 py-4'>
             <div className='space-y-2'>
-              <Label>{t('Group identifier')}</Label>
+              <Label>{t('Route key')}</Label>
               <Input
-                value={autoGroupInput}
-                onChange={(e) => setAutoGroupInput(e.target.value)}
-                placeholder={t('default')}
+                value={autoRouteDialogData.key}
+                disabled={!!autoRouteEditKey}
+                onChange={(e) =>
+                  setAutoRouteDialogData((current) => ({
+                    ...current,
+                    key: e.target.value,
+                  }))
+                }
+                placeholder='auto:fast'
               />
+            </div>
+            <div className='space-y-2'>
+              <Label>{t('Display name')}</Label>
+              <Input
+                value={autoRouteDialogData.name}
+                onChange={(e) =>
+                  setAutoRouteDialogData((current) => ({
+                    ...current,
+                    name: e.target.value,
+                  }))
+                }
+                placeholder={t('Fast route')}
+              />
+            </div>
+            <div className='space-y-2'>
+              <Label>{t('Route groups')}</Label>
+              <Textarea
+                rows={5}
+                value={autoRouteDialogData.groupsText}
+                onChange={(e) =>
+                  setAutoRouteDialogData((current) => ({
+                    ...current,
+                    groupsText: e.target.value,
+                  }))
+                }
+                placeholder={'default\nvip\nsvip'}
+              />
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'Enter one real group per line, or separate groups by comma.'
+                )}
+              </p>
             </div>
           </div>
           <DialogFooter>
             <Button
               variant='outline'
-              onClick={() => setAutoGroupDialogOpen(false)}
+              onClick={() => setAutoRouteDialogOpen(false)}
             >
               {t('Cancel')}
             </Button>
-            <Button onClick={handleAutoGroupSave}>{t('Add')}</Button>
+            <Button onClick={handleAutoRouteSave}>
+              {autoRouteEditKey ? t('Update') : t('Add')}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -771,12 +1084,14 @@ function GroupPricingTable({
       groupRatio,
       userUsableGroups
     )
+    /* eslint-disable react-hooks/set-state-in-effect -- Keep the visual rows synced when the JSON fields are edited directly. */
     setRows((currentRows) => {
       if (groupPricingSignature(currentRows) === incomingSignature) {
         return currentRows
       }
       return buildGroupPricingRows(groupRatio, userUsableGroups)
     })
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [groupRatio, userUsableGroups])
 
   const emitRows = useCallback(
@@ -998,6 +1313,7 @@ function SimpleGroupDialog({
   const title = type === 'groupRatio' ? t('group ratio') : t('top-up ratio')
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- Reset dialog draft state when a different group is opened. */
     if (!open) {
       setName('')
       setValue('')
@@ -1006,6 +1322,7 @@ function SimpleGroupDialog({
 
     setName(editData?.name ?? '')
     setValue(editData?.value ?? '')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [editData, open])
 
   const handleSave = () => {
@@ -1086,6 +1403,7 @@ function GroupOverrideDialog({
   const [ratio, setRatio] = useState('')
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- Reset dialog draft state when a different override is opened. */
     if (!open) {
       setTargetGroup('')
       setRatio('')
@@ -1094,6 +1412,7 @@ function GroupOverrideDialog({
 
     setTargetGroup(editData?.targetGroup ?? '')
     setRatio(editData ? String(editData.ratio) : '')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [editData, open])
 
   const handleSave = () => {

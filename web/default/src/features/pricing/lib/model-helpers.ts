@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { isAutoRouteKey } from '@/lib/auto-routes'
 import { EXCLUDED_GROUPS, QUOTA_TYPE_VALUES } from '../constants'
 import type { PricingModel } from '../types'
 
@@ -28,7 +29,7 @@ import type { PricingModel } from '../types'
  */
 export function getAvailableGroups(
   model: PricingModel,
-  usableGroup: Record<string, { desc: string; ratio: number }>
+  usableGroup: Record<string, { desc: string; ratio: number | string }>
 ): string[] {
   const modelEnableGroups = Array.isArray(model.enable_groups)
     ? model.enable_groups
@@ -36,6 +37,7 @@ export function getAvailableGroups(
 
   return Object.keys(usableGroup)
     .filter((g) => !EXCLUDED_GROUPS.includes(g))
+    .filter((g) => !isAutoRouteKey(g))
     .filter((g) => modelEnableGroups.includes(g))
 }
 

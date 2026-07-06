@@ -65,6 +65,7 @@ type GroupFormValues = {
   UserUsableGroups: string
   GroupGroupRatio: string
   AutoGroups: string
+  AutoGroupRoutes: string
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
 }
@@ -141,6 +142,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               userUsableGroups={form.watch('UserUsableGroups')}
               groupGroupRatio={form.watch('GroupGroupRatio')}
               autoGroups={form.watch('AutoGroups')}
+              autoGroupRoutes={form.watch('AutoGroupRoutes')}
               onChange={(field, value) =>
                 handleFieldChange(field as keyof GroupFormValues, value)
               }
@@ -262,13 +264,32 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               name='AutoGroups'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Auto assignment order')}</FormLabel>
+                  <FormLabel>{t('Default auto route groups')}</FormLabel>
                   <FormControl>
                     <Textarea rows={6} {...field} />
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'JSON array of group identifiers. When enabled below, new tokens rotate through this list.'
+                      'Compatibility field for the default auto route. It is derived from the route config when saving.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AutoGroupRoutes'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Auto route chains')}</FormLabel>
+                  <FormControl>
+                    <Textarea rows={12} {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'JSON config for named auto routes such as auto, auto:fast, and auto:cheap.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -426,13 +447,32 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'When a token uses the auto group, the system tries groups from top to bottom until it finds an available group.'
+                    'When a token uses an auto route, the system tries the route groups from top to bottom until it finds an available group.'
                   )}
                 </p>
-                <GuideCodeBlock>{`["default", "vip"]`}</GuideCodeBlock>
+                <GuideCodeBlock>{`{
+  "version": 1,
+  "default_route": "auto",
+  "routes": [
+    {
+      "key": "auto",
+      "name": "Auto",
+      "enabled": true,
+      "user_selectable": true,
+      "groups": ["default", "vip"]
+    },
+    {
+      "key": "auto:fast",
+      "name": "Fast route",
+      "enabled": true,
+      "user_selectable": true,
+      "groups": ["svip", "vip"]
+    }
+  ]
+}`}</GuideCodeBlock>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'If default auto group is enabled, newly created tokens start with auto instead of an empty group.'
+                    'If default auto group is enabled, newly created tokens start with the configured default auto route.'
                   )}
                 </p>
               </AccordionContent>

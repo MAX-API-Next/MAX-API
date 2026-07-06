@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +30,22 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
 	}
 	return maskedTokens
+}
+
+func validateAssignableTokenGroup(c *gin.Context, group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return true
+	}
+	userGroup := c.GetString("group")
+	if userGroup == "" {
+		userGroup = c.GetString("user_group")
+	}
+	if service.CanUseTokenGroup(userGroup, group) {
+		return true
+	}
+	common.ApiErrorMsg(c, fmt.Sprintf("无权访问 %s 分组", group))
+	return false
 }
 
 func GetAllTokens(c *gin.Context) {
@@ -157,6 +175,10 @@ func AddToken(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
 	}
+	token.Group = strings.TrimSpace(token.Group)
+	if !validateAssignableTokenGroup(c, token.Group) {
+		return
+	}
 	// 非无限额度时，检查额度值是否超出有效范围
 	if !token.UnlimitedQuota {
 		if token.RemainQuota < 0 {
@@ -271,6 +293,10 @@ func UpdateToken(c *gin.Context) {
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
+		token.Group = strings.TrimSpace(token.Group)
+		if !validateAssignableTokenGroup(c, token.Group) {
+			return
+		}
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime

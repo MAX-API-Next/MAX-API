@@ -233,6 +233,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "AutoGroupRoutes":
+		_, err = setting.ParseAutoGroupRoutesConfig(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "自动链路配置失败: " + err.Error(),
+			})
+			return
+		}
 	case "ImageRatio":
 		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
 		if err != nil {

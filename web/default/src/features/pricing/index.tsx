@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { isAutoRouteKey } from '@/lib/auto-routes'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 import {
@@ -47,6 +48,7 @@ export function Pricing() {
     usableGroup,
     endpointMap,
     autoGroups,
+    autoRoutes,
     isLoading,
     priceRate,
     usdExchangeRate,
@@ -98,7 +100,7 @@ export function Pricing() {
   const availableGroups = useMemo(
     () =>
       Object.keys(usableGroup || {}).filter(
-        (g) => !EXCLUDED_GROUPS.includes(g)
+        (g) => !EXCLUDED_GROUPS.includes(g) && !isAutoRouteKey(g)
       ),
     [usableGroup]
   )
@@ -275,6 +277,7 @@ export function Pricing() {
                 >) || {}
               }
               autoGroups={autoGroups || []}
+              autoRoutes={autoRoutes || []}
               priceRate={priceRate ?? 1}
               usdExchangeRate={usdExchangeRate ?? 1}
               tokenUnit={tokenUnit}
