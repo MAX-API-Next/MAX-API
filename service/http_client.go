@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"sync"
 	"time"
 
@@ -107,38 +106,11 @@ func getCachedSSRFProtection() (*common.SSRFProtection, bool, error) {
 
 func ssrfProtectedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{}
-	protection, enabled, err := getCachedSSRFProtection()
-	if err != nil {
-		return nil, fmt.Errorf("request reject - %v", err)
-	}
-	if !enabled {
-		return dialer.DialContext(ctx, network, addr)
-	}
-
-	host, portStr, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid port: %s", portStr)
-	}
-	dialAddrs, err := protection.ResolveValidatedDialAddresses(ctx, host, port)
-	if err != nil {
-		return nil, err
-	}
-	if len(dialAddrs) == 0 {
-		return nil, fmt.Errorf("no validated dial addresses for %s", addr)
-	}
-	var lastErr error
-	for _, dialAddr := range dialAddrs {
-		conn, err := dialer.DialContext(ctx, network, dialAddr)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
+	return (&protectedFetchDialer{
+		resolver:      net.DefaultResolver,
+		dialContext:   dialer.DialContext,
+		getProtection: getCachedSSRFProtection,
+	}).DialContext(ctx, network, addr)
 }
 
 func newSSRFProtectedHTTPClient() *http.Client {
@@ -151,15 +123,7 @@ func newSSRFProtectedHTTPClient() *http.Client {
 }
 
 func checkRedirect(req *http.Request, via []*http.Request) error {
-	fetchSetting := system_setting.GetFetchSetting()
-	urlStr := req.URL.String()
-	if err := common.ValidateURLWithFetchSetting(urlStr, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
-		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
-	}
-	if len(via) >= 10 {
-		return fmt.Errorf("stopped after 10 redirects")
-	}
-	return nil
+	return checkProtectedFetchRedirect(req, via)
 }
 
 func InitHttpClient() {
@@ -172,6 +136,12 @@ func GetHttpClient() *http.Client {
 }
 
 func GetSSRFProtectedHttpClient() *http.Client {
+	if _, enabled, err := getCachedSSRFProtection(); err == nil && !enabled {
+		if httpClient != nil {
+			return httpClient
+		}
+		return http.DefaultClient
+	}
 	if ssrfProtectedHTTPClient != nil {
 		return ssrfProtectedHTTPClient
 	}

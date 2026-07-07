@@ -520,7 +520,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		} else {
 			aliReq.Parameters.Duration = seconds
 		}
-	} else {
+	}
+	if aliReq.Parameters.Duration <= 0 {
 		aliReq.Parameters.Duration = 5 // 默认5秒
 	}
 
@@ -564,6 +565,9 @@ func (a *TaskAdaptor) convertToAliKlingRequest(upstreamModel string, req relayco
 			return nil, errors.Wrap(err, "convert seconds to int failed")
 		}
 		aliReq.Parameters.Duration = seconds
+	}
+	if aliReq.Parameters.Duration <= 0 {
+		aliReq.Parameters.Duration = 5
 	}
 	if imageURL := firstNonEmpty(req.InputReference, req.Image); imageURL != "" {
 		aliReq.Input.Media = []map[string]interface{}{
@@ -773,7 +777,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	otherRatios := map[string]float64{
-		"seconds": float64(aliReq.Parameters.Duration),
+		"seconds": float64(min(aliReq.Parameters.Duration, relaycommon.MaxTaskDurationSeconds)),
 	}
 	ratios, err := ProcessAliOtherRatios(aliReq)
 	if err != nil {

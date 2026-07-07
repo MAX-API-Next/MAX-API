@@ -279,6 +279,10 @@ func (p *SSRFProtection) validateHostAndPort(host string, port int) error {
 	return nil
 }
 
+func (p *SSRFProtection) ValidateNetworkTarget(host string, port int) error {
+	return p.validateHostAndPort(host, port)
+}
+
 func (p *SSRFProtection) validateResolvedIP(host string, ip net.IP) error {
 	if !p.IsIPAccessAllowed(ip) {
 		if isPrivateIP(ip) && !p.AllowPrivateIp {
@@ -290,6 +294,10 @@ func (p *SSRFProtection) validateResolvedIP(host string, ip net.IP) error {
 		return fmt.Errorf("ip in blacklist: %s resolves to %s", host, ip.String())
 	}
 	return nil
+}
+
+func (p *SSRFProtection) ValidateResolvedIP(host string, ip net.IP) error {
+	return p.validateResolvedIP(host, ip)
 }
 
 func (p *SSRFProtection) resolveValidatedIPs(ctx context.Context, host string) ([]net.IP, error) {
@@ -412,6 +420,11 @@ func NewSSRFProtectionWithFetchSetting(enableSSRFProtection, allowPrivateIp bool
 		AllowedPorts:           allowedPortInts,
 		ApplyIPFilterForDomain: applyIPFilterForDomain,
 	}, true, nil
+}
+
+func NewSSRFProtectionFromFetchSetting(allowPrivateIp bool, domainFilterMode bool, ipFilterMode bool, domainList, ipList, allowedPorts []string, applyIPFilterForDomain bool) (*SSRFProtection, error) {
+	protection, _, err := NewSSRFProtectionWithFetchSetting(true, allowPrivateIp, domainFilterMode, ipFilterMode, domainList, ipList, allowedPorts, applyIPFilterForDomain)
+	return protection, err
 }
 
 // ValidateURLWithFetchSetting 使用FetchSetting配置验证URL

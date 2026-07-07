@@ -77,7 +77,7 @@ func Calculate(input types.TaskBillingInput, groupRatio float64) (*types.TaskBil
 		return nil, nil
 	}
 	totalPrice := row.UnitPrice * quantity
-	quota := int(totalPrice * common.QuotaPerUnit * groupRatio)
+	quota := common.QuotaFromFloat(totalPrice * common.QuotaPerUnit * groupRatio)
 	if totalPrice > 0 && quota <= 0 {
 		quota = 1
 	}
@@ -121,8 +121,8 @@ func validateRateCards(rateCards map[string]RateCard) error {
 			return fmt.Errorf("rate card %s has no rows", key)
 		}
 		for i, row := range card.Rows {
-			if row.UnitPrice < 0 {
-				return fmt.Errorf("rate card %s row %d has negative unit_price", key, i)
+			if row.UnitPrice < 0 || math.IsNaN(row.UnitPrice) || math.IsInf(row.UnitPrice, 0) {
+				return fmt.Errorf("rate card %s row %d has invalid unit_price", key, i)
 			}
 			if len(row.Match) == 0 {
 				return fmt.Errorf("rate card %s row %d has empty match", key, i)
@@ -130,6 +130,10 @@ func validateRateCards(rateCards map[string]RateCard) error {
 		}
 	}
 	return nil
+}
+
+func validQuantity(value float64) bool {
+	return value > 0 && value <= math.MaxInt32 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func findRateCard(models ...string) (*RateCard, string) {
@@ -212,23 +216,23 @@ func mergeFields(card RateCard, input types.TaskBillingInput) map[string]string 
 
 func resolveQuantity(card RateCard, input types.TaskBillingInput, fields map[string]string) (float64, error) {
 	if card.QuantityField == "" {
-		if card.DefaultQuantity > 0 {
+		if validQuantity(card.DefaultQuantity) {
 			return card.DefaultQuantity, nil
 		}
 		return 1, nil
 	}
 	if input.Numbers != nil {
-		if value, ok := input.Numbers[card.QuantityField]; ok && value > 0 {
+		if value, ok := input.Numbers[card.QuantityField]; ok && validQuantity(value) {
 			return value, nil
 		}
 	}
 	if raw := fields[card.QuantityField]; raw != "" {
 		value, err := strconv.ParseFloat(raw, 64)
-		if err == nil && value > 0 {
+		if err == nil && validQuantity(value) {
 			return value, nil
 		}
 	}
-	if card.DefaultQuantity > 0 {
+	if validQuantity(card.DefaultQuantity) {
 		return card.DefaultQuantity, nil
 	}
 	return 0, fmt.Errorf("missing positive quantity field %q", card.QuantityField)
