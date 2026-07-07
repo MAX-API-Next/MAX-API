@@ -157,10 +157,7 @@ export const QUOTA_FILTER_VALUES = [
 ] as const
 
 export const QUOTA_FILTER_SEARCH_VALUES = [
-  QUOTA_FILTER_ALL_VALUE,
-  QUOTA_FILTER_ABNORMAL_VALUE,
-  QUOTA_FILTER_ZERO_VALUE,
-  QUOTA_FILTER_NEGATIVE_VALUE,
+  ...QUOTA_FILTER_VALUES,
 ] satisfies [string, ...string[]]
 
 // ============================================================================
