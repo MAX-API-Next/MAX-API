@@ -13,9 +13,9 @@ func TestValidateImageN(t *testing.T) {
 
 	err := ValidateImageN("", -1)
 	require.Error(t, err)
-	require.Equal(t, fmt.Sprintf("n must be an integer between 1 and %d", MaxImageN), err.Error())
+	require.Equal(t, fmt.Sprintf("n must be an integer between 0 and %d", MaxImageN), err.Error())
 
 	err = ValidateImageN("parameters.n", MaxImageN+1)
 	require.Error(t, err)
-	require.Equal(t, fmt.Sprintf("parameters.n must be an integer between 1 and %d", MaxImageN), err.Error())
+	require.Equal(t, fmt.Sprintf("parameters.n must be an integer between 0 and %d", MaxImageN), err.Error())
 }

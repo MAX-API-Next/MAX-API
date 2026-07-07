@@ -20,7 +20,7 @@ func ValidateImageN(field string, n int) error {
 		field = "n"
 	}
 	if n < 0 || n > MaxImageN {
-		return fmt.Errorf("%s must be an integer between 1 and %d", field, MaxImageN)
+		return fmt.Errorf("%s must be an integer between 0 and %d", field, MaxImageN)
 	}
 	return nil
 }

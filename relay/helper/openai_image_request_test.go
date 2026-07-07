@@ -24,7 +24,7 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 		return c
 	}
 
-	boundErr := fmt.Sprintf("n must be an integer between 1 and %d", dto.MaxImageN)
+	boundErr := fmt.Sprintf("n must be an integer between 0 and %d", dto.MaxImageN)
 
 	tests := []struct {
 		name    string
