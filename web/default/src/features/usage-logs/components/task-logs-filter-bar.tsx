@@ -22,6 +22,7 @@ import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { useIsAdmin } from '@/hooks/use-admin'
+import { QUOTA_FILTER_ALL_VALUE } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { DrawingLogFilters, LogCategory, TaskLogFilters } from '../types'
@@ -31,6 +32,11 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
+import {
+  isQuotaFilterValue,
+  QuotaFilterSelect,
+  type QuotaFilterValue,
+} from './quota-filter-select'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -85,6 +91,10 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       ...(searchParams.channel
         ? { channel: String(searchParams.channel) }
         : {}),
+      quotaFilter:
+        searchParams.quotaFilter && isQuotaFilterValue(searchParams.quotaFilter)
+          ? searchParams.quotaFilter
+          : QUOTA_FILTER_ALL_VALUE,
     }
     const next: TaskLogsFilters =
       props.logCategory === 'drawing'
@@ -105,6 +115,7 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
     searchParams.endTime,
     searchParams.channel,
     searchParams.filter,
+    searchParams.quotaFilter,
   ])
 
   const handleChange = useCallback(
@@ -130,7 +141,11 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
-    const resetFilters: TaskLogsFilters = { startTime: start, endTime: end }
+    const resetFilters: TaskLogsFilters = {
+      startTime: start,
+      endTime: end,
+      quotaFilter: QUOTA_FILTER_ALL_VALUE,
+    }
     setFilters(resetFilters)
 
     navigate({
@@ -139,6 +154,7 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       search: {
         page: 1,
         pageSize: 100,
+        quotaFilter: undefined,
         startTime: start.getTime(),
         endTime: end.getTime(),
         searchVersion: undefined,
@@ -161,11 +177,15 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
   )
 
   const filterValue = getFilterValue(filters, props.logCategory)
+  const hasQuotaFilter =
+    filters.quotaFilter != null &&
+    filters.quotaFilter !== QUOTA_FILTER_ALL_VALUE
   const placeholder =
     props.logCategory === 'drawing'
       ? t('Filter by Midjourney task ID')
       : t('Filter by task ID')
-  const hasAdditionalFilters = !!filterValue || !!filters.channel
+  const hasAdditionalFilters =
+    !!filterValue || !!filters.channel || hasQuotaFilter
   const dateRangeFilter = (
     <LogsFilterField wide>
       <CompactDateTimeRangePicker
@@ -199,6 +219,16 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       />
     </LogsFilterField>
   ) : null
+  const quotaFilter = (
+    <LogsFilterField>
+      <QuotaFilterSelect
+        value={
+          (filters.quotaFilter || QUOTA_FILTER_ALL_VALUE) as QuotaFilterValue
+        }
+        onValueChange={(value) => handleChange('quotaFilter', value)}
+      />
+    </LogsFilterField>
+  )
 
   return (
     <LogsFilterToolbar
@@ -208,6 +238,7 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
           {dateRangeFilter}
           {taskIdFilter}
           {channelFilter}
+          {quotaFilter}
         </>
       }
       mobilePinnedFilters={dateRangeFilter}
@@ -215,9 +246,12 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
         <>
           {taskIdFilter}
           {channelFilter}
+          {quotaFilter}
         </>
       }
-      mobileFilterCount={[filterValue, filters.channel].filter(Boolean).length}
+      mobileFilterCount={
+        [filterValue, filters.channel, hasQuotaFilter].filter(Boolean).length
+      }
       hasActiveFilters={hasAdditionalFilters}
       onSearch={handleApply}
       searchLoading={fetchingLogs > 0}

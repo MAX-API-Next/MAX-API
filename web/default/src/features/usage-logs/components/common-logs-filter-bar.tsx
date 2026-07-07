@@ -43,6 +43,7 @@ import {
   LOG_TYPE_ALL_VALUE,
   LOG_TYPE_FILTER_VALUES,
   LOG_TYPE_FILTERS,
+  QUOTA_FILTER_ALL_VALUE,
 } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
@@ -54,6 +55,11 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
+import {
+  isQuotaFilterValue,
+  QuotaFilterSelect,
+  type QuotaFilterValue,
+} from './quota-filter-select'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -104,6 +110,10 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
+      quotaFilter:
+        searchParams.quotaFilter && isQuotaFilterValue(searchParams.quotaFilter)
+          ? searchParams.quotaFilter
+          : QUOTA_FILTER_ALL_VALUE,
     })
 
     const typeArr = searchParams.type
@@ -124,6 +134,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.quotaFilter,
     searchParams.type,
   ])
 
@@ -151,7 +162,11 @@ export function CommonLogsFilterBar<TData>(
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
-    const resetFilters: CommonLogFilters = { startTime: start, endTime: end }
+    const resetFilters: CommonLogFilters = {
+      startTime: start,
+      endTime: end,
+      quotaFilter: QUOTA_FILTER_ALL_VALUE,
+    }
     setFilters(resetFilters)
     setLogType(LOG_TYPE_ALL_VALUE)
 
@@ -162,6 +177,7 @@ export function CommonLogsFilterBar<TData>(
         page: 1,
         pageSize: 100,
         type: [LOG_TYPE_ALL_VALUE],
+        quotaFilter: undefined,
         startTime: start.getTime(),
         endTime: end.getTime(),
         searchVersion: undefined,
@@ -184,8 +200,15 @@ export function CommonLogsFilterBar<TData>(
     !!filters.upstreamRequestId
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
+  const hasQuotaFilter =
+    filters.quotaFilter != null &&
+    filters.quotaFilter !== QUOTA_FILTER_ALL_VALUE
   const hasAdditionalFilters =
-    !!filters.model || !!filters.group || hasTypeFilter || hasExpandedFilters
+    !!filters.model ||
+    !!filters.group ||
+    hasTypeFilter ||
+    hasQuotaFilter ||
+    hasExpandedFilters
 
   const expandedFilterCount = [
     filters.token,
@@ -299,6 +322,16 @@ export function CommonLogsFilterBar<TData>(
       </Select>
     </LogsFilterField>
   )
+  const quotaFilter = (
+    <LogsFilterField>
+      <QuotaFilterSelect
+        value={
+          (filters.quotaFilter || QUOTA_FILTER_ALL_VALUE) as QuotaFilterValue
+        }
+        onValueChange={(value) => handleChange('quotaFilter', value)}
+      />
+    </LogsFilterField>
+  )
   const advancedFilters = (
     <>
       <LogsFilterField>
@@ -360,6 +393,7 @@ export function CommonLogsFilterBar<TData>(
           {modelFilter}
           {groupFilter}
           {typeFilter}
+          {quotaFilter}
         </>
       }
       advancedFilters={advancedFilters}
@@ -369,12 +403,14 @@ export function CommonLogsFilterBar<TData>(
           {modelFilter}
           {groupFilter}
           {typeFilter}
+          {quotaFilter}
           {advancedFilters}
         </>
       }
       mobileFilterCount={
-        [filters.model, filters.group, hasTypeFilter].filter(Boolean).length +
-        expandedFilterCount
+        [filters.model, filters.group, hasTypeFilter, hasQuotaFilter].filter(
+          Boolean
+        ).length + expandedFilterCount
       }
       hasAdvancedActiveFilters={hasExpandedFilters}
       advancedFilterCount={expandedFilterCount}

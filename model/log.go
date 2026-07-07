@@ -91,6 +91,38 @@ const (
 	LogFilterEmptyRetry = "empty_retry"
 )
 
+const (
+	LogQuotaFilterAbnormal = "abnormal"
+	LogQuotaFilterZero     = "zero"
+	LogQuotaFilterNegative = "negative"
+)
+
+func normalizeLogQuotaFilter(filter string) string {
+	switch strings.ToLower(strings.TrimSpace(filter)) {
+	case LogQuotaFilterAbnormal:
+		return LogQuotaFilterAbnormal
+	case LogQuotaFilterZero:
+		return LogQuotaFilterZero
+	case LogQuotaFilterNegative:
+		return LogQuotaFilterNegative
+	default:
+		return ""
+	}
+}
+
+func applyQuotaFilter(tx *gorm.DB, column string, filter string) *gorm.DB {
+	switch normalizeLogQuotaFilter(filter) {
+	case LogQuotaFilterAbnormal:
+		return tx.Where(column+" <= ?", 0)
+	case LogQuotaFilterZero:
+		return tx.Where(column+" = ?", 0)
+	case LogQuotaFilterNegative:
+		return tx.Where(column+" < ?", 0)
+	default:
+		return tx
+	}
+}
+
 func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 	if logType == LogTypeUnknown {
 		return tx
@@ -604,11 +636,12 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, quotaFilter string) (logs []*Log, total int64, err error) {
 	tx, err := applyLogFilter(applyLogTypeFilter(LOG_DB, logType), logFilter)
 	if err != nil {
 		return nil, 0, err
 	}
+	tx = applyQuotaFilter(tx, "logs.quota", quotaFilter)
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
 		return nil, 0, err
@@ -692,11 +725,12 @@ func GetAllLogs(logType int, logFilter string, startTimestamp int64, endTimestam
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, quotaFilter string) (logs []*Log, total int64, err error) {
 	tx, err := applyLogFilter(applyLogTypeFilter(LOG_DB.Where("logs.user_id = ?", userId), logType), logFilter)
 	if err != nil {
 		return nil, 0, err
 	}
+	tx = applyQuotaFilter(tx, "logs.quota", quotaFilter)
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
 		return nil, 0, err
@@ -771,7 +805,7 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, quotaFilter string) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
 
 	// 为rpm和tpm创建单独的查询
@@ -785,6 +819,8 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	if err != nil {
 		return stat, err
 	}
+	tx = applyQuotaFilter(tx, "logs.quota", quotaFilter)
+	rpmTpmQuery = applyQuotaFilter(rpmTpmQuery, "logs.quota", quotaFilter)
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -820,7 +856,7 @@ func SumUsedQuota(logType int, logFilter string, startTimestamp int64, endTimest
 	if logType != LogTypeUnknown {
 		tx = tx.Where("logs.type = ?", logType)
 		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", logType)
-	} else if !isRetryLogFilter(logFilter) {
+	} else {
 		tx = tx.Where("logs.type = ?", LogTypeConsume)
 		rpmTpmQuery = rpmTpmQuery.Where("logs.type = ?", LogTypeConsume)
 	}

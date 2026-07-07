@@ -5,8 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	common2 "github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
@@ -87,6 +91,23 @@ func (r *customReadSeeker) Read(p []byte) (int, error) {
 
 func (r *customReadSeeker) Seek(offset int64, whence int) (int64, error) {
 	return r.reader.Seek(offset, whence)
+}
+
+type blockingPingWriter struct {
+	gin.ResponseWriter
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+	once     sync.Once
+}
+
+func (w *blockingPingWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.started)
+	})
+	<-w.release
+	close(w.finished)
+	return len(p), nil
 }
 
 func TestNewTaskHTTPRequestDoesNotPreReadRequestBody(t *testing.T) {
@@ -229,6 +250,38 @@ func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestDoTaskApiRequestInitializesChannelMetaForApiKeyPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	var gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"task_123"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	common2.SetContextKey(ctx, constant.ContextKeyChannelKey, "sk-task")
+
+	info := &relaycommon.RelayInfo{
+		UseRuntimeHeadersOverride: true,
+		RuntimeHeadersOverride: map[string]any{
+			"Authorization": "Bearer {api_key}",
+		},
+	}
+
+	resp, err := DoTaskApiRequest(taskHeaderAdaptor{url: server.URL}, ctx, info, strings.NewReader(`{"prompt":"test"}`))
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, "Bearer sk-task", gotAuthorization)
+}
+
 func TestProcessHeaderOverride_PassthroughSkipsAcceptEncoding(t *testing.T) {
 	t.Parallel()
 
@@ -345,4 +398,50 @@ func TestDoTaskApiRequestAppliesRuntimeHeaderOverride(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, "overridden", gotDefault)
 	require.Equal(t, "enabled", gotRuntime)
+}
+
+func TestSendPingDataReturnsWhenWriterBlocks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/stream", nil)
+	writer := &blockingPingWriter{
+		ResponseWriter: ctx.Writer,
+		started:        make(chan struct{}),
+		release:        make(chan struct{}),
+		finished:       make(chan struct{}),
+	}
+	ctx.Writer = writer
+
+	oldTimeout := sendPingDataTimeout
+	sendPingDataTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		sendPingDataTimeout = oldTimeout
+	})
+
+	errCh := make(chan error, 1)
+	var mutex sync.Mutex
+	go func() {
+		errCh <- sendPingData(ctx, &mutex)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("ping write did not start")
+	}
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "timed out")
+	case <-time.After(time.Second):
+		t.Fatal("sendPingData did not return after timeout")
+	}
+
+	close(writer.release)
+	select {
+	case <-writer.finished:
+	case <-time.After(time.Second):
+		t.Fatal("blocked ping writer did not finish after release")
+	}
 }

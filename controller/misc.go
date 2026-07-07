@@ -320,10 +320,10 @@ func SendPasswordResetEmail(c *gin.Context) {
 			"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, link, link, common.VerificationValidMinutes)
 		err := common.SendEmail(subject, email, content)
 		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", email, err.Error()))
+			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", common.MaskEmail(email), err.Error()))
 		}
-	} else if err != nil && !errors.Is(err, model.ErrEmailNotFound) {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("skip password reset email for %s: %s", email, err.Error()))
+	} else if !errors.Is(err, model.ErrEmailNotFound) {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("skip password reset email for %s: %s", common.MaskEmail(email), err.Error()))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

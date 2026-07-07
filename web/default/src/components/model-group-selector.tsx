@@ -59,7 +59,9 @@ interface GroupOption {
 }
 
 function shouldShowGroupRatio(ratio: GroupOption['ratio']) {
-  return ratio !== undefined && ratio !== 0 && ratio !== '0'
+  if (ratio === undefined || ratio === '') return false
+  const numeric = typeof ratio === 'number' ? ratio : Number(ratio)
+  return !Number.isNaN(numeric) && numeric !== 0
 }
 
 interface ModelSelectorProps {

@@ -29,6 +29,7 @@ type User struct {
 	Role             int            `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
 	Email            string         `json:"email" gorm:"index" validate:"max=50"`
+	NormalizedEmail  string         `json:"-" gorm:"column:normalized_email;size:50;index"`
 	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
 	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
 	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
@@ -52,6 +53,16 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+}
+
+func (user *User) BeforeSave(_ *gorm.DB) error {
+	user.NormalizedEmail = NormalizeEmail(user.Email)
+	return nil
+}
+
+func (user *User) normalizeEmailFields() {
+	user.Email = NormalizeEmail(user.Email)
+	user.NormalizedEmail = user.Email
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -191,7 +202,7 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 	if email == "" {
 		err = DB.Unscoped().First(&user, "username = ?", username).Error
 	} else {
-		err = DB.Unscoped().First(&user, "username = ? or LOWER(email) = ?", username, email).Error
+		err = DB.Unscoped().First(&user, "username = ? or normalized_email = ?", username, email).Error
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -209,11 +220,15 @@ func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+func normalizedEmailLockName(email string) string {
+	return "maxapi:user-email:" + common.Sha1([]byte(NormalizeEmail(email)))
+}
+
 func emailQuery(tx *gorm.DB, email string) *gorm.DB {
 	if tx == nil {
 		tx = DB
 	}
-	return tx.Unscoped().Model(&User{}).Where("LOWER(email) = ?", NormalizeEmail(email))
+	return tx.Unscoped().Model(&User{}).Where("normalized_email = ?", NormalizeEmail(email))
 }
 
 func CountUsersByEmail(email string) (int64, error) {
@@ -266,13 +281,79 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
 			return err
 		}
+		return fn(tx)
 	case common.UsingMySQL:
-		var ids []int
-		if err := tx.Raw("SELECT id FROM users WHERE LOWER(email) = ? FOR UPDATE", email).Scan(&ids).Error; err != nil {
+		lockName := normalizedEmailLockName(email)
+		var acquired sql.NullInt64
+		if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
 			return err
 		}
+		if !acquired.Valid || acquired.Int64 != 1 {
+			return errors.New("failed to acquire user email lock")
+		}
+		released := false
+		defer func() {
+			if !released {
+				_ = releaseMySQLNamedLock(tx, lockName)
+			}
+		}()
+		err := fn(tx)
+		releaseErr := releaseMySQLNamedLock(tx, lockName)
+		released = true
+		if releaseErr != nil && err == nil {
+			return releaseErr
+		}
+		return err
+	default:
+		return fn(tx)
 	}
-	return fn(tx)
+}
+
+// WithNormalizedEmailWriteTx runs fn in a transaction while serializing writers
+// for the same normalized email. MySQL named locks are connection-scoped, so the
+// lock must be acquired on a pinned connection and released only after the
+// transaction has committed or rolled back.
+func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error {
+	email = NormalizeEmail(email)
+	if !common.UsingMySQL {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			return withNormalizedEmailLock(tx, email, fn)
+		})
+	}
+	if email == "" {
+		return DB.Transaction(fn)
+	}
+
+	lockName := normalizedEmailLockName(email)
+	return DB.Connection(func(conn *gorm.DB) error {
+		var acquired sql.NullInt64
+		if err := conn.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
+			return err
+		}
+		if !acquired.Valid || acquired.Int64 != 1 {
+			return errors.New("failed to acquire user email lock")
+		}
+
+		released := false
+		defer func() {
+			if !released {
+				_ = releaseMySQLNamedLock(conn, lockName)
+			}
+		}()
+
+		err := conn.Transaction(fn)
+		releaseErr := releaseMySQLNamedLock(conn, lockName)
+		released = true
+		if err != nil {
+			return err
+		}
+		return releaseErr
+	})
+}
+
+func releaseMySQLNamedLock(tx *gorm.DB, lockName string) error {
+	var released sql.NullInt64
+	return tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error
 }
 
 func GetMaxUserId() int {
@@ -502,7 +583,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 }
 
 func (user *User) prepareForInsert(tx *gorm.DB) error {
-	user.Email = NormalizeEmail(user.Email)
+	user.normalizeEmailFields()
 	if err := ensureEmailAvailableWithTx(tx, user.Email, 0); err != nil {
 		return err
 	}
@@ -537,17 +618,19 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 // user, preventing concurrent binds from sharing the same normalized address.
 func BindEmailToUser(user *User, email string) error {
 	email = NormalizeEmail(email)
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		return withNormalizedEmailLock(tx, email, func(tx *gorm.DB) error {
-			if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
-				return err
-			}
-			if err := tx.Model(&User{}).Where("id = ?", user.Id).Update("email", email).Error; err != nil {
-				return err
-			}
-			user.Email = email
-			return tx.First(user, user.Id).Error
-		})
+	if err := WithNormalizedEmailWriteTx(email, func(tx *gorm.DB) error {
+		if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
+			return err
+		}
+		if err := tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+			"email":            email,
+			"normalized_email": email,
+		}).Error; err != nil {
+			return err
+		}
+		user.Email = email
+		user.NormalizedEmail = email
+		return tx.First(user, user.Id).Error
 	}); err != nil {
 		return err
 	}
@@ -555,23 +638,21 @@ func BindEmailToUser(user *User, email string) error {
 }
 
 func (user *User) Insert(inviterId int) error {
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
-			if err := user.prepareForInsert(tx); err != nil {
-				return err
-			}
-			user.Quota = common.QuotaForNewUser
-			user.AffCode = common.GetRandomString(4)
+	if err := WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
+		if err := user.prepareForInsert(tx); err != nil {
+			return err
+		}
+		user.Quota = common.QuotaForNewUser
+		user.AffCode = common.GetRandomString(4)
 
-			// 初始化用户设置，包括默认的边栏配置
-			if user.Setting == "" {
-				defaultSetting := dto.UserSetting{}
-				// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
-				user.SetSetting(defaultSetting)
-			}
+		// 初始化用户设置，包括默认的边栏配置
+		if user.Setting == "" {
+			defaultSetting := dto.UserSetting{}
+			// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
+			user.SetSetting(defaultSetting)
+		}
 
-			return tx.Create(user).Error
-		})
+		return tx.Create(user).Error
 	}); err != nil {
 		return err
 	}
@@ -609,6 +690,8 @@ func (user *User) Insert(inviterId int) error {
 }
 
 // InsertWithTx inserts a new user within an existing transaction.
+// Callers that own the outer transaction should use WithNormalizedEmailWriteTx
+// so MySQL's connection-scoped email lock covers the final commit.
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
@@ -707,7 +790,9 @@ func buildUserUpdateValues(current User, newUser User, updatePassword bool) map[
 		updates["status"] = newUser.Status
 	}
 	if fullUser || newUser.Email != "" {
-		updates["email"] = newUser.Email
+		email := NormalizeEmail(newUser.Email)
+		updates["email"] = email
+		updates["normalized_email"] = email
 	}
 	if fullUser || newUser.GitHubId != "" {
 		updates["github_id"] = newUser.GitHubId
@@ -772,26 +857,27 @@ func buildUserUpdateValues(current User, newUser User, updatePassword bool) map[
 
 func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current User) {
 	defaults := map[string]interface{}{
-		"role":            current.Role,
-		"status":          current.Status,
-		"email":           current.Email,
-		"github_id":       current.GitHubId,
-		"discord_id":      current.DiscordId,
-		"oidc_id":         current.OidcId,
-		"wechat_id":       current.WeChatId,
-		"telegram_id":     current.TelegramId,
-		"access_token":    current.AccessToken,
-		"group":           current.Group,
-		"aff_code":        current.AffCode,
-		"aff_count":       current.AffCount,
-		"aff_quota":       current.AffQuota,
-		"aff_history":     current.AffHistoryQuota,
-		"inviter_id":      current.InviterId,
-		"linux_do_id":     current.LinuxDOId,
-		"setting":         current.Setting,
-		"remark":          current.Remark,
-		"stripe_customer": current.StripeCustomer,
-		"last_login_at":   current.LastLoginAt,
+		"role":             current.Role,
+		"status":           current.Status,
+		"email":            current.Email,
+		"normalized_email": NormalizeEmail(current.Email),
+		"github_id":        current.GitHubId,
+		"discord_id":       current.DiscordId,
+		"oidc_id":          current.OidcId,
+		"wechat_id":        current.WeChatId,
+		"telegram_id":      current.TelegramId,
+		"access_token":     current.AccessToken,
+		"group":            current.Group,
+		"aff_code":         current.AffCode,
+		"aff_count":        current.AffCount,
+		"aff_quota":        current.AffQuota,
+		"aff_history":      current.AffHistoryQuota,
+		"inviter_id":       current.InviterId,
+		"linux_do_id":      current.LinuxDOId,
+		"setting":          current.Setting,
+		"remark":           current.Remark,
+		"stripe_customer":  current.StripeCustomer,
+		"last_login_at":    current.LastLoginAt,
 	}
 	for key, value := range defaults {
 		if _, ok := updates[key]; !ok {
@@ -848,7 +934,11 @@ func (user *User) ClearBinding(bindingType string) error {
 		return errors.New("invalid binding type")
 	}
 
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
+	updates := map[string]interface{}{column: ""}
+	if bindingType == "email" {
+		updates["normalized_email"] = ""
+	}
+	if err := DB.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
 		return err
 	}
 
@@ -987,7 +1077,7 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 		return nil, ErrEmailNotFound
 	}
 	var users []User
-	if err := DB.Where("LOWER(email) = ?", email).Limit(2).Find(&users).Error; err != nil {
+	if err := DB.Where("normalized_email = ?", email).Limit(2).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	switch len(users) {

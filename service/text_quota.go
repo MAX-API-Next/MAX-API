@@ -151,7 +151,7 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 		}
 	}
 
-	return tieredQuota + decimalToQuota(summary.ToolCallSurchargeQuota)
+	return decimalToQuota(decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota))
 }
 
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {

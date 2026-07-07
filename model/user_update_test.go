@@ -3,7 +3,11 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -11,6 +15,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +51,85 @@ func useFailingUserUpdateRedis(t *testing.T) {
 		_ = client.Close()
 		common.RedisEnabled = oldRedisEnabled
 		common.RDB = oldRDB
+	})
+}
+
+func openUserUpdateMySQLTestDB(t *testing.T, dsn string) *gorm.DB {
+	t.Helper()
+
+	db, err := gorm.Open(gormmysql.Open(mysqlDSNWithClientFoundRowsFalse(dsn)), &gorm.Config{})
+	require.NoError(t, err)
+	if db.Migrator().HasTable(&User{}) {
+		t.Skip("refusing to run mysql user update test against external database because users table already exists")
+	}
+	require.NoError(t, db.AutoMigrate(&User{}))
+	t.Cleanup(func() {
+		_ = db.Migrator().DropTable(&User{})
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+func TestNormalizedEmailLockNameIsStableAndShort(t *testing.T) {
+	lockName := normalizedEmailLockName(" User@Example.COM ")
+
+	assert.Equal(t, normalizedEmailLockName("user@example.com"), lockName)
+	assert.LessOrEqual(t, len(lockName), 64)
+	assert.Contains(t, lockName, "maxapi:user-email:")
+}
+
+func mysqlDSNWithClientFoundRowsFalse(dsn string) string {
+	base, rawQuery, ok := strings.Cut(dsn, "?")
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		if ok {
+			return dsn + "&clientFoundRows=false"
+		}
+		return dsn + "?clientFoundRows=false"
+	}
+	for key := range values {
+		if strings.EqualFold(key, "clientFoundRows") {
+			delete(values, key)
+		}
+	}
+	values.Set("clientFoundRows", "false")
+	if !ok {
+		return base + "?" + values.Encode()
+	}
+	return base + "?" + values.Encode()
+}
+
+func useUserUpdateTestDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	oldDB := DB
+	oldLOGDB := LOG_DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldRedisEnabled := common.RedisEnabled
+	oldBatchUpdateEnabled := common.BatchUpdateEnabled
+
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+	common.BatchUpdateEnabled = false
+	initCol()
+
+	t.Cleanup(func() {
+		DB = oldDB
+		LOG_DB = oldLOGDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.RedisEnabled = oldRedisEnabled
+		common.BatchUpdateEnabled = oldBatchUpdateEnabled
+		initCol()
 	})
 }
 
@@ -172,6 +256,94 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
 }
 
+func TestUpdateUserSettingOnlyUpdatesSettingMySQL(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("set TEST_MYSQL_DSN to run mysql UpdateUserSetting coverage")
+	}
+	db := openUserUpdateMySQLTestDB(t, dsn)
+	useUserUpdateTestDB(t, db)
+
+	user := User{
+		Id:           2,
+		Username:     "mysql-setting-user",
+		Password:     "password",
+		Status:       common.UserStatusEnabled,
+		Quota:        1000,
+		UsedQuota:    20,
+		RequestCount: 3,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota - ?", 250),
+		"used_quota":    gorm.Expr("used_quota + ?", 250),
+		"request_count": gorm.Expr("request_count + ?", 1),
+	}).Error)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, 750, got.Quota)
+	assert.Equal(t, 270, got.UsedQuota)
+	assert.Equal(t, 4, got.RequestCount)
+	assert.Equal(t, "zh", got.GetSetting().Language)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+}
+
+func TestInsertRejectsConcurrentDuplicateEmailMySQL(t *testing.T) {
+	dsn := os.Getenv("TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("set TEST_MYSQL_DSN to run mysql concurrent email insert coverage")
+	}
+	db := openUserUpdateMySQLTestDB(t, dsn)
+	useUserUpdateTestDB(t, db)
+
+	oldQuotaForNewUser := common.QuotaForNewUser
+	common.QuotaForNewUser = 0
+	t.Cleanup(func() {
+		common.QuotaForNewUser = oldQuotaForNewUser
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for i := range 2 {
+		go func(i int) {
+			<-start
+			user := &User{
+				Username: fmt.Sprintf("mysql-race-user-%d", i),
+				Email:    "Race@Example.COM",
+				Role:     common.RoleCommonUser,
+				Status:   common.UserStatusEnabled,
+			}
+			errs <- user.Insert(0)
+		}(i)
+	}
+	close(start)
+
+	var successCount int
+	var duplicateCount int
+	for range 2 {
+		err := <-errs
+		switch {
+		case err == nil:
+			successCount++
+		case errors.Is(err, ErrEmailAlreadyTaken):
+			duplicateCount++
+		default:
+			require.NoError(t, err)
+		}
+	}
+
+	require.Equal(t, 1, successCount)
+	require.Equal(t, 1, duplicateCount)
+	count, err := CountUsersByEmail("race@example.com")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+}
+
 func TestUpdateUserSettingIgnoresCacheWriteFailure(t *testing.T) {
 	setupUserUpdateTestState(t)
 
@@ -218,6 +390,29 @@ func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
 	assert.Equal(t, "existing", user.Username)
 
 	require.NoError(t, EnsureEmailAvailable("taken@example.com", user.Id))
+}
+
+func TestBackfillUserNormalizedEmails(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	require.NoError(t, DB.Exec(
+		"INSERT INTO users (id, username, password, email, status) VALUES (?, ?, ?, ?, ?)",
+		21,
+		"legacy-email-user",
+		"password",
+		"Legacy@Example.COM",
+		common.UserStatusEnabled,
+	).Error)
+
+	require.NoError(t, backfillUserNormalizedEmails())
+
+	var got User
+	require.NoError(t, DB.First(&got, 21).Error)
+	assert.Equal(t, "Legacy@Example.COM", got.Email)
+	assert.Equal(t, "legacy@example.com", got.NormalizedEmail)
+
+	require.ErrorIs(t, EnsureEmailAvailable(" legacy@example.com ", 0), ErrEmailAlreadyTaken)
+	require.NoError(t, EnsureEmailAvailable("legacy@example.com", got.Id))
 }
 
 func TestInsertRejectsDuplicateEmailWithoutUniqueIndex(t *testing.T) {

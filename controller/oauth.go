@@ -285,7 +285,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		// Custom provider: create user and binding in a transaction
-		err := model.DB.Transaction(func(tx *gorm.DB) error {
+		err := model.WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
@@ -311,7 +311,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.FinalizeOAuthUserCreation(inviterId)
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
-		err := model.DB.Transaction(func(tx *gorm.DB) error {
+		err := model.WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err

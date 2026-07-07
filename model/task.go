@@ -170,6 +170,7 @@ type SyncTaskQueryParams struct {
 	StartTimestamp int64
 	EndTimestamp   int64
 	UserIDs        []int
+	QuotaFilter    string
 }
 
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
@@ -217,6 +218,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 
 	// 初始化查询构建器
 	query := DB.Where("user_id = ?", userId)
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
@@ -253,6 +255,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 
 	// 初始化查询构建器
 	query := DB
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	// 添加过滤条件
 	if queryParams.ChannelID != "" {
@@ -455,6 +458,7 @@ type TaskQuotaUsage struct {
 func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 	var total int64
 	query := DB.Model(&Task{})
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 	if queryParams.ChannelID != "" {
 		query = query.Where("channel_id = ?", queryParams.ChannelID)
 	}
@@ -490,6 +494,7 @@ func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
 	var total int64
 	query := DB.Model(&Task{}).Where("user_id = ?", userId)
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
 	}

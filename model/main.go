@@ -311,6 +311,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := backfillUserNormalizedEmails(); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -386,6 +389,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := backfillUserNormalizedEmails(); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -396,6 +402,19 @@ func migrateDBFast() error {
 		}
 	}
 	common.SysLog("database migrated")
+	return nil
+}
+
+func backfillUserNormalizedEmails() error {
+	if DB == nil || !DB.Migrator().HasTable(&User{}) || !DB.Migrator().HasColumn(&User{}, "normalized_email") {
+		return nil
+	}
+	result := DB.Model(&User{}).
+		Where("email <> ? AND (normalized_email = ? OR normalized_email IS NULL)", "", "").
+		Update("normalized_email", gorm.Expr("LOWER(TRIM(email))"))
+	if result.Error != nil {
+		return fmt.Errorf("failed to backfill user normalized emails: %w", result.Error)
+	}
 	return nil
 }
 

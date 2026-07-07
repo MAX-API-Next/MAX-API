@@ -64,6 +64,8 @@ const (
 	headerPassthroughRegexPrefixV2 = "regex:"
 )
 
+var sendPingDataTimeout = 10 * time.Second
+
 var passthroughSkipHeaderNamesLower = map[string]struct{}{
 	// RFC 7230 hop-by-hop headers.
 	"connection":          {},
@@ -459,18 +461,42 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.Can
 }
 
 func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
-	mutex.Lock()
-	defer mutex.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		mutex.Lock()
+		defer mutex.Unlock()
 
-	helper.ExtendWriteDeadline(c)
-	err := helper.PingData(c)
-	if err != nil {
-		logger.LogError(c, "SSE ping error: "+err.Error())
-		return err
+		helper.ExtendWriteDeadline(c)
+		err := helper.PingData(c)
+		if err != nil {
+			logger.LogError(c, "SSE ping error: "+err.Error())
+			done <- err
+			return
+		}
+
+		logger.LogDebug(c, "SSE ping data sent")
+		done <- nil
+	}()
+
+	timer := time.NewTimer(sendPingDataTimeout)
+	defer timer.Stop()
+
+	var requestDone <-chan struct{}
+	if c != nil && c.Request != nil {
+		requestDone = c.Request.Context().Done()
 	}
 
-	logger.LogDebug(c, "SSE ping data sent")
-	return nil
+	select {
+	case err := <-done:
+		return err
+	case <-requestDone:
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			return fmt.Errorf("SSE ping request context done: %w", c.Request.Context().Err())
+		}
+		return errors.New("SSE ping request context done")
+	case <-timer.C:
+		return fmt.Errorf("SSE ping write timed out after %s", sendPingDataTimeout)
+	}
 }
 
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
@@ -570,6 +596,9 @@ func attachSeekableGetBody(req *http.Request, reader io.Reader) {
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	if info != nil && info.ChannelMeta == nil {
+		info.InitChannelMeta(c)
+	}
 	fullRequestURL, err := a.BuildRequestURL(info)
 	if err != nil {
 		return nil, err

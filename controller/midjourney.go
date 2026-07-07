@@ -263,6 +263,7 @@ func GetAllMidjourney(c *gin.Context) {
 		MjID:           c.Query("mj_id"),
 		StartTimestamp: c.Query("start_timestamp"),
 		EndTimestamp:   c.Query("end_timestamp"),
+		QuotaFilter:    c.Query("quota_filter"),
 	}
 
 	items := model.GetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
@@ -288,6 +289,7 @@ func GetUserMidjourney(c *gin.Context) {
 		MjID:           c.Query("mj_id"),
 		StartTimestamp: c.Query("start_timestamp"),
 		EndTimestamp:   c.Query("end_timestamp"),
+		QuotaFilter:    c.Query("quota_filter"),
 	}
 
 	items := model.GetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)

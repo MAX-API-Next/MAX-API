@@ -19,7 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import z from 'zod'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { UsageLogs } from '@/features/usage-logs'
-import { LOG_TYPE_SEARCH_VALUES } from '@/features/usage-logs/constants'
+import {
+  LOG_TYPE_SEARCH_VALUES,
+  QUOTA_FILTER_SEARCH_VALUES,
+} from '@/features/usage-logs/constants'
 import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
@@ -48,6 +51,7 @@ const usageLogsSearchSchema = z.object({
   username: z.string().optional().catch(''),
   requestId: z.string().optional().catch(''),
   upstreamRequestId: z.string().optional().catch(''),
+  quotaFilter: z.enum(QUOTA_FILTER_SEARCH_VALUES).optional().catch(undefined),
   startTime: z.number().optional(),
   endTime: z.number().optional(),
 })

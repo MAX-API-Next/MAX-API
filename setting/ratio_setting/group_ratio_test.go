@@ -30,3 +30,19 @@ func TestGroupRatioFiltersAutoRouteNamespace(t *testing.T) {
 func TestCheckGroupRatioAcceptsNormalGroups(t *testing.T) {
 	require.NoError(t, CheckGroupRatio(`{"default":1,"vip":0}`))
 }
+
+func TestGroupRatioTrimsNormalGroupNames(t *testing.T) {
+	original := GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateGroupRatioByJSONString(original))
+	})
+
+	normalized, err := NormalizeGroupRatioJSONString(`{" vip ":0.5}`)
+	require.NoError(t, err)
+	require.Contains(t, normalized, `"vip":0.5`)
+	require.NotContains(t, normalized, `" vip "`)
+
+	require.NoError(t, UpdateGroupRatioByJSONString(`{" vip ":0.5}`))
+	require.True(t, ContainsGroupRatio("vip"))
+	require.Equal(t, 0.5, GetGroupRatio("vip"))
+}

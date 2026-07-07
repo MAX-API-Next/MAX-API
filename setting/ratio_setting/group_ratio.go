@@ -160,9 +160,9 @@ func normalizeGroupRatioMap(jsonStr string) (map[string]float64, error) {
 			continue
 		}
 		if ratio < 0 {
-			return nil, errors.New("group ratio must be not less than 0: " + name)
+			return nil, errors.New("group ratio must be not less than 0: " + trimmedName)
 		}
-		normalized[name] = ratio
+		normalized[trimmedName] = ratio
 	}
 	return normalized, nil
 }

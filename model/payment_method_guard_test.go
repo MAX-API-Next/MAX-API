@@ -312,6 +312,39 @@ func TestRechargeCreemRejectsZeroQuotaBeforeCompletingOrder(t *testing.T) {
 	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 610))
 }
 
+func TestRechargeCreemSkipsDuplicateCustomerEmailBinding(t *testing.T) {
+	truncateTables(t)
+
+	require.NoError(t, DB.Create(&User{
+		Id:       611,
+		Username: "creem-email-owner",
+		Email:    "taken@example.com",
+		AffCode:  "creem611",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&User{
+		Id:       612,
+		Username: "creem-empty-email",
+		AffCode:  "creem612",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	insertTopUpForPaymentGuardTest(t, "creem-duplicate-email", 612, PaymentProviderCreem)
+
+	err := RechargeCreem("creem-duplicate-email", " Taken@Example.COM ", "", "127.0.0.1")
+	require.NoError(t, err)
+
+	var got User
+	require.NoError(t, DB.First(&got, 612).Error)
+	assert.Empty(t, got.Email)
+	assert.Empty(t, got.NormalizedEmail)
+	assert.Equal(t, 2, got.Quota)
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-duplicate-email"))
+
+	count, err := CountUsersByEmail("taken@example.com")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count)
+}
+
 func TestRefundSubscriptionPreConsume_IdempotentDoesNotDoubleRefund(t *testing.T) {
 	truncateTables(t)
 
