@@ -65,24 +65,34 @@ func TestTaskDurationBounds(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		body    string
-		wantErr bool
+		name        string
+		body        string
+		wantErr     bool
+		wantMessage string
 	}{
 		{
-			name:    "huge duration is rejected",
-			body:    `{"model":"sora-2","prompt":"a cat","duration":9999999999}`,
-			wantErr: true,
+			name:        "huge duration is rejected",
+			body:        `{"model":"sora-2","prompt":"a cat","duration":9999999999}`,
+			wantErr:     true,
+			wantMessage: "seconds must be between 0 and",
 		},
 		{
-			name:    "huge seconds string is rejected",
-			body:    `{"model":"sora-2","prompt":"a cat","seconds":"9999999999"}`,
-			wantErr: true,
+			name:        "huge seconds string is rejected",
+			body:        `{"model":"sora-2","prompt":"a cat","seconds":"9999999999"}`,
+			wantErr:     true,
+			wantMessage: "seconds must be between 0 and",
 		},
 		{
-			name:    "negative duration is rejected",
-			body:    `{"model":"sora-2","prompt":"a cat","duration":-8}`,
-			wantErr: true,
+			name:        "negative duration is rejected",
+			body:        `{"model":"sora-2","prompt":"a cat","duration":-8}`,
+			wantErr:     true,
+			wantMessage: "seconds must be between 0 and",
+		},
+		{
+			name:        "non numeric seconds string is rejected",
+			body:        `{"model":"sora-2","prompt":"a cat","seconds":"abc"}`,
+			wantErr:     true,
+			wantMessage: "invalid seconds value: abc",
 		},
 		{
 			name: "normal duration is accepted",
@@ -97,6 +107,7 @@ func TestTaskDurationBounds(t *testing.T) {
 			if tt.wantErr {
 				require.NotNil(t, taskErr)
 				require.Equal(t, "invalid_seconds", taskErr.Code)
+				require.Contains(t, taskErr.Message, tt.wantMessage)
 				return
 			}
 			require.Nil(t, taskErr)
@@ -108,6 +119,7 @@ func TestTaskDurationBounds(t *testing.T) {
 			if tt.wantErr {
 				require.NotNil(t, taskErr)
 				require.Equal(t, "invalid_seconds", taskErr.Code)
+				require.Contains(t, taskErr.Message, tt.wantMessage)
 				return
 			}
 			require.Nil(t, taskErr)

@@ -44,5 +44,7 @@ func TestGroupRatioTrimsNormalGroupNames(t *testing.T) {
 
 	require.NoError(t, UpdateGroupRatioByJSONString(`{" vip ":0.5}`))
 	require.True(t, ContainsGroupRatio("vip"))
+	require.True(t, ContainsGroupRatio(" vip "))
 	require.Equal(t, 0.5, GetGroupRatio("vip"))
+	require.Equal(t, 0.5, GetGroupRatio(" vip "))
 }

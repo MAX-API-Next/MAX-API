@@ -388,7 +388,7 @@ func GenerateAccessToken(c *gin.Context) {
 		return
 	}
 
-	if err := user.Update(false); err != nil {
+	if err := user.UpdateFields(false, model.UserUpdateFieldAccessToken); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -438,7 +438,7 @@ func GetAffCode(c *gin.Context) {
 	}
 	if user.AffCode == "" {
 		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
+		if err := user.UpdateFields(false, model.UserUpdateFieldAffCode); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
@@ -799,9 +799,16 @@ func UpdateSelf(c *gin.Context) {
 
 	cleanUser := model.User{
 		Id:          c.GetInt("id"),
-		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
+	}
+	updateFields := make([]model.UserUpdateField, 0, 2)
+	if _, ok := requestData["display_name"]; ok {
+		updateFields = append(updateFields, model.UserUpdateFieldDisplayName)
+	}
+	if _, ok := requestData["username"]; ok && user.Username != "" {
+		cleanUser.Username = user.Username
+		updateFields = append(updateFields, model.UserUpdateFieldUsername)
 	}
 	if user.Password == "$I_LOVE_U" {
 		user.Password = "" // rollback to what it should be
@@ -820,7 +827,7 @@ func UpdateSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := cleanUser.Update(updatePassword); err != nil {
+	if err := cleanUser.UpdateFields(updatePassword, updateFields...); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -1082,7 +1089,14 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 
-	if err := user.Update(false); err != nil {
+	var updateFields []model.UserUpdateField
+	switch req.Action {
+	case "disable", "enable":
+		updateFields = []model.UserUpdateField{model.UserUpdateFieldStatus}
+	case "promote", "demote":
+		updateFields = []model.UserUpdateField{model.UserUpdateFieldRole}
+	}
+	if err := user.UpdateFields(false, updateFields...); err != nil {
 		common.ApiError(c, err)
 		return
 	}

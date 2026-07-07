@@ -74,10 +74,11 @@ func GetGroupRatioCopy() map[string]float64 {
 }
 
 func ContainsGroupRatio(name string) bool {
-	if isReservedAutoRouteGroupName(strings.TrimSpace(name)) {
+	trimmedName := strings.TrimSpace(name)
+	if isReservedAutoRouteGroupName(trimmedName) {
 		return false
 	}
-	_, ok := groupRatioMap.Get(name)
+	_, ok := groupRatioMap.Get(trimmedName)
 	return ok
 }
 
@@ -98,11 +99,12 @@ func UpdateGroupRatioByJSONString(jsonStr string) error {
 }
 
 func GetGroupRatio(name string) float64 {
-	if isReservedAutoRouteGroupName(strings.TrimSpace(name)) {
+	trimmedName := strings.TrimSpace(name)
+	if isReservedAutoRouteGroupName(trimmedName) {
 		common.SysLog("group ratio not found: " + name)
 		return 1
 	}
-	ratio, ok := groupRatioMap.Get(name)
+	ratio, ok := groupRatioMap.Get(trimmedName)
 	if !ok {
 		common.SysLog("group ratio not found: " + name)
 		return 1

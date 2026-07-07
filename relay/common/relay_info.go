@@ -733,6 +733,32 @@ func (t *TaskSubmitReq) DurationValue() int {
 	return *t.Duration
 }
 
+func (t *TaskSubmitReq) ResolvedSeconds() (int, error) {
+	if t == nil {
+		return 0, nil
+	}
+	seconds := t.DurationValue()
+	if seconds == 0 && t.Seconds != "" {
+		parsed, err := strconv.Atoi(t.Seconds)
+		if err != nil {
+			return 0, fmt.Errorf("invalid seconds value: %s", t.Seconds)
+		}
+		seconds = parsed
+	}
+	return seconds, nil
+}
+
+func (t *TaskSubmitReq) ResolvedSecondsOrDefault(defaultSeconds int) (int, error) {
+	seconds, err := t.ResolvedSeconds()
+	if err != nil {
+		return 0, err
+	}
+	if seconds <= 0 {
+		return defaultSeconds, nil
+	}
+	return seconds, nil
+}
+
 func (t *TaskSubmitReq) HasImage() bool {
 	return len(t.Images) > 0
 }

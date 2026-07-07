@@ -168,8 +168,11 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			imageRequest.Model = formData.Get("model")
 			if nValue := strings.TrimSpace(formData.Get("n")); nValue != "" {
 				n, err := strconv.Atoi(nValue)
-				if err != nil || n < 0 || n > dto.MaxImageN {
-					return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
+				if err != nil {
+					return nil, dto.ValidateImageN("n", -1)
+				}
+				if err := dto.ValidateImageN("n", n); err != nil {
+					return nil, err
 				}
 				imageRequest.N = common.GetPointer(uint(n))
 			}
@@ -211,8 +214,10 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			return nil, errors.New("size an unexpected error occurred in the parameter, please use 'x' instead of the multiplication sign '×'")
 		}
 
-		if imageRequest.N != nil && *imageRequest.N > dto.MaxImageN {
-			return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
+		if imageRequest.N != nil {
+			if err := dto.ValidateImageN("n", int(*imageRequest.N)); err != nil {
+				return nil, err
+			}
 		}
 
 		// Not "256x256", "512x512", or "1024x1024"

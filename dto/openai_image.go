@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -13,6 +14,16 @@ import (
 
 // MaxImageN caps image generation count before it becomes a billing multiplier.
 const MaxImageN = 128
+
+func ValidateImageN(field string, n int) error {
+	if field == "" {
+		field = "n"
+	}
+	if n < 0 || n > MaxImageN {
+		return fmt.Errorf("%s must be an integer between 1 and %d", field, MaxImageN)
+	}
+	return nil
+}
 
 type ImageRequest struct {
 	Model             string          `json:"model"`

@@ -192,7 +192,7 @@ func TestUserUpdatePersistsZeroValueProfileFields(t *testing.T) {
 	loaded.UsedQuota = 1
 	loaded.RequestCount = 1
 
-	require.NoError(t, loaded.Update(false))
+	require.NoError(t, loaded.UpdateFields(false, UserUpdateFieldDisplayName, UserUpdateFieldAffCount))
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
@@ -201,6 +201,34 @@ func TestUserUpdatePersistsZeroValueProfileFields(t *testing.T) {
 	assert.Equal(t, 1000, got.Quota)
 	assert.Equal(t, 20, got.UsedQuota)
 	assert.Equal(t, 3, got.RequestCount)
+}
+
+func TestUserUpdateDoesNotClearEmailFromLoadedPartialUpdate(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:          6,
+		Username:    "email-preserve-user",
+		Password:    "password",
+		DisplayName: "before",
+		Email:       "Keep@Example.COM",
+		Status:      common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	loaded, err := GetUserById(user.Id, true)
+	require.NoError(t, err)
+	loaded.Email = ""
+	loaded.NormalizedEmail = ""
+	loaded.DisplayName = "after"
+
+	require.NoError(t, loaded.Update(false))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, "after", got.DisplayName)
+	assert.Equal(t, "Keep@Example.COM", got.Email)
+	assert.Equal(t, "keep@example.com", got.NormalizedEmail)
 }
 
 func TestUserUpdateIgnoresCacheWriteFailure(t *testing.T) {

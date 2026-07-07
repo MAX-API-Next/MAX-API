@@ -58,7 +58,7 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 	user.TelegramId = telegramId
-	if err := user.Update(false); err != nil {
+	if err := user.UpdateFields(false, model.UserUpdateFieldTelegramId); err != nil {
 		c.JSON(200, gin.H{
 			"message": err.Error(),
 			"success": false,

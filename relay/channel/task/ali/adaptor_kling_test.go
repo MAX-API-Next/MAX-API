@@ -87,6 +87,58 @@ func TestConvertToAliKlingRequestMapsKlingOfficialVideoList(t *testing.T) {
 	}
 }
 
+func TestConvertToAliKlingRequestResolvesDurationFromTaskSubmitReq(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	duration := 6
+
+	tests := []struct {
+		name string
+		req  relaycommon.TaskSubmitReq
+		want int
+	}{
+		{
+			name: "duration takes precedence over seconds",
+			req: relaycommon.TaskSubmitReq{
+				Model:    "kling/kling-v3-omni-video-generation",
+				Prompt:   "make a video",
+				Duration: &duration,
+				Seconds:  "9",
+			},
+			want: 6,
+		},
+		{
+			name: "seconds is used when duration is absent",
+			req: relaycommon.TaskSubmitReq{
+				Model:   "kling/kling-v3-omni-video-generation",
+				Prompt:  "make a video",
+				Seconds: "9",
+			},
+			want: 9,
+		},
+		{
+			name: "zero duration defaults to five seconds",
+			req: relaycommon.TaskSubmitReq{
+				Model:  "kling/kling-v3-omni-video-generation",
+				Prompt: "make a video",
+			},
+			want: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := adaptor.convertToAliKlingRequest(tt.req.Model, tt.req)
+
+			if err != nil {
+				t.Fatalf("convertToAliKlingRequest returned error: %v", err)
+			}
+			if got.Parameters == nil || got.Parameters.Duration != tt.want {
+				t.Fatalf("duration = %+v, want %d", got.Parameters, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildAliKlingOfficialVideoResponseUsesPublicTaskID(t *testing.T) {
 	resp := buildAliKlingOfficialVideoResponse(
 		"task_public",

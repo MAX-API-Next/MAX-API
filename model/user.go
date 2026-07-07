@@ -18,6 +18,33 @@ import (
 
 const UserNameMaxLength = 20
 
+type UserUpdateField string
+
+const (
+	UserUpdateFieldUsername        UserUpdateField = "username"
+	UserUpdateFieldDisplayName     UserUpdateField = "display_name"
+	UserUpdateFieldRole            UserUpdateField = "role"
+	UserUpdateFieldStatus          UserUpdateField = "status"
+	UserUpdateFieldEmail           UserUpdateField = "email"
+	UserUpdateFieldGitHubId        UserUpdateField = "github_id"
+	UserUpdateFieldDiscordId       UserUpdateField = "discord_id"
+	UserUpdateFieldOidcId          UserUpdateField = "oidc_id"
+	UserUpdateFieldWeChatId        UserUpdateField = "wechat_id"
+	UserUpdateFieldTelegramId      UserUpdateField = "telegram_id"
+	UserUpdateFieldAccessToken     UserUpdateField = "access_token"
+	UserUpdateFieldGroup           UserUpdateField = "group"
+	UserUpdateFieldAffCode         UserUpdateField = "aff_code"
+	UserUpdateFieldAffCount        UserUpdateField = "aff_count"
+	UserUpdateFieldAffQuota        UserUpdateField = "aff_quota"
+	UserUpdateFieldAffHistoryQuota UserUpdateField = "aff_history"
+	UserUpdateFieldInviterId       UserUpdateField = "inviter_id"
+	UserUpdateFieldLinuxDOId       UserUpdateField = "linux_do_id"
+	UserUpdateFieldSetting         UserUpdateField = "setting"
+	UserUpdateFieldRemark          UserUpdateField = "remark"
+	UserUpdateFieldStripeCustomer  UserUpdateField = "stripe_customer"
+	UserUpdateFieldLastLoginAt     UserUpdateField = "last_login_at"
+)
+
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
@@ -667,7 +694,7 @@ func (user *User) Insert(inviterId int) error {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.UpdateFields(false, UserUpdateFieldSetting)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
@@ -723,7 +750,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.UpdateFields(false, UserUpdateFieldSetting)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
@@ -744,7 +771,17 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 }
 
 func (user *User) Update(updatePassword bool) error {
-	if err := user.UpdateWithTx(DB, updatePassword); err != nil {
+	if err := user.updateWithTx(DB, updatePassword, nil); err != nil {
+		return err
+	}
+	if err := updateUserCache(*user); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
+	}
+	return nil
+}
+
+func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
+	if err := user.updateWithTx(DB, updatePassword, fields); err != nil {
 		return err
 	}
 	if err := updateUserCache(*user); err != nil {
@@ -754,6 +791,14 @@ func (user *User) Update(updatePassword bool) error {
 }
 
 func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
+	return user.updateWithTx(tx, updatePassword, nil)
+}
+
+func (user *User) UpdateFieldsWithTx(tx *gorm.DB, updatePassword bool, fields ...UserUpdateField) error {
+	return user.updateWithTx(tx, updatePassword, fields)
+}
+
+func (user *User) updateWithTx(tx *gorm.DB, updatePassword bool, fields []UserUpdateField) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
@@ -766,93 +811,151 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-	result := tx.Model(&current).Updates(buildUserUpdateValues(current, newUser, updatePassword))
+	result := tx.Model(&current).Updates(buildUserUpdateValues(current, newUser, updatePassword, fields...))
 	if err = ensureUserUpdateMatchedTx(tx, result, user.Id, errors.New("用户不存在")); err != nil {
 		return err
 	}
 	return tx.First(user, user.Id).Error
 }
 
-func buildUserUpdateValues(current User, newUser User, updatePassword bool) map[string]interface{} {
-	fullUser := newUser.CreatedAt != 0
+func buildUserUpdateValues(current User, newUser User, updatePassword bool, fields ...UserUpdateField) map[string]interface{} {
 	updates := map[string]interface{}{}
 
-	if fullUser || newUser.Username != "" {
-		updates["username"] = newUser.Username
-	}
-	if fullUser || newUser.DisplayName != "" {
-		updates["display_name"] = newUser.DisplayName
-	}
-	if fullUser || newUser.Role != 0 {
-		updates["role"] = newUser.Role
-	}
-	if fullUser || newUser.Status != 0 {
-		updates["status"] = newUser.Status
-	}
-	if fullUser || newUser.Email != "" {
-		email := NormalizeEmail(newUser.Email)
-		updates["email"] = email
-		updates["normalized_email"] = email
-	}
-	if fullUser || newUser.GitHubId != "" {
-		updates["github_id"] = newUser.GitHubId
-	}
-	if fullUser || newUser.DiscordId != "" {
-		updates["discord_id"] = newUser.DiscordId
-	}
-	if fullUser || newUser.OidcId != "" {
-		updates["oidc_id"] = newUser.OidcId
-	}
-	if fullUser || newUser.WeChatId != "" {
-		updates["wechat_id"] = newUser.WeChatId
-	}
-	if fullUser || newUser.TelegramId != "" {
-		updates["telegram_id"] = newUser.TelegramId
-	}
-	if fullUser || newUser.AccessToken != nil {
-		updates["access_token"] = newUser.AccessToken
-	}
-	if fullUser || newUser.Group != "" {
-		updates["group"] = newUser.Group
-	}
-	if fullUser || newUser.AffCode != "" {
-		updates["aff_code"] = newUser.AffCode
-	}
-	if fullUser || newUser.AffCount != 0 {
-		updates["aff_count"] = newUser.AffCount
-	}
-	if fullUser || newUser.AffQuota != 0 {
-		updates["aff_quota"] = newUser.AffQuota
-	}
-	if fullUser || newUser.AffHistoryQuota != 0 {
-		updates["aff_history"] = newUser.AffHistoryQuota
-	}
-	if fullUser || newUser.InviterId != 0 {
-		updates["inviter_id"] = newUser.InviterId
-	}
-	if fullUser || newUser.LinuxDOId != "" {
-		updates["linux_do_id"] = newUser.LinuxDOId
-	}
-	if fullUser || newUser.Setting != "" {
-		updates["setting"] = newUser.Setting
-	}
-	if fullUser || newUser.Remark != "" {
-		updates["remark"] = newUser.Remark
-	}
-	if fullUser || newUser.StripeCustomer != "" {
-		updates["stripe_customer"] = newUser.StripeCustomer
-	}
-	if fullUser || newUser.LastLoginAt != 0 {
-		updates["last_login_at"] = newUser.LastLoginAt
+	if len(fields) > 0 {
+		for _, field := range fields {
+			applyUserUpdateField(updates, newUser, field)
+		}
+	} else {
+		applyNonZeroUserUpdateValues(updates, newUser)
 	}
 	if updatePassword {
 		updates["password"] = newUser.Password
 	}
 
-	if !fullUser {
-		copyUnspecifiedUserUpdateValues(updates, current)
-	}
+	copyUnspecifiedUserUpdateValues(updates, current)
 	return updates
+}
+
+func applyNonZeroUserUpdateValues(updates map[string]interface{}, newUser User) {
+	if newUser.Username != "" {
+		updates["username"] = newUser.Username
+	}
+	if newUser.DisplayName != "" {
+		updates["display_name"] = newUser.DisplayName
+	}
+	if newUser.Role != 0 {
+		updates["role"] = newUser.Role
+	}
+	if newUser.Status != 0 {
+		updates["status"] = newUser.Status
+	}
+	if newUser.Email != "" {
+		email := NormalizeEmail(newUser.Email)
+		updates["email"] = email
+		updates["normalized_email"] = email
+	}
+	if newUser.GitHubId != "" {
+		updates["github_id"] = newUser.GitHubId
+	}
+	if newUser.DiscordId != "" {
+		updates["discord_id"] = newUser.DiscordId
+	}
+	if newUser.OidcId != "" {
+		updates["oidc_id"] = newUser.OidcId
+	}
+	if newUser.WeChatId != "" {
+		updates["wechat_id"] = newUser.WeChatId
+	}
+	if newUser.TelegramId != "" {
+		updates["telegram_id"] = newUser.TelegramId
+	}
+	if newUser.AccessToken != nil {
+		updates["access_token"] = newUser.AccessToken
+	}
+	if newUser.Group != "" {
+		updates["group"] = newUser.Group
+	}
+	if newUser.AffCode != "" {
+		updates["aff_code"] = newUser.AffCode
+	}
+	if newUser.AffCount != 0 {
+		updates["aff_count"] = newUser.AffCount
+	}
+	if newUser.AffQuota != 0 {
+		updates["aff_quota"] = newUser.AffQuota
+	}
+	if newUser.AffHistoryQuota != 0 {
+		updates["aff_history"] = newUser.AffHistoryQuota
+	}
+	if newUser.InviterId != 0 {
+		updates["inviter_id"] = newUser.InviterId
+	}
+	if newUser.LinuxDOId != "" {
+		updates["linux_do_id"] = newUser.LinuxDOId
+	}
+	if newUser.Setting != "" {
+		updates["setting"] = newUser.Setting
+	}
+	if newUser.Remark != "" {
+		updates["remark"] = newUser.Remark
+	}
+	if newUser.StripeCustomer != "" {
+		updates["stripe_customer"] = newUser.StripeCustomer
+	}
+	if newUser.LastLoginAt != 0 {
+		updates["last_login_at"] = newUser.LastLoginAt
+	}
+}
+
+func applyUserUpdateField(updates map[string]interface{}, newUser User, field UserUpdateField) {
+	switch field {
+	case UserUpdateFieldUsername:
+		updates["username"] = newUser.Username
+	case UserUpdateFieldDisplayName:
+		updates["display_name"] = newUser.DisplayName
+	case UserUpdateFieldRole:
+		updates["role"] = newUser.Role
+	case UserUpdateFieldStatus:
+		updates["status"] = newUser.Status
+	case UserUpdateFieldEmail:
+		email := NormalizeEmail(newUser.Email)
+		updates["email"] = email
+		updates["normalized_email"] = email
+	case UserUpdateFieldGitHubId:
+		updates["github_id"] = newUser.GitHubId
+	case UserUpdateFieldDiscordId:
+		updates["discord_id"] = newUser.DiscordId
+	case UserUpdateFieldOidcId:
+		updates["oidc_id"] = newUser.OidcId
+	case UserUpdateFieldWeChatId:
+		updates["wechat_id"] = newUser.WeChatId
+	case UserUpdateFieldTelegramId:
+		updates["telegram_id"] = newUser.TelegramId
+	case UserUpdateFieldAccessToken:
+		updates["access_token"] = newUser.AccessToken
+	case UserUpdateFieldGroup:
+		updates["group"] = newUser.Group
+	case UserUpdateFieldAffCode:
+		updates["aff_code"] = newUser.AffCode
+	case UserUpdateFieldAffCount:
+		updates["aff_count"] = newUser.AffCount
+	case UserUpdateFieldAffQuota:
+		updates["aff_quota"] = newUser.AffQuota
+	case UserUpdateFieldAffHistoryQuota:
+		updates["aff_history"] = newUser.AffHistoryQuota
+	case UserUpdateFieldInviterId:
+		updates["inviter_id"] = newUser.InviterId
+	case UserUpdateFieldLinuxDOId:
+		updates["linux_do_id"] = newUser.LinuxDOId
+	case UserUpdateFieldSetting:
+		updates["setting"] = newUser.Setting
+	case UserUpdateFieldRemark:
+		updates["remark"] = newUser.Remark
+	case UserUpdateFieldStripeCustomer:
+		updates["stripe_customer"] = newUser.StripeCustomer
+	case UserUpdateFieldLastLoginAt:
+		updates["last_login_at"] = newUser.LastLoginAt
+	}
 }
 
 func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current User) {

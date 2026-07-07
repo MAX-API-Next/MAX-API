@@ -117,12 +117,12 @@ func validatePrompt(prompt string) *dto.TaskError {
 const MaxTaskDurationSeconds = 3600
 
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
-	seconds := req.DurationValue()
-	if seconds == 0 && req.Seconds != "" {
-		seconds, _ = strconv.Atoi(req.Seconds)
+	seconds, err := req.ResolvedSeconds()
+	if err != nil {
+		return createTaskError(err, "invalid_seconds", http.StatusBadRequest, true)
 	}
 	if seconds < 0 || seconds > MaxTaskDurationSeconds {
-		return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
+		return createTaskError(fmt.Errorf("seconds must be between 0 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
 	}
 	return nil
 }
@@ -183,10 +183,11 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	prompt = req.Prompt
 	model = req.Model
 	size = req.Size
-	seconds, _ = strconv.Atoi(req.Seconds)
-	if seconds == 0 {
-		seconds = req.DurationValue()
+	resolvedSeconds, err := req.ResolvedSeconds()
+	if err != nil {
+		return createTaskError(err, "invalid_seconds", http.StatusBadRequest, true)
 	}
+	seconds = resolvedSeconds
 	if inputReference := strings.TrimSpace(req.InputReference); inputReference != "" {
 		req.Images = []string{inputReference}
 	} else if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {

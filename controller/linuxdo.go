@@ -66,7 +66,7 @@ func LinuxDoBind(c *gin.Context) {
 	}
 
 	user.LinuxDOId = strconv.Itoa(linuxdoUser.Id)
-	err = user.Update(false)
+	err = user.UpdateFields(false, model.UserUpdateFieldLinuxDOId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

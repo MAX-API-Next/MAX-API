@@ -211,7 +211,7 @@ func DiscordBind(c *gin.Context) {
 		return
 	}
 	user.DiscordId = discordUser.UID
-	err = user.Update(false)
+	err = user.UpdateFields(false, model.UserUpdateFieldDiscordId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

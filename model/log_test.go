@@ -24,6 +24,13 @@ func withLogAuditSettings(t *testing.T, requestEnabled bool, responseEnabled boo
 	})
 }
 
+func TestLogQuotaFilterIndexes(t *testing.T) {
+	db := newRetryBackfillTestDB(t, &Log{})
+
+	require.True(t, db.Migrator().HasIndex(&Log{}, "idx_logs_quota"))
+	require.True(t, db.Migrator().HasIndex(&Log{}, "idx_logs_type_quota_created_at"))
+}
+
 func TestGetAllLogsRetryFilter(t *testing.T) {
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	t.Cleanup(func() {
@@ -32,7 +39,7 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 
 	logs := createRetryFilterLogs(t)
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 5, total)
 	require.Len(t, got, 5)
@@ -47,7 +54,7 @@ func TestGetUserLogsRetryFilter(t *testing.T) {
 
 	logs := createRetryFilterLogs(t)
 
-	got, total, err := GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "", "")
+	got, total, err := GetUserLogs(LogQueryParams{UserId: 1, LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 4, total)
 	require.Len(t, got, 4)
@@ -67,7 +74,7 @@ func TestSumUsedQuotaRetryFilter(t *testing.T) {
 
 	createRetryFilterLogs(t)
 
-	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry})
 	require.NoError(t, err)
 	require.Equal(t, 1550, stat.Quota)
 	require.Equal(t, 4, stat.Rpm)
@@ -93,7 +100,7 @@ func TestSumUsedQuotaRetryFilterIgnoresNonConsumeQuota(t *testing.T) {
 		}),
 	}).Error)
 
-	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry})
 	require.NoError(t, err)
 	require.Equal(t, 1550, stat.Quota)
 	require.Equal(t, 4, stat.Rpm)
@@ -108,13 +115,13 @@ func TestGetAllLogsRetrySubtypeFilters(t *testing.T) {
 
 	logs := createRetryFilterLogs(t)
 
-	errorLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	errorLogs, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterErrorRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 4, total)
 	require.Len(t, errorLogs, 4)
 	require.ElementsMatch(t, []int{logs[0].Id, logs[4].Id, logs[5].Id, logs[6].Id}, []int{errorLogs[0].Id, errorLogs[1].Id, errorLogs[2].Id, errorLogs[3].Id})
 
-	emptyLogs, total, err := GetAllLogs(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	emptyLogs, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterEmptyRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, total)
 	require.Len(t, emptyLogs, 2)
@@ -129,13 +136,13 @@ func TestSumUsedQuotaRetrySubtypeFilters(t *testing.T) {
 
 	createRetryFilterLogs(t)
 
-	errorStat, err := SumUsedQuota(LogTypeUnknown, LogFilterErrorRetry, 0, 0, "", "", "", 0, "", "")
+	errorStat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterErrorRetry})
 	require.NoError(t, err)
 	require.Equal(t, 1350, errorStat.Quota)
 	require.Equal(t, 3, errorStat.Rpm)
 	require.Equal(t, 81, errorStat.Tpm)
 
-	emptyStat, err := SumUsedQuota(LogTypeUnknown, LogFilterEmptyRetry, 0, 0, "", "", "", 0, "", "")
+	emptyStat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterEmptyRetry})
 	require.NoError(t, err)
 	require.Equal(t, 550, emptyStat.Quota)
 	require.Equal(t, 2, emptyStat.Rpm)
@@ -150,7 +157,7 @@ func TestSumUsedQuotaAppliesExplicitLogType(t *testing.T) {
 
 	createRetryFilterLogs(t)
 
-	stat, err := SumUsedQuota(LogTypeError, "", 0, 0, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeError})
 	require.NoError(t, err)
 	require.Equal(t, 0, stat.Quota)
 	require.Equal(t, 1, stat.Rpm)
@@ -184,7 +191,11 @@ func TestSumUsedQuotaKeepsRpmTpmLiveForHistoricalWindow(t *testing.T) {
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
-	stat, err := SumUsedQuota(LogTypeUnknown, "", now-90000, now-80000, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{
+		LogType:        LogTypeUnknown,
+		StartTimestamp: now - 90000,
+		EndTimestamp:   now - 80000,
+	})
 
 	require.NoError(t, err)
 	require.Equal(t, 200, stat.Quota)
@@ -235,19 +246,19 @@ func TestLogQuotaFilters(t *testing.T) {
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
-	zeroLogs, total, err := GetAllLogs(LogTypeConsume, "", 0, 0, "", "", "", 0, 10, 0, "", "", "", LogQuotaFilterZero)
+	zeroLogs, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeConsume, Num: 10, QuotaFilter: LogQuotaFilterZero})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, zeroLogs, 1)
 	require.Equal(t, logs[0].Id, zeroLogs[0].Id)
 
-	negativeLogs, total, err := GetUserLogs(1, LogTypeConsume, "", 0, 0, "", "", 0, 10, "", "", "", LogQuotaFilterNegative)
+	negativeLogs, total, err := GetUserLogs(LogQueryParams{UserId: 1, LogType: LogTypeConsume, Num: 10, QuotaFilter: LogQuotaFilterNegative})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, negativeLogs, 1)
 	require.Equal(t, logs[1].Id, negativeLogs[0].LogId)
 
-	abnormalStat, err := SumUsedQuota(LogTypeUnknown, "", 0, 0, "", "", "", 0, "", LogQuotaFilterAbnormal)
+	abnormalStat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, QuotaFilter: LogQuotaFilterAbnormal})
 	require.NoError(t, err)
 	require.Equal(t, -125, abnormalStat.Quota)
 	require.Equal(t, 3, abnormalStat.Rpm)
@@ -289,13 +300,13 @@ func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, got, 1)
 	require.Equal(t, logs[1].Id, got[0].Id)
 
-	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry})
 	require.NoError(t, err)
 	require.Equal(t, 200, stat.Quota)
 	require.Equal(t, 1, stat.Rpm)
@@ -338,7 +349,7 @@ func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 	require.NoError(t, LOG_DB.Model(&Log{}).Where("1 = 1").UpdateColumn("is_retry", false).Error)
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, total)
 	require.Len(t, got, 2)
@@ -377,7 +388,7 @@ func TestRetryFilterUsesIsRetryAfterBackfillCompletion(t *testing.T) {
 	require.NoError(t, LOG_DB.Model(&Log{}).Where("id = ?", log.Id).UpdateColumn("is_retry", false).Error)
 	require.NoError(t, markLogRetryMarkerBackfillCompleted())
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.NoError(t, err)
 	require.EqualValues(t, 0, total)
 	require.Empty(t, got)
@@ -397,17 +408,17 @@ func TestRetryFilterReadPathsReturnReadinessError(t *testing.T) {
 		ensureLogRetryMarkerBackfillCompletedForRead = originalEnsure
 	})
 
-	got, total, err := GetAllLogs(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, 10, 0, "", "", "", "")
+	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.ErrorIs(t, err, expectedErr)
 	require.Nil(t, got)
 	require.Zero(t, total)
 
-	got, total, err = GetUserLogs(1, LogTypeUnknown, LogFilterRetry, 0, 0, "", "", 0, 10, "", "", "", "")
+	got, total, err = GetUserLogs(LogQueryParams{UserId: 1, LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
 	require.ErrorIs(t, err, expectedErr)
 	require.Nil(t, got)
 	require.Zero(t, total)
 
-	stat, err := SumUsedQuota(LogTypeUnknown, LogFilterRetry, 0, 0, "", "", "", 0, "", "")
+	stat, err := SumUsedQuota(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry})
 	require.ErrorIs(t, err, expectedErr)
 	require.Zero(t, stat)
 }
