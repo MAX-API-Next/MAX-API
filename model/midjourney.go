@@ -31,6 +31,7 @@ type TaskQueryParams struct {
 	MjID           string
 	StartTimestamp string
 	EndTimestamp   string
+	QuotaFilter    string
 }
 
 func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
@@ -39,6 +40,7 @@ func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryPara
 
 	// 初始化查询构建器
 	query := DB.Where("user_id = ?", userId)
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	if queryParams.MjID != "" {
 		query = query.Where("mj_id = ?", queryParams.MjID)
@@ -66,6 +68,7 @@ func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourn
 
 	// 初始化查询构建器
 	query := DB
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 
 	// 添加过滤条件
 	if queryParams.ChannelID != "" {
@@ -186,6 +189,7 @@ func MjBulkUpdateByTaskIds(taskIDs []int, params map[string]any) error {
 func CountAllTasks(queryParams TaskQueryParams) int64 {
 	var total int64
 	query := DB.Model(&Midjourney{})
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 	if queryParams.ChannelID != "" {
 		query = query.Where("channel_id = ?", queryParams.ChannelID)
 	}
@@ -206,6 +210,7 @@ func CountAllTasks(queryParams TaskQueryParams) int64 {
 func CountAllUserTask(userId int, queryParams TaskQueryParams) int64 {
 	var total int64
 	query := DB.Model(&Midjourney{}).Where("user_id = ?", userId)
+	query = applyQuotaFilter(query, "quota", queryParams.QuotaFilter)
 	if queryParams.MjID != "" {
 		query = query.Where("mj_id = ?", queryParams.MjID)
 	}

@@ -54,6 +54,9 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 		}
 	}
 
+	if err := dto.ValidateImageN("parameters.n", imageRequest.Parameters.N); err != nil {
+		return nil, err
+	}
 	if imageRequest.Parameters.N != 0 {
 		info.PriceData.AddOtherRatio("n", float64(imageRequest.Parameters.N))
 	}

@@ -50,19 +50,20 @@ func ParseVeoResolution(metadata map[string]any) string {
 
 // ResolveVeoDuration returns the effective duration in seconds.
 // Priority: metadata["durationSeconds"] > stdDuration > stdSeconds > default (8).
+// The result is capped because it is used as a billing multiplier.
 func ResolveVeoDuration(metadata map[string]any, stdDuration int, stdSeconds string) int {
 	if metadata != nil {
 		if _, exists := metadata["durationSeconds"]; exists {
 			if d := ParseVeoDurationSeconds(metadata); d > 0 {
-				return d
+				return min(d, relaycommon.MaxTaskDurationSeconds)
 			}
 		}
 	}
 	if stdDuration > 0 {
-		return stdDuration
+		return min(stdDuration, relaycommon.MaxTaskDurationSeconds)
 	}
 	if s, err := strconv.Atoi(stdSeconds); err == nil && s > 0 {
-		return s
+		return min(s, relaycommon.MaxTaskDurationSeconds)
 	}
 	return 8
 }

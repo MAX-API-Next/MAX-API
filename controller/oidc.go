@@ -215,7 +215,7 @@ func OidcBind(c *gin.Context) {
 		return
 	}
 	user.OidcId = oidcUser.OpenID
-	err = user.Update(false)
+	err = user.UpdateFields(false, model.UserUpdateFieldOidcId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

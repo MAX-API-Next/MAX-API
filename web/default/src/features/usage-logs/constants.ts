@@ -137,6 +137,29 @@ export const LOG_TYPE_SEARCH_VALUES = [
   LOG_TYPE_RETRY_VALUE,
 ] as [string, ...string[]]
 
+export const QUOTA_FILTER_ALL_VALUE = 'all' as const
+export const QUOTA_FILTER_ABNORMAL_VALUE = 'abnormal' as const
+export const QUOTA_FILTER_ZERO_VALUE = 'zero' as const
+export const QUOTA_FILTER_NEGATIVE_VALUE = 'negative' as const
+
+export const QUOTA_FILTERS = [
+  { label: 'All Billing', value: QUOTA_FILTER_ALL_VALUE },
+  { label: 'Abnormal Billing', value: QUOTA_FILTER_ABNORMAL_VALUE },
+  { label: 'Zero Billing', value: QUOTA_FILTER_ZERO_VALUE },
+  { label: 'Negative Billing', value: QUOTA_FILTER_NEGATIVE_VALUE },
+] as const
+
+export const QUOTA_FILTER_VALUES = [
+  QUOTA_FILTER_ALL_VALUE,
+  QUOTA_FILTER_ABNORMAL_VALUE,
+  QUOTA_FILTER_ZERO_VALUE,
+  QUOTA_FILTER_NEGATIVE_VALUE,
+] as const
+
+export const QUOTA_FILTER_SEARCH_VALUES = [
+  ...QUOTA_FILTER_VALUES,
+] satisfies [string, ...string[]]
+
 // ============================================================================
 // Drawing Logs (Midjourney) Constants
 // ============================================================================

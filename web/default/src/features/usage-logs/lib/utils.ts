@@ -35,6 +35,7 @@ import {
   LOG_TYPE_RETRY_VALUE,
   LOG_TYPE_ERROR_RETRY_VALUE,
   LOG_TYPE_EMPTY_RETRY_VALUE,
+  QUOTA_FILTER_ALL_VALUE,
 } from '../constants'
 import type {
   GetLogsParams,
@@ -214,6 +215,7 @@ export function buildBaseParams(config: {
   channel_id?: string
   start_timestamp?: number
   end_timestamp?: number
+  quota_filter?: string
 } {
   const { page, pageSize, searchParams, useMilliseconds = false } = config
 
@@ -224,6 +226,10 @@ export function buildBaseParams(config: {
       ? {
           channel_id: String(searchParams.channel),
         }
+      : {}),
+    ...(searchParams.quotaFilter &&
+    searchParams.quotaFilter !== QUOTA_FILTER_ALL_VALUE
+      ? { quota_filter: String(searchParams.quotaFilter) }
       : {}),
     ...buildTimeRangeParams(searchParams, useMilliseconds),
   }
@@ -302,6 +308,10 @@ export function buildApiParams(config: {
       : {}),
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
+      : {}),
+    ...(searchParams.quotaFilter &&
+    searchParams.quotaFilter !== QUOTA_FILTER_ALL_VALUE
+      ? { quota_filter: String(searchParams.quotaFilter) }
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }

@@ -2,6 +2,7 @@ package helper
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type notifyPipeReadCloser struct {
+	*io.PipeReader
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (r *notifyPipeReadCloser) Close() error {
+	r.once.Do(func() {
+		close(r.closed)
+	})
+	return r.PipeReader.Close()
+}
 
 func init() {
 	gin.SetMode(gin.TestMode)
@@ -40,6 +54,44 @@ func setupStreamTest(t *testing.T, body io.Reader) (*gin.Context, *http.Response
 	}
 
 	return c, resp, info
+}
+
+func TestStreamScannerHandler_ClientCancelClosesUpstreamBody(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() {
+		_ = pw.Close()
+	})
+
+	body := &notifyPipeReadCloser{
+		PipeReader: pr,
+		closed:     make(chan struct{}),
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	resp := &http.Response{Body: body}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+	}()
+
+	cancel()
+
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream response body was not closed after client cancel")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("StreamScannerHandler did not return after client cancel")
+	}
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
 }
 
 func buildSSEBody(n int) string {

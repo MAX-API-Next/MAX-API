@@ -51,3 +51,34 @@ func TestTaskSubmitReqPreservesExplicitZeroDuration(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"duration":0`)
 }
+
+func TestTaskSubmitReqResolvedSeconds(t *testing.T) {
+	duration := 8
+	req := TaskSubmitReq{
+		Duration: &duration,
+		Seconds:  "12",
+	}
+
+	seconds, err := req.ResolvedSeconds()
+	require.NoError(t, err)
+	require.Equal(t, 8, seconds)
+
+	req = TaskSubmitReq{Seconds: "12"}
+	seconds, err = req.ResolvedSeconds()
+	require.NoError(t, err)
+	require.Equal(t, 12, seconds)
+
+	req = TaskSubmitReq{Seconds: "abc"}
+	_, err = req.ResolvedSeconds()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid seconds value: abc")
+}
+
+func TestTaskSubmitReqResolvedSecondsOrDefault(t *testing.T) {
+	zero := 0
+	req := TaskSubmitReq{Duration: &zero}
+
+	seconds, err := req.ResolvedSecondsOrDefault(5)
+	require.NoError(t, err)
+	require.Equal(t, 5, seconds)
+}

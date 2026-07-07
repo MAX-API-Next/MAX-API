@@ -18,6 +18,33 @@ import (
 
 const UserNameMaxLength = 20
 
+type UserUpdateField string
+
+const (
+	UserUpdateFieldUsername        UserUpdateField = "username"
+	UserUpdateFieldDisplayName     UserUpdateField = "display_name"
+	UserUpdateFieldRole            UserUpdateField = "role"
+	UserUpdateFieldStatus          UserUpdateField = "status"
+	UserUpdateFieldEmail           UserUpdateField = "email"
+	UserUpdateFieldGitHubId        UserUpdateField = "github_id"
+	UserUpdateFieldDiscordId       UserUpdateField = "discord_id"
+	UserUpdateFieldOidcId          UserUpdateField = "oidc_id"
+	UserUpdateFieldWeChatId        UserUpdateField = "wechat_id"
+	UserUpdateFieldTelegramId      UserUpdateField = "telegram_id"
+	UserUpdateFieldAccessToken     UserUpdateField = "access_token"
+	UserUpdateFieldGroup           UserUpdateField = "group"
+	UserUpdateFieldAffCode         UserUpdateField = "aff_code"
+	UserUpdateFieldAffCount        UserUpdateField = "aff_count"
+	UserUpdateFieldAffQuota        UserUpdateField = "aff_quota"
+	UserUpdateFieldAffHistoryQuota UserUpdateField = "aff_history"
+	UserUpdateFieldInviterId       UserUpdateField = "inviter_id"
+	UserUpdateFieldLinuxDOId       UserUpdateField = "linux_do_id"
+	UserUpdateFieldSetting         UserUpdateField = "setting"
+	UserUpdateFieldRemark          UserUpdateField = "remark"
+	UserUpdateFieldStripeCustomer  UserUpdateField = "stripe_customer"
+	UserUpdateFieldLastLoginAt     UserUpdateField = "last_login_at"
+)
+
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
@@ -29,6 +56,7 @@ type User struct {
 	Role             int            `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
 	Email            string         `json:"email" gorm:"index" validate:"max=50"`
+	NormalizedEmail  string         `json:"-" gorm:"column:normalized_email;size:50;index"`
 	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
 	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
 	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
@@ -52,6 +80,16 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+}
+
+func (user *User) BeforeSave(_ *gorm.DB) error {
+	user.NormalizedEmail = NormalizeEmail(user.Email)
+	return nil
+}
+
+func (user *User) normalizeEmailFields() {
+	user.Email = NormalizeEmail(user.Email)
+	user.NormalizedEmail = user.Email
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -187,10 +225,11 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 	// err := DB.Unscoped().First(&user, "username = ? or email = ?", username, email).Error
 	// check email if empty
 	var err error
+	email = NormalizeEmail(email)
 	if email == "" {
 		err = DB.Unscoped().First(&user, "username = ?", username).Error
 	} else {
-		err = DB.Unscoped().First(&user, "username = ? or email = ?", username, email).Error
+		err = DB.Unscoped().First(&user, "username = ? or normalized_email = ?", username, email).Error
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -202,6 +241,146 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 	}
 	// exist, return true, nil
 	return true, nil
+}
+
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func normalizedEmailLockName(email string) string {
+	return "maxapi:user-email:" + common.Sha1([]byte(NormalizeEmail(email)))
+}
+
+func emailQuery(tx *gorm.DB, email string) *gorm.DB {
+	if tx == nil {
+		tx = DB
+	}
+	return tx.Unscoped().Model(&User{}).Where("normalized_email = ?", NormalizeEmail(email))
+}
+
+func CountUsersByEmail(email string) (int64, error) {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return 0, nil
+	}
+	var count int64
+	err := emailQuery(DB, email).Count(&count).Error
+	return count, err
+}
+
+func IsEmailAvailable(email string, excludeUserID int) (bool, error) {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return true, nil
+	}
+	query := emailQuery(DB, email)
+	if excludeUserID > 0 {
+		query = query.Where("id <> ?", excludeUserID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func EnsureEmailAvailable(email string, excludeUserID int) error {
+	available, err := IsEmailAvailable(email, excludeUserID)
+	if err != nil {
+		return err
+	}
+	if !available {
+		return ErrEmailAlreadyTaken
+	}
+	return nil
+}
+
+// withNormalizedEmailLock serializes concurrent writers targeting the same
+// normalized email inside tx. SQLite's single-writer model already serializes
+// the write path, so it needs no explicit lock here.
+func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) error) error {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return fn(tx)
+	}
+	switch {
+	case common.UsingPostgreSQL:
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
+			return err
+		}
+		return fn(tx)
+	case common.UsingMySQL:
+		lockName := normalizedEmailLockName(email)
+		var acquired sql.NullInt64
+		if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
+			return err
+		}
+		if !acquired.Valid || acquired.Int64 != 1 {
+			return errors.New("failed to acquire user email lock")
+		}
+		released := false
+		defer func() {
+			if !released {
+				_ = releaseMySQLNamedLock(tx, lockName)
+			}
+		}()
+		err := fn(tx)
+		releaseErr := releaseMySQLNamedLock(tx, lockName)
+		released = true
+		if releaseErr != nil && err == nil {
+			return releaseErr
+		}
+		return err
+	default:
+		return fn(tx)
+	}
+}
+
+// WithNormalizedEmailWriteTx runs fn in a transaction while serializing writers
+// for the same normalized email. MySQL named locks are connection-scoped, so the
+// lock must be acquired on a pinned connection and released only after the
+// transaction has committed or rolled back.
+func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error {
+	email = NormalizeEmail(email)
+	if !common.UsingMySQL {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			return withNormalizedEmailLock(tx, email, fn)
+		})
+	}
+	if email == "" {
+		return DB.Transaction(fn)
+	}
+
+	lockName := normalizedEmailLockName(email)
+	return DB.Connection(func(conn *gorm.DB) error {
+		var acquired sql.NullInt64
+		if err := conn.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
+			return err
+		}
+		if !acquired.Valid || acquired.Int64 != 1 {
+			return errors.New("failed to acquire user email lock")
+		}
+
+		released := false
+		defer func() {
+			if !released {
+				_ = releaseMySQLNamedLock(conn, lockName)
+			}
+		}()
+
+		err := conn.Transaction(fn)
+		releaseErr := releaseMySQLNamedLock(conn, lockName)
+		released = true
+		if err != nil {
+			return err
+		}
+		return releaseErr
+	})
+}
+
+func releaseMySQLNamedLock(tx *gorm.DB, lockName string) error {
+	var released sql.NullInt64
+	return tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error
 }
 
 func GetMaxUserId() int {
@@ -430,28 +609,79 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	return tx.Commit().Error
 }
 
-func (user *User) Insert(inviterId int) error {
+func (user *User) prepareForInsert(tx *gorm.DB) error {
+	user.normalizeEmailFields()
+	if err := ensureEmailAvailableWithTx(tx, user.Email, 0); err != nil {
+		return err
+	}
+	if user.Password == "" {
+		return nil
+	}
 	var err error
-	if user.Password != "" {
-		user.Password, err = common.Password2Hash(user.Password)
-		if err != nil {
+	user.Password, err = common.Password2Hash(user.Password)
+	return err
+}
+
+func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) error {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return nil
+	}
+	query := emailQuery(tx, email)
+	if excludeUserID > 0 {
+		query = query.Where("id <> ?", excludeUserID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrEmailAlreadyTaken
+	}
+	return nil
+}
+
+// BindEmailToUser atomically checks email availability and assigns it to the
+// user, preventing concurrent binds from sharing the same normalized address.
+func BindEmailToUser(user *User, email string) error {
+	email = NormalizeEmail(email)
+	if err := WithNormalizedEmailWriteTx(email, func(tx *gorm.DB) error {
+		if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
 			return err
 		}
+		if err := tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+			"email":            email,
+			"normalized_email": email,
+		}).Error; err != nil {
+			return err
+		}
+		user.Email = email
+		user.NormalizedEmail = email
+		return tx.First(user, user.Id).Error
+	}); err != nil {
+		return err
 	}
-	user.Quota = common.QuotaForNewUser
-	//user.SetAccessToken(common.GetUUID())
-	user.AffCode = common.GetRandomString(4)
+	return updateUserCache(*user)
+}
 
-	// 初始化用户设置，包括默认的边栏配置
-	if user.Setting == "" {
-		defaultSetting := dto.UserSetting{}
-		// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
-		user.SetSetting(defaultSetting)
-	}
+func (user *User) Insert(inviterId int) error {
+	if err := WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
+		if err := user.prepareForInsert(tx); err != nil {
+			return err
+		}
+		user.Quota = common.QuotaForNewUser
+		user.AffCode = common.GetRandomString(4)
 
-	result := DB.Create(user)
-	if result.Error != nil {
-		return result.Error
+		// 初始化用户设置，包括默认的边栏配置
+		if user.Setting == "" {
+			defaultSetting := dto.UserSetting{}
+			// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
+			user.SetSetting(defaultSetting)
+		}
+
+		return tx.Create(user).Error
+	}); err != nil {
+		return err
 	}
 
 	// 用户创建成功后，根据角色初始化边栏配置
@@ -464,7 +694,7 @@ func (user *User) Insert(inviterId int) error {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.UpdateFields(false, UserUpdateFieldSetting)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
@@ -487,31 +717,26 @@ func (user *User) Insert(inviterId int) error {
 }
 
 // InsertWithTx inserts a new user within an existing transaction.
+// Callers that own the outer transaction should use WithNormalizedEmailWriteTx
+// so MySQL's connection-scoped email lock covers the final commit.
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
-	var err error
-	if user.Password != "" {
-		user.Password, err = common.Password2Hash(user.Password)
-		if err != nil {
+	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
+		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-	}
-	user.Quota = common.QuotaForNewUser
-	user.AffCode = common.GetRandomString(4)
+		user.Quota = common.QuotaForNewUser
+		user.AffCode = common.GetRandomString(4)
 
-	// 初始化用户设置
-	if user.Setting == "" {
-		defaultSetting := dto.UserSetting{}
-		user.SetSetting(defaultSetting)
-	}
+		// 初始化用户设置
+		if user.Setting == "" {
+			defaultSetting := dto.UserSetting{}
+			user.SetSetting(defaultSetting)
+		}
 
-	result := tx.Create(user)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	return nil
+		return tx.Create(user).Error
+	})
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
@@ -525,7 +750,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.UpdateFields(false, UserUpdateFieldSetting)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
@@ -546,6 +771,34 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 }
 
 func (user *User) Update(updatePassword bool) error {
+	if err := user.updateWithTx(DB, updatePassword, nil); err != nil {
+		return err
+	}
+	if err := updateUserCache(*user); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
+	}
+	return nil
+}
+
+func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
+	if err := user.updateWithTx(DB, updatePassword, fields); err != nil {
+		return err
+	}
+	if err := updateUserCache(*user); err != nil {
+		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
+	}
+	return nil
+}
+
+func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
+	return user.updateWithTx(tx, updatePassword, nil)
+}
+
+func (user *User) UpdateFieldsWithTx(tx *gorm.DB, updatePassword bool, fields ...UserUpdateField) error {
+	return user.updateWithTx(tx, updatePassword, fields)
+}
+
+func (user *User) updateWithTx(tx *gorm.DB, updatePassword bool, fields []UserUpdateField) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
@@ -555,21 +808,185 @@ func (user *User) Update(updatePassword bool) error {
 	}
 	newUser := *user
 	current := User{}
-	if err = DB.First(&current, user.Id).Error; err != nil {
+	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-	result := DB.Model(&current).Omit("quota", "used_quota", "request_count").Updates(newUser)
-	if err = ensureUserUpdateMatchedTx(DB, result, user.Id, errors.New("用户不存在")); err != nil {
+	result := tx.Model(&current).Updates(buildUserUpdateValues(current, newUser, updatePassword, fields...))
+	if err = ensureUserUpdateMatchedTx(tx, result, user.Id, errors.New("用户不存在")); err != nil {
 		return err
 	}
-	if err = DB.First(user, user.Id).Error; err != nil {
-		return err
+	return tx.First(user, user.Id).Error
+}
+
+func buildUserUpdateValues(current User, newUser User, updatePassword bool, fields ...UserUpdateField) map[string]interface{} {
+	updates := map[string]interface{}{}
+
+	if len(fields) > 0 {
+		for _, field := range fields {
+			applyUserUpdateField(updates, newUser, field)
+		}
+	} else {
+		applyNonZeroUserUpdateValues(updates, newUser)
+	}
+	if updatePassword {
+		updates["password"] = newUser.Password
 	}
 
-	if err = updateUserCache(*user); err != nil {
-		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
+	copyUnspecifiedUserUpdateValues(updates, current)
+	return updates
+}
+
+func applyNonZeroUserUpdateValues(updates map[string]interface{}, newUser User) {
+	if newUser.Username != "" {
+		updates["username"] = newUser.Username
 	}
-	return nil
+	if newUser.DisplayName != "" {
+		updates["display_name"] = newUser.DisplayName
+	}
+	if newUser.Role != 0 {
+		updates["role"] = newUser.Role
+	}
+	if newUser.Status != 0 {
+		updates["status"] = newUser.Status
+	}
+	if newUser.Email != "" {
+		email := NormalizeEmail(newUser.Email)
+		updates["email"] = email
+		updates["normalized_email"] = email
+	}
+	if newUser.GitHubId != "" {
+		updates["github_id"] = newUser.GitHubId
+	}
+	if newUser.DiscordId != "" {
+		updates["discord_id"] = newUser.DiscordId
+	}
+	if newUser.OidcId != "" {
+		updates["oidc_id"] = newUser.OidcId
+	}
+	if newUser.WeChatId != "" {
+		updates["wechat_id"] = newUser.WeChatId
+	}
+	if newUser.TelegramId != "" {
+		updates["telegram_id"] = newUser.TelegramId
+	}
+	if newUser.AccessToken != nil {
+		updates["access_token"] = newUser.AccessToken
+	}
+	if newUser.Group != "" {
+		updates["group"] = newUser.Group
+	}
+	if newUser.AffCode != "" {
+		updates["aff_code"] = newUser.AffCode
+	}
+	if newUser.AffCount != 0 {
+		updates["aff_count"] = newUser.AffCount
+	}
+	if newUser.AffQuota != 0 {
+		updates["aff_quota"] = newUser.AffQuota
+	}
+	if newUser.AffHistoryQuota != 0 {
+		updates["aff_history"] = newUser.AffHistoryQuota
+	}
+	if newUser.InviterId != 0 {
+		updates["inviter_id"] = newUser.InviterId
+	}
+	if newUser.LinuxDOId != "" {
+		updates["linux_do_id"] = newUser.LinuxDOId
+	}
+	if newUser.Setting != "" {
+		updates["setting"] = newUser.Setting
+	}
+	if newUser.Remark != "" {
+		updates["remark"] = newUser.Remark
+	}
+	if newUser.StripeCustomer != "" {
+		updates["stripe_customer"] = newUser.StripeCustomer
+	}
+	if newUser.LastLoginAt != 0 {
+		updates["last_login_at"] = newUser.LastLoginAt
+	}
+}
+
+func applyUserUpdateField(updates map[string]interface{}, newUser User, field UserUpdateField) {
+	switch field {
+	case UserUpdateFieldUsername:
+		updates["username"] = newUser.Username
+	case UserUpdateFieldDisplayName:
+		updates["display_name"] = newUser.DisplayName
+	case UserUpdateFieldRole:
+		updates["role"] = newUser.Role
+	case UserUpdateFieldStatus:
+		updates["status"] = newUser.Status
+	case UserUpdateFieldEmail:
+		email := NormalizeEmail(newUser.Email)
+		updates["email"] = email
+		updates["normalized_email"] = email
+	case UserUpdateFieldGitHubId:
+		updates["github_id"] = newUser.GitHubId
+	case UserUpdateFieldDiscordId:
+		updates["discord_id"] = newUser.DiscordId
+	case UserUpdateFieldOidcId:
+		updates["oidc_id"] = newUser.OidcId
+	case UserUpdateFieldWeChatId:
+		updates["wechat_id"] = newUser.WeChatId
+	case UserUpdateFieldTelegramId:
+		updates["telegram_id"] = newUser.TelegramId
+	case UserUpdateFieldAccessToken:
+		updates["access_token"] = newUser.AccessToken
+	case UserUpdateFieldGroup:
+		updates["group"] = newUser.Group
+	case UserUpdateFieldAffCode:
+		updates["aff_code"] = newUser.AffCode
+	case UserUpdateFieldAffCount:
+		updates["aff_count"] = newUser.AffCount
+	case UserUpdateFieldAffQuota:
+		updates["aff_quota"] = newUser.AffQuota
+	case UserUpdateFieldAffHistoryQuota:
+		updates["aff_history"] = newUser.AffHistoryQuota
+	case UserUpdateFieldInviterId:
+		updates["inviter_id"] = newUser.InviterId
+	case UserUpdateFieldLinuxDOId:
+		updates["linux_do_id"] = newUser.LinuxDOId
+	case UserUpdateFieldSetting:
+		updates["setting"] = newUser.Setting
+	case UserUpdateFieldRemark:
+		updates["remark"] = newUser.Remark
+	case UserUpdateFieldStripeCustomer:
+		updates["stripe_customer"] = newUser.StripeCustomer
+	case UserUpdateFieldLastLoginAt:
+		updates["last_login_at"] = newUser.LastLoginAt
+	}
+}
+
+func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current User) {
+	defaults := map[string]interface{}{
+		"role":             current.Role,
+		"status":           current.Status,
+		"email":            current.Email,
+		"normalized_email": NormalizeEmail(current.Email),
+		"github_id":        current.GitHubId,
+		"discord_id":       current.DiscordId,
+		"oidc_id":          current.OidcId,
+		"wechat_id":        current.WeChatId,
+		"telegram_id":      current.TelegramId,
+		"access_token":     current.AccessToken,
+		"group":            current.Group,
+		"aff_code":         current.AffCode,
+		"aff_count":        current.AffCount,
+		"aff_quota":        current.AffQuota,
+		"aff_history":      current.AffHistoryQuota,
+		"inviter_id":       current.InviterId,
+		"linux_do_id":      current.LinuxDOId,
+		"setting":          current.Setting,
+		"remark":           current.Remark,
+		"stripe_customer":  current.StripeCustomer,
+		"last_login_at":    current.LastLoginAt,
+	}
+	for key, value := range defaults {
+		if _, ok := updates[key]; !ok {
+			updates[key] = value
+		}
+	}
 }
 
 func (user *User) Edit(updatePassword bool) error {
@@ -620,7 +1037,11 @@ func (user *User) ClearBinding(bindingType string) error {
 		return errors.New("invalid binding type")
 	}
 
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
+	updates := map[string]interface{}{column: ""}
+	if bindingType == "email" {
+		updates["normalized_email"] = ""
+	}
+	if err := DB.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
 		return err
 	}
 
@@ -670,6 +1091,9 @@ func (user *User) ValidateAndFill() (err error) {
 			return ErrInvalidCredentials
 		}
 		return fmt.Errorf("%w: %v", ErrDatabase, err)
+	}
+	if user.Password == "" {
+		return ErrInvalidCredentials
 	}
 	okay := common.ValidatePasswordAndHash(password, user.Password)
 	if !okay || user.Status != common.UserStatusEnabled {
@@ -746,7 +1170,27 @@ func (user *User) FillUserByTelegramId() error {
 }
 
 func IsEmailAlreadyTaken(email string) bool {
-	return DB.Unscoped().Where("email = ?", email).Find(&User{}).RowsAffected == 1
+	count, err := CountUsersByEmail(email)
+	return err == nil && count > 0
+}
+
+func GetUniqueUserByEmail(email string) (*User, error) {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return nil, ErrEmailNotFound
+	}
+	var users []User
+	if err := DB.Where("normalized_email = ?", email).Limit(2).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	switch len(users) {
+	case 0:
+		return nil, ErrEmailNotFound
+	case 1:
+		return &users[0], nil
+	default:
+		return nil, ErrEmailAmbiguous
+	}
 }
 
 func IsWeChatIdAlreadyTaken(wechatId string) bool {
@@ -773,11 +1217,15 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	if email == "" || password == "" {
 		return errors.New("邮箱地址或密码为空！")
 	}
+	user, err := GetUniqueUserByEmail(email)
+	if err != nil {
+		return err
+	}
 	hashedPassword, err := common.Password2Hash(password)
 	if err != nil {
 		return err
 	}
-	err = DB.Model(&User{}).Where("email = ?", email).Update("password", hashedPassword).Error
+	err = DB.Model(&User{}).Where("id = ?", user.Id).Update("password", hashedPassword).Error
 	return err
 }
 

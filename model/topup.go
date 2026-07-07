@@ -438,7 +438,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		refCol = `"trade_no"`
 	}
 
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err = WithNormalizedEmailWriteTx(customerEmail, func(tx *gorm.DB) error {
 		err := withRowLock(tx).Where(refCol+" = ?", referenceId).First(topUp).Error
 		if err != nil {
 			return errors.New("充值订单不存在")
@@ -467,18 +467,8 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		}
 
 		// 如果有客户邮箱，尝试更新用户邮箱（仅当用户邮箱为空时）
-		if customerEmail != "" {
-			// 先检查用户当前邮箱是否为空
-			var user User
-			err = tx.Where("id = ?", topUp.UserId).First(&user).Error
-			if err != nil {
-				return err
-			}
-
-			// 如果用户邮箱为空，则更新为支付时使用的邮箱
-			if user.Email == "" {
-				updateFields["email"] = customerEmail
-			}
+		if err := addCreemCustomerEmailUpdateIfAvailable(tx, topUp.UserId, customerEmail, updateFields); err != nil {
+			return err
 		}
 
 		result := tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(updateFields)
@@ -496,6 +486,31 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 
 	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %v，支付金额：%.2f", quota, topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodCreem)
 
+	return nil
+}
+
+func addCreemCustomerEmailUpdateIfAvailable(tx *gorm.DB, userId int, customerEmail string, updateFields map[string]interface{}) error {
+	customerEmail = NormalizeEmail(customerEmail)
+	if customerEmail == "" {
+		return nil
+	}
+
+	var user User
+	if err := tx.Where("id = ?", userId).First(&user).Error; err != nil {
+		return err
+	}
+	if user.Email != "" {
+		return nil
+	}
+
+	if err := ensureEmailAvailableWithTx(tx, customerEmail, user.Id); err != nil {
+		if errors.Is(err, ErrEmailAlreadyTaken) {
+			return nil
+		}
+		return err
+	}
+	updateFields["email"] = customerEmail
+	updateFields["normalized_email"] = customerEmail
 	return nil
 }
 

@@ -64,6 +64,8 @@ const (
 	headerPassthroughRegexPrefixV2 = "regex:"
 )
 
+var sendPingDataTimeout = 10 * time.Second
+
 var passthroughSkipHeaderNamesLower = map[string]struct{}{
 	// RFC 7230 hop-by-hop headers.
 	"connection":          {},
@@ -400,10 +402,12 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	return targetConn, nil
 }
 
-func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) context.CancelFunc {
+func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {
 	pingerCtx, stopPinger := context.WithCancel(context.Background())
+	done := make(chan struct{})
 
 	gopool.Go(func() {
+		defer close(done)
 		defer func() {
 			// 增加panic恢复处理
 			if r := recover(); r != nil {
@@ -453,16 +457,16 @@ func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) context.Canc
 		}
 	})
 
-	return stopPinger
+	return stopPinger, done
 }
 
 func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
-	// 增加超时控制，防止锁死等待
 	done := make(chan error, 1)
 	go func() {
 		mutex.Lock()
 		defer mutex.Unlock()
 
+		helper.ExtendWriteDeadline(c)
 		err := helper.PingData(c)
 		if err != nil {
 			logger.LogError(c, "SSE ping error: "+err.Error())
@@ -474,14 +478,24 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 		done <- nil
 	}()
 
-	// 设置发送ping数据的超时时间
+	timer := time.NewTimer(sendPingDataTimeout)
+	defer timer.Stop()
+
+	var requestDone <-chan struct{}
+	if c != nil && c.Request != nil {
+		requestDone = c.Request.Context().Done()
+	}
+
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(10 * time.Second):
-		return errors.New("SSE ping data send timeout")
-	case <-c.Request.Context().Done():
-		return errors.New("request context cancelled during ping")
+	case <-requestDone:
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			return fmt.Errorf("SSE ping request context done: %w", c.Request.Context().Err())
+		}
+		return errors.New("SSE ping request context done")
+	case <-timer.C:
+		return fmt.Errorf("SSE ping write timed out after %s", sendPingDataTimeout)
 	}
 }
 
@@ -501,17 +515,19 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	var stopPinger context.CancelFunc
+	var pingerDone <-chan struct{}
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
 		// 处理流式请求的 ping 保活
 		generalSettings := operation_setting.GetGeneralSetting()
 		if generalSettings.PingIntervalEnabled && !info.DisablePing {
 			pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
-			stopPinger = startPingKeepAlive(c, pingInterval)
+			stopPinger, pingerDone = startPingKeepAlive(c, pingInterval)
 			// 使用defer确保在任何情况下都能停止ping goroutine
 			defer func() {
 				if stopPinger != nil {
 					stopPinger()
+					<-pingerDone
 					logger.LogDebug(c, "SSE ping goroutine stopped by defer")
 				}
 			}()
@@ -580,6 +596,9 @@ func attachSeekableGetBody(req *http.Request, reader io.Reader) {
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	if info != nil && info.ChannelMeta == nil {
+		info.InitChannelMeta(c)
+	}
 	fullRequestURL, err := a.BuildRequestURL(info)
 	if err != nil {
 		return nil, err

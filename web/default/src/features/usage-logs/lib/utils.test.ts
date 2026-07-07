@@ -18,7 +18,11 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { buildApiParams, matchesCommonLogTypeFilter } from './utils'
+import {
+  buildApiParams,
+  buildBaseParams,
+  matchesCommonLogTypeFilter,
+} from './utils'
 
 describe('buildApiParams', () => {
   test('treats mixed retry and numeric type filters as retry filters', () => {
@@ -102,6 +106,40 @@ describe('buildApiParams', () => {
       assert.equal(params.log_filter, undefined)
     }
   })
+
+  test('maps quota filters to API params', () => {
+    const params = buildApiParams({
+      page: 1,
+      pageSize: 100,
+      searchParams: { quotaFilter: 'abnormal' },
+      isAdmin: true,
+    })
+
+    assert.equal(params.quota_filter, 'abnormal')
+  })
+
+  test('does not send all quota filter to API', () => {
+    const params = buildApiParams({
+      page: 1,
+      pageSize: 100,
+      searchParams: { quotaFilter: 'all' },
+      isAdmin: true,
+    })
+
+    assert.equal(params.quota_filter, undefined)
+  })
+})
+
+describe('buildBaseParams', () => {
+  test('maps quota filters for task-like logs', () => {
+    const params = buildBaseParams({
+      page: 2,
+      pageSize: 50,
+      searchParams: { quotaFilter: 'negative' },
+    })
+
+    assert.equal(params.quota_filter, 'negative')
+  })
 })
 
 describe('matchesCommonLogTypeFilter', () => {
@@ -128,7 +166,10 @@ describe('matchesCommonLogTypeFilter', () => {
     )
     assert.equal(
       matchesCommonLogTypeFilter(
-        { type: 2, other: JSON.stringify({ admin_info: { use_channel: ['1'] } }) },
+        {
+          type: 2,
+          other: JSON.stringify({ admin_info: { use_channel: ['1'] } }),
+        },
         ['retry']
       ),
       false

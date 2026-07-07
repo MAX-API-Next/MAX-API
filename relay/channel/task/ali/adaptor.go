@@ -510,19 +510,11 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		}
 	}
 
-	// 处理时长
-	if duration := req.DurationValue(); duration > 0 {
-		aliReq.Parameters.Duration = duration
-	} else if req.Seconds != "" {
-		seconds, err := strconv.Atoi(req.Seconds)
-		if err != nil {
-			return nil, errors.Wrap(err, "convert seconds to int failed")
-		} else {
-			aliReq.Parameters.Duration = seconds
-		}
-	} else {
-		aliReq.Parameters.Duration = 5 // 默认5秒
+	duration, err := req.ResolvedSecondsOrDefault(5)
+	if err != nil {
+		return nil, err
 	}
+	aliReq.Parameters.Duration = duration
 
 	// 从 metadata 中提取额外参数
 	if err := applyAliMetadata(req.Metadata, aliReq); err != nil {
@@ -556,15 +548,11 @@ func (a *TaskAdaptor) convertToAliKlingRequest(upstreamModel string, req relayco
 		},
 	}
 
-	if duration := req.DurationValue(); duration > 0 {
-		aliReq.Parameters.Duration = duration
-	} else if req.Seconds != "" {
-		seconds, err := strconv.Atoi(req.Seconds)
-		if err != nil {
-			return nil, errors.Wrap(err, "convert seconds to int failed")
-		}
-		aliReq.Parameters.Duration = seconds
+	duration, err := req.ResolvedSecondsOrDefault(5)
+	if err != nil {
+		return nil, err
 	}
+	aliReq.Parameters.Duration = duration
 	if imageURL := firstNonEmpty(req.InputReference, req.Image); imageURL != "" {
 		aliReq.Input.Media = []map[string]interface{}{
 			{
@@ -773,7 +761,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	otherRatios := map[string]float64{
-		"seconds": float64(aliReq.Parameters.Duration),
+		"seconds": float64(min(aliReq.Parameters.Duration, relaycommon.MaxTaskDurationSeconds)),
 	}
 	ratios, err := ProcessAliOtherRatios(aliReq)
 	if err != nil {

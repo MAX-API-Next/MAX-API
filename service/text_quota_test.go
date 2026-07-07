@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -13,8 +14,16 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecimalToQuotaSaturation(t *testing.T) {
+	overflowing := decimal.NewFromInt(2000).Mul(decimal.NewFromFloat(1.8446744073686647e19))
+	require.Equal(t, math.MaxInt32, decimalToQuota(overflowing))
+	require.Equal(t, math.MinInt32, decimalToQuota(overflowing.Neg()))
+	require.Equal(t, 42, decimalToQuota(decimal.NewFromFloat(41.7)))
+}
 
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -599,4 +608,14 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 
 	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 14500, quota)
+}
+
+func TestComposeTieredTextQuotaFallbackSaturatesFinalQuota(t *testing.T) {
+	summary := textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(100),
+	}
+
+	quota := composeTieredTextQuota(&relaycommon.RelayInfo{}, summary, math.MaxInt32-50, nil)
+
+	require.Equal(t, math.MaxInt32, quota)
 }

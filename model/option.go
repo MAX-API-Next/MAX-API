@@ -211,6 +211,11 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	var err error
+	value, err = normalizeOptionUpdateValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err := validateOptionUpdate(key, value); err != nil {
 		return err
 	}
@@ -239,13 +244,21 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	normalizedValues := make(map[string]string, len(values))
 	for k, v := range values {
+		normalized, err := normalizeOptionUpdateValue(k, v)
+		if err != nil {
+			return err
+		}
+		normalizedValues[k] = normalized
+	}
+	for k, v := range normalizedValues {
 		if err := validateOptionUpdate(k, v); err != nil {
 			return err
 		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for k, v := range normalizedValues {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -260,12 +273,21 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for k, v := range normalizedValues {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalizeOptionUpdateValue(key string, value string) (string, error) {
+	switch key {
+	case "GroupRatio", "group_ratio_setting.group_ratio":
+		return ratio_setting.NormalizeGroupRatioJSONString(value)
+	default:
+		return value, nil
+	}
 }
 
 func validateOptionUpdate(key string, value string) error {
@@ -307,6 +329,10 @@ func validateJSONOption[T any](value string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	value, err = normalizeOptionUpdateValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err := validateOptionUpdate(key, value); err != nil {
 		return err
 	}

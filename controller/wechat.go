@@ -169,7 +169,7 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	user.WeChatId = wechatId
-	err = user.Update(false)
+	err = user.UpdateFields(false, model.UserUpdateFieldWeChatId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

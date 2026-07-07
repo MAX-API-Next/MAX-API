@@ -6,18 +6,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCheckGroupRatioRejectsAutoRouteNamespace(t *testing.T) {
-	for _, jsonStr := range []string{
-		`{"auto":1}`,
-		`{"auto:fast":1}`,
-		`{" auto:fast ":1}`,
-	} {
-		err := CheckGroupRatio(jsonStr)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "auto route namespace")
-	}
+func TestGroupRatioFiltersAutoRouteNamespace(t *testing.T) {
+	original := GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateGroupRatioByJSONString(original))
+	})
+
+	normalized, err := NormalizeGroupRatioJSONString(`{"auto":1,"auto:fast":2," auto:cheap ":3,"default":1.25,"vip":0.5}`)
+	require.NoError(t, err)
+	require.NotContains(t, normalized, `"auto"`)
+	require.NotContains(t, normalized, `"auto:fast"`)
+	require.NotContains(t, normalized, `" auto:cheap "`)
+	require.Contains(t, normalized, `"default":1.25`)
+	require.Contains(t, normalized, `"vip":0.5`)
+
+	require.NoError(t, UpdateGroupRatioByJSONString(`{"auto":1,"default":1.25}`))
+	require.NotContains(t, GetGroupRatioCopy(), "auto")
+	require.False(t, ContainsGroupRatio("auto"))
+	require.Equal(t, 1.0, GetGroupRatio("auto"))
+	require.Equal(t, 1.25, GetGroupRatio("default"))
 }
 
 func TestCheckGroupRatioAcceptsNormalGroups(t *testing.T) {
 	require.NoError(t, CheckGroupRatio(`{"default":1,"vip":0}`))
+}
+
+func TestGroupRatioTrimsNormalGroupNames(t *testing.T) {
+	original := GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, UpdateGroupRatioByJSONString(original))
+	})
+
+	normalized, err := NormalizeGroupRatioJSONString(`{" vip ":0.5}`)
+	require.NoError(t, err)
+	require.Contains(t, normalized, `"vip":0.5`)
+	require.NotContains(t, normalized, `" vip "`)
+
+	require.NoError(t, UpdateGroupRatioByJSONString(`{" vip ":0.5}`))
+	require.True(t, ContainsGroupRatio("vip"))
+	require.True(t, ContainsGroupRatio(" vip "))
+	require.Equal(t, 0.5, GetGroupRatio("vip"))
+	require.Equal(t, 0.5, GetGroupRatio(" vip "))
 }

@@ -44,34 +44,55 @@ func optionExistsForTest(t *testing.T, key string) bool {
 	return count > 0
 }
 
-func TestUpdateOptionRejectsAutoRouteGroupRatioNamesBeforePersistence(t *testing.T) {
-	setupOptionMapTestState(t)
-
-	err := UpdateOption("GroupRatio", `{"auto":1}`)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "auto route namespace")
-	require.False(t, optionMapContainsForTest("GroupRatio"))
-
-	err = UpdateOptionsBulk(map[string]string{
-		"group_ratio_setting.group_ratio": `{"auto:fast":1}`,
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "auto route namespace")
-	require.False(t, optionMapContainsForTest("group_ratio_setting.group_ratio"))
+func optionValueForTest(t *testing.T, key string) string {
+	t.Helper()
+	var option Option
+	require.NoError(t, DB.First(&option, commonKeyCol+" = ?", key).Error)
+	return option.Value
 }
 
-func TestUpdateOptionMapRejectsAutoRouteGroupRatioNames(t *testing.T) {
+func optionMapValueForTest(key string) string {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return common.OptionMap[key]
+}
+
+func TestUpdateOptionFiltersAutoRouteGroupRatioNamesBeforePersistence(t *testing.T) {
+	setupOptionMapTestState(t)
+	deleteOptionsForTest(t, "GroupRatio", "group_ratio_setting.group_ratio")
+	t.Cleanup(func() {
+		deleteOptionsForTest(t, "GroupRatio", "group_ratio_setting.group_ratio")
+	})
+
+	err := UpdateOption("GroupRatio", `{"auto":1,"default":1.25}`)
+	require.NoError(t, err)
+	require.NotContains(t, optionValueForTest(t, "GroupRatio"), "auto")
+	require.NotContains(t, optionMapValueForTest("GroupRatio"), "auto")
+	require.NotContains(t, ratio_setting.GetGroupRatioCopy(), "auto")
+	require.Equal(t, 1.25, ratio_setting.GetGroupRatio("default"))
+
+	err = UpdateOptionsBulk(map[string]string{
+		"group_ratio_setting.group_ratio": `{"auto:fast":1,"vip":0.5}`,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, optionValueForTest(t, "group_ratio_setting.group_ratio"), "auto:fast")
+	require.NotContains(t, optionMapValueForTest("group_ratio_setting.group_ratio"), "auto:fast")
+	require.NotContains(t, ratio_setting.GetGroupRatioCopy(), "auto:fast")
+	require.Equal(t, 0.5, ratio_setting.GetGroupRatio("vip"))
+}
+
+func TestUpdateOptionMapFiltersAutoRouteGroupRatioNames(t *testing.T) {
 	setupOptionMapTestState(t)
 
-	err := updateOptionMap("GroupRatio", `{"auto":1}`)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "auto route namespace")
+	err := updateOptionMap("GroupRatio", `{"auto":1,"default":1.25}`)
+	require.NoError(t, err)
 	require.NotContains(t, ratio_setting.GetGroupRatioCopy(), "auto")
+	require.Equal(t, 1.25, ratio_setting.GetGroupRatio("default"))
 
-	err = updateOptionMap("group_ratio_setting.group_ratio", `{"auto:fast":1}`)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "auto route namespace")
+	err = updateOptionMap("group_ratio_setting.group_ratio", `{"auto:fast":1,"vip":0.5}`)
+	require.NoError(t, err)
 	require.NotContains(t, ratio_setting.GetGroupRatioCopy(), "auto:fast")
+	require.Equal(t, 0.5, ratio_setting.GetGroupRatio("vip"))
 
 	require.NoError(t, updateOptionMap("GroupRatio", `{"default":1,"vip":0.5}`))
 	require.Equal(t, 0.5, ratio_setting.GetGroupRatio("vip"))

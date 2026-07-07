@@ -552,7 +552,7 @@ func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	if !strings.Contains(response.Message, "auto:internal") {
 		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
 	}
-	if !strings.Contains(response.Message, "无权访问") {
+	if !strings.Contains(response.Message, "无权分配") {
 		t.Fatalf("expected localized denial message, got %q", response.Message)
 	}
 
@@ -633,7 +633,7 @@ func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	if !strings.Contains(response.Message, "auto:internal") {
 		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
 	}
-	if !strings.Contains(response.Message, "无权访问") {
+	if !strings.Contains(response.Message, "无权分配") {
 		t.Fatalf("expected localized denial message, got %q", response.Message)
 	}
 

@@ -112,6 +112,21 @@ func validatePrompt(prompt string) *dto.TaskError {
 	return nil
 }
 
+// MaxTaskDurationSeconds caps user-supplied video duration before it becomes
+// an OtherRatio billing multiplier.
+const MaxTaskDurationSeconds = 3600
+
+func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
+	seconds, err := req.ResolvedSeconds()
+	if err != nil {
+		return createTaskError(err, "invalid_seconds", http.StatusBadRequest, true)
+	}
+	if seconds < 0 || seconds > MaxTaskDurationSeconds {
+		return createTaskError(fmt.Errorf("seconds must be between 0 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
+	}
+	return nil
+}
+
 func validateMultipartTaskRequest(c *gin.Context, info *RelayInfo, action string) (TaskSubmitReq, error) {
 	var req TaskSubmitReq
 	if _, err := c.MultipartForm(); err != nil {
@@ -168,10 +183,11 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	prompt = req.Prompt
 	model = req.Model
 	size = req.Size
-	seconds, _ = strconv.Atoi(req.Seconds)
-	if seconds == 0 {
-		seconds = req.DurationValue()
+	resolvedSeconds, err := req.ResolvedSeconds()
+	if err != nil {
+		return createTaskError(err, "invalid_seconds", http.StatusBadRequest, true)
 	}
+	seconds = resolvedSeconds
 	if inputReference := strings.TrimSpace(req.InputReference); inputReference != "" {
 		req.Images = []string{inputReference}
 	} else if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
@@ -187,6 +203,10 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	}
 
 	if taskErr := validatePrompt(prompt); taskErr != nil {
+		return taskErr
+	}
+
+	if taskErr := validateTaskDurationBounds(req); taskErr != nil {
 		return taskErr
 	}
 
@@ -248,6 +268,10 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 	}
 
 	if taskErr := validatePrompt(req.Prompt); taskErr != nil {
+		return taskErr
+	}
+
+	if taskErr := validateTaskDurationBounds(req); taskErr != nil {
 		return taskErr
 	}
 

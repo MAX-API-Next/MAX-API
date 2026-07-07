@@ -207,7 +207,7 @@ func GitHubBind(c *gin.Context) {
 		return
 	}
 	user.GitHubId = githubUser.Login
-	err = user.Update(false)
+	err = user.UpdateFields(false, model.UserUpdateFieldGitHubId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

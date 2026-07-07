@@ -44,6 +44,54 @@ func TestConvertToAliRequestWan27I2VBuildsMediaFromImage(t *testing.T) {
 	assert.NotContains(t, string(body), `"img_url"`)
 }
 
+func TestConvertToAliRequestResolvesDurationFromTaskSubmitReq(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	duration := 8
+
+	tests := []struct {
+		name string
+		req  relaycommon.TaskSubmitReq
+		want int
+	}{
+		{
+			name: "duration takes precedence over seconds",
+			req: relaycommon.TaskSubmitReq{
+				Model:    "wan2.5-t2v-preview",
+				Prompt:   "make a video",
+				Duration: &duration,
+				Seconds:  "12",
+			},
+			want: 8,
+		},
+		{
+			name: "seconds is used when duration is absent",
+			req: relaycommon.TaskSubmitReq{
+				Model:   "wan2.5-t2v-preview",
+				Prompt:  "make a video",
+				Seconds: "12",
+			},
+			want: 12,
+		},
+		{
+			name: "zero duration defaults to five seconds",
+			req: relaycommon.TaskSubmitReq{
+				Model:  "wan2.5-t2v-preview",
+				Prompt: "make a video",
+			},
+			want: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			aliReq, err := adaptor.convertToAliRequest(testRelayInfo(), tt.req)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, aliReq.Parameters.Duration)
+		})
+	}
+}
+
 func TestConvertToAliRequestWan27I2VPrefersInputReferenceOverImage(t *testing.T) {
 	adaptor := &TaskAdaptor{}
 	req := relaycommon.TaskSubmitReq{

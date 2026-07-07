@@ -70,24 +70,41 @@ func GetGroupRatioSetting() *GroupRatioSetting {
 }
 
 func GetGroupRatioCopy() map[string]float64 {
-	return groupRatioMap.ReadAll()
+	return filterReservedAutoRouteGroupRatios(groupRatioMap.ReadAll())
 }
 
 func ContainsGroupRatio(name string) bool {
-	_, ok := groupRatioMap.Get(name)
+	trimmedName := strings.TrimSpace(name)
+	if isReservedAutoRouteGroupName(trimmedName) {
+		return false
+	}
+	_, ok := groupRatioMap.Get(trimmedName)
 	return ok
 }
 
 func GroupRatio2JSONString() string {
-	return groupRatioMap.MarshalJSONString()
+	jsonBytes, err := common.Marshal(GetGroupRatioCopy())
+	if err != nil {
+		return "{}"
+	}
+	return string(jsonBytes)
 }
 
 func UpdateGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupRatioMap, jsonStr)
+	normalized, err := NormalizeGroupRatioJSONString(jsonStr)
+	if err != nil {
+		return err
+	}
+	return types.LoadFromJsonString(groupRatioMap, normalized)
 }
 
 func GetGroupRatio(name string) float64 {
-	ratio, ok := groupRatioMap.Get(name)
+	trimmedName := strings.TrimSpace(name)
+	if isReservedAutoRouteGroupName(trimmedName) {
+		common.SysLog("group ratio not found: " + name)
+		return 1
+	}
+	ratio, ok := groupRatioMap.Get(trimmedName)
 	if !ok {
 		common.SysLog("group ratio not found: " + name)
 		return 1
@@ -116,21 +133,51 @@ func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
 }
 
 func CheckGroupRatio(jsonStr string) error {
+	_, err := normalizeGroupRatioMap(jsonStr)
+	return err
+}
+
+func NormalizeGroupRatioJSONString(jsonStr string) (string, error) {
+	normalized, err := normalizeGroupRatioMap(jsonStr)
+	if err != nil {
+		return "", err
+	}
+	jsonBytes, err := common.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
+}
+
+func normalizeGroupRatioMap(jsonStr string) (map[string]float64, error) {
 	checkGroupRatio := make(map[string]float64)
 	err := common.Unmarshal([]byte(jsonStr), &checkGroupRatio)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	normalized := make(map[string]float64, len(checkGroupRatio))
 	for name, ratio := range checkGroupRatio {
 		trimmedName := strings.TrimSpace(name)
 		if isReservedAutoRouteGroupName(trimmedName) {
-			return errors.New("group name conflicts with auto route namespace: " + trimmedName)
+			continue
 		}
 		if ratio < 0 {
-			return errors.New("group ratio must be not less than 0: " + name)
+			return nil, errors.New("group ratio must be not less than 0: " + trimmedName)
 		}
+		normalized[trimmedName] = ratio
 	}
-	return nil
+	return normalized, nil
+}
+
+func filterReservedAutoRouteGroupRatios(ratios map[string]float64) map[string]float64 {
+	filtered := make(map[string]float64, len(ratios))
+	for name, ratio := range ratios {
+		if isReservedAutoRouteGroupName(strings.TrimSpace(name)) {
+			continue
+		}
+		filtered[name] = ratio
+	}
+	return filtered
 }
 
 func isReservedAutoRouteGroupName(name string) bool {

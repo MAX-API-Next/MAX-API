@@ -244,6 +244,85 @@ func TestUpdateWithStatus_Lose(t *testing.T) {
 	assert.EqualValues(t, TaskStatusFailure, reloaded.Status) // unchanged
 }
 
+func TestUpdateQuotaScopesByTaskPrimaryKey(t *testing.T) {
+	truncateTables(t)
+
+	target := &Task{
+		TaskID: "task_quota_target",
+		Status: TaskStatusInProgress,
+		Quota:  100,
+		Data:   json.RawMessage(`{}`),
+	}
+	other := &Task{
+		TaskID: "task_quota_other",
+		Status: TaskStatusInProgress,
+		Quota:  200,
+		Data:   json.RawMessage(`{}`),
+	}
+	insertTask(t, target)
+	insertTask(t, other)
+
+	target.Quota = 350
+	require.NoError(t, target.UpdateQuota())
+
+	var reloadedTarget Task
+	require.NoError(t, DB.First(&reloadedTarget, target.ID).Error)
+	assert.Equal(t, 350, reloadedTarget.Quota)
+
+	var reloadedOther Task
+	require.NoError(t, DB.First(&reloadedOther, other.ID).Error)
+	assert.Equal(t, 200, reloadedOther.Quota)
+}
+
+func TestTaskQuotaFilters(t *testing.T) {
+	truncateTables(t)
+
+	tasks := []*Task{
+		{
+			TaskID: "task_quota_zero",
+			UserId: 1,
+			Status: TaskStatusSuccess,
+			Quota:  0,
+			Data:   json.RawMessage(`{}`),
+		},
+		{
+			TaskID: "task_quota_negative",
+			UserId: 1,
+			Status: TaskStatusSuccess,
+			Quota:  -50,
+			Data:   json.RawMessage(`{}`),
+		},
+		{
+			TaskID: "task_quota_positive",
+			UserId: 1,
+			Status: TaskStatusSuccess,
+			Quota:  100,
+			Data:   json.RawMessage(`{}`),
+		},
+		{
+			TaskID: "task_quota_other_user_negative",
+			UserId: 2,
+			Status: TaskStatusSuccess,
+			Quota:  -75,
+			Data:   json.RawMessage(`{}`),
+		},
+	}
+	for _, task := range tasks {
+		insertTask(t, task)
+	}
+
+	zeroTasks := TaskGetAllTasks(0, 10, SyncTaskQueryParams{QuotaFilter: LogQuotaFilterZero})
+	require.Len(t, zeroTasks, 1)
+	assert.Equal(t, "task_quota_zero", zeroTasks[0].TaskID)
+
+	negativeUserTasks := TaskGetAllUserTask(1, 0, 10, SyncTaskQueryParams{QuotaFilter: LogQuotaFilterNegative})
+	require.Len(t, negativeUserTasks, 1)
+	assert.Equal(t, "task_quota_negative", negativeUserTasks[0].TaskID)
+
+	assert.EqualValues(t, 3, TaskCountAllTasks(SyncTaskQueryParams{QuotaFilter: LogQuotaFilterAbnormal}))
+	assert.EqualValues(t, 2, TaskCountAllUserTask(1, SyncTaskQueryParams{QuotaFilter: LogQuotaFilterAbnormal}))
+}
+
 func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 	truncateTables(t)
 
