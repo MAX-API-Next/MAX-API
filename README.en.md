@@ -52,6 +52,8 @@
 
 MAX API is an AI model governance, AgentOps, and application service infrastructure project initiated, maintained, and operated long term by AGI enthusiasts from research institutions and universities. It provides developers, researchers, teams, and organizations with a stable and reusable service layer. The project focuses on the operational problems that appear after AI applications move into real use: more models, frequent upstream API changes, longer Agent call chains, and rising pressure around cost and auditability. MAX API provides a unified access, authentication, routing, billing, observability, and governance layer between applications, Agents, users, organizations, and upstream model providers, helping AI applications run with greater stability and control.
 
+In practice, MAX API is more than a request forwarder. It is an operable gateway for AI-ready applications and Agent workloads, bringing protocol normalization, provider differences, traffic bursts, long streaming responses, large request bodies, multi-node cache, cost audit, and performance observability under one governance boundary.
+
 Ongoing investment areas:
 
 - **AI model governance**: continuously tracks model updates, API changes, parameter differences, pricing rules, and task protocols across OpenAI, Azure OpenAI, AWS Bedrock, Vertex AI, Ollama, and domestic platforms such as DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, and SiliconFlow. It also tracks application and multimodal ecosystems such as Dify, RAGFlow, Kling, and Seedance, bringing distributed model capabilities into unified governance through channels, model mapping, protocol conversion, path overrides, and configurable task protocols.
@@ -83,6 +85,7 @@ In the AGI application era, MAX API focuses on open AI model governance and AI A
 - **Channel configuration plane**: reduces misconfiguration risk when adding upstream channels, migrating providers, or maintaining non-standard APIs through capability matrices, form validation, model discovery, and protocol templates.
 - **Protocol and provider adaptation layer**: continuously tracks official overseas APIs, domestic model platform APIs, and OpenAI-compatible / non-standard interface changes, then normalizes them into stable application-side APIs.
 - **Cost, quota, and reliability governance**: supports channel routing, weighted distribution, retry, rate limiting, pre-charge, failure refund, expression billing, fixed pricing, task rate-cards, multiplier billing, and usage statistics.
+- **Performance and scalability governance**: uses Redis / in-memory cache, model request rate limits, streaming timeouts and large-response buffers, request body limits, disk cache, Pyroscope profiling, and graceful shutdown to support stable single-node and multi-node deployments.
 - **Organization operations and audit layer**: provides user management, group management, private deployment, data retention, audit, and continuous operations optimization for teams, research institutions, enterprises, and community services.
 - **Reusable governance templates**: accumulates channel templates, task protocol templates, pricing configuration, deployment practices, and operations experience to reduce onboarding cost for new models, providers, and Agent scenarios.
 
@@ -195,6 +198,17 @@ docker compose up -d
 - Supports weighted channel routing, failure retry, disabled-channel bypass, and model-level routing to reduce upstream impact on applications and Agents.
 - Supports Redis and in-memory cache for single-node and multi-node deployments.
 
+### Performance and Scalability Governance
+
+| Capability | Description |
+|------|------|
+| Cache and multi-node scaling | Single-node deployments can use in-memory cache, while multi-node deployments can use Redis; user, token, channel affinity, and quota-related caches reduce repeated database reads, while `SESSION_SECRET`, `CRYPTO_SECRET`, and `NODE_NAME` keep sessions, encryption, and log attribution consistent |
+| Rate limits and capacity protection | Supports global API / Web rate limits, critical endpoint limits, search limits, model request limits, and group-specific model request quotas; counters can use Redis or memory |
+| Streaming and large-request controls | Supports `STREAMING_TIMEOUT`, `STREAM_SCANNER_MAX_BUFFER_MB`, `MAX_REQUEST_BODY_MB`, `MAX_FILE_DOWNLOAD_MB`, and related settings for long streams, large SSE lines, decompressed request bodies, and remote file downloads |
+| Relay connection tuning | Supports `RELAY_TIMEOUT`, `RELAY_IDLE_CONN_TIMEOUT`, `RELAY_MAX_IDLE_CONNS`, and `RELAY_MAX_IDLE_CONNS_PER_HOST` for upstream HTTP timeout and connection-pool behavior |
+| Disk cache and performance observability | System performance settings can enable disk cache for large request bodies and configure cache threshold and capacity; operations endpoints can inspect / clear disk cache, and Pyroscope can collect CPU, memory, goroutine, mutex, and block profiles |
+| Graceful shutdown and data flush | Shutdown supports `SHUTDOWN_TIMEOUT_SECONDS` and `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS` so the process can close HTTP handling and save quota cache before exit when possible |
+
 ### Security and Organization Management
 
 - Supports JWT, WebAuthn/Passkeys, OAuth, OIDC, Telegram, Discord, LinuxDO, and other login methods.
@@ -213,6 +227,7 @@ docker compose up -d
 | Agent access | Agents directly hold upstream keys, making revocation and quota control difficult | Assign independent tokens to Agents with model, quota, expiration, and group limits |
 | Protocol differences | Applications adapt Claude, Gemini, Responses, and other formats themselves | Gateway handles protocol conversion and provider adaptation |
 | Failure handling | Applications implement retry, fallback, and error normalization themselves | Channel failure retry, weighted routing, and error handling are built in |
+| Performance and scaling | Applications handle timeouts, rate limits, connection pools, and cache themselves | Gateway centralizes streaming timeouts, request limits, Redis / in-memory cache, connection-pool tuning, and performance observability |
 | Cost statistics | Bills are scattered across providers and hard to attribute by user or Agent | Unified quota, billing, usage statistics, and consumption logs, attributable by token and model |
 | Audit boundary | Application-side logging is fragmented and retention/permission policies differ | Unified admin audit entry with normal user logs filtering admin-only fields |
 | Private deployment | Keys, logs, and billing strategies are scattered | Self-hosted control over keys, data, logs, and policies |

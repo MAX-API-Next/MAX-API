@@ -42,6 +42,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   PromptInput,
   PromptInputButton,
   PromptInputFooter,
@@ -49,12 +55,6 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 import type { ModelOption, GroupOption } from '../types'
@@ -104,9 +104,7 @@ export function PlaygroundInput({
   const { t } = useTranslation()
   const [text, setText] = useState('')
 
-  const isModelSelectDisabled =
-    disabled || isModelLoading || models.length === 0
-  const isGroupSelectDisabled = disabled || groups.length === 0
+  const isSelectorDisabled = disabled || isModelLoading || groups.length === 0
   const isClearHistoryDisabled = disabled || isGenerating || !hasMessages
 
   const handleSubmit = (message: PromptInputMessage) => {
@@ -231,7 +229,7 @@ export function PlaygroundInput({
               selectedGroup={groupValue}
               groups={groups}
               onGroupChange={onGroupChange}
-              disabled={isModelSelectDisabled || isGroupSelectDisabled}
+              disabled={isSelectorDisabled}
             />
 
             {isGenerating && onStop ? (

@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   SettingsControlChildren,
   SettingsForm,
@@ -137,29 +138,35 @@ export function HeaderNavigationSection({
   useResetForm(form, formDefaults)
 
   const onSubmit = async (values: HeaderNavFormValues) => {
-    await headerNavOption.updateHeaderNavModules((current) => ({
-      ...current,
-      home: values.home,
-      console: values.console,
-      docs: values.docs,
-      about: values.about,
-      custom: {
-        ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
-        enabled: values.customEnabled,
-        title: values.customTitle.trim(),
-        href: values.customHref.trim(),
-      },
-      pricing: {
-        ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
-        enabled: values.pricingEnabled,
-        requireAuth: values.pricingRequireAuth,
-      },
-    }))
-    await rankingsOption.updateRankingsModule((current) => ({
-      ...current,
-      enabled: values.rankingsEnabled,
-      requireAuth: values.rankingsRequireAuth,
-    }))
+    try {
+      await Promise.all([
+        headerNavOption.updateHeaderNavModules((current) => ({
+          ...current,
+          home: values.home,
+          console: values.console,
+          docs: values.docs,
+          about: values.about,
+          custom: {
+            ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
+            enabled: values.customEnabled,
+            title: values.customTitle.trim(),
+            href: values.customHref.trim(),
+          },
+          pricing: {
+            ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
+            enabled: values.pricingEnabled,
+            requireAuth: values.pricingRequireAuth,
+          },
+        })),
+        rankingsOption.updateRankingsModule((current) => ({
+          ...current,
+          enabled: values.rankingsEnabled,
+          requireAuth: values.rankingsRequireAuth,
+        })),
+      ])
+    } catch (error) {
+      handleServerError(error)
+    }
   }
 
   const resetToDefault = () => {
