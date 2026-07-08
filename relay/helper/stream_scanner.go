@@ -58,20 +58,10 @@ func ExtendWriteDeadline(c *gin.Context) {
 }
 
 func pingDataWithTimeout(c *gin.Context) error {
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- streamPingData(c)
-	}()
-
-	timer := time.NewTimer(streamPingWriteTimeout)
-	defer timer.Stop()
-
-	select {
-	case err := <-errChan:
-		return err
-	case <-timer.C:
-		return fmt.Errorf("ping data timed out after %s", streamPingWriteTimeout)
-	}
+	// c.Writer is not safe for concurrent writes; keep the ping write in the
+	// caller's critical section and rely on the response write deadline to bound it.
+	extendWriteDeadline(c, streamPingWriteTimeout)
+	return streamPingData(c)
 }
 
 func newStreamingTimeoutTicker(timeoutSeconds int) (*time.Ticker, <-chan time.Time) {
@@ -181,7 +171,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					func() {
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
-						extendWriteDeadline(c, streamPingWriteTimeout)
 						err = pingDataWithTimeout(c)
 					}()
 					if err != nil {

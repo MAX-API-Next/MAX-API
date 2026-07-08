@@ -236,7 +236,10 @@ func main() {
 	shutdownHTTPServer(ctx, srv)
 	if common.DataExportEnabled {
 		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
-		if !runWithTimeout(saveTimeout, model.SaveQuotaDataCache) {
+		if !runWithTimeout(saveTimeout, func() {
+			model.WaitPendingLogQuotaData()
+			model.SaveQuotaDataCache()
+		}) {
 			common.SysError(fmt.Sprintf("timed out waiting for quota data cache save after %s", saveTimeout))
 		}
 	}

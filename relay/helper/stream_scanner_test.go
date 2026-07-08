@@ -493,7 +493,7 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	assert.Equal(t, 0, pingCount, "pings should be disabled when DisablePing=true")
 }
 
-func TestStreamScannerHandler_PingTimeoutStopsStream(t *testing.T) {
+func TestStreamScannerHandler_PingWriteStaysSynchronizedUntilComplete(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds
@@ -501,12 +501,9 @@ func TestStreamScannerHandler_PingTimeoutStopsStream(t *testing.T) {
 	setting.PingIntervalSeconds = 1
 
 	originalPingData := streamPingData
-	originalPingTimeout := streamPingWriteTimeout
 	pingStarted := make(chan struct{})
 	releasePing := make(chan struct{})
 	var startOnce sync.Once
-	var releaseOnce sync.Once
-	streamPingWriteTimeout = 20 * time.Millisecond
 	streamPingData = func(c *gin.Context) error {
 		startOnce.Do(func() {
 			close(pingStarted)
@@ -518,10 +515,6 @@ func TestStreamScannerHandler_PingTimeoutStopsStream(t *testing.T) {
 		setting.PingIntervalEnabled = oldEnabled
 		setting.PingIntervalSeconds = oldSeconds
 		streamPingData = originalPingData
-		streamPingWriteTimeout = originalPingTimeout
-		releaseOnce.Do(func() {
-			close(releasePing)
-		})
 	})
 
 	pr, pw := io.Pipe()
@@ -538,9 +531,15 @@ func TestStreamScannerHandler_PingTimeoutStopsStream(t *testing.T) {
 	resp := &http.Response{Body: body}
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
+	handlerCalled := make(chan struct{})
+	var handlerOnce sync.Once
 	done := make(chan struct{})
 	go func() {
-		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			handlerOnce.Do(func() {
+				close(handlerCalled)
+			})
+		})
 		close(done)
 	}()
 
@@ -550,24 +549,37 @@ func TestStreamScannerHandler_PingTimeoutStopsStream(t *testing.T) {
 		t.Fatal("timed out waiting for ping to start")
 	}
 
+	go func() {
+		fmt.Fprint(pw, "data: chunk_0\n")
+		fmt.Fprint(pw, "data: [DONE]\n")
+		_ = pw.Close()
+	}()
+
+	select {
+	case <-handlerCalled:
+		t.Fatal("data handler ran while ping write was still in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releasePing)
+
+	require.NotNil(t, info.StreamStatus)
+	select {
+	case <-handlerCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("data handler did not run after ping write completed")
+	}
+
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("stream did not stop after ping timeout")
+		t.Fatal("stream did not finish after ping write completed")
 	}
-	releaseOnce.Do(func() {
-		close(releasePing)
-	})
-
-	require.NotNil(t, info.StreamStatus)
-	assert.Equal(t, relaycommon.StreamEndReasonPingFail, info.StreamStatus.EndReason)
-	require.Error(t, info.StreamStatus.EndError)
-	assert.Contains(t, info.StreamStatus.EndError.Error(), "ping data timed out")
 
 	select {
 	case <-body.closed:
 	default:
-		t.Fatal("upstream response body was not closed after ping timeout")
+		t.Fatal("upstream response body was not closed after stream completion")
 	}
 }
 

@@ -798,6 +798,51 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 	require.Len(t, CacheQuotaData, 1)
 }
 
+func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
+	resetQuotaDataCacheForTest(t)
+
+	originalRunner := logQuotaDataAsyncRunner
+	release := make(chan struct{})
+	logQuotaDataAsyncRunner = func(fn func()) {
+		go func() {
+			<-release
+			fn()
+		}()
+	}
+	t.Cleanup(func() {
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	enqueueLogQuotaData(QuotaDataLogParams{
+		UserID:    7,
+		Username:  "quota-wait",
+		ModelName: "gpt-test",
+		Quota:     42,
+		CreatedAt: time.Now().Unix(),
+	})
+
+	waitDone := make(chan struct{})
+	go func() {
+		WaitPendingLogQuotaData()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("wait returned before queued quota data ran")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued quota data")
+	}
+	require.Len(t, CacheQuotaData, 1)
+}
+
 func newRetryBackfillTestDB(t *testing.T, models ...interface{}) *gorm.DB {
 	t.Helper()
 

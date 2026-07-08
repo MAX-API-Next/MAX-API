@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -188,14 +189,23 @@ func ensureLogRetryMarkerBackfillCompletedForReadDefault() error {
 	return fmt.Errorf("%w; retry log filters will be available after startup backfill finishes", ErrLogRetryMarkerBackfillIncomplete)
 }
 
-var logQuotaDataAsyncRunner = func(fn func()) {
-	gopool.Go(fn)
-}
+var (
+	logQuotaDataAsyncRunner = func(fn func()) {
+		gopool.Go(fn)
+	}
+	logQuotaDataAsyncWG sync.WaitGroup
+)
 
 func enqueueLogQuotaData(params QuotaDataLogParams) {
+	logQuotaDataAsyncWG.Add(1)
 	logQuotaDataAsyncRunner(func() {
+		defer logQuotaDataAsyncWG.Done()
 		LogQuotaData(params)
 	})
+}
+
+func WaitPendingLogQuotaData() {
+	logQuotaDataAsyncWG.Wait()
 }
 
 func applyLogFilter(tx *gorm.DB, filter string) (*gorm.DB, error) {
