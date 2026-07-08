@@ -476,6 +476,7 @@ A task rate-card can match prices by request parameters:
 | Remote database | MySQL ≥ 5.7.8 or PostgreSQL ≥ 9.6 |
 | Cache | In-memory cache for single-node deployments; Redis recommended for multi-node deployments |
 | Frontend build | Bun workspace; keep `web/package.json` and `web/bun.lock` |
+| Source build | Use the Go version declared in `go.mod` (currently Go 1.25.1+) with the repository `go.sum`; after dependency or security updates, run `go mod download`, `go mod verify`, and rebuild |
 
 ### Recommended Environment Variables
 
@@ -547,6 +548,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` downloads Go modules during the image build. For host builds or dependency/security updates, keep `go.mod` and `go.sum` committed together, run `go mod download && go mod verify`, then rebuild the binary or image; use `docker build --pull --no-cache -t cscitechtop/max-api:latest .` when base images need to be refreshed.
 
 > [!TIP]
 > The frontend uses Bun workspace. The build context must keep `web/package.json`, `web/bun.lock`, and `web/default/package.json`; otherwise `catalog:` dependencies cannot be resolved.

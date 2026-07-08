@@ -413,6 +413,7 @@ Les modèles vidéo comme Seedance 2.0 peuvent utiliser la résolution, l'entré
 | Base distante | MySQL ≥ 5.7.8 ou PostgreSQL ≥ 9.6 |
 | Cache | Mémoire en mono-nœud, Redis recommandé en multi-nœud |
 | Build frontend | Bun workspace, conserver `web/package.json` et `web/bun.lock` |
+| Build source | Utiliser la version de Go déclarée dans `go.mod` (actuellement Go 1.25.1+) avec `go.sum` ; après une mise à jour de dépendances ou de sécurité, exécuter `go mod download`, `go mod verify`, puis reconstruire |
 
 ### Variables d'environnement recommandées
 
@@ -476,6 +477,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` télécharge les modules Go pendant la construction de l'image. Pour une construction locale ou après une mise à jour de dépendances / sécurité, conservez `go.mod` et `go.sum` ensemble, exécutez `go mod download && go mod verify`, puis reconstruisez le binaire ou l'image ; utilisez `docker build --pull --no-cache -t cscitechtop/max-api:latest .` lorsque les images de base doivent être rafraîchies.
 
 > [!TIP]
 > Le frontend utilise Bun workspace. Conservez `web/package.json`, `web/bun.lock` et `web/default/package.json`, sinon les dépendances `catalog:` ne seront pas résolues.

@@ -476,6 +476,7 @@ Seedance 2.0 等視頻模型可按分辨率、視頻輸入等請求參數參與�
 | 遠程資料庫 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6 |
 | 緩存 | 單機可使用內存緩存，多機部署建議使用 Redis |
 | 前端構建 | 使用 Bun workspace，需保留 `web/package.json` 與 `web/bun.lock` |
+| 源碼構建 | 使用倉庫 `go.mod` 聲明的 Go 版本（目前 Go 1.25.1+）和 `go.sum`；依賴或安全更新後運行 `go mod download`、`go mod verify` 並重新構建 |
 
 ### 推薦環境變量
 
@@ -547,6 +548,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` 會在鏡像構建中下載 Go 模塊。宿主機直接構建或依賴 / 安全更新後，請保持 `go.mod` 與 `go.sum` 成對提交，先運行 `go mod download && go mod verify`，再重新構建二進制或鏡像；需要刷新基礎鏡像時可使用 `docker build --pull --no-cache -t cscitechtop/max-api:latest .`。
 
 > [!TIP]
 > 前端使用 Bun workspace。構建上下文中必須保留 `web/package.json`、`web/bun.lock` 和 `web/default/package.json`，否則 `catalog:` 依賴無法解析。

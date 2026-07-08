@@ -413,6 +413,7 @@ Seedance 2.0 などの動画モデルでは、解像度や動画入力などの�
 | リモートデータベース | MySQL ≥ 5.7.8 または PostgreSQL ≥ 9.6 |
 | キャッシュ | 単一ノードはメモリキャッシュ、複数ノードは Redis 推奨 |
 | フロントエンドビルド | Bun workspace。`web/package.json` と `web/bun.lock` を保持 |
+| ソースビルド | `go.mod` に記載された Go バージョン（現在は Go 1.25.1+）とリポジトリ内の `go.sum` を使用。依存関係またはセキュリティ更新後は `go mod download`、`go mod verify` を実行してから再ビルド |
 
 ### 推奨環境変数
 
@@ -484,6 +485,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` はイメージビルド中に Go モジュールをダウンロードします。ホストで直接ビルドする場合、または依存関係 / セキュリティ更新後は、`go.mod` と `go.sum` を必ず一緒にコミットし、`go mod download && go mod verify` を実行してからバイナリまたはイメージを再ビルドしてください。ベースイメージを更新する必要がある場合は `docker build --pull --no-cache -t cscitechtop/max-api:latest .` を使用します。
 
 > [!TIP]
 > フロントエンドは Bun workspace を使用します。ビルドコンテキストには `web/package.json`、`web/bun.lock`、`web/default/package.json` を保持してください。そうしないと `catalog:` 依存関係を解決できません。

@@ -478,6 +478,7 @@ Seedance 2.0 等视频模型可按分辨率、视频输入等请求参数参与�
 | 远程数据库 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6 |
 | 缓存 | 单机可使用内存缓存，多机部署建议使用 Redis |
 | 前端构建 | 使用 Bun workspace，需保留 `web/package.json` 与 `web/bun.lock` |
+| 源码构建 | 使用仓库 `go.mod` 声明的 Go 版本（当前 Go 1.25.1+）和 `go.sum`；依赖或安全更新后运行 `go mod download`、`go mod verify` 并重新构建 |
 
 ### 推荐环境变量
 
@@ -549,6 +550,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` 会在镜像构建中下载 Go 模块。宿主机直接构建或依赖 / 安全更新后，请保持 `go.mod` 与 `go.sum` 成对提交，先运行 `go mod download && go mod verify`，再重新构建二进制或镜像；需要刷新基础镜像时可使用 `docker build --pull --no-cache -t cscitechtop/max-api:latest .`。
 
 > [!TIP]
 > 前端使用 Bun workspace。构建上下文中必须保留 `web/package.json`、`web/bun.lock` 和 `web/default/package.json`，否则 `catalog:` 依赖无法解析。
@@ -696,15 +700,6 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或业务 Agent
 
 如果你修改并通过网络向用户提供本项目服务，请理解并遵守 AGPLv3 对应源码提供等义务。商业合作、机构合作或其他授权问题，请联系：maxapi@max-api.ai。
 
----
-
-## 🌟 Star History
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=MAX-API-Next/MAX-API&type=Date)](https://star-history.com/#MAX-API-Next/MAX-API&Date)
-
-</div>
 
 ---
 
