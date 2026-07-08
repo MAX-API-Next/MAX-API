@@ -16,24 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { ResetSubscriptionsDialog } from './dialogs/reset-subscriptions-dialog'
-import { ToggleStatusDialog } from './dialogs/toggle-status-dialog'
-import { SubscriptionsMutateDrawer } from './subscriptions-mutate-drawer'
-import { useSubscriptions } from './subscriptions-provider'
 
-export function SubscriptionsDialogs() {
-  const { open, setOpen, currentRow } = useSubscriptions()
-  const isUpdate = open === 'update'
+export function resolveOAuthSiteUrl(
+  serverAddress: string,
+  fallback: string
+): string {
+  const normalized = serverAddress.trim().replace(/\/+$/, '')
+  return normalized || fallback
+}
 
-  return (
-    <>
-      <SubscriptionsMutateDrawer
-        open={open === 'create' || isUpdate}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
-        currentRow={isUpdate ? currentRow || undefined : undefined}
-      />
-      <ToggleStatusDialog />
-      <ResetSubscriptionsDialog />
-    </>
-  )
+export function buildOAuthCallbackUrl(
+  serverAddress: string,
+  callbackPath: string,
+  fallback: string
+): string {
+  const siteUrl = resolveOAuthSiteUrl(serverAddress, fallback)
+  return `${siteUrl}/oauth/${callbackPath.replace(/^\/+/, '')}`
 }
