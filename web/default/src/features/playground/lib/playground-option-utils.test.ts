@@ -21,6 +21,7 @@ import { describe, test } from 'node:test'
 import {
   getGroupFallback,
   getModelFallback,
+  getOptionLoadErrorMessage,
   shouldClearModelForGroup,
 } from './playground-option-utils'
 
@@ -47,6 +48,10 @@ describe('playground-option-utils', () => {
     assert.equal(shouldClearModelForGroup([], 'gpt-4o'), true)
   })
 
+  test('does not clear an already-empty model selection', () => {
+    assert.equal(shouldClearModelForGroup([], ''), false)
+  })
+
   test('prefers the default group when the current group is unavailable', () => {
     assert.equal(
       getGroupFallback(
@@ -65,5 +70,16 @@ describe('playground-option-utils', () => {
       getGroupFallback([{ label: 'vip', value: 'vip', ratio: 2 }], 'stale'),
       'vip'
     )
+  })
+
+  test('returns the error message for Error instances', () => {
+    assert.equal(
+      getOptionLoadErrorMessage(new Error('boom'), 'fallback'),
+      'boom'
+    )
+  })
+
+  test('returns the fallback message for non-Error values', () => {
+    assert.equal(getOptionLoadErrorMessage('boom', 'fallback'), 'fallback')
   })
 })
