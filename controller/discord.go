@@ -203,8 +203,12 @@ func DiscordBind(c *gin.Context) {
 		return
 	}
 	session := sessions.Default(c)
-	id := session.Get("id")
-	user.Id = id.(int)
+	id, ok := sessionUserID(session.Get("id"))
+	if !ok {
+		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
+		return
+	}
+	user.Id = id
 	err = user.FillUserById()
 	if err != nil {
 		common.ApiError(c, err)

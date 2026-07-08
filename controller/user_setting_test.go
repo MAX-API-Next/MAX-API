@@ -126,3 +126,48 @@ func TestUpdateUserSettingPreservesUnrelatedSettings(t *testing.T) {
 	assert.Empty(t, setting.GotifyToken)
 	assert.Zero(t, setting.GotifyPriority)
 }
+
+func TestNormalizeNotificationEmailRejectsMalformedAddress(t *testing.T) {
+	validEmail, ok := normalizeNotificationEmail("new@example.com")
+	require.True(t, ok)
+	require.Equal(t, "new@example.com", validEmail)
+
+	for _, email := range []string{"a@", "@b", "@.", "a@b", "Display <new@example.com>"} {
+		_, ok := normalizeNotificationEmail(email)
+		require.False(t, ok, "email should be rejected: %s", email)
+	}
+}
+
+func TestTopUpLockReleaseDeletesIdleEntry(t *testing.T) {
+	topUpLocks.Range(func(key, value any) bool {
+		topUpLocks.Delete(key)
+		return true
+	})
+
+	entry := acquireTopUpLock(1001)
+	require.True(t, entry.lock.TryLock())
+	entry.lock.Unlock()
+	releaseTopUpLock(1001, entry)
+
+	_, ok := topUpLocks.Load(1001)
+	require.False(t, ok)
+}
+
+func TestTopUpLockReleaseKeepsReferencedEntry(t *testing.T) {
+	topUpLocks.Range(func(key, value any) bool {
+		topUpLocks.Delete(key)
+		return true
+	})
+
+	first := acquireTopUpLock(1002)
+	second := acquireTopUpLock(1002)
+	require.Same(t, first, second)
+
+	releaseTopUpLock(1002, first)
+	_, ok := topUpLocks.Load(1002)
+	require.True(t, ok)
+
+	releaseTopUpLock(1002, second)
+	_, ok = topUpLocks.Load(1002)
+	require.False(t, ok)
+}

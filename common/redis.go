@@ -61,6 +61,26 @@ func ParseRedisOption() *redis.Options {
 	return opt
 }
 
+var redisIncrWithTTLScript = redis.NewScript(`
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl > 0 then
+	redis.call("INCRBY", KEYS[1], ARGV[1])
+	redis.call("PEXPIRE", KEYS[1], ttl)
+	return 1
+end
+return 0
+`)
+
+var redisHIncrByWithTTLScript = redis.NewScript(`
+local ttl = redis.call("PTTL", KEYS[1])
+if ttl > 0 then
+	redis.call("HINCRBY", KEYS[1], ARGV[1], ARGV[2])
+	redis.call("PEXPIRE", KEYS[1], ttl)
+	return 1
+end
+return 0
+`)
+
 func RedisSet(key string, value string, expiration time.Duration) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis SET: key=%s, value=%s, expiration=%v", key, value, expiration))
@@ -243,31 +263,9 @@ func RedisIncr(key string, delta int64) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis INCR: key=%s, delta=%d", key, delta))
 	}
-	// 检查键的剩余生存时间
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	// 只有在 key 存在且有 TTL 时才需要特殊处理
-	if ttl > 0 {
-		ctx := context.Background()
-		// 开始一个Redis事务
-		txn := RDB.TxPipeline()
-
-		// 减少余额
-		decrCmd := txn.IncrBy(ctx, key, delta)
-		if err := decrCmd.Err(); err != nil {
-			return err // 如果减少失败，则直接返回错误
-		}
-
-		// 重新设置过期时间，使用原来的过期时间
-		txn.Expire(ctx, key, ttl)
-
-		// 执行事务
-		_, err = txn.Exec(ctx)
-		return err
+	ctx := context.Background()
+	if _, err := redisIncrWithTTLScript.Run(ctx, RDB, []string{key}, delta).Result(); err != nil {
+		return fmt.Errorf("failed to increment key: %w", err)
 	}
 	return nil
 }
@@ -276,25 +274,9 @@ func RedisHIncrBy(key, field string, delta int64) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HINCRBY: key=%s, field=%s, delta=%d", key, field, delta))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		incrCmd := txn.HIncrBy(ctx, key, field, delta)
-		if err := incrCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
-		return err
+	ctx := context.Background()
+	if _, err := redisHIncrByWithTTLScript.Run(ctx, RDB, []string{key}, field, delta).Result(); err != nil {
+		return fmt.Errorf("failed to increment hash field: %w", err)
 	}
 	return nil
 }
