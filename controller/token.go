@@ -41,7 +41,7 @@ func validateAssignableTokenGroup(c *gin.Context, group string) bool {
 	if userGroup == "" {
 		userGroup = c.GetString("user_group")
 	}
-	if service.CanUseTokenGroup(userGroup, group) {
+	if service.CanUseTokenGroupRuntime(userGroup, group) {
 		return true
 	}
 	common.ApiErrorI18n(c, i18n.MsgTokenGroupNotAssignable, map[string]any{"Group": group})

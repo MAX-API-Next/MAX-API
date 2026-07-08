@@ -20,6 +20,21 @@ func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
 }
 
+func oauthProviderUserUpdateField(provider oauth.Provider) (model.UserUpdateField, bool) {
+	switch provider.(type) {
+	case *oauth.GitHubProvider:
+		return model.UserUpdateFieldGitHubId, true
+	case *oauth.DiscordProvider:
+		return model.UserUpdateFieldDiscordId, true
+	case *oauth.OIDCProvider:
+		return model.UserUpdateFieldOidcId, true
+	case *oauth.LinuxDOProvider:
+		return model.UserUpdateFieldLinuxDOId, true
+	default:
+		return "", false
+	}
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
@@ -107,10 +122,6 @@ func HandleOAuth(c *gin.Context) {
 	// 7. Find or create user
 	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
 	if err != nil {
-		if errors.Is(err, model.ErrEmailAlreadyTaken) {
-			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
-			return
-		}
 		switch err.(type) {
 		case *OAuthUserDeletedError:
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
@@ -190,7 +201,12 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 	} else {
 		// Built-in provider: update user record directly
 		provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
-		err = user.Update(false)
+		updateField, ok := oauthProviderUserUpdateField(provider)
+		if !ok {
+			common.ApiError(c, fmt.Errorf("unsupported built-in OAuth provider: %s", provider.GetName()))
+			return
+		}
+		err = user.UpdateFields(false, updateField)
 		if err != nil {
 			common.ApiError(c, err)
 			return

@@ -2,11 +2,14 @@ package model
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -22,6 +25,35 @@ func withLogAuditSettings(t *testing.T, requestEnabled bool, responseEnabled boo
 		common.LogRequestContentEnabled = prevRequest
 		common.LogResponseContentEnabled = prevResponse
 	})
+}
+
+func markRetryLogBackfillCompletedForTest(t *testing.T) {
+	t.Helper()
+	markerKey := logRetryMarkerBackfillCompletionKey()
+	require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	require.NoError(t, markLogRetryMarkerBackfillCompleted())
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
+	})
+}
+
+func resetQuotaDataCacheForTest(t *testing.T) {
+	t.Helper()
+	CacheQuotaDataLock.Lock()
+	CacheQuotaData = make(map[string]*QuotaData)
+	CacheQuotaDataLock.Unlock()
+	t.Cleanup(func() {
+		CacheQuotaDataLock.Lock()
+		CacheQuotaData = make(map[string]*QuotaData)
+		CacheQuotaDataLock.Unlock()
+	})
+}
+
+func newLogTestContext() *gin.Context {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	return c
 }
 
 func TestLogQuotaFilterIndexes(t *testing.T) {
@@ -270,6 +302,7 @@ func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	})
+	markRetryLogBackfillCompletedForTest(t)
 
 	logs := []Log{
 		{
@@ -313,7 +346,7 @@ func TestRetryFilterIgnoresNestedRetryMarker(t *testing.T) {
 	require.Equal(t, 16, stat.Tpm)
 }
 
-func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
+func TestRetryFilterReturnsReadinessErrorBeforeBackfillCompletion(t *testing.T) {
 	markerKey := logRetryMarkerBackfillCompletionKey()
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	require.NoError(t, DB.Where(commonKeyCol+" = ?", markerKey).Delete(&Option{}).Error)
@@ -347,23 +380,26 @@ func TestRetryFilterBackfillsLegacyMarkersBeforeCompletion(t *testing.T) {
 		},
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
-	require.NoError(t, LOG_DB.Model(&Log{}).Where("1 = 1").UpdateColumn("is_retry", false).Error)
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("1 = 1").Updates(map[string]interface{}{
+		"is_retry":       false,
+		"is_error_retry": false,
+		"is_empty_retry": false,
+	}).Error)
 
 	got, total, err := GetAllLogs(LogQueryParams{LogType: LogTypeUnknown, LogFilter: LogFilterRetry, Num: 10})
-	require.NoError(t, err)
-	require.EqualValues(t, 2, total)
-	require.Len(t, got, 2)
-	require.ElementsMatch(t, []int{logs[0].Id, logs[1].Id}, []int{got[0].Id, got[1].Id})
+	require.ErrorIs(t, err, ErrLogRetryMarkerBackfillIncomplete)
+	require.Nil(t, got)
+	require.Zero(t, total)
 
 	var reloaded []Log
 	require.NoError(t, LOG_DB.Order("id asc").Find(&reloaded).Error)
 	require.Len(t, reloaded, 2)
-	require.True(t, reloaded[0].IsRetry)
-	require.True(t, reloaded[0].IsErrorRetry)
+	require.False(t, reloaded[0].IsRetry)
+	require.False(t, reloaded[0].IsErrorRetry)
 	require.False(t, reloaded[0].IsEmptyRetry)
-	require.True(t, reloaded[1].IsRetry)
+	require.False(t, reloaded[1].IsRetry)
 	require.False(t, reloaded[1].IsErrorRetry)
-	require.True(t, reloaded[1].IsEmptyRetry)
+	require.False(t, reloaded[1].IsEmptyRetry)
 }
 
 func TestRetryFilterUsesIsRetryAfterBackfillCompletion(t *testing.T) {
@@ -683,6 +719,85 @@ func TestLogRetryMarkerIsRecomputedWhenOtherChanges(t *testing.T) {
 	require.False(t, reloaded.IsRetry)
 }
 
+func TestRecordConsumeLogQueuesQuotaDataAsync(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+	resetQuotaDataCacheForTest(t)
+
+	originalDataExportEnabled := common.DataExportEnabled
+	originalRunner := logQuotaDataAsyncRunner
+	common.DataExportEnabled = true
+	var queued []func()
+	executed := false
+	logQuotaDataAsyncRunner = func(fn func()) {
+		queued = append(queued, func() {
+			executed = true
+			fn()
+		})
+	}
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExportEnabled
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	RecordConsumeLog(newLogTestContext(), 7, RecordConsumeLogParams{
+		ModelName:        "gpt-test",
+		Quota:            42,
+		PromptTokens:     3,
+		CompletionTokens: 5,
+		Group:            "default",
+		TokenId:          11,
+		ChannelId:        13,
+	})
+
+	require.Len(t, queued, 1)
+	require.False(t, executed)
+	require.Empty(t, CacheQuotaData)
+
+	queued[0]()
+	require.True(t, executed)
+	require.Len(t, CacheQuotaData, 1)
+}
+
+func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+	resetQuotaDataCacheForTest(t)
+
+	originalDataExportEnabled := common.DataExportEnabled
+	originalRunner := logQuotaDataAsyncRunner
+	common.DataExportEnabled = true
+	var queued []func()
+	logQuotaDataAsyncRunner = func(fn func()) {
+		queued = append(queued, fn)
+	}
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExportEnabled
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	RecordTaskBillingLog(RecordTaskBillingLogParams{
+		UserId:    7,
+		LogType:   LogTypeConsume,
+		Content:   "task billing",
+		ChannelId: 13,
+		ModelName: "task-test",
+		Quota:     42,
+		TokenId:   11,
+		Group:     "default",
+	})
+
+	require.Len(t, queued, 1)
+	require.Empty(t, CacheQuotaData)
+
+	queued[0]()
+	require.Len(t, CacheQuotaData, 1)
+}
+
 func newRetryBackfillTestDB(t *testing.T, models ...interface{}) *gorm.DB {
 	t.Helper()
 
@@ -703,6 +818,7 @@ func newRetryBackfillTestDB(t *testing.T, models ...interface{}) *gorm.DB {
 
 func createRetryFilterLogs(t *testing.T) []Log {
 	t.Helper()
+	markRetryLogBackfillCompletedForTest(t)
 
 	now := time.Now().Unix()
 	logs := []Log{
