@@ -193,11 +193,21 @@ var (
 	logQuotaDataAsyncRunner = func(fn func()) {
 		gopool.Go(fn)
 	}
-	logQuotaDataAsyncWG sync.WaitGroup
+	logQuotaDataAsyncWG         sync.WaitGroup
+	logQuotaDataShutdownMu      sync.Mutex
+	logQuotaDataShutdownStarted bool
 )
 
 func enqueueLogQuotaData(params QuotaDataLogParams) {
+	logQuotaDataShutdownMu.Lock()
+	if logQuotaDataShutdownStarted {
+		logQuotaDataShutdownMu.Unlock()
+		LogQuotaData(params)
+		SaveQuotaDataCache()
+		return
+	}
 	logQuotaDataAsyncWG.Add(1)
+	logQuotaDataShutdownMu.Unlock()
 	logQuotaDataAsyncRunner(func() {
 		defer logQuotaDataAsyncWG.Done()
 		LogQuotaData(params)
@@ -205,6 +215,9 @@ func enqueueLogQuotaData(params QuotaDataLogParams) {
 }
 
 func WaitPendingLogQuotaData() {
+	logQuotaDataShutdownMu.Lock()
+	logQuotaDataShutdownStarted = true
+	logQuotaDataShutdownMu.Unlock()
 	logQuotaDataAsyncWG.Wait()
 }
 

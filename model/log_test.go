@@ -39,6 +39,7 @@ func markRetryLogBackfillCompletedForTest(t *testing.T) {
 
 func resetQuotaDataCacheForTest(t *testing.T) {
 	t.Helper()
+	resetLogQuotaDataShutdownForTest(t)
 	CacheQuotaDataLock.Lock()
 	CacheQuotaData = make(map[string]*QuotaData)
 	CacheQuotaDataLock.Unlock()
@@ -46,6 +47,18 @@ func resetQuotaDataCacheForTest(t *testing.T) {
 		CacheQuotaDataLock.Lock()
 		CacheQuotaData = make(map[string]*QuotaData)
 		CacheQuotaDataLock.Unlock()
+	})
+}
+
+func resetLogQuotaDataShutdownForTest(t *testing.T) {
+	t.Helper()
+	logQuotaDataShutdownMu.Lock()
+	logQuotaDataShutdownStarted = false
+	logQuotaDataShutdownMu.Unlock()
+	t.Cleanup(func() {
+		logQuotaDataShutdownMu.Lock()
+		logQuotaDataShutdownStarted = false
+		logQuotaDataShutdownMu.Unlock()
 	})
 }
 
@@ -841,6 +854,43 @@ func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
 		t.Fatal("timed out waiting for queued quota data")
 	}
 	require.Len(t, CacheQuotaData, 1)
+}
+
+func TestEnqueueLogQuotaDataAfterShutdownPersistsSynchronously(t *testing.T) {
+	resetQuotaDataCacheForTest(t)
+	require.NoError(t, DB.AutoMigrate(&QuotaData{}))
+	require.NoError(t, DB.Where("1 = 1").Delete(&QuotaData{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&QuotaData{}).Error)
+	})
+
+	originalRunner := logQuotaDataAsyncRunner
+	runnerCalled := false
+	logQuotaDataAsyncRunner = func(fn func()) {
+		runnerCalled = true
+	}
+	logQuotaDataShutdownMu.Lock()
+	logQuotaDataShutdownStarted = true
+	logQuotaDataShutdownMu.Unlock()
+	t.Cleanup(func() {
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	enqueueLogQuotaData(QuotaDataLogParams{
+		UserID:    7,
+		Username:  "quota-shutdown",
+		ModelName: "gpt-test",
+		Quota:     42,
+		CreatedAt: time.Now().Unix(),
+	})
+
+	require.False(t, runnerCalled)
+	require.Empty(t, CacheQuotaData)
+
+	var stored QuotaData
+	require.NoError(t, DB.Where("user_id = ? AND username = ? AND model_name = ?", 7, "quota-shutdown", "gpt-test").First(&stored).Error)
+	require.Equal(t, 1, stored.Count)
+	require.Equal(t, 42, stored.Quota)
 }
 
 func newRetryBackfillTestDB(t *testing.T, models ...interface{}) *gorm.DB {

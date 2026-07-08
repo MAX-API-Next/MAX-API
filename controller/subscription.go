@@ -425,6 +425,10 @@ func AdminCreateUserSubscription(c *gin.Context) {
 }
 
 func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
@@ -458,6 +462,10 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 }
 
 func AdminResetPlanSubscriptions(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+
 	planId, _ := strconv.Atoi(c.Param("id"))
 	if planId <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
