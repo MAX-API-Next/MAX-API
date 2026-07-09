@@ -14,14 +14,11 @@ import (
 func TestMemoryModelSuccessRateLimitDoesNotCountFailures(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	oldLimiter := inMemoryRateLimiter
 	oldRedisEnabled := common.RedisEnabled
 	oldDuration := setting.ModelRequestRateLimitDurationMinutes
-	inMemoryRateLimiter = common.InMemoryRateLimiter{}
 	common.RedisEnabled = false
 	setting.ModelRequestRateLimitDurationMinutes = 1
 	t.Cleanup(func() {
-		inMemoryRateLimiter = oldLimiter
 		common.RedisEnabled = oldRedisEnabled
 		setting.ModelRequestRateLimitDurationMinutes = oldDuration
 	})
@@ -29,7 +26,7 @@ func TestMemoryModelSuccessRateLimitDoesNotCountFailures(t *testing.T) {
 	status := http.StatusInternalServerError
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set("id", 7)
+		c.Set("id", 770001)
 		c.Next()
 	})
 	router.Use(memoryRateLimitHandler(60, 0, 1))
