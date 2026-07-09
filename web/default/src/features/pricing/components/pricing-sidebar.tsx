@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import type { ReactNode } from 'react'
-import { ChevronDown, RotateCcw } from 'lucide-react'
+import { ChevronDown, Info, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { AutoGroupRoute } from '@/lib/auto-routes'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -28,6 +30,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { GroupBadge } from '@/components/group-badge'
 import {
   ENDPOINT_TYPES,
   FILTER_ALL,
@@ -35,6 +38,10 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
+import {
+  getAutoRouteLabelOverride,
+  getConfiguredAutoRouteChains,
+} from '../lib/auto-route-view'
 import { parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
 
@@ -51,6 +58,7 @@ type FilterSectionProps = {
   value: string
   options: FilterOption[]
   onChange: (value: string) => void
+  children?: ReactNode
 }
 
 export interface PricingSidebarProps {
@@ -67,6 +75,8 @@ export interface PricingSidebarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  autoGroups?: string[]
+  autoRoutes?: AutoGroupRoute[]
   tags: string[]
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -149,8 +159,66 @@ function FilterSection(props: FilterSectionProps) {
             />
           ))}
         </div>
+        {props.children}
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+function AutoRouteGroupIntro(props: {
+  autoGroups?: string[]
+  autoRoutes?: AutoGroupRoute[]
+}) {
+  const { t } = useTranslation()
+  const routeChains = getConfiguredAutoRouteChains({
+    autoGroups: props.autoGroups ?? [],
+    autoRoutes: props.autoRoutes,
+  })
+
+  if (routeChains.length === 0) return null
+
+  return (
+    <Alert className='mt-3'>
+      <Info aria-hidden />
+      <AlertTitle className='text-xs'>
+        {t('Configured auto route groups')}
+      </AlertTitle>
+      <AlertDescription className='flex flex-col gap-2 text-xs leading-relaxed'>
+        <p>
+          {t(
+            'Auto route groups are selectable aliases that point to administrator-configured billing groups.'
+          )}
+        </p>
+        <div className='flex flex-col gap-1.5'>
+          {routeChains.map(({ route, groups }) => (
+            <div key={route.key} className='flex flex-wrap items-center gap-1'>
+              <GroupBadge
+                group={route.key}
+                label={getAutoRouteLabelOverride(route)}
+                size='sm'
+              />
+              <span className='text-muted-foreground/40'>→</span>
+              {groups.map((group, index) => (
+                <span
+                  key={`${route.key}-${group}-${index}`}
+                  className='flex items-center gap-1'
+                >
+                  <GroupBadge group={group} size='sm' />
+                  {index < groups.length - 1 && (
+                    <span className='text-muted-foreground/40'>→</span>
+                  )}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+        <p>
+          {t(
+            'Billing and group ratios are calculated from the real group that handles the request.'
+          )}
+        </p>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -277,7 +345,12 @@ export function PricingSidebar(props: PricingSidebarProps) {
           value={props.groupFilter}
           options={groupOptions}
           onChange={props.onGroupChange}
-        />
+        >
+          <AutoRouteGroupIntro
+            autoGroups={props.autoGroups}
+            autoRoutes={props.autoRoutes}
+          />
+        </FilterSection>
         <FilterSection
           title={t('All Vendors')}
           value={props.vendorFilter}

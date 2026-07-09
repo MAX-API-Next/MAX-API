@@ -21,7 +21,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { ArrowLeft, Code2, HeartPulse, Info, Timer } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { DEFAULT_AUTO_ROUTE_KEY, type AutoGroupRoute } from '@/lib/auto-routes'
+import type { AutoGroupRoute } from '@/lib/auto-routes'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -54,6 +54,10 @@ import {
 } from '@/features/performance-metrics/lib/format'
 import { DEFAULT_TOKEN_UNIT, QUOTA_TYPE_VALUES } from '../constants'
 import { usePricingData } from '../hooks/use-pricing-data'
+import {
+  getAutoRouteLabelOverride,
+  getConfiguredAutoRouteChains,
+} from '../lib/auto-route-view'
 import {
   getDynamicPriceEntries,
   getDynamicPricingSummary,
@@ -748,46 +752,32 @@ function AutoGroupChain(props: {
   const modelEnableGroups = Array.isArray(props.model.enable_groups)
     ? props.model.enable_groups
     : []
-  const routes =
-    props.autoRoutes && props.autoRoutes.length > 0
-      ? props.autoRoutes
-      : [
-          {
-            key: DEFAULT_AUTO_ROUTE_KEY,
-            enabled: true,
-            user_selectable: true,
-            groups: props.autoGroups,
-          },
-        ]
-  const routeChains = routes
-    .filter((route) => route.enabled)
-    .map((route) => ({
-      route,
-      groups: route.groups.filter((g) => modelEnableGroups.includes(g)),
-    }))
-    .filter((item) => item.groups.length > 0)
+  const routeChains = getConfiguredAutoRouteChains({
+    autoGroups: props.autoGroups,
+    autoRoutes: props.autoRoutes,
+    groupFilter: (group) => modelEnableGroups.includes(group),
+  })
 
   if (routeChains.length === 0) return null
 
-  const getRouteLabelOverride = (route: AutoGroupRoute) => {
-    const name = route.name?.trim()
-    if (
-      route.key === DEFAULT_AUTO_ROUTE_KEY &&
-      (!name || name === 'Auto' || name === DEFAULT_AUTO_ROUTE_KEY)
-    ) {
-      return undefined
-    }
-    return name || route.key
-  }
-
   return (
-    <div className='text-muted-foreground mb-3 flex flex-col gap-1.5 text-xs'>
-      <span className='font-medium'>{t('Auto Route Chains')}</span>
+    <div className='text-muted-foreground mb-3 flex flex-col gap-2 text-xs'>
+      <div className='flex flex-col gap-1'>
+        <span className='font-medium'>{t('Auto Route Chains')}</span>
+        <p className='leading-relaxed'>
+          {t(
+            'When a token uses an auto route, the system tries the route groups from top to bottom until it finds an available group.'
+          )}{' '}
+          {t(
+            'Billing and group ratios are calculated from the real group that handles the request.'
+          )}
+        </p>
+      </div>
       {routeChains.map(({ route, groups }) => (
         <div key={route.key} className='flex flex-wrap items-center gap-1'>
           <GroupBadge
             group={route.key}
-            label={getRouteLabelOverride(route)}
+            label={getAutoRouteLabelOverride(route)}
             size='sm'
           />
           <span className='text-muted-foreground/40'>→</span>

@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useState } from 'react'
 import { ArrowUpDown, Check, Filter, Grid2X2, Table2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { AutoGroupRoute } from '@/lib/auto-routes'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -85,6 +86,8 @@ export interface PricingToolbarProps {
   vendors: PricingVendor[]
   groups: string[]
   groupRatios?: Record<string, number>
+  autoGroups?: string[]
+  autoRoutes?: AutoGroupRoute[]
   tags: string[]
   models: PricingModel[]
   hasActiveFilters: boolean
@@ -297,6 +300,8 @@ export function PricingToolbar(props: PricingToolbarProps) {
               vendors={props.vendors}
               groups={props.groups}
               groupRatios={props.groupRatios}
+              autoGroups={props.autoGroups}
+              autoRoutes={props.autoRoutes}
               tags={props.tags}
               models={props.models}
               hasActiveFilters={props.hasActiveFilters}
