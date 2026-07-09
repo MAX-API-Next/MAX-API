@@ -16,9 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
+import { useAuthStore } from '@/stores/auth-store'
 import { SignUp } from '@/features/auth/sign-up'
 
 export const Route = createFileRoute('/(auth)/sign-up')({
   component: SignUp,
+  beforeLoad: async () => {
+    const { auth } = useAuthStore.getState()
+
+    if (auth.user) {
+      throw redirect({ to: '/dashboard' })
+    }
+  },
 })

@@ -44,6 +44,8 @@
 
 MAX API est un projet d'infrastructure pour la gouvernance des modèles IA, l'AgentOps et les services applicatifs. Il est initié, maintenu et exploité sur le long terme par des passionnés d'AGI issus d'organismes de recherche et d'universités. Il fournit aux développeurs, chercheurs, équipes et organisations une couche de service stable et réutilisable. Le projet se concentre sur les problèmes d'exploitation qui apparaissent lorsque les applications IA passent en production : multiplication des modèles, évolution fréquente des API amont, chaînes d'appels Agent plus longues, pression accrue sur les coûts et l'audit. MAX API fournit une couche unifiée d'accès, d'authentification, de routage, de facturation, d'observabilité et de gouvernance entre applications, Agents, utilisateurs, organisations et fournisseurs de modèles.
 
+En pratique, MAX API n'est pas seulement un proxy de requêtes. C'est une passerelle exploitable pour applications AI-ready et charges Agent, qui regroupe normalisation des protocoles, différences fournisseurs, pics de trafic, longs flux streaming, gros corps de requête, cache multi-nœud, audit des coûts et observabilité des performances dans une même frontière de gouvernance.
+
 Axes d'investissement continus :
 
 - **Gouvernance des modèles IA** : suivi continu des mises à jour de modèles, des changements d'API, des différences de paramètres, des règles de prix et des protocoles de tâches chez OpenAI, Azure OpenAI, AWS Bedrock, Vertex AI, Ollama, ainsi que chez DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, SiliconFlow et d'autres plateformes. Le projet suit aussi Dify, RAGFlow, Kling, Seedance et d'autres écosystèmes applicatifs ou multimodaux.
@@ -75,6 +77,7 @@ Pour la production, privilégiez les versions stables. Utilisez les versions Pre
 - **Plan de configuration des canaux** : réduit les risques de mauvaise configuration grâce aux matrices de capacités, validations de formulaires, découverte de modèles et modèles de protocole.
 - **Couche d'adaptation protocoles/fournisseurs** : suit les API officielles internationales, les plateformes de modèles chinoises et les API OpenAI-compatible / non standard, puis les normalise en interfaces applicatives stables.
 - **Gouvernance coût, quota et fiabilité** : routage de canaux, distribution pondérée, retry, limitation, préfacturation, remboursement d'échec, facturation par expression, prix fixes, rate-cards de tâches, multiplicateurs et statistiques d'usage.
+- **Gouvernance performance et scalabilité** : cache Redis / mémoire, limitation des requêtes modèles, timeouts streaming, tampons pour grandes réponses, limites de corps de requête, cache disque, profiling Pyroscope et arrêt gracieux pour les déploiements mono ou multi-nœuds.
 - **Couche d'exploitation et d'audit organisationnelle** : utilisateurs, groupes, déploiement privé, rétention des données, audit et optimisation continue.
 - **Modèles de gouvernance réutilisables** : capitalisation des templates de canaux, protocoles de tâches, configurations de prix, pratiques de déploiement et retours d'exploitation.
 
@@ -187,6 +190,17 @@ docker compose up -d
 - Routage pondéré, retry, contournement des canaux désactivés et routage par modèle.
 - Cache Redis et mémoire pour déploiement mono ou multi-nœud.
 
+### Gouvernance performance et scalabilité
+
+| Capacité | Description |
+|------|------|
+| Cache et extension multi-nœud | Déploiement mono-nœud avec cache mémoire, multi-nœud avec Redis ; les caches utilisateur, jeton, affinité de canal et quota réduisent les lectures répétées en base, tandis que `SESSION_SECRET`, `CRYPTO_SECRET` et `NODE_NAME` gardent sessions, chiffrement et attribution des journaux cohérents |
+| Limitation et protection de capacité | Limites globales API / Web, limites d'endpoints critiques, recherche, requêtes modèles et quotas par groupe ; compteurs via Redis ou mémoire |
+| Streaming et grandes requêtes | `STREAMING_TIMEOUT`, `STREAM_SCANNER_MAX_BUFFER_MB`, `MAX_REQUEST_BODY_MB`, `MAX_FILE_DOWNLOAD_MB` contrôlent longs flux, grandes lignes SSE, corps décompressés et téléchargements distants |
+| Réglage des connexions relais | `RELAY_TIMEOUT`, `RELAY_IDLE_CONN_TIMEOUT`, `RELAY_MAX_IDLE_CONNS` et `RELAY_MAX_IDLE_CONNS_PER_HOST` configurent timeouts et pool HTTP amont |
+| Cache disque et observabilité | Les paramètres de performance peuvent activer le cache disque pour grands corps, définir seuil et capacité ; les endpoints ops peuvent inspecter / nettoyer ce cache, et Pyroscope collecte CPU, mémoire, goroutines, mutex et block profiles |
+| Arrêt gracieux et persistance | `SHUTDOWN_TIMEOUT_SECONDS` et `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS` aident à fermer HTTP et sauvegarder le cache quota avant sortie quand c'est possible |
+
 ### Sécurité et gestion d'organisation
 
 - JWT, WebAuthn/Passkeys, OAuth, OIDC, Telegram, Discord, LinuxDO et autres méthodes de connexion.
@@ -205,6 +219,7 @@ docker compose up -d
 | Accès Agent | Les Agents détiennent directement les clés amont | Jetons indépendants avec limites de modèles, quota, expiration et groupe |
 | Différences de protocole | L'application adapte Claude, Gemini, Responses, etc. | La passerelle convertit les protocoles et adapte les fournisseurs |
 | Échecs | Retry, fallback et normalisation d'erreurs côté application | Retry de canaux, routage pondéré et traitement d'erreurs intégrés |
+| Performance et extension | L'application gère timeouts, limites, pools de connexions et cache | La passerelle centralise timeouts streaming, limites de requêtes, cache Redis / mémoire, réglage de pool et observabilité |
 | Coûts | Factures dispersées, attribution difficile | Quotas, facturation, statistiques et journaux unifiés par jeton et modèle |
 | Audit | Journaux applicatifs dispersés | Entrée d'audit admin unifiée, filtrage des champs admin pour utilisateurs |
 | Privé | Clés, journaux et stratégie tarifaire dispersés | Auto-hébergement et contrôle des clés, données, journaux et politiques |
@@ -413,6 +428,7 @@ Les modèles vidéo comme Seedance 2.0 peuvent utiliser la résolution, l'entré
 | Base distante | MySQL ≥ 5.7.8 ou PostgreSQL ≥ 9.6 |
 | Cache | Mémoire en mono-nœud, Redis recommandé en multi-nœud |
 | Build frontend | Bun workspace, conserver `web/package.json` et `web/bun.lock` |
+| Build source | Utiliser la version de Go déclarée dans `go.mod` (actuellement Go 1.25.1+) avec `go.sum` ; après une mise à jour de dépendances ou de sécurité, exécuter `go mod download`, `go mod verify`, puis reconstruire |
 
 ### Variables d'environnement recommandées
 
@@ -476,6 +492,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` télécharge les modules Go pendant la construction de l'image. Pour une construction locale ou après une mise à jour de dépendances / sécurité, conservez `go.mod` et `go.sum` ensemble, exécutez `go mod download && go mod verify`, puis reconstruisez le binaire ou l'image ; utilisez `docker build --pull --no-cache -t cscitechtop/max-api:latest .` lorsque les images de base doivent être rafraîchies.
 
 > [!TIP]
 > Le frontend utilise Bun workspace. Conservez `web/package.json`, `web/bun.lock` et `web/default/package.json`, sinon les dépendances `catalog:` ne seront pas résolues.

@@ -46,6 +46,35 @@ type ContextSchema = {
   modelId?: ModelId
 }
 
+type UsageWithTokenDetails = LanguageModelUsage & {
+  reasoningTokens?: number
+  cachedInputTokens?: number
+  outputTokenDetails?: {
+    reasoningTokens?: number
+  }
+  inputTokenDetails?: {
+    cacheReadTokens?: number
+  }
+}
+
+function getReasoningTokenCount(usage?: LanguageModelUsage): number {
+  const tokenUsage = usage as UsageWithTokenDetails | undefined
+  return (
+    tokenUsage?.outputTokenDetails?.reasoningTokens ??
+    tokenUsage?.reasoningTokens ??
+    0
+  )
+}
+
+function getCacheReadTokenCount(usage?: LanguageModelUsage): number {
+  const tokenUsage = usage as UsageWithTokenDetails | undefined
+  return (
+    tokenUsage?.inputTokenDetails?.cacheReadTokens ??
+    tokenUsage?.cachedInputTokens ??
+    0
+  )
+}
+
 const ContextContext = createContext<ContextSchema | null>(null)
 
 const useContextValue = () => {
@@ -346,7 +375,7 @@ export const ContextReasoningUsage = ({
 }: ContextReasoningUsageProps) => {
   const { t } = useTranslation()
   const { usage, modelId } = useContextValue()
-  const reasoningTokens = usage?.reasoningTokens ?? 0
+  const reasoningTokens = getReasoningTokenCount(usage)
 
   if (children) {
     return children
@@ -387,7 +416,7 @@ export const ContextCacheUsage = ({
 }: ContextCacheUsageProps) => {
   const { t } = useTranslation()
   const { usage, modelId } = useContextValue()
-  const cacheTokens = usage?.cachedInputTokens ?? 0
+  const cacheTokens = getCacheReadTokenCount(usage)
 
   if (children) {
     return children

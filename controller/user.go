@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ var (
 	errUserPasswordUnset    = errors.New("user password is not set")
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
+
+const maxUserQuotaValue = 1<<31 - 1
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -250,6 +253,9 @@ func Register(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if common.EmailVerificationEnabled {
+		common.DeleteKey(user.Email, common.EmailVerificationPurpose)
 	}
 
 	// 获取插入后的用户ID
@@ -609,6 +615,25 @@ func GetUserModels(c *gin.Context) {
 		return
 	}
 	groups := service.GetUserUsableGroups(user.Group)
+	group := c.Query("group")
+	if group != "" {
+		if _, ok := groups[group]; !ok {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"message": "",
+				"data":    []string{},
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data":    model.GetGroupEnabledModels(group),
+		})
+		return
+	}
+
 	var models []string
 	for group := range groups {
 		for _, g := range model.GetGroupEnabledModels(group) {
@@ -970,6 +995,17 @@ type ManageRequest struct {
 	Mode   string `json:"mode"`
 }
 
+func isValidQuotaOverride(value int) bool {
+	return value >= 0 && value <= maxUserQuotaValue
+}
+
+func isValidQuotaAddition(current int, delta int) bool {
+	if delta <= 0 || delta > maxUserQuotaValue {
+		return false
+	}
+	return current <= maxUserQuotaValue-delta
+}
+
 // ManageUser Only admin user can do this
 func ManageUser(c *gin.Context) {
 	var req ManageRequest
@@ -1046,6 +1082,10 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
+			if !isValidQuotaAddition(user.Quota, req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
 			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
 				common.ApiError(c, err)
 				return
@@ -1066,6 +1106,10 @@ func ManageUser(c *gin.Context) {
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
+			if !isValidQuotaOverride(req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
 			oldQuota := user.Quota
 			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
 				common.ApiError(c, err)
@@ -1147,9 +1191,13 @@ func EmailBind(c *gin.Context) {
 		return
 	}
 	session := sessions.Default(c)
-	id := session.Get("id")
+	id, ok := sessionUserID(session.Get("id"))
+	if !ok {
+		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
+		return
+	}
 	user := model.User{
-		Id: id.(int),
+		Id: id,
 	}
 	err := user.FillUserById()
 	if err != nil {
@@ -1178,6 +1226,11 @@ type topUpRequest struct {
 var topUpLocks sync.Map
 var topUpCreateLock sync.Mutex
 
+type topUpLockEntry struct {
+	lock *topUpTryLock
+	refs int
+}
+
 type topUpTryLock struct {
 	ch chan struct{}
 }
@@ -1202,18 +1255,29 @@ func (l *topUpTryLock) Unlock() {
 	}
 }
 
-func getTopUpLock(userID int) *topUpTryLock {
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
+func acquireTopUpLock(userID int) *topUpLockEntry {
 	topUpCreateLock.Lock()
 	defer topUpCreateLock.Unlock()
 	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
+		entry := v.(*topUpLockEntry)
+		entry.refs++
+		return entry
 	}
-	l := newTopUpTryLock()
-	topUpLocks.Store(userID, l)
-	return l
+	entry := &topUpLockEntry{lock: newTopUpTryLock(), refs: 1}
+	topUpLocks.Store(userID, entry)
+	return entry
+}
+
+func releaseTopUpLock(userID int, entry *topUpLockEntry) {
+	topUpCreateLock.Lock()
+	defer topUpCreateLock.Unlock()
+	entry.refs--
+	if entry.refs > 0 {
+		return
+	}
+	if current, ok := topUpLocks.Load(userID); ok && current == entry {
+		topUpLocks.Delete(userID)
+	}
 }
 
 func TopUp(c *gin.Context) {
@@ -1223,12 +1287,13 @@ func TopUp(c *gin.Context) {
 	}
 
 	id := c.GetInt("id")
-	lock := getTopUpLock(id)
-	if !lock.TryLock() {
+	lockEntry := acquireTopUpLock(id)
+	defer releaseTopUpLock(id, lockEntry)
+	if !lockEntry.lock.TryLock() {
 		common.ApiErrorI18n(c, i18n.MsgUserTopUpProcessing)
 		return
 	}
-	defer lock.Unlock()
+	defer lockEntry.lock.Unlock()
 	req := topUpRequest{}
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -1266,6 +1331,21 @@ type UpdateUserSettingRequest struct {
 	RecordIpLog                      bool    `json:"record_ip_log"`
 }
 
+func normalizeNotificationEmail(email string) (string, bool) {
+	email = strings.TrimSpace(email)
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return "", false
+	}
+	local, domain, ok := strings.Cut(addr.Address, "@")
+	if !ok || local == "" || domain == "" ||
+		strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") ||
+		strings.Contains(domain, "..") || !strings.Contains(domain, ".") {
+		return "", false
+	}
+	return addr.Address, true
+}
+
 func UpdateUserSetting(c *gin.Context) {
 	var req UpdateUserSettingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1300,11 +1380,12 @@ func UpdateUserSetting(c *gin.Context) {
 
 	// 如果是邮件类型，验证邮箱地址
 	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
-		// 验证邮箱格式
-		if !strings.Contains(req.NotificationEmail, "@") {
+		email, ok := normalizeNotificationEmail(req.NotificationEmail)
+		if !ok {
 			common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
 			return
 		}
+		req.NotificationEmail = email
 	}
 
 	// 如果是Bark类型，验证Bark URL

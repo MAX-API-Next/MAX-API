@@ -16,21 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { handleServerError } from '@/lib/handle-server-error'
-import { getUserModels, getUserGroups } from './api'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
-import { usePlaygroundState, useChatHandler } from './hooks'
-import { createUserMessage, createLoadingAssistantMessage } from './lib'
-import { queryDataOrEmptyOnError } from './lib/query-state'
 import {
-  getAvailableOptionValue,
-  isOptionValueAvailable,
-} from './lib/selection-state'
+  useChatHandler,
+  usePlaygroundOptions,
+  usePlaygroundState,
+} from './hooks'
+import { createUserMessage, createLoadingAssistantMessage } from './lib'
+import { isOptionValueAvailable } from './lib/selection-state'
 import type { Message as MessageType } from './types'
 
 export function Playground() {
@@ -59,78 +56,21 @@ export function Playground() {
     null
   )
 
-  // Load models
-  const {
-    data: modelsData,
-    error: modelsError,
-    isLoading: isLoadingModels,
-  } = useQuery({
-    queryKey: ['playground-models'],
-    queryFn: getUserModels,
+  const { isLoadingModels, currentModels } = usePlaygroundOptions({
+    currentGroup: config.group,
+    currentModel: config.model,
+    setGroups,
+    setModels,
+    updateConfig,
   })
 
-  // Load groups
-  const { data: groupsData, error: groupsError } = useQuery({
-    queryKey: ['playground-groups'],
-    queryFn: getUserGroups,
-  })
-  const effectiveModelsData = useMemo(
-    () => queryDataOrEmptyOnError(modelsData, modelsError),
-    [modelsData, modelsError]
-  )
-  const effectiveGroupsData = useMemo(
-    () => queryDataOrEmptyOnError(groupsData, groupsError),
-    [groupsData, groupsError]
-  )
   const canSendChat = useMemo(() => {
     return (
-      isOptionValueAvailable(effectiveModelsData, config.model) &&
-      isOptionValueAvailable(effectiveGroupsData, config.group)
+      !isLoadingModels &&
+      isOptionValueAvailable(currentModels, config.model) &&
+      isOptionValueAvailable(groups, config.group)
     )
-  }, [effectiveModelsData, effectiveGroupsData, config.model, config.group])
-
-  useEffect(() => {
-    if (!modelsError) return
-
-    handleServerError(modelsError)
-  }, [modelsError])
-
-  useEffect(() => {
-    if (!groupsError) return
-
-    handleServerError(groupsError)
-  }, [groupsError])
-
-  // Update models when data changes
-  useEffect(() => {
-    if (!effectiveModelsData) return
-
-    setModels(effectiveModelsData)
-
-    const nextModel = getAvailableOptionValue(
-      effectiveModelsData,
-      config.model
-    )
-    if (nextModel !== config.model) {
-      updateConfig('model', nextModel)
-    }
-  }, [effectiveModelsData, config.model, setModels, updateConfig])
-
-  // Update groups when data changes
-  useEffect(() => {
-    if (!effectiveGroupsData) return
-
-    setGroups(effectiveGroupsData)
-
-    const nextGroup = getAvailableOptionValue(
-      effectiveGroupsData,
-      config.group,
-      'default'
-    )
-    if (nextGroup !== config.group) {
-      updateConfig('group', nextGroup)
-    }
-  }, [effectiveGroupsData, setGroups, config.group, updateConfig])
+  }, [config.group, config.model, currentModels, groups, isLoadingModels])
 
   const handleSendMessage = (text: string) => {
     if (!canSendChat) return

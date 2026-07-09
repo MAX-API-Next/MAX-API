@@ -389,8 +389,6 @@ func TestStreamScannerHandler_SlowUpstreamFastHandler(t *testing.T) {
 // ---------- Ping tests ----------
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
-	t.Parallel()
-
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds
@@ -443,8 +441,6 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
-	t.Parallel()
-
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds
@@ -495,6 +491,96 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	body := recorder.Body.String()
 	pingCount := strings.Count(body, ": PING")
 	assert.Equal(t, 0, pingCount, "pings should be disabled when DisablePing=true")
+}
+
+func TestStreamScannerHandler_PingWriteStaysSynchronizedUntilComplete(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+
+	originalPingData := streamPingData
+	pingStarted := make(chan struct{})
+	releasePing := make(chan struct{})
+	var startOnce sync.Once
+	streamPingData = func(c *gin.Context) error {
+		startOnce.Do(func() {
+			close(pingStarted)
+		})
+		<-releasePing
+		return nil
+	}
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+		streamPingData = originalPingData
+	})
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() {
+		_ = pw.Close()
+	})
+	body := &notifyPipeReadCloser{
+		PipeReader: pr,
+		closed:     make(chan struct{}),
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{Body: body}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	handlerCalled := make(chan struct{})
+	var handlerOnce sync.Once
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			handlerOnce.Do(func() {
+				close(handlerCalled)
+			})
+		})
+		close(done)
+	}()
+
+	select {
+	case <-pingStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ping to start")
+	}
+
+	go func() {
+		fmt.Fprint(pw, "data: chunk_0\n")
+		fmt.Fprint(pw, "data: [DONE]\n")
+		_ = pw.Close()
+	}()
+
+	select {
+	case <-handlerCalled:
+		t.Fatal("data handler ran while ping write was still in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releasePing)
+
+	require.NotNil(t, info.StreamStatus)
+	select {
+	case <-handlerCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("data handler did not run after ping write completed")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not finish after ping write completed")
+	}
+
+	select {
+	case <-body.closed:
+	default:
+		t.Fatal("upstream response body was not closed after stream completion")
+	}
 }
 
 // ---------- StreamStatus integration ----------
@@ -721,8 +807,6 @@ func TestStreamScannerHandler_StreamStatus_PreInitialized(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingInterleavesWithSlowUpstream(t *testing.T) {
-	t.Parallel()
-
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds

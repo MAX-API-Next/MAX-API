@@ -522,7 +522,7 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
-func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
+func TestAddTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)
 	if err := appi18n.Init(); err != nil {
@@ -546,11 +546,47 @@ func TestAddTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	AddToken(ctx)
 
 	response := decodeAPIResponse(t, recorder)
-	if response.Success {
-		t.Fatalf("expected hidden auto route token creation to fail")
+	if !response.Success {
+		t.Fatalf("expected hidden runtime route token creation to succeed, got message: %s", response.Message)
 	}
-	if !strings.Contains(response.Message, "auto:internal") {
-		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
+
+	var stored model.Token
+	if err := db.First(&stored).Error; err != nil {
+		t.Fatalf("failed to load created token: %v", err)
+	}
+	if stored.Group != "auto:internal" {
+		t.Fatalf("expected token group auto:internal, got %q", stored.Group)
+	}
+}
+
+func TestAddTokenRejectsUnavailableGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
+
+	body := map[string]any{
+		"name":                 "invalid-group-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "missing",
+		"cross_group_retry":    true,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if response.Success {
+		t.Fatalf("expected unavailable group token creation to fail")
+	}
+	if !strings.Contains(response.Message, "missing") {
+		t.Fatalf("expected error message to mention unavailable group, got %q", response.Message)
 	}
 	if !strings.Contains(response.Message, "无权分配") {
 		t.Fatalf("expected localized denial message, got %q", response.Message)
@@ -601,7 +637,7 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
-func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
+func TestUpdateTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)
 	if err := appi18n.Init(); err != nil {
@@ -627,14 +663,49 @@ func TestUpdateTokenRejectsNonSelectableAutoRoute(t *testing.T) {
 	UpdateToken(ctx)
 
 	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected hidden runtime route token update to succeed, got message: %s", response.Message)
+	}
+
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if stored.Group != "auto:internal" {
+		t.Fatalf("expected token group auto:internal, got %q", stored.Group)
+	}
+}
+
+func TestUpdateTokenRejectsUnavailableGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	if err := appi18n.Init(); err != nil {
+		t.Fatalf("failed to initialize i18n: %v", err)
+	}
+	token := seedToken(t, db, 1, "editable-token", "reject1234group5678")
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "updated-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "missing",
+		"cross_group_retry":    true,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	ctx.Request.Header.Set("Accept-Language", "zh-CN")
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
 	if response.Success {
-		t.Fatalf("expected hidden auto route token update to fail")
+		t.Fatalf("expected unavailable group token update to fail")
 	}
-	if !strings.Contains(response.Message, "auto:internal") {
-		t.Fatalf("expected error message to mention hidden route, got %q", response.Message)
-	}
-	if !strings.Contains(response.Message, "无权分配") {
-		t.Fatalf("expected localized denial message, got %q", response.Message)
+	if !strings.Contains(response.Message, "missing") {
+		t.Fatalf("expected error message to mention unavailable group, got %q", response.Message)
 	}
 
 	var stored model.Token

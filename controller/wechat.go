@@ -159,9 +159,13 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	session := sessions.Default(c)
-	id := session.Get("id")
+	id, ok := sessionUserID(session.Get("id"))
+	if !ok {
+		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
+		return
+	}
 	user := model.User{
-		Id: id.(int),
+		Id: id,
 	}
 	err = user.FillUserById()
 	if err != nil {

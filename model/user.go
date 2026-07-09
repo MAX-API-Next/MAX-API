@@ -549,10 +549,8 @@ func HardDeleteUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	if err := DB.Unscoped().Delete(&User{}, "id = ?", id).Error; err != nil {
-		return err
-	}
-	return invalidateUserCache(id)
+	user := User{Id: id}
+	return user.HardDelete()
 }
 
 func inviteUser(inviterId int) (err error) {
@@ -1056,6 +1054,9 @@ func (user *User) Delete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
+	if err := user.ensureCanDelete(); err != nil {
+		return err
+	}
 	if err := DB.Delete(user).Error; err != nil {
 		return err
 	}
@@ -1068,10 +1069,31 @@ func (user *User) HardDelete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
+	if err := user.ensureCanDelete(); err != nil {
+		return err
+	}
 	if err := DB.Unscoped().Delete(user).Error; err != nil {
 		return err
 	}
 	return invalidateUserCache(user.Id)
+}
+
+func (user *User) ensureCanDelete() error {
+	if user.Role == common.RoleRootUser {
+		return errors.New("cannot delete root user")
+	}
+	if user.Role != 0 {
+		return nil
+	}
+	var existing User
+	if err := DB.Unscoped().Select("role").First(&existing, "id = ?", user.Id).Error; err != nil {
+		return err
+	}
+	if existing.Role == common.RoleRootUser {
+		return errors.New("cannot delete root user")
+	}
+	user.Role = existing.Role
+	return nil
 }
 
 // ValidateAndFill check password & user status

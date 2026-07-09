@@ -150,6 +150,36 @@ func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	require.Contains(t, logBuffer.String(), body)
 }
 
+func TestRelayErrorHandlerLimitsUpstreamErrorBodyRead(t *testing.T) {
+	body := strings.Repeat("x", maxUpstreamErrorBodyBytes+4096)
+	reader := &countingReadCloser{Reader: strings.NewReader(body)}
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       reader,
+	}
+
+	maxAPIError := RelayErrorHandler(context.Background(), resp, true)
+
+	require.NotNil(t, maxAPIError)
+	require.LessOrEqual(t, reader.read, maxUpstreamErrorBodyBytes+1)
+	require.Contains(t, maxAPIError.Error(), "truncated after")
+}
+
+type countingReadCloser struct {
+	io.Reader
+	read int
+}
+
+func (r *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.read += n
+	return n, err
+}
+
+func (r *countingReadCloser) Close() error {
+	return nil
+}
+
 func withDebugEnabled(t *testing.T, enabled bool) {
 	t.Helper()
 

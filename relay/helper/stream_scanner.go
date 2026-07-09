@@ -28,6 +28,11 @@ const (
 	streamWriteTimeout          = 30 * time.Second
 )
 
+var (
+	streamPingData         = PingData
+	streamPingWriteTimeout = 10 * time.Second
+)
+
 func getScannerBufferSize() int {
 	if constant.StreamScannerMaxBufferMB > 0 {
 		return constant.StreamScannerMaxBufferMB << 20
@@ -41,11 +46,22 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	return scanner
 }
 
-func ExtendWriteDeadline(c *gin.Context) {
+func extendWriteDeadline(c *gin.Context, timeout time.Duration) {
 	if c == nil || c.Writer == nil {
 		return
 	}
-	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(timeout))
+}
+
+func ExtendWriteDeadline(c *gin.Context) {
+	extendWriteDeadline(c, streamWriteTimeout)
+}
+
+func pingDataWithTimeout(c *gin.Context) error {
+	// c.Writer is not safe for concurrent writes; keep the ping write in the
+	// caller's critical section and rely on the response write deadline to bound it.
+	extendWriteDeadline(c, streamPingWriteTimeout)
+	return streamPingData(c)
 }
 
 func newStreamingTimeoutTicker(timeoutSeconds int) (*time.Ticker, <-chan time.Time) {
@@ -155,12 +171,12 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					func() {
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
-						ExtendWriteDeadline(c)
-						err = PingData(c)
+						err = pingDataWithTimeout(c)
 					}()
 					if err != nil {
 						logger.LogError(c, "ping data error: "+err.Error())
 						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
+						stop()
 						return
 					}
 					logger.LogDebug(c, "ping data sent")

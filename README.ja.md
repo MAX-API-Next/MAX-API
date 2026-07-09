@@ -44,6 +44,8 @@
 
 MAX API は、研究機関と大学に所属する AGI 愛好者によって立ち上げられ、長期的に保守・運営されている AI モデルガバナンス、AgentOps、アプリケーションサービス基盤プロジェクトです。開発者、研究者、チーム、組織に対して、安定して再利用可能なサービスレイヤーを提供します。AI アプリケーションが実運用に入ると、モデル数の増加、上流 API の頻繁な変更、Agent の呼び出しチェーンの長大化、コストと監査の負担増加が発生します。MAX API は、アプリケーション、Agent、ユーザー、組織、上流モデルサービスの間に、アクセス、認証、ルーティング、課金、可観測性、ガバナンスの統一レイヤーを提供します。
 
+実運用では、MAX API は単なるリクエスト転送ではありません。AI-ready アプリケーションと Agent ワークロード向けの運用可能なゲートウェイとして、プロトコル正規化、プロバイダー差分、トラフィック集中、長時間ストリーミング、大きなリクエストボディ、複数ノードキャッシュ、コスト監査、性能観測を同じガバナンス境界にまとめます。
+
 継続的に注力する領域：
 
 - **AI モデルガバナンス**：OpenAI、Azure OpenAI、AWS Bedrock、Vertex AI、Ollama、および DeepSeek、Qwen / Alibaba Cloud Model Studio、Zhipu GLM、Kimi、Doubao / Volcano Engine、Tencent Hunyuan、Baidu ERNIE / Qianfan、iFlytek Spark、MiniMax、01.AI、SiliconFlow などのモデル更新、API 変更、パラメータ差分、価格ルール、タスクプロトコルを継続的に追跡します。Dify、RAGFlow、Kling、Seedance などのアプリケーション・マルチモーダルエコシステムも対象です。
@@ -75,6 +77,7 @@ AGI アプリケーション時代において、MAX API はオープンな AI �
 - **チャネル設定プレーン**：能力マトリクス、フォーム検証、モデル発見、プロトコルテンプレートによって、上流チャネル追加や非標準 API の保守における設定ミスを減らします。
 - **プロトコル・プロバイダー適応レイヤー**：海外公式 API、中国国内モデルプラットフォーム API、OpenAI-compatible / 非標準 API の変化を追跡し、安定したアプリケーション側インターフェースへ正規化します。
 - **コスト、クォータ、信頼性ガバナンス**：チャネルルーティング、重み付き分配、retry、レート制限、事前課金、失敗時返金、式ベース課金、固定価格、タスク rate-card、倍率課金、利用統計をサポートします。
+- **性能とスケーラビリティガバナンス**：Redis / メモリキャッシュ、モデルリクエスト制限、ストリーミング timeout、大きな応答バッファ、リクエストボディ上限、ディスクキャッシュ、Pyroscope profiling、graceful shutdown により、単一ノードから複数ノードまで安定運用を支えます。
 - **組織運用・監査レイヤー**：チーム、研究機関、企業、コミュニティ向けに、ユーザー管理、グループ管理、プライベートデプロイ、データ保持、監査、継続運用最適化を提供します。
 - **再利用可能なガバナンステンプレート**：チャネルテンプレート、タスクプロトコルテンプレート、価格設定、デプロイ実践、運用ノウハウを蓄積します。
 
@@ -187,6 +190,17 @@ docker compose up -d
 - 重み付きチャネルルーティング、失敗時 retry、無効チャネル回避、モデルレベルルーティングをサポートします。
 - Redis キャッシュとメモリキャッシュにより、単一ノード・複数ノード構成に対応します。
 
+### 性能とスケーラビリティガバナンス
+
+| 機能 | 説明 |
+|------|------|
+| キャッシュと複数ノード拡張 | 単一ノードではメモリキャッシュ、複数ノードでは Redis を利用できます。ユーザー、トークン、チャネル affinity、クォータ関連キャッシュで DB 読み取りを減らし、`SESSION_SECRET`、`CRYPTO_SECRET`、`NODE_NAME` によりセッション、暗号化、ログ帰属を揃えます |
+| レート制限と容量保護 | グローバル API / Web、重要 endpoint、検索、モデルリクエスト、グループ別モデルリクエスト quota の制限をサポートし、Redis またはメモリカウンターを利用できます |
+| ストリーミングと大きなリクエスト制御 | `STREAMING_TIMEOUT`、`STREAM_SCANNER_MAX_BUFFER_MB`、`MAX_REQUEST_BODY_MB`、`MAX_FILE_DOWNLOAD_MB` で長時間 stream、大きな SSE 行、解凍後リクエストボディ、リモートファイル download を制御します |
+| リレー接続調整 | `RELAY_TIMEOUT`、`RELAY_IDLE_CONN_TIMEOUT`、`RELAY_MAX_IDLE_CONNS`、`RELAY_MAX_IDLE_CONNS_PER_HOST` で上流 HTTP timeout と connection pool を調整できます |
+| ディスクキャッシュと性能観測 | 性能設定で大きなリクエストボディ向けディスクキャッシュ、閾値、容量を設定できます。運用 endpoint で確認 / クリアでき、Pyroscope で CPU、メモリ、goroutine、mutex、block profile を収集できます |
+| Graceful shutdown とデータ保存 | `SHUTDOWN_TIMEOUT_SECONDS` と `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS` により、可能な範囲で HTTP 処理を閉じ、クォータキャッシュを保存してから終了します |
+
 ### セキュリティと組織管理
 
 - JWT、WebAuthn/Passkeys、OAuth、OIDC、Telegram、Discord、LinuxDO などのログイン方式をサポートします。
@@ -205,6 +219,7 @@ docker compose up -d
 | Agent アクセス | Agent が上流 Key を直接保持し、回収や制限が難しい | Agent ごとに独立トークンを割り当て、モデル・クォータ・期限・グループを制限 |
 | プロトコル差分 | Claude、Gemini、Responses などをアプリ側で吸収 | ゲートウェイがプロトコル変換とプロバイダー適応を担当 |
 | 障害処理 | retry、fallback、エラー正規化をアプリ側で実装 | チャネル失敗時 retry、重み付きルーティング、エラー処理を内蔵 |
+| 性能と拡張 | timeout、レート制限、接続 pool、cache をアプリ側で処理 | ゲートウェイが streaming timeout、リクエスト制限、Redis / メモリ cache、接続 pool 調整、性能観測を集約 |
 | コスト統計 | 請求が各平台に分散し、ユーザーや Agent への帰属が難しい | クォータ、課金、利用統計、消費ログを統一し、トークンとモデル単位で帰属可能 |
 | 監査境界 | アプリ側ログが分散し、権限・保持ポリシーが不統一 | 管理者側統一監査入口、通常ユーザーには管理者専用フィールドを除外 |
 | プライベート化 | Key、ログ、課金ポリシーが分散 | 自己ホストで Key、データ、ログ、ポリシーを掌握 |
@@ -413,6 +428,7 @@ Seedance 2.0 などの動画モデルでは、解像度や動画入力などの�
 | リモートデータベース | MySQL ≥ 5.7.8 または PostgreSQL ≥ 9.6 |
 | キャッシュ | 単一ノードはメモリキャッシュ、複数ノードは Redis 推奨 |
 | フロントエンドビルド | Bun workspace。`web/package.json` と `web/bun.lock` を保持 |
+| ソースビルド | `go.mod` に記載された Go バージョン（現在は Go 1.25.1+）とリポジトリ内の `go.sum` を使用。依存関係またはセキュリティ更新後は `go mod download`、`go mod verify` を実行してから再ビルド |
 
 ### 推奨環境変数
 
@@ -484,6 +500,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` はイメージビルド中に Go モジュールをダウンロードします。ホストで直接ビルドする場合、または依存関係 / セキュリティ更新後は、`go.mod` と `go.sum` を必ず一緒にコミットし、`go mod download && go mod verify` を実行してからバイナリまたはイメージを再ビルドしてください。ベースイメージを更新する必要がある場合は `docker build --pull --no-cache -t cscitechtop/max-api:latest .` を使用します。
 
 > [!TIP]
 > フロントエンドは Bun workspace を使用します。ビルドコンテキストには `web/package.json`、`web/bun.lock`、`web/default/package.json` を保持してください。そうしないと `catalog:` 依存関係を解決できません。

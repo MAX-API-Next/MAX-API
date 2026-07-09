@@ -52,6 +52,8 @@
 
 MAX API 是由来自科研机构和高校的 AGI 爱好者组织发起、维护和长期运营的 AI 模型治理、AgentOps 与应用服务基础设施项目，面向开发者、研究者、团队和组织提供稳定、可复用的服务层能力。项目关注 AI 应用落地后的持续运营问题：模型越来越多、供应商接口频繁变化、Agent 调用链路变长、成本和审计压力增加。MAX API 在应用、Agent、用户、组织和上游模型服务之间提供统一的接入、鉴权、路由、计费、观测和治理层，让 AI 应用更稳定、更可控地运行。
 
+换句话说，MAX API 不只是请求转发器，而是面向 AI-ready 应用和 Agent 工作负载的可运营网关：在统一模型协议与供应商差异的同时，把突发流量、长流式响应、大请求体、多节点缓存、成本审计和性能观测放进同一套治理边界。
+
 持续投入方向：
 
 - **AI 模型治理**：持续跟踪 OpenAI、Azure OpenAI、AWS Bedrock、Vertex AI、Ollama，以及 DeepSeek、通义千问 / 阿里云百炼、智谱 GLM、Kimi、豆包 / 火山引擎、腾讯混元、百度文心 / 千帆、讯飞星火、MiniMax、零一万物、硅基流动等模型与平台的模型更新、接口变化、参数差异、价格规则和任务协议；同时关注 Dify、RAGFlow、Kling、Seedance 等应用和多模态生态的接入形态，通过渠道、模型映射、协议转换、路径覆盖和可配置任务协议，把分散模型能力纳入统一治理。
@@ -83,6 +85,7 @@ MAX API 当前版本发布分为正式版和 Preview 预览版。Preview 预览�
 - **渠道配置平面**：通过能力矩阵、表单校验、模型发现和协议模板，降低新增上游渠道、迁移供应商和维护非标准接口时的误配置风险。
 - **协议与供应商适配层**：持续跟踪海外官方接口、国产模型平台接口（DeepSeek、通义、智谱、火山引擎、百度千帆等）以及各类 OpenAI 兼容 / 非标准接口的变化，并规范化为稳定的应用侧接口。
 - **成本、额度与可靠性治理**：支持渠道路由、加权分发、失败重试、限流、预扣费、失败退款，以及表达式计费、固定价格、任务 rate-card、倍率计费和用量统计。
+- **性能与可扩展性治理**：通过 Redis / 内存缓存、模型请求限流、流式超时与大响应缓冲、请求体上限、磁盘缓存、Pyroscope 性能采样和优雅关闭，支撑单机到多节点部署的稳定运行。
 - **组织级运营与审计层**：为团队、研究机构、企业和社区服务提供用户管理、分组管理、私有化部署、数据留存、审计和持续运营优化能力。
 - **可复用治理模板**：沉淀渠道模板、任务协议模板、价格配置、部署实践和运维经验，降低新模型、新供应商和新 Agent 场景的接入成本。
 
@@ -195,6 +198,17 @@ docker compose up -d
 - 支持渠道加权随机、失败重试、禁用渠道绕过和模型级路由，降低上游异常对应用和 Agent 的影响。
 - 支持 Redis 缓存与内存缓存，适配单机和多机部署。
 
+### 性能与可扩展性治理
+
+| 能力 | 说明 |
+|------|------|
+| 缓存与多节点扩展 | 单机可使用内存缓存，多机可接入 Redis；用户、令牌、渠道亲和、额度相关缓存减少重复数据库访问，并通过 `SESSION_SECRET`、`CRYPTO_SECRET`、`NODE_NAME` 保持会话、加密和日志归属一致 |
+| 请求限流与容量保护 | 支持全局 API / Web 限流、关键接口限流、搜索限流、模型请求限流和按分组配置的模型请求配额；可使用 Redis 或内存计数器 |
+| 流式与大请求控制 | 支持 `STREAMING_TIMEOUT`、`STREAM_SCANNER_MAX_BUFFER_MB`、`MAX_REQUEST_BODY_MB`、`MAX_FILE_DOWNLOAD_MB` 等配置，控制长流式响应、大行 SSE、解压后请求体和远程文件下载大小 |
+| 中继连接调优 | 支持 `RELAY_TIMEOUT`、`RELAY_IDLE_CONN_TIMEOUT`、`RELAY_MAX_IDLE_CONNS`、`RELAY_MAX_IDLE_CONNS_PER_HOST` 配置上游 HTTP 连接池与超时策略 |
+| 磁盘缓存与性能观测 | 系统性能设置可启用大请求体磁盘缓存、配置缓存阈值和容量；运维接口可查看 / 清理磁盘缓存，并可通过 Pyroscope 采集 CPU、内存、goroutine、mutex 和 block profile |
+| 平滑退出与数据落盘 | 关闭进程时支持 `SHUTDOWN_TIMEOUT_SECONDS` 和 `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS`，尽量在退出前完成 HTTP 关闭和额度缓存保存 |
+
 ### 安全与组织管理
 
 - 支持 JWT、WebAuthn/Passkeys、OAuth、OIDC、Telegram、Discord、LinuxDO 等登录方式。
@@ -213,6 +227,7 @@ docker compose up -d
 | Agent 访问 | Agent 直接持有上游 Key，难以回收和限额 | 为 Agent 分配独立令牌，并限制模型、额度、过期时间和分组 |
 | 协议差异 | 应用自行适配 Claude、Gemini、Responses 等格式 | 网关统一做协议转换和供应商适配 |
 | 失败处理 | 应用自行实现重试、降级和错误归一 | 渠道失败自动重试、加权路由和错误处理 |
+| 性能与扩展 | 应用自行处理超时、限流、连接池和缓存 | 网关集中提供流式超时、请求限制、Redis / 内存缓存、连接池调优和性能观测 |
 | 成本统计 | 各平台账单分散，难以按用户或 Agent 核算 | 统一额度、计费、用量统计和消费日志，可按令牌和模型归因 |
 | 审计边界 | 应用侧分散记录，权限和留存策略不统一 | 管理员侧统一审计入口，普通用户日志过滤管理员专用字段 |
 | 私有化 | 密钥、日志和计费策略分散 | 自托管，自主掌控密钥、数据、日志和策略 |
@@ -476,6 +491,7 @@ Seedance 2.0 等视频模型可按分辨率、视频输入等请求参数参与�
 | 远程数据库 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6 |
 | 缓存 | 单机可使用内存缓存，多机部署建议使用 Redis |
 | 前端构建 | 使用 Bun workspace，需保留 `web/package.json` 与 `web/bun.lock` |
+| 源码构建 | 使用仓库 `go.mod` 声明的 Go 版本（当前 Go 1.25.1+）和 `go.sum`；依赖或安全更新后运行 `go mod download`、`go mod verify` 并重新构建 |
 
 ### 推荐环境变量
 
@@ -547,6 +563,9 @@ git clone https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 docker build -t cscitechtop/max-api:latest .
 ```
+
+> [!NOTE]
+> `Dockerfile` 会在镜像构建中下载 Go 模块。宿主机直接构建或依赖 / 安全更新后，请保持 `go.mod` 与 `go.sum` 成对提交，先运行 `go mod download && go mod verify`，再重新构建二进制或镜像；需要刷新基础镜像时可使用 `docker build --pull --no-cache -t cscitechtop/max-api:latest .`。
 
 > [!TIP]
 > 前端使用 Bun workspace。构建上下文中必须保留 `web/package.json`、`web/bun.lock` 和 `web/default/package.json`，否则 `catalog:` 依赖无法解析。

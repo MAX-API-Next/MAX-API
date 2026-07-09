@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { HtmlContent } from '@/components/html-content'
 import { Markdown } from '@/components/ui/markdown'
+import { HtmlContent, type HtmlContentVariant } from '@/components/html-content'
 
 type RichContentMode = 'markdown' | 'html'
 
@@ -25,11 +25,18 @@ interface RichContentProps {
   content: string
   mode?: RichContentMode
   className?: string
+  htmlVariant?: HtmlContentVariant
 }
 
 export function RichContent(props: RichContentProps) {
   if (props.mode === 'html') {
-    return <HtmlContent content={props.content} className={props.className} />
+    return (
+      <HtmlContent
+        content={props.content}
+        className={props.className}
+        variant={props.htmlVariant}
+      />
+    )
   }
 
   return <Markdown className={props.className}>{props.content}</Markdown>

@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/types"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 
 	"gorm.io/gorm"
@@ -91,6 +93,8 @@ const (
 	LogFilterEmptyRetry = "empty_retry"
 )
 
+var ErrLogRetryMarkerBackfillIncomplete = errors.New("log retry marker backfill is not completed")
+
 const (
 	LogQuotaFilterAbnormal = "abnormal"
 	LogQuotaFilterZero     = "zero"
@@ -150,25 +154,28 @@ func applyLogTypeFilter(tx *gorm.DB, logType int) *gorm.DB {
 
 var ensureLogRetryMarkerBackfillCompletedForRead = ensureLogRetryMarkerBackfillCompletedForReadDefault
 
-func applyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
+func applyRetryColumnFilter(tx *gorm.DB, column string) (*gorm.DB, error) {
 	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
 		return nil, err
 	}
-	return tx.Where("logs.is_retry = ?", true), nil
+	switch column {
+	case "is_retry", "is_error_retry", "is_empty_retry":
+		return tx.Where("logs."+column+" = ?", true), nil
+	default:
+		return nil, fmt.Errorf("invalid retry log filter column: %s", column)
+	}
+}
+
+func applyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
+	return applyRetryColumnFilter(tx, "is_retry")
 }
 
 func applyErrorRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
-	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
-		return nil, err
-	}
-	return tx.Where("logs.is_error_retry = ?", true), nil
+	return applyRetryColumnFilter(tx, "is_error_retry")
 }
 
 func applyEmptyRetryLogFilter(tx *gorm.DB) (*gorm.DB, error) {
-	if err := ensureLogRetryMarkerBackfillCompletedForRead(); err != nil {
-		return nil, err
-	}
-	return tx.Where("logs.is_empty_retry = ?", true), nil
+	return applyRetryColumnFilter(tx, "is_empty_retry")
 }
 
 func ensureLogRetryMarkerBackfillCompletedForReadDefault() error {
@@ -179,10 +186,39 @@ func ensureLogRetryMarkerBackfillCompletedForReadDefault() error {
 	if completed {
 		return nil
 	}
-	if err := backfillLogRetryMarker(); err != nil {
-		return fmt.Errorf("failed to backfill log retry markers before retry log read: %w", err)
+	return fmt.Errorf("%w; retry log filters will be available after startup backfill finishes", ErrLogRetryMarkerBackfillIncomplete)
+}
+
+var (
+	logQuotaDataAsyncRunner = func(fn func()) {
+		gopool.Go(fn)
 	}
-	return nil
+	logQuotaDataAsyncWG         sync.WaitGroup
+	logQuotaDataShutdownMu      sync.Mutex
+	logQuotaDataShutdownStarted bool
+)
+
+func enqueueLogQuotaData(params QuotaDataLogParams) {
+	logQuotaDataShutdownMu.Lock()
+	if logQuotaDataShutdownStarted {
+		logQuotaDataShutdownMu.Unlock()
+		LogQuotaData(params)
+		SaveQuotaDataCache()
+		return
+	}
+	logQuotaDataAsyncWG.Add(1)
+	logQuotaDataShutdownMu.Unlock()
+	logQuotaDataAsyncRunner(func() {
+		defer logQuotaDataAsyncWG.Done()
+		LogQuotaData(params)
+	})
+}
+
+func WaitPendingLogQuotaData() {
+	logQuotaDataShutdownMu.Lock()
+	logQuotaDataShutdownStarted = true
+	logQuotaDataShutdownMu.Unlock()
+	logQuotaDataAsyncWG.Wait()
 }
 
 func applyLogFilter(tx *gorm.DB, filter string) (*gorm.DB, error) {
@@ -577,7 +613,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if common.DataExportEnabled {
 		createdAt := common.GetTimestamp()
-		LogQuotaData(QuotaDataLogParams{
+		enqueueLogQuotaData(QuotaDataLogParams{
 			UserID:    userId,
 			Username:  username,
 			ModelName: params.ModelName,
@@ -640,7 +676,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		if nodeName == "" {
 			nodeName = common.NodeName
 		}
-		LogQuotaData(QuotaDataLogParams{
+		enqueueLogQuotaData(QuotaDataLogParams{
 			UserID:    params.UserId,
 			Username:  username,
 			ModelName: params.ModelName,

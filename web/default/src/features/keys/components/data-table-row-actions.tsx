@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { encodeChannelConnectionInfo } from '@/lib/channel-connection-info'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { Button } from '@/components/ui/button'
 import {
@@ -69,14 +70,6 @@ function getServerAddress(): string {
     /* empty */
   }
   return window.location.origin
-}
-
-function encodeConnectionString(key: string, url: string): string {
-  return JSON.stringify({
-    _type: 'maxapi_channel_conn',
-    key,
-    url,
-  })
 }
 
 type DataTableRowActionsProps<TData> = {
@@ -251,7 +244,7 @@ export function DataTableRowActions<TData>({
             onClick={async () => {
               const realKey = getCachedRealKey()
               if (!realKey) return
-              const connStr = encodeConnectionString(
+              const connStr = encodeChannelConnectionInfo(
                 realKey,
                 getServerAddress()
               )

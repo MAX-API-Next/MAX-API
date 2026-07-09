@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   SettingsControlChildren,
   SettingsForm,
@@ -42,14 +43,21 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { HEADER_NAV_DEFAULT, type HeaderNavModulesConfig } from './config'
+import {
+  HEADER_NAV_DEFAULT,
+  type HeaderNavAccessConfig,
+  type HeaderNavModulesConfig,
+} from './config'
 import { useHeaderNavModulesOption } from './use-header-nav-modules-option'
+import { useRankingsModuleOption } from './use-rankings-module-option'
 
 const headerNavSchema = z.object({
   home: z.boolean(),
   console: z.boolean(),
   pricingEnabled: z.boolean(),
   pricingRequireAuth: z.boolean(),
+  rankingsEnabled: z.boolean(),
+  rankingsRequireAuth: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
   customEnabled: z.boolean(),
@@ -61,9 +69,13 @@ type HeaderNavFormValues = z.infer<typeof headerNavSchema>
 
 type HeaderNavigationSectionProps = {
   config: HeaderNavModulesConfig
+  rankingsConfig: HeaderNavAccessConfig
 }
 
-const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
+const toFormValues = (
+  config: HeaderNavModulesConfig,
+  rankingsConfig: HeaderNavAccessConfig
+): HeaderNavFormValues => ({
   home:
     config.home === undefined ? HEADER_NAV_DEFAULT.home : Boolean(config.home),
   console:
@@ -78,6 +90,14 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.pricing?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.pricing.requireAuth
       : Boolean(config.pricing.requireAuth),
+  rankingsEnabled:
+    rankingsConfig.enabled === undefined
+      ? HEADER_NAV_DEFAULT.rankings.enabled
+      : Boolean(rankingsConfig.enabled),
+  rankingsRequireAuth:
+    rankingsConfig.requireAuth === undefined
+      ? HEADER_NAV_DEFAULT.rankings.requireAuth
+      : Boolean(rankingsConfig.requireAuth),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -100,10 +120,15 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
 
 export function HeaderNavigationSection({
   config,
+  rankingsConfig,
 }: HeaderNavigationSectionProps) {
   const { t } = useTranslation()
   const headerNavOption = useHeaderNavModulesOption()
-  const formDefaults = useMemo(() => toFormValues(config), [config])
+  const rankingsOption = useRankingsModuleOption()
+  const formDefaults = useMemo(
+    () => toFormValues(config, rankingsConfig),
+    [config, rankingsConfig]
+  )
 
   const form = useForm<HeaderNavFormValues>({
     resolver: zodResolver(headerNavSchema),
@@ -113,28 +138,39 @@ export function HeaderNavigationSection({
   useResetForm(form, formDefaults)
 
   const onSubmit = async (values: HeaderNavFormValues) => {
-    await headerNavOption.updateHeaderNavModules((current) => ({
-      ...current,
-      home: values.home,
-      console: values.console,
-      docs: values.docs,
-      about: values.about,
-      custom: {
-        ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
-        enabled: values.customEnabled,
-        title: values.customTitle.trim(),
-        href: values.customHref.trim(),
-      },
-      pricing: {
-        ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
-        enabled: values.pricingEnabled,
-        requireAuth: values.pricingRequireAuth,
-      },
-    }))
+    try {
+      await Promise.all([
+        headerNavOption.updateHeaderNavModules((current) => ({
+          ...current,
+          home: values.home,
+          console: values.console,
+          docs: values.docs,
+          about: values.about,
+          custom: {
+            ...(current.custom ?? HEADER_NAV_DEFAULT.custom),
+            enabled: values.customEnabled,
+            title: values.customTitle.trim(),
+            href: values.customHref.trim(),
+          },
+          pricing: {
+            ...(current.pricing ?? HEADER_NAV_DEFAULT.pricing),
+            enabled: values.pricingEnabled,
+            requireAuth: values.pricingRequireAuth,
+          },
+        })),
+        rankingsOption.updateRankingsModule((current) => ({
+          ...current,
+          enabled: values.rankingsEnabled,
+          requireAuth: values.rankingsRequireAuth,
+        })),
+      ])
+    } catch (error) {
+      handleServerError(error)
+    }
   }
 
   const resetToDefault = () => {
-    form.reset(toFormValues(HEADER_NAV_DEFAULT))
+    form.reset(toFormValues(HEADER_NAV_DEFAULT, HEADER_NAV_DEFAULT.rankings))
   }
   const customEnabled = form.watch('customEnabled')
 
@@ -166,9 +202,9 @@ export function HeaderNavigationSection({
   ]
 
   const accessModules: Array<{
-    enabledKey: keyof HeaderNavFormValues
-    requireAuthKey: keyof HeaderNavFormValues
-    requireAuthDependsOn: 'pricingEnabled'
+    enabledKey: 'pricingEnabled' | 'rankingsEnabled'
+    requireAuthKey: 'pricingRequireAuth' | 'rankingsRequireAuth'
+    requireAuthDependsOn: 'pricingEnabled' | 'rankingsEnabled'
     title: string
     description: string
     requireAuthTitle: string
@@ -185,6 +221,19 @@ export function HeaderNavigationSection({
         'Visitors must authenticate before accessing the pricing directory.'
       ),
     },
+    {
+      enabledKey: 'rankingsEnabled',
+      requireAuthKey: 'rankingsRequireAuth',
+      requireAuthDependsOn: 'rankingsEnabled',
+      title: t('Rankings'),
+      description: t(
+        'Allow users to open the rankings page and query live ranking data.'
+      ),
+      requireAuthTitle: t('Require login to view rankings'),
+      requireAuthDescription: t(
+        'Visitors must authenticate before accessing the rankings page.'
+      ),
+    },
   ]
 
   return (
@@ -194,7 +243,7 @@ export function HeaderNavigationSection({
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}
             onReset={resetToDefault}
-            isSaving={headerNavOption.isPending}
+            isSaving={headerNavOption.isPending || rankingsOption.isPending}
             resetLabel='Reset to default'
             saveLabel='Save navigation'
           />

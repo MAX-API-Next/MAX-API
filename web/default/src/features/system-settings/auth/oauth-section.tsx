@@ -16,13 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type BaseSyntheticEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import * as z from 'zod'
 import axios from 'axios'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Form,
   FormControl,
@@ -35,6 +45,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { CopyButton } from '@/components/copy-button'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import {
@@ -45,6 +56,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  buildOAuthCallbackUrl,
+  resolveOAuthSiteUrl,
+} from './oauth-callback-url'
 
 /**
  * react-hook-form 7 treats dotted `name` strings as nested paths. To keep
@@ -115,6 +130,55 @@ type FlatOAuthDefaults = {
 const oauthTabContentClassName =
   'grid min-w-0 gap-x-5 gap-y-6 lg:grid-cols-2 [&>[data-slot=form-item]]:min-w-0 lg:[&>[data-slot=form-item]:has([data-slot=switch])]:col-span-2'
 
+type OAuthSetupGuideRow = {
+  label: ReactNode
+  value: string
+  copyLabel: string
+}
+
+type OAuthSetupGuideProps = {
+  title: string
+  description: ReactNode
+  rows: OAuthSetupGuideRow[]
+  children?: ReactNode
+}
+
+function OAuthSetupGuide(props: OAuthSetupGuideProps) {
+  return (
+    <Alert className='lg:col-span-2'>
+      <AlertTitle>{props.title}</AlertTitle>
+      <AlertDescription className='flex flex-col gap-3 text-sm'>
+        <div>{props.description}</div>
+        <div className='flex flex-col gap-2'>
+          {props.rows.map((row) => (
+            <div
+              key={`${String(row.label)}-${row.value}`}
+              className='flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between'
+            >
+              <span className='text-muted-foreground shrink-0'>
+                {row.label}
+              </span>
+              <span className='flex min-w-0 items-center gap-2'>
+                <code className='bg-muted text-foreground min-w-0 rounded px-1.5 py-0.5 text-xs break-all'>
+                  {row.value}
+                </code>
+                <CopyButton
+                  value={row.value}
+                  size='icon'
+                  className='size-7'
+                  tooltip={row.copyLabel}
+                  aria-label={row.copyLabel}
+                />
+              </span>
+            </div>
+          ))}
+        </div>
+        {props.children}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 const buildFormDefaults = (defaults: FlatOAuthDefaults): OAuthFormValues => ({
   GitHubOAuthEnabled: defaults.GitHubOAuthEnabled,
   GitHubClientId: defaults.GitHubClientId ?? '',
@@ -175,12 +239,34 @@ const normalizeFormValues = (values: OAuthFormValues): FlatOAuthDefaults => ({
 
 type OAuthSectionProps = {
   defaultValues: FlatOAuthDefaults
+  serverAddress: string
 }
 
 export function OAuthSection(props: OAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [activeTab, setActiveTab] = useState('github')
+  const siteUrl = resolveOAuthSiteUrl(props.serverAddress, t('Site URL'))
+  const githubCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'github',
+    t('Site URL')
+  )
+  const discordCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'discord',
+    t('Site URL')
+  )
+  const oidcCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'oidc',
+    t('Site URL')
+  )
+  const linuxDOCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'linuxdo',
+    t('Site URL')
+  )
 
   const formDefaults = useMemo(
     () => buildFormDefaults(props.defaultValues),
@@ -205,73 +291,87 @@ export function OAuthSection(props: OAuthSectionProps) {
     form.reset(buildFormDefaults(props.defaultValues))
   }, [props.defaultValues, form])
 
-  const onSubmit = async (values: OAuthFormValues) => {
-    let finalValues = values
+  const onSubmit = useCallback(
+    async (values: OAuthFormValues) => {
+      let finalValues = values
 
-    if (values.oidc.well_known && values.oidc.well_known.trim() !== '') {
-      const wellKnown = values.oidc.well_known.trim()
-      if (
-        !wellKnown.startsWith('http://') &&
-        !wellKnown.startsWith('https://')
-      ) {
-        toast.error(t('Well-Known URL must start with http:// or https://'))
-        return
-      }
-
-      try {
-        const res = await axios.create().get(wellKnown)
-        const authEndpoint = res.data['authorization_endpoint'] || ''
-        const tokenEndpoint = res.data['token_endpoint'] || ''
-        const userInfoEndpoint = res.data['userinfo_endpoint'] || ''
-
-        finalValues = {
-          ...values,
-          oidc: {
-            ...values.oidc,
-            authorization_endpoint: authEndpoint,
-            token_endpoint: tokenEndpoint,
-            user_info_endpoint: userInfoEndpoint,
-          },
+      if (values.oidc.well_known && values.oidc.well_known.trim() !== '') {
+        const wellKnown = values.oidc.well_known.trim()
+        if (
+          !wellKnown.startsWith('http://') &&
+          !wellKnown.startsWith('https://')
+        ) {
+          toast.error(t('Well-Known URL must start with http:// or https://'))
+          return
         }
 
-        form.setValue('oidc.authorization_endpoint', authEndpoint)
-        form.setValue('oidc.token_endpoint', tokenEndpoint)
-        form.setValue('oidc.user_info_endpoint', userInfoEndpoint)
+        try {
+          const res = await axios.create().get(wellKnown)
+          const authEndpoint = res.data['authorization_endpoint'] || ''
+          const tokenEndpoint = res.data['token_endpoint'] || ''
+          const userInfoEndpoint = res.data['userinfo_endpoint'] || ''
 
-        toast.success(t('OIDC configuration fetched successfully'))
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error(err)
-        toast.error(
-          t(
-            'Failed to fetch OIDC configuration. Please check the URL and network status'
+          finalValues = {
+            ...values,
+            oidc: {
+              ...values.oidc,
+              authorization_endpoint: authEndpoint,
+              token_endpoint: tokenEndpoint,
+              user_info_endpoint: userInfoEndpoint,
+            },
+          }
+
+          form.setValue('oidc.authorization_endpoint', authEndpoint)
+          form.setValue('oidc.token_endpoint', tokenEndpoint)
+          form.setValue('oidc.user_info_endpoint', userInfoEndpoint)
+
+          toast.success(t('OIDC configuration fetched successfully'))
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error(err)
+          toast.error(
+            t(
+              'Failed to fetch OIDC configuration. Please check the URL and network status'
+            )
           )
-        )
+          return
+        }
+      }
+
+      const normalized = normalizeFormValues(finalValues)
+      const changedKeys = (
+        Object.keys(normalized) as Array<keyof FlatOAuthDefaults>
+      ).filter((key) => normalized[key] !== baselineRef.current[key])
+
+      if (changedKeys.length === 0) {
+        toast.info(t('No changes to save'))
         return
       }
-    }
 
-    const normalized = normalizeFormValues(finalValues)
-    const changedKeys = (
-      Object.keys(normalized) as Array<keyof FlatOAuthDefaults>
-    ).filter((key) => normalized[key] !== baselineRef.current[key])
+      for (const key of changedKeys) {
+        await updateOption.mutateAsync({
+          key,
+          value: normalized[key],
+        })
+      }
 
-    if (changedKeys.length === 0) {
-      toast.info(t('No changes to save'))
-      return
-    }
+      baselineRef.current = normalized
+      baselineSerializedRef.current = JSON.stringify(normalized)
+      form.reset(buildFormDefaults(normalized))
+    },
+    [form, t, updateOption]
+  )
 
-    for (const key of changedKeys) {
-      await updateOption.mutateAsync({
-        key,
-        value: normalized[key],
-      })
-    }
+  const handleFormSubmit = useCallback(
+    (event?: BaseSyntheticEvent) => {
+      void form.handleSubmit(onSubmit)(event)
+    },
+    [form, onSubmit]
+  )
 
-    baselineRef.current = normalized
-    baselineSerializedRef.current = JSON.stringify(normalized)
-    form.reset(buildFormDefaults(normalized))
-  }
+  const handleSave = useCallback(() => {
+    void form.handleSubmit(onSubmit)()
+  }, [form, onSubmit])
 
   const handleReset = () => {
     form.reset(buildFormDefaults(baselineRef.current))
@@ -284,9 +384,9 @@ export function OAuthSection(props: OAuthSectionProps) {
 
       <SettingsSection title={t('OAuth Integrations')}>
         <Form {...form}>
-          <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+          <SettingsForm onSubmit={handleFormSubmit}>
             <SettingsPageFormActions
-              onSave={form.handleSubmit(onSubmit)}
+              onSave={handleSave}
               onReset={handleReset}
               isSaving={updateOption.isPending}
               isResetDisabled={!form.formState.isDirty}
@@ -304,6 +404,25 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsList>
 
               <TabsContent value='github' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  title={t('Setup guide')}
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  rows={[
+                    {
+                      label: t('Homepage URL'),
+                      value: siteUrl,
+                      copyLabel: t('Copy homepage URL'),
+                    },
+                    {
+                      label: t('Authorization callback URL'),
+                      value: githubCallbackUrl,
+                      copyLabel: t('Copy callback URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='GitHubOAuthEnabled'
@@ -376,6 +495,25 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='discord' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  title={t('Setup guide')}
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  rows={[
+                    {
+                      label: t('Homepage URL'),
+                      value: siteUrl,
+                      copyLabel: t('Copy homepage URL'),
+                    },
+                    {
+                      label: t('Authorization callback URL'),
+                      value: discordCallbackUrl,
+                      copyLabel: t('Copy callback URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='discord.enabled'
@@ -448,6 +586,36 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='oidc' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  title={t('Setup guide')}
+                  description={
+                    <div className='flex flex-col gap-1'>
+                      <p>
+                        {t(
+                          'Set these values in the provider application before enabling login.'
+                        )}
+                      </p>
+                      <p>
+                        {t(
+                          'OIDC discovery can fill the endpoint fields automatically when the provider supports it.'
+                        )}
+                      </p>
+                    </div>
+                  }
+                  rows={[
+                    {
+                      label: t('Homepage URL'),
+                      value: siteUrl,
+                      copyLabel: t('Copy homepage URL'),
+                    },
+                    {
+                      label: t('Redirect URL'),
+                      value: oidcCallbackUrl,
+                      copyLabel: t('Copy redirect URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='oidc.enabled'
@@ -700,6 +868,30 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='linuxdo' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  title={t('Setup guide')}
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  rows={[
+                    {
+                      label: t('Authorization callback URL'),
+                      value: linuxDOCallbackUrl,
+                      copyLabel: t('Copy callback URL'),
+                    },
+                  ]}
+                >
+                  <a
+                    href='https://connect.linux.do/'
+                    target='_blank'
+                    rel='noreferrer'
+                    className='text-primary inline-flex w-fit items-center gap-1 underline underline-offset-3 hover:no-underline'
+                  >
+                    {t('Manage your LinuxDO OAuth app')}
+                    <ExternalLink className='size-3' aria-hidden='true' />
+                  </a>
+                </OAuthSetupGuide>
+
                 <FormField
                   control={form.control}
                   name='LinuxDOOAuthEnabled'

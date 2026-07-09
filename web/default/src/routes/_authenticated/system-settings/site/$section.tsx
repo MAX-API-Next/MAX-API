@@ -27,6 +27,13 @@ export const Route = createFileRoute(
   '/_authenticated/system-settings/site/$section'
 )({
   beforeLoad: ({ params }) => {
+    if (params.section === 'rankings') {
+      throw redirect({
+        to: '/system-settings/site/$section',
+        params: { section: 'header-navigation' },
+      })
+    }
+
     const validSections = SITE_SECTION_IDS as unknown as string[]
     if (!validSections.includes(params.section)) {
       throw redirect({
