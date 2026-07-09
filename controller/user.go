@@ -35,6 +35,8 @@ var (
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
 
+const maxUserQuotaValue = 1<<31 - 1
+
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordLoginDisabled)
@@ -251,6 +253,9 @@ func Register(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if common.EmailVerificationEnabled {
+		common.DeleteKey(user.Email, common.EmailVerificationPurpose)
 	}
 
 	// 获取插入后的用户ID
@@ -990,6 +995,17 @@ type ManageRequest struct {
 	Mode   string `json:"mode"`
 }
 
+func isValidQuotaOverride(value int) bool {
+	return value >= 0 && value <= maxUserQuotaValue
+}
+
+func isValidQuotaAddition(current int, delta int) bool {
+	if delta <= 0 || delta > maxUserQuotaValue {
+		return false
+	}
+	return current <= maxUserQuotaValue-delta
+}
+
 // ManageUser Only admin user can do this
 func ManageUser(c *gin.Context) {
 	var req ManageRequest
@@ -1066,6 +1082,10 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
+			if !isValidQuotaAddition(user.Quota, req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
 			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
 				common.ApiError(c, err)
 				return
@@ -1086,6 +1106,10 @@ func ManageUser(c *gin.Context) {
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
+			if !isValidQuotaOverride(req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+				return
+			}
 			oldQuota := user.Quota
 			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
 				common.ApiError(c, err)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-gonic/gin"
@@ -170,4 +171,59 @@ func TestTopUpLockReleaseKeepsReferencedEntry(t *testing.T) {
 	releaseTopUpLock(1002, second)
 	_, ok = topUpLocks.Load(1002)
 	require.False(t, ok)
+}
+
+func TestRegisterConsumesEmailVerificationCode(t *testing.T) {
+	setupUserSettingControllerTestDB(t)
+
+	originalRegisterEnabled := common.RegisterEnabled
+	originalPasswordRegisterEnabled := common.PasswordRegisterEnabled
+	originalEmailVerificationEnabled := common.EmailVerificationEnabled
+	originalQuotaForNewUser := common.QuotaForNewUser
+	originalGenerateDefaultToken := constant.GenerateDefaultToken
+	common.RegisterEnabled = true
+	common.PasswordRegisterEnabled = true
+	common.EmailVerificationEnabled = true
+	common.QuotaForNewUser = 0
+	constant.GenerateDefaultToken = false
+	t.Cleanup(func() {
+		common.RegisterEnabled = originalRegisterEnabled
+		common.PasswordRegisterEnabled = originalPasswordRegisterEnabled
+		common.EmailVerificationEnabled = originalEmailVerificationEnabled
+		common.QuotaForNewUser = originalQuotaForNewUser
+		constant.GenerateDefaultToken = originalGenerateDefaultToken
+	})
+
+	email := "register-code@example.com"
+	code := "123456"
+	common.RegisterVerificationCodeWithKey(email, code, common.EmailVerificationPurpose)
+	payloadBytes, err := common.Marshal(model.User{
+		Username:         "registercode",
+		Password:         "password123",
+		Email:            email,
+		VerificationCode: code,
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/register", bytes.NewReader(payloadBytes))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	Register(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.False(t, common.VerifyCodeWithKey(email, code, common.EmailVerificationPurpose))
+}
+
+func TestQuotaBoundsValidation(t *testing.T) {
+	require.True(t, isValidQuotaOverride(0))
+	require.True(t, isValidQuotaOverride(maxUserQuotaValue))
+	require.False(t, isValidQuotaOverride(-1))
+	require.False(t, isValidQuotaOverride(maxUserQuotaValue+1))
+
+	require.True(t, isValidQuotaAddition(maxUserQuotaValue-1, 1))
+	require.False(t, isValidQuotaAddition(maxUserQuotaValue, 1))
+	require.False(t, isValidQuotaAddition(0, maxUserQuotaValue+1))
+	require.False(t, isValidQuotaAddition(0, 0))
 }
