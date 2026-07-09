@@ -26,7 +26,7 @@ export type PricingAutoRouteChain = {
 function normalizeDisplayGroups(
   groups: string[],
   groupFilter?: (group: string) => boolean
-) {
+): string[] {
   const seen = new Set<string>()
   const normalized: string[] = []
 
@@ -53,7 +53,9 @@ function getFallbackAutoRoute(autoGroups: string[]): AutoGroupRoute | null {
   }
 }
 
-export function getAutoRouteLabelOverride(route: AutoGroupRoute) {
+export function getAutoRouteLabelOverride(
+  route: AutoGroupRoute
+): string | undefined {
   const name = route.name?.trim()
   if (
     route.key === DEFAULT_AUTO_ROUTE_KEY &&
@@ -71,7 +73,7 @@ export function getConfiguredAutoRouteChains(options: {
 }): PricingAutoRouteChain[] {
   const fallbackRoute = getFallbackAutoRoute(options.autoGroups)
   const routes =
-    options.autoRoutes && options.autoRoutes.length > 0
+    options.autoRoutes !== undefined
       ? options.autoRoutes
       : fallbackRoute
         ? [fallbackRoute]

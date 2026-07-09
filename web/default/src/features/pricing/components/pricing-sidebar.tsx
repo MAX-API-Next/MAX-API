@@ -168,11 +168,14 @@ function FilterSection(props: FilterSectionProps) {
 function AutoRouteGroupIntro(props: {
   autoGroups?: string[]
   autoRoutes?: AutoGroupRoute[]
+  visibleGroups: string[]
 }) {
   const { t } = useTranslation()
+  const visibleGroupSet = new Set(props.visibleGroups)
   const routeChains = getConfiguredAutoRouteChains({
     autoGroups: props.autoGroups ?? [],
     autoRoutes: props.autoRoutes,
+    groupFilter: (group) => visibleGroupSet.has(group),
   })
 
   if (routeChains.length === 0) return null
@@ -349,6 +352,7 @@ export function PricingSidebar(props: PricingSidebarProps) {
           <AutoRouteGroupIntro
             autoGroups={props.autoGroups}
             autoRoutes={props.autoRoutes}
+            visibleGroups={props.groups}
           />
         </FilterSection>
         <FilterSection
