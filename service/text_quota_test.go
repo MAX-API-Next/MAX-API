@@ -172,7 +172,7 @@ func TestPostTextConsumeQuotaUpdatesUsageStatsForStreamFallback(t *testing.T) {
 
 	var user model.User
 	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", userID).First(&user).Error)
-	require.Equal(t, fallbackQuota, user.UsedQuota)
+	require.EqualValues(t, fallbackQuota, user.UsedQuota)
 	require.Equal(t, 1, user.RequestCount)
 
 	var channel model.Channel
@@ -225,7 +225,7 @@ func TestPostTextConsumeQuotaUsesFallbackForNilUsageWithEstimate(t *testing.T) {
 
 	var user model.User
 	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", userID).First(&user).Error)
-	require.Equal(t, fallbackQuota, user.UsedQuota)
+	require.EqualValues(t, fallbackQuota, user.UsedQuota)
 	require.Equal(t, 1, user.RequestCount)
 
 	var channel model.Channel

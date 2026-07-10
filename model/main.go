@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -666,6 +667,10 @@ func migrateTokenModelLimitsToText() error {
 	return nil
 }
 
+// migrateUserQuotaColumnsToBigInt runs during startup. On MySQL/PostgreSQL,
+// changing large users table columns can hold table-level or rewrite locks for
+// a noticeable time, so operators with large deployments should schedule this
+// upgrade off-peak or run an equivalent online-DDL migration before booting.
 func migrateUserQuotaColumnsToBigInt() error {
 	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(&User{}) {
 		return nil
@@ -679,32 +684,55 @@ func migrateUserQuotaColumnsToBigInt() error {
 			continue
 		}
 
+		var backfillSQL string
 		var alterSQL string
 		if common.UsingPostgreSQL {
-			var dataType string
-			if err := DB.Raw(`SELECT data_type FROM information_schema.columns
+			var columnMetadata struct {
+				DataType      string         `gorm:"column:data_type"`
+				IsNullable    string         `gorm:"column:is_nullable"`
+				ColumnDefault sql.NullString `gorm:"column:column_default"`
+			}
+			if err := DB.Raw(`SELECT data_type AS data_type, is_nullable AS is_nullable, column_default AS column_default
+				FROM information_schema.columns
 				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
-				tableName, columnName).Scan(&dataType).Error; err != nil {
+				tableName, columnName).Scan(&columnMetadata).Error; err != nil {
 				common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-			} else if strings.EqualFold(dataType, "bigint") {
+			} else if strings.EqualFold(strings.TrimSpace(columnMetadata.DataType), "bigint") &&
+				strings.EqualFold(columnMetadata.IsNullable, "NO") &&
+				isZeroColumnDefault(columnMetadata.ColumnDefault) {
 				continue
 			}
-			alterSQL = fmt.Sprintf(`ALTER TABLE "%s" ALTER COLUMN "%s" TYPE bigint USING "%s"::bigint`,
+			backfillSQL = fmt.Sprintf(`UPDATE "%s" SET "%s" = 0 WHERE "%s" IS NULL`,
 				tableName, columnName, columnName)
+			alterSQL = fmt.Sprintf(`ALTER TABLE "%s" ALTER COLUMN "%s" TYPE bigint USING COALESCE("%s", 0)::bigint, ALTER COLUMN "%s" SET NOT NULL, ALTER COLUMN "%s" SET DEFAULT 0`,
+				tableName, columnName, columnName, columnName, columnName)
 		} else if common.UsingMySQL {
-			var columnType string
-			if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+			var columnMetadata struct {
+				ColumnType    string         `gorm:"column:column_type"`
+				IsNullable    string         `gorm:"column:is_nullable"`
+				ColumnDefault sql.NullString `gorm:"column:column_default"`
+			}
+			if err := DB.Raw(`SELECT COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable, COLUMN_DEFAULT AS column_default
+				FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-				tableName, columnName).Scan(&columnType).Error; err != nil {
+				tableName, columnName).Scan(&columnMetadata).Error; err != nil {
 				common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-			} else if strings.HasPrefix(strings.ToLower(columnType), "bigint") {
+			} else if strings.HasPrefix(strings.ToLower(strings.TrimSpace(columnMetadata.ColumnType)), "bigint") &&
+				strings.EqualFold(columnMetadata.IsNullable, "NO") &&
+				isZeroColumnDefault(columnMetadata.ColumnDefault) {
 				continue
 			}
-			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint DEFAULT 0", tableName, columnName)
+			backfillSQL = fmt.Sprintf("UPDATE `%s` SET `%s` = 0 WHERE `%s` IS NULL", tableName, columnName, columnName)
+			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint NOT NULL DEFAULT 0", tableName, columnName)
 		}
 
 		if alterSQL == "" {
 			continue
+		}
+		if backfillSQL != "" {
+			if err := DB.Exec(backfillSQL).Error; err != nil {
+				return fmt.Errorf("failed to backfill null values for %s.%s: %w", tableName, columnName, err)
+			}
 		}
 		if err := DB.Exec(alterSQL).Error; err != nil {
 			return fmt.Errorf("failed to migrate %s.%s to bigint: %w", tableName, columnName, err)
@@ -713,6 +741,20 @@ func migrateUserQuotaColumnsToBigInt() error {
 	}
 
 	return nil
+}
+
+func isZeroColumnDefault(defaultValue sql.NullString) bool {
+	if !defaultValue.Valid {
+		return false
+	}
+
+	value := strings.ToLower(strings.TrimSpace(defaultValue.String))
+	switch value {
+	case "0", "(0)", "'0'", "0::bigint", "0::integer", "'0'::bigint", "'0'::integer":
+		return true
+	default:
+		return false
+	}
 }
 
 // migrateSubscriptionPlanPriceAmount migrates price_amount column from float/double to decimal(10,6)

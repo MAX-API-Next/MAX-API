@@ -119,7 +119,11 @@ func logHelper(ctx context.Context, level string, msg string) {
 	}
 }
 
-func LogQuota(quota int) string {
+type quotaInteger interface {
+	~int | ~int64
+}
+
+func LogQuota[T quotaInteger](quota T) string {
 	// 新逻辑：根据额度展示类型输出
 	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
@@ -146,7 +150,7 @@ func LogQuota(quota int) string {
 	}
 }
 
-func FormatQuota(quota int) string {
+func FormatQuota[T quotaInteger](quota T) string {
 	q := float64(quota)
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:

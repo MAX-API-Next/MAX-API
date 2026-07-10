@@ -408,7 +408,7 @@ func GenerateAccessToken(c *gin.Context) {
 }
 
 type TransferAffQuotaRequest struct {
-	Quota int `json:"quota" binding:"required"`
+	Quota int64 `json:"quota" binding:"required"`
 }
 
 func TransferAffQuota(c *gin.Context) {
@@ -991,19 +991,19 @@ func CreateUser(c *gin.Context) {
 type ManageRequest struct {
 	Id     int    `json:"id"`
 	Action string `json:"action"`
-	Value  int    `json:"value"`
+	Value  int64  `json:"value"`
 	Mode   string `json:"mode"`
 }
 
-func isValidQuotaOverride(value int) bool {
-	return value >= 0 && int64(value) <= maxUserQuotaValue
+func isValidQuotaOverride(value int64) bool {
+	return value >= 0 && value <= maxUserQuotaValue
 }
 
-func isValidQuotaAddition(current int, delta int) bool {
-	if delta <= 0 || int64(delta) > maxUserQuotaValue {
+func isValidQuotaAddition(current int64, delta int64) bool {
+	if delta <= 0 || delta > maxUserQuotaValue {
 		return false
 	}
-	return int64(current) <= maxUserQuotaValue-int64(delta)
+	return current <= maxUserQuotaValue-delta
 }
 
 // ManageUser Only admin user can do this
