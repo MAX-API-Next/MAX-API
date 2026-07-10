@@ -217,14 +217,25 @@ func TestRegisterConsumesEmailVerificationCode(t *testing.T) {
 }
 
 func TestQuotaBoundsValidation(t *testing.T) {
-	legacyInt32Max := 1<<31 - 1
+	legacyInt32Max := int64(1<<31 - 1)
 	aboveLegacyInt32Max := legacyInt32Max + 1
+	maxQuota := maxUserQuotaValue
+	wrappedAboveMax := maxQuota + 1
+	overflowingHalfMax := maxQuota/2 + 1
 
 	require.True(t, isValidQuotaOverride(0))
 	require.True(t, isValidQuotaOverride(aboveLegacyInt32Max))
+	require.True(t, isValidQuotaOverride(maxQuota))
 	require.False(t, isValidQuotaOverride(-1))
+	require.False(t, isValidQuotaOverride(wrappedAboveMax))
 
 	require.True(t, isValidQuotaAddition(aboveLegacyInt32Max, 1))
 	require.True(t, isValidQuotaAddition(0, aboveLegacyInt32Max))
+	require.True(t, isValidQuotaAddition(maxQuota-1, 1))
+	require.True(t, isValidQuotaAddition(0, maxQuota))
+	require.False(t, isValidQuotaAddition(maxQuota, 1))
+	require.False(t, isValidQuotaAddition(1, maxQuota))
+	require.False(t, isValidQuotaAddition(overflowingHalfMax, overflowingHalfMax))
+	require.False(t, isValidQuotaAddition(maxQuota, maxQuota))
 	require.False(t, isValidQuotaAddition(0, 0))
 }

@@ -666,6 +666,10 @@ func migrateTokenModelLimitsToText() error {
 	return nil
 }
 
+// migrateUserQuotaColumnsToBigInt runs during startup. On MySQL/PostgreSQL,
+// changing large users table columns can hold table-level or rewrite locks for
+// a noticeable time, so operators with large deployments should schedule this
+// upgrade off-peak or run an equivalent online-DDL migration before booting.
 func migrateUserQuotaColumnsToBigInt() error {
 	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(&User{}) {
 		return nil
@@ -700,7 +704,7 @@ func migrateUserQuotaColumnsToBigInt() error {
 			} else if strings.HasPrefix(strings.ToLower(columnType), "bigint") {
 				continue
 			}
-			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint DEFAULT 0", tableName, columnName)
+			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint NOT NULL DEFAULT 0", tableName, columnName)
 		}
 
 		if alterSQL == "" {

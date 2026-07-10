@@ -190,8 +190,8 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
 	assert.Equal(t, "after", got.DisplayName)
-	assert.Equal(t, 600, got.Quota)
-	assert.Equal(t, 420, got.UsedQuota)
+	assert.EqualValues(t, 600, got.Quota)
+	assert.EqualValues(t, 420, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
 }
 
@@ -225,8 +225,8 @@ func TestUserUpdatePersistsZeroValueProfileFields(t *testing.T) {
 	require.NoError(t, DB.First(&got, user.Id).Error)
 	assert.Empty(t, got.DisplayName)
 	assert.Zero(t, got.AffCount)
-	assert.Equal(t, 1000, got.Quota)
-	assert.Equal(t, 20, got.UsedQuota)
+	assert.EqualValues(t, 1000, got.Quota)
+	assert.EqualValues(t, 20, got.UsedQuota)
 	assert.Equal(t, 3, got.RequestCount)
 }
 
@@ -303,8 +303,8 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
-	assert.Equal(t, 750, got.Quota)
-	assert.Equal(t, 270, got.UsedQuota)
+	assert.EqualValues(t, 750, got.Quota)
+	assert.EqualValues(t, 270, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
 	assert.Equal(t, "zh", got.GetSetting().Language)
 
@@ -340,8 +340,8 @@ func TestUpdateUserSettingOnlyUpdatesSettingMySQL(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
-	assert.Equal(t, 750, got.Quota)
-	assert.Equal(t, 270, got.UsedQuota)
+	assert.EqualValues(t, 750, got.Quota)
+	assert.EqualValues(t, 270, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
 	assert.Equal(t, "zh", got.GetSetting().Language)
 

@@ -9,8 +9,8 @@ import (
 )
 
 func GetSubscription(c *gin.Context) {
-	var remainQuota int
-	var usedQuota int
+	var remainQuota int64
+	var usedQuota int64
 	var err error
 	var token *model.Token
 	var expiredTime int64
@@ -18,8 +18,8 @@ func GetSubscription(c *gin.Context) {
 		tokenId := c.GetInt("token_id")
 		token, err = model.GetTokenById(tokenId)
 		expiredTime = token.ExpiredTime
-		remainQuota = token.RemainQuota
-		usedQuota = token.UsedQuota
+		remainQuota = int64(token.RemainQuota)
+		usedQuota = int64(token.UsedQuota)
 	} else {
 		userId := c.GetInt("id")
 		remainQuota, err = model.GetUserQuota(userId, false)
@@ -69,13 +69,13 @@ func GetSubscription(c *gin.Context) {
 }
 
 func GetUsage(c *gin.Context) {
-	var quota int
+	var quota int64
 	var err error
 	var token *model.Token
 	if common.DisplayTokenStatEnabled {
 		tokenId := c.GetInt("token_id")
 		token, err = model.GetTokenById(tokenId)
-		quota = token.UsedQuota
+		quota = int64(token.UsedQuota)
 	} else {
 		userId := c.GetInt("id")
 		quota, err = model.GetUserUsedQuota(userId)
