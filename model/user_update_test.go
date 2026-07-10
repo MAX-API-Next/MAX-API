@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -98,6 +99,12 @@ func TestScanNullableInt64UsesSQLRow(t *testing.T) {
 	nullValue, err := scanNullableInt64(db.Raw("SELECT NULL").Row())
 	require.NoError(t, err)
 	assert.False(t, nullValue.Valid)
+}
+
+func TestMySQLNamedLockResultSuccessRequiresOne(t *testing.T) {
+	assert.True(t, isMySQLNamedLockSuccess(sql.NullInt64{Int64: 1, Valid: true}))
+	assert.False(t, isMySQLNamedLockSuccess(sql.NullInt64{Int64: 0, Valid: true}))
+	assert.False(t, isMySQLNamedLockSuccess(sql.NullInt64{Valid: false}))
 }
 
 func mysqlDSNWithClientFoundRowsFalse(dsn string) string {

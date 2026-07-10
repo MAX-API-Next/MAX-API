@@ -390,12 +390,22 @@ func acquireMySQLNamedLock(tx *gorm.DB, lockName string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return acquired.Valid && acquired.Int64 == 1, nil
+	return isMySQLNamedLockSuccess(acquired), nil
 }
 
 func releaseMySQLNamedLock(tx *gorm.DB, lockName string) error {
-	_, err := scanNullableInt64(tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Row())
-	return err
+	released, err := scanNullableInt64(tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Row())
+	if err != nil {
+		return err
+	}
+	if !isMySQLNamedLockSuccess(released) {
+		return errors.New("failed to release user email lock")
+	}
+	return nil
+}
+
+func isMySQLNamedLockSuccess(value sql.NullInt64) bool {
+	return value.Valid && value.Int64 == 1
 }
 
 func GetMaxUserId() int {
