@@ -311,11 +311,11 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 		return fn(tx)
 	case common.UsingMySQL:
 		lockName := normalizedEmailLockName(email)
-		var acquired sql.NullInt64
-		if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
+		acquired, err := acquireMySQLNamedLock(tx, lockName)
+		if err != nil {
 			return err
 		}
-		if !acquired.Valid || acquired.Int64 != 1 {
+		if !acquired {
 			return errors.New("failed to acquire user email lock")
 		}
 		released := false
@@ -324,7 +324,7 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 				_ = releaseMySQLNamedLock(tx, lockName)
 			}
 		}()
-		err := fn(tx)
+		err = fn(tx)
 		releaseErr := releaseMySQLNamedLock(tx, lockName)
 		released = true
 		if releaseErr != nil && err == nil {
@@ -353,11 +353,11 @@ func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error 
 
 	lockName := normalizedEmailLockName(email)
 	return DB.Connection(func(conn *gorm.DB) error {
-		var acquired sql.NullInt64
-		if err := conn.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&acquired).Error; err != nil {
+		acquired, err := acquireMySQLNamedLock(conn, lockName)
+		if err != nil {
 			return err
 		}
-		if !acquired.Valid || acquired.Int64 != 1 {
+		if !acquired {
 			return errors.New("failed to acquire user email lock")
 		}
 
@@ -368,7 +368,7 @@ func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error 
 			}
 		}()
 
-		err := conn.Transaction(fn)
+		err = conn.Transaction(fn)
 		releaseErr := releaseMySQLNamedLock(conn, lockName)
 		released = true
 		if err != nil {
@@ -378,9 +378,24 @@ func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error 
 	})
 }
 
+// Use database/sql row scanning so sql.NullInt64 is not parsed as a GORM model.
+func scanNullableInt64(row *sql.Row) (sql.NullInt64, error) {
+	var value sql.NullInt64
+	err := row.Scan(&value)
+	return value, err
+}
+
+func acquireMySQLNamedLock(tx *gorm.DB, lockName string) (bool, error) {
+	acquired, err := scanNullableInt64(tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Row())
+	if err != nil {
+		return false, err
+	}
+	return acquired.Valid && acquired.Int64 == 1, nil
+}
+
 func releaseMySQLNamedLock(tx *gorm.DB, lockName string) error {
-	var released sql.NullInt64
-	return tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error
+	_, err := scanNullableInt64(tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Row())
+	return err
 }
 
 func GetMaxUserId() int {
