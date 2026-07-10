@@ -278,6 +278,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -331,6 +334,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -657,6 +663,55 @@ func migrateTokenModelLimitsToText() error {
 		}
 		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
 	}
+	return nil
+}
+
+func migrateUserQuotaColumnsToBigInt() error {
+	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(&User{}) {
+		return nil
+	}
+
+	tableName := "users"
+	columnNames := []string{"quota", "used_quota", "aff_quota", "aff_history"}
+
+	for _, columnName := range columnNames {
+		if !DB.Migrator().HasColumn(&User{}, columnName) {
+			continue
+		}
+
+		var alterSQL string
+		if common.UsingPostgreSQL {
+			var dataType string
+			if err := DB.Raw(`SELECT data_type FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+				tableName, columnName).Scan(&dataType).Error; err != nil {
+				common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+			} else if strings.EqualFold(dataType, "bigint") {
+				continue
+			}
+			alterSQL = fmt.Sprintf(`ALTER TABLE "%s" ALTER COLUMN "%s" TYPE bigint USING "%s"::bigint`,
+				tableName, columnName, columnName)
+		} else if common.UsingMySQL {
+			var columnType string
+			if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+				tableName, columnName).Scan(&columnType).Error; err != nil {
+				common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+			} else if strings.HasPrefix(strings.ToLower(columnType), "bigint") {
+				continue
+			}
+			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint DEFAULT 0", tableName, columnName)
+		}
+
+		if alterSQL == "" {
+			continue
+		}
+		if err := DB.Exec(alterSQL).Error; err != nil {
+			return fmt.Errorf("failed to migrate %s.%s to bigint: %w", tableName, columnName, err)
+		}
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to bigint", tableName, columnName))
+	}
+
 	return nil
 }
 
