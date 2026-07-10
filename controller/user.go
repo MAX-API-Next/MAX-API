@@ -35,7 +35,7 @@ var (
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
 
-const maxUserQuotaValue = 1<<31 - 1
+const maxUserQuotaValue = int64(^uint64(0) >> 1)
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -996,14 +996,14 @@ type ManageRequest struct {
 }
 
 func isValidQuotaOverride(value int) bool {
-	return value >= 0 && value <= maxUserQuotaValue
+	return value >= 0 && int64(value) <= maxUserQuotaValue
 }
 
 func isValidQuotaAddition(current int, delta int) bool {
-	if delta <= 0 || delta > maxUserQuotaValue {
+	if delta <= 0 || int64(delta) > maxUserQuotaValue {
 		return false
 	}
-	return current <= maxUserQuotaValue-delta
+	return int64(current) <= maxUserQuotaValue-int64(delta)
 }
 
 // ManageUser Only admin user can do this
