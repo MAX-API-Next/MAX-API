@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -696,12 +697,20 @@ func migrateUserQuotaColumnsToBigInt() error {
 			alterSQL = fmt.Sprintf(`ALTER TABLE "%s" ALTER COLUMN "%s" TYPE bigint USING "%s"::bigint`,
 				tableName, columnName, columnName)
 		} else if common.UsingMySQL {
-			var columnType string
-			if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+			var columnMetadata struct {
+				ColumnType    string         `gorm:"column:column_type"`
+				IsNullable    string         `gorm:"column:is_nullable"`
+				ColumnDefault sql.NullString `gorm:"column:column_default"`
+			}
+			if err := DB.Raw(`SELECT COLUMN_TYPE AS column_type, IS_NULLABLE AS is_nullable, COLUMN_DEFAULT AS column_default
+				FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-				tableName, columnName).Scan(&columnType).Error; err != nil {
+				tableName, columnName).Scan(&columnMetadata).Error; err != nil {
 				common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-			} else if strings.HasPrefix(strings.ToLower(columnType), "bigint") {
+			} else if strings.HasPrefix(strings.ToLower(strings.TrimSpace(columnMetadata.ColumnType)), "bigint") &&
+				strings.EqualFold(columnMetadata.IsNullable, "NO") &&
+				columnMetadata.ColumnDefault.Valid &&
+				strings.TrimSpace(columnMetadata.ColumnDefault.String) == "0" {
 				continue
 			}
 			alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` bigint NOT NULL DEFAULT 0", tableName, columnName)
