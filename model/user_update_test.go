@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,6 +80,31 @@ func TestNormalizedEmailLockNameIsStableAndShort(t *testing.T) {
 	assert.Equal(t, normalizedEmailLockName("user@example.com"), lockName)
 	assert.LessOrEqual(t, len(lockName), 64)
 	assert.Contains(t, lockName, "maxapi:user-email:")
+}
+
+func TestScanNullableInt64UsesSQLRow(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	if sqlDB, err := db.DB(); err == nil {
+		t.Cleanup(func() {
+			_ = sqlDB.Close()
+		})
+	}
+
+	got, err := scanNullableInt64(db.Raw("SELECT ?", 1).Row())
+	require.NoError(t, err)
+	require.True(t, got.Valid)
+	assert.EqualValues(t, 1, got.Int64)
+
+	nullValue, err := scanNullableInt64(db.Raw("SELECT NULL").Row())
+	require.NoError(t, err)
+	assert.False(t, nullValue.Valid)
+}
+
+func TestMySQLNamedLockResultSuccessRequiresOne(t *testing.T) {
+	assert.True(t, isMySQLNamedLockSuccess(sql.NullInt64{Int64: 1, Valid: true}))
+	assert.False(t, isMySQLNamedLockSuccess(sql.NullInt64{Int64: 0, Valid: true}))
+	assert.False(t, isMySQLNamedLockSuccess(sql.NullInt64{Valid: false}))
 }
 
 func mysqlDSNWithClientFoundRowsFalse(dsn string) string {

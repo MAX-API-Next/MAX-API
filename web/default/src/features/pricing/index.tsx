@@ -218,6 +218,8 @@ export function Pricing() {
               vendors={vendors || []}
               groups={availableGroups}
               groupRatios={groupRatio}
+              autoGroups={autoGroups || []}
+              autoRoutes={autoRoutes}
               tags={availableTags}
               models={models || []}
               hasActiveFilters={hasActiveFilters}
@@ -250,6 +252,8 @@ export function Pricing() {
                 vendors={vendors || []}
                 groups={availableGroups}
                 groupRatios={groupRatio}
+                autoGroups={autoGroups || []}
+                autoRoutes={autoRoutes}
                 tags={availableTags}
                 models={models || []}
                 hasActiveFilters={hasActiveFilters}
@@ -277,7 +281,7 @@ export function Pricing() {
                 >) || {}
               }
               autoGroups={autoGroups || []}
-              autoRoutes={autoRoutes || []}
+              autoRoutes={autoRoutes}
               priceRate={priceRate ?? 1}
               usdExchangeRate={usdExchangeRate ?? 1}
               tokenUnit={tokenUnit}
