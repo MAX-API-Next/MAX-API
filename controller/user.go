@@ -35,7 +35,9 @@ var (
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
 
-const maxUserQuotaValue = int64(^uint64(0) >> 1)
+// User quota crosses the JSON boundary as a JavaScript number in the default
+// frontend, so management operations must stay within its exact integer range.
+const maxUserQuotaValue = int64(1<<53 - 1)
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -1000,10 +1002,17 @@ func isValidQuotaOverride(value int64) bool {
 }
 
 func isValidQuotaAddition(current int64, delta int64) bool {
-	if delta <= 0 || delta > maxUserQuotaValue {
+	if current < -maxUserQuotaValue || current > maxUserQuotaValue || delta <= 0 || delta > maxUserQuotaValue {
 		return false
 	}
 	return current <= maxUserQuotaValue-delta
+}
+
+func isValidQuotaSubtraction(current int64, delta int64) bool {
+	if current < -maxUserQuotaValue || current > maxUserQuotaValue || delta <= 0 || delta > maxUserQuotaValue {
+		return false
+	}
+	return current >= -maxUserQuotaValue+delta
 }
 
 // ManageUser Only admin user can do this
@@ -1096,6 +1105,10 @@ func ManageUser(c *gin.Context) {
 		case "subtract":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
+				return
+			}
+			if !isValidQuotaSubtraction(user.Quota, req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 				return
 			}
 			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {

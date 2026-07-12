@@ -3602,6 +3602,7 @@
     "Quota ({{currency}})": "Квота ({{currency}})",
     "quota + refund": "quota + refund",
     "Quota adjusted successfully": "Квота успешно изменена",
+    "Quota must be a safe integer within the supported range": "Квота должна быть безопасным целым числом в поддерживаемом диапазоне",
     "Quota consumed before charging users": "Квота, потребляемая до взимания платы с пользователей",
     "Quota Distribution": "Распределение квоты",
     "Quota given to invited users": "Квота, предоставляемая приглашенным пользователям",

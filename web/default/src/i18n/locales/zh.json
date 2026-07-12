@@ -3602,6 +3602,7 @@
     "Quota ({{currency}})": "额度 ({{currency}})",
     "quota + refund": "额度 + 退款",
     "Quota adjusted successfully": "调整额度成功",
+    "Quota must be a safe integer within the supported range": "额度必须是支持范围内的安全整数",
     "Quota consumed before charging users": "向用户收费前消耗的配额",
     "Quota Distribution": "消耗分布",
     "Quota given to invited users": "授予被邀请用户的配额",

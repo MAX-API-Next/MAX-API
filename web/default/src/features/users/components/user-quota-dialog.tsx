@@ -34,6 +34,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { adjustUserQuota } from '../api'
+import { isSafeQuotaAdjustment } from '../lib/quota-safety'
 import type { QuotaAdjustMode } from '../types'
 
 interface UserQuotaDialogProps {
@@ -56,6 +57,13 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
 
   const amountValue = parseFloat(amount) || 0
   const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
+  const adjustmentValue =
+    mode === 'override' ? parseQuotaFromDollars(amountValue) : quotaValue
+  const quotaIsSafe = isSafeQuotaAdjustment(
+    props.currentQuota,
+    mode,
+    adjustmentValue
+  )
 
   const getPreviewText = () => {
     const current = props.currentQuota
@@ -77,16 +85,19 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const handleConfirm = async () => {
     if (!amount && mode !== 'override') return
     if (quotaValue <= 0 && mode !== 'override') return
+    if (!quotaIsSafe) {
+      toast.error(t('Quota must be a safe integer within the supported range'))
+      return
+    }
 
     setLoading(true)
     try {
-      const value =
-        mode === 'override' ? parseQuotaFromDollars(amountValue) : quotaValue
       const result = await adjustUserQuota({
         id: props.userId,
         action: 'add_quota',
         mode,
-        value: mode === 'override' ? value : Math.abs(value),
+        value:
+          mode === 'override' ? adjustmentValue : Math.abs(adjustmentValue),
       })
       if (result.success) {
         toast.success(t('Quota adjusted successfully'))
@@ -171,13 +182,18 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
                 if (e.key === 'Enter') handleConfirm()
               }}
             />
+            {amount && !quotaIsSafe && (
+              <p className='text-destructive text-xs'>
+                {t('Quota must be a safe integer within the supported range')}
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter>
           <Button variant='outline' onClick={handleCancel}>
             {t('Cancel')}
           </Button>
-          <Button onClick={handleConfirm} disabled={loading}>
+          <Button onClick={handleConfirm} disabled={loading || !quotaIsSafe}>
             {loading ? t('Processing...') : t('Confirm')}
           </Button>
         </DialogFooter>

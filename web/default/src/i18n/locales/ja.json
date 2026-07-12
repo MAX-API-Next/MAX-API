@@ -3602,6 +3602,7 @@
     "Quota ({{currency}})": "クォータ ({{currency}})",
     "quota + refund": "quota + refund",
     "Quota adjusted successfully": "クォータの調整に成功しました",
+    "Quota must be a safe integer within the supported range": "クォータはサポート範囲内の安全な整数である必要があります",
     "Quota consumed before charging users": "ユーザーに請求する前に消費されるクォータ",
     "Quota Distribution": "クォータの分配",
     "Quota given to invited users": "招待されたユーザーに付与されるクォータ",

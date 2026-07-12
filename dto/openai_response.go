@@ -262,6 +262,30 @@ type InputTokenDetails struct {
 	ImageTokens          int `json:"image_tokens"`
 }
 
+func CopyInputTokenDetails(dst *InputTokenDetails, src *InputTokenDetails, overwriteExisting bool) {
+	if dst == nil || src == nil {
+		return
+	}
+	if overwriteExisting || dst.CachedTokens == 0 {
+		dst.CachedTokens = src.CachedTokens
+	}
+	if overwriteExisting || dst.CachedCreationTokens == 0 {
+		dst.CachedCreationTokens = src.CachedCreationTokens
+	}
+	if overwriteExisting || dst.CacheWriteTokens == 0 {
+		dst.CacheWriteTokens = src.CacheWriteTokens
+	}
+	if overwriteExisting || dst.TextTokens == 0 {
+		dst.TextTokens = src.TextTokens
+	}
+	if overwriteExisting || dst.ImageTokens == 0 {
+		dst.ImageTokens = src.ImageTokens
+	}
+	if overwriteExisting || dst.AudioTokens == 0 {
+		dst.AudioTokens = src.AudioTokens
+	}
+}
+
 func (d InputTokenDetails) CacheCreationTokensTotal() int {
 	total := d.CachedCreationTokens
 	if d.CacheWriteTokens > total {

@@ -63,6 +63,46 @@ func TestNewEstimatedGeminiChatBillingUsage(t *testing.T) {
 	assert.Equal(t, 18, billingUsage.GeminiUsageMetadata.TotalTokenCount)
 }
 
+func TestCopyInputTokenDetails(t *testing.T) {
+	src := &InputTokenDetails{
+		CachedTokens:         1,
+		CachedCreationTokens: 2,
+		CacheWriteTokens:     3,
+		TextTokens:           4,
+		ImageTokens:          5,
+		AudioTokens:          6,
+	}
+
+	overwritten := InputTokenDetails{
+		CachedTokens:         10,
+		CachedCreationTokens: 20,
+		CacheWriteTokens:     30,
+		TextTokens:           40,
+		ImageTokens:          50,
+		AudioTokens:          60,
+	}
+	CopyInputTokenDetails(&overwritten, src, true)
+	assert.Equal(t, *src, overwritten)
+
+	filled := InputTokenDetails{
+		CachedTokens:         10,
+		CachedCreationTokens: 0,
+		CacheWriteTokens:     30,
+		TextTokens:           0,
+		ImageTokens:          50,
+		AudioTokens:          0,
+	}
+	CopyInputTokenDetails(&filled, src, false)
+	assert.Equal(t, InputTokenDetails{
+		CachedTokens:         10,
+		CachedCreationTokens: 2,
+		CacheWriteTokens:     30,
+		TextTokens:           4,
+		ImageTokens:          50,
+		AudioTokens:          6,
+	}, filled)
+}
+
 func TestBillingUsageJSONUsesProtocolNamedFields(t *testing.T) {
 	billingUsage := &BillingUsage{
 		OpenAIUsage:         &Usage{PromptTokens: 1, BillingUsage: NewClaudeMessagesBillingUsage(&ClaudeUsage{InputTokens: 9})},

@@ -3602,6 +3602,7 @@
     "Quota ({{currency}})": "Quota ({{currency}})",
     "quota + refund": "quota + refund",
     "Quota adjusted successfully": "Quota ajusté avec succès",
+    "Quota must be a safe integer within the supported range": "Le quota doit être un entier sûr dans la plage prise en charge",
     "Quota consumed before charging users": "Quota consommé avant de facturer les utilisateurs",
     "Quota Distribution": "Distribution des quotas",
     "Quota given to invited users": "Quota attribué aux utilisateurs invités",

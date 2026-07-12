@@ -3602,6 +3602,7 @@
     "Quota ({{currency}})": "Hạn mức ({{currency}})",
     "quota + refund": "quota + refund",
     "Quota adjusted successfully": "Điều chỉnh hạn mức thành công",
+    "Quota must be a safe integer within the supported range": "Hạn mức phải là số nguyên an toàn trong phạm vi được hỗ trợ",
     "Quota consumed before charging users": "Hạn mức tiêu thụ trước khi tính phí người dùng",
     "Quota Distribution": "Phân bổ hạn ngạch",
     "Quota given to invited users": "Hạn mức được cấp cho người dùng được mời",
