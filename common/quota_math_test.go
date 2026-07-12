@@ -83,6 +83,28 @@ func TestQuotaFromFloatStrictReturnsTypedClampError(t *testing.T) {
 	assert.ErrorContains(t, err, "clamped=2147483647")
 }
 
+func TestQuotaFromFloatStrictAcceptsExactInt32Boundaries(t *testing.T) {
+	quota, err := QuotaFromFloatStrict(float64(MaxQuota))
+	require.NoError(t, err)
+	assert.Equal(t, MaxQuota, quota)
+
+	quota, err = QuotaFromFloatStrict(float64(MinQuota))
+	require.NoError(t, err)
+	assert.Equal(t, MinQuota, quota)
+
+	quota, err = QuotaFromFloatStrict(float64(MaxQuota) + 1)
+	assert.Zero(t, quota)
+	var overflow *QuotaClamp
+	require.ErrorAs(t, err, &overflow)
+	assert.Equal(t, QuotaClampOverflow, overflow.Kind)
+
+	quota, err = QuotaFromFloatStrict(float64(MinQuota) - 1)
+	assert.Zero(t, quota)
+	var underflow *QuotaClamp
+	require.ErrorAs(t, err, &underflow)
+	assert.Equal(t, QuotaClampUnderflow, underflow.Kind)
+}
+
 func TestQuotaClampAuditMapIsJSONSafe(t *testing.T) {
 	tests := []struct {
 		name         string

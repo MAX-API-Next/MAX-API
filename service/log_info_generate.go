@@ -20,8 +20,12 @@ func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.Qu
 	if clamp == nil || other == nil {
 		return
 	}
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	if !ok || adminInfo == nil {
+	rawAdminInfo, exists := other["admin_info"]
+	adminInfo, ok := rawAdminInfo.(map[string]interface{})
+	if exists && !ok {
+		return
+	}
+	if !exists || adminInfo == nil {
 		adminInfo = map[string]interface{}{}
 		other["admin_info"] = adminInfo
 	}
@@ -29,7 +33,7 @@ func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.Qu
 }
 
 func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
-	if relayInfo == nil || relayInfo.QuotaClamp == nil {
+	if relayInfo == nil || relayInfo.QuotaClamp == nil || other == nil {
 		return
 	}
 	clamp := relayInfo.QuotaClamp

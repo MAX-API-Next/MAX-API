@@ -995,6 +995,18 @@ export const ModelRatioVisualEditor = memo(
     }, [editData, persistPricingData, t, table])
 
     const selectedTargetCount = table.getFilteredSelectedRowModel().rows.length
+    const emptyStateText = (() => {
+      if (table.getState().globalFilter) {
+        return t('No models match your search')
+      }
+      if (filterMode === 'unset') {
+        if (candidateModelsLoading) {
+          return t('Loading...')
+        }
+        return t('No models with unset prices')
+      }
+      return t('No models configured. Use Add model to get started.')
+    })()
 
     return (
       <div className='flex flex-col gap-4'>
@@ -1038,13 +1050,7 @@ export const ModelRatioVisualEditor = memo(
 
             {table.getRowModel().rows.length === 0 ? (
               <div className='text-muted-foreground rounded-lg border border-dashed p-8 text-center'>
-                {table.getState().globalFilter
-                  ? t('No models match your search')
-                  : filterMode === 'unset'
-                    ? candidateModelsLoading
-                      ? t('Loading...')
-                      : t('No models with unset prices')
-                    : t('No models configured. Use Add model to get started.')}
+                {emptyStateText}
               </div>
             ) : (
               <div className='overflow-hidden rounded-md border'>

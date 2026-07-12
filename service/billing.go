@@ -15,9 +15,7 @@ const (
 	BillingSourceSubscription = "subscription"
 )
 
-// PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
-// 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
-func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
+func validatePreConsumedQuota(preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
 	if relayInfo != nil && relayInfo.QuotaClamp != nil {
 		return types.NewErrorWithStatusCode(
 			relayInfo.QuotaClamp,
@@ -33,6 +31,15 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 			http.StatusBadRequest,
 			types.ErrOptionWithSkipRetry(),
 		)
+	}
+	return nil
+}
+
+// PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
+// 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
+func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
+	if apiErr := validatePreConsumedQuota(preConsumedQuota, relayInfo); apiErr != nil {
+		return apiErr
 	}
 	session, apiErr := NewBillingSession(c, relayInfo, preConsumedQuota)
 	if apiErr != nil {

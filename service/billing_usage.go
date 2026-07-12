@@ -117,10 +117,35 @@ func usageFromOpenAIBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
+	fillPromptTokenDetailsFromInputDetails(&usage.PromptTokensDetails, usage.InputTokensDetails)
 	usage.UsageSemantic = dto.BillingUsageSemanticOpenAI
 	usage.UsageSource = billingUsage.Source
 	usage.BillingUsage = dto.CloneBillingUsage(billingUsage)
 	return &usage
+}
+
+func fillPromptTokenDetailsFromInputDetails(promptDetails *dto.InputTokenDetails, inputDetails *dto.InputTokenDetails) {
+	if inputDetails == nil {
+		return
+	}
+	if promptDetails.CachedTokens == 0 {
+		promptDetails.CachedTokens = inputDetails.CachedTokens
+	}
+	if promptDetails.CachedCreationTokens == 0 {
+		promptDetails.CachedCreationTokens = inputDetails.CachedCreationTokens
+	}
+	if promptDetails.CacheWriteTokens == 0 {
+		promptDetails.CacheWriteTokens = inputDetails.CacheWriteTokens
+	}
+	if promptDetails.TextTokens == 0 {
+		promptDetails.TextTokens = inputDetails.TextTokens
+	}
+	if promptDetails.ImageTokens == 0 {
+		promptDetails.ImageTokens = inputDetails.ImageTokens
+	}
+	if promptDetails.AudioTokens == 0 {
+		promptDetails.AudioTokens = inputDetails.AudioTokens
+	}
 }
 
 func usageFromClaudeBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {

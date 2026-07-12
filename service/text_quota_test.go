@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -444,6 +445,65 @@ func TestCalculateTextQuotaSummaryUsesOpenAIBillingUsageBeforeTopLevelUsage(t *t
 	require.Equal(t, 9, summary.CompletionTokens)
 	require.Equal(t, 89, summary.TotalTokens)
 	require.Equal(t, 98, summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryPreservesResponsesInputDetailsThroughBillingUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	chatResp, usage, err := openaicompat.ResponsesResponseToChatCompletionsResponse(&dto.OpenAIResponsesResponse{
+		ID:        "resp_1",
+		Model:     "gpt-test",
+		CreatedAt: 456,
+		Status:    []byte(`"completed"`),
+		Usage: &dto.Usage{
+			InputTokens:  100,
+			OutputTokens: 10,
+			TotalTokens:  110,
+			InputTokensDetails: &dto.InputTokenDetails{
+				CachedTokens:     5,
+				CacheWriteTokens: 11,
+				ImageTokens:      7,
+				AudioTokens:      13,
+			},
+		},
+		Output: []dto.ResponsesOutput{{
+			Type: "message",
+			Role: "assistant",
+			Content: []dto.ResponsesOutputContent{{
+				Type: "output_text",
+				Text: "done",
+			}},
+		}},
+	}, "chatcmpl_1")
+	require.NoError(t, err)
+	require.Equal(t, usage.PromptTokensDetails, chatResp.Usage.PromptTokensDetails)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-test",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    2,
+			CacheRatio:         0,
+			CacheCreationRatio: 4,
+			ImageRatio:         3,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, effectiveBillingUsage(usage))
+
+	require.Equal(t, dto.BillingUsageSemanticOpenAI, summary.UsageSemantic)
+	require.Equal(t, 100, summary.PromptTokens)
+	require.Equal(t, 10, summary.CompletionTokens)
+	require.Equal(t, 5, summary.CacheTokens)
+	require.Equal(t, 11, summary.CacheCreationTokens)
+	require.Equal(t, 7, summary.ImageTokens)
+	require.Equal(t, 13, summary.AudioTokens)
+	require.Equal(t, 162, summary.Quota)
 }
 
 func TestUsageBillingPathForLog(t *testing.T) {

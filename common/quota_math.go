@@ -67,9 +67,9 @@ func saturateQuota(value float64, op string) (int, *QuotaClamp) {
 	switch {
 	case math.IsNaN(value):
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampNaN, Original: value, Clamped: 0}
-	case value >= MaxQuota:
+	case value > MaxQuota:
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampOverflow, Original: value, Clamped: MaxQuota}
-	case value <= MinQuota:
+	case value < MinQuota:
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampUnderflow, Original: value, Clamped: MinQuota}
 	default:
 		return int(value), nil
