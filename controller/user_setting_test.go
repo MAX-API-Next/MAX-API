@@ -330,3 +330,30 @@ func TestManageUserRejectsQuotaValueAboveJavaScriptSafeInteger(t *testing.T) {
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	require.EqualValues(t, 100, stored.Quota)
 }
+
+func TestManageUserRejectsMissingIdWithoutTouchingFirstUser(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	user := model.User{
+		Username: "manage-missing-id-first-user",
+		Password: "password123",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(
+		`{"action":"disable"}`,
+	))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("role", common.RoleRootUser)
+
+	ManageUser(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+	var stored model.User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, stored.Status)
+}
