@@ -19,9 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import type { QuotaAdjustMode } from '../types'
 
 export function isSafeQuotaValue(value: number) {
-  return (
-    Number.isSafeInteger(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER
-  )
+  return Number.isSafeInteger(value)
 }
 
 export function isSafeQuotaAdjustment(
