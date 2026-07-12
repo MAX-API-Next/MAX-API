@@ -51,6 +51,8 @@ type secureVerificationMethods struct {
 }
 
 func loadSecureVerificationMethods(user *model.User, allowPassword bool) (secureVerificationMethods, error) {
+	// PasswordLoginEnabled gates new password logins; it does not invalidate an
+	// existing credential used to re-verify an already authenticated session.
 	methods := secureVerificationMethods{
 		hasPassword: user != nil && user.Password != "",
 	}
