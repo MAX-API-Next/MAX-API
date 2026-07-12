@@ -1,10 +1,12 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -16,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+var universalVerifyRateLimitTestRun uint64
 
 func TestUserTokenRouteUsesPostOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -76,6 +80,7 @@ func TestVerificationMethodsRouteIsRegistered(t *testing.T) {
 
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)
 
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB
@@ -104,8 +109,8 @@ func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 		&model.PasskeyCredential{},
 	))
 	user := model.User{
-		Id:       987654,
-		Username: "verify-rate-limit-user",
+		Id:       987654 + int(testRun),
+		Username: fmt.Sprintf("verify-rate-limit-user-%d", testRun),
 		Password: "hashed-password",
 		Role:     common.RoleCommonUser,
 		Status:   common.UserStatusEnabled,
@@ -161,8 +166,8 @@ func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 		return recorder
 	}
 
-	require.Equal(t, http.StatusOK, performVerify("192.0.2.10:1234").Code)
-	require.Equal(t, http.StatusTooManyRequests, performVerify("192.0.2.11:1234").Code)
+	require.Equal(t, http.StatusOK, performVerify(fmt.Sprintf("[2001:db8:%x::1]:1234", testRun)).Code)
+	require.Equal(t, http.StatusTooManyRequests, performVerify(fmt.Sprintf("[2001:db8:%x::2]:1234", testRun)).Code)
 }
 
 func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
