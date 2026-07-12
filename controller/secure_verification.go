@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -15,8 +16,12 @@ const (
 	// SecureVerificationSessionKey means the user has fully passed secure verification.
 	SecureVerificationSessionKey       = "secure_verified_at"
 	secureVerificationMethodSessionKey = "secure_verified_method"
+	secureVerificationUserSessionKey   = "secure_verified_user_id"
+	secureVerificationScopeSessionKey  = "secure_verified_scope"
 	secureVerificationMethod2FA        = "2fa"
 	secureVerificationMethodPasskey    = "passkey"
+	secureVerificationMethodPassword   = "password"
+	secureVerificationScopeAccessToken = "access_token"
 	// PasskeyReadySessionKey means WebAuthn finished and /api/verify can finalize step-up verification.
 	PasskeyReadySessionKey = "secure_passkey_ready_at"
 	// SecureVerificationTimeout 验证有效期（秒）
@@ -26,13 +31,81 @@ const (
 )
 
 type UniversalVerifyRequest struct {
-	Method string `json:"method"` // "2fa" 或 "passkey"
-	Code   string `json:"code,omitempty"`
+	Method   string `json:"method"` // "2fa"、"passkey" 或 "password"
+	Code     string `json:"code,omitempty"`
+	Password string `json:"password,omitempty"`
+	Scope    string `json:"scope,omitempty"`
 }
 
-type VerificationStatusResponse struct {
-	Verified  bool  `json:"verified"`
-	ExpiresAt int64 `json:"expires_at,omitempty"`
+type VerificationMethodsResponse struct {
+	Has2FA      bool `json:"has_2fa"`
+	HasPasskey  bool `json:"has_passkey"`
+	HasPassword bool `json:"has_password"`
+}
+
+type secureVerificationMethods struct {
+	twoFA       *model.TwoFA
+	has2FA      bool
+	hasPasskey  bool
+	hasPassword bool
+}
+
+func loadSecureVerificationMethods(user *model.User, allowPassword bool) (secureVerificationMethods, error) {
+	methods := secureVerificationMethods{
+		hasPassword: user != nil && user.Password != "",
+	}
+	if user == nil || user.Id == 0 {
+		return methods, errors.New("用户不存在")
+	}
+
+	twoFA, err := model.GetTwoFAByUserId(user.Id)
+	if err != nil {
+		return methods, err
+	}
+	methods.twoFA = twoFA
+	methods.has2FA = twoFA != nil && twoFA.IsEnabled
+
+	_, err = model.GetPasskeyByUserID(user.Id)
+	switch {
+	case err == nil:
+		methods.hasPasskey = true
+	case errors.Is(err, model.ErrPasskeyNotFound):
+		methods.hasPasskey = false
+	default:
+		return methods, err
+	}
+
+	// Password is a fallback only when no stronger verification method is enrolled.
+	methods.hasPassword = allowPassword && methods.hasPassword && !methods.has2FA && !methods.hasPasskey
+	return methods, nil
+}
+
+func GetVerificationMethods(c *gin.Context) {
+	userId := c.GetInt("id")
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if user.Status != common.UserStatusEnabled {
+		common.ApiError(c, fmt.Errorf("该用户已被禁用"))
+		return
+	}
+
+	methods, err := loadSecureVerificationMethods(user, c.Query("scope") == secureVerificationScopeAccessToken)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": VerificationMethodsResponse{
+			Has2FA:      methods.has2FA,
+			HasPasskey:  methods.hasPasskey,
+			HasPassword: methods.hasPassword,
+		},
+	})
 }
 
 // UniversalVerify 通用验证接口
@@ -54,8 +127,8 @@ func UniversalVerify(c *gin.Context) {
 	}
 
 	// 获取用户信息
-	user := &model.User{Id: userId}
-	if err := user.FillUserById(); err != nil {
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
 		common.ApiError(c, fmt.Errorf("获取用户信息失败: %v", err))
 		return
 	}
@@ -65,26 +138,19 @@ func UniversalVerify(c *gin.Context) {
 		return
 	}
 
-	// 检查用户的验证方式
-	twoFA, _ := model.GetTwoFAByUserId(userId)
-	has2FA := twoFA != nil && twoFA.IsEnabled
-
-	passkey, passkeyErr := model.GetPasskeyByUserID(userId)
-	hasPasskey := passkeyErr == nil && passkey != nil
-
-	if !has2FA && !hasPasskey {
-		common.ApiError(c, fmt.Errorf("用户未启用2FA或Passkey"))
+	methods, err := loadSecureVerificationMethods(user, req.Scope == secureVerificationScopeAccessToken)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
 
 	// 根据验证方式进行验证
 	var verified bool
 	var verifyMethod string
-	var err error
 
 	switch req.Method {
 	case "2fa":
-		if !has2FA {
+		if !methods.has2FA {
 			common.ApiError(c, fmt.Errorf("用户未启用2FA"))
 			return
 		}
@@ -92,11 +158,11 @@ func UniversalVerify(c *gin.Context) {
 			common.ApiError(c, fmt.Errorf("验证码不能为空"))
 			return
 		}
-		verified = validateTwoFactorAuth(twoFA, req.Code)
+		verified = validateTwoFactorAuth(methods.twoFA, req.Code)
 		verifyMethod = "2FA"
 
 	case "passkey":
-		if !hasPasskey {
+		if !methods.hasPasskey {
 			common.ApiError(c, fmt.Errorf("用户未启用Passkey"))
 			return
 		}
@@ -112,18 +178,34 @@ func UniversalVerify(c *gin.Context) {
 		}
 		verifyMethod = "Passkey"
 
+	case "password":
+		if !methods.hasPassword {
+			common.ApiError(c, fmt.Errorf("密码验证不可用，请使用2FA或Passkey"))
+			return
+		}
+		if req.Password == "" {
+			common.ApiError(c, fmt.Errorf("密码不能为空"))
+			return
+		}
+		verified = common.ValidatePasswordAndHash(req.Password, user.Password)
+		verifyMethod = "Password"
+
 	default:
 		common.ApiError(c, fmt.Errorf("不支持的验证方式: %s", req.Method))
 		return
 	}
 
 	if !verified {
-		common.ApiError(c, fmt.Errorf("验证失败，请检查验证码"))
+		if req.Method == secureVerificationMethodPassword {
+			common.ApiError(c, fmt.Errorf("密码错误"))
+		} else {
+			common.ApiError(c, fmt.Errorf("验证失败，请检查验证码"))
+		}
 		return
 	}
 
 	// 验证成功，在 session 中记录时间戳
-	now, err := setSecureVerificationSession(c, req.Method)
+	now, err := setSecureVerificationSession(c, userId, req.Method, req.Scope)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("保存验证状态失败: %v", err))
 		return
@@ -142,12 +224,18 @@ func UniversalVerify(c *gin.Context) {
 	})
 }
 
-func setSecureVerificationSession(c *gin.Context, method string) (int64, error) {
+func setSecureVerificationSession(c *gin.Context, userId int, method string, scope string) (int64, error) {
 	session := sessions.Default(c)
 	session.Delete(PasskeyReadySessionKey)
 	now := time.Now().Unix()
 	session.Set(SecureVerificationSessionKey, now)
 	session.Set(secureVerificationMethodSessionKey, method)
+	session.Set(secureVerificationUserSessionKey, userId)
+	if scope == "" {
+		session.Delete(secureVerificationScopeSessionKey)
+	} else {
+		session.Set(secureVerificationScopeSessionKey, scope)
+	}
 	if err := session.Save(); err != nil {
 		return 0, err
 	}

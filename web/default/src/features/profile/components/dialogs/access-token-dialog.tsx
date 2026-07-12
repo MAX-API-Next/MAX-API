@@ -21,10 +21,6 @@ import { RefreshCw, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
-  SecureVerificationDialog,
-  useSecureVerification,
-} from '@/features/auth/secure-verification'
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -35,6 +31,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CopyButton } from '@/components/copy-button'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { useAccessToken } from '../../hooks'
 
 // ============================================================================
@@ -68,6 +68,7 @@ export function AccessTokenDialog({
       () => generate({ rethrowVerificationRequired: true }),
       {
         preferredMethod: 'passkey',
+        scope: 'access_token',
         title: t('Security verification'),
         description: t(
           "Your system access token for API authentication. Keep it secure and don't share it with others."

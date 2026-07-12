@@ -138,6 +138,11 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
 	session := sessions.Default(c)
+	session.Delete(SecureVerificationSessionKey)
+	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
+	session.Delete(PasskeyReadySessionKey)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)

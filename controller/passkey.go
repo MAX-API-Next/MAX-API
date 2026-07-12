@@ -498,6 +498,8 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	session.Set(PasskeyReadySessionKey, time.Now().Unix())
 	session.Delete(SecureVerificationSessionKey)
 	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
 	if err := session.Save(); err != nil {
 		common.ApiError(c, fmt.Errorf("保存验证状态失败: %v", err))
 		return
@@ -570,9 +572,13 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 func requireSecureVerificationMethod(c *gin.Context, method string) bool {
 	session := sessions.Default(c)
 	verifiedAt, ok := session.Get(SecureVerificationSessionKey).(int64)
-	if !ok || time.Now().Unix()-verifiedAt >= SecureVerificationTimeout {
+	verifiedUserID, userOK := session.Get(secureVerificationUserSessionKey).(int)
+	elapsed := time.Now().Unix() - verifiedAt
+	if !ok || !userOK || verifiedUserID != c.GetInt("id") || elapsed < 0 || elapsed >= SecureVerificationTimeout {
 		session.Delete(SecureVerificationSessionKey)
 		session.Delete(secureVerificationMethodSessionKey)
+		session.Delete(secureVerificationUserSessionKey)
+		session.Delete(secureVerificationScopeSessionKey)
 		_ = session.Save()
 		common.ApiErrorMsg(c, "请先完成安全验证")
 		return false

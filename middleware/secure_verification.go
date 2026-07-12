@@ -12,6 +12,9 @@ const (
 	// SecureVerificationSessionKey 安全验证的 session key（与 controller 保持一致）
 	SecureVerificationSessionKey       = "secure_verified_at"
 	secureVerificationMethodSessionKey = "secure_verified_method"
+	secureVerificationUserSessionKey   = "secure_verified_user_id"
+	secureVerificationScopeSessionKey  = "secure_verified_scope"
+	secureVerificationMethodPassword   = "password"
 	// SecureVerificationTimeout 验证有效期（秒）
 	SecureVerificationTimeout = 300 // 5分钟
 )
@@ -19,7 +22,7 @@ const (
 // SecureVerificationRequired 安全验证中间件
 // 检查用户是否在有效时间内通过了安全验证
 // 如果未验证或验证已过期，返回 401 错误
-func SecureVerificationRequired() gin.HandlerFunc {
+func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 检查用户是否已登录
 		userId := c.GetInt("id")
@@ -58,10 +61,21 @@ func SecureVerificationRequired() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		verifiedUserID, ok := session.Get(secureVerificationUserSessionKey).(int)
+		if !ok || verifiedUserID != userId {
+			clearSecureVerificationSession(session)
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "验证状态与当前用户不匹配，请重新验证",
+				"code":    "VERIFICATION_INVALID",
+			})
+			c.Abort()
+			return
+		}
 
 		// 检查验证是否过期
 		elapsed := time.Now().Unix() - verifiedAt
-		if elapsed >= SecureVerificationTimeout {
+		if elapsed < 0 || elapsed >= SecureVerificationTimeout {
 			// 验证已过期，清除 session
 			clearSecureVerificationSession(session)
 			c.JSON(http.StatusForbidden, gin.H{
@@ -73,6 +87,34 @@ func SecureVerificationRequired() gin.HandlerFunc {
 			return
 		}
 
+		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
+		if !ok || verifiedMethod == "" {
+			clearSecureVerificationSession(session)
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "验证状态异常，请重新验证",
+				"code":    "VERIFICATION_INVALID",
+			})
+			c.Abort()
+			return
+		}
+		if verifiedMethod == secureVerificationMethodPassword {
+			requiredScope := ""
+			if len(requiredScopes) > 0 {
+				requiredScope = requiredScopes[0]
+			}
+			verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
+			if requiredScope == "" || verifiedScope != requiredScope {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": "需要对应操作的安全验证",
+					"code":    "VERIFICATION_REQUIRED",
+				})
+				c.Abort()
+				return
+			}
+		}
+
 		c.Next()
 	}
 }
@@ -80,6 +122,8 @@ func SecureVerificationRequired() gin.HandlerFunc {
 func clearSecureVerificationSession(session sessions.Session) {
 	session.Delete(SecureVerificationSessionKey)
 	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
 	_ = session.Save()
 }
 
@@ -106,14 +150,28 @@ func OptionalSecureVerification() gin.HandlerFunc {
 
 		verifiedAt, ok := verifiedAtRaw.(int64)
 		if !ok {
+			clearSecureVerificationSession(session)
+			c.Set("secure_verified", false)
+			c.Next()
+			return
+		}
+		verifiedUserID, ok := session.Get(secureVerificationUserSessionKey).(int)
+		if !ok || verifiedUserID != userId {
+			clearSecureVerificationSession(session)
 			c.Set("secure_verified", false)
 			c.Next()
 			return
 		}
 
 		elapsed := time.Now().Unix() - verifiedAt
-		if elapsed >= SecureVerificationTimeout {
+		if elapsed < 0 || elapsed >= SecureVerificationTimeout {
 			clearSecureVerificationSession(session)
+			c.Set("secure_verified", false)
+			c.Next()
+			return
+		}
+		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
+		if !ok || verifiedMethod == "" || verifiedMethod == secureVerificationMethodPassword {
 			c.Set("secure_verified", false)
 			c.Next()
 			return
