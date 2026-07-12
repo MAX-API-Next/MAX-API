@@ -1058,7 +1058,89 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 		usage.PromptTokensDetails.TextTokens = usage.PromptTokens
 	}
 
+	usage.BillingUsage = dto.NewGeminiChatBillingUsage(&metadata)
 	return usage
+}
+
+func attachEstimatedGeminiBillingUsage(usage *dto.Usage) *dto.Usage {
+	if usage != nil && usage.BillingUsage == nil {
+		usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(usage)
+	}
+	return usage
+}
+
+// patchGeminiZeroCompletionUsage estimates completion tokens locally when
+// upstream usageMetadata was billable but reported zero completion tokens even
+// though output content was received. Without replacing BillingUsage, settlement
+// would still prefer the prompt-only metadata and bill zero completion.
+func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, responseText string, imageCount int) {
+	if usage == nil || usage.CompletionTokens > 0 {
+		return
+	}
+	if responseText == "" && imageCount == 0 {
+		return
+	}
+	promptTokens := usage.PromptTokens
+	if promptTokens <= 0 {
+		promptTokens = info.GetEstimatePromptTokens()
+	}
+	estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, promptTokens)
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = estimated.PromptTokens
+	}
+	usage.CompletionTokens = estimated.CompletionTokens
+	if imageCount != 0 && usage.CompletionTokens == 0 {
+		usage.CompletionTokens = imageCount * 1400
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(usage)
+}
+
+func geminiResponseUsageText(response *dto.GeminiChatResponse) string {
+	if response == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" {
+				text.WriteString(part.Text)
+			}
+		}
+	}
+	return text.String()
+}
+
+func geminiResponseInlineImageCount(response *dto.GeminiChatResponse) int {
+	if response == nil {
+		return 0
+	}
+	count := 0
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) dto.Usage {
+	if response == nil {
+		return dto.Usage{}
+	}
+	if metadata := response.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
+		usage := buildUsageFromGeminiMetadata(*metadata, info.GetEstimatePromptTokens())
+		patchGeminiZeroCompletionUsage(c, info, &usage, geminiResponseUsageText(response), geminiResponseInlineImageCount(response))
+		return usage
+	}
+	usage := service.ResponseText2Usage(c, geminiResponseUsageText(response), info.UpstreamModelName, info.GetEstimatePromptTokens())
+	attachEstimatedGeminiBillingUsage(usage)
+	if usage == nil {
+		return dto.Usage{}
+	}
+	return *usage
 }
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
@@ -1380,8 +1462,8 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 
 		// 更新使用量统计
-		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
-			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+		if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
+			mappedUsage := buildUsageFromGeminiMetadata(*metadata, info.GetEstimatePromptTokens())
 			*usage = mappedUsage
 		}
 
@@ -1390,15 +1472,12 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	})
 
-	if imageCount != 0 {
-		if usage.CompletionTokens == 0 {
-			usage.CompletionTokens = imageCount * 1400
-		}
-	}
+	patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 
 	if usage.CompletionTokens <= 0 {
 		if info.ReceivedResponseCount > 0 {
 			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			attachEstimatedGeminiBillingUsage(usage)
 		} else {
 			usage = &dto.Usage{}
 		}
@@ -1535,7 +1614,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if len(geminiResponse.Candidates) == 0 {
-		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+		usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 
 		var maxAPIError *types.MaxAPIError
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -1571,7 +1650,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
-	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+	usage := buildUsageFromGeminiResponse(c, info, &geminiResponse)
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.BuildGeminiResponseAuditContent(&geminiResponse))
 	}
