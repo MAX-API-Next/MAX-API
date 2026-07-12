@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { QuotaAdjustMode } from '../types'
 
-export function isSafeQuotaValue(value: number) {
+export function isSafeQuotaValue(value: number): boolean {
   return Number.isSafeInteger(value)
 }
 
@@ -26,7 +26,7 @@ export function isSafeQuotaAdjustment(
   currentQuota: number,
   mode: QuotaAdjustMode,
   value: number
-) {
+): boolean {
   if (!isSafeQuotaValue(value)) return false
   if (mode === 'override') return value >= 0
   if (!isSafeQuotaValue(currentQuota)) return false
