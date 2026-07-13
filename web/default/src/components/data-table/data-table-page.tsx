@@ -253,11 +253,9 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
 
 function useNarrowTableContainer() {
   const containerRef = React.useRef<HTMLDivElement>(null)
-  const [isNarrow, setIsNarrow] = React.useState(
-    () => typeof window !== 'undefined' && window.innerWidth <= 640
-  )
+  const [isNarrow, setIsNarrow] = React.useState(false)
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const container = containerRef.current
     if (!container) return
 

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -123,11 +123,28 @@ interface HeroSignal {
   icon: LucideIcon
 }
 
+type LoadableState = 'error' | 'loading' | 'ready'
+
 interface OperationsStatusItem {
   label: string
   value: string
   icon: LucideIcon
-  state?: 'error' | 'loading' | 'ready'
+  state?: LoadableState
+}
+
+function getLoadableState(isError: boolean, isLoading: boolean): LoadableState {
+  if (isError) return 'error'
+  if (isLoading) return 'loading'
+  return 'ready'
+}
+
+function getLoadableValue<T>(
+  state: LoadableState,
+  values: Record<LoadableState, T>
+): T {
+  if (state === 'error') return values.error
+  if (state === 'loading') return values.loading
+  return values.ready
 }
 
 function OperationsStatusSummary(props: {
@@ -291,11 +308,15 @@ function StartStepItem(props: {
 }) {
   const { t } = useTranslation()
   const Icon = props.step.icon
-  const StatusIcon = props.step.unavailable
-    ? AlertCircle
-    : props.step.completed
-      ? Check
-      : Circle
+  let StatusIcon = Circle
+  let statusLabel = t('Incomplete')
+  if (props.step.unavailable) {
+    StatusIcon = AlertCircle
+    statusLabel = t('Error')
+  } else if (props.step.completed) {
+    StatusIcon = Check
+    statusLabel = t('Completed')
+  }
 
   return (
     <li className='relative flex gap-3 pb-2.5 last:pb-0'>
@@ -320,13 +341,7 @@ function StartStepItem(props: {
           )}
           aria-hidden='true'
         />
-        <span className='sr-only'>
-          {props.step.unavailable
-            ? t('Error')
-            : props.step.completed
-              ? t('Completed')
-              : t('Incomplete')}
-        </span>
+        <span className='sr-only'>{statusLabel}</span>
       </span>
 
       <Link
@@ -402,6 +417,46 @@ function RequestPreview(props: {
     }
   }
 
+  let requestStatus = t('Create an API key to unlock the real request')
+  let requestAction: ReactNode = (
+    <Button size='sm' variant='outline' render={<Link to='/keys' />}>
+      {t('Create API Key')}
+    </Button>
+  )
+  if (props.example.unavailable) {
+    requestStatus = t('Request failed')
+    requestAction = (
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-7 px-2 text-xs'
+        disabled={props.isRetrying}
+        onClick={props.onRetry}
+      >
+        <RefreshCw
+          data-icon='inline-start'
+          className={cn(props.isRetrying && 'animate-spin')}
+        />
+        {t('Retry')}
+      </Button>
+    )
+  } else if (props.example.ready) {
+    requestStatus = props.example.keyName
+    requestAction = (
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-7 gap-1.5 px-2 text-xs'
+        disabled={isCopying}
+        onClick={handleCopyRequest}
+        aria-label={t('Copy ready-to-run curl')}
+      >
+        <Copy data-icon='inline-start' />
+        {isCopying ? t('Loading') : t('Copy')}
+      </Button>
+    )
+  }
+
   return (
     <motion.div
       initial={shouldReduceMotion ? false : { opacity: 0, y: 10, scale: 0.98 }}
@@ -428,45 +483,11 @@ function RequestPreview(props: {
               {t('First API request')}
             </div>
             <div className='text-muted-foreground truncate text-xs'>
-              {props.example.unavailable
-                ? t('Request failed')
-                : props.example.ready
-                  ? props.example.keyName
-                  : t('Create an API key to unlock the real request')}
+              {requestStatus}
             </div>
           </div>
         </div>
-        {props.example.unavailable ? (
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 px-2 text-xs'
-            disabled={props.isRetrying}
-            onClick={props.onRetry}
-          >
-            <RefreshCw
-              data-icon='inline-start'
-              className={cn(props.isRetrying && 'animate-spin')}
-            />
-            {t('Retry')}
-          </Button>
-        ) : props.example.ready ? (
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 gap-1.5 px-2 text-xs'
-            disabled={isCopying}
-            onClick={handleCopyRequest}
-            aria-label={t('Copy ready-to-run curl')}
-          >
-            <Copy data-icon='inline-start' />
-            {isCopying ? t('Loading') : t('Copy')}
-          </Button>
-        ) : (
-          <Button size='sm' variant='outline' render={<Link to='/keys' />}>
-            {t('Create API Key')}
-          </Button>
-        )}
+        {requestAction}
       </div>
 
       <div className='bg-foreground/[0.035] my-3 rounded-xl p-3 font-mono text-xs'>
@@ -686,8 +707,25 @@ export function OverviewDashboard() {
     [isAdmin, quickActions]
   )
 
-  const heroSignals = useMemo<HeroSignal[]>(
-    () => [
+  const heroSignals = useMemo<HeroSignal[]>(() => {
+    let apiKeyStatus = t('Needs API key')
+    if (apiKeysQuery.isError) {
+      apiKeyStatus = t('Error')
+    } else if (preferredKey) {
+      apiKeyStatus = t('Secured')
+    }
+
+    const modelState = getLoadableState(
+      modelsQuery.isError,
+      modelsQuery.isLoading
+    )
+    const modelStatus = getLoadableValue(modelState, {
+      error: t('Error'),
+      loading: t('Loading'),
+      ready: modelsQuery.data?.[0] ?? t('No models found.'),
+    })
+
+    return [
       {
         label: t('Model route active'),
         value: apiInfoItems.length > 0 ? t('Online') : t('Current domain'),
@@ -695,33 +733,24 @@ export function OverviewDashboard() {
       },
       {
         label: t('Agent key configured'),
-        value: apiKeysQuery.isError
-          ? t('Error')
-          : preferredKey
-            ? t('Secured')
-            : t('Needs API key'),
+        value: apiKeyStatus,
         icon: ShieldCheck,
       },
       {
         label: t('Model selected'),
-        value: modelsQuery.isError
-          ? t('Error')
-          : modelsQuery.isLoading
-            ? t('Loading')
-            : (modelsQuery.data?.[0] ?? t('No models found.')),
+        value: modelStatus,
         icon: Timer,
       },
-    ],
-    [
-      apiInfoItems.length,
-      apiKeysQuery.isError,
-      modelsQuery.data,
-      modelsQuery.isError,
-      modelsQuery.isLoading,
-      preferredKey,
-      t,
     ]
-  )
+  }, [
+    apiInfoItems.length,
+    apiKeysQuery.isError,
+    modelsQuery.data,
+    modelsQuery.isError,
+    modelsQuery.isLoading,
+    preferredKey,
+    t,
+  ])
 
   const requestExample = useMemo<RequestExample>(() => {
     const endpoint = normalizeEndpoint(apiInfoItems[0]?.url)
@@ -758,8 +787,17 @@ export function OverviewDashboard() {
   const showLeftContentPanels =
     isAdmin || showApiInfoPanel || showAnnouncementsPanel || showFAQPanel
   const showContentPanels = showLeftContentPanels || showUptimePanel
-  const operationsStatusItems = useMemo<OperationsStatusItem[]>(
-    () => [
+  const operationsStatusItems = useMemo<OperationsStatusItem[]>(() => {
+    const modelsState = getLoadableState(
+      modelsQuery.isError,
+      modelsQuery.isLoading
+    )
+    const apiKeysState = getLoadableState(
+      apiKeysQuery.isError,
+      apiKeysQuery.isLoading
+    )
+
+    return [
       {
         label: t('API Requests'),
         value: formatNumber(requestCount),
@@ -772,45 +810,36 @@ export function OverviewDashboard() {
       },
       {
         label: t('Available Models'),
-        value: modelsQuery.isError
-          ? t('Error')
-          : modelsQuery.isLoading
-            ? t('Loading...')
-            : formatNumber(modelsQuery.data?.length ?? 0),
+        value: getLoadableValue(modelsState, {
+          error: t('Error'),
+          loading: t('Loading...'),
+          ready: formatNumber(modelsQuery.data?.length ?? 0),
+        }),
         icon: RadioTower,
-        state: modelsQuery.isError
-          ? 'error'
-          : modelsQuery.isLoading
-            ? 'loading'
-            : 'ready',
+        state: modelsState,
       },
       {
         label: t('API Keys'),
-        value: apiKeysQuery.isError
-          ? t('Error')
-          : apiKeysQuery.isLoading
-            ? t('Loading...')
-            : formatNumber(apiKeysQuery.data?.total ?? 0),
+        value: getLoadableValue(apiKeysState, {
+          error: t('Error'),
+          loading: t('Loading...'),
+          ready: formatNumber(apiKeysQuery.data?.total ?? 0),
+        }),
         icon: KeyRound,
-        state: apiKeysQuery.isError
-          ? 'error'
-          : apiKeysQuery.isLoading
-            ? 'loading'
-            : 'ready',
+        state: apiKeysState,
       },
-    ],
-    [
-      apiKeysQuery.data?.total,
-      apiKeysQuery.isError,
-      apiKeysQuery.isLoading,
-      modelsQuery.data?.length,
-      modelsQuery.isError,
-      modelsQuery.isLoading,
-      remainQuota,
-      requestCount,
-      t,
     ]
-  )
+  }, [
+    apiKeysQuery.data?.total,
+    apiKeysQuery.isError,
+    apiKeysQuery.isLoading,
+    modelsQuery.data?.length,
+    modelsQuery.isError,
+    modelsQuery.isLoading,
+    remainQuota,
+    requestCount,
+    t,
+  ])
 
   const handleSetupGuideToggle = () => {
     const nextExpanded = !setupGuideExpanded

@@ -87,6 +87,8 @@ export function OllamaModelsDialog({
   const [isPulling, setIsPulling] = useState(false)
   const [pullProgress, setPullProgress] = useState<PullProgress | null>(null)
   const pullAbortRef = useRef<AbortController | null>(null)
+  const modelFetchAbortRef = useRef<AbortController | null>(null)
+  const modelFetchRunRef = useRef(0)
 
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
@@ -103,7 +105,18 @@ export function OllamaModelsDialog({
     [currentRow?.models]
   )
 
+  const cancelModelFetch = useCallback(() => {
+    modelFetchRunRef.current += 1
+    modelFetchAbortRef.current?.abort()
+    modelFetchAbortRef.current = null
+  }, [])
+
   const resetDialogState = useCallback(() => {
+    cancelModelFetch()
+    setIsFetching(false)
+    setDeleteOpen(false)
+    setDeleteTarget(null)
+    setIsDeleting(false)
     setModels([])
     setSelected([])
     setSearch('')
@@ -112,10 +125,18 @@ export function OllamaModelsDialog({
     setPullProgress(null)
     pullAbortRef.current?.abort()
     pullAbortRef.current = null
-  }, [])
+  }, [cancelModelFetch])
 
   const fetchOllamaModels = useCallback(async () => {
     if (!channelId) return
+
+    cancelModelFetch()
+    const controller = new AbortController()
+    const fetchRun = modelFetchRunRef.current
+    modelFetchAbortRef.current = controller
+    const isActiveRun = () =>
+      modelFetchRunRef.current === fetchRun && !controller.signal.aborted
+
     setIsFetching(true)
     try {
       let normalized: OllamaModel[] = []
@@ -125,24 +146,33 @@ export function OllamaModelsDialog({
       const baseUrl = resolveOllamaBaseUrl(currentRow ?? null)
       if (isOllamaChannel && baseUrl) {
         try {
-          const payloadLive = await fetchModelsFromEndpoint({
-            base_url: baseUrl,
-            type: CHANNEL_TYPE_OLLAMA,
-            key: typeof currentRow?.key === 'string' ? currentRow.key : '',
-          })
+          const payloadLive = await fetchModelsFromEndpoint(
+            {
+              base_url: baseUrl,
+              type: CHANNEL_TYPE_OLLAMA,
+              key: typeof currentRow?.key === 'string' ? currentRow.key : '',
+            },
+            controller.signal
+          )
+          if (!isActiveRun()) return
           if (payloadLive?.success) {
             normalized = normalizeOllamaModels(payloadLive.data)
           } else if (payloadLive?.message) {
             lastErr = String(payloadLive.message)
           }
         } catch (err: unknown) {
+          if (!isActiveRun()) return
           lastErr = err instanceof Error ? err.message : ''
         }
       }
 
       // 2) Fallback to server-side fetch by channelId
       if (!normalized.length) {
-        const payload = await fetchUpstreamModels(Number(channelId))
+        const payload = await fetchUpstreamModels(
+          Number(channelId),
+          controller.signal
+        )
+        if (!isActiveRun()) return
         if (payload?.success) {
           normalized = normalizeOllamaModels(payload.data)
           lastErr = ''
@@ -151,6 +181,7 @@ export function OllamaModelsDialog({
         }
       }
 
+      if (!isActiveRun()) return
       if (!normalized.length && lastErr) {
         toast.error(lastErr || t('Failed to fetch models'))
       }
@@ -166,13 +197,17 @@ export function OllamaModelsDialog({
           : normalized.map((m) => m.id)
       })
     } catch (err: unknown) {
+      if (!isActiveRun()) return
       const msg = err instanceof Error ? err.message : undefined
       toast.error(msg || t('Failed to fetch models'))
       setModels([])
     } finally {
-      setIsFetching(false)
+      if (modelFetchRunRef.current === fetchRun) {
+        modelFetchAbortRef.current = null
+        setIsFetching(false)
+      }
     }
-  }, [channelId, currentRow, isOllamaChannel, t])
+  }, [cancelModelFetch, channelId, currentRow, isOllamaChannel, t])
 
   useEffect(() => {
     if (!open) {
@@ -184,9 +219,19 @@ export function OllamaModelsDialog({
       const frame = requestAnimationFrame(() => {
         void fetchOllamaModels()
       })
-      return () => cancelAnimationFrame(frame)
+      return () => {
+        cancelAnimationFrame(frame)
+        cancelModelFetch()
+      }
     }
-  }, [channelId, fetchOllamaModels, isOllamaChannel, open, resetDialogState])
+  }, [
+    cancelModelFetch,
+    channelId,
+    fetchOllamaModels,
+    isOllamaChannel,
+    open,
+    resetDialogState,
+  ])
 
   const toggleSelected = (modelId: string, checked: boolean) => {
     setSelected((prev) => {

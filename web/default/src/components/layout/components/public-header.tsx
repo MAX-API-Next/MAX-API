@@ -46,6 +46,7 @@ import { PublicHeaderToolsMenu } from './header-tools-menu'
 
 const AUTH_PROMPT_SECONDS = 5
 const MAX_API_GITHUB_URL = 'https://github.com/MAX-API-Next/MAX-API'
+const DESKTOP_NAVIGATION_MEDIA_QUERY = '(min-width: 1024px)'
 
 type AuthPromptTarget = {
   title: string
@@ -119,6 +120,17 @@ export function PublicHeader(props: PublicHeaderProps) {
       document.body.style.overflow = ''
     }
   }, [mobileOpen])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(DESKTOP_NAVIGATION_MEDIA_QUERY)
+    const closeMobileMenuOnDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) setMobileOpen(false)
+    }
+
+    mediaQuery.addEventListener('change', closeMobileMenuOnDesktop)
+    return () =>
+      mediaQuery.removeEventListener('change', closeMobileMenuOnDesktop)
+  }, [])
 
   useEffect(() => {
     if (!authPromptTarget) return

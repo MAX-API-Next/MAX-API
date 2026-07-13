@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { TFunction } from 'i18next'
 
 export function unitCostToPrice(unitCost: number | string): number {
   return Number(unitCost) || 0
@@ -26,17 +27,22 @@ export function priceToUnitCost(price: number | string): number {
 }
 
 export function formatTokenHint(
-  value: number | string | null | undefined
+  value: number | string | null | undefined,
+  t: TFunction
 ): string {
   if (value == null || value === '' || Number.isNaN(Number(value))) return ''
 
   const tokenCount = Number(value)
   if (tokenCount === 0) return '= 0'
   if (tokenCount >= 1_000_000) {
-    return `= ${(tokenCount / 1_000_000).toLocaleString()}M tokens`
+    return t('= {{count}}M tokens', {
+      count: (tokenCount / 1_000_000).toLocaleString(),
+    })
   }
   if (tokenCount >= 1_000) {
-    return `= ${(tokenCount / 1_000).toLocaleString()}K tokens`
+    return t('= {{count}}K tokens', {
+      count: (tokenCount / 1_000).toLocaleString(),
+    })
   }
-  return `= ${tokenCount.toLocaleString()} tokens`
+  return t('= {{count}} tokens', { count: tokenCount.toLocaleString() })
 }

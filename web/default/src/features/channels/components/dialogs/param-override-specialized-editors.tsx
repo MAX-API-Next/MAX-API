@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useId, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -31,6 +33,12 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  editSyncTargetKey,
+  normalizeSyncTargetType,
+  selectSyncTargetType,
+  type SyncTargetType,
+} from './param-override-specialized-editor-utils'
 
 const CONDITION_MODE_OPTIONS = [
   { label: 'Exact Match', value: 'full' },
@@ -47,13 +55,6 @@ const SYNC_TARGET_TYPE_OPTIONS = [
   { label: 'Request Body Field', value: 'json' },
   { label: 'Request Header Field', value: 'header' },
 ]
-
-const buildSyncTargetSpec = (type: string, key: string): string => {
-  const normalizedType = type === 'header' ? 'header' : 'json'
-  const normalizedKey = String(key ?? '').trim()
-  if (!normalizedKey) return ''
-  return `${normalizedType}:${normalizedKey}`
-}
 
 export type ReturnErrorDraft = {
   message: string
@@ -99,6 +100,7 @@ export function ReturnErrorEditor(
 ) {
   const { t } = useTranslation()
   const draft = returnErrorEditorProps.draft
+  const fieldIdPrefix = useId()
 
   return (
     <div className='rounded-lg border p-3'>
@@ -140,10 +142,14 @@ export function ReturnErrorEditor(
       </div>
 
       <div className='space-y-1.5'>
-        <label className='text-xs font-medium'>
+        <Label
+          htmlFor={`${fieldIdPrefix}-message`}
+          className='text-xs font-medium'
+        >
           {t('Error Message (required)')}
-        </label>
+        </Label>
         <Textarea
+          id={`${fieldIdPrefix}-message`}
           value={draft.message}
           onChange={(e) =>
             returnErrorEditorProps.updateDraft(
@@ -167,8 +173,14 @@ export function ReturnErrorEditor(
         <>
           <div className='mt-3 grid gap-3 sm:grid-cols-3'>
             <div className='space-y-1'>
-              <label className='text-xs font-medium'>{t('Status Code')}</label>
+              <Label
+                htmlFor={`${fieldIdPrefix}-status-code`}
+                className='text-xs font-medium'
+              >
+                {t('Status Code')}
+              </Label>
               <Input
+                id={`${fieldIdPrefix}-status-code`}
                 value={String(draft.statusCode ?? '')}
                 onChange={(e) =>
                   returnErrorEditorProps.updateDraft(
@@ -181,10 +193,14 @@ export function ReturnErrorEditor(
               />
             </div>
             <div className='space-y-1'>
-              <label className='text-xs font-medium'>
+              <Label
+                htmlFor={`${fieldIdPrefix}-error-code`}
+                className='text-xs font-medium'
+              >
                 {t('Error Code (optional)')}
-              </label>
+              </Label>
               <Input
+                id={`${fieldIdPrefix}-error-code`}
                 value={draft.code}
                 onChange={(e) =>
                   returnErrorEditorProps.updateDraft(
@@ -197,10 +213,14 @@ export function ReturnErrorEditor(
               />
             </div>
             <div className='space-y-1'>
-              <label className='text-xs font-medium'>
+              <Label
+                htmlFor={`${fieldIdPrefix}-error-type`}
+                className='text-xs font-medium'
+              >
                 {t('Error Type (optional)')}
-              </label>
+              </Label>
               <Input
+                id={`${fieldIdPrefix}-error-type`}
                 value={draft.type}
                 onChange={(e) =>
                   returnErrorEditorProps.updateDraft(
@@ -321,6 +341,7 @@ export function PruneObjectsEditor(
 ) {
   const { t } = useTranslation()
   const draft = pruneObjectsEditorProps.draft
+  const fieldIdPrefix = useId()
 
   return (
     <div className='rounded-lg border p-3'>
@@ -360,8 +381,14 @@ export function PruneObjectsEditor(
       </div>
 
       <div className='space-y-1.5'>
-        <label className='text-xs font-medium'>{t('Type (common)')}</label>
+        <Label
+          htmlFor={`${fieldIdPrefix}-type`}
+          className='text-xs font-medium'
+        >
+          {t('Type (common)')}
+        </Label>
         <Input
+          id={`${fieldIdPrefix}-type`}
           value={draft.typeText}
           onChange={(e) =>
             pruneObjectsEditorProps.updateDraft(
@@ -382,7 +409,12 @@ export function PruneObjectsEditor(
         <>
           <div className='mt-3 grid gap-3 sm:grid-cols-2'>
             <div className='space-y-1'>
-              <label className='text-xs font-medium'>{t('Logic')}</label>
+              <Label
+                htmlFor={`${fieldIdPrefix}-logic`}
+                className='text-xs font-medium'
+              >
+                {t('Logic')}
+              </Label>
               <Select
                 items={[
                   { value: 'AND', label: t('All Must Match (AND)') },
@@ -396,7 +428,10 @@ export function PruneObjectsEditor(
                   )
                 }
               >
-                <SelectTrigger className='h-8 text-xs'>
+                <SelectTrigger
+                  id={`${fieldIdPrefix}-logic`}
+                  className='h-8 text-xs'
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
@@ -410,9 +445,9 @@ export function PruneObjectsEditor(
               </Select>
             </div>
             <div className='space-y-1'>
-              <label className='text-xs font-medium'>
+              <span className='text-xs font-medium'>
                 {t('Recursion Strategy')}
-              </label>
+              </span>
               <div className='flex gap-1'>
                 <Button
                   type='button'
@@ -474,132 +509,158 @@ export function PruneObjectsEditor(
               </p>
             ) : (
               <div className='space-y-2'>
-                {draft.rules.map((rule, ruleIndex) => (
-                  <div
-                    key={rule.id}
-                    className='bg-background rounded-md border p-2'
-                  >
-                    <div className='mb-1 flex items-center justify-between'>
-                      <Badge variant='outline' className='text-[10px]'>
-                        R{ruleIndex + 1}
-                      </Badge>
-                      <Button
-                        type='button'
-                        variant='ghost'
-                        size='sm'
-                        className='text-destructive hover:text-destructive h-6 text-[10px]'
-                        onClick={() =>
-                          pruneObjectsEditorProps.removeRule(
-                            pruneObjectsEditorProps.operationId,
-                            rule.id
-                          )
-                        }
-                      >
-                        <Trash2 className='mr-1 h-3 w-3' />
-                        {t('Delete')}
-                      </Button>
-                    </div>
-                    <div className='grid gap-2 sm:grid-cols-3'>
-                      <div className='space-y-0.5'>
-                        <label className='text-[10px] font-medium'>
-                          {t('Field Path')}
-                        </label>
-                        <Input
-                          value={rule.path}
-                          onChange={(e) =>
-                            pruneObjectsEditorProps.updateRule(
+                {draft.rules.map((rule, ruleIndex) => {
+                  const ruleFieldIdPrefix = `${fieldIdPrefix}-rule-${rule.id}`
+
+                  return (
+                    <div
+                      key={rule.id}
+                      className='bg-background rounded-md border p-2'
+                    >
+                      <div className='mb-1 flex items-center justify-between'>
+                        <Badge variant='outline' className='text-[10px]'>
+                          R{ruleIndex + 1}
+                        </Badge>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          className='text-destructive hover:text-destructive h-6 text-[10px]'
+                          onClick={() =>
+                            pruneObjectsEditorProps.removeRule(
                               pruneObjectsEditorProps.operationId,
-                              rule.id,
-                              { path: e.target.value }
-                            )
-                          }
-                          placeholder='type'
-                          className='h-7 text-xs'
-                        />
-                      </div>
-                      <div className='space-y-0.5'>
-                        <label className='text-[10px] font-medium'>
-                          {t('Match Mode')}
-                        </label>
-                        <Select
-                          items={[
-                            ...CONDITION_MODE_OPTIONS.map((o) => ({
-                              value: o.value,
-                              label: t(o.label),
-                            })),
-                          ]}
-                          value={rule.mode}
-                          onValueChange={(v) =>
-                            v !== null &&
-                            pruneObjectsEditorProps.updateRule(
-                              pruneObjectsEditorProps.operationId,
-                              rule.id,
-                              { mode: v }
+                              rule.id
                             )
                           }
                         >
-                          <SelectTrigger className='h-7 text-xs'>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {CONDITION_MODE_OPTIONS.map((o) => (
-                                <SelectItem key={o.value} value={o.value}>
-                                  {t(o.label)}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
+                          <Trash2 className='mr-1 h-3 w-3' />
+                          {t('Delete')}
+                        </Button>
                       </div>
-                      <div className='space-y-0.5'>
-                        <label className='text-[10px] font-medium'>
-                          {t('Match Value (optional)')}
-                        </label>
-                        <Input
-                          value={rule.value_text}
-                          onChange={(e) =>
-                            pruneObjectsEditorProps.updateRule(
-                              pruneObjectsEditorProps.operationId,
-                              rule.id,
-                              { value_text: e.target.value }
-                            )
-                          }
-                          placeholder='redacted_thinking'
-                          className='h-7 text-xs'
-                        />
+                      <div className='grid gap-2 sm:grid-cols-3'>
+                        <div className='space-y-0.5'>
+                          <Label
+                            htmlFor={`${ruleFieldIdPrefix}-path`}
+                            className='text-[10px] font-medium'
+                          >
+                            {t('Field Path')}
+                          </Label>
+                          <Input
+                            id={`${ruleFieldIdPrefix}-path`}
+                            value={rule.path}
+                            onChange={(e) =>
+                              pruneObjectsEditorProps.updateRule(
+                                pruneObjectsEditorProps.operationId,
+                                rule.id,
+                                { path: e.target.value }
+                              )
+                            }
+                            placeholder='type'
+                            className='h-7 text-xs'
+                          />
+                        </div>
+                        <div className='space-y-0.5'>
+                          <Label
+                            htmlFor={`${ruleFieldIdPrefix}-mode`}
+                            className='text-[10px] font-medium'
+                          >
+                            {t('Match Mode')}
+                          </Label>
+                          <Select
+                            items={[
+                              ...CONDITION_MODE_OPTIONS.map((o) => ({
+                                value: o.value,
+                                label: t(o.label),
+                              })),
+                            ]}
+                            value={rule.mode}
+                            onValueChange={(v) =>
+                              v !== null &&
+                              pruneObjectsEditorProps.updateRule(
+                                pruneObjectsEditorProps.operationId,
+                                rule.id,
+                                { mode: v }
+                              )
+                            }
+                          >
+                            <SelectTrigger
+                              id={`${ruleFieldIdPrefix}-mode`}
+                              className='h-7 text-xs'
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent alignItemWithTrigger={false}>
+                              <SelectGroup>
+                                {CONDITION_MODE_OPTIONS.map((o) => (
+                                  <SelectItem key={o.value} value={o.value}>
+                                    {t(o.label)}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className='space-y-0.5'>
+                          <Label
+                            htmlFor={`${ruleFieldIdPrefix}-value`}
+                            className='text-[10px] font-medium'
+                          >
+                            {t('Match Value (optional)')}
+                          </Label>
+                          <Input
+                            id={`${ruleFieldIdPrefix}-value`}
+                            value={rule.value_text}
+                            onChange={(e) =>
+                              pruneObjectsEditorProps.updateRule(
+                                pruneObjectsEditorProps.operationId,
+                                rule.id,
+                                { value_text: e.target.value }
+                              )
+                            }
+                            placeholder='redacted_thinking'
+                            className='h-7 text-xs'
+                          />
+                        </div>
+                      </div>
+                      <div className='mt-1.5 flex flex-wrap gap-3'>
+                        <Label
+                          htmlFor={`${ruleFieldIdPrefix}-invert`}
+                          className='flex items-center gap-1.5 text-[10px]'
+                        >
+                          <Switch
+                            id={`${ruleFieldIdPrefix}-invert`}
+                            checked={rule.invert}
+                            onCheckedChange={(checked) =>
+                              pruneObjectsEditorProps.updateRule(
+                                pruneObjectsEditorProps.operationId,
+                                rule.id,
+                                { invert: checked }
+                              )
+                            }
+                          />
+                          {t('Invert match')}
+                        </Label>
+                        <Label
+                          htmlFor={`${ruleFieldIdPrefix}-pass-missing`}
+                          className='flex items-center gap-1.5 text-[10px]'
+                        >
+                          <Switch
+                            id={`${ruleFieldIdPrefix}-pass-missing`}
+                            checked={rule.pass_missing_key}
+                            onCheckedChange={(checked) =>
+                              pruneObjectsEditorProps.updateRule(
+                                pruneObjectsEditorProps.operationId,
+                                rule.id,
+                                { pass_missing_key: checked }
+                              )
+                            }
+                          />
+                          {t('Pass when key is missing')}
+                        </Label>
                       </div>
                     </div>
-                    <div className='mt-1.5 flex flex-wrap gap-3'>
-                      <label className='flex items-center gap-1.5 text-[10px]'>
-                        <Switch
-                          checked={rule.invert}
-                          onCheckedChange={(checked) =>
-                            pruneObjectsEditorProps.updateRule(
-                              pruneObjectsEditorProps.operationId,
-                              rule.id,
-                              { invert: checked }
-                            )
-                          }
-                        />
-                        {t('Invert match')}
-                      </label>
-                      <label className='flex items-center gap-1.5 text-[10px]'>
-                        <Switch
-                          checked={rule.pass_missing_key}
-                          onCheckedChange={(checked) =>
-                            pruneObjectsEditorProps.updateRule(
-                              pruneObjectsEditorProps.operationId,
-                              rule.id,
-                              { pass_missing_key: checked }
-                            )
-                          }
-                        />
-                        {t('Pass when key is missing')}
-                      </label>
-                    </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -625,14 +686,32 @@ type SyncFieldsEditorProps = {
 
 export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
   const { t } = useTranslation()
+  const fieldIdPrefix = useId()
+  const [sourceTypeOverride, setSourceTypeOverride] =
+    useState<SyncTargetType | null>(null)
+  const [targetTypeOverride, setTargetTypeOverride] =
+    useState<SyncTargetType | null>(null)
+  const sourceType = syncFieldsEditorProps.syncFromTarget.key
+    ? normalizeSyncTargetType(syncFieldsEditorProps.syncFromTarget.type)
+    : (sourceTypeOverride ??
+      normalizeSyncTargetType(syncFieldsEditorProps.syncFromTarget.type))
+  const targetType = syncFieldsEditorProps.syncToTarget.key
+    ? normalizeSyncTargetType(syncFieldsEditorProps.syncToTarget.type)
+    : (targetTypeOverride ??
+      normalizeSyncTargetType(syncFieldsEditorProps.syncToTarget.type))
+
   return (
     <div className='space-y-3'>
-      <label className='text-xs font-medium'>{t('Sync Endpoints')}</label>
+      <p className='text-xs font-medium'>{t('Sync Endpoints')}</p>
       <div className='grid gap-3 sm:grid-cols-2'>
         <div className='space-y-1.5'>
-          <label className='text-[10px] font-medium'>
+          <Label
+            id={`${fieldIdPrefix}-source-label`}
+            htmlFor={`${fieldIdPrefix}-source-key`}
+            className='text-[10px] font-medium'
+          >
             {t('Source Endpoint')}
-          </label>
+          </Label>
           <div className='flex gap-2'>
             <Select
               items={[
@@ -641,21 +720,26 @@ export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
                   label: t(o.label),
                 })),
               ]}
-              value={syncFieldsEditorProps.syncFromTarget.type || 'json'}
-              onValueChange={(v) =>
-                v !== null &&
+              value={sourceType}
+              onValueChange={(value) => {
+                if (value === null) return
+                const edit = selectSyncTargetType(
+                  syncFieldsEditorProps.syncFromTarget,
+                  value
+                )
+                setSourceTypeOverride(edit.typeOverride)
+                if (!edit.spec) return
                 syncFieldsEditorProps.updateOperation(
                   syncFieldsEditorProps.operationId,
-                  {
-                    from: buildSyncTargetSpec(
-                      v,
-                      syncFieldsEditorProps.syncFromTarget.key
-                    ),
-                  }
+                  { from: edit.spec }
                 )
-              }
+              }}
             >
-              <SelectTrigger className='h-8 w-[110px] text-xs'>
+              <SelectTrigger
+                id={`${fieldIdPrefix}-source-type`}
+                aria-labelledby={`${fieldIdPrefix}-source-label`}
+                className='h-8 w-[110px] text-xs'
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
@@ -669,27 +753,29 @@ export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
               </SelectContent>
             </Select>
             <Input
+              id={`${fieldIdPrefix}-source-key`}
               value={syncFieldsEditorProps.syncFromTarget.key}
-              onChange={(e) =>
+              onChange={(e) => {
+                const edit = editSyncTargetKey(sourceType, e.target.value)
+                setSourceTypeOverride(edit.typeOverride)
                 syncFieldsEditorProps.updateOperation(
                   syncFieldsEditorProps.operationId,
-                  {
-                    from: buildSyncTargetSpec(
-                      syncFieldsEditorProps.syncFromTarget.type,
-                      e.target.value
-                    ),
-                  }
+                  { from: edit.spec }
                 )
-              }
+              }}
               placeholder='session_id'
               className='h-8 text-xs'
             />
           </div>
         </div>
         <div className='space-y-1.5'>
-          <label className='text-[10px] font-medium'>
+          <Label
+            id={`${fieldIdPrefix}-target-label`}
+            htmlFor={`${fieldIdPrefix}-target-key`}
+            className='text-[10px] font-medium'
+          >
             {t('Target Endpoint')}
-          </label>
+          </Label>
           <div className='flex gap-2'>
             <Select
               items={[
@@ -698,21 +784,26 @@ export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
                   label: t(o.label),
                 })),
               ]}
-              value={syncFieldsEditorProps.syncToTarget.type || 'json'}
-              onValueChange={(v) =>
-                v !== null &&
+              value={targetType}
+              onValueChange={(value) => {
+                if (value === null) return
+                const edit = selectSyncTargetType(
+                  syncFieldsEditorProps.syncToTarget,
+                  value
+                )
+                setTargetTypeOverride(edit.typeOverride)
+                if (!edit.spec) return
                 syncFieldsEditorProps.updateOperation(
                   syncFieldsEditorProps.operationId,
-                  {
-                    to: buildSyncTargetSpec(
-                      v,
-                      syncFieldsEditorProps.syncToTarget.key
-                    ),
-                  }
+                  { to: edit.spec }
                 )
-              }
+              }}
             >
-              <SelectTrigger className='h-8 w-[110px] text-xs'>
+              <SelectTrigger
+                id={`${fieldIdPrefix}-target-type`}
+                aria-labelledby={`${fieldIdPrefix}-target-label`}
+                className='h-8 w-[110px] text-xs'
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
@@ -726,18 +817,16 @@ export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
               </SelectContent>
             </Select>
             <Input
+              id={`${fieldIdPrefix}-target-key`}
               value={syncFieldsEditorProps.syncToTarget.key}
-              onChange={(e) =>
+              onChange={(e) => {
+                const edit = editSyncTargetKey(targetType, e.target.value)
+                setTargetTypeOverride(edit.typeOverride)
                 syncFieldsEditorProps.updateOperation(
                   syncFieldsEditorProps.operationId,
-                  {
-                    to: buildSyncTargetSpec(
-                      syncFieldsEditorProps.syncToTarget.type,
-                      e.target.value
-                    ),
-                  }
+                  { to: edit.spec }
                 )
-              }
+              }}
               placeholder='prompt_cache_key'
               className='h-8 text-xs'
             />
@@ -763,12 +852,14 @@ export function SyncFieldsEditor(syncFieldsEditorProps: SyncFieldsEditorProps) {
             variant='outline'
             size='sm'
             className='h-6 text-[10px]'
-            onClick={() =>
+            onClick={() => {
+              setSourceTypeOverride(null)
+              setTargetTypeOverride(null)
               syncFieldsEditorProps.updateOperation(
                 syncFieldsEditorProps.operationId,
                 { from: preset.from, to: preset.to }
               )
-            }
+            }}
           >
             {preset.label}
           </Button>

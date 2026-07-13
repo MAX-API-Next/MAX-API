@@ -184,7 +184,7 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
         className='w-32'
       />
       <span className='text-muted-foreground text-xs'>
-        {formatTokenHint(condition.value)}
+        {formatTokenHint(condition.value, t)}
       </span>
       <Button
         variant='ghost'
