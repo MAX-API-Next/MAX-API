@@ -16,10 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ComponentProps, ReactNode } from 'react'
+import { useId, type ComponentProps, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from '@/components/ui/field'
 import { FormItem } from '@/components/ui/form'
-import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 
 type SettingsFormGridProps = {
@@ -41,6 +47,8 @@ type SettingsSwitchFieldProps = SettingsSwitchRowProps & {
   label: ReactNode
   description?: ReactNode
   disabled?: boolean
+  disabledReason?: ReactNode
+  error?: ReactNode
 }
 
 const settingsSwitchRowClassName =
@@ -107,29 +115,69 @@ export function SettingsSwitchField({
   label,
   description,
   disabled,
+  disabledReason,
+  error,
   className,
+  'aria-label': ariaLabel,
   ...props
 }: SettingsSwitchFieldProps) {
+  const switchId = useId()
+  const descriptionId = description ? `${switchId}-description` : undefined
+  const disabledReasonId =
+    disabled && disabledReason ? `${switchId}-disabled-reason` : undefined
+  const errorId = error ? `${switchId}-error` : undefined
+  const describedBy = [descriptionId, disabledReasonId, errorId]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <SettingsSwitchRow className={className} {...props}>
-      <SettingsSwitchContent>
-        <Label className='text-sm font-medium'>{label}</Label>
+    <Field
+      orientation='horizontal'
+      data-settings-form-span='full'
+      data-disabled={disabled || undefined}
+      data-invalid={Boolean(error) || undefined}
+      className={cn(settingsSwitchRowClassName, className)}
+      {...props}
+    >
+      <FieldContent>
+        <FieldLabel htmlFor={switchId} className='text-sm font-medium'>
+          {label}
+        </FieldLabel>
         {description ? (
-          <p className='text-muted-foreground text-xs'>{description}</p>
+          <FieldDescription id={descriptionId} className='text-xs'>
+            {description}
+          </FieldDescription>
         ) : null}
-      </SettingsSwitchContent>
+        {disabled && disabledReason ? (
+          <FieldDescription
+            id={disabledReasonId}
+            className='text-warning text-xs'
+          >
+            {disabledReason}
+          </FieldDescription>
+        ) : null}
+        {error ? (
+          <FieldError id={errorId} className='text-xs'>
+            {error}
+          </FieldError>
+        ) : null}
+      </FieldContent>
       <Switch
+        id={switchId}
         checked={checked}
         onCheckedChange={onCheckedChange}
         disabled={disabled}
+        aria-label={ariaLabel}
+        aria-describedby={describedBy || undefined}
+        aria-invalid={Boolean(error) || undefined}
       />
-    </SettingsSwitchRow>
+    </Field>
   )
 }
 
 export function SettingsSwitchContent(props: SettingsFormGridProps) {
   return (
-    <div className={cn('min-w-0 space-y-0.5', props.className)}>
+    <div className={cn('flex min-w-0 flex-col gap-0.5', props.className)}>
       {props.children}
     </div>
   )

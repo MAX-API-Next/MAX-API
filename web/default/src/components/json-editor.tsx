@@ -89,6 +89,8 @@ export function JsonEditor({
   // Parse JSON to rows when value changes externally
   useEffect(() => {
     if (value !== jsonValue) {
+      // External updates replace the local visual/JSON draft together.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setJsonValue(value)
       parseJsonToRows(value)
     }
@@ -255,7 +257,7 @@ export function JsonEditor({
                     type='button'
                     variant='ghost'
                     size='icon'
-                    aria-label='Delete row'
+                    aria-label={t('Delete row')}
                     onClick={() => handleDeleteRow(row.id)}
                     disabled={disabled}
                     className='h-10 w-10'

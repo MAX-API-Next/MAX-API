@@ -124,9 +124,9 @@ function FallbackListSkeleton() {
  *                          [Actions ⋯]
  */
 function CompactRow<TData>({ row }: { row: Row<TData> }) {
-  const allCells = row
-    .getVisibleCells()
-    .filter((cell) => cell.column.id !== 'select')
+  const visibleCells = row.getVisibleCells()
+  const selectCell = visibleCells.find((cell) => cell.column.id === 'select')
+  const allCells = visibleCells.filter((cell) => cell.column.id !== 'select')
 
   const titleCell = allCells.find((c) => getCellMeta(c)?.mobileTitle)
   const badgeCell = allCells.find((c) => getCellMeta(c)?.mobileBadge)
@@ -144,13 +144,23 @@ function CompactRow<TData>({ row }: { row: Row<TData> }) {
     <>
       {/* Row 1: Title + Badge */}
       <div className='flex items-center justify-between gap-2'>
-        {titleCell && (
-          <div className='min-w-0 flex-1 overflow-hidden text-sm font-medium'>
-            {renderCellContent(titleCell)}
+        {(selectCell || titleCell) && (
+          <div className='flex min-w-0 flex-1 items-center gap-2'>
+            {selectCell && (
+              <div className='shrink-0'>{renderCellContent(selectCell)}</div>
+            )}
+            {titleCell && (
+              <div className='min-w-0 flex-1 overflow-hidden text-sm font-medium'>
+                {renderCellContent(titleCell)}
+              </div>
+            )}
           </div>
         )}
-        {badgeCell && (
-          <div className='shrink-0'>{renderCellContent(badgeCell)}</div>
+        {(badgeCell || actionsCell) && (
+          <div className='flex shrink-0 items-center gap-1'>
+            {badgeCell && renderCellContent(badgeCell)}
+            {actionsCell && renderCellContent(actionsCell)}
+          </div>
         )}
       </div>
 
@@ -174,13 +184,6 @@ function CompactRow<TData>({ row }: { row: Row<TData> }) {
           })}
         </div>
       )}
-
-      {/* Actions */}
-      {actionsCell && (
-        <div className='mt-1 -mb-0.5 flex justify-end'>
-          {renderCellContent(actionsCell)}
-        </div>
-      )}
     </>
   )
 }
@@ -190,9 +193,9 @@ function CompactRow<TData>({ row }: { row: Row<TData> }) {
  * mobileTitle/mobileBadge. Still respects mobileHidden.
  */
 function FallbackRow<TData>({ row }: { row: Row<TData> }) {
-  const allCells = row
-    .getVisibleCells()
-    .filter((cell) => cell.column.id !== 'select')
+  const visibleCells = row.getVisibleCells()
+  const selectCell = visibleCells.find((cell) => cell.column.id === 'select')
+  const allCells = visibleCells.filter((cell) => cell.column.id !== 'select')
 
   const actionsCell = allCells.find((c) => c.column.id === 'actions')
   const contentCells = allCells.filter(
@@ -201,6 +204,16 @@ function FallbackRow<TData>({ row }: { row: Row<TData> }) {
 
   return (
     <>
+      {(selectCell || actionsCell) && (
+        <div className='flex items-center justify-between gap-2'>
+          <div className='shrink-0'>
+            {selectCell ? renderCellContent(selectCell) : null}
+          </div>
+          {actionsCell && (
+            <div className='shrink-0'>{renderCellContent(actionsCell)}</div>
+          )}
+        </div>
+      )}
       {contentCells.map((cell) => {
         const label = getCellLabel(cell)
         const content = renderCellContent(cell)
@@ -227,11 +240,6 @@ function FallbackRow<TData>({ row }: { row: Row<TData> }) {
           </div>
         )
       })}
-      {actionsCell && (
-        <div className='-mb-0.5 flex justify-end pt-0.5'>
-          {renderCellContent(actionsCell)}
-        </div>
-      )}
     </>
   )
 }
@@ -303,7 +311,7 @@ export function MobileCardList<TData>(props: MobileCardListProps<TData>) {
             key={key}
             data-state={row.getIsSelected() ? 'selected' : undefined}
             className={cn(
-              'bg-card px-3 py-2.5 transition-colors data-[state=selected]:bg-muted',
+              'bg-card data-[state=selected]:bg-muted px-3 py-2.5 transition-colors',
               getRowClassName?.(row)
             )}
           >

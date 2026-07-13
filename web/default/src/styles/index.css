@@ -500,7 +500,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
     'tnum' 1,
     'lnum' 1;
   font-variant-numeric: tabular-nums lining-nums;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 /* Micro-interactions — Vercel-style subtle hover/active feedback */
@@ -798,7 +798,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(125 211 252);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.18em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -953,6 +953,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 
 .home-visual-shell {
   position: relative;
+  width: 100%;
+  min-width: 0;
   overflow: hidden;
   min-height: 42rem;
   border-radius: 1.75rem;
@@ -1534,7 +1536,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(148 163 184 / 0.58);
   font-size: 0.78rem;
   font-weight: 900;
-  letter-spacing: 0.14em;
+  letter-spacing: 0;
 }
 
 .home-metric-value {
@@ -1592,7 +1594,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(125 211 252);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -1626,7 +1628,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(125 211 252);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -1694,7 +1696,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(125 211 252);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -1733,7 +1735,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
   color: rgb(125 211 252);
   font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -1943,6 +1945,11 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 }
 
 @media (max-width: 1023px) {
+  .home-hero-layout {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
   .home-hero-title span {
     font-size: 3.6rem;
   }

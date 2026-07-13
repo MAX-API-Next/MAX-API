@@ -842,6 +842,13 @@ export function ModelPricingEditorPanel({
                             value={lanePrices[lane.key]}
                             enabled={laneEnabled[lane.key]}
                             disabled={disabled}
+                            disabledReason={
+                              disabled
+                                ? t(
+                                    'Enable and price audio input before configuring audio output.'
+                                  )
+                                : undefined
+                            }
                             onEnabledChange={(checked) =>
                               handleLaneToggle(lane.key, checked)
                             }
@@ -1010,6 +1017,7 @@ function PriceLane(props: {
   value: string
   enabled: boolean
   disabled?: boolean
+  disabledReason?: string
   onEnabledChange: (checked: boolean) => void
   onChange: (value: string) => void
 }) {
@@ -1024,6 +1032,7 @@ function PriceLane(props: {
       <SettingsSwitchField
         checked={props.enabled}
         disabled={props.disabled}
+        disabledReason={props.disabledReason}
         onCheckedChange={props.onEnabledChange}
         label={props.title}
         description={props.description}

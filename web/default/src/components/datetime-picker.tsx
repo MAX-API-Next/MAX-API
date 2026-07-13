@@ -63,6 +63,8 @@ export function DateTimePicker({
   const [time, setTime] = React.useState<string>('00:00')
 
   React.useEffect(() => {
+    // Keep the editable draft synchronized with the controlled value.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDate(value)
     setMonth(value)
     if (value) {
@@ -151,7 +153,7 @@ export function DateTimePicker({
           size='icon'
           onClick={handleClear}
           className='shrink-0'
-          aria-label='Clear'
+          aria-label={t('Clear')}
         >
           <span aria-hidden='true'>✕</span>
         </Button>

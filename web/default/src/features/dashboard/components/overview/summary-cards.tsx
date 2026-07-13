@@ -241,11 +241,11 @@ export function SummaryCards() {
             <div className='flex flex-col gap-2'>
               <div className='flex items-center gap-2.5'>
                 <span className='h-px w-6 bg-emerald-500/70' />
-                <span className='text-muted-foreground text-[10px] font-semibold tracking-[0.26em] uppercase'>
+                <span className='text-muted-foreground text-[10px] font-semibold uppercase'>
                   {t('Overview')}
                 </span>
               </div>
-              <h3 className='font-serif text-xl font-bold tracking-[-0.01em]'>
+              <h3 className='font-serif text-xl font-bold'>
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm'>
@@ -291,7 +291,7 @@ export function SummaryCards() {
               </span>
             </div>
 
-            <div className='editorial-numeral text-3xl font-black tracking-[-0.02em]'>
+            <div className='editorial-numeral text-3xl font-black'>
               {formatQuota(remainQuota)}
             </div>
 

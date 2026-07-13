@@ -51,11 +51,9 @@ type UptimeSparklineProps = {
 }
 
 function colourFor(uptime: number): string {
-  if (uptime >= 99.9) return 'bg-emerald-500'
-  if (uptime >= 99.0) return 'bg-emerald-400'
-  if (uptime >= 95.0) return 'bg-amber-500'
-  if (uptime >= 90.0) return 'bg-amber-600'
-  return 'bg-rose-500'
+  if (uptime >= 99.0) return 'bg-success'
+  if (uptime >= 90.0) return 'bg-warning'
+  return 'bg-destructive'
 }
 
 function heightFor(uptime: number): string {
@@ -67,13 +65,13 @@ function heightFor(uptime: number): string {
 }
 
 function overallTextColour(pct: number): string {
-  if (pct >= 99.9) return 'text-emerald-600 dark:text-emerald-400'
-  if (pct >= 99.0) return 'text-emerald-600 dark:text-emerald-400'
-  if (pct >= 95.0) return 'text-amber-600 dark:text-amber-400'
-  return 'text-rose-600 dark:text-rose-400'
+  if (pct >= 99.0) return 'text-success'
+  if (pct >= 90.0) return 'text-warning'
+  return 'text-destructive'
 }
 
 export function UptimeSparkline(props: UptimeSparklineProps) {
+  const { t } = useTranslation()
   const size = props.size ?? 'md'
   const showOverall = props.showOverall ?? true
 
@@ -97,7 +95,9 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
       <div
         className={cn('flex items-end', containerHeight, gap)}
         role='img'
-        aria-label={`30 day uptime ${overall.toFixed(2)}%`}
+        aria-label={t('30 day uptime {{percent}}%', {
+          percent: overall.toFixed(2),
+        })}
       >
         {props.series.map((day) => (
           <Tooltip key={day.date}>

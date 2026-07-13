@@ -19,6 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useMemo, useState, type ReactNode } from 'react'
 import { useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { Skeleton } from '@/components/ui/skeleton'
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import type { SystemOption } from '../types'
@@ -88,6 +90,29 @@ function SettingsPageFrame(props: SettingsPageFrameProps) {
   )
 }
 
+function SettingsPageSkeleton() {
+  return (
+    <div className='flex flex-col gap-4' aria-hidden='true'>
+      {Array.from({ length: 2 }, (_, sectionIndex) => (
+        <div key={sectionIndex} className='overflow-hidden rounded-xl border'>
+          <div className='flex flex-col gap-2 border-b px-4 py-3 sm:px-5'>
+            <Skeleton className='h-5 w-40' />
+            <Skeleton className='h-3.5 w-full max-w-md' />
+          </div>
+          <div className='grid gap-4 p-4 sm:grid-cols-2 sm:p-5'>
+            {Array.from({ length: 4 }, (_, fieldIndex) => (
+              <div key={fieldIndex} className='flex min-w-0 flex-col gap-2'>
+                <Skeleton className='h-3.5 w-24' />
+                <Skeleton className='h-8 w-full' />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /**
  * Generic settings page component
  * Handles loading state, data fetching, and section rendering
@@ -107,7 +132,7 @@ export function SettingsPage<
   resolveSettings,
 }: SettingsPageProps<TSettings, TSectionId, TExtraArgs>) {
   const { t } = useTranslation()
-  const { data, isLoading } = useSystemOptions()
+  const { data, error, isError, isLoading, refetch } = useSystemOptions()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params = useParams({ from: routePath as any })
   const activeSection = (params?.section ?? defaultSection) as TSectionId
@@ -126,9 +151,19 @@ export function SettingsPage<
   if (isLoading) {
     return (
       <SettingsPageFrame title={t(sectionMeta.titleKey)}>
-        <div className='text-muted-foreground flex min-h-40 items-center justify-center text-sm'>
-          {t(loadingMessage)}
-        </div>
+        <span className='sr-only'>{t(loadingMessage)}</span>
+        <SettingsPageSkeleton />
+      </SettingsPageFrame>
+    )
+  }
+
+  if (isError) {
+    return (
+      <SettingsPageFrame title={t(sectionMeta.titleKey)}>
+        <ErrorState
+          description={error instanceof Error ? error.message : undefined}
+          onRetry={() => void refetch()}
+        />
       </SettingsPageFrame>
     )
   }

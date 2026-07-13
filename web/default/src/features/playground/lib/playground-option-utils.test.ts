@@ -21,6 +21,7 @@ import { describe, test } from 'node:test'
 import {
   getGroupFallback,
   getModelFallback,
+  getModelQueryGroup,
   getOptionLoadErrorMessage,
   shouldClearModelForGroup,
 } from './playground-option-utils'
@@ -70,6 +71,12 @@ describe('playground-option-utils', () => {
       getGroupFallback([{ label: 'vip', value: 'vip', ratio: 2 }], 'stale'),
       'vip'
     )
+  })
+
+  test('loads the user model collection for selectable auto routes', () => {
+    assert.equal(getModelQueryGroup('auto'), undefined)
+    assert.equal(getModelQueryGroup('auto:fast'), undefined)
+    assert.equal(getModelQueryGroup('default'), 'default')
   })
 
   test('returns the error message for Error instances', () => {

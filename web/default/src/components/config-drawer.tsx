@@ -64,7 +64,17 @@ import { useSidebar } from './ui/sidebar'
 
 const Item = RadioPrimitive.Root
 
-export function ConfigDrawer() {
+type ConfigDrawerProps = {
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  showTrigger?: boolean
+}
+
+export function ConfigDrawer({
+  open,
+  onOpenChange,
+  showTrigger = true,
+}: ConfigDrawerProps) {
   const { t } = useTranslation()
   const { setOpen } = useSidebar()
   const { resetDir } = useDirection()
@@ -81,20 +91,22 @@ export function ConfigDrawer() {
   }
 
   return (
-    <Sheet>
-      <SheetTrigger
-        render={
-          <Button
-            size='icon'
-            variant='ghost'
-            aria-label={t('Open theme settings')}
-            aria-describedby='config-drawer-description'
-            className='max-md:hidden'
-          />
-        }
-      >
-        <Palette className='size-[1.2rem]' aria-hidden='true' />
-      </SheetTrigger>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      {showTrigger ? (
+        <SheetTrigger
+          render={
+            <Button
+              size='icon'
+              variant='ghost'
+              aria-label={t('Open theme settings')}
+              aria-describedby='config-drawer-description'
+              className='max-md:hidden'
+            />
+          }
+        >
+          <Palette aria-hidden='true' />
+        </SheetTrigger>
+      ) : null}
       <SheetContent className={sideDrawerContentClassName('sm:max-w-md')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>{t('Theme Settings')}</SheetTitle>
@@ -133,6 +145,8 @@ function SectionTitle(props: {
   onReset?: () => void
   className?: string
 }) {
+  const { t } = useTranslation()
+
   return (
     <div
       className={cn(
@@ -147,7 +161,7 @@ function SectionTitle(props: {
           variant='secondary'
           className='size-4'
           onClick={props.onReset}
-          aria-label='Reset'
+          aria-label={t('Reset')}
         >
           <RotateCcw className='size-3' aria-hidden='true' />
         </Button>
@@ -164,12 +178,13 @@ function RadioGroupItem(props: {
   }
   isTheme?: boolean
 }) {
+  const { t } = useTranslation()
   const isTheme = props.isTheme ?? false
   return (
     <Item
       value={props.item.value}
       className={cn('group outline-none', 'transition duration-200 ease-in')}
-      aria-label={`Select ${props.item.label.toLowerCase()}`}
+      aria-label={t('Select {{item}}', { item: props.item.label })}
       aria-describedby={`${props.item.value}-description`}
     >
       <div
@@ -180,7 +195,7 @@ function RadioGroupItem(props: {
         )}
         role='img'
         aria-hidden='false'
-        aria-label={`${props.item.label} option preview`}
+        aria-label={t('{{item}} option preview', { item: props.item.label })}
       >
         <CircleCheck
           className={cn(

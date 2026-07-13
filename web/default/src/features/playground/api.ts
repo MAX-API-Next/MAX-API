@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { api } from '@/lib/api'
 import { API_ENDPOINTS } from './constants'
+import { getModelQueryGroup } from './lib/playground-option-utils'
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -41,9 +42,11 @@ export async function sendChatCompletion(
  * Get user available models
  */
 export async function getUserModels(group: string): Promise<ModelOption[]> {
-  const res = await api.get(API_ENDPOINTS.USER_MODELS, {
-    params: { group },
-  })
+  const queryGroup = getModelQueryGroup(group)
+  const res = await api.get(
+    API_ENDPOINTS.USER_MODELS,
+    queryGroup ? { params: { group: queryGroup } } : undefined
+  )
   const { data } = res
 
   if (!data.success || !Array.isArray(data.data)) {

@@ -82,14 +82,14 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
           checked={table.getIsAllPageRowsSelected()}
           indeterminate={table.getIsSomePageRowsSelected()}
           onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-          aria-label='Select all'
+          aria-label={t('Select all')}
         />
       ),
       cell: ({ row }) => (
         <Checkbox
           checked={row.getIsSelected()}
           onCheckedChange={(value) => row.toggleSelected(!!value)}
-          aria-label='Select row'
+          aria-label={t('Select row')}
         />
       ),
       enableSorting: false,
@@ -134,7 +134,11 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     // Model Name column
     {
       accessorKey: 'model_name',
-      meta: { label: t('Model Name'), mobileTitle: true },
+      meta: {
+        label: t('Model Name'),
+        mobileTitle: true,
+        className: 'max-w-[28rem] whitespace-normal',
+      },
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Model Name')} />
       ),
@@ -146,7 +150,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
             variant='neutral'
             copyText={name}
             size='sm'
-            className='font-mono'
+            className='max-w-[min(100%,24rem)] font-mono'
           />
         )
       },

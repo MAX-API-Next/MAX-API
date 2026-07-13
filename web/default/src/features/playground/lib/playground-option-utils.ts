@@ -18,6 +18,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { GroupOption, ModelOption } from '../types'
 
+export function getModelQueryGroup(group: string): string | undefined {
+  return group === 'auto' || group.startsWith('auto:') ? undefined : group
+}
+
 export function getModelFallback(
   models: ModelOption[],
   currentModel: string

@@ -25,13 +25,45 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-export function ThemeSwitch() {
+export function ThemeMenuGroup() {
   const { t } = useTranslation()
   const { theme, setTheme } = useTheme()
+
+  return (
+    <DropdownMenuGroup>
+      <DropdownMenuItem onClick={() => setTheme('light')}>
+        {t('Light')}
+        <Check
+          className={cn('ms-auto', theme !== 'light' && 'hidden')}
+          aria-hidden='true'
+        />
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => setTheme('dark')}>
+        {t('Dark')}
+        <Check
+          className={cn('ms-auto', theme !== 'dark' && 'hidden')}
+          aria-hidden='true'
+        />
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => setTheme('system')}>
+        {t('System')}
+        <Check
+          className={cn('ms-auto', theme !== 'system' && 'hidden')}
+          aria-hidden='true'
+        />
+      </DropdownMenuItem>
+    </DropdownMenuGroup>
+  )
+}
+
+export function ThemeSwitch() {
+  const { t } = useTranslation()
+  const { theme } = useTheme()
 
   /* Update theme-color meta tag
    * when theme is updated */
@@ -51,27 +83,7 @@ export function ThemeSwitch() {
         <span className='sr-only'>{t('Toggle theme')}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
-        <DropdownMenuItem onClick={() => setTheme('light')}>
-          {t('Light')}{' '}
-          <Check
-            size={14}
-            className={cn('ms-auto', theme !== 'light' && 'hidden')}
-          />
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('dark')}>
-          {t('Dark')}
-          <Check
-            size={14}
-            className={cn('ms-auto', theme !== 'dark' && 'hidden')}
-          />
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('system')}>
-          {t('System')}
-          <Check
-            size={14}
-            className={cn('ms-auto', theme !== 'system' && 'hidden')}
-          />
-        </DropdownMenuItem>
+        <ThemeMenuGroup />
       </DropdownMenuContent>
     </DropdownMenu>
   )

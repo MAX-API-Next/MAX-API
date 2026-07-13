@@ -140,6 +140,8 @@ export function PrefillGroupManagementDialog({
 
   useEffect(() => {
     if (!open) {
+      // Closing the dialog clears transient confirmation state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDeleteState({ open: false, group: null })
       setIsDeleting(false)
     }
@@ -327,7 +329,9 @@ export function PrefillGroupManagementDialog({
                                 onClick={() => onEditGroup(group)}
                               >
                                 <Pencil className='h-4 w-4' />
-                                <span className='sr-only'>Edit group</span>
+                                <span className='sr-only'>
+                                  {t('Edit group')}
+                                </span>
                               </Button>
                               <Button
                                 size='icon'
@@ -336,12 +340,14 @@ export function PrefillGroupManagementDialog({
                                 onClick={() => handleDeleteClick(group)}
                               >
                                 <Trash2 className='h-4 w-4' />
-                                <span className='sr-only'>Delete group</span>
+                                <span className='sr-only'>
+                                  {t('Delete group')}
+                                </span>
                               </Button>
                             </div>
                           </CardHeader>
                           <CardContent className='space-y-3'>
-                            <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs font-medium tracking-wide uppercase'>
+                            <div className='text-muted-foreground flex flex-wrap items-center gap-2 text-xs font-medium uppercase'>
                               <span>Items</span>
                               <StatusBadge
                                 label={`${parsedItems.length} item${parsedItems.length === 1 ? '' : 's'}`}
@@ -458,7 +464,7 @@ export function PrefillGroupManagementDialog({
                                         </p>
                                       )}
                                     </div>
-                                    <div className='text-muted-foreground mt-2 text-xs font-medium tracking-wide uppercase'>
+                                    <div className='text-muted-foreground mt-2 text-xs font-medium uppercase'>
                                       {parsedItems.length} item
                                       {parsedItems.length === 1 ? '' : 's'}
                                     </div>

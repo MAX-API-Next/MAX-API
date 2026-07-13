@@ -103,24 +103,16 @@ export function OllamaModelsDialog({
     [currentRow?.models]
   )
 
-  useEffect(() => {
-    if (!open) {
-      setModels([])
-      setSelected([])
-      setSearch('')
-      setPullName('')
-      setIsPulling(false)
-      setPullProgress(null)
-      pullAbortRef.current?.abort()
-      pullAbortRef.current = null
-      return
-    }
-
-    if (open && isOllamaChannel && channelId) {
-      void fetchOllamaModels()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isOllamaChannel, channelId])
+  const resetDialogState = useCallback(() => {
+    setModels([])
+    setSelected([])
+    setSearch('')
+    setPullName('')
+    setIsPulling(false)
+    setPullProgress(null)
+    pullAbortRef.current?.abort()
+    pullAbortRef.current = null
+  }, [])
 
   const fetchOllamaModels = useCallback(async () => {
     if (!channelId) return
@@ -181,6 +173,20 @@ export function OllamaModelsDialog({
       setIsFetching(false)
     }
   }, [channelId, currentRow, isOllamaChannel, t])
+
+  useEffect(() => {
+    if (!open) {
+      const frame = requestAnimationFrame(resetDialogState)
+      return () => cancelAnimationFrame(frame)
+    }
+
+    if (isOllamaChannel && channelId) {
+      const frame = requestAnimationFrame(() => {
+        void fetchOllamaModels()
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+  }, [channelId, fetchOllamaModels, isOllamaChannel, open, resetDialogState])
 
   const toggleSelected = (modelId: string, checked: boolean) => {
     setSelected((prev) => {
@@ -367,8 +373,7 @@ export function OllamaModelsDialog({
   }
 
   const close = () => {
-    pullAbortRef.current?.abort()
-    pullAbortRef.current = null
+    resetDialogState()
     onOpenChange(false)
   }
 
@@ -524,7 +529,9 @@ export function OllamaModelsDialog({
                                 onCheckedChange={(v) =>
                                   toggleSelected(m.id, !!v)
                                 }
-                                aria-label={`Select model ${m.id}`}
+                                aria-label={t('Select model {{model}}', {
+                                  model: m.id,
+                                })}
                               />
                               <div className='min-w-0'>
                                 <div className='truncate font-mono text-sm'>

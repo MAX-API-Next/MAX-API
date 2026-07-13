@@ -239,7 +239,10 @@ function RateLimitWindow(props: RateLimitWindowProps) {
       <div className='mt-3'>
         <Progress
           value={percent}
-          aria-label={`${props.title} usage: ${percent}%`}
+          aria-label={t('{{title}} usage: {{percent}}%', {
+            title: props.title,
+            percent,
+          })}
         />
       </div>
       {hasData ? (

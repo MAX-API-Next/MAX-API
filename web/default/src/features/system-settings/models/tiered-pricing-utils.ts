@@ -16,22 +16,27 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import '@tanstack/react-table'
 
-declare module '@tanstack/react-table' {
-  // Extended column metadata for enhanced table functionality
-  interface ColumnMeta<_TData, _TValue> {
-    // Human-readable label for the column
-    label?: string
-    // Optional description shown in tooltips or help text
-    description?: string
-    // Whether this column can be sorted (overrides default behavior)
-    sortable?: boolean
-    // Custom CSS classes to apply to the column cells
-    className?: string
-    // Mobile list placement hints
-    mobileTitle?: boolean
-    mobileBadge?: boolean
-    mobileHidden?: boolean
+export function unitCostToPrice(unitCost: number | string): number {
+  return Number(unitCost) || 0
+}
+
+export function priceToUnitCost(price: number | string): number {
+  return Number(price) || 0
+}
+
+export function formatTokenHint(
+  value: number | string | null | undefined
+): string {
+  if (value == null || value === '' || Number.isNaN(Number(value))) return ''
+
+  const tokenCount = Number(value)
+  if (tokenCount === 0) return '= 0'
+  if (tokenCount >= 1_000_000) {
+    return `= ${(tokenCount / 1_000_000).toLocaleString()}M tokens`
   }
+  if (tokenCount >= 1_000) {
+    return `= ${(tokenCount / 1_000).toLocaleString()}K tokens`
+  }
+  return `= ${tokenCount.toLocaleString()} tokens`
 }

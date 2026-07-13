@@ -122,7 +122,7 @@ export function LogStatCards(props: LogStatCardsProps) {
             >
               <div className='flex items-center gap-2'>
                 <Icon className='text-muted-foreground/60 size-3.5 shrink-0' />
-                <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+                <div className='text-muted-foreground truncate text-xs font-medium uppercase'>
                   {it.title}
                 </div>
               </div>
@@ -134,7 +134,7 @@ export function LogStatCards(props: LogStatCardsProps) {
                 </div>
               ) : error ? (
                 <>
-                  <div className='text-muted-foreground mt-1.5 font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'>
+                  <div className='text-muted-foreground mt-1.5 font-mono text-lg font-bold tabular-nums sm:mt-2 sm:text-2xl'>
                     --
                   </div>
                   <div className='text-muted-foreground/40 mt-1 hidden text-xs md:block'>
@@ -143,7 +143,7 @@ export function LogStatCards(props: LogStatCardsProps) {
                 </>
               ) : (
                 <>
-                  <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'>
+                  <div className='text-foreground mt-1.5 font-mono text-lg font-bold tabular-nums sm:mt-2 sm:text-2xl'>
                     {it.value}
                   </div>
                   <div className='text-muted-foreground/60 mt-1 hidden text-xs md:block'>

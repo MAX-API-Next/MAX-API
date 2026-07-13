@@ -16,22 +16,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import '@tanstack/react-table'
+import { describe, expect, test } from 'bun:test'
+import { getDashboardQueryData } from './overview-query-utils'
 
-declare module '@tanstack/react-table' {
-  // Extended column metadata for enhanced table functionality
-  interface ColumnMeta<_TData, _TValue> {
-    // Human-readable label for the column
-    label?: string
-    // Optional description shown in tooltips or help text
-    description?: string
-    // Whether this column can be sorted (overrides default behavior)
-    sortable?: boolean
-    // Custom CSS classes to apply to the column cells
-    className?: string
-    // Mobile list placement hints
-    mobileTitle?: boolean
-    mobileBadge?: boolean
-    mobileHidden?: boolean
-  }
-}
+describe('getDashboardQueryData', () => {
+  test('returns successful response data', () => {
+    expect(
+      getDashboardQueryData({ success: true, data: ['model-a', 'model-b'] })
+    ).toEqual(['model-a', 'model-b'])
+  })
+
+  test('throws the backend message for a business failure', () => {
+    expect(() =>
+      getDashboardQueryData({ success: false, message: 'models unavailable' })
+    ).toThrow('models unavailable')
+  })
+
+  test('uses the generic message when the backend omits one', () => {
+    expect(() => getDashboardQueryData({ success: false })).toThrow(
+      'Request failed'
+    )
+  })
+})

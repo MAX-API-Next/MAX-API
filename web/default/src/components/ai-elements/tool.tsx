@@ -135,7 +135,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
   const { t } = useTranslation()
   return (
     <div className={cn('space-y-2 overflow-hidden p-4', className)} {...props}>
-      <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
+      <h4 className='text-muted-foreground text-xs font-medium uppercase'>
         {t('Parameters')}
       </h4>
       <div className='bg-muted/50 rounded-md'>
@@ -172,7 +172,7 @@ export const ToolOutput = ({
 
   return (
     <div className={cn('space-y-2 p-4', className)} {...props}>
-      <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
+      <h4 className='text-muted-foreground text-xs font-medium uppercase'>
         {errorText ? 'Error' : 'Result'}
       </h4>
       <div
