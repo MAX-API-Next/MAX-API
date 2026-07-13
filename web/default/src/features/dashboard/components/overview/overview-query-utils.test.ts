@@ -16,25 +16,33 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { describe, expect, test } from 'bun:test'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
 import { getDashboardQueryData } from './overview-query-utils'
 
 describe('getDashboardQueryData', () => {
   test('returns successful response data', () => {
-    expect(
-      getDashboardQueryData({ success: true, data: ['model-a', 'model-b'] })
-    ).toEqual(['model-a', 'model-b'])
+    assert.deepEqual(
+      getDashboardQueryData({ success: true, data: ['model-a', 'model-b'] }),
+      ['model-a', 'model-b']
+    )
   })
 
   test('throws the backend message for a business failure', () => {
-    expect(() =>
-      getDashboardQueryData({ success: false, message: 'models unavailable' })
-    ).toThrow('models unavailable')
+    assert.throws(
+      () =>
+        getDashboardQueryData({
+          success: false,
+          message: 'models unavailable',
+        }),
+      /models unavailable/
+    )
   })
 
   test('uses the generic message when the backend omits one', () => {
-    expect(() => getDashboardQueryData({ success: false })).toThrow(
-      'Request failed'
+    assert.throws(
+      () => getDashboardQueryData({ success: false }),
+      /Request failed/
     )
   })
 })
