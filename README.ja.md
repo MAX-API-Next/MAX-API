@@ -635,6 +635,45 @@ SQLite、MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6 に対応しています。ロー�
 | 最新リリース | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
 | DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
 
+### 二次開発とコミュニティへの謝辞
+
+本プロジェクトをベースに二次開発し、ご自身で利用する場合は、プロジェクトのホームページ、フッター、または「About」ページなどの目立つ場所に、次のいずれかの方法でプロジェクトの出典またはコミュニティへの謝辞を表示できます：
+
+- プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- コミュニティへの謝辞：[MAX-API-Next](https://github.com/MAX-API-Next)
+
+フロントエンドへの埋め込み例（React / Tailwind CSS、必要に応じていずれか一方のみ残してください）：
+
+```tsx
+<p className='text-sm text-muted-foreground'>
+  {' '}
+  <a
+    href='https://github.com/MAX-API-Next/MAX-API'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next/MAX-API
+  </a>{' '}
+  を基に二次開発 ·{' '}
+  <a
+    href='https://github.com/MAX-API-Next'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next コミュニティ
+  </a>{' '}
+  に感謝
+</p>
+```
+
+上記いずれかの表示要件を満たし、リンクを明確に表示し続けることで、申請や承認を別途行うことなく、本プロジェクトの一時的な商用ライセンスを自動的に取得できます。このライセンスは永久ライセンスではなく、表示要件を継続して満たしている期間に限り有効です。有効期間および今後の変更は、本 README または公式コミュニティで公開される最新のお知らせに従います。
+
+本プロジェクトは [One API](https://github.com/songquanpeng/one-api) および [New API](https://github.com/QuantumNous/new-api) をベースに開発されています。商用利用にあたっては、各上流プロジェクトが現在公開している `LICENSE` ファイルに従い、One API の MIT ライセンスおよび New API の AGPLv3 ライセンスも遵守する必要があります。本プロジェクトが提供する一時的な商用ライセンスは、上流プロジェクトのオープンソースライセンス上の義務を置き換えたり免除したりするものではありません。
+
+表示要件を満たさなくなった場合、または一時的なライセンスが期限切れ、告知により変更もしくは終了した場合は、AGPLv3 に従うか、別途書面による許諾を取得する必要があります。長期商用ライセンスについては、maxapi@max-api.ai までお問い合わせください。
+
 Issue、ドキュメント改善、プロバイダー適応経験、デプロイ方案、コード貢献を歓迎します。
 
 ---

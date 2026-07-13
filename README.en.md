@@ -698,6 +698,44 @@ The frontend uses Bun workspace, and `catalog:` dependencies are defined in `web
 | Latest releases | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
 | DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
 
+### Derivative Use and Community Acknowledgement
+
+If you build a derivative version of this project for your own use, you are welcome to keep the project source or a community acknowledgement clearly visible on the homepage, in the footer, or on the About page by choosing either option below:
+
+- Link to the project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- Acknowledge the community: [MAX-API-Next](https://github.com/MAX-API-Next)
+
+Reference frontend embed code (React / Tailwind CSS; keep either item as needed):
+
+```tsx
+<p className='text-sm text-muted-foreground'>
+  Built from{' '}
+  <a
+    href='https://github.com/MAX-API-Next/MAX-API'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next/MAX-API
+  </a>{' '}
+  · Thanks to the{' '}
+  <a
+    href='https://github.com/MAX-API-Next'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next community
+  </a>
+</p>
+```
+
+By meeting either attribution requirement above and keeping the link clearly visible, you automatically receive a temporary commercial license for this project, with no separate application or approval required. This is not a perpetual license and remains valid only while the display requirement continues to be met. Its validity period and any later changes are governed by the latest notice published in this README or by the official community.
+
+This project is developed from [One API](https://github.com/songquanpeng/one-api) and [New API](https://github.com/QuantumNous/new-api). Commercial use must also comply with the One API MIT License and the New API AGPLv3 License, subject to each upstream project's current `LICENSE` file. The temporary commercial license provided by this project does not replace or waive any upstream open-source license obligations.
+
+If the display requirement is no longer met, or the temporary license expires, is amended, or is terminated by notice, you must comply with AGPLv3 or obtain separate written authorization. For a long-term commercial license, contact: maxapi@max-api.ai.
+
 Issues, documentation improvements, provider adaptation experience, deployment practices, and code contributions are welcome.
 
 ---

@@ -698,6 +698,44 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或业务 Agent
 | 最新发布 | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
 | DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
 
+### 二次开发与社区鸣谢
+
+如果你基于本项目进行二次开发并仅供自用，欢迎在项目主页、页脚或“关于”页面等明显位置，任选一种方式保留项目来源或社区鸣谢：
+
+- 添加项目地址：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- 鸣谢社区：[MAX-API-Next](https://github.com/MAX-API-Next)
+
+参考前端嵌入代码（React / Tailwind CSS，可按需保留其中一项）：
+
+```tsx
+<p className='text-sm text-muted-foreground'>
+  基于{' '}
+  <a
+    href='https://github.com/MAX-API-Next/MAX-API'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next/MAX-API
+  </a>{' '}
+  二次开发 · 感谢{' '}
+  <a
+    href='https://github.com/MAX-API-Next'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next 社区
+  </a>
+</p>
+```
+
+满足上述任一展示要求并保持链接清晰可见，即自动获得本项目的临时商用授权，无需另行申请或等待确认。该授权为非永久授权，仅在持续满足展示要求期间有效；有效期及后续调整以项目方在本 README 或官方社区发布的最新说明为准。
+
+本项目基于 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 开发。商业使用本项目时，还须分别遵守 One API 的 MIT 许可证与 New API 的 AGPLv3 许可证，具体以各上游项目的 `LICENSE` 文件为准；本项目提供的临时商用授权不替代、也不免除相关上游项目的开源许可义务。
+
+如不再满足展示要求，或临时授权到期、被公告调整或终止，仍需按 AGPLv3 或项目方另行书面授权使用本项目。如需长期商用授权，请联系：maxapi@max-api.ai。
+
 欢迎提交 Issue、改进文档、补充供应商适配经验、完善部署方案或贡献代码。
 
 ---
