@@ -615,6 +615,44 @@ Le frontend utilise Bun workspace ; `catalog:` est défini dans `web/package.jso
 | Dernières versions | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
 | DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
 
+### Développements dérivés et remerciements à la communauté
+
+Si vous développez une version dérivée de ce projet pour votre propre usage, vous pouvez afficher clairement la source du projet ou un remerciement à la communauté sur la page d'accueil, dans le pied de page ou sur la page « À propos », en choisissant l'une des options suivantes :
+
+- Ajouter le lien du projet : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- Remercier la communauté : [MAX-API-Next](https://github.com/MAX-API-Next)
+
+Exemple de code d'intégration frontend (React / Tailwind CSS ; conservez l'un ou l'autre élément selon vos besoins) :
+
+```tsx
+<p className='text-sm text-muted-foreground'>
+  Développé à partir de{' '}
+  <a
+    href='https://github.com/MAX-API-Next/MAX-API'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    MAX-API-Next/MAX-API
+  </a>{' '}
+  · Merci à la{' '}
+  <a
+    href='https://github.com/MAX-API-Next'
+    target='_blank'
+    rel='noopener noreferrer'
+    className='font-medium underline underline-offset-4'
+  >
+    communauté MAX-API-Next
+  </a>
+</p>
+```
+
+En respectant l'une des exigences d'affichage ci-dessus et en maintenant le lien clairement visible, vous obtenez automatiquement une licence commerciale temporaire pour ce projet, sans demande ni approbation supplémentaire. Cette licence n'est pas permanente et reste valable uniquement tant que l'exigence d'affichage est respectée. Sa période de validité et toute modification ultérieure sont régies par le dernier avis publié dans ce README ou par la communauté officielle.
+
+Ce projet est développé à partir de [One API](https://github.com/songquanpeng/one-api) et de [New API](https://github.com/QuantumNous/new-api). Toute utilisation commerciale doit également respecter la licence MIT de One API et la licence AGPLv3 de New API, conformément au fichier `LICENSE` actuellement publié par chaque projet en amont. La licence commerciale temporaire fournie par ce projet ne remplace ni ne supprime aucune obligation liée aux licences open source des projets en amont.
+
+Si l'exigence d'affichage n'est plus respectée, ou si la licence temporaire expire, est modifiée ou prend fin par avis, vous devez respecter l'AGPLv3 ou obtenir une autorisation écrite distincte. Pour une licence commerciale à long terme, contactez : maxapi@max-api.ai.
+
 Contributions de code, documentation, expériences d'adaptation fournisseur et pratiques de déploiement sont bienvenues.
 
 ---
