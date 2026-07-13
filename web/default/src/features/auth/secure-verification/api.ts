@@ -16,40 +16,53 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api, get2FAStatus } from '@/lib/api'
+import i18next from 'i18next'
+import { api } from '@/lib/api'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
-import {
-  beginPasskeyVerification,
-  finishPasskeyVerification,
-  getPasskeyStatus,
-} from '../passkey'
-import type { VerificationMethod, VerificationMethods } from './types'
+import { beginPasskeyVerification, finishPasskeyVerification } from '../passkey'
+import type {
+  VerificationMethod,
+  VerificationMethods,
+  VerificationScope,
+} from './types'
+
+interface VerificationMethodsApiResponse {
+  success: boolean
+  message?: string
+  data?: {
+    has_2fa: boolean
+    has_passkey: boolean
+    has_password: boolean
+  }
+}
 
 /**
  * Fetch available verification methods for the current user.
  */
-export async function checkVerificationMethods(): Promise<VerificationMethods> {
+export async function checkVerificationMethods(
+  scope?: VerificationScope
+): Promise<VerificationMethods> {
   try {
-    const [twoFAResponse, passkeyResponse, passkeySupported] =
-      await Promise.all([
-        get2FAStatus(),
-        getPasskeyStatus(),
-        detectPasskeySupport(),
-      ])
-
-    const has2FA =
-      Boolean(twoFAResponse?.success) && Boolean(twoFAResponse?.data?.enabled)
-    const hasPasskey =
-      Boolean(passkeyResponse?.success) &&
-      Boolean(passkeyResponse?.data?.enabled)
+    const [methodsResponse, passkeySupported] = await Promise.all([
+      api.get<VerificationMethodsApiResponse>('/api/verify/methods', {
+        params: scope ? { scope } : undefined,
+      }),
+      detectPasskeySupport(),
+    ])
+    const methods = methodsResponse.data?.data
 
     return {
-      has2FA,
-      hasPasskey,
+      has2FA:
+        Boolean(methodsResponse.data?.success) && Boolean(methods?.has_2fa),
+      hasPasskey:
+        Boolean(methodsResponse.data?.success) && Boolean(methods?.has_passkey),
+      hasPassword:
+        Boolean(methodsResponse.data?.success) &&
+        Boolean(methods?.has_password),
       passkeySupported,
     }
   } catch (error) {
@@ -58,6 +71,7 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
     return {
       has2FA: false,
       hasPasskey: false,
+      hasPassword: false,
       passkeySupported: false,
     }
   }
@@ -68,22 +82,47 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
  */
 export async function verify(
   method: VerificationMethod,
-  code?: string
+  code?: string,
+  scope?: VerificationScope
 ): Promise<void> {
   switch (method) {
     case '2fa':
-      return verifyTwoFA(code)
+      return verifyTwoFA(code, scope)
     case 'passkey':
-      return verifyPasskey()
+      return verifyPasskey(scope)
+    case 'password':
+      return verifyPassword(code, scope)
     default:
       throw new Error(`Unsupported verification method: ${method}`)
+  }
+}
+
+async function verifyPassword(
+  password?: string | null,
+  scope?: VerificationScope
+): Promise<void> {
+  if (!password) {
+    throw new Error(i18next.t('Please enter your password'))
+  }
+
+  const res = await api.post('/api/verify', {
+    method: 'password',
+    password,
+    scope,
+  })
+
+  if (!res.data?.success) {
+    throw new Error(res.data?.message || 'Verification failed')
   }
 }
 
 /**
  * Perform 2FA verification flow.
  */
-async function verifyTwoFA(code?: string | null): Promise<void> {
+async function verifyTwoFA(
+  code?: string | null,
+  scope?: VerificationScope
+): Promise<void> {
   const trimmed = code?.trim()
   if (!trimmed) {
     throw new Error('Please enter the verification code or backup code')
@@ -92,6 +131,7 @@ async function verifyTwoFA(code?: string | null): Promise<void> {
   const res = await api.post('/api/verify', {
     method: '2fa',
     code: trimmed,
+    scope,
   })
 
   if (!res.data?.success) {
@@ -102,7 +142,7 @@ async function verifyTwoFA(code?: string | null): Promise<void> {
 /**
  * Perform Passkey verification flow.
  */
-async function verifyPasskey(): Promise<void> {
+async function verifyPasskey(scope?: VerificationScope): Promise<void> {
   if (typeof navigator === 'undefined' || !navigator.credentials) {
     throw new Error('Passkey verification is not supported in this environment')
   }
@@ -137,6 +177,7 @@ async function verifyPasskey(): Promise<void> {
 
     const verifyResponse = await api.post('/api/verify', {
       method: 'passkey',
+      scope,
     })
 
     if (!verifyResponse.data?.success) {

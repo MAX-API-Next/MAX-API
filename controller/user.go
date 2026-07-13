@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type LoginRequest struct {
@@ -35,7 +36,9 @@ var (
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
 
-const maxUserQuotaValue = int64(^uint64(0) >> 1)
+// User quota crosses the JSON boundary as a JavaScript number in the default
+// frontend, so management operations must stay within its exact integer range.
+const maxUserQuotaValue = int64(1<<53 - 1)
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -135,6 +138,11 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
 	session := sessions.Default(c)
+	session.Delete(SecureVerificationSessionKey)
+	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
+	session.Delete(PasskeyReadySessionKey)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
@@ -1000,10 +1008,17 @@ func isValidQuotaOverride(value int64) bool {
 }
 
 func isValidQuotaAddition(current int64, delta int64) bool {
-	if delta <= 0 || delta > maxUserQuotaValue {
+	if current < -maxUserQuotaValue || current > maxUserQuotaValue || delta <= 0 || delta > maxUserQuotaValue {
 		return false
 	}
 	return current <= maxUserQuotaValue-delta
+}
+
+func isValidQuotaSubtraction(current int64, delta int64) bool {
+	if current < -maxUserQuotaValue || current > maxUserQuotaValue || delta <= 0 || delta > maxUserQuotaValue {
+		return false
+	}
+	return current >= -maxUserQuotaValue+delta
 }
 
 // ManageUser Only admin user can do this
@@ -1015,13 +1030,19 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	user := model.User{
-		Id: req.Id,
+	if req.Id <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
 	}
+
+	var user model.User
 	// Fill attributes
-	model.DB.Unscoped().Where(&user).First(&user)
-	if user.Id == 0 {
-		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
+	if err := model.DB.Unscoped().Where("id = ?", req.Id).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			common.ApiErrorI18n(c, i18n.MsgUserNotExists)
+			return
+		}
+		common.ApiError(c, err)
 		return
 	}
 	myRole := c.GetInt("role")
@@ -1096,6 +1117,10 @@ func ManageUser(c *gin.Context) {
 		case "subtract":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
+				return
+			}
+			if !isValidQuotaSubtraction(user.Quota, req.Value) {
+				common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 				return
 			}
 			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {

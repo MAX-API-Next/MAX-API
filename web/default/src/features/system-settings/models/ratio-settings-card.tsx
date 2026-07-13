@@ -214,7 +214,12 @@ const groupSchema = z.object({
 
 type ModelFormValues = z.infer<typeof modelSchema>
 type GroupFormValues = z.infer<typeof groupSchema>
-type RatioTabId = 'models' | 'groups' | 'tool-prices' | 'upstream-sync'
+type RatioTabId =
+  | 'models'
+  | 'unset-models'
+  | 'groups'
+  | 'tool-prices'
+  | 'upstream-sync'
 
 function normalizeAutoGroupRoutesString(
   autoGroupRoutes: string,
@@ -271,7 +276,7 @@ export function RatioSettingsCard({
     },
   })
 
-  const modelNormalizedDefaults = useRef({
+  const initialModelNormalizedDefaults = {
     ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
     ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
     CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
@@ -285,7 +290,11 @@ export function RatioSettingsCard({
     ExposeRatioEnabled: modelDefaults.ExposeRatioEnabled,
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
-  })
+  }
+  const modelNormalizedDefaults = useRef(initialModelNormalizedDefaults)
+  const [savedModelValues, setSavedModelValues] = useState(
+    initialModelNormalizedDefaults
+  )
 
   const groupNormalizedDefaults = useRef({
     GroupRatio: normalizeJsonString(groupDefaults.GroupRatio),
@@ -359,6 +368,7 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     }
+    setSavedModelValues(modelNormalizedDefaults.current)
 
     modelForm.reset({
       ...modelDefaults,
@@ -447,6 +457,9 @@ export function RatioSettingsCard({
         const apiKey = apiKeyMap[key as string] || (key as string)
         await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
       }
+
+      modelNormalizedDefaults.current = normalized
+      setSavedModelValues(normalized)
     },
     [t, updateOption]
   )
@@ -510,6 +523,7 @@ export function RatioSettingsCard({
 
   const tabLabels: Record<RatioTabId, string> = {
     models: 'Model prices',
+    'unset-models': 'Unset price models',
     groups: 'Group ratios',
     'tool-prices': 'Tool prices',
     'upstream-sync': 'Upstream price sync',
@@ -520,18 +534,21 @@ export function RatioSettingsCard({
       2: 'grid-cols-2',
       3: 'grid-cols-3',
       4: 'grid-cols-4',
+      5: 'grid-cols-5',
     }[visibleTabs.length] ?? 'grid-cols-4'
   const defaultTab = visibleTabs[0] ?? 'models'
 
   const renderTabContent = (tab: RatioTabId) => {
-    if (tab === 'models') {
+    if (tab === 'models' || tab === 'unset-models') {
       return (
         <ModelRatioForm
           form={modelForm}
+          savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
           isSaving={updateOption.isPending}
           isResetting={resetMutation.isPending}
+          variant={tab === 'unset-models' ? 'unset' : 'default'}
         />
       )
     }

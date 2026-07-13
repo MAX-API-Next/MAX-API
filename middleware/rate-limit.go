@@ -108,6 +108,15 @@ func CriticalRateLimit() func(c *gin.Context) {
 	return defNext
 }
 
+// UserCriticalRateLimit applies the critical-operation limit per authenticated
+// user. Use it together with CriticalRateLimit so both account and IP bursts are bounded.
+func UserCriticalRateLimit() func(c *gin.Context) {
+	if !common.CriticalRateLimitEnable {
+		return defNext
+	}
+	return userRateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "CT")
+}
+
 func DownloadRateLimit() func(c *gin.Context) {
 	return rateLimitFactory(common.DownloadRateLimitNum, common.DownloadRateLimitDuration, "DW")
 }

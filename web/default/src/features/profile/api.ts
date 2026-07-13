@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import type {
   ApiResponse,
   UserProfile,
@@ -26,6 +26,11 @@ import type {
   CheckinStatusResponse,
   CheckinResponse,
 } from './types'
+
+const sensitiveActionConfig: ApiRequestConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+}
 
 // ============================================================================
 // User Profile APIs
@@ -83,7 +88,11 @@ export async function deleteUserAccount(
  * Generate/regenerate system access token
  */
 export async function generateAccessToken(): Promise<ApiResponse<string>> {
-  const res = await api.get('/api/user/token')
+  const res = await api.post<ApiResponse<string>>(
+    '/api/user/token',
+    undefined,
+    sensitiveActionConfig
+  )
   return res.data
 }
 

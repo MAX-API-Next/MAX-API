@@ -2,17 +2,45 @@ package service
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.QuotaClamp) {
+	if clamp == nil || other == nil {
+		return
+	}
+	rawAdminInfo, exists := other["admin_info"]
+	adminInfo, ok := rawAdminInfo.(map[string]interface{})
+	if exists && !ok {
+		return
+	}
+	if !exists || adminInfo == nil {
+		adminInfo = map[string]interface{}{}
+		other["admin_info"] = adminInfo
+	}
+	adminInfo["quota_saturation"] = clamp.AuditMap()
+}
+
+func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || relayInfo.QuotaClamp == nil || other == nil {
+		return
+	}
+	clamp := relayInfo.QuotaClamp
+	attachQuotaSaturationToOther(other, clamp)
+	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
+		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
+}
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {

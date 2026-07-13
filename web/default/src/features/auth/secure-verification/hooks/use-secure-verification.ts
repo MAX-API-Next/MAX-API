@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import {
@@ -24,12 +24,14 @@ import {
   isVerificationRequiredError,
 } from '@/lib/secure-verification'
 import { checkVerificationMethods, verify } from '../api'
+import { selectVerificationMethod } from '../method-selection'
 import type {
   SecureVerificationState,
   StartVerificationOptions,
   UseSecureVerificationOptions,
   VerificationMethod,
   VerificationMethods,
+  VerificationScope,
 } from '../types'
 
 type ApiCall = (() => Promise<unknown>) | null
@@ -41,6 +43,7 @@ interface InternalState extends SecureVerificationState {
 const defaultMethods: VerificationMethods = {
   has2FA: false,
   hasPasskey: false,
+  hasPassword: false,
   passkeySupported: false,
 }
 
@@ -62,15 +65,14 @@ export function useSecureVerification(
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setOpen] = useState(false)
 
-  const fetchVerificationMethods = useCallback(async () => {
-    const result = await checkVerificationMethods()
-    setMethods(result)
-    return result
-  }, [])
-
-  useEffect(() => {
-    fetchVerificationMethods()
-  }, [fetchVerificationMethods])
+  const fetchVerificationMethods = useCallback(
+    async (scope?: VerificationScope) => {
+      const result = await checkVerificationMethods(scope)
+      setMethods(result)
+      return result
+    },
+    []
+  )
 
   const reset = useCallback(() => {
     setState(initialState)
@@ -82,10 +84,14 @@ export function useSecureVerification(
       apiCall: () => Promise<unknown>,
       config: StartVerificationOptions = {}
     ) => {
-      const { preferredMethod, title, description } = config
-      const availableMethods = await fetchVerificationMethods()
+      const { preferredMethod, title, description, scope } = config
+      const availableMethods = await fetchVerificationMethods(scope)
 
-      if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
+      if (
+        !availableMethods.has2FA &&
+        !availableMethods.hasPasskey &&
+        !availableMethods.hasPassword
+      ) {
         toast.error(
           i18next.t(
             'Please enable Two-factor Authentication or Passkey before proceeding'
@@ -99,14 +105,10 @@ export function useSecureVerification(
         return false
       }
 
-      let defaultMethod: VerificationMethod | null = preferredMethod ?? null
-      if (!defaultMethod) {
-        if (availableMethods.hasPasskey && availableMethods.passkeySupported) {
-          defaultMethod = 'passkey'
-        } else if (availableMethods.has2FA) {
-          defaultMethod = '2fa'
-        }
-      }
+      const defaultMethod = selectVerificationMethod(
+        availableMethods,
+        preferredMethod
+      )
 
       setState((prev) => ({
         ...prev,
@@ -114,6 +116,7 @@ export function useSecureVerification(
         method: defaultMethod,
         title,
         description,
+        scope,
       }))
       setOpen(true)
       return true
@@ -137,7 +140,7 @@ export function useSecureVerification(
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
-        await verify(actualMethod, code ?? state.code)
+        await verify(actualMethod, code ?? state.code, state.scope)
         const result = await state.apiCall()
 
         if (successMessage) {
@@ -204,7 +207,7 @@ export function useSecureVerification(
       if (method === 'passkey') {
         return methods.hasPasskey && methods.passkeySupported
       }
-      return false
+      return methods.hasPassword
     },
     [methods]
   )
@@ -212,6 +215,7 @@ export function useSecureVerification(
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
     if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
     if (methods.has2FA) return '2fa'
+    if (methods.hasPassword) return 'password'
     return null
   }, [methods])
 
@@ -230,7 +234,7 @@ export function useSecureVerification(
     fetchVerificationMethods,
     canUseMethod,
     recommendedMethod,
-    hasAnyMethod: methods.has2FA || methods.hasPasskey,
+    hasAnyMethod: methods.has2FA || methods.hasPasskey || methods.hasPassword,
     isLoading: state.loading,
     currentMethod: state.method,
     code: state.code,

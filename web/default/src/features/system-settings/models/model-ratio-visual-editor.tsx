@@ -68,6 +68,16 @@ import {
 import { formatPricingNumber } from './pricing-format'
 
 type ModelRatioVisualEditorProps = {
+  savedModelPrice: string
+  savedModelRatio: string
+  savedCacheRatio: string
+  savedCreateCacheRatio: string
+  savedCompletionRatio: string
+  savedImageRatio: string
+  savedAudioRatio: string
+  savedAudioCompletionRatio: string
+  savedBillingMode: string
+  savedBillingExpr: string
   modelPrice: string
   modelRatio: string
   cacheRatio: string
@@ -78,7 +88,23 @@ type ModelRatioVisualEditorProps = {
   audioCompletionRatio: string
   billingMode: string
   billingExpr: string
+  candidateModelNames?: string[]
+  candidateModelsLoading?: boolean
+  filterMode?: 'all' | 'unset'
   onChange: (field: string, value: string) => void
+}
+
+type ModelRatioSettingsInput = {
+  modelPrice: string
+  modelRatio: string
+  cacheRatio: string
+  createCacheRatio: string
+  completionRatio: string
+  imageRatio: string
+  audioRatio: string
+  audioCompletionRatio: string
+  billingMode: string
+  billingExpr: string
 }
 
 type ModelRow = {
@@ -192,8 +218,146 @@ const getPriceDetail = (row: ModelRow, t: (key: string) => string) => {
   return details.length > 0 ? details.join(' · ') : t('Base input price only')
 }
 
+const isBasePricingUnset = (row?: ModelRow) =>
+  !row ||
+  (row.billingMode !== 'tiered_expr' &&
+    !hasValue(row.price) &&
+    !hasValue(row.ratio))
+
+const buildModelRows = ({
+  modelPrice,
+  modelRatio,
+  cacheRatio,
+  createCacheRatio,
+  completionRatio,
+  imageRatio,
+  audioRatio,
+  audioCompletionRatio,
+  billingMode,
+  billingExpr,
+}: ModelRatioSettingsInput): ModelRow[] => {
+  const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
+    fallback: {},
+    context: 'model prices',
+  })
+  const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
+    fallback: {},
+    context: 'model ratios',
+  })
+  const cacheMap = safeJsonParse<Record<string, number>>(cacheRatio, {
+    fallback: {},
+    context: 'cache ratios',
+  })
+  const createCacheMap = safeJsonParse<Record<string, number>>(
+    createCacheRatio,
+    { fallback: {}, context: 'create cache ratios' }
+  )
+  const completionMap = safeJsonParse<Record<string, number>>(completionRatio, {
+    fallback: {},
+    context: 'completion ratios',
+  })
+  const imageMap = safeJsonParse<Record<string, number>>(imageRatio, {
+    fallback: {},
+    context: 'image ratios',
+  })
+  const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
+    fallback: {},
+    context: 'audio ratios',
+  })
+  const audioCompletionMap = safeJsonParse<Record<string, number>>(
+    audioCompletionRatio,
+    { fallback: {}, context: 'audio completion ratios' }
+  )
+  const billingModeMap = safeJsonParse<Record<string, string>>(billingMode, {
+    fallback: {},
+    context: 'billing mode',
+  })
+  const billingExprMap = safeJsonParse<Record<string, string>>(billingExpr, {
+    fallback: {},
+    context: 'billing expression',
+  })
+
+  const modelNames = new Set([
+    ...Object.keys(priceMap),
+    ...Object.keys(ratioMap),
+    ...Object.keys(cacheMap),
+    ...Object.keys(createCacheMap),
+    ...Object.keys(completionMap),
+    ...Object.keys(imageMap),
+    ...Object.keys(audioMap),
+    ...Object.keys(audioCompletionMap),
+    ...Object.keys(billingModeMap),
+    ...Object.keys(billingExprMap),
+  ])
+
+  return Array.from(modelNames).map((name) => {
+    const price = priceMap[name]?.toString() || ''
+    const ratio = ratioMap[name]?.toString() || ''
+    const cache = cacheMap[name]?.toString() || ''
+    const createCache = createCacheMap[name]?.toString() || ''
+    const completion = completionMap[name]?.toString() || ''
+    const image = imageMap[name]?.toString() || ''
+    const audio = audioMap[name]?.toString() || ''
+    const audioCompletion = audioCompletionMap[name]?.toString() || ''
+
+    const modeForModel = billingModeMap[name]
+    if (modeForModel === 'tiered_expr') {
+      const fullExpr = billingExprMap[name] || ''
+      const { billingExpr: pureExpr, requestRuleExpr } =
+        splitBillingExprAndRequestRules(fullExpr)
+      return {
+        name,
+        billingMode: 'tiered_expr',
+        billingExpr: pureExpr,
+        requestRuleExpr,
+        price,
+        ratio,
+        cacheRatio: cache,
+        createCacheRatio: createCache,
+        completionRatio: completion,
+        imageRatio: image,
+        audioRatio: audio,
+        audioCompletionRatio: audioCompletion,
+        hasConflict: false,
+      }
+    }
+
+    return {
+      name,
+      price,
+      ratio,
+      cacheRatio: cache,
+      createCacheRatio: createCache,
+      completionRatio: completion,
+      imageRatio: image,
+      audioRatio: audio,
+      audioCompletionRatio: audioCompletion,
+      billingMode: price !== '' ? 'per-request' : 'per-token',
+      hasConflict:
+        price !== '' &&
+        (ratio !== '' ||
+          completion !== '' ||
+          cache !== '' ||
+          createCache !== '' ||
+          image !== '' ||
+          audio !== '' ||
+          audioCompletion !== ''),
+    }
+  })
+}
+
 export const ModelRatioVisualEditor = memo(
   function ModelRatioVisualEditor({
+    savedModelPrice,
+    savedModelRatio,
+    savedCacheRatio,
+    savedCreateCacheRatio,
+    savedCompletionRatio,
+    savedImageRatio,
+    savedAudioRatio,
+    savedAudioCompletionRatio,
+    savedBillingMode,
+    savedBillingExpr,
     modelPrice,
     modelRatio,
     cacheRatio,
@@ -204,6 +368,9 @@ export const ModelRatioVisualEditor = memo(
     audioCompletionRatio,
     billingMode,
     billingExpr,
+    candidateModelNames,
+    candidateModelsLoading,
+    filterMode = 'all',
     onChange,
   }: ModelRatioVisualEditorProps) {
     const { t } = useTranslation()
@@ -259,126 +426,69 @@ export const ModelRatioVisualEditor = memo(
     }, [columnVisibility])
 
     const models = useMemo(() => {
-      const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
-        fallback: {},
-        context: 'model prices',
+      const savedRows = buildModelRows({
+        modelPrice: savedModelPrice,
+        modelRatio: savedModelRatio,
+        cacheRatio: savedCacheRatio,
+        createCacheRatio: savedCreateCacheRatio,
+        completionRatio: savedCompletionRatio,
+        imageRatio: savedImageRatio,
+        audioRatio: savedAudioRatio,
+        audioCompletionRatio: savedAudioCompletionRatio,
+        billingMode: savedBillingMode,
+        billingExpr: savedBillingExpr,
       })
-      const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
-        fallback: {},
-        context: 'model ratios',
-      })
-      const cacheMap = safeJsonParse<Record<string, number>>(cacheRatio, {
-        fallback: {},
-        context: 'cache ratios',
-      })
-      const createCacheMap = safeJsonParse<Record<string, number>>(
+      const draftRows = buildModelRows({
+        modelPrice,
+        modelRatio,
+        cacheRatio,
         createCacheRatio,
-        { fallback: {}, context: 'create cache ratios' }
-      )
-      const completionMap = safeJsonParse<Record<string, number>>(
         completionRatio,
-        { fallback: {}, context: 'completion ratios' }
-      )
-      const imageMap = safeJsonParse<Record<string, number>>(imageRatio, {
-        fallback: {},
-        context: 'image ratios',
-      })
-      const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
-        fallback: {},
-        context: 'audio ratios',
-      })
-      const audioCompletionMap = safeJsonParse<Record<string, number>>(
+        imageRatio,
+        audioRatio,
         audioCompletionRatio,
-        { fallback: {}, context: 'audio completion ratios' }
-      )
-      const billingModeMap = safeJsonParse<Record<string, string>>(
         billingMode,
-        {
-          fallback: {},
-          context: 'billing mode',
-        }
-      )
-      const billingExprMap = safeJsonParse<Record<string, string>>(
         billingExpr,
-        {
-          fallback: {},
-          context: 'billing expression',
-        }
-      )
-
-      const modelNames = new Set([
-        ...Object.keys(priceMap),
-        ...Object.keys(ratioMap),
-        ...Object.keys(cacheMap),
-        ...Object.keys(createCacheMap),
-        ...Object.keys(completionMap),
-        ...Object.keys(imageMap),
-        ...Object.keys(audioMap),
-        ...Object.keys(audioCompletionMap),
-        ...Object.keys(billingModeMap),
-        ...Object.keys(billingExprMap),
-      ])
-
-      const modelData: ModelRow[] = Array.from(modelNames).map((name) => {
-        const price = priceMap[name]?.toString() || ''
-        const ratio = ratioMap[name]?.toString() || ''
-        const cache = cacheMap[name]?.toString() || ''
-        const createCache = createCacheMap[name]?.toString() || ''
-        const completion = completionMap[name]?.toString() || ''
-        const image = imageMap[name]?.toString() || ''
-        const audio = audioMap[name]?.toString() || ''
-        const audioCompletion = audioCompletionMap[name]?.toString() || ''
-
-        const modeForModel = billingModeMap[name]
-        if (modeForModel === 'tiered_expr') {
-          // Tiered_expr models may also retain ratio/price values as fallback
-          // during multi-instance sync delays. We preserve them in the row so
-          // the edit dialog round-trip and the next save don't drop them.
-          const fullExpr = billingExprMap[name] || ''
-          const { billingExpr: pureExpr, requestRuleExpr } =
-            splitBillingExprAndRequestRules(fullExpr)
-          return {
-            name,
-            billingMode: 'tiered_expr',
-            billingExpr: pureExpr,
-            requestRuleExpr,
-            price,
-            ratio,
-            cacheRatio: cache,
-            createCacheRatio: createCache,
-            completionRatio: completion,
-            imageRatio: image,
-            audioRatio: audio,
-            audioCompletionRatio: audioCompletion,
-            hasConflict: false,
-          }
-        }
-
-        return {
-          name,
-          price,
-          ratio,
-          cacheRatio: cache,
-          createCacheRatio: createCache,
-          completionRatio: completion,
-          imageRatio: image,
-          audioRatio: audio,
-          audioCompletionRatio: audioCompletion,
-          billingMode: price !== '' ? 'per-request' : 'per-token',
-          hasConflict:
-            price !== '' &&
-            (ratio !== '' ||
-              completion !== '' ||
-              cache !== '' ||
-              createCache !== '' ||
-              image !== '' ||
-              audio !== '' ||
-              audioCompletion !== ''),
-        }
       })
+      const savedByName = new Map(savedRows.map((row) => [row.name, row]))
+      const draftByName = new Map(draftRows.map((row) => [row.name, row]))
+      const modelNames =
+        filterMode === 'unset'
+          ? new Set(candidateModelNames ?? [])
+          : new Set([...savedByName.keys(), ...draftByName.keys()])
 
-      return modelData.sort((a, b) => a.name.localeCompare(b.name))
+      return Array.from(modelNames)
+        .map((name) => {
+          const draft = draftByName.get(name)
+          const saved = savedByName.get(name)
+          return (
+            draft ??
+            saved ?? {
+              name,
+              billingMode: 'per-token',
+              hasConflict: false,
+            }
+          )
+        })
+        .filter(
+          (row) =>
+            filterMode !== 'unset' ||
+            isBasePricingUnset(savedByName.get(row.name))
+        )
+        .sort((a, b) => a.name.localeCompare(b.name))
     }, [
+      candidateModelNames,
+      filterMode,
+      savedModelPrice,
+      savedModelRatio,
+      savedCacheRatio,
+      savedCreateCacheRatio,
+      savedCompletionRatio,
+      savedImageRatio,
+      savedAudioRatio,
+      savedAudioCompletionRatio,
+      savedBillingMode,
+      savedBillingExpr,
       modelPrice,
       modelRatio,
       cacheRatio,
@@ -664,19 +774,21 @@ export const ModelRatioVisualEditor = memo(
               >
                 <Pencil />
               </Button>
-              <Button
-                variant='ghost'
-                size='sm'
-                onClick={() => handleDelete(row.original.name)}
-              >
-                <Trash2 />
-              </Button>
+              {filterMode !== 'unset' && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => handleDelete(row.original.name)}
+                >
+                  <Trash2 />
+                </Button>
+              )}
             </div>
           ),
           enableHiding: false,
         },
       ]
-    }, [handleEdit, handleDelete, t])
+    }, [filterMode, handleEdit, handleDelete, t])
 
     const table = useReactTable({
       data: models,
@@ -883,6 +995,18 @@ export const ModelRatioVisualEditor = memo(
     }, [editData, persistPricingData, t, table])
 
     const selectedTargetCount = table.getFilteredSelectedRowModel().rows.length
+    const emptyStateText = (() => {
+      if (table.getState().globalFilter) {
+        return t('No models match your search')
+      }
+      if (filterMode === 'unset') {
+        if (candidateModelsLoading) {
+          return t('Loading...')
+        }
+        return t('No models with unset prices')
+      }
+      return t('No models configured. Use Add model to get started.')
+    })()
 
     return (
       <div className='flex flex-col gap-4'>
@@ -915,18 +1039,18 @@ export const ModelRatioVisualEditor = memo(
                 },
               ]}
               preActions={
-                <Button onClick={handleAdd}>
-                  <Plus data-icon='inline-start' />
-                  {t('Add model')}
-                </Button>
+                filterMode === 'unset' ? undefined : (
+                  <Button onClick={handleAdd}>
+                    <Plus data-icon='inline-start' />
+                    {t('Add model')}
+                  </Button>
+                )
               }
             />
 
             {table.getRowModel().rows.length === 0 ? (
               <div className='text-muted-foreground rounded-lg border border-dashed p-8 text-center'>
-                {table.getState().globalFilter
-                  ? t('No models match your search')
-                  : t('No models configured. Use Add model to get started.')}
+                {emptyStateText}
               </div>
             ) : (
               <div className='overflow-hidden rounded-md border'>
@@ -1005,10 +1129,12 @@ export const ModelRatioVisualEditor = memo(
                     'Use the full-width table to scan prices, then select a row to edit it here.'
                   )}
                 </p>
-                <Button variant='outline' onClick={handleAdd}>
-                  <Plus data-icon='inline-start' />
-                  {t('Add model')}
-                </Button>
+                {filterMode !== 'unset' && (
+                  <Button variant='outline' onClick={handleAdd}>
+                    <Plus data-icon='inline-start' />
+                    {t('Add model')}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -1039,6 +1165,17 @@ export const ModelRatioVisualEditor = memo(
   // Custom equality check - only re-render if JSON props actually changed
   (prevProps, nextProps) => {
     return (
+      prevProps.savedModelPrice === nextProps.savedModelPrice &&
+      prevProps.savedModelRatio === nextProps.savedModelRatio &&
+      prevProps.savedCacheRatio === nextProps.savedCacheRatio &&
+      prevProps.savedCreateCacheRatio === nextProps.savedCreateCacheRatio &&
+      prevProps.savedCompletionRatio === nextProps.savedCompletionRatio &&
+      prevProps.savedImageRatio === nextProps.savedImageRatio &&
+      prevProps.savedAudioRatio === nextProps.savedAudioRatio &&
+      prevProps.savedAudioCompletionRatio ===
+        nextProps.savedAudioCompletionRatio &&
+      prevProps.savedBillingMode === nextProps.savedBillingMode &&
+      prevProps.savedBillingExpr === nextProps.savedBillingExpr &&
       prevProps.modelPrice === nextProps.modelPrice &&
       prevProps.modelRatio === nextProps.modelRatio &&
       prevProps.cacheRatio === nextProps.cacheRatio &&
@@ -1049,6 +1186,9 @@ export const ModelRatioVisualEditor = memo(
       prevProps.audioCompletionRatio === nextProps.audioCompletionRatio &&
       prevProps.billingMode === nextProps.billingMode &&
       prevProps.billingExpr === nextProps.billingExpr &&
+      prevProps.candidateModelNames === nextProps.candidateModelNames &&
+      prevProps.candidateModelsLoading === nextProps.candidateModelsLoading &&
+      prevProps.filterMode === nextProps.filterMode &&
       prevProps.onChange === nextProps.onChange
     )
   }

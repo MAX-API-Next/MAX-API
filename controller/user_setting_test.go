@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -219,12 +220,15 @@ func TestRegisterConsumesEmailVerificationCode(t *testing.T) {
 func TestQuotaBoundsValidation(t *testing.T) {
 	legacyInt32Max := int64(1<<31 - 1)
 	aboveLegacyInt32Max := legacyInt32Max + 1
+	javascriptSafeIntegerMax := int64(1<<53 - 1)
 	maxQuota := maxUserQuotaValue
 	overflowingHalfMax := maxQuota/2 + 1
 
+	require.Equal(t, javascriptSafeIntegerMax, maxQuota)
 	require.True(t, isValidQuotaOverride(0))
 	require.True(t, isValidQuotaOverride(aboveLegacyInt32Max))
 	require.True(t, isValidQuotaOverride(maxQuota))
+	require.False(t, isValidQuotaOverride(maxQuota+1))
 	require.False(t, isValidQuotaOverride(-1))
 
 	require.True(t, isValidQuotaAddition(aboveLegacyInt32Max, 1))
@@ -236,6 +240,50 @@ func TestQuotaBoundsValidation(t *testing.T) {
 	require.False(t, isValidQuotaAddition(overflowingHalfMax, overflowingHalfMax))
 	require.False(t, isValidQuotaAddition(maxQuota, maxQuota))
 	require.False(t, isValidQuotaAddition(0, 0))
+
+	require.True(t, isValidQuotaSubtraction(-maxQuota+1, 1))
+	require.True(t, isValidQuotaSubtraction(0, maxQuota))
+	require.False(t, isValidQuotaSubtraction(-maxQuota, 1))
+	require.False(t, isValidQuotaSubtraction(0, maxQuota+1))
+	require.False(t, isValidQuotaSubtraction(0, 0))
+}
+
+func TestResetPasswordKeepsVerificationCodeWhenPasswordUpdateFails(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	user := model.User{
+		Username: "reset-failure-user",
+		Password: "ExistingPassword123",
+		Email:    "reset-failure@example.com",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	wantErr := errors.New("forced password update failure")
+	const callbackName = "test:force_password_reset_failure"
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		tx.AddError(wantErr)
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, db.Callback().Update().Remove(callbackName))
+	})
+
+	code := "reset-code"
+	common.RegisterVerificationCodeWithKey(user.Email, code, common.PasswordResetPurpose)
+	t.Cleanup(func() { common.DeleteKey(user.Email, common.PasswordResetPurpose) })
+	payload, err := common.Marshal(PasswordResetRequest{Email: user.Email, Token: code})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/reset", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	ResetPassword(ctx)
+
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+	require.True(t, common.VerifyCodeWithKey(user.Email, code, common.PasswordResetPurpose))
+	var stored model.User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	require.Equal(t, user.Password, stored.Password)
 }
 
 func TestManageUserRejectsQuotaValueAboveInt64Max(t *testing.T) {
@@ -250,4 +298,62 @@ func TestManageUserRejectsQuotaValueAboveInt64Max(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"success":false`)
+}
+
+func TestManageUserRejectsQuotaValueAboveJavaScriptSafeInteger(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	user := model.User{
+		Username: "unsafe-quota-user",
+		Password: "password123",
+		Quota:    100,
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	payload, err := common.Marshal(ManageRequest{
+		Id:     user.Id,
+		Action: "add_quota",
+		Mode:   "override",
+		Value:  maxUserQuotaValue + 1,
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("role", common.RoleRootUser)
+
+	ManageUser(ctx)
+
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+	var stored model.User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	require.EqualValues(t, 100, stored.Quota)
+}
+
+func TestManageUserRejectsMissingIdWithoutTouchingFirstUser(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	user := model.User{
+		Username: "manage-missing-id-first-user",
+		Password: "password123",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(
+		`{"action":"disable"}`,
+	))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("role", common.RoleRootUser)
+
+	ManageUser(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+	var stored model.User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, stored.Status)
 }

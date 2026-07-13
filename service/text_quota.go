@@ -138,6 +138,17 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	return surcharge
 }
 
+// noteQuotaClamp records the first quota saturation event onto relayInfo so it
+// can later be attached to the consume/task log for admin auditing.
+func noteQuotaClamp(relayInfo *relaycommon.RelayInfo, clamp *common.QuotaClamp) {
+	if clamp == nil || relayInfo == nil {
+		return
+	}
+	if relayInfo.QuotaClamp == nil {
+		relayInfo.QuotaClamp = clamp
+	}
+}
+
 func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
 	if summary.ToolCallSurchargeQuota.IsZero() {
 		return tieredQuota
@@ -145,13 +156,17 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 
 	if tieredResult != nil {
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
-			return decimalToQuota(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).
+			quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).
 				Mul(decimal.NewFromFloat(snap.GroupRatio)).
 				Add(summary.ToolCallSurchargeQuota))
+			noteQuotaClamp(relayInfo, clamp)
+			return quota
 		}
 	}
 
-	return decimalToQuota(decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota))
+	quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota))
+	noteQuotaClamp(relayInfo, clamp)
+	return quota
 }
 
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
@@ -184,7 +199,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CompletionTokens = usage.CompletionTokens
 	summary.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
-	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
@@ -270,6 +285,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			}
 		}
 
+		if baseTokens.IsNegative() {
+			baseTokens = decimal.Zero
+		}
+
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
 		quotaCalculateDecimal := promptQuota.Add(completionQuota).Mul(ratio)
@@ -285,7 +304,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
 		}
-		summary.Quota = decimalToQuota(quotaCalculateDecimal)
+		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
+		summary.Quota = quota
+		noteQuotaClamp(relayInfo, clamp)
 	} else {
 		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
@@ -295,7 +316,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 				quotaCalculateDecimal = quotaCalculateDecimal.Mul(decimal.NewFromFloat(otherRatio))
 			}
 		}
-		summary.Quota = decimalToQuota(quotaCalculateDecimal)
+		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
+		summary.Quota = quota
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	if summary.TotalTokens == 0 {
@@ -308,8 +331,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 }
 
 func decimalToQuota(d decimal.Decimal) int {
-	f, _ := d.Round(0).Float64()
-	return common.QuotaFromFloat(f)
+	return common.QuotaFromDecimal(d)
 }
 
 func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) string {
@@ -347,15 +369,16 @@ func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
+	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
 	if originUsage != nil {
-		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, relayInfo.GetFinalRequestRelayFormat())
+		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
-	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
@@ -364,7 +387,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
 		}
-		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(usage, summary.IsClaudeUsageSemantic, tieredUsedVars))
+		tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(billingUsage, summary.IsClaudeUsageSemantic, tieredUsedVars))
 		if tieredOk {
 			tieredBillingApplied = true
 			tieredResult = tieredRes
@@ -436,6 +459,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason
 	}
@@ -486,16 +510,17 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// to cache_creation_tokens.
 		other["cache_write_tokens"] = cacheWriteTokens
 	}
-	if relayInfo.GetFinalRequestRelayFormat() != types.RelayFormatClaude && usage != nil && usage.UsageSource != "" && usage.InputTokens > 0 {
+	if relayInfo.GetFinalRequestRelayFormat() != types.RelayFormatClaude && billingUsage != nil && billingUsage.UsageSource != "" && billingUsage.InputTokens > 0 {
 		// input_tokens_total: explicit normalized total input used by the usage log UI.
 		// Only write this field when upstream/current conversion has already provided a
 		// reliable total input value and tagged the usage source. Do not infer it from
 		// prompt/cache fields here, otherwise old upstream payloads may be double-counted.
-		other["input_tokens_total"] = usage.InputTokens
+		other["input_tokens_total"] = billingUsage.InputTokens
 	}
 	if tieredBillingApplied {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
+	attachQuotaSaturation(ctx, relayInfo, other)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

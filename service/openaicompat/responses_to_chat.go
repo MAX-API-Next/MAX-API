@@ -135,14 +135,12 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 	} else {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
-	if src.InputTokensDetails != nil {
-		usage.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
-		usage.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
-		usage.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
-		usage.PromptTokensDetails.CachedCreationTokens = src.InputTokensDetails.CachedCreationTokens
-		usage.PromptTokensDetails.TextTokens = src.InputTokensDetails.TextTokens
-	}
+	dto.CopyInputTokenDetails(&usage.PromptTokensDetails, src.InputTokensDetails, true)
 	usage.CompletionTokenDetails = src.CompletionTokenDetails
+	usage.BillingUsage = dto.CloneBillingUsage(src.BillingUsage)
+	if usage.BillingUsage == nil {
+		usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(src)
+	}
 	return usage
 }
 

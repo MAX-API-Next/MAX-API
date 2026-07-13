@@ -289,6 +289,7 @@ func TestResponsesResponseToChatCompletionsResponsePreservesUsageDetails(t *test
 			InputTokensDetails: &dto.InputTokenDetails{
 				CachedTokens:         1,
 				CachedCreationTokens: 2,
+				CacheWriteTokens:     10,
 				TextTokens:           3,
 				AudioTokens:          4,
 				ImageTokens:          5,
@@ -317,6 +318,7 @@ func TestResponsesResponseToChatCompletionsResponsePreservesUsageDetails(t *test
 	assert.Equal(t, 18, usage.TotalTokens)
 	assert.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
 	assert.Equal(t, 2, usage.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 10, usage.PromptTokensDetails.CacheWriteTokens)
 	assert.Equal(t, 3, usage.PromptTokensDetails.TextTokens)
 	assert.Equal(t, 4, usage.PromptTokensDetails.AudioTokens)
 	assert.Equal(t, 5, usage.PromptTokensDetails.ImageTokens)

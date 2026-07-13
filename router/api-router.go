@@ -62,7 +62,8 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/waffo-pancake/webhook/:env", anonymousRequestBodyLimit, controller.WaffoPancakeWebhook)
 
 		// Universal secure verification routes
-		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)
+		apiRouter.GET("/verify/methods", middleware.UserAuth(), middleware.DisableCache(), controller.GetVerificationMethods)
+		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), controller.UniversalVerify)
 
 		userRoute := apiRouter.Group("/user")
 		{
@@ -85,7 +86,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/models", controller.GetUserModels)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
-				selfRoute.GET("/token", controller.GenerateAccessToken)
+				selfRoute.POST("/token", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("access_token"), controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
 				selfRoute.POST("/passkey/register/begin", controller.PasskeyRegisterBegin)
 				selfRoute.POST("/passkey/register/finish", controller.PasskeyRegisterFinish)

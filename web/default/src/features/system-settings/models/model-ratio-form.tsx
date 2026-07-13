@@ -16,10 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { memo, useCallback, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { type UseFormReturn } from 'react-hook-form'
+import { useQuery } from '@tanstack/react-query'
 import { Code2, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -32,6 +34,7 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { getEnabledModels } from '@/features/channels/api'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -56,21 +59,44 @@ type ModelFormValues = {
 
 type ModelRatioFormProps = {
   form: UseFormReturn<ModelFormValues>
+  savedValues: ModelFormValues
   onSave: (values: ModelFormValues) => Promise<void>
   onReset: () => void
   isSaving: boolean
   isResetting: boolean
+  variant?: 'default' | 'unset'
 }
 
 export const ModelRatioForm = memo(function ModelRatioForm({
   form,
+  savedValues,
   onSave,
   onReset,
   isSaving,
   isResetting,
+  variant = 'default',
 }: ModelRatioFormProps) {
   const { t } = useTranslation()
+  const isUnsetVariant = variant === 'unset'
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
+
+  const enabledModelsQuery = useQuery({
+    queryKey: ['enabled-models'],
+    queryFn: getEnabledModels,
+    enabled: isUnsetVariant,
+  })
+
+  const enabledModelsError = isUnsetVariant
+    ? enabledModelsQuery.isError ||
+      (enabledModelsQuery.data !== undefined &&
+        !enabledModelsQuery.data.success)
+    : false
+  const enabledModelsErrorMessage = enabledModelsQuery.data?.message
+
+  useEffect(() => {
+    if (!enabledModelsError) return
+    toast.error(enabledModelsErrorMessage || t('Failed to load enabled models'))
+  }, [enabledModelsError, enabledModelsErrorMessage, t])
 
   const handleFieldChange = useCallback(
     (field: keyof ModelFormValues, value: string) => {
@@ -127,6 +153,16 @@ export const ModelRatioForm = memo(function ModelRatioForm({
         {editMode === 'visual' ? (
           <div className='space-y-6'>
             <ModelRatioVisualEditor
+              savedModelPrice={savedValues.ModelPrice}
+              savedModelRatio={savedValues.ModelRatio}
+              savedCacheRatio={savedValues.CacheRatio}
+              savedCreateCacheRatio={savedValues.CreateCacheRatio}
+              savedCompletionRatio={savedValues.CompletionRatio}
+              savedImageRatio={savedValues.ImageRatio}
+              savedAudioRatio={savedValues.AudioRatio}
+              savedAudioCompletionRatio={savedValues.AudioCompletionRatio}
+              savedBillingMode={savedValues.BillingMode}
+              savedBillingExpr={savedValues.BillingExpr}
               modelPrice={form.watch('ModelPrice')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
@@ -137,6 +173,13 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               audioCompletionRatio={form.watch('AudioCompletionRatio')}
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
+              candidateModelNames={
+                isUnsetVariant ? enabledModelsQuery.data?.data : undefined
+              }
+              candidateModelsLoading={
+                isUnsetVariant && enabledModelsQuery.isLoading
+              }
+              filterMode={isUnsetVariant ? 'unset' : 'all'}
               onChange={(field, value) => {
                 const fieldMap: Record<string, keyof ModelFormValues> = {
                   'billing_setting.billing_mode': 'BillingMode',

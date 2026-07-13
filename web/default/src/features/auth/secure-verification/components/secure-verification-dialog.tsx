@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useMemo } from 'react'
-import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
+import { ShieldCheck, KeyRound, Loader2, LockKeyhole } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -62,6 +62,7 @@ export function SecureVerificationDialog({
     const tabs: VerificationMethod[] = []
     if (methods.has2FA) tabs.push('2fa')
     if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
+    if (methods.hasPassword) tabs.push('password')
     return tabs
   }, [methods])
 
@@ -82,13 +83,14 @@ export function SecureVerificationDialog({
 
   const handleVerify = () => {
     if (!activeMethod) return
-    const payload = activeMethod === '2fa' ? state.code : undefined
+    const payload = activeMethod === 'passkey' ? undefined : state.code
     onVerify(activeMethod, payload)
   }
 
   const verifyDisabled =
     state.loading ||
-    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6))
+    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6)) ||
+    (activeMethod === 'password' && !state.code)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -136,6 +138,9 @@ export function SecureVerificationDialog({
                   {methods.hasPasskey && methods.passkeySupported && (
                     <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
                   )}
+                  {methods.hasPassword && (
+                    <TabsTrigger value='password'>{t('Password')}</TabsTrigger>
+                  )}
                 </TabsList>
 
                 <TabsContent value='2fa' className='space-y-3'>
@@ -182,6 +187,32 @@ export function SecureVerificationDialog({
                       {t('This device does not support Passkey verification.')}
                     </p>
                   )}
+                </TabsContent>
+
+                <TabsContent value='password' className='space-y-3'>
+                  <div className='bg-muted/50 flex items-center gap-3 rounded-lg p-4'>
+                    <LockKeyhole className='text-primary h-6 w-6 shrink-0' />
+                    <p className='text-muted-foreground text-sm'>
+                      {t(
+                        'Enter your account password to confirm this sensitive action.'
+                      )}
+                    </p>
+                  </div>
+                  <Input
+                    type='password'
+                    autoComplete='current-password'
+                    value={state.code}
+                    onChange={(event) => onCodeChange(event.target.value)}
+                    placeholder={t('Password')}
+                    disabled={state.loading}
+                    autoFocus={activeMethod === 'password'}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !verifyDisabled) {
+                        event.preventDefault()
+                        handleVerify()
+                      }
+                    }}
+                  />
                 </TabsContent>
               </Tabs>
             )}

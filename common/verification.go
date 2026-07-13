@@ -9,8 +9,9 @@ import (
 )
 
 type verificationValue struct {
-	code string
-	time time.Time
+	code    string
+	time    time.Time
+	claimID string
 }
 
 const (
@@ -49,10 +50,47 @@ func VerifyCodeWithKey(key string, code string, purpose string) bool {
 	defer verificationMutex.Unlock()
 	value, okay := verificationMap[purpose+key]
 	now := time.Now()
-	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
+	if !okay || value.claimID != "" || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
 		return false
 	}
 	return code == value.code
+}
+
+// VerifyCodeWithKeyAndRun reserves a code while fn runs. A successful fn
+// consumes the code; an error or panic releases the reservation for retry.
+func VerifyCodeWithKeyAndRun(key string, code string, purpose string, fn func() error) (verified bool, err error) {
+	mapKey := purpose + key
+	claimID := uuid.NewString()
+
+	verificationMutex.Lock()
+	value, okay := verificationMap[mapKey]
+	now := time.Now()
+	if !okay || value.claimID != "" || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 || code != value.code {
+		verificationMutex.Unlock()
+		return false, nil
+	}
+	value.claimID = claimID
+	verificationMap[mapKey] = value
+	verificationMutex.Unlock()
+
+	committed := false
+	defer func() {
+		verificationMutex.Lock()
+		current, exists := verificationMap[mapKey]
+		if exists && current.claimID == claimID {
+			if committed {
+				delete(verificationMap, mapKey)
+			} else {
+				current.claimID = ""
+				verificationMap[mapKey] = current
+			}
+		}
+		verificationMutex.Unlock()
+	}()
+
+	err = fn()
+	committed = err == nil
+	return true, err
 }
 
 func VerifyAndDeleteCodeWithKey(key string, code string, purpose string) bool {
@@ -61,7 +99,7 @@ func VerifyAndDeleteCodeWithKey(key string, code string, purpose string) bool {
 	mapKey := purpose + key
 	value, okay := verificationMap[mapKey]
 	now := time.Now()
-	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 || code != value.code {
+	if !okay || value.claimID != "" || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 || code != value.code {
 		return false
 	}
 	delete(verificationMap, mapKey)

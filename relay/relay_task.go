@@ -222,7 +222,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 					quotaWithRatios *= ra
 				}
 			}
-			info.PriceData.Quota = common.QuotaFromFloat(quotaWithRatios)
+			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
 		}
 	}
 
@@ -373,7 +375,18 @@ func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float6
 			result *= ra
 		}
 	}
-	return common.QuotaFromFloat(result)
+	quota, clamp := common.QuotaFromFloatChecked(result)
+	noteTaskQuotaClamp(info, clamp)
+	return quota
+}
+
+func noteTaskQuotaClamp(info *relaycommon.RelayInfo, clamp *common.QuotaClamp) {
+	if clamp == nil || info == nil {
+		return
+	}
+	if info.QuotaClamp == nil {
+		info.QuotaClamp = clamp
+	}
 }
 
 var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp *dto.TaskError){
