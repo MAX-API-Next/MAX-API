@@ -744,6 +744,8 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或業務 Agent
 
 本專案采用 [GNU Affero 通用公共許可證 v3.0 (AGPLv3)](./LICENSE) 授權。
 
+除預設的 AGPLv3 授權外，符合上文「二次開發與社群鳴謝」條件的自用二開專案，可按該說明自動獲得非永久的臨時商用授權。該臨時授權僅涵蓋 MAX API 專案方有權授權的新增與修改部分，並不包含或代替 One API、New API 等上游專案的許可授權。
+
 如果你修改并通過網絡向使用者提供本專案服務，請理解并遵守 AGPLv3 對應源碼提供等義務。商業合作、機構合作或其他授權問題，請聯系：maxapi@max-api.ai。
 
 ---

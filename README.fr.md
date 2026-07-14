@@ -661,6 +661,8 @@ Contributions de code, documentation, expériences d'adaptation fournisseur et p
 
 Ce projet est sous [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
+Outre la licence AGPLv3 par défaut, les projets dérivés à usage propre qui respectent les conditions « Développements dérivés et remerciements à la communauté » ci-dessus reçoivent automatiquement la licence commerciale temporaire et non permanente qui y est décrite. Cette licence temporaire ne couvre que les ajouts et modifications que les responsables du projet MAX API sont en droit de concéder ; elle n'inclut ni ne remplace les licences des projets en amont tels que One API et New API.
+
 Si vous modifiez le projet et le fournissez aux utilisateurs via le réseau, comprenez et respectez les obligations AGPLv3 de disponibilité du code source. Pour coopération commerciale, institutionnelle ou autres questions de licence : maxapi@max-api.ai.
 
 ---
