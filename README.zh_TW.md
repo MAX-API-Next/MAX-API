@@ -732,7 +732,7 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或業務 Agent
 
 滿足上述任一展示要求並保持連結清晰可見，即自動獲得本專案的臨時商用授權，無需另行申請或等待確認。該授權為非永久授權，僅在持續滿足展示要求期間有效；有效期及後續調整以專案方在本 README 或官方社群發布的最新說明為準。
 
-本專案基於 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 開發。商業使用本專案時，還須分別遵守 One API 的 MIT 許可證與 New API 的 AGPLv3 許可證，具體以各上游專案的 `LICENSE` 檔案為準；本專案提供的臨時商用授權不替代、也不免除相關上游專案的開源許可義務。
+本專案基於 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 開發。現階段，MAX API 主要在上述專案基礎上持續強化 AI API 閘道與治理能力、擴充功能並修正問題。商業使用本專案時，還須分別遵守 One API 的 MIT 許可證與 New API 的 AGPLv3 許可證，具體以各上游專案的 `LICENSE` 檔案為準；本專案提供的臨時商用授權不替代、也不免除相關上游專案的開源許可義務。
 
 如不再滿足展示要求，或臨時授權到期、被公告調整或終止，仍需按 AGPLv3 或專案方另行書面授權使用本專案。如需長期商用授權，請聯絡：maxapi@max-api.ai。
 
