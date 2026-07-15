@@ -695,6 +695,9 @@ func buildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo 
 	if usage.InputTokens == 0 && claudeInfo.Usage.PromptTokens > 0 {
 		usage.InputTokens = claudeInfo.Usage.PromptTokens
 	}
+	if usage.OutputTokens == 0 && claudeInfo.Usage.CompletionTokens > 0 {
+		usage.OutputTokens = claudeInfo.Usage.CompletionTokens
+	}
 	if usage.CacheReadInputTokens == 0 && claudeInfo.Usage.PromptTokensDetails.CachedTokens > 0 {
 		usage.CacheReadInputTokens = claudeInfo.Usage.PromptTokensDetails.CachedTokens
 	}

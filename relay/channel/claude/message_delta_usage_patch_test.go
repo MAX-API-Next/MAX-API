@@ -92,11 +92,13 @@ func TestBuildMessageDeltaPatchUsage(t *testing.T) {
 	t.Run("keep upstream non-zero values", func(t *testing.T) {
 		claudeResponse := &dto.ClaudeResponse{Usage: &dto.ClaudeUsage{
 			InputTokens:              9,
+			OutputTokens:             8,
 			CacheReadInputTokens:     7,
 			CacheCreationInputTokens: 6,
 		}}
 		claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{
-			PromptTokens: 100,
+			PromptTokens:     100,
+			CompletionTokens: 99,
 			PromptTokensDetails: dto.InputTokenDetails{
 				CachedTokens:         30,
 				CachedCreationTokens: 50,
@@ -105,6 +107,7 @@ func TestBuildMessageDeltaPatchUsage(t *testing.T) {
 
 		usage := buildMessageDeltaPatchUsage(claudeResponse, claudeInfo)
 		require.EqualValues(t, 9, usage.InputTokens)
+		require.EqualValues(t, 8, usage.OutputTokens)
 		require.EqualValues(t, 7, usage.CacheReadInputTokens)
 		require.EqualValues(t, 6, usage.CacheCreationInputTokens)
 	})
