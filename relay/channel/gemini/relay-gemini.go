@@ -1069,12 +1069,11 @@ func attachEstimatedGeminiBillingUsage(usage *dto.Usage) *dto.Usage {
 	return usage
 }
 
-// patchGeminiZeroCompletionUsage estimates completion tokens locally when
-// upstream usageMetadata was billable but reported zero completion tokens even
-// though output content was received. Without replacing BillingUsage, settlement
-// would still prefer the prompt-only metadata and bill zero completion.
+// patchGeminiZeroCompletionUsage estimates candidate tokens locally when
+// upstream usageMetadata reported no candidate usage even though visible output
+// was received. Reasoning tokens and the original detailed metadata are retained.
 func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, responseText string, imageCount int) {
-	if usage == nil || usage.CompletionTokens > 0 {
+	if usage == nil || geminiCandidateTokenCount(usage) > 0 {
 		return
 	}
 	if responseText == "" && imageCount == 0 {
@@ -1088,12 +1087,36 @@ func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo,
 	if usage.PromptTokens == 0 {
 		usage.PromptTokens = estimated.PromptTokens
 	}
-	usage.CompletionTokens = estimated.CompletionTokens
-	if imageCount != 0 && usage.CompletionTokens == 0 {
-		usage.CompletionTokens = imageCount * 1400
+	estimatedCandidateTokens := estimated.CompletionTokens
+	if imageCount != 0 && estimatedCandidateTokens == 0 {
+		estimatedCandidateTokens = imageCount * 1400
+		usage.CompletionTokenDetails.ImageTokens = estimatedCandidateTokens
+	} else if responseText != "" && estimatedCandidateTokens > 0 &&
+		usage.CompletionTokenDetails.TextTokens == 0 &&
+		usage.CompletionTokenDetails.ImageTokens == 0 &&
+		usage.CompletionTokenDetails.AudioTokens == 0 {
+		usage.CompletionTokenDetails.TextTokens = estimatedCandidateTokens
 	}
+	usage.CompletionTokens = usage.CompletionTokenDetails.ReasoningTokens + estimatedCandidateTokens
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(usage)
+}
+
+func geminiCandidateTokenCount(usage *dto.Usage) int {
+	if usage == nil {
+		return 0
+	}
+	if usage.BillingUsage != nil && usage.BillingUsage.GeminiUsageMetadata != nil {
+		if count := usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount; count > 0 {
+			return count
+		}
+		return 0
+	}
+	count := usage.CompletionTokens - usage.CompletionTokenDetails.ReasoningTokens
+	if count < 0 {
+		return 0
+	}
+	return count
 }
 
 func geminiResponseUsageText(response *dto.GeminiChatResponse) string {

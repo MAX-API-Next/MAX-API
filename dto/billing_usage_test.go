@@ -49,6 +49,17 @@ func TestNewOpenAIChatBillingUsageRequiresTokenContent(t *testing.T) {
 	assert.Equal(t, 1, billingUsage.OpenAIUsage.PromptTokens)
 }
 
+func TestNewOpenAIResponsesBillingUsageSupportsOutputTokenDetails(t *testing.T) {
+	source := &Usage{OutputTokensDetails: &OutputTokenDetails{AudioTokens: 9}}
+	billingUsage := NewOpenAIResponsesBillingUsage(source)
+
+	require.NotNil(t, billingUsage)
+	require.NotNil(t, billingUsage.OpenAIUsage)
+	require.NotNil(t, billingUsage.OpenAIUsage.OutputTokensDetails)
+	assert.Equal(t, 9, billingUsage.OpenAIUsage.OutputTokensDetails.AudioTokens)
+	assert.NotSame(t, source.OutputTokensDetails, billingUsage.OpenAIUsage.OutputTokensDetails)
+}
+
 func TestNewEstimatedGeminiChatBillingUsage(t *testing.T) {
 	billingUsage := NewEstimatedGeminiChatBillingUsage(&Usage{
 		PromptTokens:     11,

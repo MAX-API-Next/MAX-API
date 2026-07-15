@@ -2,13 +2,13 @@ package minimax
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -118,7 +118,7 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 
 	// Parse response
 	var minimaxResp MiniMaxTTSResponse
-	if unmarshalErr := json.Unmarshal(body, &minimaxResp); unmarshalErr != nil {
+	if unmarshalErr := common.Unmarshal(body, &minimaxResp); unmarshalErr != nil {
 		return nil, types.NewErrorWithStatusCode(
 			fmt.Errorf("failed to unmarshal minimax TTS response: %w", unmarshalErr),
 			types.ErrorCodeBadResponseBody,
@@ -163,10 +163,17 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		c.Data(http.StatusOK, contentType, audioData)
 	}
 
+	promptTokens := info.GetEstimatePromptTokens()
+	if minimaxResp.ExtraInfo.UsageCharacters > 0 {
+		promptTokens = int(minimaxResp.ExtraInfo.UsageCharacters)
+	}
 	usage = &dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
+		PromptTokens:     promptTokens,
 		CompletionTokens: 0,
-		TotalTokens:      int(minimaxResp.ExtraInfo.UsageCharacters),
+		TotalTokens:      promptTokens,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens: promptTokens,
+		},
 	}
 
 	return usage, nil

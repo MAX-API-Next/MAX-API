@@ -97,6 +97,13 @@ func HasOpenAIUsageTokens(usage *Usage) bool {
 		usage.CompletionTokenDetails.AudioTokens != 0 {
 		return true
 	}
+	if usage.OutputTokensDetails != nil &&
+		(usage.OutputTokensDetails.ReasoningTokens != 0 ||
+			usage.OutputTokensDetails.TextTokens != 0 ||
+			usage.OutputTokensDetails.ImageTokens != 0 ||
+			usage.OutputTokensDetails.AudioTokens != 0) {
+		return true
+	}
 	return usage.InputTokensDetails != nil
 }
 
@@ -108,15 +115,49 @@ func NewEstimatedGeminiChatBillingUsage(usage *Usage) *BillingUsage {
 	if usage == nil {
 		return nil
 	}
+	metadata := GeminiUsageMetadata{}
+	if usage.BillingUsage != nil && usage.BillingUsage.GeminiUsageMetadata != nil {
+		metadata = cloneGeminiUsageMetadata(*usage.BillingUsage.GeminiUsageMetadata)
+	}
+
+	if usage.PromptTokens > 0 {
+		promptTokens := usage.PromptTokens - metadata.ToolUsePromptTokenCount
+		if promptTokens < 0 {
+			promptTokens = 0
+		}
+		metadata.PromptTokenCount = promptTokens
+	}
+	if usage.CompletionTokenDetails.ReasoningTokens > 0 {
+		metadata.ThoughtsTokenCount = usage.CompletionTokenDetails.ReasoningTokens
+	}
+	candidateTokens := usage.CompletionTokens - metadata.ThoughtsTokenCount
+	if candidateTokens < 0 {
+		candidateTokens = 0
+	}
+	metadata.CandidatesTokenCount = candidateTokens
+	metadata.CandidatesTokensDetails = mergeGeminiCandidateTokenDetail(metadata.CandidatesTokensDetails, "TEXT", usage.CompletionTokenDetails.TextTokens)
+	metadata.CandidatesTokensDetails = mergeGeminiCandidateTokenDetail(metadata.CandidatesTokensDetails, "IMAGE", usage.CompletionTokenDetails.ImageTokens)
+	metadata.CandidatesTokensDetails = mergeGeminiCandidateTokenDetail(metadata.CandidatesTokensDetails, "AUDIO", usage.CompletionTokenDetails.AudioTokens)
+
 	totalTokens := usage.TotalTokens
 	if totalTokens == 0 {
 		totalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
-	return newGeminiChatBillingUsage(&GeminiUsageMetadata{
-		PromptTokenCount:     usage.PromptTokens,
-		CandidatesTokenCount: usage.CompletionTokens,
-		TotalTokenCount:      totalTokens,
-	}, true)
+	metadata.TotalTokenCount = totalTokens
+	return newGeminiChatBillingUsage(&metadata, true)
+}
+
+func mergeGeminiCandidateTokenDetail(details []GeminiPromptTokensDetails, modality string, tokenCount int) []GeminiPromptTokensDetails {
+	if tokenCount <= 0 {
+		return details
+	}
+	for i := range details {
+		if details[i].Modality == modality {
+			details[i].TokenCount = tokenCount
+			return details
+		}
+	}
+	return append(details, GeminiPromptTokensDetails{Modality: modality, TokenCount: tokenCount})
 }
 
 func newGeminiChatBillingUsage(metadata *GeminiUsageMetadata, estimated bool) *BillingUsage {
@@ -155,6 +196,10 @@ func cloneOpenAIUsage(usage *Usage) *Usage {
 	if usage.InputTokensDetails != nil {
 		inputTokensDetails := *usage.InputTokensDetails
 		clone.InputTokensDetails = &inputTokensDetails
+	}
+	if usage.OutputTokensDetails != nil {
+		outputTokensDetails := *usage.OutputTokensDetails
+		clone.OutputTokensDetails = &outputTokensDetails
 	}
 	return &clone
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 // Claude Sonnet-style tiered expression: standard vs long-context
@@ -558,6 +559,35 @@ func TestBuildTieredTokenParams_GPT_AudioOutputNoVar(t *testing.T) {
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
+}
+
+func TestBuildRealtimeTieredTokenParamsIncludesAudioAndCache(t *testing.T) {
+	usage := &dto.RealtimeUsage{
+		InputTokens:  100,
+		OutputTokens: 40,
+		InputTokenDetails: dto.InputTokenDetails{
+			CachedTokens: 20,
+			TextTokens:   50,
+			AudioTokens:  30,
+		},
+		OutputTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  30,
+			AudioTokens: 10,
+		},
+	}
+	expr := `tier("base", p + c + cr + ai + ao)`
+	params := BuildRealtimeTieredTokenParams(usage, billingexpr.UsedVars(expr))
+
+	require.Equal(t, float64(50), params.P)
+	require.Equal(t, float64(30), params.C)
+	require.Equal(t, float64(100), params.Len)
+	require.Equal(t, float64(20), params.CR)
+	require.Equal(t, float64(30), params.AI)
+	require.Equal(t, float64(10), params.AO)
+
+	params = BuildRealtimeTieredTokenParams(usage, billingexpr.UsedVars(`tier("base", p + c)`))
+	require.Equal(t, float64(100), params.P)
+	require.Equal(t, float64(40), params.C)
 }
 
 func TestBuildTieredTokenParams_ParityWithRatio(t *testing.T) {

@@ -377,6 +377,84 @@ func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMiss
 	require.Equal(t, 110, usage.TotalTokens)
 }
 
+func TestPatchGeminiZeroCompletionUsagePreservesBillingDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-test:generateContent", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+	}
+	metadata := dto.GeminiUsageMetadata{
+		PromptTokenCount:        100,
+		ToolUsePromptTokenCount: 5,
+		ThoughtsTokenCount:      10,
+		TotalTokenCount:         115,
+		CachedContentTokenCount: 20,
+		PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 70},
+			{Modality: "IMAGE", TokenCount: 10},
+			{Modality: "AUDIO", TokenCount: 20},
+		},
+		ToolUsePromptTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 5},
+		},
+	}
+	usage := buildUsageFromGeminiMetadata(metadata, 0)
+	require.Equal(t, 10, usage.CompletionTokens)
+
+	patchGeminiZeroCompletionUsage(c, info, &usage, "", 2)
+
+	require.Equal(t, 2810, usage.CompletionTokens)
+	require.Equal(t, 10, usage.CompletionTokenDetails.ReasoningTokens)
+	require.Equal(t, 2800, usage.CompletionTokenDetails.ImageTokens)
+	require.NotNil(t, usage.BillingUsage)
+	require.True(t, usage.BillingUsage.Estimated)
+	require.NotNil(t, usage.BillingUsage.GeminiUsageMetadata)
+	patched := usage.BillingUsage.GeminiUsageMetadata
+	require.Equal(t, 20, patched.CachedContentTokenCount)
+	require.Equal(t, metadata.PromptTokensDetails, patched.PromptTokensDetails)
+	require.Equal(t, metadata.ToolUsePromptTokensDetails, patched.ToolUsePromptTokensDetails)
+	require.Equal(t, 10, patched.ThoughtsTokenCount)
+	require.Equal(t, 2800, patched.CandidatesTokenCount)
+	require.Contains(t, patched.CandidatesTokensDetails, dto.GeminiPromptTokensDetails{Modality: "IMAGE", TokenCount: 2800})
+}
+
+func TestPatchGeminiZeroCompletionUsageEstimatesTextAlongsideReasoning(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-test:generateContent", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+	}
+	metadata := dto.GeminiUsageMetadata{
+		PromptTokenCount:        100,
+		ThoughtsTokenCount:      10,
+		TotalTokenCount:         110,
+		CachedContentTokenCount: 20,
+		PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 100},
+		},
+	}
+	usage := buildUsageFromGeminiMetadata(metadata, 0)
+
+	patchGeminiZeroCompletionUsage(c, info, &usage, "visible response text", 0)
+
+	estimatedCandidates := usage.CompletionTokens - 10
+	require.Positive(t, estimatedCandidates)
+	require.Equal(t, estimatedCandidates, usage.CompletionTokenDetails.TextTokens)
+	require.Equal(t, 10, usage.CompletionTokenDetails.ReasoningTokens)
+	require.NotNil(t, usage.BillingUsage)
+	require.Equal(t, estimatedCandidates, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
+	require.Equal(t, 10, usage.BillingUsage.GeminiUsageMetadata.ThoughtsTokenCount)
+	require.Equal(t, 20, usage.BillingUsage.GeminiUsageMetadata.CachedContentTokenCount)
+	require.Contains(t, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokensDetails, dto.GeminiPromptTokensDetails{
+		Modality:   "TEXT",
+		TokenCount: estimatedCandidates,
+	})
+}
+
 func sseDataForEvent(t *testing.T, body string, eventType string) string {
 	t.Helper()
 	for _, event := range strings.Split(body, "\n\n") {

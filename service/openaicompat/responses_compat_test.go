@@ -294,7 +294,7 @@ func TestResponsesResponseToChatCompletionsResponsePreservesUsageDetails(t *test
 				AudioTokens:          4,
 				ImageTokens:          5,
 			},
-			CompletionTokenDetails: dto.OutputTokenDetails{
+			OutputTokensDetails: &dto.OutputTokenDetails{
 				ReasoningTokens: 6,
 				TextTokens:      7,
 				AudioTokens:     8,

@@ -120,6 +120,57 @@ func TestDoResponseForImageGeneration(t *testing.T) {
 	}
 }
 
+func TestHandleTTSResponseUsesUpstreamCharacterUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info.SetEstimatePromptTokens(7)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       ioNopCloser(`{"data":{"audio":"00"},"extra_info":{"usage_characters":42},"base_resp":{"status_code":0}}`),
+	}
+
+	usageAny, maxAPIError := handleTTSResponse(c, resp, info)
+
+	if maxAPIError != nil {
+		t.Fatalf("handleTTSResponse returned error: %v", maxAPIError)
+	}
+	usage, ok := usageAny.(*dto.Usage)
+	if !ok {
+		t.Fatalf("usage type = %T, want *dto.Usage", usageAny)
+	}
+	if usage.PromptTokens != 42 || usage.TotalTokens != 42 {
+		t.Fatalf("usage = %#v, want upstream character count as prompt and total", usage)
+	}
+	if usage.PromptTokensDetails.TextTokens != 42 {
+		t.Fatalf("text tokens = %d, want 42", usage.PromptTokensDetails.TextTokens)
+	}
+}
+
+func TestHandleTTSResponseFallsBackWhenCharacterUsageMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info.SetEstimatePromptTokens(7)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       ioNopCloser(`{"data":{"audio":"00"},"extra_info":{"usage_characters":0},"base_resp":{"status_code":0}}`),
+	}
+
+	usageAny, maxAPIError := handleTTSResponse(c, resp, info)
+
+	if maxAPIError != nil {
+		t.Fatalf("handleTTSResponse returned error: %v", maxAPIError)
+	}
+	usage := usageAny.(*dto.Usage)
+	if usage.PromptTokens != 7 || usage.TotalTokens != 7 || usage.PromptTokensDetails.TextTokens != 7 {
+		t.Fatalf("usage = %#v, want local estimate fallback", usage)
+	}
+}
+
 type nopReadCloser struct {
 	*strings.Reader
 }

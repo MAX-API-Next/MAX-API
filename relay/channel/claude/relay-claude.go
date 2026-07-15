@@ -744,6 +744,7 @@ func patchClaudeMessageDeltaUsageData(data string, usage *dto.ClaudeUsage) strin
 	}
 
 	data = setMessageDeltaUsageInt(data, "usage.input_tokens", usage.InputTokens)
+	data = setMessageDeltaUsageInt(data, "usage.output_tokens", usage.OutputTokens)
 	data = setMessageDeltaUsageInt(data, "usage.cache_read_input_tokens", usage.CacheReadInputTokens)
 	data = setMessageDeltaUsageInt(data, "usage.cache_creation_input_tokens", usage.CacheCreationInputTokens)
 
