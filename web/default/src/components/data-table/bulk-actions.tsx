@@ -64,7 +64,10 @@ export function DataTableBulkActions<TData>({
   // Announce selection changes to screen readers
   useEffect(() => {
     if (selectedCount > 0) {
-      const message = `${selectedCount} ${selectedEntityName} selected. Bulk actions toolbar is available.`
+      const message = t(
+        '{{count}} {{entity}} selected. Bulk actions toolbar is available.',
+        { count: selectedCount, entity: selectedEntityName }
+      )
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnnouncement(message)
 
@@ -72,7 +75,7 @@ export function DataTableBulkActions<TData>({
       const timer = setTimeout(() => setAnnouncement(''), 3000)
       return () => clearTimeout(timer)
     }
-  }, [selectedCount, selectedEntityName])
+  }, [selectedCount, selectedEntityName, t])
 
   const handleClearSelection = () => {
     table.resetRowSelection()
@@ -159,13 +162,16 @@ export function DataTableBulkActions<TData>({
       <div
         ref={toolbarRef}
         role='toolbar'
-        aria-label={`Bulk actions for ${selectedCount} selected ${selectedEntityName}`}
+        aria-label={t('Bulk actions for {{count}} selected {{entity}}', {
+          count: selectedCount,
+          entity: selectedEntityName,
+        })}
         aria-describedby='bulk-actions-description'
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
-          'fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl',
-          'transition-all delay-100 duration-300 ease-out hover:scale-105',
+          'fixed bottom-3 left-1/2 z-50 max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-xl sm:bottom-6',
+          'transition-all delay-100 duration-300 ease-out motion-safe:hover:scale-105',
           'focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none'
         )}
       >
@@ -174,7 +180,7 @@ export function DataTableBulkActions<TData>({
             'p-2 shadow-xl',
             'rounded-xl border',
             'bg-background/95 supports-[backdrop-filter]:bg-background/60 backdrop-blur-lg',
-            'flex items-center gap-x-2'
+            'flex max-w-full items-center gap-x-2 overflow-x-auto'
           )}
         >
           <Tooltip>
@@ -211,7 +217,7 @@ export function DataTableBulkActions<TData>({
             <Badge
               variant='default'
               className='min-w-8 rounded-lg'
-              aria-label={`${selectedCount} selected`}
+              aria-label={t('{{count}} selected', { count: selectedCount })}
             >
               {selectedCount}
             </Badge>{' '}

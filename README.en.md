@@ -732,7 +732,7 @@ Reference frontend embed code (React / Tailwind CSS; keep either item as needed)
 
 By meeting either attribution requirement above and keeping the link clearly visible, you automatically receive a temporary commercial license for this project, with no separate application or approval required. This is not a perpetual license and remains valid only while the display requirement continues to be met. Its validity period and any later changes are governed by the latest notice published in this README or by the official community.
 
-This project is developed from [One API](https://github.com/songquanpeng/one-api) and [New API](https://github.com/QuantumNous/new-api). Commercial use must also comply with the One API MIT License and the New API AGPLv3 License, subject to each upstream project's current `LICENSE` file. The temporary commercial license provided by this project does not replace or waive any upstream open-source license obligations.
+This project is developed from [One API](https://github.com/songquanpeng/one-api) and [New API](https://github.com/QuantumNous/new-api). At this stage, MAX API builds on those foundations by strengthening its AI API gateway and governance capabilities, expanding features, and fixing bugs. Commercial use must also comply with the One API MIT License and the New API AGPLv3 License, subject to each upstream project's current `LICENSE` file. The temporary commercial license provided by this project does not replace or waive any upstream open-source license obligations.
 
 If the display requirement is no longer met, or the temporary license expires, is amended, or is terminated by notice, you must comply with AGPLv3 or obtain separate written authorization. For a long-term commercial license, contact: maxapi@max-api.ai.
 
@@ -743,6 +743,8 @@ Issues, documentation improvements, provider adaptation experience, deployment p
 ## 📜 License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
+
+In addition to the default AGPLv3 license, self-use derivative projects that meet the “Derivative Use and Community Acknowledgement” conditions above automatically receive the non-perpetual temporary commercial license described there. This temporary license covers only additions and modifications that the MAX API project maintainers have the right to license; it does not include or replace licensing from upstream projects such as One API and New API.
 
 If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source availability obligations. For commercial cooperation, institutional cooperation, or other licensing questions, contact: maxapi@max-api.ai.
 

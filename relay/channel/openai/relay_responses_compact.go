@@ -35,15 +35,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, info *relaycommon.RelayInfo, 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	usage := dto.Usage{}
-	if compactResp.Usage != nil {
-		usage.PromptTokens = compactResp.Usage.InputTokens
-		usage.CompletionTokens = compactResp.Usage.OutputTokens
-		usage.TotalTokens = compactResp.Usage.TotalTokens
-		if compactResp.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
-			usage.PromptTokensDetails.CacheWriteTokens = compactResp.Usage.InputTokensDetails.CacheWriteTokens
-		}
-	}
+	applyResponsesUsage(&usage, compactResp.Usage)
 
 	return &usage, nil
 }

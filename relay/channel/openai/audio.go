@@ -18,6 +18,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func normalizeOpenAIAudioUsage(usage *dto.Usage) {
+	if usage == nil {
+		return
+	}
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = usage.InputTokens
+	}
+	if usage.CompletionTokens == 0 {
+		usage.CompletionTokens = usage.OutputTokens
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	dto.CopyInputTokenDetails(&usage.PromptTokensDetails, usage.InputTokensDetails, false)
+	dto.CopyOutputTokenDetails(&usage.CompletionTokenDetails, usage.OutputTokensDetails, false)
+}
+
 func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) *dto.Usage {
 	// the status code has been judged before, if there is a body reading failure,
 	// it should be regarded as a non-recoverable error, so it should not return err for external retry.
@@ -44,10 +61,9 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 				if err := common.Unmarshal([]byte(data), &simpleResponse); err != nil {
 					logger.LogError(c, err.Error())
 					sr.Error(err)
-				} else if simpleResponse.Usage.TotalTokens != 0 {
-					usage.PromptTokens = simpleResponse.Usage.InputTokens
-					usage.CompletionTokens = simpleResponse.OutputTokens
-					usage.TotalTokens = simpleResponse.TotalTokens
+				} else if dto.HasOpenAIUsageTokens(&simpleResponse.Usage) {
+					*usage = simpleResponse.Usage
+					normalizeOpenAIAudioUsage(usage)
 				}
 			}
 			if err := helper.StringData(c, data); err != nil {
@@ -127,17 +143,10 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	var responseData struct {
 		Usage *dto.Usage `json:"usage"`
 	}
-	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil {
-		if responseData.Usage.TotalTokens > 0 {
-			usage := responseData.Usage
-			if usage.PromptTokens == 0 {
-				usage.PromptTokens = usage.InputTokens
-			}
-			if usage.CompletionTokens == 0 {
-				usage.CompletionTokens = usage.OutputTokens
-			}
-			return nil, usage
-		}
+	if err := common.Unmarshal(responseBody, &responseData); err == nil && dto.HasOpenAIUsageTokens(responseData.Usage) {
+		usage := responseData.Usage
+		normalizeOpenAIAudioUsage(usage)
+		return nil, usage
 	}
 
 	usage := &dto.Usage{}

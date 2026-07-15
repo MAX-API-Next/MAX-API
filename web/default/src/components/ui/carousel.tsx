@@ -24,6 +24,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import useEmblaCarousel, {
   type UseEmblaCarouselType,
 } from 'embla-carousel-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -195,6 +196,7 @@ function CarouselPrevious({
   size = 'icon-sm',
   ...props
 }: React.ComponentProps<typeof Button>) {
+  const { t } = useTranslation()
   const { orientation, scrollPrev, canScrollPrev } = useCarousel()
 
   return (
@@ -214,7 +216,7 @@ function CarouselPrevious({
       {...props}
     >
       <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
-      <span className='sr-only'>Previous slide</span>
+      <span className='sr-only'>{t('Previous slide')}</span>
     </Button>
   )
 }
@@ -225,6 +227,7 @@ function CarouselNext({
   size = 'icon-sm',
   ...props
 }: React.ComponentProps<typeof Button>) {
+  const { t } = useTranslation()
   const { orientation, scrollNext, canScrollNext } = useCarousel()
 
   return (
@@ -244,7 +247,7 @@ function CarouselNext({
       {...props}
     >
       <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
-      <span className='sr-only'>Next slide</span>
+      <span className='sr-only'>{t('Next slide')}</span>
     </Button>
   )
 }

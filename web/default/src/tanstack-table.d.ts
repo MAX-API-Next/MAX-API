@@ -29,5 +29,9 @@ declare module '@tanstack/react-table' {
     sortable?: boolean
     // Custom CSS classes to apply to the column cells
     className?: string
+    // Mobile list placement hints
+    mobileTitle?: boolean
+    mobileBadge?: boolean
+    mobileHidden?: boolean
   }
 }

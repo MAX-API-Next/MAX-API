@@ -26,6 +26,7 @@ import { Search } from '@/components/search'
 import { defaultTopNavLinks } from '../config/top-nav.config'
 import { type TopNavLink } from '../types'
 import { Header } from './header'
+import { HeaderToolsMenu } from './header-tools-menu'
 import { SystemBrand } from './system-brand'
 import { TopNav } from './top-nav'
 
@@ -120,8 +121,8 @@ export function AppHeader({
 
         {rightContent ?? (
           <div className='ms-auto flex items-center gap-1 sm:gap-2'>
-            {showTopNav && (
-              <div className='me-1 hidden lg:block'>
+            {showTopNav && links.length > 0 && (
+              <div className='me-1'>
                 <TopNav links={links} />
               </div>
             )}
@@ -139,8 +140,13 @@ export function AppHeader({
                 loading={notifications.loading}
               />
             )}
-            <LanguageSwitcher />
-            {showConfigDrawer && <ConfigDrawer />}
+            <div className='hidden items-center md:flex'>
+              <LanguageSwitcher />
+              {showConfigDrawer && <ConfigDrawer />}
+            </div>
+            <div className='md:hidden'>
+              <HeaderToolsMenu showConfigDrawer={showConfigDrawer} />
+            </div>
             {showProfileDropdown && <ProfileDropdown />}
           </div>
         )}

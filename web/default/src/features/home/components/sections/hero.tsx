@@ -228,7 +228,7 @@ export function Hero(props: HeroProps) {
         </div>
 
         <div
-          className='landing-animate-fade-up relative opacity-0'
+          className='landing-animate-fade-up relative min-w-0 opacity-0'
           style={{ animationDelay: '260ms' }}
         >
           <NeuralSphere logo={DEFAULT_LOGO} name='MAX API' />

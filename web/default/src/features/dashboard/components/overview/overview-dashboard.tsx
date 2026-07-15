@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
+  AlertCircle,
   ArrowRight,
   BookOpen,
   Check,
@@ -32,6 +33,7 @@ import {
   KeyRound,
   ListChecks,
   RadioTower,
+  RefreshCw,
   ShieldCheck,
   TerminalSquare,
   Timer,
@@ -42,6 +44,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { getUserModels } from '@/lib/api'
+import { formatNumber, formatQuota } from '@/lib/format'
 import { MOTION_TRANSITION } from '@/lib/motion'
 import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
@@ -60,6 +63,7 @@ import {
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
 import { FAQPanel } from './faq-panel'
+import { getDashboardQueryData } from './overview-query-utils'
 import { PerformanceHealthPanel } from './performance-health-panel'
 import { SummaryCards } from './summary-cards'
 import { UptimePanel } from './uptime-panel'
@@ -92,6 +96,7 @@ interface StartStep {
   to: DashboardActionPath
   icon: LucideIcon
   completed: boolean
+  unavailable?: boolean
 }
 
 interface QuickAction {
@@ -109,12 +114,94 @@ interface RequestExample {
   keyId?: number
   displayKey: string
   ready: boolean
+  unavailable: boolean
 }
 
 interface HeroSignal {
   label: string
   value: string
   icon: LucideIcon
+}
+
+type LoadableState = 'error' | 'loading' | 'ready'
+
+interface OperationsStatusItem {
+  label: string
+  value: string
+  icon: LucideIcon
+  state?: LoadableState
+}
+
+function getLoadableState(isError: boolean, isLoading: boolean): LoadableState {
+  if (isError) return 'error'
+  if (isLoading) return 'loading'
+  return 'ready'
+}
+
+function getLoadableValue<T>(
+  state: LoadableState,
+  values: Record<LoadableState, T>
+): T {
+  if (state === 'error') return values.error
+  if (state === 'loading') return values.loading
+  return values.ready
+}
+
+function OperationsStatusSummary(props: {
+  items: OperationsStatusItem[]
+  hasError: boolean
+  isRetrying: boolean
+  onRetry: () => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <section className='overflow-hidden rounded-lg border'>
+      <div className='bg-card flex min-h-10 items-center justify-between gap-3 border-b px-4 py-2.5 sm:px-5'>
+        <div className='flex min-w-0 items-center gap-2'>
+          <ShieldCheck className='text-success size-4' aria-hidden='true' />
+          <h2 className='truncate text-sm font-semibold'>
+            {t('AI Models and Agents governance console')}
+          </h2>
+        </div>
+        {props.hasError ? (
+          <Button
+            variant='ghost'
+            size='sm'
+            disabled={props.isRetrying}
+            onClick={props.onRetry}
+          >
+            <RefreshCw
+              data-icon='inline-start'
+              className={cn(props.isRetrying && 'animate-spin')}
+            />
+            {t('Retry')}
+          </Button>
+        ) : null}
+      </div>
+      <div className='bg-border grid gap-px sm:grid-cols-2 xl:grid-cols-4'>
+        {props.items.map((item) => {
+          const Icon = item.icon
+          return (
+            <div key={item.label} className='bg-card min-w-0 px-4 py-3 sm:px-5'>
+              <div className='text-muted-foreground flex items-center gap-2 text-xs'>
+                <Icon className='size-3.5' aria-hidden='true' />
+                <span className='truncate'>{item.label}</span>
+              </div>
+              <div
+                className={cn(
+                  'mt-1.5 truncate text-lg font-semibold tabular-nums',
+                  item.state === 'error' && 'text-destructive'
+                )}
+              >
+                {item.value}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
 }
 
 function getSavedSetupGuideExpanded(): boolean | null {
@@ -197,7 +284,7 @@ function SetupGuideBackdrop(props: { compact?: boolean }) {
       >
         <pre
           className={cn(
-            'absolute right-3 [mask-image:linear-gradient(90deg,transparent_0%,black_30%,black_82%,transparent_100%)] text-right tracking-[0.38em] whitespace-pre',
+            'absolute right-3 [mask-image:linear-gradient(90deg,transparent_0%,black_30%,black_82%,transparent_100%)] text-right whitespace-pre',
             props.compact
               ? '-top-6 text-[9px] leading-4'
               : 'top-1 text-[11px] leading-5'
@@ -219,8 +306,17 @@ function StartStepItem(props: {
   index: number
   isLast: boolean
 }) {
+  const { t } = useTranslation()
   const Icon = props.step.icon
-  const StatusIcon = props.step.completed ? Check : Circle
+  let StatusIcon = Circle
+  let statusLabel = t('Incomplete')
+  if (props.step.unavailable) {
+    StatusIcon = AlertCircle
+    statusLabel = t('Error')
+  } else if (props.step.completed) {
+    StatusIcon = Check
+    statusLabel = t('Completed')
+  }
 
   return (
     <li className='relative flex gap-3 pb-2.5 last:pb-0'>
@@ -233,13 +329,19 @@ function StartStepItem(props: {
       <span
         className={cn(
           'bg-background relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs',
-          props.step.completed && 'border-success/30 bg-success/10'
+          props.step.completed && 'border-success/30 bg-success/10',
+          props.step.unavailable && 'border-destructive/30 bg-destructive/10'
         )}
       >
         <StatusIcon
-          className={props.step.completed ? 'text-success size-4' : 'size-4'}
+          className={cn(
+            'size-4',
+            props.step.completed && 'text-success',
+            props.step.unavailable && 'text-destructive'
+          )}
           aria-hidden='true'
         />
+        <span className='sr-only'>{statusLabel}</span>
       </span>
 
       <Link
@@ -274,6 +376,8 @@ function StartStepItem(props: {
 function RequestPreview(props: {
   example: RequestExample
   signals: HeroSignal[]
+  isRetrying: boolean
+  onRetry: () => void
 }) {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
@@ -313,6 +417,46 @@ function RequestPreview(props: {
     }
   }
 
+  let requestStatus = t('Create an API key to unlock the real request')
+  let requestAction: ReactNode = (
+    <Button size='sm' variant='outline' render={<Link to='/keys' />}>
+      {t('Create API Key')}
+    </Button>
+  )
+  if (props.example.unavailable) {
+    requestStatus = t('Request failed')
+    requestAction = (
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-7 px-2 text-xs'
+        disabled={props.isRetrying}
+        onClick={props.onRetry}
+      >
+        <RefreshCw
+          data-icon='inline-start'
+          className={cn(props.isRetrying && 'animate-spin')}
+        />
+        {t('Retry')}
+      </Button>
+    )
+  } else if (props.example.ready) {
+    requestStatus = props.example.keyName
+    requestAction = (
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-7 gap-1.5 px-2 text-xs'
+        disabled={isCopying}
+        onClick={handleCopyRequest}
+        aria-label={t('Copy ready-to-run curl')}
+      >
+        <Copy data-icon='inline-start' />
+        {isCopying ? t('Loading') : t('Copy')}
+      </Button>
+    )
+  }
+
   return (
     <motion.div
       initial={shouldReduceMotion ? false : { opacity: 0, y: 10, scale: 0.98 }}
@@ -339,29 +483,11 @@ function RequestPreview(props: {
               {t('First API request')}
             </div>
             <div className='text-muted-foreground truncate text-xs'>
-              {props.example.ready
-                ? props.example.keyName
-                : t('Create an API key to unlock the real request')}
+              {requestStatus}
             </div>
           </div>
         </div>
-        {props.example.ready ? (
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-7 gap-1.5 px-2 text-xs'
-            disabled={isCopying}
-            onClick={handleCopyRequest}
-            aria-label={t('Copy ready-to-run curl')}
-          >
-            <Copy data-icon='inline-start' />
-            {isCopying ? t('Loading') : t('Copy')}
-          </Button>
-        ) : (
-          <Button size='sm' variant='outline' render={<Link to='/keys' />}>
-            {t('Create API Key')}
-          </Button>
-        )}
+        {requestAction}
       </div>
 
       <div className='bg-foreground/[0.035] my-3 rounded-xl p-3 font-mono text-xs'>
@@ -475,7 +601,11 @@ export function OverviewDashboard() {
     queryKey: ['dashboard', 'overview', 'api-keys'],
     queryFn: async () => {
       const result = await getApiKeys({ p: 1, size: 10 })
-      return result.success ? (result.data?.items ?? []) : []
+      const data = getDashboardQueryData(result)
+      return {
+        items: data?.items ?? [],
+        total: data?.total ?? 0,
+      }
     },
     staleTime: 60 * 1000,
   })
@@ -484,15 +614,25 @@ export function OverviewDashboard() {
     queryKey: ['dashboard', 'overview', 'user-models'],
     queryFn: async () => {
       const result = await getUserModels()
-      return result.success ? (result.data ?? []) : []
+      return getDashboardQueryData(result) ?? []
     },
     staleTime: 5 * 60 * 1000,
   })
 
   const preferredKey = useMemo(
-    () => getPreferredKey(apiKeysQuery.data ?? []),
+    () => getPreferredKey(apiKeysQuery.data?.items ?? []),
     [apiKeysQuery.data]
   )
+  const hasOperationsError = apiKeysQuery.isError || modelsQuery.isError
+  const isOperationsRetrying =
+    (apiKeysQuery.isError && apiKeysQuery.isFetching) ||
+    (modelsQuery.isError && modelsQuery.isFetching)
+  const handleOperationsRetry = () => {
+    const retries: Promise<unknown>[] = []
+    if (apiKeysQuery.isError) retries.push(apiKeysQuery.refetch())
+    if (modelsQuery.isError) retries.push(modelsQuery.refetch())
+    void Promise.all(retries)
+  }
 
   const startSteps = useMemo<StartStep[]>(
     () => [
@@ -502,6 +642,7 @@ export function OverviewDashboard() {
         to: '/keys',
         icon: KeyRound,
         completed: Boolean(preferredKey),
+        unavailable: apiKeysQuery.isError,
       },
       {
         title: t('Add credits'),
@@ -518,7 +659,14 @@ export function OverviewDashboard() {
         completed: requestCount > 0,
       },
     ],
-    [preferredKey, remainQuota, requestCount, t, usedQuota]
+    [
+      apiKeysQuery.isError,
+      preferredKey,
+      remainQuota,
+      requestCount,
+      t,
+      usedQuota,
+    ]
   )
 
   const quickActions = useMemo<QuickAction[]>(
@@ -559,8 +707,25 @@ export function OverviewDashboard() {
     [isAdmin, quickActions]
   )
 
-  const heroSignals = useMemo<HeroSignal[]>(
-    () => [
+  const heroSignals = useMemo<HeroSignal[]>(() => {
+    let apiKeyStatus = t('Needs API key')
+    if (apiKeysQuery.isError) {
+      apiKeyStatus = t('Error')
+    } else if (preferredKey) {
+      apiKeyStatus = t('Secured')
+    }
+
+    const modelState = getLoadableState(
+      modelsQuery.isError,
+      modelsQuery.isLoading
+    )
+    const modelStatus = getLoadableValue(modelState, {
+      error: t('Error'),
+      loading: t('Loading'),
+      ready: modelsQuery.data?.[0] ?? t('No models found.'),
+    })
+
+    return [
       {
         label: t('Model route active'),
         value: apiInfoItems.length > 0 ? t('Online') : t('Current domain'),
@@ -568,23 +733,33 @@ export function OverviewDashboard() {
       },
       {
         label: t('Agent key configured'),
-        value: preferredKey ? t('Secured') : t('Needs API key'),
+        value: apiKeyStatus,
         icon: ShieldCheck,
       },
       {
         label: t('Model selected'),
-        value: modelsQuery.data?.[0] ?? t('Loading'),
+        value: modelStatus,
         icon: Timer,
       },
-    ],
-    [apiInfoItems.length, modelsQuery.data, preferredKey, t]
-  )
+    ]
+  }, [
+    apiInfoItems.length,
+    apiKeysQuery.isError,
+    modelsQuery.data,
+    modelsQuery.isError,
+    modelsQuery.isLoading,
+    preferredKey,
+    t,
+  ])
 
   const requestExample = useMemo<RequestExample>(() => {
     const endpoint = normalizeEndpoint(apiInfoItems[0]?.url)
     const model = modelsQuery.data?.[0] ?? 'gpt-4o-mini'
-    const keyName = preferredKey?.name ?? t('No API key yet')
-    const ready = Boolean(preferredKey?.id && model)
+    const keyName = apiKeysQuery.isError
+      ? t('Error')
+      : (preferredKey?.name ?? t('No API key yet'))
+    const unavailable = apiKeysQuery.isError || modelsQuery.isError
+    const ready = !unavailable && Boolean(preferredKey?.id && model)
 
     return {
       endpoint,
@@ -595,8 +770,16 @@ export function OverviewDashboard() {
         ? formatDisplayKey(`sk-${preferredKey.key}`)
         : 'sk-...',
       ready,
+      unavailable,
     }
-  }, [apiInfoItems, modelsQuery.data, preferredKey, t])
+  }, [
+    apiInfoItems,
+    apiKeysQuery.isError,
+    modelsQuery.data,
+    modelsQuery.isError,
+    preferredKey,
+    t,
+  ])
 
   const completedStepCount = startSteps.filter((step) => step.completed).length
   const setupComplete = completedStepCount === startSteps.length
@@ -604,6 +787,59 @@ export function OverviewDashboard() {
   const showLeftContentPanels =
     isAdmin || showApiInfoPanel || showAnnouncementsPanel || showFAQPanel
   const showContentPanels = showLeftContentPanels || showUptimePanel
+  const operationsStatusItems = useMemo<OperationsStatusItem[]>(() => {
+    const modelsState = getLoadableState(
+      modelsQuery.isError,
+      modelsQuery.isLoading
+    )
+    const apiKeysState = getLoadableState(
+      apiKeysQuery.isError,
+      apiKeysQuery.isLoading
+    )
+
+    return [
+      {
+        label: t('API Requests'),
+        value: formatNumber(requestCount),
+        icon: TerminalSquare,
+      },
+      {
+        label: t('Remaining quota'),
+        value: formatQuota(remainQuota),
+        icon: CreditCard,
+      },
+      {
+        label: t('Available Models'),
+        value: getLoadableValue(modelsState, {
+          error: t('Error'),
+          loading: t('Loading...'),
+          ready: formatNumber(modelsQuery.data?.length ?? 0),
+        }),
+        icon: RadioTower,
+        state: modelsState,
+      },
+      {
+        label: t('API Keys'),
+        value: getLoadableValue(apiKeysState, {
+          error: t('Error'),
+          loading: t('Loading...'),
+          ready: formatNumber(apiKeysQuery.data?.total ?? 0),
+        }),
+        icon: KeyRound,
+        state: apiKeysState,
+      },
+    ]
+  }, [
+    apiKeysQuery.data?.total,
+    apiKeysQuery.isError,
+    apiKeysQuery.isLoading,
+    modelsQuery.data?.length,
+    modelsQuery.isError,
+    modelsQuery.isLoading,
+    remainQuota,
+    requestCount,
+    t,
+  ])
 
   const handleSetupGuideToggle = () => {
     const nextExpanded = !setupGuideExpanded
@@ -613,6 +849,13 @@ export function OverviewDashboard() {
 
   return (
     <div className='flex flex-col gap-4'>
+      <OperationsStatusSummary
+        items={operationsStatusItems}
+        hasError={hasOperationsError}
+        isRetrying={isOperationsRetrying}
+        onRetry={handleOperationsRetry}
+      />
+
       {setupGuideExpanded ? (
         <CardStaggerContainer className='grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
           <CardStaggerItem className='bg-card h-full overflow-hidden rounded-2xl border shadow-xs'>
@@ -622,11 +865,11 @@ export function OverviewDashboard() {
                 <div className='flex min-w-0 flex-col gap-5'>
                   <div className='flex flex-wrap items-start justify-between gap-3'>
                     <div className='flex max-w-2xl flex-col gap-1'>
-                      <div className='text-muted-foreground flex items-center gap-2 text-xs font-medium tracking-wider uppercase'>
+                      <div className='text-muted-foreground flex items-center gap-2 text-xs font-medium uppercase'>
                         <ListChecks className='size-3.5' aria-hidden='true' />
                         {t('Get started')}
                       </div>
-                      <h3 className='font-serif text-xl font-bold tracking-[-0.01em] sm:text-2xl'>
+                      <h3 className='font-serif text-xl font-bold sm:text-2xl'>
                         {t('Start AI Models and Agents governance in minutes')}
                       </h3>
                       <p className='text-muted-foreground max-w-xl text-sm leading-relaxed'>
@@ -666,6 +909,8 @@ export function OverviewDashboard() {
                 <RequestPreview
                   example={requestExample}
                   signals={heroSignals}
+                  isRetrying={isOperationsRetrying}
+                  onRetry={handleOperationsRetry}
                 />
               </div>
             </div>
@@ -674,10 +919,10 @@ export function OverviewDashboard() {
           <CardStaggerItem className='bg-card h-full rounded-2xl border p-4 shadow-xs sm:p-5'>
             <div className='flex h-full flex-col gap-4'>
               <div className='flex flex-col gap-1'>
-                <div className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
+                <div className='text-muted-foreground text-xs font-medium uppercase'>
                   {t('Recommended actions')}
                 </div>
-                <h3 className='text-lg font-semibold tracking-tight'>
+                <h3 className='text-lg font-semibold'>
                   {t('Keep governance ready')}
                 </h3>
               </div>

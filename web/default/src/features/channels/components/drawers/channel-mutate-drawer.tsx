@@ -16,23 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import {
-  type ReactNode,
-  useEffect,
-  useState,
-  useMemo,
-  useCallback,
-  useRef,
-} from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
-  AlertCircle,
   Boxes,
-  CheckCircle2,
-  Circle,
   ClipboardPaste,
   HelpCircle,
   Loader2,
@@ -60,7 +50,6 @@ import {
   type ChannelConnectionInfo,
 } from '@/lib/channel-connection-info'
 import { getLobeIcon } from '@/lib/lobe-icon'
-import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -179,6 +168,34 @@ import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dial
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import {
+  CardHeading,
+  ChannelEditorNav,
+  SubHeading,
+  type ChannelEditorNavChildItem,
+  type ChannelEditorNavItem,
+  type ChannelEditorSectionStatus,
+} from './channel-editor-navigation'
+import {
+  ADVANCED_ERROR_FIELDS,
+  ADVANCED_SETTINGS_CHILD_SECTION_IDS,
+  ADVANCED_SETTINGS_EXPANDED_KEY,
+  ADVANCED_SETTINGS_SECTION_IDS,
+  CHANNEL_EDITOR_MAIN_SECTION_IDS,
+  CHANNEL_EDITOR_SECTION_IDS,
+  MODEL_MAPPING_PREVIEW_FALLBACK,
+  UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT,
+  createEmptyModelMappingGuardrail,
+  formatModelNames,
+  formatUnixTime,
+  getCompletionStatus,
+  getSectionStatusLabel,
+  hasAdvancedSettingsValues,
+  hasConfiguredOverrideValue,
+  parseSettingsRecord,
+  readAdvancedSettingsPreference,
+  type ModelMappingGuardrail,
+} from './channel-editor-state'
+import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
   ChannelAuthSection,
@@ -191,366 +208,6 @@ type ChannelMutateDrawerProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentRow?: Channel | null
-}
-
-type ModelMappingGuardrail = {
-  invalidJson: boolean
-  entries: Array<{ source: string; target: string }>
-  missingSourceModels: string[]
-  exposedTargetModels: string[]
-}
-
-type ChannelEditorSectionStatus = 'complete' | 'configured' | 'error' | 'idle'
-
-type ChannelEditorNavChildItem = {
-  id: string
-  title: string
-  configured?: boolean
-}
-
-type ChannelEditorNavItem = {
-  id: string
-  title: string
-  description?: string
-  statusLabel: string
-  status: ChannelEditorSectionStatus
-  icon: ReactNode
-  configured?: boolean
-  children?: ChannelEditorNavChildItem[]
-}
-
-// Helper functions
-const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
-  invalidJson: false,
-  entries: [],
-  missingSourceModels: [],
-  exposedTargetModels: [],
-})
-
-const formatModelNames = (models: string[]): string =>
-  models.map((model) => `"${model}"`).join(', ')
-
-const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
-  source: string
-  target: string
-}> = [{ source: 'client-model', target: 'upstream-model' }]
-
-const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
-const CHANNEL_EDITOR_SECTION_IDS = {
-  identity: 'channel-section-identity',
-  apiAccess: 'channel-section-api-access',
-  models: 'channel-section-models',
-  advanced: 'channel-section-advanced',
-} as const
-const CHANNEL_EDITOR_MAIN_SECTION_IDS = [
-  CHANNEL_EDITOR_SECTION_IDS.identity,
-  CHANNEL_EDITOR_SECTION_IDS.apiAccess,
-  CHANNEL_EDITOR_SECTION_IDS.models,
-  CHANNEL_EDITOR_SECTION_IDS.advanced,
-]
-const ADVANCED_SETTINGS_SECTION_IDS = {
-  routingStrategy: 'channel-section-advanced-routing-strategy',
-  internalNotes: 'channel-section-advanced-internal-notes',
-  overrideRules: 'channel-section-advanced-override-rules',
-  videoTaskProtocol: 'channel-section-advanced-video-task-protocol',
-  responseMapping: 'channel-section-advanced-response-mapping',
-  fieldPassthrough: 'channel-section-advanced-field-passthrough',
-  extraSettings: 'channel-section-advanced-extra-settings',
-  upstreamModelDetection: 'channel-section-advanced-upstream-model-detection',
-} as const
-const ADVANCED_SETTINGS_CHILD_SECTION_IDS: string[] = Object.values(
-  ADVANCED_SETTINGS_SECTION_IDS
-)
-const ADVANCED_ERROR_FIELDS = [
-  'priority',
-  'weight',
-  'test_model',
-  'auto_ban',
-  'status_code_mapping',
-  'tag',
-  'remark',
-  'param_override',
-  'header_override',
-  'force_format',
-  'thinking_to_content',
-  'proxy',
-  'pass_through_body_enabled',
-  'system_prompt',
-  'system_prompt_override',
-  'allow_service_tier',
-  'disable_store',
-  'allow_safety_identifier',
-  'allow_include_obfuscation',
-  'allow_inference_geo',
-  'allow_speed',
-  'claude_beta_query',
-  'upstream_model_update_check_enabled',
-  'upstream_model_update_auto_sync_enabled',
-  'upstream_model_update_ignored_models',
-  'video_task_path_override_enabled',
-  'video_task_protocol_enabled',
-  'video_task_submit_path',
-  'video_task_query_path',
-  'video_task_task_id_path',
-  'video_task_status_path',
-  'video_task_progress_path',
-  'video_task_result_url_paths',
-  'video_task_error_message_path',
-  'video_task_status_submitted',
-  'video_task_status_queued',
-  'video_task_status_running',
-  'video_task_status_succeeded',
-  'video_task_status_failed',
-] satisfies (keyof ChannelFormValues)[]
-const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
-
-function readAdvancedSettingsPreference(): boolean {
-  if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(ADVANCED_SETTINGS_EXPANDED_KEY) === 'true'
-}
-
-function hasConfiguredOverrideValue(value: unknown): boolean {
-  if (typeof value !== 'string') return false
-
-  const trimmed = value.trim()
-  if (!trimmed || trimmed === 'null') return false
-
-  try {
-    const parsed = JSON.parse(trimmed)
-    if (parsed === null) return false
-    if (Array.isArray(parsed)) return parsed.length > 0
-    if (typeof parsed === 'object') return Object.keys(parsed).length > 0
-  } catch {
-    return true
-  }
-
-  return true
-}
-
-function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
-  return Boolean(
-    values.model_mapping?.trim() ||
-    values.advanced_custom?.trim() ||
-    hasConfiguredOverrideValue(values.param_override) ||
-    hasConfiguredOverrideValue(values.header_override) ||
-    hasConfiguredOverrideValue(values.status_code_mapping) ||
-    values.tag?.trim() ||
-    values.remark?.trim() ||
-    values.priority ||
-    values.weight ||
-    values.proxy?.trim() ||
-    values.system_prompt?.trim() ||
-    values.force_format ||
-    values.thinking_to_content ||
-    values.pass_through_body_enabled ||
-    values.system_prompt_override ||
-    values.claude_beta_query ||
-    values.video_task_path_override_enabled ||
-    values.video_task_protocol_enabled ||
-    values.upstream_model_update_check_enabled ||
-    values.upstream_model_update_auto_sync_enabled ||
-    values.upstream_model_update_ignored_models?.trim()
-  )
-}
-
-function parseSettingsRecord(
-  settings: string | undefined
-): Record<string, unknown> {
-  if (!settings?.trim()) return {}
-  try {
-    const parsed = JSON.parse(settings)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    return {}
-  }
-  return {}
-}
-
-function formatUnixTime(timestamp: unknown): string {
-  const seconds = Number(timestamp)
-  if (!Number.isFinite(seconds) || seconds <= 0) return '-'
-  return new Date(seconds * 1000).toLocaleString()
-}
-
-function CardHeading({ title, icon }: { title: string; icon?: ReactNode }) {
-  return (
-    <div className='flex items-center gap-3'>
-      {icon && (
-        <span className='bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md'>
-          {icon}
-        </span>
-      )}
-      <h3 className='text-sm font-semibold tracking-tight'>{title}</h3>
-    </div>
-  )
-}
-
-function SubHeading({ title, icon }: { title: string; icon?: ReactNode }) {
-  return (
-    <div className='flex items-center gap-2'>
-      {icon && <span className='text-muted-foreground'>{icon}</span>}
-      <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
-        {title}
-      </h4>
-    </div>
-  )
-}
-
-function getSectionStatusIcon(status: ChannelEditorSectionStatus): ReactNode {
-  if (status === 'error') {
-    return <AlertCircle className='h-3.5 w-3.5' aria-hidden='true' />
-  }
-  if (status === 'complete' || status === 'configured') {
-    return <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' />
-  }
-  return <Circle className='h-3.5 w-3.5' aria-hidden='true' />
-}
-
-function getCompletionStatus(
-  hasErrors: boolean,
-  isComplete: boolean
-): ChannelEditorSectionStatus {
-  if (hasErrors) return 'error'
-  if (isComplete) return 'complete'
-  return 'idle'
-}
-
-function getSectionStatusLabel(
-  status: ChannelEditorSectionStatus,
-  t: (key: string) => string
-): string {
-  if (status === 'error') return t('Error')
-  if (status === 'complete' || status === 'configured') return t('Ready')
-  return t('Incomplete')
-}
-
-function ChannelEditorNav(props: {
-  providerLogo: ReactNode
-  providerLabel: string
-  statusLabel: string
-  progressLabel: string
-  navigationLabel: string
-  items: ChannelEditorNavItem[]
-  activeItemId?: string
-  expandedItemId?: string
-  onNavigate: (targetId: string) => void
-}) {
-  return (
-    <aside className='hidden self-start lg:sticky lg:top-4 lg:z-20 lg:block'>
-      <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
-        <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
-          <div className='flex min-w-0 items-center gap-2'>
-            <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
-              {props.providerLogo}
-            </span>
-            <div className='min-w-0'>
-              <p className='truncate text-sm font-medium'>
-                {props.providerLabel}
-              </p>
-              <p className='text-muted-foreground truncate text-xs'>
-                {props.statusLabel} · {props.progressLabel}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <nav
-          className='border-border/60 bg-background rounded-lg border p-1'
-          aria-label={props.navigationLabel}
-        >
-          {props.items.map((item) => {
-            const isError = item.status === 'error'
-            const isDone =
-              item.status === 'complete' || item.status === 'configured'
-            const isConfigured = Boolean(item.configured)
-            const isActive = props.activeItemId === item.id
-            const isExpanded = props.expandedItemId === item.id
-            return (
-              <div key={item.id}>
-                <button
-                  type='button'
-                  className={cn(
-                    'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
-                    isActive && 'bg-muted/70',
-                    isConfigured && !isError && 'text-primary',
-                    isError && 'text-destructive hover:bg-destructive/10'
-                  )}
-                  onClick={() => props.onNavigate(item.id)}
-                  aria-current={isActive ? 'true' : undefined}
-                >
-                  <span
-                    className={cn(
-                      'bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md',
-                      isConfigured && !isError && 'bg-primary/10 text-primary',
-                      isError && 'bg-destructive/10 text-destructive',
-                      isDone && !isError && 'text-primary'
-                    )}
-                  >
-                    {item.icon}
-                  </span>
-                  <span className='min-w-0 flex-1'>
-                    <span className='block truncate text-sm font-medium'>
-                      {item.title}
-                    </span>
-                    {item.description && (
-                      <span className='text-muted-foreground block truncate text-xs'>
-                        {item.description}
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      'text-muted-foreground mt-1 shrink-0',
-                      isError && 'text-destructive',
-                      isDone && !isError && 'text-primary',
-                      isConfigured && !isError && 'pt-1.5'
-                    )}
-                    aria-label={item.statusLabel}
-                  >
-                    {isConfigured && !isError && !isDone ? (
-                      <span
-                        className='bg-success block size-2 rounded-full'
-                        aria-hidden='true'
-                      />
-                    ) : (
-                      getSectionStatusIcon(item.status)
-                    )}
-                  </span>
-                </button>
-                {item.children && isExpanded && (
-                  <div className='border-border/60 ml-5 flex flex-col gap-0.5 border-l py-1 pl-3'>
-                    {item.children.map((child) => (
-                      <button
-                        key={child.id}
-                        type='button'
-                        className={cn(
-                          'text-muted-foreground hover:bg-muted/50 hover:text-foreground flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors',
-                          child.configured && 'text-primary'
-                        )}
-                        onClick={() => props.onNavigate(child.id)}
-                      >
-                        <span className='min-w-0 flex-1 truncate'>
-                          {child.title}
-                        </span>
-                        {child.configured && (
-                          <span
-                            className='bg-success size-1.5 shrink-0 rounded-full'
-                            aria-hidden='true'
-                          />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </nav>
-      </div>
-    </aside>
-  )
 }
 
 export function ChannelMutateDrawer({
@@ -3263,7 +2920,7 @@ export function ChannelMutateDrawer({
                                             align='start'
                                             className='max-w-xs space-y-2 text-left'
                                           >
-                                            <p className='text-xs font-semibold tracking-wide uppercase'>
+                                            <p className='text-xs font-semibold uppercase'>
                                               {t('Request flow')}
                                             </p>
                                             <div className='space-y-1 font-mono text-xs'>

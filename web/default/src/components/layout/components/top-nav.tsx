@@ -19,11 +19,13 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useMemo } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Menu } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -38,6 +40,7 @@ type TopNavProps = React.HTMLAttributes<HTMLElement> & {
  * 在大屏幕显示水平导航，在小屏幕显示下拉菜单
  */
 export function TopNav({ className, links, ...props }: TopNavProps) {
+  const { t } = useTranslation()
   // 规范化链接，确保所有可选属性都有默认值
   const normalizedLinks = useMemo(
     () =>
@@ -56,38 +59,48 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
       <div className='lg:hidden'>
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
-            render={<Button size='icon' variant='outline' className='size-7' />}
+            render={
+              <Button
+                size='icon-sm'
+                variant='outline'
+                aria-label={t('Toggle navigation menu')}
+              />
+            }
           >
             <Menu />
+            <span className='sr-only'>{t('Toggle navigation menu')}</span>
           </DropdownMenuTrigger>
           <DropdownMenuContent side='bottom' align='start'>
-            {normalizedLinks.map(
-              ({ title, href, isActive, disabled, external }) => (
-                <DropdownMenuItem
-                  key={`${title}-${href}`}
-                  render={
-                    external ? (
-                      <a
-                        href={href}
-                        target='_blank'
-                        rel='noopener noreferrer'
-                        className={!isActive ? 'text-muted-foreground' : ''}
-                      >
-                        {title}
-                      </a>
-                    ) : (
-                      <Link
-                        to={href}
-                        className={!isActive ? 'text-muted-foreground' : ''}
-                        disabled={disabled}
-                      >
-                        {title}
-                      </Link>
-                    )
-                  }
-                ></DropdownMenuItem>
-              )
-            )}
+            <DropdownMenuGroup>
+              {normalizedLinks.map(
+                ({ title, href, isActive, disabled, external }) => (
+                  <DropdownMenuItem
+                    key={`${title}-${href}`}
+                    disabled={disabled}
+                    render={
+                      external ? (
+                        <a
+                          href={href}
+                          target='_blank'
+                          rel='noopener noreferrer'
+                          className={!isActive ? 'text-muted-foreground' : ''}
+                        >
+                          {title}
+                        </a>
+                      ) : (
+                        <Link
+                          to={href}
+                          className={!isActive ? 'text-muted-foreground' : ''}
+                          disabled={disabled}
+                        >
+                          {title}
+                        </Link>
+                      )
+                    }
+                  />
+                )
+              )}
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

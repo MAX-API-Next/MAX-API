@@ -137,6 +137,7 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 	}
 	dto.CopyInputTokenDetails(&usage.PromptTokensDetails, src.InputTokensDetails, true)
 	usage.CompletionTokenDetails = src.CompletionTokenDetails
+	dto.CopyOutputTokenDetails(&usage.CompletionTokenDetails, src.OutputTokensDetails, false)
 	usage.BillingUsage = dto.CloneBillingUsage(src.BillingUsage)
 	if usage.BillingUsage == nil {
 		usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(src)

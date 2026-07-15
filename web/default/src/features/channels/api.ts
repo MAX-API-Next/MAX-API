@@ -214,11 +214,12 @@ export async function updateChannelBalance(
  * Fetch available models from upstream provider
  */
 export async function fetchUpstreamModels(
-  id: number
+  id: number,
+  signal?: AbortSignal
 ): Promise<FetchModelsResponse> {
   const res = await api.get(
     `/api/channel/fetch_models/${id}`,
-    channelActionConfig()
+    channelActionConfig({ signal })
   )
   return res.data
 }
@@ -500,15 +501,18 @@ export async function getTagModels(
 /**
  * Fetch models from a custom endpoint (for testing before creating channel)
  */
-export async function fetchModels(data: {
-  base_url: string
-  type: number
-  key: string
-}): Promise<FetchModelsResponse> {
+export async function fetchModels(
+  data: {
+    base_url: string
+    type: number
+    key: string
+  },
+  signal?: AbortSignal
+): Promise<FetchModelsResponse> {
   const res = await api.post(
     '/api/channel/fetch_models',
     data,
-    channelActionConfig()
+    channelActionConfig({ signal })
   )
   return res.data
 }

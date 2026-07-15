@@ -23,7 +23,6 @@ import {
   type Row,
   type Table as TanstackTable,
 } from '@tanstack/react-table'
-import { useMediaQuery } from '@/hooks'
 import { cn } from '@/lib/utils'
 import {
   Table,
@@ -105,7 +104,8 @@ export type DataTablePageProps<TData> = {
 
   /**
    * Bulk action bar — typically a wrapped {@link DataTableBulkActions} component.
-   * Rendered only on desktop (mobile selection is uncommon).
+   * Rendered whenever the consumer provides it. Mobile lists expose the same
+   * selection cells as the desktop table.
    */
   bulkActions?: React.ReactNode
 
@@ -216,7 +216,7 @@ export type DataTablePageProps<TData> = {
  * `toolbar` / `mobile` / `renderRow` slots instead of the `*Props` variants.
  */
 export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
-  const isMobile = useMediaQuery('(max-width: 640px)')
+  const [containerRef, isMobile] = useNarrowTableContainer()
   const showMobile = isMobile && !props.hideMobile
 
   const toolbarNode = renderToolbar(props)
@@ -225,16 +225,17 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
 
   return (
     <>
-      <div className={cn('space-y-2.5 sm:space-y-3', props.className)}>
+      <div
+        ref={containerRef}
+        className={cn('space-y-2.5 sm:space-y-3', props.className)}
+      >
         {toolbarNode}
         {mobileNode}
         {desktopNode}
         {props.afterTable}
       </div>
 
-      {/* Bulk actions are typically a fixed-position toolbar; let the consumer
-          handle its own visibility, we just gate it to non-mobile. */}
-      {!showMobile && props.bulkActions}
+      {props.bulkActions}
 
       {props.showPagination !== false &&
         (props.paginationInFooter !== false ? (
@@ -248,6 +249,31 @@ export function DataTablePage<TData>(props: DataTablePageProps<TData>) {
         ))}
     </>
   )
+}
+
+function useNarrowTableContainer() {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [isNarrow, setIsNarrow] = React.useState(false)
+
+  React.useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const update = () =>
+      setIsNarrow(container.getBoundingClientRect().width <= 640)
+    update()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+
+    const observer = new ResizeObserver(update)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [])
+
+  return [containerRef, isNarrow] as const
 }
 
 function renderToolbar<TData>(
@@ -316,6 +342,7 @@ function renderDesktop<TData>(
                 <TableHead
                   key={header.id}
                   colSpan={header.colSpan}
+                  className={header.column.columnDef.meta?.className}
                   style={
                     props.applyHeaderSize
                       ? { width: header.getSize() }
@@ -381,7 +408,10 @@ function DefaultRow<TData>({
       className={className}
     >
       {row.getVisibleCells().map((cell) => (
-        <TableCell key={cell.id}>
+        <TableCell
+          key={cell.id}
+          className={cell.column.columnDef.meta?.className}
+        >
           {flexRender(cell.column.columnDef.cell, cell.getContext())}
         </TableCell>
       ))}

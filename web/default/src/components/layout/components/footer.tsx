@@ -260,13 +260,13 @@ export function Footer(props: FooterProps) {
                 alt={displayName}
                 className='size-7 rounded-lg object-contain'
               />
-              <span className='font-serif text-base font-bold tracking-[-0.01em]'>
+              <span className='font-serif text-base font-bold'>
                 {displayName}
               </span>
             </Link>
             <div className='mt-3 flex items-center gap-2'>
               <span className='h-px w-6 bg-emerald-500/70' />
-              <span className='text-muted-foreground/60 text-[10px] font-semibold tracking-[0.24em] uppercase'>
+              <span className='text-muted-foreground/60 text-[10px] font-semibold uppercase'>
                 {t('AI Models · Agents governance')}
               </span>
             </div>
@@ -280,7 +280,7 @@ export function Footer(props: FooterProps) {
             <div className='grid grid-cols-3 gap-8 md:gap-16'>
               {displayColumns.map((column, index) => (
                 <div key={index}>
-                  <p className='text-muted-foreground/50 mb-3 text-xs font-medium tracking-wider uppercase'>
+                  <p className='text-muted-foreground/50 mb-3 text-xs font-medium uppercase'>
                     {t(column.title)}
                   </p>
                   <ul className='space-y-2.5'>

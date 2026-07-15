@@ -30,12 +30,13 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-export function LanguageSwitcher() {
-  const { i18n, t } = useTranslation()
+export function LanguageMenuGroup() {
+  const { i18n } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
   const currentLanguage = normalizeInterfaceLanguage(i18n.language)
 
@@ -54,29 +55,36 @@ export function LanguageSwitcher() {
   )
 
   return (
+    <DropdownMenuGroup>
+      {INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
+        <DropdownMenuItem
+          key={lang.code}
+          onClick={() => handleChangeLanguage(lang.code)}
+        >
+          {lang.label}
+          <Check
+            className={cn('ms-auto', currentLanguage !== lang.code && 'hidden')}
+            aria-hidden='true'
+          />
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuGroup>
+  )
+}
+
+export function LanguageSwitcher() {
+  const { t } = useTranslation()
+
+  return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
-        render={<Button variant='ghost' size='icon' className='h-9 w-9' />}
+        render={<Button variant='ghost' size='icon' className='size-9' />}
       >
-        <Languages className='size-[1.2rem]' />
+        <Languages aria-hidden='true' />
         <span className='sr-only'>{t('Change language')}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
-        {INTERFACE_LANGUAGE_OPTIONS.map((lang) => (
-          <DropdownMenuItem
-            key={lang.code}
-            onClick={() => handleChangeLanguage(lang.code)}
-          >
-            {lang.label}
-            <Check
-              size={14}
-              className={cn(
-                'ms-auto',
-                currentLanguage !== lang.code && 'hidden'
-              )}
-            />
-          </DropdownMenuItem>
-        ))}
+        <LanguageMenuGroup />
       </DropdownMenuContent>
     </DropdownMenu>
   )

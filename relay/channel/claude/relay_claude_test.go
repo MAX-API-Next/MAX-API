@@ -2,11 +2,15 @@ package claude
 
 import (
 	"encoding/base64"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -149,6 +153,40 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 	if !claudeInfo.Done {
 		t.Error("expected Done = true")
 	}
+}
+
+func TestHandleStreamFinalResponsePreservesOutputTokensInBillingUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-sonnet-test",
+		},
+	}
+	claudeInfo := &ClaudeResponseInfo{
+		ResponseText: strings.Builder{},
+		Usage:        &dto.Usage{},
+	}
+
+	require.True(t, FormatClaudeResponseInfo(&dto.ClaudeResponse{
+		Type: "message_start",
+		Message: &dto.ClaudeMediaMessage{
+			Model: "claude-sonnet-test",
+			Usage: &dto.ClaudeUsage{InputTokens: 100},
+		},
+	}, nil, claudeInfo))
+	require.True(t, FormatClaudeResponseInfo(&dto.ClaudeResponse{
+		Type:  "message_delta",
+		Usage: &dto.ClaudeUsage{OutputTokens: 53},
+	}, nil, claudeInfo))
+
+	HandleStreamFinalResponse(ctx, info, claudeInfo)
+
+	require.Equal(t, 53, claudeInfo.Usage.CompletionTokens)
+	require.NotNil(t, claudeInfo.Usage.BillingUsage)
+	require.NotNil(t, claudeInfo.Usage.BillingUsage.ClaudeUsage)
+	require.Equal(t, 53, claudeInfo.Usage.BillingUsage.ClaudeUsage.OutputTokens)
 }
 
 func TestFormatClaudeResponseInfo_NilClaudeInfo(t *testing.T) {

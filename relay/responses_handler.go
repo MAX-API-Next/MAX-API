@@ -157,10 +157,19 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *
 		return nil
 	}
 
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
+	if shouldUseResponsesAudioBilling(info.OriginModelName, usageDto) {
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
 	return nil
+}
+
+func shouldUseResponsesAudioBilling(modelName string, usage *dto.Usage) bool {
+	if usage != nil && (usage.PromptTokensDetails.AudioTokens > 0 || usage.CompletionTokenDetails.AudioTokens > 0) {
+		return true
+	}
+	return strings.HasPrefix(modelName, "gpt-4o-audio") ||
+		strings.HasPrefix(modelName, "gpt-4o-mini-audio") ||
+		strings.HasPrefix(modelName, "gpt-audio")
 }
