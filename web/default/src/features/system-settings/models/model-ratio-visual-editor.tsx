@@ -128,6 +128,8 @@ type ModelRow = {
   isDraftNew?: boolean
 }
 
+type BillingMode = 'per-token' | 'per-request' | 'tiered_expr'
+
 const STORAGE_KEY = 'model-ratio-column-visibility'
 
 const hasValue = (value?: string) => value !== undefined && value !== ''
@@ -229,7 +231,7 @@ const isBasePricingUnset = (row?: ModelRow) =>
     !hasValue(row.price) &&
     !hasValue(row.ratio))
 
-const getModelRowSignature = (row?: ModelRow) => {
+const getModelRowSignature = (row?: ModelRow): string => {
   if (!row) return ''
   return JSON.stringify({
     price: row.price || '',
@@ -555,6 +557,13 @@ export const ModelRatioVisualEditor = memo(
     const handleEdit = useCallback(
       (model: ModelRow) => {
         const editableModel = model.draft ?? model.saved ?? model
+        let derivedBillingMode: BillingMode = 'per-token'
+        if (editableModel.billingMode === 'tiered_expr') {
+          derivedBillingMode = 'tiered_expr'
+        } else if (editableModel.price && editableModel.price !== '') {
+          derivedBillingMode = 'per-request'
+        }
+
         setEditData({
           name: editableModel.name,
           price: editableModel.price,
@@ -565,12 +574,7 @@ export const ModelRatioVisualEditor = memo(
           imageRatio: editableModel.imageRatio,
           audioRatio: editableModel.audioRatio,
           audioCompletionRatio: editableModel.audioCompletionRatio,
-          billingMode:
-            editableModel.billingMode === 'tiered_expr'
-              ? 'tiered_expr'
-              : editableModel.price && editableModel.price !== ''
-                ? 'per-request'
-                : 'per-token',
+          billingMode: derivedBillingMode,
           billingExpr: editableModel.billingExpr,
           requestRuleExpr: editableModel.requestRuleExpr,
         })

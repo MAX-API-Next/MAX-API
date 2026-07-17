@@ -64,7 +64,7 @@
     "{{routeContext}} groups must not be empty": "Группы {{routeContext}} не должны быть пустыми",
     "{{routeContext}} groups must not exceed 64 entries": "Группы {{routeContext}} не должны содержать более 64 элементов",
     "{{success}} succeeded, {{failed}} failed": "{{success}} успешно, {{failed}} с ошибкой",
-    "{{target}} test failed": "Тест {{target}} не выполнен",
+    "{{target}} test failed": "Тест {{target}} не пройден",
     "{{target}} test succeeded": "Тест {{target}} успешно выполнен",
     "{{title}} usage: {{percent}}%": "Использование {{title}}: {{percent}}%",
     "{{value}}ms": "{{value}} мс",
