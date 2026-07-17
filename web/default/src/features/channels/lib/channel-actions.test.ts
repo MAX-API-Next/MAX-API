@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   createChannelTestCachePatch,
+  selectLatestCompletedChannelTestResult,
   updateChannelTestCache,
 } from './channel-actions'
 
@@ -73,5 +74,21 @@ describe('channel test cache patch helpers', () => {
     assert.equal(nextData.data.items[0].test_time, 11)
     assert.equal(nextData.data.items[1].response_time, 99)
     assert.equal(nextData.data.items[1].test_time, 123)
+  })
+
+  test('selects the last completed batch result instead of the last input result', () => {
+    const slowFirstInput = {
+      responseTime: 1200,
+      completedAt: 2_000,
+    }
+    const fastSecondInput = {
+      responseTime: 200,
+      completedAt: 1_000,
+    }
+
+    assert.equal(
+      selectLatestCompletedChannelTestResult([slowFirstInput, fastSecondInput]),
+      slowFirstInput
+    )
   })
 })

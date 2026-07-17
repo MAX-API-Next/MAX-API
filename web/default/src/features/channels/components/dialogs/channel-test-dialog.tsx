@@ -95,6 +95,7 @@ import {
   createChannelTestCachePatch,
   formatResponseTime,
   handleTestChannel,
+  selectLatestCompletedChannelTestResult,
   refreshChannelListsWithTestPatch,
 } from '../../lib'
 import { useChannels } from '../channels-provider'
@@ -465,12 +466,19 @@ export function ChannelTestDialog({
           const settled = await Promise.allSettled(
             batch.map((modelName) => testSingleModel(modelName, true, false))
           )
-          for (const result of settled) {
-            const resultValue =
-              result.status === 'fulfilled' ? result.value : undefined
-            if (typeof resultValue?.responseTime === 'number') {
-              latestResultWithResponse = resultValue
-            }
+          const batchResults = settled.map((result) =>
+            result.status === 'fulfilled' ? result.value : undefined
+          )
+          const batchLatestResult =
+            selectLatestCompletedChannelTestResult(batchResults)
+          if (batchLatestResult) {
+            latestResultWithResponse =
+              selectLatestCompletedChannelTestResult([
+                latestResultWithResponse,
+                batchLatestResult,
+              ]) ?? latestResultWithResponse
+          }
+          for (const resultValue of batchResults) {
             recordBatchResult(resultValue)
           }
 

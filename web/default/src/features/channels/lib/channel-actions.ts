@@ -62,6 +62,11 @@ export type ChannelTestCachePatch = {
   testTime: number
 }
 
+export type ChannelTestCompletionResult = {
+  responseTime?: number
+  completedAt?: number
+}
+
 type ChannelListCache = GetChannelsResponse | SearchChannelsResponse
 
 function getChannelTestResponseTime(
@@ -130,6 +135,35 @@ export function createChannelTestCachePatch(
     responseTime,
     testTime: Math.floor(completedAt / 1000),
   }
+}
+
+export function selectLatestCompletedChannelTestResult<
+  T extends ChannelTestCompletionResult,
+>(results: readonly (T | undefined)[]): T | undefined {
+  let latestResult: T | undefined
+  let latestCompletedAt = Number.NEGATIVE_INFINITY
+
+  for (const result of results) {
+    if (
+      typeof result?.responseTime !== 'number' ||
+      !Number.isFinite(result.responseTime)
+    ) {
+      continue
+    }
+
+    const completedAt =
+      typeof result.completedAt === 'number' &&
+      Number.isFinite(result.completedAt)
+        ? result.completedAt
+        : Number.NEGATIVE_INFINITY
+
+    if (!latestResult || completedAt >= latestCompletedAt) {
+      latestResult = result
+      latestCompletedAt = completedAt
+    }
+  }
+
+  return latestResult
 }
 
 export function updateChannelTestCache(
