@@ -53,12 +53,13 @@ import {
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { MODEL_FETCHABLE_TYPES } from '../constants'
 import {
-  channelsQueryKeys,
+  createChannelTestCachePatch,
   handleDeleteChannel,
   handleTestChannel,
   handleToggleChannelStatus,
   isChannelEnabled,
   isMultiKeyChannel,
+  refreshChannelListsWithTestPatch,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
@@ -94,9 +95,17 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     e.stopPropagation()
     setIsTesting(true)
     try {
-      await handleTestChannel(channel.id, undefined, () => {
-        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
-      })
+      await handleTestChannel(
+        channel.id,
+        { channelName: channel.name },
+        (_success, responseTime) => {
+          refreshChannelListsWithTestPatch(
+            queryClient,
+            channel.id,
+            createChannelTestCachePatch(responseTime)
+          )
+        }
+      )
     } finally {
       setIsTesting(false)
     }
