@@ -3,11 +3,16 @@ package controller
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/oauth"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 type deletedUserOAuthProvider struct{}
@@ -65,18 +70,63 @@ func TestFindOrCreateOAuthUserMapsDeletedUserDomainError(t *testing.T) {
 
 type failingLookupOAuthProvider struct {
 	deletedUserOAuthProvider
+	err error
 }
 
-func (*failingLookupOAuthProvider) IsUserIDTaken(string) (bool, error) {
+func (p *failingLookupOAuthProvider) IsUserIDTaken(string) (bool, error) {
+	if p.err != nil {
+		return false, p.err
+	}
 	return false, errors.New("oauth uniqueness lookup unavailable")
 }
 
 func TestFindOrCreateOAuthUserPropagatesUniquenessLookupError(t *testing.T) {
-	_, err := findOrCreateOAuthUser(nil, &failingLookupOAuthProvider{}, &oauth.OAuthUser{
+	lookupErr := errors.New("oauth uniqueness lookup unavailable")
+	provider := &failingLookupOAuthProvider{err: lookupErr}
+	_, err := findOrCreateOAuthUser(nil, provider, &oauth.OAuthUser{
 		ProviderUserID: "unverified-user-id",
 	}, nil)
 
-	if err == nil || err.Error() != "oauth uniqueness lookup unavailable" {
-		t.Fatalf("expected uniqueness lookup error, got %v", err)
+	if err == nil || !errors.Is(err, lookupErr) || !strings.Contains(err.Error(), "identity lookup failed") {
+		t.Fatalf("expected identity lookup domain error, got %v", err)
+	}
+}
+
+type publicLookupFailingOAuthProvider struct {
+	deletedUserOAuthProvider
+}
+
+func (*publicLookupFailingOAuthProvider) ExchangeToken(context.Context, string, *gin.Context) (*oauth.OAuthToken, error) {
+	return &oauth.OAuthToken{AccessToken: "test-token"}, nil
+}
+
+func (*publicLookupFailingOAuthProvider) GetUserInfo(context.Context, *oauth.OAuthToken) (*oauth.OAuthUser, error) {
+	return &oauth.OAuthUser{ProviderUserID: "unverified-user-id", Extra: map[string]any{}}, nil
+}
+
+func (*publicLookupFailingOAuthProvider) IsUserIDTaken(string) (bool, error) {
+	return false, errors.New("internal database host db.internal:5432")
+}
+
+func TestOAuthBindMasksUniquenessLookupDatabaseError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/oauth/test?code=test-code", nil)
+
+	handleOAuthBind(c, &publicLookupFailingOAuthProvider{})
+
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	if response.Success {
+		t.Fatal("expected OAuth bind lookup to fail")
+	}
+	if response.Message == "" {
+		t.Fatal("expected a public error message")
+	}
+	if strings.Contains(response.Message, "db.internal") {
+		t.Fatalf("database details leaked in OAuth response: %q", response.Message)
 	}
 }

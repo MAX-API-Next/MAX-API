@@ -87,7 +87,7 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 	}
 
 	require.Error(t, session.Settle(15))
-	assert.Equal(t, []int{5, -5, -5, -5}, funding.deltas)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.True(t, session.fundingSettled)
 	assert.True(t, session.compensationFailed)
 	assert.False(t, session.settled)
@@ -96,8 +96,37 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 		Id: 52, UserId: 51, Key: "retry-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
 	require.NoError(t, session.Settle(15))
-	assert.Equal(t, []int{5, -5, -5, -5}, funding.deltas)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.True(t, session.settled)
+}
+
+type ambiguousCompensationFundingSource struct {
+	deltas []int
+}
+
+func (f *ambiguousCompensationFundingSource) Source() string       { return BillingSourceWallet }
+func (f *ambiguousCompensationFundingSource) PreConsume(int) error { return nil }
+func (f *ambiguousCompensationFundingSource) Refund() error        { return nil }
+func (f *ambiguousCompensationFundingSource) Settle(delta int) (int64, error) {
+	f.deltas = append(f.deltas, delta)
+	if delta < 0 {
+		return int64(delta), errors.New("compensation outcome is unknown")
+	}
+	return int64(delta), nil
+}
+
+func TestBillingSessionDoesNotReapplyFundingAfterAmbiguousCompensationError(t *testing.T) {
+	truncate(t)
+	funding := &ambiguousCompensationFundingSource{}
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{UserId: 53, TokenId: 54, TokenKey: "ambiguous-compensation-token"},
+		funding:   funding, preConsumedQuota: 10,
+	}
+
+	require.Error(t, session.Settle(15))
+	assert.Equal(t, []int{5, -5}, funding.deltas)
+	assert.EqualValues(t, 5, session.appliedFundingDelta)
+	assert.True(t, session.compensationFailed)
 }
 
 type partialCompensationFundingSource struct {
@@ -125,7 +154,8 @@ func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testin
 
 	require.Error(t, session.Settle(15))
 	require.Equal(t, []int{5, -5, 2, -5, 2, -5}, funding.deltas)
-	require.True(t, session.compensationFailed)
+	require.False(t, session.compensationFailed)
+	require.True(t, session.fundingReconcilePending)
 	require.EqualValues(t, 3, session.appliedFundingDelta)
 
 	require.NoError(t, model.DB.Create(&model.Token{

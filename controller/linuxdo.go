@@ -48,8 +48,7 @@ func LinuxDoBind(c *gin.Context) {
 	}
 
 	taken, err := model.IsLinuxDOIdAlreadyTaken(user.LinuxDOId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "Linux DO", err) {
 		return
 	}
 	if taken {
@@ -213,8 +212,7 @@ func LinuxdoOAuth(c *gin.Context) {
 
 	// Check if user exists
 	taken, err := model.IsLinuxDOIdAlreadyTaken(user.LinuxDOId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "Linux DO", err) {
 		return
 	}
 	if taken {

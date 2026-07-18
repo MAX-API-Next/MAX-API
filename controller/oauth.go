@@ -47,6 +47,35 @@ func handleOAuthUserLookupError(c *gin.Context, err error) bool {
 	return true
 }
 
+type oauthIdentityLookupError struct {
+	provider string
+	err      error
+}
+
+func (e *oauthIdentityLookupError) Error() string {
+	return "OAuth identity lookup failed"
+}
+
+func (e *oauthIdentityLookupError) Unwrap() error {
+	return e.err
+}
+
+func handleOAuthIdentityLookupError(c *gin.Context, provider string, err error) bool {
+	if err == nil {
+		return false
+	}
+	var lookupErr *oauthIdentityLookupError
+	if errors.As(err, &lookupErr) {
+		if lookupErr.provider != "" {
+			provider = lookupErr.provider
+		}
+		err = lookupErr.err
+	}
+	common.SysError(fmt.Sprintf("OAuth identity lookup failed (provider=%s): %v", provider, err))
+	common.ApiErrorI18n(c, i18n.MsgOAuthGetUserErr)
+	return true
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
@@ -134,6 +163,11 @@ func HandleOAuth(c *gin.Context) {
 	// 7. Find or create user
 	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
 	if err != nil {
+		var lookupErr *oauthIdentityLookupError
+		if errors.As(err, &lookupErr) {
+			handleOAuthIdentityLookupError(c, provider.GetName(), lookupErr)
+			return
+		}
 		switch err.(type) {
 		case *OAuthUserDeletedError:
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
@@ -181,8 +215,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 
 	// Check if this OAuth account is already bound (check both new ID and legacy ID)
 	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, provider.GetName(), err) {
 		return
 	}
 	if taken {
@@ -192,8 +225,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 	// Also check legacy ID to prevent duplicate bindings during migration period
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
 		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
-		if lookupErr != nil {
-			common.ApiError(c, lookupErr)
+		if handleOAuthIdentityLookupError(c, provider.GetName(), lookupErr) {
 			return
 		}
 		if legacyTaken {
@@ -251,7 +283,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	// Check if user already exists with new ID
 	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
 	if err != nil {
-		return nil, err
+		return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: err}
 	}
 	if taken {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
@@ -272,7 +304,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
 		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
 		if lookupErr != nil {
-			return nil, lookupErr
+			return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: lookupErr}
 		}
 		if legacyTaken {
 			err := provider.FillUserByProviderID(user, legacyID)

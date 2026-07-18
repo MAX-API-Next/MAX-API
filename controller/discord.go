@@ -131,8 +131,7 @@ func DiscordOAuth(c *gin.Context) {
 		DiscordId: discordUser.UID,
 	}
 	taken, err := model.IsDiscordIdAlreadyTaken(user.DiscordId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "Discord", err) {
 		return
 	}
 	if taken {
@@ -197,8 +196,7 @@ func DiscordBind(c *gin.Context) {
 		DiscordId: discordUser.UID,
 	}
 	taken, err := model.IsDiscordIdAlreadyTaken(user.DiscordId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "Discord", err) {
 		return
 	}
 	if taken {

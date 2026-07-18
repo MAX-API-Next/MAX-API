@@ -74,8 +74,7 @@ func WeChatAuth(c *gin.Context) {
 		WeChatId: wechatId,
 	}
 	taken, err := model.IsWeChatIdAlreadyTaken(wechatId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "WeChat", err) {
 		return
 	}
 	if taken {
@@ -146,8 +145,7 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	taken, err := model.IsWeChatIdAlreadyTaken(wechatId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "WeChat", err) {
 		return
 	}
 	if taken {

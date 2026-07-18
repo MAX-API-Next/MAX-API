@@ -133,8 +133,7 @@ func OidcAuth(c *gin.Context) {
 		OidcId: oidcUser.OpenID,
 	}
 	taken, err := model.IsOidcIdAlreadyTaken(user.OidcId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "OIDC", err) {
 		return
 	}
 	if taken {
@@ -200,8 +199,7 @@ func OidcBind(c *gin.Context) {
 		OidcId: oidcUser.OpenID,
 	}
 	taken, err := model.IsOidcIdAlreadyTaken(user.OidcId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "OIDC", err) {
 		return
 	}
 	if taken {

@@ -272,6 +272,74 @@ type failCacheMutationHook struct {
 	failAt int32
 }
 
+type recoverableCacheMutationHook struct {
+	seen      atomic.Int32
+	available atomic.Bool
+}
+
+type overlappingCacheMutationHook struct {
+	client    *redis.Client
+	cacheKey  string
+	started   chan struct{}
+	release   chan struct{}
+	afterErr  chan error
+	seen      atomic.Int32
+	afterOnce sync.Once
+}
+
+func (h *overlappingCacheMutationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	name := strings.ToLower(cmd.Name())
+	if name != "eval" && name != "evalsha" {
+		return ctx, nil
+	}
+	if h.seen.Add(1) == 1 {
+		close(h.started)
+		<-h.release
+	}
+	return ctx, nil
+}
+
+func (h *overlappingCacheMutationHook) AfterProcess(_ context.Context, cmd redis.Cmder) error {
+	name := strings.ToLower(cmd.Name())
+	if name != "eval" && name != "evalsha" || h.seen.Load() != 1 {
+		return nil
+	}
+	h.afterOnce.Do(func() {
+		h.afterErr <- h.client.HSet(context.Background(), h.cacheKey, "Status", common.TokenStatusEnabled).Err()
+	})
+	return nil
+}
+
+func (*overlappingCacheMutationHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*overlappingCacheMutationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func (h *recoverableCacheMutationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	name := strings.ToLower(cmd.Name())
+	if name != "eval" && name != "evalsha" {
+		return ctx, nil
+	}
+	h.seen.Add(1)
+	if !h.available.Load() {
+		return ctx, errors.New("injected cache outage")
+	}
+	return ctx, nil
+}
+
+func (*recoverableCacheMutationHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
+
+func (*recoverableCacheMutationHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*recoverableCacheMutationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
 func (h *failCacheMutationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
 	name := strings.ToLower(cmd.Name())
 	if name != "eval" && name != "evalsha" {
@@ -403,6 +471,68 @@ func TestTokenDeleteRetriesCacheDeletion(t *testing.T) {
 
 	require.NoError(t, token.Delete())
 	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+}
+
+func TestTokenDeleteRetriesUntilCacheRecovers(t *testing.T) {
+	setupUserUpdateTestState(t)
+	token := Token{Id: 91, UserId: 92, Key: "token-delete-cache-recovery", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	oldRDB := common.RDB
+	oldRedisEnabled := common.RedisEnabled
+	common.RDB = client
+	common.RedisEnabled = true
+	require.NoError(t, common.RedisInvalidateVersionedHash("cache-recovery-warmup", "cache-recovery-warmup-version"))
+	hook := &recoverableCacheMutationHook{}
+	client.AddHook(hook)
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+		common.RedisEnabled = oldRedisEnabled
+	})
+	cacheTokenForRetryTest(t, client, token)
+
+	require.NoError(t, token.Delete())
+	require.Eventually(t, func() bool { return hook.seen.Load() >= 4 }, 2*time.Second, 10*time.Millisecond)
+	exists, err := client.Exists(context.Background(), getTokenCacheKey(token.Key)).Result()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, exists)
+
+	hook.available.Store(true)
+	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+}
+
+func TestTokenCacheRetryPreservesNewerRequestDuringInflightSuccess(t *testing.T) {
+	setupUserUpdateTestState(t)
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	oldRDB := common.RDB
+	oldRedisEnabled := common.RedisEnabled
+	common.RDB = client
+	common.RedisEnabled = true
+	require.NoError(t, common.RedisDeleteVersionedHash("cache-overlap-warmup", "cache-overlap-warmup-version"))
+
+	tokenKey := "overlapping-token-cache-retry"
+	cacheKey := getTokenCacheKey(tokenKey)
+	require.NoError(t, client.HSet(context.Background(), cacheKey, "Status", common.TokenStatusEnabled).Err())
+	hook := &overlappingCacheMutationHook{
+		client: client, cacheKey: cacheKey, started: make(chan struct{}), release: make(chan struct{}), afterErr: make(chan error, 1),
+	}
+	client.AddHook(hook)
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+		common.RedisEnabled = oldRedisEnabled
+	})
+
+	enqueueTokenCacheRetry(tokenKey, true, nil)
+	waitForCacheHook(t, hook.started, "retry start")
+	enqueueTokenCacheRetry(tokenKey, true, errors.New("newer deletion request"))
+	close(hook.release)
+	require.NoError(t, <-hook.afterErr)
+	requireCacheKeyDeletedEventually(t, client, cacheKey)
 }
 
 func TestBatchTokenDeleteRetriesCacheDeletion(t *testing.T) {

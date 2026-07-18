@@ -33,8 +33,7 @@ func TelegramBind(c *gin.Context) {
 	}
 	telegramId := params["id"][0]
 	taken, err := model.IsTelegramIdAlreadyTaken(telegramId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "Telegram", err) {
 		return
 	}
 	if taken {

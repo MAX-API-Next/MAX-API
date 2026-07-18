@@ -113,8 +113,7 @@ func GitHubOAuth(c *gin.Context) {
 	}
 	// IsGitHubIdAlreadyTaken is unscoped
 	taken, err := model.IsGitHubIdAlreadyTaken(user.GitHubId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "GitHub", err) {
 		return
 	}
 	if taken {
@@ -184,8 +183,7 @@ func GitHubBind(c *gin.Context) {
 		GitHubId: githubUser.Login,
 	}
 	taken, err := model.IsGitHubIdAlreadyTaken(user.GitHubId)
-	if err != nil {
-		common.ApiError(c, err)
+	if handleOAuthIdentityLookupError(c, "GitHub", err) {
 		return
 	}
 	if taken {

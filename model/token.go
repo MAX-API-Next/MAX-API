@@ -543,14 +543,9 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	if common.RedisEnabled {
-		gopool.Go(func() {
-			for _, t := range tokens {
-				if cacheErr := deleteTokenCache(t.Key); cacheErr != nil {
-					common.SysLog("failed to delete token cache after batch deletion: " + cacheErr.Error())
-					enqueueTokenCacheRetry(t.Key, true, cacheErr)
-				}
-			}
-		})
+		for _, t := range tokens {
+			enqueueTokenCacheRetry(t.Key, true, nil)
+		}
 	}
 
 	return len(tokens), nil
