@@ -41,6 +41,9 @@ const (
 	quotaDataAggregateMigrationMemberKeyIdx   = "idx_quota_data_aggregate_key_migration_members_key"
 	quotaDataAggregateMigrationSurvivorIdx    = "idx_quota_data_aggregate_key_migration_survivor"
 	quotaDataAggregateMigrationBatchDefault   = 1000
+	quotaDataSnapshotRetentionSeconds         = int64(7 * 24 * 60 * 60)
+	quotaDataSnapshotCleanupBatchDefault      = 1000
+	quotaDataSnapshotCleanupIntervalSeconds   = int64(60 * 60)
 	quotaDataOperationLockTable               = "quota_data_operation_locks"
 	quotaDataOperationLockName                = "quota_data_aggregate_migration"
 	quotaDataOperationLockLeaseSecondsDefault = int64(60)
@@ -59,6 +62,8 @@ var (
 	quotaDataAggregateKeyIndexCacheDB    *gorm.DB
 	quotaDataAggregateKeyIndexCacheSet   bool
 	quotaDataAggregateKeyIndexCacheValue bool
+	quotaDataSnapshotCleanupMu           sync.Mutex
+	quotaDataSnapshotCleanupLastRun      int64
 )
 
 var errQuotaDataOperationLockLost = errors.New("quota_data operation lock lost")
@@ -987,11 +992,71 @@ func SaveQuotaDataCache(ctx context.Context) error {
 		}
 		CacheQuotaDataLock.Unlock()
 	}
+	cleanupErr := maybeCleanupQuotaDataSnapshots(ctx)
+	if cleanupErr != nil {
+		common.SysLog(fmt.Sprintf("cleanup quota_data snapshot markers error: %s", cleanupErr))
+	}
 	common.SysLog(fmt.Sprintf("保存数据看板数据完成，成功%d条，待重试%d条", size-len(failed), len(failed)))
 	if flushErr != nil {
 		return flushErr
 	}
-	return saveErr
+	if saveErr != nil {
+		return saveErr
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	return nil
+}
+
+func maybeCleanupQuotaDataSnapshots(ctx context.Context) error {
+	now := common.GetTimestamp()
+	quotaDataSnapshotCleanupMu.Lock()
+	if quotaDataSnapshotCleanupLastRun > 0 && now-quotaDataSnapshotCleanupLastRun < quotaDataSnapshotCleanupIntervalSeconds {
+		quotaDataSnapshotCleanupMu.Unlock()
+		return nil
+	}
+	quotaDataSnapshotCleanupLastRun = now
+	quotaDataSnapshotCleanupMu.Unlock()
+
+	_, err := cleanupQuotaDataSnapshotMarkers(ctx, now-quotaDataSnapshotRetentionSeconds, quotaDataSnapshotCleanupBatchDefault)
+	if err != nil {
+		quotaDataSnapshotCleanupMu.Lock()
+		if quotaDataSnapshotCleanupLastRun == now {
+			quotaDataSnapshotCleanupLastRun = 0
+		}
+		quotaDataSnapshotCleanupMu.Unlock()
+	}
+	return err
+}
+
+func cleanupQuotaDataSnapshotMarkers(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if DB == nil || !DB.Migrator().HasTable(&QuotaDataSnapshot{}) {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = quotaDataSnapshotCleanupBatchDefault
+	}
+	var ids []string
+	if err := DB.WithContext(ctx).
+		Model(&QuotaDataSnapshot{}).
+		Where("created_at < ?", cutoff).
+		Order("created_at ASC").
+		Limit(batchSize).
+		Pluck("snapshot_id", &ids).Error; err != nil {
+		return 0, fmt.Errorf("failed to load old quota_data snapshot markers: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := DB.WithContext(ctx).Where("snapshot_id IN ?", ids).Delete(&QuotaDataSnapshot{})
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to delete old quota_data snapshot markers: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 func saveQuotaData(quotaData *QuotaData) error {

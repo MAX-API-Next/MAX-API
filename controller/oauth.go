@@ -399,7 +399,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.FinalizeOAuthUserCreation(inviterId)
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
-		err := model.WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
+		err := model.WithUserOAuthIdentityWriteTx(user.Email, func(tx *gorm.DB) error {
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err

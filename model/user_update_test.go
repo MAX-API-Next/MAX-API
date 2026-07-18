@@ -929,6 +929,123 @@ func TestMigrateUserOAuthIdentityConstraintsBackfillsAndEnforcesUniqueness(t *te
 	require.NoError(t, DB.Create(&User{Id: 107, Username: "oauth-empty-d", AffCode: "oed", Status: common.UserStatusEnabled}).Error)
 }
 
+func TestMigrateUserOAuthIdentityConstraintsWaitsForOAuthIdentityLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	useSQLiteUserMigrationTestDB(t, db)
+	require.NoError(t, db.AutoMigrate(&User{}))
+	require.NoError(t, DB.Create(&User{Id: 201, Username: "oauth-lock-a", OidcId: "lock-oidc", AffCode: "ola", Status: common.UserStatusEnabled}).Error)
+
+	userOAuthIdentityLockMu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			userOAuthIdentityLockMu.Unlock()
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- migrateUserOAuthIdentityConstraints()
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		t.Fatal("migration completed while OAuth identity lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	userOAuthIdentityLockMu.Unlock()
+	locked = false
+	require.NoError(t, <-done)
+}
+
+func TestOAuthIdentityUpdateWaitsForMigrationLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	useSQLiteUserMigrationTestDB(t, db)
+	require.NoError(t, db.AutoMigrate(&User{}))
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+
+	user := User{Id: 211, Username: "oauth-update-lock", GitHubId: "before", AffCode: "oul", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	user.GitHubId = "after"
+
+	userOAuthIdentityLockMu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			userOAuthIdentityLockMu.Unlock()
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- user.UpdateFields(false, UserUpdateFieldGitHubId)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		t.Fatal("OAuth identity update completed while migration lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	userOAuthIdentityLockMu.Unlock()
+	locked = false
+	require.NoError(t, <-done)
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "after", stored.GitHubId)
+}
+
+func TestUserFieldUpdateWaitsForOAuthIdentityMigrationLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	useSQLiteUserMigrationTestDB(t, db)
+	require.NoError(t, db.AutoMigrate(&User{}))
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+
+	user := User{Id: 221, Username: "user-update-lock", DisplayName: "before", GitHubId: "existing", AffCode: "uul", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	user.DisplayName = "after"
+
+	userOAuthIdentityLockMu.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			userOAuthIdentityLockMu.Unlock()
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- user.UpdateFields(false, UserUpdateFieldDisplayName)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		t.Fatal("user field update completed while OAuth identity migration lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	userOAuthIdentityLockMu.Unlock()
+	locked = false
+	require.NoError(t, <-done)
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "after", stored.DisplayName)
+	assert.Equal(t, "existing", stored.GitHubId)
+}
+
 func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	setupUserUpdateTestState(t)
 

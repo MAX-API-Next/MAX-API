@@ -471,34 +471,76 @@ func migrateUserOAuthIdentityConstraints() error {
 	if DB == nil || !DB.Migrator().HasTable(&User{}) {
 		return nil
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		for _, identity := range userOAuthIdentityMigrations {
-			if !tx.Migrator().HasColumn(&User{}, identity.column) {
-				continue
-			}
-			quotedColumn := quoteDBIdentifier(identity.column)
-			if err := tx.Table("users").
-				Where(quotedColumn+" = ?", "").
-				Update(identity.column, nil).Error; err != nil {
-				return fmt.Errorf("failed to null empty users.%s values: %w", identity.column, err)
-			}
-			if err := clearDuplicateUserOAuthIdentityTx(tx, identity); err != nil {
-				return err
-			}
+	return withUserOAuthIdentityMutationLock(DB, migrateUserOAuthIdentityConstraintsLocked)
+}
+
+func migrateUserOAuthIdentityConstraintsLocked(db *gorm.DB) error {
+	if common.UsingMySQL {
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return cleanupUserOAuthIdentityDuplicatesTx(tx)
+		}); err != nil {
+			return err
 		}
-		return nil
-	}); err != nil {
-		return err
+		return ensureUserOAuthIdentityUniqueIndexes(db)
 	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserOAuthIdentityTableForConstraintMigrationTx(tx); err != nil {
+			return err
+		}
+		if err := cleanupUserOAuthIdentityDuplicatesTx(tx); err != nil {
+			return err
+		}
+		return ensureUserOAuthIdentityUniqueIndexes(tx)
+	})
+}
+
+func cleanupUserOAuthIdentityDuplicatesTx(tx *gorm.DB) error {
 	for _, identity := range userOAuthIdentityMigrations {
-		if !DB.Migrator().HasColumn(&User{}, identity.column) {
+		if !tx.Migrator().HasColumn(&User{}, identity.column) {
 			continue
 		}
-		if err := ensureUserOAuthIdentityUniqueIndex(identity); err != nil {
+		quotedColumn := quoteDBIdentifier(identity.column)
+		if err := tx.Table("users").
+			Where(quotedColumn+" = ?", "").
+			Update(identity.column, nil).Error; err != nil {
+			return fmt.Errorf("failed to null empty users.%s values: %w", identity.column, err)
+		}
+		if err := clearDuplicateUserOAuthIdentityTx(tx, identity); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func ensureUserOAuthIdentityUniqueIndexes(db *gorm.DB) error {
+	for _, identity := range userOAuthIdentityMigrations {
+		if !db.Migrator().HasColumn(&User{}, identity.column) {
+			continue
+		}
+		if err := ensureUserOAuthIdentityUniqueIndex(db, identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lockUserOAuthIdentityTableForConstraintMigrationTx(tx *gorm.DB) error {
+	switch {
+	case common.UsingPostgreSQL:
+		return tx.Exec("LOCK TABLE " + quoteDBIdentifier("users") + " IN SHARE ROW EXCLUSIVE MODE").Error
+	case common.UsingSQLite:
+		var id int
+		if err := tx.Table("users").Select("id").Order("id ASC").Limit(1).Scan(&id).Error; err != nil {
+			return err
+		}
+		if id == 0 {
+			return nil
+		}
+		return tx.Table("users").Where("id = ?", id).Update("id", gorm.Expr("id")).Error
+	default:
+		return nil
+	}
 }
 
 func clearDuplicateUserOAuthIdentityTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
@@ -572,19 +614,19 @@ func duplicateUserOAuthIdentityValuesTx(tx *gorm.DB, column string) ([]string, e
 	return values, nil
 }
 
-func ensureUserOAuthIdentityUniqueIndex(identity userOAuthIdentityMigration) error {
-	if DB.Migrator().HasIndex(&User{}, identity.indexName) {
+func ensureUserOAuthIdentityUniqueIndex(db *gorm.DB, identity userOAuthIdentityMigration) error {
+	if db.Migrator().HasIndex(&User{}, identity.indexName) {
 		return nil
 	}
 	if common.UsingMySQL {
-		if !DB.Migrator().HasColumn(&User{}, identity.mysqlGeneratedColumn) {
+		if !db.Migrator().HasColumn(&User{}, identity.mysqlGeneratedColumn) {
 			addColumnSQL := fmt.Sprintf(
 				"ALTER TABLE %s ADD COLUMN %s varchar(256) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
 				quoteDBIdentifier("users"),
 				quoteDBIdentifier(identity.mysqlGeneratedColumn),
 				quoteDBIdentifier(identity.column),
 			)
-			if err := DB.Exec(addColumnSQL).Error; err != nil {
+			if err := db.Exec(addColumnSQL).Error; err != nil {
 				return fmt.Errorf("failed to add users.%s generated column: %w", identity.mysqlGeneratedColumn, err)
 			}
 		}
@@ -593,7 +635,7 @@ func ensureUserOAuthIdentityUniqueIndex(identity userOAuthIdentityMigration) err
 			quoteDBIdentifier("users"),
 			quoteDBIdentifier(identity.mysqlGeneratedColumn),
 		)
-		if err := DB.Exec(createIndexSQL).Error; err != nil {
+		if err := db.Exec(createIndexSQL).Error; err != nil {
 			return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
 		}
 		return nil
@@ -607,7 +649,7 @@ func ensureUserOAuthIdentityUniqueIndex(identity userOAuthIdentityMigration) err
 		quotedColumn,
 		quotedColumn,
 	)
-	if err := DB.Exec(createIndexSQL).Error; err != nil {
+	if err := db.Exec(createIndexSQL).Error; err != nil {
 		return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
 	}
 	return nil

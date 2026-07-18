@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -17,6 +18,10 @@ import (
 )
 
 const UserNameMaxLength = 20
+
+const userOAuthIdentityLockName = "maxapi:user-oauth-identity"
+
+var userOAuthIdentityLockMu sync.Mutex
 
 type UserUpdateField string
 
@@ -252,6 +257,71 @@ func normalizedEmailLockName(email string) string {
 	return "maxapi:user-email:" + common.Sha1([]byte(NormalizeEmail(email)))
 }
 
+func withUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) error {
+	if db == nil {
+		db = DB
+	}
+	switch {
+	case common.UsingPostgreSQL:
+		return db.Connection(func(conn *gorm.DB) error {
+			if err := conn.Exec("SELECT pg_advisory_lock(hashtext(?))", userOAuthIdentityLockName).Error; err != nil {
+				return err
+			}
+			released := false
+			defer func() {
+				if !released {
+					_ = releasePostgreSQLAdvisoryLock(conn, userOAuthIdentityLockName)
+				}
+			}()
+			err := fn(conn)
+			releaseErr := releasePostgreSQLAdvisoryLock(conn, userOAuthIdentityLockName)
+			released = true
+			if err != nil {
+				return err
+			}
+			return releaseErr
+		})
+	case common.UsingMySQL:
+		return db.Connection(func(conn *gorm.DB) error {
+			acquired, err := acquireMySQLNamedLock(conn, userOAuthIdentityLockName)
+			if err != nil {
+				return err
+			}
+			if !acquired {
+				return errors.New("failed to acquire user OAuth identity lock")
+			}
+			released := false
+			defer func() {
+				if !released {
+					_ = releaseMySQLNamedLock(conn, userOAuthIdentityLockName)
+				}
+			}()
+			err = fn(conn)
+			releaseErr := releaseMySQLNamedLock(conn, userOAuthIdentityLockName)
+			released = true
+			if err != nil {
+				return err
+			}
+			return releaseErr
+		})
+	default:
+		userOAuthIdentityLockMu.Lock()
+		defer userOAuthIdentityLockMu.Unlock()
+		return fn(db)
+	}
+}
+
+func releasePostgreSQLAdvisoryLock(db *gorm.DB, lockName string) error {
+	var released bool
+	if err := db.Raw("SELECT pg_advisory_unlock(hashtext(?))", lockName).Row().Scan(&released); err != nil {
+		return err
+	}
+	if !released {
+		return errors.New("failed to release user OAuth identity lock")
+	}
+	return nil
+}
+
 func emailQuery(tx *gorm.DB, email string) *gorm.DB {
 	if tx == nil {
 		tx = DB
@@ -341,41 +411,54 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 // for the same normalized email. MySQL named locks are connection-scoped, so the
 // lock must be acquired on a pinned connection and released only after the
 // transaction has committed or rolled back.
-func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error {
+func normalizedEmailWriteTxOnConn(db *gorm.DB, email string, fn func(tx *gorm.DB) error) error {
 	email = NormalizeEmail(email)
 	if !common.UsingMySQL {
-		return DB.Transaction(func(tx *gorm.DB) error {
+		return db.Transaction(func(tx *gorm.DB) error {
 			return withNormalizedEmailLock(tx, email, fn)
 		})
 	}
 	if email == "" {
-		return DB.Transaction(fn)
+		return db.Transaction(fn)
 	}
 
 	lockName := normalizedEmailLockName(email)
+	acquired, err := acquireMySQLNamedLock(db, lockName)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		return errors.New("failed to acquire user email lock")
+	}
+
+	released := false
+	defer func() {
+		if !released {
+			_ = releaseMySQLNamedLock(db, lockName)
+		}
+	}()
+
+	err = db.Transaction(fn)
+	releaseErr := releaseMySQLNamedLock(db, lockName)
+	released = true
+	if err != nil {
+		return err
+	}
+	return releaseErr
+}
+
+func WithNormalizedEmailWriteTx(email string, fn func(tx *gorm.DB) error) error {
+	if !common.UsingMySQL {
+		return normalizedEmailWriteTxOnConn(DB, email, fn)
+	}
 	return DB.Connection(func(conn *gorm.DB) error {
-		acquired, err := acquireMySQLNamedLock(conn, lockName)
-		if err != nil {
-			return err
-		}
-		if !acquired {
-			return errors.New("failed to acquire user email lock")
-		}
+		return normalizedEmailWriteTxOnConn(conn, email, fn)
+	})
+}
 
-		released := false
-		defer func() {
-			if !released {
-				_ = releaseMySQLNamedLock(conn, lockName)
-			}
-		}()
-
-		err = conn.Transaction(fn)
-		releaseErr := releaseMySQLNamedLock(conn, lockName)
-		released = true
-		if err != nil {
-			return err
-		}
-		return releaseErr
+func WithUserOAuthIdentityWriteTx(email string, fn func(tx *gorm.DB) error) error {
+	return withUserOAuthIdentityMutationLock(DB, func(conn *gorm.DB) error {
+		return normalizedEmailWriteTxOnConn(conn, email, fn)
 	})
 }
 
@@ -799,7 +882,9 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 }
 
 func (user *User) Update(updatePassword bool) error {
-	if err := user.updateWithTx(DB, updatePassword, nil); err != nil {
+	if err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
+		return user.updateWithTx(db, updatePassword, nil)
+	}); err != nil {
 		return err
 	}
 	if err := updateUserCache(*user); err != nil {
@@ -809,7 +894,9 @@ func (user *User) Update(updatePassword bool) error {
 }
 
 func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
-	if err := user.updateWithTx(DB, updatePassword, fields); err != nil {
+	if err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
+		return user.updateWithTx(db, updatePassword, fields)
+	}); err != nil {
 		return err
 	}
 	if err := updateUserCache(*user); err != nil {
@@ -1069,11 +1156,19 @@ func (user *User) ClearBinding(bindingType string) error {
 	if bindingType == "email" {
 		updates["normalized_email"] = ""
 	}
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
-		return err
+	update := func(db *gorm.DB) error {
+		if err := db.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		return db.Where("id = ?", user.Id).First(user).Error
 	}
-
-	if err := DB.Where("id = ?", user.Id).First(user).Error; err != nil {
+	var err error
+	if bindingType == "email" {
+		err = update(DB)
+	} else {
+		err = withUserOAuthIdentityMutationLock(DB, update)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -1182,7 +1277,9 @@ func (user *User) UpdateGitHubId(newGitHubId string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
-	return DB.Model(user).Update("github_id", newGitHubId).Error
+	return withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
+		return db.Model(user).Update("github_id", newGitHubId).Error
+	})
 }
 
 func (user *User) FillUserByDiscordId() error {

@@ -288,6 +288,38 @@ func TestQuotaDataStartupAggregateMigrationRunsWhenEnabled(t *testing.T) {
 	assert.Equal(t, 7, rows[0].TokenUsed)
 }
 
+func TestCleanupQuotaDataSnapshotMarkersDeletesOnlyOldMarkersWithinBatch(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
+
+	require.NoError(t, db.Create(&[]QuotaDataSnapshot{
+		{SnapshotID: "old-a", CreatedAt: 100},
+		{SnapshotID: "old-b", CreatedAt: 200},
+		{SnapshotID: "recent", CreatedAt: 1000},
+	}).Error)
+
+	deleted, err := cleanupQuotaDataSnapshotMarkers(context.Background(), 500, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+
+	var remaining []QuotaDataSnapshot
+	require.NoError(t, db.Order("created_at ASC").Find(&remaining).Error)
+	require.Len(t, remaining, 2)
+	assert.Equal(t, "old-b", remaining[0].SnapshotID)
+	assert.Equal(t, "recent", remaining[1].SnapshotID)
+
+	deleted, err = cleanupQuotaDataSnapshotMarkers(context.Background(), 500, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	require.NoError(t, db.Order("created_at ASC").Find(&remaining).Error)
+	require.Len(t, remaining, 1)
+	assert.Equal(t, "recent", remaining[0].SnapshotID)
+}
+
 func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
