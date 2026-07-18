@@ -239,8 +239,15 @@ func main() {
 		if !runWithTimeout(saveTimeout, model.WaitPendingLogQuotaData) {
 			common.SysError(fmt.Sprintf("timed out waiting for pending quota data export after %s", saveTimeout))
 		}
-		if !runWithTimeout(saveTimeout, model.SaveQuotaDataCache) {
-			common.SysError(fmt.Sprintf("timed out waiting for quota data cache save after %s", saveTimeout))
+		saveCtx, saveCancel := context.WithTimeout(context.Background(), saveTimeout)
+		saveErr := runWithContext(saveCtx, model.SaveQuotaDataCache)
+		saveCancel()
+		if saveErr != nil {
+			if errors.Is(saveErr, context.DeadlineExceeded) || errors.Is(saveErr, context.Canceled) {
+				common.SysError(fmt.Sprintf("timed out waiting for quota data cache save after %s", saveTimeout))
+			} else {
+				common.SysError(fmt.Sprintf("failed to save quota data cache during shutdown: %v", saveErr))
+			}
 		}
 	}
 	common.SysLog("server exited")
@@ -276,6 +283,15 @@ func runWithTimeout(timeout time.Duration, fn func()) bool {
 	case <-timer.C:
 		return false
 	}
+}
+
+func runWithContext(ctx context.Context, fn func(context.Context) error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("runWithContext: recovered panic: %v", r)
+		}
+	}()
+	return fn(ctx)
 }
 
 func InjectUmamiAnalytics() {

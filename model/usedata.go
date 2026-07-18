@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -79,7 +80,7 @@ func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {
 			common.SysLog("正在更新数据看板数据...")
-			SaveQuotaDataCache()
+			_ = SaveQuotaDataCache(context.Background())
 		}
 		time.Sleep(time.Duration(common.DataExportInterval) * time.Minute)
 	}
@@ -87,7 +88,7 @@ func UpdateQuotaData() {
 
 var CacheQuotaData = make(map[string]*QuotaData)
 var CacheQuotaDataLock = sync.Mutex{}
-var cacheQuotaDataSaveLock sync.Mutex
+var cacheQuotaDataSaveLock = make(chan struct{}, 1)
 
 func logQuotaDataCache(quotaData *QuotaData) {
 	if quotaData.SnapshotID == nil {
@@ -167,6 +168,7 @@ func (quotaDataOperationLock) TableName() string {
 }
 
 type quotaDataOperationLockGuard struct {
+	ctx      context.Context
 	owner    string
 	stop     chan struct{}
 	stopped  chan struct{}
@@ -185,6 +187,13 @@ func (g *quotaDataOperationLockGuard) Owner() string {
 func (g *quotaDataOperationLockGuard) Check() error {
 	if g == nil {
 		return nil
+	}
+	if g.ctx != nil {
+		select {
+		case <-g.ctx.Done():
+			return g.ctx.Err()
+		default:
+		}
 	}
 	g.lostMu.Lock()
 	defer g.lostMu.Unlock()
@@ -275,7 +284,7 @@ func mergeQuotaDataAggregateRows() error {
 	if err := ensureQuotaDataOperationLockTable(); err != nil {
 		return err
 	}
-	return withQuotaDataOperationLock("aggregate-key migration", func(lock *quotaDataOperationLockGuard) error {
+	return withQuotaDataOperationLock(context.Background(), "aggregate-key migration", func(lock *quotaDataOperationLockGuard) error {
 		if err := resetQuotaDataAggregateMigrationTables(); err != nil {
 			return err
 		}
@@ -545,7 +554,10 @@ func updateQuotaDataAggregateSurvivorsTx(tx *gorm.DB) error {
 	return nil
 }
 
-func acquireQuotaDataOperationLock() (string, error) {
+func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	owner := uuid.NewString()
 	retryInterval := quotaDataOperationLockRetryInterval
 	if retryInterval <= 0 {
@@ -555,9 +567,13 @@ func acquireQuotaDataOperationLock() (string, error) {
 	if maxWait <= 0 {
 		maxWait = 30 * time.Minute
 	}
-	deadline := time.Now().Add(maxWait)
+	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
 
 	for {
+		if err := waitCtx.Err(); err != nil {
+			return "", err
+		}
 		now := common.GetTimestamp()
 		lock := &quotaDataOperationLock{
 			Name:      quotaDataOperationLockName,
@@ -567,15 +583,18 @@ func acquireQuotaDataOperationLock() (string, error) {
 			UpdatedAt: now,
 		}
 		notifyQuotaDataOperationLockAttempt(owner)
-		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(lock)
+		result := DB.WithContext(waitCtx).Clauses(clause.OnConflict{DoNothing: true}).Create(lock)
 		if result.Error != nil {
+			if err := waitCtx.Err(); err != nil {
+				return "", err
+			}
 			return "", fmt.Errorf("failed to acquire quota_data operation lock: %w", result.Error)
 		}
 		if result.RowsAffected == 1 {
 			return owner, nil
 		}
 
-		result = DB.Model(&quotaDataOperationLock{}).
+		result = DB.WithContext(waitCtx).Model(&quotaDataOperationLock{}).
 			Where("name = ? AND expires_at < ?", quotaDataOperationLockName, now).
 			Updates(map[string]interface{}{
 				"owner":      owner,
@@ -583,15 +602,26 @@ func acquireQuotaDataOperationLock() (string, error) {
 				"updated_at": now,
 			})
 		if result.Error != nil {
+			if err := waitCtx.Err(); err != nil {
+				return "", err
+			}
 			return "", fmt.Errorf("failed to claim expired quota_data operation lock: %w", result.Error)
 		}
 		if result.RowsAffected == 1 {
 			return owner, nil
 		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("timed out waiting for quota_data operation lock")
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-waitCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return "", waitCtx.Err()
+		case <-timer.C:
 		}
-		time.Sleep(retryInterval)
 	}
 }
 
@@ -632,9 +662,12 @@ func quotaDataOperationLockHeartbeatInterval() time.Duration {
 	return interval
 }
 
-func refreshQuotaDataOperationLock(owner string) error {
+func refreshQuotaDataOperationLock(ctx context.Context, owner string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	now := common.GetTimestamp()
-	result := DB.Model(&quotaDataOperationLock{}).
+	result := DB.WithContext(ctx).Model(&quotaDataOperationLock{}).
 		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
 		Updates(map[string]interface{}{
 			"expires_at": now + quotaDataOperationLockLeaseSecondsValue(),
@@ -645,7 +678,7 @@ func refreshQuotaDataOperationLock(owner string) error {
 	}
 	if result.RowsAffected == 0 {
 		var owned int64
-		if err := DB.Model(&quotaDataOperationLock{}).
+		if err := DB.WithContext(ctx).Model(&quotaDataOperationLock{}).
 			Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
 			Count(&owned).Error; err != nil {
 			return fmt.Errorf("failed to verify quota_data operation lock ownership: %w", err)
@@ -693,8 +726,12 @@ func releaseQuotaDataOperationLockOnce(owner string) error {
 	return nil
 }
 
-func startQuotaDataOperationLockHeartbeat(operation, owner string) *quotaDataOperationLockGuard {
+func startQuotaDataOperationLockHeartbeat(ctx context.Context, operation, owner string) *quotaDataOperationLockGuard {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	guard := &quotaDataOperationLockGuard{
+		ctx:     ctx,
 		owner:   owner,
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -710,15 +747,22 @@ func startQuotaDataOperationLockHeartbeat(operation, owner string) *quotaDataOpe
 		for {
 			select {
 			case <-ticker.C:
-				err := refreshQuotaDataOperationLock(owner)
+				err := refreshQuotaDataOperationLock(ctx, owner)
 				if err == nil {
 					lastRenewed = time.Now()
 					continue
+				}
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					guard.setLost(ctxErr)
+					return
 				}
 				if errors.Is(err, errQuotaDataOperationLockLost) || time.Since(lastRenewed) >= leaseDuration {
 					guard.setLost(fmt.Errorf("quota_data operation lock heartbeat failed for %s: %w", operation, err))
 					return
 				}
+			case <-ctx.Done():
+				guard.setLost(ctx.Err())
+				return
 			case <-guard.stop:
 				return
 			}
@@ -727,12 +771,15 @@ func startQuotaDataOperationLockHeartbeat(operation, owner string) *quotaDataOpe
 	return guard
 }
 
-func withQuotaDataOperationLock(operation string, fn func(lock *quotaDataOperationLockGuard) error) (returnErr error) {
-	lockOwner, err := acquireQuotaDataOperationLock()
+func withQuotaDataOperationLock(ctx context.Context, operation string, fn func(lock *quotaDataOperationLockGuard) error) (returnErr error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lockOwner, err := acquireQuotaDataOperationLock(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to acquire quota_data operation lock for %s: %w", operation, err)
 	}
-	lock := startQuotaDataOperationLockHeartbeat(operation, lockOwner)
+	lock := startQuotaDataOperationLockHeartbeat(ctx, operation, lockOwner)
 	defer func() {
 		lock.stopHeartbeat()
 		if err := lock.Check(); err != nil && returnErr == nil {
@@ -807,9 +854,16 @@ func LogQuotaData(params QuotaDataLogParams) {
 	logQuotaDataCache(quotaData)
 }
 
-func SaveQuotaDataCache() {
-	cacheQuotaDataSaveLock.Lock()
-	defer cacheQuotaDataSaveLock.Unlock()
+func SaveQuotaDataCache(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case cacheQuotaDataSaveLock <- struct{}{}:
+		defer func() { <-cacheQuotaDataSaveLock }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	CacheQuotaDataLock.Lock()
 	snapshot := CacheQuotaData
@@ -818,17 +872,18 @@ func SaveQuotaDataCache() {
 
 	size := len(snapshot)
 	failed := make([]*QuotaData, 0)
+	var flushErr error
 	// 如果缓存中有数据，就保存到数据库中
 	// 1. 先查询数据库中是否有数据
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
 	if len(snapshot) > 0 {
-		if err := withQuotaDataOperationLock("quota cache flush", func(lock *quotaDataOperationLockGuard) error {
+		flushErr = withQuotaDataOperationLock(ctx, "quota cache flush", func(lock *quotaDataOperationLockGuard) error {
 			for _, quotaData := range snapshot {
 				if err := lock.Check(); err != nil {
 					return err
 				}
-				if err := saveQuotaDataLocked(quotaData); err != nil {
+				if err := saveQuotaDataLocked(ctx, quotaData); err != nil {
 					common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
 					failed = append(failed, quotaData)
 				}
@@ -837,8 +892,9 @@ func SaveQuotaDataCache() {
 				}
 			}
 			return nil
-		}); err != nil {
-			common.SysLog(fmt.Sprintf("saveQuotaData lock error: %s", err))
+		})
+		if flushErr != nil {
+			common.SysLog(fmt.Sprintf("saveQuotaData lock error: %s", flushErr))
 			failed = make([]*QuotaData, 0, len(snapshot))
 			for _, quotaData := range snapshot {
 				failed = append(failed, quotaData)
@@ -854,26 +910,31 @@ func SaveQuotaDataCache() {
 		CacheQuotaDataLock.Unlock()
 	}
 	common.SysLog(fmt.Sprintf("保存数据看板数据完成，成功%d条，待重试%d条", size-len(failed), len(failed)))
+	return flushErr
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
-	return withQuotaDataOperationLock("quota write", func(lock *quotaDataOperationLockGuard) error {
+	ctx := context.Background()
+	return withQuotaDataOperationLock(ctx, "quota write", func(lock *quotaDataOperationLockGuard) error {
 		if err := lock.Check(); err != nil {
 			return err
 		}
-		if err := saveQuotaDataLocked(quotaData); err != nil {
+		if err := saveQuotaDataLocked(ctx, quotaData); err != nil {
 			return err
 		}
 		return lock.Check()
 	})
 }
 
-func saveQuotaDataLocked(quotaData *QuotaData) error {
+func saveQuotaDataLocked(ctx context.Context, quotaData *QuotaData) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if quotaData.SnapshotID == nil {
 		snapshotID := uuid.NewString()
 		quotaData.SnapshotID = &snapshotID
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		marker := &QuotaDataSnapshot{SnapshotID: *quotaData.SnapshotID, CreatedAt: common.GetTimestamp()}
 		markerResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(marker)
 		if markerResult.Error != nil {

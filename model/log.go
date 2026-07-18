@@ -203,7 +203,7 @@ func enqueueLogQuotaData(params QuotaDataLogParams) {
 	if logQuotaDataShutdownStarted {
 		logQuotaDataShutdownMu.Unlock()
 		LogQuotaData(params)
-		SaveQuotaDataCache()
+		_ = SaveQuotaDataCache(context.Background())
 		return
 	}
 	logQuotaDataAsyncWG.Add(1)
