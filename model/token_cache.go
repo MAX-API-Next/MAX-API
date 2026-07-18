@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/bytedance/gopkg/util/gopool"
 )
 
 func getTokenCacheKey(key string) string {
@@ -29,6 +30,9 @@ func cacheSetTokenIfVersion(token Token, version int64) error {
 }
 
 func invalidateTokenCache(key string) error {
+	if !common.RedisEnabled || key == "" {
+		return nil
+	}
 	return common.RedisInvalidateVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
 }
 
@@ -37,6 +41,31 @@ func deleteTokenCache(key string) error {
 		return nil
 	}
 	return common.RedisDeleteVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
+}
+
+func enqueueTokenCacheRetry(key string, deleteEntry bool, cause error) {
+	if key == "" {
+		return
+	}
+	gopool.Go(func() {
+		delay := 50 * time.Millisecond
+		operation := "invalidation"
+		cacheOperation := invalidateTokenCache
+		if deleteEntry {
+			operation = "deletion"
+			cacheOperation = deleteTokenCache
+		}
+		for attempt := 1; attempt <= 3; attempt++ {
+			time.Sleep(delay)
+			if err := cacheOperation(key); err == nil {
+				return
+			} else {
+				common.SysLog(fmt.Sprintf("token cache %s retry %d/3 failed (initial_error=%v): %v",
+					operation, attempt, cause, err))
+			}
+			delay *= 2
+		}
+	})
 }
 
 func cacheSetTokenField(key string, field string, value string) error {

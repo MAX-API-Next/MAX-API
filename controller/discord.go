@@ -130,7 +130,12 @@ func DiscordOAuth(c *gin.Context) {
 	user := model.User{
 		DiscordId: discordUser.UID,
 	}
-	if model.IsDiscordIdAlreadyTaken(user.DiscordId) {
+	taken, err := model.IsDiscordIdAlreadyTaken(user.DiscordId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		err := user.FillUserByDiscordId()
 		if handleOAuthUserLookupError(c, err) {
 			return
@@ -191,7 +196,12 @@ func DiscordBind(c *gin.Context) {
 	user := model.User{
 		DiscordId: discordUser.UID,
 	}
-	if model.IsDiscordIdAlreadyTaken(user.DiscordId) {
+	taken, err := model.IsDiscordIdAlreadyTaken(user.DiscordId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "该 Discord 账户已被绑定",

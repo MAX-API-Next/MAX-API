@@ -1,13 +1,19 @@
 package service
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
+	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +87,7 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 	}
 
 	require.Error(t, session.Settle(15))
-	assert.Equal(t, []int{5, -5}, funding.deltas)
+	assert.Equal(t, []int{5, -5, -5, -5}, funding.deltas)
 	assert.True(t, session.fundingSettled)
 	assert.True(t, session.compensationFailed)
 	assert.False(t, session.settled)
@@ -90,7 +96,7 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 		Id: 52, UserId: 51, Key: "retry-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
 	require.NoError(t, session.Settle(15))
-	assert.Equal(t, []int{5, -5}, funding.deltas)
+	assert.Equal(t, []int{5, -5, -5, -5}, funding.deltas)
 	assert.True(t, session.settled)
 }
 
@@ -118,9 +124,9 @@ func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testin
 	}
 
 	require.Error(t, session.Settle(15))
-	require.NotEmpty(t, funding.deltas)
+	require.Equal(t, []int{5, -5, 2, -5, 2, -5}, funding.deltas)
 	require.True(t, session.compensationFailed)
-	require.EqualValues(t, 5, session.appliedFundingDelta)
+	require.EqualValues(t, 3, session.appliedFundingDelta)
 
 	require.NoError(t, model.DB.Create(&model.Token{
 		Id: 57, UserId: 56, Key: "partial-compensation-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
@@ -129,6 +135,76 @@ func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testin
 	assert.True(t, session.settled)
 	assert.EqualValues(t, 5, session.appliedFundingDelta)
 	assert.Equal(t, int64(2), int64(funding.deltas[len(funding.deltas)-1]))
+}
+
+type exhaustUserAfterTokenCacheReadHook struct {
+	userID    int
+	tokenKey  string
+	exhausted bool
+	err       error
+}
+
+func (h *exhaustUserAfterTokenCacheReadHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (h *exhaustUserAfterTokenCacheReadHook) AfterProcess(_ context.Context, cmd redis.Cmder) error {
+	args := cmd.Args()
+	if h.exhausted || cmd.Name() != "hgetall" || len(args) < 2 || fmt.Sprint(args[1]) != h.tokenKey {
+		return nil
+	}
+	h.exhausted = true
+	h.err = model.DB.Model(&model.User{}).Where("id = ?", h.userID).Update("quota", 0).Error
+	return nil
+}
+
+func (*exhaustUserAfterTokenCacheReadHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*exhaustUserAfterTokenCacheReadHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func TestPreConsumeQuotaMapsConcurrentUserExhaustion(t *testing.T) {
+	truncate(t)
+	seedUser(t, 73, 10)
+	seedToken(t, 74, 73, "concurrent-user-exhaustion", 10)
+
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	oldRDB := common.RDB
+	oldRedisEnabled := common.RedisEnabled
+	common.RDB = client
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+		common.RedisEnabled = oldRedisEnabled
+	})
+	userCacheKey := "user:73"
+	tokenCacheKey := fmt.Sprintf("token:%s", common.GenerateHMAC("concurrent-user-exhaustion"))
+	require.NoError(t, client.HSet(context.Background(), userCacheKey, map[string]interface{}{
+		"Id": 73, "Quota": 10, "Role": common.RoleCommonUser, "Status": common.UserStatusEnabled,
+	}).Err())
+	require.NoError(t, client.HSet(context.Background(), tokenCacheKey, map[string]interface{}{
+		"Id": 74, "UserId": 73, "Status": common.TokenStatusEnabled, "RemainQuota": 10,
+	}).Err())
+	hook := &exhaustUserAfterTokenCacheReadHook{userID: 73, tokenKey: tokenCacheKey}
+	client.AddHook(hook)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	apiErr := PreConsumeQuota(ctx, 7, &relaycommon.RelayInfo{
+		UserId: 73, TokenId: 74, TokenKey: "concurrent-user-exhaustion",
+	})
+	require.NotNil(t, apiErr)
+	require.NoError(t, hook.err)
+	assert.True(t, hook.exhausted)
+	assert.ErrorIs(t, apiErr, model.ErrUserQuotaInsufficient)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	assert.True(t, types.IsSkipRetryError(apiErr))
+	assert.False(t, types.IsRecordErrorLog(apiErr))
 }
 
 type tokenRecoveringFundingSource struct {

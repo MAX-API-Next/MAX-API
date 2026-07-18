@@ -94,6 +94,7 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 		if s.appliedFundingDelta != int64(delta) {
 			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta)
 		}
+		s.compensationFailed = false
 	}
 	// 2) 调整令牌额度
 	var tokenErr error

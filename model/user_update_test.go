@@ -225,7 +225,38 @@ func TestIsOidcIdAlreadyTakenHandlesDuplicateLegacyRows(t *testing.T) {
 	require.NoError(t, DB.Create(&User{Id: 36, Username: "oidc-duplicate-a", OidcId: "duplicate-oidc", AffCode: "oidc-a"}).Error)
 	require.NoError(t, DB.Create(&User{Id: 37, Username: "oidc-duplicate-b", OidcId: "duplicate-oidc", AffCode: "oidc-b"}).Error)
 
-	require.True(t, IsOidcIdAlreadyTaken("duplicate-oidc"))
+	taken, err := IsOidcIdAlreadyTaken("duplicate-oidc")
+	require.NoError(t, err)
+	require.True(t, taken)
+}
+
+func TestOAuthIDTakenChecksReturnDatabaseErrors(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	checks := []struct {
+		name string
+		call func() (bool, error)
+	}{
+		{name: "wechat", call: func() (bool, error) { return IsWeChatIdAlreadyTaken("wechat-id") }},
+		{name: "github", call: func() (bool, error) { return IsGitHubIdAlreadyTaken("github-id") }},
+		{name: "discord", call: func() (bool, error) { return IsDiscordIdAlreadyTaken("discord-id") }},
+		{name: "oidc", call: func() (bool, error) { return IsOidcIdAlreadyTaken("oidc-id") }},
+		{name: "telegram", call: func() (bool, error) { return IsTelegramIdAlreadyTaken("telegram-id") }},
+		{name: "linuxdo", call: func() (bool, error) { return IsLinuxDOIdAlreadyTaken("linuxdo-id") }},
+		{name: "generic", call: func() (bool, error) { return IsProviderUserIdTaken(1, "provider-user-id") }},
+	}
+
+	for _, tt := range checks {
+		t.Run(tt.name, func(t *testing.T) {
+			taken, err := tt.call()
+			assert.False(t, taken)
+			require.Error(t, err)
+		})
+	}
 }
 
 type blockingCacheFillHook struct {
@@ -234,6 +265,157 @@ type blockingCacheFillHook struct {
 	finished   chan struct{}
 	beforeOnce sync.Once
 	afterOnce  sync.Once
+}
+
+type failCacheMutationHook struct {
+	seen   atomic.Int32
+	failAt int32
+}
+
+func (h *failCacheMutationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	name := strings.ToLower(cmd.Name())
+	if name != "eval" && name != "evalsha" {
+		return ctx, nil
+	}
+	if h.seen.Add(1) == h.failAt {
+		return ctx, errors.New("injected cache mutation failure")
+	}
+	return ctx, nil
+}
+
+func (*failCacheMutationHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
+
+func (*failCacheMutationHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*failCacheMutationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func useFailingCacheMutationRedis(t *testing.T, failAt int32) (*redis.Client, *failCacheMutationHook) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+
+	oldRDB := common.RDB
+	oldRedisEnabled := common.RedisEnabled
+	common.RDB = client
+	common.RedisEnabled = true
+	// Load the script before installing the hook so each later invalidation is
+	// represented by one EVALSHA command and failAt is deterministic.
+	require.NoError(t, common.RedisInvalidateVersionedHash("cache-retry-warmup", "cache-retry-warmup-version"))
+	hook := &failCacheMutationHook{failAt: failAt}
+	client.AddHook(hook)
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+		common.RedisEnabled = oldRedisEnabled
+	})
+	return client, hook
+}
+
+func cacheUserForRetryTest(t *testing.T, client *redis.Client, user User) {
+	t.Helper()
+	require.NoError(t, client.HSet(context.Background(), getUserCacheKey(user.Id), map[string]interface{}{
+		"Id":       user.Id,
+		"Group":    user.Group,
+		"Quota":    user.Quota,
+		"Role":     common.RoleCommonUser,
+		"Status":   common.UserStatusEnabled,
+		"Username": user.Username,
+	}).Err())
+}
+
+func cacheTokenForRetryTest(t *testing.T, client *redis.Client, token Token) {
+	t.Helper()
+	require.NoError(t, client.HSet(context.Background(), getTokenCacheKey(token.Key), map[string]interface{}{
+		"Id":          token.Id,
+		"UserId":      token.UserId,
+		"Status":      token.Status,
+		"RemainQuota": token.RemainQuota,
+	}).Err())
+}
+
+func requireCacheKeyDeletedEventually(t *testing.T, client *redis.Client, key string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		exists, err := client.Exists(context.Background(), key).Result()
+		return err == nil && exists == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestUserQuotaMutationsRetryCacheInvalidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(int) error
+	}{
+		{name: "increase", mutate: func(id int) error { return IncreaseUserQuota(id, 1, false) }},
+		{name: "decrease", mutate: func(id int) error { return DecreaseUserQuota(id, 1, false) }},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupUserUpdateTestState(t)
+			user := User{Id: 80 + index, Username: "cache-retry-user-" + tt.name, Quota: 10, Status: common.UserStatusEnabled}
+			require.NoError(t, DB.Create(&user).Error)
+			client, _ := useFailingCacheMutationRedis(t, 1)
+			cacheUserForRetryTest(t, client, user)
+
+			require.NoError(t, tt.mutate(user.Id))
+			requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
+		})
+	}
+}
+
+func TestAtomicPreConsumeRetriesBothCacheInvalidations(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 83, Username: "atomic-cache-retry-user", Quota: 10, Status: common.UserStatusEnabled}
+	token := Token{Id: 84, UserId: user.Id, Key: "atomic-cache-retry-token", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&token).Error)
+	client, _ := useFailingCacheMutationRedis(t, 2)
+	cacheUserForRetryTest(t, client, user)
+	cacheTokenForRetryTest(t, client, token)
+
+	require.NoError(t, DecreaseTokenAndUserQuota(token.Id, user.Id, token.Key, 1))
+	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+	requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
+}
+
+func TestTokenQuotaMutationRetriesCacheInvalidation(t *testing.T) {
+	setupUserUpdateTestState(t)
+	token := Token{Id: 85, UserId: 86, Key: "token-quota-cache-retry", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheTokenForRetryTest(t, client, token)
+
+	require.NoError(t, DecreaseTokenQuota(token.Id, token.Key, 1))
+	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+}
+
+func TestTokenDeleteRetriesCacheDeletion(t *testing.T) {
+	setupUserUpdateTestState(t)
+	token := Token{Id: 87, UserId: 88, Key: "token-delete-cache-retry", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheTokenForRetryTest(t, client, token)
+
+	require.NoError(t, token.Delete())
+	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+}
+
+func TestBatchTokenDeleteRetriesCacheDeletion(t *testing.T) {
+	setupUserUpdateTestState(t)
+	token := Token{Id: 89, UserId: 90, Key: "batch-token-delete-cache-retry", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheTokenForRetryTest(t, client, token)
+
+	deleted, err := BatchDeleteTokens([]int{token.Id}, token.UserId)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
 }
 
 func newBlockingCacheFillHook() *blockingCacheFillHook {

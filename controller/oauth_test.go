@@ -20,7 +20,7 @@ func (*deletedUserOAuthProvider) ExchangeToken(context.Context, string, *gin.Con
 func (*deletedUserOAuthProvider) GetUserInfo(context.Context, *oauth.OAuthToken) (*oauth.OAuthUser, error) {
 	return nil, nil
 }
-func (*deletedUserOAuthProvider) IsUserIDTaken(string) bool { return true }
+func (*deletedUserOAuthProvider) IsUserIDTaken(string) (bool, error) { return true, nil }
 func (*deletedUserOAuthProvider) FillUserByProviderID(*model.User, string) error {
 	return model.ErrUserDeleted
 }
@@ -60,5 +60,23 @@ func TestFindOrCreateOAuthUserMapsDeletedUserDomainError(t *testing.T) {
 	var deletedErr *OAuthUserDeletedError
 	if !errors.As(err, &deletedErr) {
 		t.Fatalf("expected OAuthUserDeletedError, got %v", err)
+	}
+}
+
+type failingLookupOAuthProvider struct {
+	deletedUserOAuthProvider
+}
+
+func (*failingLookupOAuthProvider) IsUserIDTaken(string) (bool, error) {
+	return false, errors.New("oauth uniqueness lookup unavailable")
+}
+
+func TestFindOrCreateOAuthUserPropagatesUniquenessLookupError(t *testing.T) {
+	_, err := findOrCreateOAuthUser(nil, &failingLookupOAuthProvider{}, &oauth.OAuthUser{
+		ProviderUserID: "unverified-user-id",
+	}, nil)
+
+	if err == nil || err.Error() != "oauth uniqueness lookup unavailable" {
+		t.Fatalf("expected uniqueness lookup error, got %v", err)
 	}
 }

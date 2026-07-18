@@ -32,7 +32,12 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 	telegramId := params["id"][0]
-	if model.IsTelegramIdAlreadyTaken(telegramId) {
+	taken, err := model.IsTelegramIdAlreadyTaken(telegramId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		c.JSON(200, gin.H{
 			"message": "该 Telegram 账户已被绑定",
 			"success": false,

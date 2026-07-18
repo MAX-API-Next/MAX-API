@@ -180,13 +180,23 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 	}
 
 	// Check if this OAuth account is already bound (check both new ID and legacy ID)
-	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		common.ApiErrorI18n(c, i18n.MsgOAuthAlreadyBound, providerParams(provider.GetName()))
 		return
 	}
 	// Also check legacy ID to prevent duplicate bindings during migration period
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
-		if provider.IsUserIDTaken(legacyID) {
+		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
+		if lookupErr != nil {
+			common.ApiError(c, lookupErr)
+			return
+		}
+		if legacyTaken {
 			common.ApiErrorI18n(c, i18n.MsgOAuthAlreadyBound, providerParams(provider.GetName()))
 			return
 		}
@@ -239,7 +249,11 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	user := &model.User{}
 
 	// Check if user already exists with new ID
-	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
 		if err != nil {
 			if errors.Is(err, model.ErrUserDeleted) {
@@ -256,7 +270,11 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 
 	// Try to find user with legacy ID (for GitHub migration from login to numeric ID)
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
-		if provider.IsUserIDTaken(legacyID) {
+		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if legacyTaken {
 			err := provider.FillUserByProviderID(user, legacyID)
 			if err != nil {
 				if errors.Is(err, model.ErrUserDeleted) {

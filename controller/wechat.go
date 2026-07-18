@@ -73,7 +73,12 @@ func WeChatAuth(c *gin.Context) {
 	user := model.User{
 		WeChatId: wechatId,
 	}
-	if model.IsWeChatIdAlreadyTaken(wechatId) {
+	taken, err := model.IsWeChatIdAlreadyTaken(wechatId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		err := user.FillUserByWeChatId()
 		if handleOAuthUserLookupError(c, err) {
 			return
@@ -140,7 +145,12 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	if model.IsWeChatIdAlreadyTaken(wechatId) {
+	taken, err := model.IsWeChatIdAlreadyTaken(wechatId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if taken {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "该微信账号已被绑定",

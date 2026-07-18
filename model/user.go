@@ -1258,24 +1258,29 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 	}
 }
 
-func IsWeChatIdAlreadyTaken(wechatId string) bool {
-	return DB.Unscoped().Where("wechat_id = ?", wechatId).Limit(1).Find(&User{}).RowsAffected > 0
+func IsWeChatIdAlreadyTaken(wechatId string) (bool, error) {
+	result := DB.Unscoped().Where("wechat_id = ?", wechatId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
-func IsGitHubIdAlreadyTaken(githubId string) bool {
-	return DB.Unscoped().Where("github_id = ?", githubId).Limit(1).Find(&User{}).RowsAffected > 0
+func IsGitHubIdAlreadyTaken(githubId string) (bool, error) {
+	result := DB.Unscoped().Where("github_id = ?", githubId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
-func IsDiscordIdAlreadyTaken(discordId string) bool {
-	return DB.Unscoped().Where("discord_id = ?", discordId).Limit(1).Find(&User{}).RowsAffected > 0
+func IsDiscordIdAlreadyTaken(discordId string) (bool, error) {
+	result := DB.Unscoped().Where("discord_id = ?", discordId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
-func IsOidcIdAlreadyTaken(oidcId string) bool {
-	return DB.Unscoped().Where("oidc_id = ?", oidcId).Limit(1).Find(&User{}).RowsAffected > 0
+func IsOidcIdAlreadyTaken(oidcId string) (bool, error) {
+	result := DB.Unscoped().Where("oidc_id = ?", oidcId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
-func IsTelegramIdAlreadyTaken(telegramId string) bool {
-	return DB.Unscoped().Where("telegram_id = ?", telegramId).Limit(1).Find(&User{}).RowsAffected > 0
+func IsTelegramIdAlreadyTaken(telegramId string) (bool, error) {
+	result := DB.Unscoped().Where("telegram_id = ?", telegramId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
 func ResetUserPasswordByEmail(email string, password string) error {
@@ -1497,6 +1502,7 @@ func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	}
 	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
 		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
+		enqueueUserCacheInvalidationRetry(id, cacheErr)
 	}
 	return nil
 }
@@ -1529,6 +1535,7 @@ func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	}
 	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
 		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
+		enqueueUserCacheInvalidationRetry(id, cacheErr)
 	}
 	return nil
 }
@@ -1681,10 +1688,9 @@ func GetUsernameById(id int, fromDB bool) (username string, err error) {
 	return username, nil
 }
 
-func IsLinuxDOIdAlreadyTaken(linuxDOId string) bool {
-	var user User
-	err := DB.Unscoped().Where("linux_do_id = ?", linuxDOId).First(&user).Error
-	return !errors.Is(err, gorm.ErrRecordNotFound)
+func IsLinuxDOIdAlreadyTaken(linuxDOId string) (bool, error) {
+	result := DB.Unscoped().Where("linux_do_id = ?", linuxDOId).Limit(1).Find(&User{})
+	return result.RowsAffected > 0, result.Error
 }
 
 func (user *User) FillUserByLinuxDOId() error {

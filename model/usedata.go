@@ -1,7 +1,8 @@
 package model
 
 import (
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -14,19 +15,20 @@ import (
 
 // QuotaData 柱状图数据
 type QuotaData struct {
-	Id         int     `json:"id"`
-	SnapshotID *string `json:"-" gorm:"-:all"`
-	UserID     int     `json:"user_id" gorm:"index"`
-	Username   string  `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
-	ModelName  string  `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
-	CreatedAt  int64   `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
-	UseGroup   string  `json:"use_group" gorm:"index;size:64;default:''"`
-	TokenID    int     `json:"token_id" gorm:"index;default:0"`
-	ChannelID  int     `json:"channel_id" gorm:"index;default:0"`
-	NodeName   string  `json:"node_name" gorm:"index;size:64;default:''"`
-	TokenUsed  int     `json:"token_used" gorm:"default:0"`
-	Count      int     `json:"count" gorm:"default:0"`
-	Quota      int     `json:"quota" gorm:"default:0"`
+	Id           int     `json:"id"`
+	AggregateKey *string `json:"-" gorm:"type:varchar(64);uniqueIndex:ux_quota_data_aggregate_key"`
+	SnapshotID   *string `json:"-" gorm:"-:all"`
+	UserID       int     `json:"user_id" gorm:"index"`
+	Username     string  `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
+	ModelName    string  `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
+	CreatedAt    int64   `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
+	UseGroup     string  `json:"use_group" gorm:"index;size:64;default:''"`
+	TokenID      int     `json:"token_id" gorm:"index;default:0"`
+	ChannelID    int     `json:"channel_id" gorm:"index;default:0"`
+	NodeName     string  `json:"node_name" gorm:"index;size:64;default:''"`
+	TokenUsed    int     `json:"token_used" gorm:"default:0"`
+	Count        int     `json:"count" gorm:"default:0"`
+	Quota        int     `json:"quota" gorm:"default:0"`
 }
 
 type QuotaDataSnapshot struct {
@@ -91,6 +93,11 @@ func quotaDataCacheKey(quotaData *QuotaData) string {
 		quotaData.ChannelID,
 		quotaData.NodeName,
 	)
+}
+
+func quotaDataAggregateKey(quotaData *QuotaData) string {
+	digest := sha256.Sum256([]byte(quotaDataCacheKey(quotaData)))
+	return hex.EncodeToString(digest[:])
 }
 
 func requeueQuotaDataCache(quotaData *QuotaData) {
@@ -185,32 +192,27 @@ func saveQuotaData(quotaData *QuotaData) error {
 			return nil
 		}
 
-		var existing QuotaData
-		err := tx.Table("quota_data").
-			Where("user_id = ? and username = ? and model_name = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
-				quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
-			First(&existing).Error
-		if err == nil {
-			return increaseQuotaDataTx(tx, quotaData)
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		record := *quotaData
-		record.Id = 0
-		return tx.Table("quota_data").Create(&record).Error
+		return increaseQuotaDataTx(tx, quotaData)
 	})
 }
 
 func increaseQuotaDataTx(tx *gorm.DB, quotaData *QuotaData) error {
-	return tx.Table("quota_data").
-		Where("user_id = ? and username = ? and model_name = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
-			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
-		Updates(map[string]interface{}{
+	return quotaDataUpsert(tx, quotaData).Error
+}
+
+func quotaDataUpsert(tx *gorm.DB, quotaData *QuotaData) *gorm.DB {
+	aggregateKey := quotaDataAggregateKey(quotaData)
+	record := *quotaData
+	record.Id = 0
+	record.AggregateKey = &aggregateKey
+	return tx.Table("quota_data").Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "aggregate_key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
 			"count":      gorm.Expr("count + ?", quotaData.Count),
 			"quota":      gorm.Expr("quota + ?", quotaData.Quota),
 			"token_used": gorm.Expr("token_used + ?", quotaData.TokenUsed),
-		}).Error
+		}),
+	}).Create(&record)
 }
 
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {

@@ -290,7 +290,7 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 	}, nil
 }
 
-func (p *GenericOAuthProvider) IsUserIDTaken(providerUserID string) bool {
+func (p *GenericOAuthProvider) IsUserIDTaken(providerUserID string) (bool, error) {
 	return model.IsProviderUserIdTaken(p.config.Id, providerUserID)
 }
 

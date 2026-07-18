@@ -313,6 +313,7 @@ func (token *Token) Update() (err error) {
 	if err == nil && common.RedisEnabled {
 		if cacheErr := invalidateTokenCache(token.Key); cacheErr != nil {
 			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
+			enqueueTokenCacheRetry(token.Key, false, cacheErr)
 		}
 	}
 	return err
@@ -324,6 +325,7 @@ func (token *Token) SelectUpdate() (err error) {
 	if err == nil && common.RedisEnabled {
 		if cacheErr := invalidateTokenCache(token.Key); cacheErr != nil {
 			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
+			enqueueTokenCacheRetry(token.Key, false, cacheErr)
 		}
 	}
 	return err
@@ -334,6 +336,7 @@ func (token *Token) Delete() (err error) {
 	if err == nil && common.RedisEnabled {
 		if cacheErr := deleteTokenCache(token.Key); cacheErr != nil {
 			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
+			enqueueTokenCacheRetry(token.Key, true, cacheErr)
 		}
 	}
 	return err
@@ -472,6 +475,7 @@ func DecreaseTokenAndUserQuota(tokenId, userId int, key string, quota int) error
 	invalidateTokenQuotaCache(key)
 	if cacheErr := invalidateUserQuotaCache(userId); cacheErr != nil {
 		common.SysLog(fmt.Sprintf("failed to invalidate user quota cache after atomic pre-consume (user_id=%d): %v", userId, cacheErr))
+		enqueueUserCacheInvalidationRetry(userId, cacheErr)
 	}
 	return nil
 }
@@ -504,6 +508,7 @@ func invalidateTokenQuotaCache(key string) {
 	}
 	if err := invalidateTokenCache(key); err != nil {
 		common.SysLog("failed to invalidate token quota cache: " + err.Error())
+		enqueueTokenCacheRetry(key, false, err)
 	}
 }
 
@@ -540,7 +545,10 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	if common.RedisEnabled {
 		gopool.Go(func() {
 			for _, t := range tokens {
-				_ = deleteTokenCache(t.Key)
+				if cacheErr := deleteTokenCache(t.Key); cacheErr != nil {
+					common.SysLog("failed to delete token cache after batch deletion: " + cacheErr.Error())
+					enqueueTokenCacheRetry(t.Key, true, cacheErr)
+				}
 			}
 		})
 	}
@@ -578,8 +586,11 @@ func InvalidateUserTokensCache(userId int) error {
 		if t.Key == "" {
 			continue
 		}
-		if err := invalidateTokenCache(t.Key); err != nil && firstErr == nil {
-			firstErr = err
+		if err := invalidateTokenCache(t.Key); err != nil {
+			enqueueTokenCacheRetry(t.Key, false, err)
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	return firstErr
