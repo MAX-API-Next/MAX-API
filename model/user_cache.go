@@ -441,18 +441,6 @@ func getUserSettingCache(userId int) (dto.UserSetting, error) {
 	return cache.GetSetting(), nil
 }
 
-// New functions for individual field updates
-func updateUserStatusCache(userId int, status bool) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	statusInt := common.UserStatusEnabled
-	if !status {
-		statusInt = common.UserStatusDisabled
-	}
-	return updateUserCacheField(userId, "Status", fmt.Sprintf("%d", statusInt))
-}
-
 func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error {
 	if !common.RedisEnabled {
 		return nil
@@ -466,56 +454,6 @@ func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error
 		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
 	)
 	return err
-}
-
-func updateUserGroupCache(userId int, group string) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return updateUserCacheField(userId, "Group", group)
-}
-
-func updateUserRoleCache(userId int, role int) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return updateUserCacheField(userId, "Role", fmt.Sprintf("%d", role))
-}
-
-func UpdateUserGroupCache(userId int, group string) error {
-	return updateUserGroupCache(userId, group)
-}
-
-func updateUserEmailCache(userId int, email string) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return updateUserCacheField(userId, "Email", email)
-}
-
-func updateUserNameCache(userId int, username string) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return updateUserCacheField(userId, "Username", username)
-}
-
-func updateUserSettingCache(userId int, setting string) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return updateUserCacheField(userId, "Setting", setting)
-}
-
-func updateUserCacheField(userId int, field string, value interface{}) error {
-	if err := invalidateUserCache(userId); err != nil {
-		return err
-	}
-	version, err := common.RedisGetCacheVersion(getUserCacheVersionKey(userId))
-	if err != nil {
-		return err
-	}
-	return updateUserCacheFieldIfVersion(userId, field, value, version)
 }
 
 func updateUserCacheFieldIfVersion(userId int, field string, value interface{}, version int64) error {

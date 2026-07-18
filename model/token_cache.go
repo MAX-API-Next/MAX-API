@@ -271,15 +271,6 @@ func completeTokenCacheRetryAttempt(attempt tokenCacheRetryAttempt, err error) {
 	}
 }
 
-func cacheSetTokenField(key string, field string, value string) error {
-	key = common.GenerateHMAC(key)
-	err := common.RedisHSetField(fmt.Sprintf("token:%s", key), field, value)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 // CacheGetTokenByKey 从缓存中获取 token，如果缓存中不存在，则从数据库中获取
 func cacheGetTokenByKey(key string) (*Token, error) {
 	if !common.RedisEnabled {

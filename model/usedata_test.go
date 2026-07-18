@@ -312,6 +312,147 @@ func TestQuotaDataMigrationBatchesAndRepairsStaleKeysWithLiveIndex(t *testing.T)
 	assert.Equal(t, 8, rows[0].TokenUsed)
 	assert.Equal(t, 2, rows[1].Id)
 	assert.Equal(t, keyB, *rows[1].AggregateKey)
+	assert.Equal(t, 2, rows[1].Count)
+	assert.Equal(t, 11, rows[1].Quota)
+	assert.Equal(t, 4, rows[1].TokenUsed)
+}
+
+func TestQuotaDataAggregateMigrationScratchTablesUseBigInt(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() {
+		_ = dropQuotaDataAggregateMigrationTables()
+		DB = oldDB
+	})
+
+	require.NoError(t, resetQuotaDataAggregateMigrationTables())
+
+	type sqliteColumn struct {
+		Name string `gorm:"column:name"`
+		Type string `gorm:"column:type"`
+	}
+	var summaryColumns []sqliteColumn
+	require.NoError(t, db.Raw("PRAGMA table_info(quota_data_aggregate_key_migration)").Scan(&summaryColumns).Error)
+	summaryTypes := make(map[string]string, len(summaryColumns))
+	for _, column := range summaryColumns {
+		summaryTypes[column.Name] = strings.ToLower(column.Type)
+	}
+	assert.Contains(t, summaryTypes["survivor_id"], "bigint")
+	assert.Contains(t, summaryTypes["count_sum"], "bigint")
+	assert.Contains(t, summaryTypes["quota_sum"], "bigint")
+	assert.Contains(t, summaryTypes["token_used_sum"], "bigint")
+
+	var memberColumns []sqliteColumn
+	require.NoError(t, db.Raw("PRAGMA table_info(quota_data_aggregate_key_migration_members)").Scan(&memberColumns).Error)
+	memberTypes := make(map[string]string, len(memberColumns))
+	for _, column := range memberColumns {
+		memberTypes[column.Name] = strings.ToLower(column.Type)
+	}
+	assert.Contains(t, memberTypes["id"], "bigint")
+}
+
+func TestQuotaDataMigrationWaitsForOperationLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_migration_lock?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldMaxWait := quotaDataOperationLockMaxWait
+	DB = db
+	quotaDataOperationLockRetryInterval = 10 * time.Millisecond
+	quotaDataOperationLockMaxWait = time.Second
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockMaxWait = oldMaxWait
+	})
+
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+	holder, err := acquireQuotaDataOperationLock()
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- mergeQuotaDataAggregateRows()
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		t.Fatalf("migration completed before the operation lock was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.NoError(t, releaseQuotaDataOperationLock(holder))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("migration did not continue after the operation lock was released")
+	}
+}
+
+func TestSaveQuotaDataWaitsForAggregateMigrationLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_save_lock?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldMaxWait := quotaDataOperationLockMaxWait
+	DB = db
+	quotaDataOperationLockRetryInterval = 10 * time.Millisecond
+	quotaDataOperationLockMaxWait = time.Second
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockMaxWait = oldMaxWait
+	})
+
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+	holder, err := acquireQuotaDataOperationLock()
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- saveQuotaData(&QuotaData{
+			UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+			UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+			Count: 1, Quota: 7, TokenUsed: 3,
+		})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		t.Fatalf("quota write completed before the migration lock was released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.NoError(t, releaseQuotaDataOperationLock(holder))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("quota write did not continue after the migration lock was released")
+	}
+
+	var row QuotaData
+	require.NoError(t, db.First(&row).Error)
+	assert.Equal(t, 1, row.Count)
+	assert.Equal(t, 7, row.Quota)
+	assert.Equal(t, 3, row.TokenUsed)
 }
 
 func TestSaveQuotaDataAtomicallyMergesCompetingAggregateInsert(t *testing.T) {

@@ -38,9 +38,16 @@ const (
 	quotaDataAggregateMigrationMemberKeyIdx = "idx_quota_data_aggregate_key_migration_members_key"
 	quotaDataAggregateMigrationSurvivorIdx  = "idx_quota_data_aggregate_key_migration_survivor"
 	quotaDataAggregateMigrationBatchDefault = 1000
+	quotaDataOperationLockTable             = "quota_data_operation_locks"
+	quotaDataOperationLockName              = "quota_data_aggregate_migration"
+	quotaDataOperationLockTTLSeconds        = int64(6 * 60 * 60)
 )
 
-var quotaDataAggregateMigrationBatchSize = quotaDataAggregateMigrationBatchDefault
+var (
+	quotaDataAggregateMigrationBatchSize = quotaDataAggregateMigrationBatchDefault
+	quotaDataOperationLockRetryInterval  = 200 * time.Millisecond
+	quotaDataOperationLockMaxWait        = 30 * time.Minute
+)
 
 type QuotaDataSnapshot struct {
 	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
@@ -112,21 +119,51 @@ func quotaDataAggregateKey(quotaData *QuotaData) string {
 }
 
 type quotaDataAggregateMigrationMember struct {
-	Id           int    `gorm:"column:id;primaryKey"`
-	AggregateKey string `gorm:"column:aggregate_key"`
+	Id           int64  `gorm:"column:id;primaryKey;type:bigint"`
+	AggregateKey string `gorm:"column:aggregate_key;type:varchar(64)"`
 }
 
 type quotaDataAggregateMigrationSummary struct {
-	AggregateKey string `gorm:"column:aggregate_key;primaryKey"`
-	SurvivorID   int    `gorm:"column:survivor_id"`
-	CountSum     int    `gorm:"column:count_sum"`
-	QuotaSum     int    `gorm:"column:quota_sum"`
-	TokenUsedSum int    `gorm:"column:token_used_sum"`
+	AggregateKey string `gorm:"column:aggregate_key;primaryKey;type:varchar(64)"`
+	SurvivorID   int64  `gorm:"column:survivor_id;type:bigint"`
+	CountSum     int64  `gorm:"column:count_sum;type:bigint"`
+	QuotaSum     int64  `gorm:"column:quota_sum;type:bigint"`
+	TokenUsedSum int64  `gorm:"column:token_used_sum;type:bigint"`
+}
+
+type quotaDataAggregateMigrationSourceRow struct {
+	Id        int64  `gorm:"column:id"`
+	UserID    int    `gorm:"column:user_id"`
+	Username  string `gorm:"column:username"`
+	ModelName string `gorm:"column:model_name"`
+	CreatedAt int64  `gorm:"column:created_at"`
+	UseGroup  string `gorm:"column:use_group"`
+	TokenID   int    `gorm:"column:token_id"`
+	ChannelID int    `gorm:"column:channel_id"`
+	NodeName  string `gorm:"column:node_name"`
+	Count     int64  `gorm:"column:count"`
+	Quota     int64  `gorm:"column:quota"`
+	TokenUsed int64  `gorm:"column:token_used"`
+}
+
+type quotaDataOperationLock struct {
+	Name      string `gorm:"column:name;primaryKey;type:varchar(64)"`
+	Owner     string `gorm:"column:owner;type:varchar(64);not null"`
+	ExpiresAt int64  `gorm:"column:expires_at;type:bigint;not null"`
+	CreatedAt int64  `gorm:"column:created_at;type:bigint;not null"`
+	UpdatedAt int64  `gorm:"column:updated_at;type:bigint;not null"`
+}
+
+func (quotaDataOperationLock) TableName() string {
+	return quotaDataOperationLockTable
 }
 
 func migrateQuotaDataAggregateKeys() error {
 	if DB == nil || !DB.Migrator().HasTable(&QuotaData{}) {
 		return nil
+	}
+	if err := ensureQuotaDataOperationLockTable(); err != nil {
+		return err
 	}
 	if !DB.Migrator().HasColumn(&QuotaData{}, "aggregate_key") {
 		if err := DB.Migrator().AddColumn(&QuotaData{}, "AggregateKey"); err != nil {
@@ -165,30 +202,53 @@ func quotaDataAggregateKeyCleanupNeeded(indexExists bool) (bool, error) {
 	return legacyRows > 0, nil
 }
 
-func mergeQuotaDataAggregateRows() error {
-	if err := resetQuotaDataAggregateMigrationTables(); err != nil {
-		return err
+func ensureQuotaDataOperationLockTable() error {
+	sql := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (%s varchar(64) PRIMARY KEY, %s varchar(64) NOT NULL, %s bigint NOT NULL, %s bigint NOT NULL, %s bigint NOT NULL)",
+		quoteDBIdentifier(quotaDataOperationLockTable),
+		quoteDBIdentifier("name"),
+		quoteDBIdentifier("owner"),
+		quoteDBIdentifier("expires_at"),
+		quoteDBIdentifier("created_at"),
+		quoteDBIdentifier("updated_at"),
+	)
+	if err := DB.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to ensure quota_data operation lock table: %w", err)
 	}
-	cleanup := true
-	defer func() {
-		if cleanup {
-			if err := dropQuotaDataAggregateMigrationTables(); err != nil {
-				common.SysLog("failed to drop quota_data aggregate migration tables: " + err.Error())
-			}
-		}
-	}()
-
-	if err := buildQuotaDataAggregateMigrationTables(); err != nil {
-		return err
-	}
-	if err := applyQuotaDataAggregateMigrationTables(); err != nil {
-		return err
-	}
-	if err := dropQuotaDataAggregateMigrationTables(); err != nil {
-		return err
-	}
-	cleanup = false
 	return nil
+}
+
+func mergeQuotaDataAggregateRows() error {
+	if err := ensureQuotaDataOperationLockTable(); err != nil {
+		return err
+	}
+	return withQuotaDataOperationLock("aggregate-key migration", func(lockOwner string) error {
+		if err := resetQuotaDataAggregateMigrationTables(); err != nil {
+			return err
+		}
+		cleanup := true
+		defer func() {
+			if cleanup {
+				if err := dropQuotaDataAggregateMigrationTables(); err != nil {
+					common.SysLog("failed to drop quota_data aggregate migration tables: " + err.Error())
+				}
+			}
+		}()
+
+		if err := buildQuotaDataAggregateMigrationTables(lockOwner); err != nil {
+			return err
+		}
+		if err := refreshQuotaDataOperationLock(lockOwner); err != nil {
+			return err
+		}
+		if err := applyQuotaDataAggregateMigrationTables(); err != nil {
+			return err
+		}
+		if err := dropQuotaDataAggregateMigrationTables(); err != nil {
+			return err
+		}
+		cleanup = false
+		return nil
+	})
 }
 
 func resetQuotaDataAggregateMigrationTables() error {
@@ -196,7 +256,7 @@ func resetQuotaDataAggregateMigrationTables() error {
 		return err
 	}
 	statements := []string{
-		fmt.Sprintf("CREATE TABLE %s (%s varchar(64) PRIMARY KEY, %s integer NOT NULL, %s integer NOT NULL, %s integer NOT NULL, %s integer NOT NULL)",
+		fmt.Sprintf("CREATE TABLE %s (%s varchar(64) PRIMARY KEY, %s bigint NOT NULL, %s bigint NOT NULL, %s bigint NOT NULL, %s bigint NOT NULL)",
 			quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable),
 			quoteDBIdentifier("aggregate_key"),
 			quoteDBIdentifier("survivor_id"),
@@ -209,7 +269,7 @@ func resetQuotaDataAggregateMigrationTables() error {
 			quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable),
 			quoteDBIdentifier("survivor_id"),
 		),
-		fmt.Sprintf("CREATE TABLE %s (%s integer PRIMARY KEY, %s varchar(64) NOT NULL)",
+		fmt.Sprintf("CREATE TABLE %s (%s bigint PRIMARY KEY, %s varchar(64) NOT NULL)",
 			quoteDBIdentifier(quotaDataAggregateMigrationMemberTable),
 			quoteDBIdentifier("id"),
 			quoteDBIdentifier("aggregate_key"),
@@ -237,14 +297,19 @@ func dropQuotaDataAggregateMigrationTables() error {
 	return nil
 }
 
-func buildQuotaDataAggregateMigrationTables() error {
+func buildQuotaDataAggregateMigrationTables(lockOwner string) error {
 	batchSize := quotaDataAggregateMigrationBatchSize
 	if batchSize <= 0 {
 		batchSize = quotaDataAggregateMigrationBatchDefault
 	}
-	lastID := 0
+	lastID := int64(0)
 	for {
-		rows := make([]QuotaData, 0, batchSize)
+		if lockOwner != "" {
+			if err := refreshQuotaDataOperationLock(lockOwner); err != nil {
+				return err
+			}
+		}
+		rows := make([]quotaDataAggregateMigrationSourceRow, 0, batchSize)
 		if err := DB.Table("quota_data").
 			Select("id, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used").
 			Where("id > ?", lastID).
@@ -263,11 +328,11 @@ func buildQuotaDataAggregateMigrationTables() error {
 	}
 }
 
-func insertQuotaDataAggregateMigrationBatch(rows []QuotaData) error {
+func insertQuotaDataAggregateMigrationBatch(rows []quotaDataAggregateMigrationSourceRow) error {
 	members := make([]quotaDataAggregateMigrationMember, 0, len(rows))
 	summaries := make(map[string]*quotaDataAggregateMigrationSummary, len(rows))
 	for _, row := range rows {
-		key := quotaDataAggregateKey(&row)
+		key := row.quotaDataAggregateKey()
 		members = append(members, quotaDataAggregateMigrationMember{Id: row.Id, AggregateKey: key})
 		summary, ok := summaries[key]
 		if !ok {
@@ -296,6 +361,19 @@ func insertQuotaDataAggregateMigrationBatch(rows []QuotaData) error {
 			}
 		}
 		return nil
+	})
+}
+
+func (row quotaDataAggregateMigrationSourceRow) quotaDataAggregateKey() string {
+	return quotaDataAggregateKey(&QuotaData{
+		UserID:    row.UserID,
+		Username:  row.Username,
+		ModelName: row.ModelName,
+		CreatedAt: row.CreatedAt,
+		UseGroup:  row.UseGroup,
+		TokenID:   row.TokenID,
+		ChannelID: row.ChannelID,
+		NodeName:  row.NodeName,
 	})
 }
 
@@ -409,6 +487,109 @@ func updateQuotaDataAggregateSurvivorsTx(tx *gorm.DB) error {
 	return nil
 }
 
+func acquireQuotaDataOperationLock() (string, error) {
+	owner := uuid.NewString()
+	retryInterval := quotaDataOperationLockRetryInterval
+	if retryInterval <= 0 {
+		retryInterval = 200 * time.Millisecond
+	}
+	maxWait := quotaDataOperationLockMaxWait
+	if maxWait <= 0 {
+		maxWait = 30 * time.Minute
+	}
+	deadline := time.Now().Add(maxWait)
+
+	for {
+		now := common.GetTimestamp()
+		lock := &quotaDataOperationLock{
+			Name:      quotaDataOperationLockName,
+			Owner:     owner,
+			ExpiresAt: now + quotaDataOperationLockTTLSeconds,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(lock)
+		if result.Error != nil {
+			return "", fmt.Errorf("failed to acquire quota_data operation lock: %w", result.Error)
+		}
+		if result.RowsAffected == 1 {
+			return owner, nil
+		}
+
+		result = DB.Model(&quotaDataOperationLock{}).
+			Where("name = ? AND expires_at < ?", quotaDataOperationLockName, now).
+			Updates(map[string]interface{}{
+				"owner":      owner,
+				"expires_at": now + quotaDataOperationLockTTLSeconds,
+				"updated_at": now,
+			})
+		if result.Error != nil {
+			return "", fmt.Errorf("failed to claim expired quota_data operation lock: %w", result.Error)
+		}
+		if result.RowsAffected == 1 {
+			return owner, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for quota_data operation lock")
+		}
+		time.Sleep(retryInterval)
+	}
+}
+
+func refreshQuotaDataOperationLock(owner string) error {
+	now := common.GetTimestamp()
+	result := DB.Model(&quotaDataOperationLock{}).
+		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
+		Updates(map[string]interface{}{
+			"expires_at": now + quotaDataOperationLockTTLSeconds,
+			"updated_at": now,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("failed to refresh quota_data operation lock: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		var owned int64
+		if err := DB.Model(&quotaDataOperationLock{}).
+			Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
+			Count(&owned).Error; err != nil {
+			return fmt.Errorf("failed to verify quota_data operation lock ownership: %w", err)
+		}
+		if owned == 0 {
+			return fmt.Errorf("quota_data operation lock lost")
+		}
+	}
+	return nil
+}
+
+func releaseQuotaDataOperationLock(owner string) error {
+	result := DB.Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).Delete(&quotaDataOperationLock{})
+	if result.Error != nil {
+		return fmt.Errorf("failed to release quota_data operation lock: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("quota_data operation lock was not held by this owner")
+	}
+	return nil
+}
+
+func withQuotaDataOperationLock(operation string, fn func(lockOwner string) error) (returnErr error) {
+	lockOwner, err := acquireQuotaDataOperationLock()
+	if err != nil {
+		return fmt.Errorf("failed to acquire quota_data operation lock for %s: %w", operation, err)
+	}
+	defer func() {
+		if err := releaseQuotaDataOperationLock(lockOwner); err != nil {
+			wrappedErr := fmt.Errorf("failed to release quota_data operation lock for %s: %w", operation, err)
+			if returnErr == nil {
+				returnErr = wrappedErr
+			} else {
+				common.SysLog(wrappedErr.Error())
+			}
+		}
+	}()
+	return fn(lockOwner)
+}
+
 func createQuotaDataAggregateKeyIndex() error {
 	sql := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s)",
 		quoteDBIdentifier(quotaDataAggregateKeyIndexName),
@@ -481,10 +662,21 @@ func SaveQuotaDataCache() {
 	// 1. 先查询数据库中是否有数据
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
-	for _, quotaData := range snapshot {
-		if err := saveQuotaData(quotaData); err != nil {
-			common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
-			failed = append(failed, quotaData)
+	if len(snapshot) > 0 {
+		if err := withQuotaDataOperationLock("quota cache flush", func(_ string) error {
+			for _, quotaData := range snapshot {
+				if err := saveQuotaDataLocked(quotaData); err != nil {
+					common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
+					failed = append(failed, quotaData)
+				}
+			}
+			return nil
+		}); err != nil {
+			common.SysLog(fmt.Sprintf("saveQuotaData lock error: %s", err))
+			failed = make([]*QuotaData, 0, len(snapshot))
+			for _, quotaData := range snapshot {
+				failed = append(failed, quotaData)
+			}
 		}
 	}
 
@@ -499,6 +691,12 @@ func SaveQuotaDataCache() {
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
+	return withQuotaDataOperationLock("quota write", func(_ string) error {
+		return saveQuotaDataLocked(quotaData)
+	})
+}
+
+func saveQuotaDataLocked(quotaData *QuotaData) error {
 	if quotaData.SnapshotID == nil {
 		snapshotID := uuid.NewString()
 		quotaData.SnapshotID = &snapshotID
