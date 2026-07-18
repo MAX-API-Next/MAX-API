@@ -123,6 +123,9 @@ MAX API brings AI model and AI Agent execution into a configurable, observable, 
 
 SQLite is used by default, so local evaluation does not require an external database.
 
+> [!WARNING]
+> SQLite is intended only for local evaluation, development, and small-scale testing. It is not recommended for production: concurrent requests, multi-instance deployments, large log or usage datasets, database migrations, backup and restore operations, and long transactions can cause lock contention, blocked writes, slow or failed migrations, and other availability or data-maintenance problems. Use MySQL ≥ 5.7.8 or PostgreSQL ≥ 9.6 with a reliable backup and recovery plan in production.
+
 ```bash
 # 1. Pull the image
 docker pull cscitechtop/max-api:latest
@@ -487,8 +490,8 @@ A task rate-card can match prices by request parameters:
 | Component | Requirement |
 |------|------|
 | Container engine | Docker / Docker Compose |
-| Local database | SQLite; mount `/data` when deploying with Docker |
-| Remote database | MySQL ≥ 5.7.8 or PostgreSQL ≥ 9.6 |
+| Local database | SQLite, only for local evaluation, development, or small-scale testing; mount `/data` when using Docker |
+| Production database | MySQL ≥ 5.7.8 or PostgreSQL ≥ 9.6 with a reliable backup and recovery plan |
 | Cache | In-memory cache for single-node deployments; Redis recommended for multi-node deployments |
 | Frontend build | Bun workspace; keep `web/package.json` and `web/bun.lock` |
 | Source build | Use the Go version declared in `go.mod` (currently Go 1.25.1+) with the repository `go.sum`; after dependency or security updates, run `go mod download`, `go mod verify`, and rebuild |

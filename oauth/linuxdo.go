@@ -167,7 +167,7 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	}, nil
 }
 
-func (p *LinuxDOProvider) IsUserIDTaken(providerUserID string) bool {
+func (p *LinuxDOProvider) IsUserIDTaken(providerUserID string) (bool, error) {
 	return model.IsLinuxDOIdAlreadyTaken(providerUserID)
 }
 

@@ -147,7 +147,7 @@ export function DataTableRowActions<TData>({
       if (typeof window === 'undefined') return
 
       try {
-        window.open(resolvedUrl, '_blank', 'noopener')
+        window.open(resolvedUrl, '_blank', 'noopener,noreferrer')
       } catch {
         window.location.href = resolvedUrl
       }

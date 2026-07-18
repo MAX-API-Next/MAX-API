@@ -159,7 +159,7 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 	}, nil
 }
 
-func (p *OIDCProvider) IsUserIDTaken(providerUserID string) bool {
+func (p *OIDCProvider) IsUserIDTaken(providerUserID string) (bool, error) {
 	return model.IsOidcIdAlreadyTaken(providerUserID)
 }
 

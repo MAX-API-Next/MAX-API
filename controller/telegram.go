@@ -32,7 +32,11 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 	telegramId := params["id"][0]
-	if model.IsTelegramIdAlreadyTaken(telegramId) {
+	taken, err := model.IsTelegramIdAlreadyTaken(telegramId)
+	if handleOAuthIdentityLookupError(c, "Telegram", err) {
+		return
+	}
+	if taken {
 		c.JSON(200, gin.H{
 			"message": "该 Telegram 账户已被绑定",
 			"success": false,
@@ -92,11 +96,7 @@ func TelegramLogin(c *gin.Context) {
 
 	telegramId := params["id"][0]
 	user := model.User{TelegramId: telegramId}
-	if err := user.FillUserByTelegramId(); err != nil {
-		c.JSON(200, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
+	if err := user.FillUserByTelegramId(); handleOAuthUserLookupError(c, err) {
 		return
 	}
 	setupLogin(&user, c)

@@ -216,6 +216,27 @@ func TestPurchaseSubscriptionWithBalance_InsufficientQuotaDoesNotOverdraw(t *tes
 	assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, 505))
 }
 
+func TestPurchaseSubscriptionWithBalanceRetriesCommittedUserCacheInvalidation(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 506, 10)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 602)
+	plan.PriceAmount = 0
+	plan.UpgradeGroup = "premium"
+	require.NoError(t, DB.Model(plan).Select("price_amount", "upgrade_group").Updates(plan).Error)
+
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheUserForRetryTest(t, client, User{
+		Id: 506, Username: "payment_guard_user", Group: "default", Quota: 10, Status: common.UserStatusEnabled,
+	})
+
+	require.NoError(t, PurchaseSubscriptionWithBalance(506, plan.Id))
+	requireCacheKeyDeletedEventually(t, client, getUserCacheKey(506))
+	var stored User
+	require.NoError(t, DB.First(&stored, 506).Error)
+	assert.Equal(t, "premium", stored.Group)
+}
+
 func TestRedeem_UsedCodeDoesNotDoubleCredit(t *testing.T) {
 	truncateTables(t)
 

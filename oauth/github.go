@@ -160,7 +160,7 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 	}, nil
 }
 
-func (p *GitHubProvider) IsUserIDTaken(providerUserID string) bool {
+func (p *GitHubProvider) IsUserIDTaken(providerUserID string) (bool, error) {
 	return model.IsGitHubIdAlreadyTaken(providerUserID)
 }
 

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { api } from '@/lib/api'
+import { getTurnstileHeaders } from './lib/turnstile-request'
 import type {
   LoginPayload,
   LoginResponse,
@@ -36,13 +37,13 @@ import type {
 
 // User login with username and password
 export async function login(payload: LoginPayload) {
-  const turnstile = payload.turnstile ?? ''
   const res = await api.post<LoginResponse>(
-    `/api/user/login?turnstile=${turnstile}`,
+    '/api/user/login',
     {
       username: payload.username,
       password: payload.password,
-    }
+    },
+    { headers: getTurnstileHeaders(payload.turnstile) }
   )
   return res.data
 }
@@ -69,7 +70,8 @@ export async function sendPasswordResetEmail(
   turnstile?: string
 ): Promise<ApiResponse> {
   const res = await api.get('/api/reset_password', {
-    params: { email, turnstile },
+    params: { email },
+    headers: getTurnstileHeaders(turnstile),
   })
   return res.data
 }
@@ -81,7 +83,7 @@ export async function sendPasswordResetEmail(
 // Start GitHub OAuth flow
 export async function githubOAuthStart(clientId: string, state: string) {
   const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&state=${state}&scope=user:email`
-  window.open(url)
+  window.open(url, '_self')
 }
 
 // Get OAuth state for CSRF protection
@@ -105,8 +107,10 @@ export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
 
 // User registration
 export async function register(payload: RegisterPayload): Promise<ApiResponse> {
-  const res = await api.post(`/api/user/register`, payload, {
-    params: { turnstile: payload.turnstile ?? '' },
+  const body = { ...payload }
+  delete body.turnstile
+  const res = await api.post('/api/user/register', body, {
+    headers: getTurnstileHeaders(payload.turnstile),
   })
   return res.data
 }
@@ -117,7 +121,8 @@ export async function sendEmailVerification(
   turnstile?: string
 ): Promise<ApiResponse> {
   const res = await api.get('/api/verification', {
-    params: { email, turnstile },
+    params: { email },
+    headers: getTurnstileHeaders(turnstile),
   })
   return res.data
 }

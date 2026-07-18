@@ -16,11 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { SSE } from 'sse.js'
 import { getCommonHeaders } from '@/lib/api'
 import { API_ENDPOINTS, ERROR_MESSAGES } from '../constants'
 import type { ChatCompletionRequest, ChatCompletionChunk } from '../types'
+
+export function shouldHandleStreamTermination(isStreamComplete: boolean) {
+  return !isStreamComplete
+}
 
 /**
  * Hook for handling streaming chat completion requests
@@ -28,6 +32,7 @@ import type { ChatCompletionRequest, ChatCompletionChunk } from '../types'
 export function useStreamRequest() {
   const sseSourceRef = useRef<SSE | null>(null)
   const isStreamCompleteRef = useRef(false)
+  const [isStreaming, setIsStreaming] = useState(false)
 
   const sendStreamRequest = useCallback(
     (
@@ -44,14 +49,21 @@ export function useStreamRequest() {
 
       sseSourceRef.current = source
       isStreamCompleteRef.current = false
+      setIsStreaming(true)
 
       const closeSource = () => {
         source.close()
-        sseSourceRef.current = null
+        if (sseSourceRef.current === source) {
+          sseSourceRef.current = null
+          setIsStreaming(false)
+        }
       }
 
       const handleError = (errorMessage: string, errorCode?: string) => {
-        if (!isStreamCompleteRef.current) {
+        if (
+          shouldHandleStreamTermination(isStreamCompleteRef.current) &&
+          sseSourceRef.current === source
+        ) {
           onError(errorMessage, errorCode)
           closeSource()
         }
@@ -85,27 +97,27 @@ export function useStreamRequest() {
       })
 
       source.addEventListener('error', (e: Event & { data?: string }) => {
-        // Only handle errors if stream didn't complete normally
-        if (source.readyState !== 2) {
-          // eslint-disable-next-line no-console
-          console.error('SSE Error:', e)
-          let errorMessage = e.data || ERROR_MESSAGES.API_REQUEST_ERROR
-          let errorCode: string | undefined
-          if (e.data) {
-            try {
-              const parsed = JSON.parse(e.data) as {
-                error?: { message?: string; code?: string }
-              }
-              if (parsed?.error) {
-                errorMessage = parsed.error.message || errorMessage
-                errorCode = parsed.error.code || undefined
-              }
-            } catch {
-              // not JSON, use raw string
-            }
-          }
-          handleError(errorMessage, errorCode)
+        if (!shouldHandleStreamTermination(isStreamCompleteRef.current)) {
+          return
         }
+        // eslint-disable-next-line no-console
+        console.error('SSE Error:', e)
+        let errorMessage = e.data || ERROR_MESSAGES.API_REQUEST_ERROR
+        let errorCode: string | undefined
+        if (e.data) {
+          try {
+            const parsed = JSON.parse(e.data) as {
+              error?: { message?: string; code?: string }
+            }
+            if (parsed?.error) {
+              errorMessage = parsed.error.message || errorMessage
+              errorCode = parsed.error.code || undefined
+            }
+          } catch {
+            // not JSON, use raw string
+          }
+        }
+        handleError(errorMessage, errorCode)
       })
 
       source.addEventListener(
@@ -130,6 +142,7 @@ export function useStreamRequest() {
         console.error('Failed to start SSE stream:', error)
         onError(ERROR_MESSAGES.STREAM_START_ERROR)
         sseSourceRef.current = null
+        setIsStreaming(false)
       }
     },
     []
@@ -139,16 +152,13 @@ export function useStreamRequest() {
     if (sseSourceRef.current) {
       sseSourceRef.current.close()
       sseSourceRef.current = null
+      setIsStreaming(false)
     }
   }, [])
-
-  // eslint-disable-next-line react-hooks/refs
-  const isStreaming = sseSourceRef.current !== null
 
   return {
     sendStreamRequest,
     stopStream,
-    // eslint-disable-next-line react-hooks/refs
     isStreaming,
   }
 }

@@ -28,6 +28,8 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import { api, getSelf } from '@/lib/api'
+import { clearOAuthBindingState, isOAuthBindingState } from '@/lib/oauth'
+import { normalizeInternalRedirect } from '@/lib/safe-redirect'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
 
@@ -47,31 +49,32 @@ function OAuthCallback() {
   }
   const [mode, setMode] = useState<'login' | 'bind'>(() => {
     if (typeof window === 'undefined') return 'login'
-    return window.opener ? 'bind' : 'login'
+    return window.opener || isOAuthBindingState(search.state) ? 'bind' : 'login'
   })
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMode(window.opener ? 'bind' : 'login')
-  }, [])
+    setMode(
+      window.opener || isOAuthBindingState(search.state) ? 'bind' : 'login'
+    )
+  }, [search.state])
 
   useEffect(() => {
     ;(async () => {
       const safeNavigate = (target: string) => {
-        navigate({ to: target as never, replace: true })
+        const safeTarget = normalizeInternalRedirect(target)
+        navigate({ to: safeTarget as never, replace: true })
         if (typeof window !== 'undefined') {
           setTimeout(() => {
-            const normalizedTarget = target.startsWith('/')
-              ? target
-              : `/${target}`
+            const normalizedTarget = safeTarget
             const currentPath =
               window.location.pathname + window.location.search
             if (
               currentPath !== normalizedTarget &&
               currentPath !== `${normalizedTarget}/`
             ) {
-              window.location.replace(target)
+              window.location.replace(safeTarget)
             }
           }, 100)
         }
@@ -83,7 +86,9 @@ function OAuthCallback() {
         return
       }
       const isBindingFlow =
-        typeof window !== 'undefined' ? Boolean(window.opener) : mode === 'bind'
+        typeof window !== 'undefined'
+          ? Boolean(window.opener) || isOAuthBindingState(search.state)
+          : mode === 'bind'
       if (isBindingFlow && mode !== 'bind') {
         setMode('bind')
       } else if (!isBindingFlow && mode !== 'login') {
@@ -91,6 +96,7 @@ function OAuthCallback() {
       }
       const notifyBindingResult = (status: 'success' | 'error') => {
         if (typeof window === 'undefined') return
+        clearOAuthBindingState(search.state)
         try {
           window.localStorage.setItem(
             OAUTH_BIND_STORAGE_KEY,

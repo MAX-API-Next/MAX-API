@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   type ColumnDef,
   type RowSelectionState,
@@ -26,7 +27,14 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { Check, CheckCircle2, Copy, Info, Loader2, Settings } from 'lucide-react'
+import {
+  Check,
+  CheckCircle2,
+  Copy,
+  Info,
+  Loader2,
+  Settings,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -83,7 +91,13 @@ import {
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
 import { StatusBadge } from '@/components/status-badge'
-import { formatResponseTime, handleTestChannel } from '../../lib'
+import {
+  createChannelTestCachePatch,
+  formatResponseTime,
+  handleTestChannel,
+  selectLatestCompletedChannelTestResult,
+  refreshChannelListsWithTestPatch,
+} from '../../lib'
 import { useChannels } from '../channels-provider'
 
 type ChannelTestDialogProps = {
@@ -100,6 +114,7 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 type TestResult = {
   status: TestStatus
   responseTime?: number
+  completedAt?: number
   error?: string
   errorCode?: string
 }
@@ -233,6 +248,8 @@ export function ChannelTestDialog({
 }: ChannelTestDialogProps) {
   const { t } = useTranslation()
   const { currentRow } = useChannels()
+  const queryClient = useQueryClient()
+  const currentChannelId = currentRow?.id
   const [endpointType, setEndpointType] = useState('auto')
   const [isStreamTest, setIsStreamTest] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -242,9 +259,7 @@ export function ChannelTestDialog({
     () => new Set()
   )
   const [isBatchTesting, setIsBatchTesting] = useState(false)
-  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(
-    null
-  )
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
   const [failureDetails, setFailureDetails] =
     useState<FailureDetailsState | null>(null)
   const [pagination, setPagination] = useState({
@@ -331,8 +346,24 @@ export function ChannelTestDialog({
     }))
   }, [])
 
+  const refreshChannelLists = useCallback(
+    (result?: TestResult) => {
+      if (!currentChannelId) return
+      refreshChannelListsWithTestPatch(
+        queryClient,
+        currentChannelId,
+        createChannelTestCachePatch(result?.responseTime, result?.completedAt)
+      )
+    },
+    [currentChannelId, queryClient]
+  )
+
   const testSingleModel = useCallback(
-    async (model: string, silent = false): Promise<TestResult | undefined> => {
+    async (
+      model: string,
+      silent = false,
+      refreshList = true
+    ): Promise<TestResult | undefined> => {
       if (!currentRow) return
 
       markModelTesting(model, true)
@@ -343,15 +374,18 @@ export function ChannelTestDialog({
         await handleTestChannel(
           currentRow.id,
           {
+            channelName: currentRow.name,
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
             stream: isStreamTest || undefined,
             silent,
           },
           (success, responseTime, error, errorCode) => {
+            const completedAt = Date.now()
             finalResult = {
               status: success ? 'success' : 'error',
               responseTime,
+              completedAt,
               error,
               errorCode,
             }
@@ -361,11 +395,15 @@ export function ChannelTestDialog({
       } catch (error: unknown) {
         finalResult = {
           status: 'error',
+          completedAt: Date.now(),
           error: error instanceof Error ? error.message : t('Test failed'),
         }
         updateTestResult(model, finalResult)
       } finally {
         markModelTesting(model, false)
+        if (refreshList) {
+          refreshChannelLists(finalResult)
+        }
       }
       return finalResult
     },
@@ -374,6 +412,7 @@ export function ChannelTestDialog({
       endpointType,
       isStreamTest,
       markModelTesting,
+      refreshChannelLists,
       t,
       updateTestResult,
     ]
@@ -397,6 +436,7 @@ export function ChannelTestDialog({
       let completedCount = 0
       let successCount = 0
       let failedCount = 0
+      let latestResultWithResponse: TestResult | undefined
 
       try {
         const recordBatchResult = (result?: TestResult) => {
@@ -424,12 +464,22 @@ export function ChannelTestDialog({
             startIndex + BATCH_TEST_CONCURRENCY
           )
           const settled = await Promise.allSettled(
-            batch.map((modelName) => testSingleModel(modelName, true))
+            batch.map((modelName) => testSingleModel(modelName, true, false))
           )
-          for (const result of settled) {
-            recordBatchResult(
-              result.status === 'fulfilled' ? result.value : undefined
-            )
+          const batchResults = settled.map((result) =>
+            result.status === 'fulfilled' ? result.value : undefined
+          )
+          const batchLatestResult =
+            selectLatestCompletedChannelTestResult(batchResults)
+          if (batchLatestResult) {
+            latestResultWithResponse =
+              selectLatestCompletedChannelTestResult([
+                latestResultWithResponse,
+                batchLatestResult,
+              ]) ?? latestResultWithResponse
+          }
+          for (const resultValue of batchResults) {
+            recordBatchResult(resultValue)
           }
 
           if (startIndex + BATCH_TEST_CONCURRENCY < uniqueModels.length) {
@@ -455,12 +505,13 @@ export function ChannelTestDialog({
           )
         }
       } finally {
+        refreshChannelLists(latestResultWithResponse)
         setIsBatchTesting(false)
         setBatchProgress(null)
         setRowSelection({})
       }
     },
-    [t, testSingleModel]
+    [refreshChannelLists, t, testSingleModel]
   )
 
   const handleSelectSuccessfulModels = useCallback(() => {
@@ -703,7 +754,9 @@ export function ChannelTestDialog({
                 </div>
               </div>
 
-              {batchProgress && <BatchProgressSummary progress={batchProgress} />}
+              {batchProgress && (
+                <BatchProgressSummary progress={batchProgress} />
+              )}
 
               {!isAnyTesting && successModels.length > 0 && (
                 <div className='flex flex-wrap items-center gap-2'>
@@ -939,7 +992,11 @@ function FailureStatusContent({
             size='sm'
             className='h-7 w-fit px-2 text-xs'
             onClick={() =>
-              window.open('/system-settings/billing/model-pricing', '_blank')
+              window.open(
+                '/system-settings/billing/model-pricing',
+                '_blank',
+                'noopener,noreferrer'
+              )
             }
           >
             <Settings className='mr-1 h-3 w-3 shrink-0' />

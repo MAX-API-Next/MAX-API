@@ -143,7 +143,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
 	}
 
-	if !token.UnlimitedQuota && token.RemainQuota < quota {
+	if !token.UnlimitedQuota && token.RemainQuota < int64(quota) {
 		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
 	}
 
@@ -414,7 +414,7 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if err != nil {
 		return err
 	}
-	if !relayInfo.TokenUnlimited && token.RemainQuota < quota {
+	if !relayInfo.TokenUnlimited && token.RemainQuota < int64(quota) {
 		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
 	}
 	err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)

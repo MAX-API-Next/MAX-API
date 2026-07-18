@@ -114,7 +114,9 @@ function AudioClipCard({ clip }: { clip: AudioClip }) {
               variant='outline'
               size='sm'
               className='h-7 gap-1 text-xs'
-              onClick={() => window.open(audioUrl, '_blank')}
+              onClick={() =>
+                window.open(audioUrl, '_blank', 'noopener,noreferrer')
+              }
             >
               <ExternalLink className='h-3 w-3' />
               {t('Open in new tab')}

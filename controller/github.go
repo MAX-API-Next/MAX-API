@@ -112,22 +112,14 @@ func GitHubOAuth(c *gin.Context) {
 		GitHubId: githubUser.Login,
 	}
 	// IsGitHubIdAlreadyTaken is unscoped
-	if model.IsGitHubIdAlreadyTaken(user.GitHubId) {
+	taken, err := model.IsGitHubIdAlreadyTaken(user.GitHubId)
+	if handleOAuthIdentityLookupError(c, "GitHub", err) {
+		return
+	}
+	if taken {
 		// FillUserByGitHubId is scoped
 		err := user.FillUserByGitHubId()
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-		// if user.Id == 0 , user has been deleted
-		if user.Id == 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "用户已注销",
-			})
+		if handleOAuthUserLookupError(c, err) {
 			return
 		}
 	} else {
@@ -190,7 +182,11 @@ func GitHubBind(c *gin.Context) {
 	user := model.User{
 		GitHubId: githubUser.Login,
 	}
-	if model.IsGitHubIdAlreadyTaken(user.GitHubId) {
+	taken, err := model.IsGitHubIdAlreadyTaken(user.GitHubId)
+	if handleOAuthIdentityLookupError(c, "GitHub", err) {
+		return
+	}
+	if taken {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "该 GitHub 账户已被绑定",

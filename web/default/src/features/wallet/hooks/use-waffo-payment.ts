@@ -61,7 +61,7 @@ export function useWaffoPayment() {
           const paymentUrl = getPaymentUrl(response.data)
 
           if (paymentUrl) {
-            window.open(paymentUrl, '_blank')
+            window.open(paymentUrl, '_blank', 'noopener,noreferrer')
             toast.success(i18next.t('Redirecting to payment page...'))
             return true
           }

@@ -121,7 +121,14 @@ type ModelRow = {
   billingExpr?: string
   requestRuleExpr?: string
   hasConflict: boolean
+  saved?: ModelRow
+  draft?: ModelRow
+  isDraftChanged?: boolean
+  isDraftDeleted?: boolean
+  isDraftNew?: boolean
 }
+
+type BillingMode = 'per-token' | 'per-request' | 'tiered_expr'
 
 const STORAGE_KEY = 'model-ratio-column-visibility'
 
@@ -223,6 +230,23 @@ const isBasePricingUnset = (row?: ModelRow) =>
   (row.billingMode !== 'tiered_expr' &&
     !hasValue(row.price) &&
     !hasValue(row.ratio))
+
+const getModelRowSignature = (row?: ModelRow): string => {
+  if (!row) return ''
+  return JSON.stringify({
+    price: row.price || '',
+    ratio: row.ratio || '',
+    cacheRatio: row.cacheRatio || '',
+    createCacheRatio: row.createCacheRatio || '',
+    completionRatio: row.completionRatio || '',
+    imageRatio: row.imageRatio || '',
+    audioRatio: row.audioRatio || '',
+    audioCompletionRatio: row.audioCompletionRatio || '',
+    billingMode: row.billingMode || 'per-token',
+    billingExpr: row.billingExpr || '',
+    requestRuleExpr: row.requestRuleExpr || '',
+  })
+}
 
 const buildModelRows = ({
   modelPrice,
@@ -461,15 +485,23 @@ export const ModelRatioVisualEditor = memo(
         .map((name) => {
           const draft = draftByName.get(name)
           const saved = savedByName.get(name)
-          return (
-            draft ??
+          const displayed = draft ??
             saved ?? {
               name,
               billingMode: 'per-token',
               hasConflict: false,
             }
-          )
+          return {
+            ...displayed,
+            saved,
+            draft,
+            isDraftChanged:
+              getModelRowSignature(saved) !== getModelRowSignature(draft),
+            isDraftDeleted: Boolean(saved && !draft),
+            isDraftNew: Boolean(!saved && draft),
+          }
         })
+        .filter((row) => !row.isDraftDeleted)
         .filter(
           (row) =>
             filterMode !== 'unset' ||
@@ -524,24 +556,27 @@ export const ModelRatioVisualEditor = memo(
 
     const handleEdit = useCallback(
       (model: ModelRow) => {
+        const editableModel = model.draft ?? model.saved ?? model
+        let derivedBillingMode: BillingMode = 'per-token'
+        if (editableModel.billingMode === 'tiered_expr') {
+          derivedBillingMode = 'tiered_expr'
+        } else if (editableModel.price && editableModel.price !== '') {
+          derivedBillingMode = 'per-request'
+        }
+
         setEditData({
-          name: model.name,
-          price: model.price,
-          ratio: model.ratio,
-          cacheRatio: model.cacheRatio,
-          createCacheRatio: model.createCacheRatio,
-          completionRatio: model.completionRatio,
-          imageRatio: model.imageRatio,
-          audioRatio: model.audioRatio,
-          audioCompletionRatio: model.audioCompletionRatio,
-          billingMode:
-            model.billingMode === 'tiered_expr'
-              ? 'tiered_expr'
-              : model.price && model.price !== ''
-                ? 'per-request'
-                : 'per-token',
-          billingExpr: model.billingExpr,
-          requestRuleExpr: model.requestRuleExpr,
+          name: editableModel.name,
+          price: editableModel.price,
+          ratio: editableModel.ratio,
+          cacheRatio: editableModel.cacheRatio,
+          createCacheRatio: editableModel.createCacheRatio,
+          completionRatio: editableModel.completionRatio,
+          imageRatio: editableModel.imageRatio,
+          audioRatio: editableModel.audioRatio,
+          audioCompletionRatio: editableModel.audioCompletionRatio,
+          billingMode: derivedBillingMode,
+          billingExpr: editableModel.billingExpr,
+          requestRuleExpr: editableModel.requestRuleExpr,
         })
         setEditorOpen(true)
         if (isMobile) setSheetOpen(true)

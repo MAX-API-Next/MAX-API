@@ -701,7 +701,17 @@ func handleConfigUpdate(key, value string) (bool, error) {
 	configMap := map[string]string{
 		configKey: value,
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	// group_ratio_setting.group_ratio is the persisted alias for the legacy
+	// GroupRatio option. Keep both paths on the package-owned RWMap so the
+	// runtime readers and the registered config stay connected.
+	if configName == "group_ratio_setting" && configKey == "group_ratio" {
+		if err := ratio_setting.UpdateGroupRatioByJSONString(value); err != nil {
+			return true, err
+		}
+	}
+	if err := config.UpdateConfigFromMap(cfg, configMap); err != nil {
+		return true, err
+	}
 
 	// 特定配置的后处理
 	if configName == "performance_setting" {

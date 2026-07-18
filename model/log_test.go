@@ -858,7 +858,8 @@ func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
 
 func TestEnqueueLogQuotaDataAfterShutdownPersistsSynchronously(t *testing.T) {
 	resetQuotaDataCacheForTest(t)
-	require.NoError(t, DB.AutoMigrate(&QuotaData{}))
+	require.NoError(t, DB.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
 	require.NoError(t, DB.Where("1 = 1").Delete(&QuotaData{}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, DB.Where("1 = 1").Delete(&QuotaData{}).Error)

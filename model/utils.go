@@ -82,7 +82,7 @@ func batchUpdate() {
 		for key, value := range store {
 			switch i {
 			case BatchUpdateTypeTokenQuota:
-				err := increaseTokenQuota(key, int(value))
+				err := increaseTokenQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())
 				}

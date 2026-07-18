@@ -123,6 +123,9 @@ MAX API 的设计把 AI 模型和 AI Agent 的运行过程纳入可配置、可�
 
 默认使用 SQLite，本地体验无需额外数据库。
 
+> [!WARNING]
+> SQLite 仅适合本地体验、开发和小规模测试。正式/生产环境不建议使用 SQLite：在并发请求、多实例部署、大量日志与用量数据、数据库迁移、备份恢复或长事务场景下，可能出现锁等待、写入阻塞、迁移耗时或失败，以及可用性和数据维护问题。正式环境请使用 MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，并配置可靠的备份与恢复方案。
+
 ```bash
 # 1. 拉取镜像
 docker pull cscitechtop/max-api:latest
@@ -487,8 +490,8 @@ Seedance 2.0 等视频模型可按分辨率、视频输入等请求参数参与�
 | 组件 | 要求 |
 |------|------|
 | 容器引擎 | Docker / Docker Compose |
-| 本地数据库 | SQLite，Docker 部署时需挂载 `/data` |
-| 远程数据库 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6 |
+| 本地数据库 | SQLite，仅用于本地体验、开发或小规模测试；Docker 部署时需挂载 `/data` |
+| 正式环境数据库 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，并配置可靠的备份与恢复方案 |
 | 缓存 | 单机可使用内存缓存，多机部署建议使用 Redis |
 | 前端构建 | 使用 Bun workspace，需保留 `web/package.json` 与 `web/bun.lock` |
 | 源码构建 | 使用仓库 `go.mod` 声明的 Go 版本（当前 Go 1.25.1+）和 `go.sum`；依赖或安全更新后运行 `go mod download`、`go mod verify` 并重新构建 |

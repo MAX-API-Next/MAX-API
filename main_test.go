@@ -30,6 +30,13 @@ func TestRunWithTimeoutRecoversPanic(t *testing.T) {
 	}))
 }
 
+func TestRunWithContextRecoversPanic(t *testing.T) {
+	err := runWithContext(context.Background(), func(context.Context) error {
+		panic("quota save failed")
+	})
+	require.EqualError(t, err, "runWithContext: recovered panic: quota save failed")
+}
+
 func TestShutdownHTTPServerClosesActiveHandlersAfterTimeout(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	handlerDone := make(chan struct{})

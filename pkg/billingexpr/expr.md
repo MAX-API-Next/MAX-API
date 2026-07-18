@@ -76,8 +76,8 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
 | `tier` | `tier(name, value) → float64` | Records which pricing tier matched; must wrap the cost expression |
-| `param` | `param(path) → any` | Reads a JSON path from the request body (uses gjson) |
-| `header` | `header(key) → string` | Reads a request header value |
+| `param` | `param(path) → any` | Reads an approved pricing-metadata path from the request body |
+| `header` | `header(key) → string` | Reads an approved provider feature header |
 | `has` | `has(source, substr) → bool` | Substring check |
 | `hour` | `hour(tz) → int` | Current hour in timezone (0-23) |
 | `minute` | `minute(tz) → int` | Current minute (0-59) |
@@ -89,6 +89,19 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `abs` | `abs(x) → float64` | Absolute value |
 | `ceil` | `ceil(x) → float64` | Ceiling |
 | `floor` | `floor(x) → float64` | Floor |
+
+For request-aware pricing, `header()` and `param()` use a positive allowlist.
+`header()` currently exposes only `anthropic-beta` and `openai-beta`.
+`param()` supports the established pricing metadata paths `service_tier`,
+`stream`, `fast`, `stream_options.fast_mode`, `messages.#`, `input.#`,
+`tools.#`, `modalities.#`, `response_format.type`, `reasoning.effort`,
+`thinking.type`, `thinking.budget_tokens`, and indexed `role` / `type` fields
+under `messages`, `input`, or `tools`.
+
+All other headers and body paths return an empty string or `nil`. GJSON
+modifiers, pipelines, queries, wildcards, whole-document selectors, prompt or
+message content, tool definitions, credentials, user metadata, image, audio,
+and other raw payload fields are not available to pricing expressions.
 
 ### Expression Examples
 

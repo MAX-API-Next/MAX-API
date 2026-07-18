@@ -97,7 +97,7 @@ func seedToken(t *testing.T, id int, userId int, key string, remainQuota int) {
 		Key:         key,
 		Name:        "test_token",
 		Status:      common.TokenStatusEnabled,
-		RemainQuota: remainQuota,
+		RemainQuota: int64(remainQuota),
 		UsedQuota:   0,
 	}
 	require.NoError(t, model.DB.Create(token).Error)
@@ -165,14 +165,14 @@ func getTokenRemainQuota(t *testing.T, id int) int {
 	t.Helper()
 	var token model.Token
 	require.NoError(t, model.DB.Select("remain_quota").Where("id = ?", id).First(&token).Error)
-	return token.RemainQuota
+	return int(token.RemainQuota)
 }
 
 func getTokenUsedQuota(t *testing.T, id int) int {
 	t.Helper()
 	var token model.Token
 	require.NoError(t, model.DB.Select("used_quota").Where("id = ?", id).First(&token).Error)
-	return token.UsedQuota
+	return int(token.UsedQuota)
 }
 
 func getSubscriptionUsed(t *testing.T, id int) int64 {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -52,8 +53,8 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 		// 用户额度充足，判断令牌额度是否充足
 		if !relayInfo.TokenUnlimited {
 			// 非无限令牌，判断令牌额度是否充足
-			tokenQuota := c.GetInt("token_quota")
-			if tokenQuota > trustQuota {
+			tokenQuota := c.GetInt64("token_quota")
+			if tokenQuota > int64(trustQuota) {
 				// 令牌额度充足，信任令牌
 				preConsumedQuota = 0
 				logger.LogInfo(c, fmt.Sprintf("用户 %d 剩余额度 %s 且令牌 %d 额度 %d 充足, 信任且不需要预扣费", relayInfo.UserId, logger.FormatQuota(userQuota), relayInfo.TokenId, tokenQuota))
@@ -67,11 +68,22 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	}
 
 	if preConsumedQuota > 0 {
-		err := PreConsumeTokenQuota(relayInfo, preConsumedQuota)
+		token, err := model.GetTokenByKey(relayInfo.TokenKey, false)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		err = model.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota, false)
+		if !relayInfo.TokenUnlimited && token.RemainQuota < int64(preConsumedQuota) {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(preConsumedQuota)),
+				types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		err = model.DecreaseTokenAndUserQuota(relayInfo.TokenId, relayInfo.UserId, relayInfo.TokenKey, preConsumedQuota)
+		if errors.Is(err, model.ErrTokenQuotaInsufficient) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		if errors.Is(err, model.ErrUserQuotaInsufficient) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}

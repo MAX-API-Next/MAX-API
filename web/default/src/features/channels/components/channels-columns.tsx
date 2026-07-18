@@ -660,7 +660,11 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
                           e.stopPropagation()
                           if (!deploymentId) return
                           const targetUrl = `/models/deployments?dFilter=${encodeURIComponent(String(deploymentId))}`
-                          window.open(targetUrl, '_blank', 'noopener')
+                          window.open(
+                            targetUrl,
+                            '_blank',
+                            'noopener,noreferrer'
+                          )
                         }}
                       />
                     }

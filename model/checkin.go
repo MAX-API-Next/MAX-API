@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -113,10 +114,11 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 		return nil, err
 	}
 
-	// 事务成功后，异步更新缓存
-	go func() {
-		_ = cacheIncrUserQuota(userId, int64(quotaAwarded))
-	}()
+	// 事务成功后同步失效缓存，下一次读取以数据库结果回填。
+	if cacheErr := invalidateUserQuotaCache(userId); cacheErr != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate check-in quota cache (user_id=%d): %v", userId, cacheErr))
+		enqueueUserCacheInvalidationRetry(userId, cacheErr)
+	}
 
 	return checkin, nil
 }

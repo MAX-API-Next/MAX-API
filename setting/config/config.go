@@ -1,7 +1,7 @@
 package config
 
 import (
-	"encoding/json"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -59,7 +59,7 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 		if len(configMap) > 0 {
 			if err := updateConfigFromMap(config, configMap); err != nil {
 				common.SysError("failed to update config " + name + ": " + err.Error())
-				continue
+				return fmt.Errorf("failed to update config %s: %w", name, err)
 			}
 		}
 	}
@@ -134,7 +134,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 		case reflect.Ptr:
 			// 处理指针类型：如果非 nil，序列化指向的值
 			if !field.IsNil() {
-				bytes, err := json.Marshal(field.Interface())
+				bytes, err := common.Marshal(field.Interface())
 				if err != nil {
 					return nil, err
 				}
@@ -145,7 +145,7 @@ func configToMap(config interface{}) (map[string]string, error) {
 			}
 		case reflect.Map, reflect.Slice, reflect.Struct:
 			// 复杂类型使用JSON序列化
-			bytes, err := json.Marshal(field.Interface())
+			bytes, err := common.Marshal(field.Interface())
 			if err != nil {
 				return nil, err
 			}
@@ -165,12 +165,12 @@ func configToMap(config interface{}) (map[string]string, error) {
 func updateConfigFromMap(config interface{}, configMap map[string]string) error {
 	val := reflect.ValueOf(config)
 	if val.Kind() != reflect.Ptr {
-		return nil
+		return fmt.Errorf("config must be a pointer, got %s", val.Kind())
 	}
 	val = val.Elem()
 
 	if val.Kind() != reflect.Struct {
-		return nil
+		return fmt.Errorf("config must point to a struct, got %s", val.Kind())
 	}
 
 	typ := val.Type()
@@ -206,7 +206,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 		case reflect.Bool:
 			boolValue, err := strconv.ParseBool(strValue)
 			if err != nil {
-				continue
+				return fmt.Errorf("invalid value for %s: %w", key, err)
 			}
 			field.SetBool(boolValue)
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -215,7 +215,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 				// 兼容 float 格式的字符串（如 "2.000000"）
 				floatValue, fErr := strconv.ParseFloat(strValue, 64)
 				if fErr != nil {
-					continue
+					return fmt.Errorf("invalid value for %s: %w", key, err)
 				}
 				intValue = int64(floatValue)
 			}
@@ -226,7 +226,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 				// 兼容 float 格式的字符串
 				floatValue, fErr := strconv.ParseFloat(strValue, 64)
 				if fErr != nil || floatValue < 0 {
-					continue
+					return fmt.Errorf("invalid value for %s: %q", key, strValue)
 				}
 				uintValue = uint64(floatValue)
 			}
@@ -234,7 +234,7 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 		case reflect.Float32, reflect.Float64:
 			floatValue, err := strconv.ParseFloat(strValue, 64)
 			if err != nil {
-				continue
+				return fmt.Errorf("invalid value for %s: %w", key, err)
 			}
 			field.SetFloat(floatValue)
 		case reflect.Ptr:
@@ -242,30 +242,39 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 			if strValue == "null" {
 				field.Set(reflect.Zero(field.Type()))
 			} else {
-				// 如果指针是 nil，需要先初始化
-				if field.IsNil() {
-					field.Set(reflect.New(field.Type().Elem()))
+				if !field.IsNil() {
+					if unmarshaler, ok := field.Interface().(interface{ UnmarshalJSON([]byte) error }); ok {
+						if err := unmarshaler.UnmarshalJSON([]byte(strValue)); err != nil {
+							return fmt.Errorf("invalid value for %s: %w", key, err)
+						}
+						continue
+					}
 				}
-				// 反序列化到指针指向的值
-				err := json.Unmarshal([]byte(strValue), field.Interface())
-				if err != nil {
-					continue
+				fresh := reflect.New(field.Type().Elem())
+				if !field.IsNil() {
+					fresh.Elem().Set(field.Elem())
 				}
+				if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+					return fmt.Errorf("invalid value for %s: %w", key, err)
+				}
+				field.Set(fresh)
 			}
 		case reflect.Map:
 			// json.Unmarshal merges into existing maps (keeps old keys that are
 			// absent from the new JSON). Allocate a fresh map so removed keys
 			// are properly cleared.
 			fresh := reflect.New(field.Type())
-			if err := json.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
-				continue
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+				return fmt.Errorf("invalid value for %s: %w", key, err)
 			}
 			field.Set(fresh.Elem())
 		case reflect.Slice, reflect.Struct:
-			err := json.Unmarshal([]byte(strValue), field.Addr().Interface())
-			if err != nil {
-				continue
+			fresh := reflect.New(field.Type())
+			fresh.Elem().Set(field)
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+				return fmt.Errorf("invalid value for %s: %w", key, err)
 			}
+			field.Set(fresh.Elem())
 		}
 	}
 

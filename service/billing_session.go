@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/logger"
@@ -23,24 +24,44 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	relayInfo        *relaycommon.RelayInfo
-	funding          FundingSource
-	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed    int  // 令牌额度实际扣减量
-	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted          bool // 是否命中信任额度旁路
-	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
-	settled          bool // Settle 全部完成（资金 + 令牌）
-	refunded         bool // Refund 已调用
-	mu               sync.Mutex
+	relayInfo               *relaycommon.RelayInfo
+	funding                 FundingSource
+	preConsumedQuota        int   // 实际预扣额度（信任用户可能为 0）
+	tokenConsumed           int   // 令牌额度实际扣减量
+	extraReserved           int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	trusted                 bool  // 是否命中信任额度旁路
+	fundingSettled          bool  // funding.Settle 已成功，资金来源已提交
+	appliedFundingDelta     int64 // 已提交、尚未完成令牌对账的资金差额
+	compensationFailed      bool  // 资金补偿返回错误且结果不确定；后续仅重试令牌
+	fundingReconcilePending bool  // 已知部分补偿已生效；重试令牌前先补齐资金差额
+	settled                 bool  // Settle 全部完成（资金 + 令牌）
+	refunded                bool  // Refund 已调用
+	mu                      sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
-// 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
-// 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
+// 资金来源和令牌额度分两步提交。若令牌调整失败，会优先反向补偿已提交的
+// 资金差额。已确认的部分补偿会记录剩余差额并在重试令牌前补齐；补偿
+// 返回错误时结果不明确，不会自动重复该非幂等资金操作，后续仅重试令牌。
 func (s *BillingSession) Settle(actualQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var lastErr error
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := s.settleLocked(actualQuota); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if attempt < maxAttempts-1 {
+			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("billing settlement failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func (s *BillingSession) settleLocked(actualQuota int) error {
 	if s.settled {
 		return nil
 	}
@@ -50,14 +71,37 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		return nil
 	}
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
-	appliedFundingDelta := int64(delta)
 	if !s.fundingSettled {
 		applied, err := s.funding.Settle(delta)
 		if err != nil {
 			return err
 		}
-		appliedFundingDelta = applied
+		s.appliedFundingDelta = applied
 		s.fundingSettled = true
+		s.compensationFailed = false
+		s.fundingReconcilePending = false
+	} else if s.fundingReconcilePending {
+		// A partial compensation leaves a residual funding delta committed.
+		// Reconcile that residual to the target before retrying the token step.
+		needed := int64(delta) - s.appliedFundingDelta
+		if needed != 0 {
+			applied, err := s.funding.Settle(int(needed))
+			if err != nil {
+				// The operation outcome is ambiguous. Do not issue another funding
+				// mutation automatically; later attempts may only retry the token.
+				s.compensationFailed = true
+				s.fundingReconcilePending = false
+				return err
+			}
+			s.appliedFundingDelta += applied
+			if applied != needed {
+				return fmt.Errorf("funding reconciliation incomplete: needed=%d applied=%d", needed, applied)
+			}
+		}
+		if s.appliedFundingDelta != int64(delta) {
+			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta)
+		}
+		s.fundingReconcilePending = false
 	}
 	// 2) 调整令牌额度
 	var tokenErr error
@@ -68,17 +112,47 @@ func (s *BillingSession) Settle(actualQuota int) error {
 			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
 		}
 		if tokenErr != nil {
-			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
 			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+			if s.compensationFailed {
+				return tokenErr
+			}
+			if s.appliedFundingDelta == 0 {
+				s.fundingSettled = false
+			} else {
+				committed := s.appliedFundingDelta
+				compensated, compensationErr := s.funding.Settle(-int(committed))
+				if compensationErr != nil {
+					// A funding error may be an ambiguous commit. Retain the target
+					// delta and never repeat this non-idempotent compensation.
+					s.compensationFailed = true
+					s.fundingReconcilePending = false
+					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
+						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
+				} else if compensated != -committed {
+					s.appliedFundingDelta = committed + compensated
+					s.compensationFailed = false
+					s.fundingReconcilePending = true
+					common.SysLog(fmt.Sprintf("incomplete funding compensation after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d)",
+						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated))
+				} else {
+					s.fundingSettled = false
+					s.appliedFundingDelta = 0
+					s.compensationFailed = false
+					s.fundingReconcilePending = false
+				}
+			}
+			return tokenErr
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
 	if s.funding.Source() == BillingSourceSubscription {
-		s.relayInfo.SubscriptionPostDelta += appliedFundingDelta
+		s.relayInfo.SubscriptionPostDelta += s.appliedFundingDelta
 	}
+	s.compensationFailed = false
+	s.fundingReconcilePending = false
 	s.settled = true
-	return tokenErr
+	return nil
 }
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
@@ -296,8 +370,8 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	// 检查令牌是否充足
 	tokenTrusted := s.relayInfo.TokenUnlimited
 	if !tokenTrusted {
-		tokenQuota := c.GetInt("token_quota")
-		tokenTrusted = tokenQuota > trustQuota
+		tokenQuota := c.GetInt64("token_quota")
+		tokenTrusted = tokenQuota > int64(trustQuota)
 	}
 	if !tokenTrusted {
 		return false
@@ -309,8 +383,7 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅
-		// 2. SubscriptionFunding.PreConsume 忽略参数，始终用 s.amount 预扣
-		// 3. 若信任旁路将 effectiveQuota 设为 0，会导致 preConsumedQuota 与实际订阅预扣不一致
+		// 2. 若信任旁路将 effectiveQuota 设为 0，订阅无法创建有效预扣记录
 		return false
 	default:
 		return false
@@ -390,11 +463,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				requestId: relayInfo.RequestId,
 				userId:    relayInfo.UserId,
 				modelName: relayInfo.OriginModelName,
-				amount:    subConsume,
 			},
 		}
-		// 必须传 subConsume 而非 preConsumedQuota，保证 SubscriptionFunding.amount、
-		// preConsume 参数和 FinalPreConsumedQuota 三者一致，避免订阅多扣费。
+		// 必须传 subConsume 而非 preConsumedQuota，保证订阅至少创建 1 额度预扣记录。
 		if apiErr := session.preConsume(c, int(subConsume)); apiErr != nil {
 			return nil, apiErr
 		}

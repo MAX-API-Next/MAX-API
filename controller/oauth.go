@@ -35,6 +35,47 @@ func oauthProviderUserUpdateField(provider oauth.Provider) (model.UserUpdateFiel
 	}
 }
 
+func handleOAuthUserLookupError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, model.ErrUserDeleted) {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "用户已注销"})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	}
+	return true
+}
+
+type oauthIdentityLookupError struct {
+	provider string
+	err      error
+}
+
+func (e *oauthIdentityLookupError) Error() string {
+	return "OAuth identity lookup failed"
+}
+
+func (e *oauthIdentityLookupError) Unwrap() error {
+	return e.err
+}
+
+func handleOAuthIdentityLookupError(c *gin.Context, provider string, err error) bool {
+	if err == nil {
+		return false
+	}
+	var lookupErr *oauthIdentityLookupError
+	if errors.As(err, &lookupErr) {
+		if lookupErr.provider != "" {
+			provider = lookupErr.provider
+		}
+		err = lookupErr.err
+	}
+	common.SysError(fmt.Sprintf("OAuth identity lookup failed (provider=%s): %v", provider, err))
+	common.ApiErrorI18n(c, i18n.MsgOAuthGetUserErr)
+	return true
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
@@ -122,6 +163,11 @@ func HandleOAuth(c *gin.Context) {
 	// 7. Find or create user
 	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
 	if err != nil {
+		var lookupErr *oauthIdentityLookupError
+		if errors.As(err, &lookupErr) {
+			handleOAuthIdentityLookupError(c, provider.GetName(), lookupErr)
+			return
+		}
 		switch err.(type) {
 		case *OAuthUserDeletedError:
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
@@ -168,13 +214,21 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 	}
 
 	// Check if this OAuth account is already bound (check both new ID and legacy ID)
-	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
+	if handleOAuthIdentityLookupError(c, provider.GetName(), err) {
+		return
+	}
+	if taken {
 		common.ApiErrorI18n(c, i18n.MsgOAuthAlreadyBound, providerParams(provider.GetName()))
 		return
 	}
 	// Also check legacy ID to prevent duplicate bindings during migration period
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
-		if provider.IsUserIDTaken(legacyID) {
+		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
+		if handleOAuthIdentityLookupError(c, provider.GetName(), lookupErr) {
+			return
+		}
+		if legacyTaken {
 			common.ApiErrorI18n(c, i18n.MsgOAuthAlreadyBound, providerParams(provider.GetName()))
 			return
 		}
@@ -227,9 +281,16 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	user := &model.User{}
 
 	// Check if user already exists with new ID
-	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+	taken, err := provider.IsUserIDTaken(oauthUser.ProviderUserID)
+	if err != nil {
+		return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: err}
+	}
+	if taken {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
 		if err != nil {
+			if errors.Is(err, model.ErrUserDeleted) {
+				return nil, &OAuthUserDeletedError{}
+			}
 			return nil, err
 		}
 		// Check if user has been deleted
@@ -241,9 +302,16 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 
 	// Try to find user with legacy ID (for GitHub migration from login to numeric ID)
 	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
-		if provider.IsUserIDTaken(legacyID) {
+		legacyTaken, lookupErr := provider.IsUserIDTaken(legacyID)
+		if lookupErr != nil {
+			return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: lookupErr}
+		}
+		if legacyTaken {
 			err := provider.FillUserByProviderID(user, legacyID)
 			if err != nil {
+				if errors.Is(err, model.ErrUserDeleted) {
+					return nil, &OAuthUserDeletedError{}
+				}
 				return nil, err
 			}
 			if user.Id != 0 {
@@ -331,7 +399,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.FinalizeOAuthUserCreation(inviterId)
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
-		err := model.WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
+		err := model.WithUserOAuthIdentityWriteTx(user.Email, func(tx *gorm.DB) error {
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
@@ -339,6 +407,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 
 			// Set the provider user ID on the user model and update
 			provider.SetProviderUserID(user, oauthUser.ProviderUserID)
+			if err := user.ValidateOAuthIdentityLengths(); err != nil {
+				return err
+			}
 			if err := tx.Model(user).Updates(map[string]interface{}{
 				"github_id":   user.GitHubId,
 				"discord_id":  user.DiscordId,

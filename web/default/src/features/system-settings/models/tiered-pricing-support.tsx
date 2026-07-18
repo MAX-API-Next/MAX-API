@@ -455,10 +455,12 @@ Important: len is NOT affected by auto-exclusion. Tier conditions should use len
 - tier(name, value) — labels the billing tier; must wrap the cost expression
 - max(a, b), min(a, b) — maximum/minimum
 - ceil(x), floor(x), abs(x) — ceiling, floor, absolute value
-- header(name) — reads a request header
-- param(path) — reads a request body JSON path (gjson syntax)
+- header(name) — reads an approved provider feature header (anthropic-beta or openai-beta)
+- param(path) — reads approved pricing metadata such as service_tier, stream_options.fast_mode, array counts, role/type, reasoning, or thinking settings
 - has(source, substr) — substring check
 - hour(tz), minute(tz), weekday(tz), month(tz), day(tz) — time functions, tz is a timezone like "Asia/Shanghai"
+
+Request probes use a positive allowlist. Whole-body selectors, GJSON queries/modifiers/wildcards, credentials, prompts, message content, tool definitions, user metadata, and raw media payloads are unavailable.
 
 ### Price Coefficients
 

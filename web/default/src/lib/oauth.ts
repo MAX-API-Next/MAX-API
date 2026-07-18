@@ -18,6 +18,53 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { api } from './api'
 
+const oauthBindingStatePrefix = 'oauth:binding:state:'
+const oauthBindingStateTtlMs = 10 * 60 * 1000
+
+function getOAuthBindingStateKey(state: string): string {
+  return `${oauthBindingStatePrefix}${state}`
+}
+
+function markOAuthBindingState(state: string): void {
+  try {
+    localStorage.setItem(getOAuthBindingStateKey(state), String(Date.now()))
+  } catch {
+    // The callback retains the legacy opener check when storage is unavailable.
+  }
+}
+
+export function isOAuthBindingState(state?: string): boolean {
+  if (!state) return false
+  try {
+    const key = getOAuthBindingStateKey(state)
+    const createdAt = Number(localStorage.getItem(key))
+    if (
+      !Number.isFinite(createdAt) ||
+      Date.now() - createdAt > oauthBindingStateTtlMs
+    ) {
+      localStorage.removeItem(key)
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function clearOAuthBindingState(state?: string): void {
+  if (!state) return
+  try {
+    localStorage.removeItem(getOAuthBindingStateKey(state))
+  } catch {
+    // Ignore storage cleanup failures; entries are bounded by their TTL.
+  }
+}
+
+function openOAuthBindingWindow(url: string, state: string): void {
+  markOAuthBindingState(state)
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 // ============================================================================
 // OAuth URL Builders
 // ============================================================================
@@ -104,7 +151,7 @@ export async function handleGitHubOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildGitHubOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  openOAuthBindingWindow(url, state)
 }
 
 /**
@@ -115,7 +162,7 @@ export async function handleDiscordOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildDiscordOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  openOAuthBindingWindow(url, state)
 }
 
 /**
@@ -129,7 +176,7 @@ export async function handleOIDCOAuth(
   if (!state) return
 
   const url = buildOIDCOAuthUrl(authUrl, clientId, state)
-  window.open(url, '_blank')
+  openOAuthBindingWindow(url, state)
 }
 
 /**
@@ -140,5 +187,5 @@ export async function handleLinuxDOOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildLinuxDOOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  openOAuthBindingWindow(url, state)
 }

@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
+import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { IconGithub } from '@/assets/brand-icons'
 import { useAuthStore } from '@/stores/auth-store'
@@ -101,6 +102,7 @@ export function PublicHeader(props: PublicHeaderProps) {
   const notifications = useNotifications()
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
+  const isDesktopNavigation = useMediaQuery(DESKTOP_NAVIGATION_MEDIA_QUERY)
 
   const user = auth.user
   const isAuthenticated = !!user
@@ -286,7 +288,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               <GitHubLinkButton />
               {showLanguageSwitcher && <LanguageSwitcher />}
               {showThemeSwitch && <ThemeSwitch />}
-              {showNotifications && (
+              {showNotifications && isDesktopNavigation && (
                 <NotificationPopover
                   open={notifications.popoverOpen}
                   onOpenChange={notifications.setPopoverOpen}
@@ -322,7 +324,7 @@ export function PublicHeader(props: PublicHeaderProps) {
 
             {/* Mobile: compact actions + hamburger */}
             <div className='flex items-center gap-1 lg:hidden'>
-              {showNotifications && (
+              {showNotifications && !isDesktopNavigation && (
                 <NotificationPopover
                   open={notifications.popoverOpen}
                   onOpenChange={notifications.setPopoverOpen}

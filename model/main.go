@@ -36,6 +36,21 @@ var logRetryMarkerBackfillAsyncRunner = func(fn func()) {
 	gopool.Go(fn)
 }
 
+type userOAuthIdentityMigration struct {
+	column               string
+	indexName            string
+	mysqlGeneratedColumn string
+}
+
+var userOAuthIdentityMigrations = []userOAuthIdentityMigration{
+	{column: "wechat_id", indexName: "ux_users_wechat_id", mysqlGeneratedColumn: "wechat_id_unique"},
+	{column: "github_id", indexName: "ux_users_github_id", mysqlGeneratedColumn: "github_id_unique"},
+	{column: "discord_id", indexName: "ux_users_discord_id", mysqlGeneratedColumn: "discord_id_unique"},
+	{column: "oidc_id", indexName: "ux_users_oidc_id", mysqlGeneratedColumn: "oidc_id_unique"},
+	{column: "telegram_id", indexName: "ux_users_telegram_id", mysqlGeneratedColumn: "telegram_id_unique"},
+	{column: "linux_do_id", indexName: "ux_users_linux_do_id", mysqlGeneratedColumn: "linux_do_id_unique"},
+}
+
 func logRetryMarkerBackfillCompletionKey() string {
 	logDSN := strings.TrimSpace(os.Getenv("LOG_SQL_DSN"))
 	if logDSN == "" {
@@ -84,6 +99,13 @@ func initCol() {
 	}
 	// log sql type and database type
 	//common.SysLog("Using Log SQL Type: " + common.LogSqlType)
+}
+
+func quoteDBIdentifier(identifier string) string {
+	if common.UsingPostgreSQL {
+		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	}
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
 }
 
 var DB *gorm.DB
@@ -282,6 +304,9 @@ func migrateDB() error {
 	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
 		return err
 	}
+	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -295,6 +320,8 @@ func migrateDB() error {
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
+		&QuotaDataSnapshot{},
+		&QuotaDataSnapshotRetry{},
 		&Task{},
 		&Model{},
 		&Vendor{},
@@ -313,6 +340,12 @@ func migrateDB() error {
 		&SystemInstance{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
+		return err
+	}
+	if err := migrateUserOAuthIdentityConstraints(); err != nil {
 		return err
 	}
 	if err := backfillUserNormalizedEmails(); err != nil {
@@ -338,6 +371,9 @@ func migrateDBFast() error {
 	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
 		return err
 	}
+	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -356,6 +392,8 @@ func migrateDBFast() error {
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
+		{&QuotaDataSnapshot{}, "QuotaDataSnapshot"},
+		{&QuotaDataSnapshotRetry{}, "QuotaDataSnapshotRetry"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
@@ -396,6 +434,12 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
+		return err
+	}
+	if err := migrateUserOAuthIdentityConstraints(); err != nil {
+		return err
+	}
 	if err := backfillUserNormalizedEmails(); err != nil {
 		return err
 	}
@@ -423,6 +467,218 @@ func backfillUserNormalizedEmails() error {
 		return fmt.Errorf("failed to backfill user normalized emails: %w", result.Error)
 	}
 	return nil
+}
+
+func migrateUserOAuthIdentityConstraints() error {
+	if DB == nil || !DB.Migrator().HasTable(&User{}) {
+		return nil
+	}
+	return withUserOAuthIdentityMutationLock(DB, migrateUserOAuthIdentityConstraintsLocked)
+}
+
+func migrateUserOAuthIdentityConstraintsLocked(db *gorm.DB) error {
+	if common.UsingMySQL {
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return cleanupUserOAuthIdentityDuplicatesTx(tx)
+		}); err != nil {
+			return err
+		}
+		return ensureUserOAuthIdentityUniqueIndexes(db)
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := lockUserOAuthIdentityTableForConstraintMigrationTx(tx); err != nil {
+			return err
+		}
+		if err := cleanupUserOAuthIdentityDuplicatesTx(tx); err != nil {
+			return err
+		}
+		return ensureUserOAuthIdentityUniqueIndexes(tx)
+	})
+}
+
+func cleanupUserOAuthIdentityDuplicatesTx(tx *gorm.DB) error {
+	for _, identity := range userOAuthIdentityMigrations {
+		if !tx.Migrator().HasColumn(&User{}, identity.column) {
+			continue
+		}
+		quotedColumn := quoteDBIdentifier(identity.column)
+		if err := tx.Table("users").
+			Where(quotedColumn+" = ?", "").
+			Update(identity.column, nil).Error; err != nil {
+			return fmt.Errorf("failed to null empty users.%s values: %w", identity.column, err)
+		}
+		if common.UsingMySQL {
+			if err := rejectOversizedUserOAuthIdentityValuesTx(tx, identity); err != nil {
+				return err
+			}
+		}
+		if err := clearDuplicateUserOAuthIdentityTx(tx, identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureUserOAuthIdentityUniqueIndexes(db *gorm.DB) error {
+	for _, identity := range userOAuthIdentityMigrations {
+		if !db.Migrator().HasColumn(&User{}, identity.column) {
+			continue
+		}
+		if err := ensureUserOAuthIdentityUniqueIndex(db, identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func lockUserOAuthIdentityTableForConstraintMigrationTx(tx *gorm.DB) error {
+	switch {
+	case common.UsingPostgreSQL:
+		return tx.Exec("LOCK TABLE " + quoteDBIdentifier("users") + " IN SHARE ROW EXCLUSIVE MODE").Error
+	case common.UsingSQLite:
+		var id int
+		if err := tx.Table("users").Select("id").Order("id ASC").Limit(1).Scan(&id).Error; err != nil {
+			return err
+		}
+		if id == 0 {
+			return nil
+		}
+		return tx.Table("users").Where("id = ?", id).Update("id", gorm.Expr("id")).Error
+	default:
+		return nil
+	}
+}
+
+func rejectOversizedUserOAuthIdentityValuesTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
+	quotedColumn := quoteDBIdentifier(identity.column)
+	var count int64
+	if err := tx.Table("users").
+		Where(fmt.Sprintf("%s IS NOT NULL AND %s <> ? AND CHAR_LENGTH(%s) > ?", quotedColumn, quotedColumn, quotedColumn), "", userOAuthIdentityMaxLength).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to inspect users.%s length before unique OAuth identity migration: %w", identity.column, err)
+	}
+	if count > 0 {
+		return fmt.Errorf("users.%s contains %d OAuth identity values longer than %d characters; clean them before creating the unique index", identity.column, count, userOAuthIdentityMaxLength)
+	}
+	return nil
+}
+
+func clearDuplicateUserOAuthIdentityTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
+	values, err := duplicateUserOAuthIdentityValuesTx(tx, identity.column)
+	if err != nil {
+		return err
+	}
+	quotedColumn := quoteDBIdentifier(identity.column)
+	for _, value := range values {
+		var ids []int
+		rows, err := tx.Table("users").
+			Select("id").
+			Where(quotedColumn+" = ?", value).
+			Order("CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END ASC, id ASC").
+			Rows()
+		if err != nil {
+			return fmt.Errorf("failed to load duplicate users.%s ids: %w", identity.column, err)
+		}
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(ids) <= 1 {
+			continue
+		}
+		if err := tx.Table("users").
+			Where("id IN ?", ids[1:]).
+			Update(identity.column, nil).Error; err != nil {
+			return fmt.Errorf("failed to clear duplicate users.%s values: %w", identity.column, err)
+		}
+		common.SysLog(fmt.Sprintf("cleared %d duplicate users.%s OAuth identities during migration", len(ids)-1, identity.column))
+	}
+	return nil
+}
+
+func duplicateUserOAuthIdentityValuesTx(tx *gorm.DB, column string) ([]string, error) {
+	quotedColumn := quoteDBIdentifier(column)
+	rows, err := tx.Raw(fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s IS NOT NULL AND %s <> ? GROUP BY %s HAVING COUNT(*) > 1",
+		quotedColumn,
+		quoteDBIdentifier("users"),
+		quotedColumn,
+		quotedColumn,
+		quotedColumn,
+	), "").Rows()
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect duplicate users.%s values: %w", column, err)
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	for rows.Next() {
+		var value sql.NullString
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		if value.Valid && value.String != "" {
+			values = append(values, value.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func ensureUserOAuthIdentityUniqueIndex(db *gorm.DB, identity userOAuthIdentityMigration) error {
+	if db.Migrator().HasIndex(&User{}, identity.indexName) {
+		return nil
+	}
+	if common.UsingMySQL {
+		if !db.Migrator().HasColumn(&User{}, identity.mysqlGeneratedColumn) {
+			addColumnSQL := userOAuthIdentityGeneratedColumnSQL(identity)
+			if err := db.Exec(addColumnSQL).Error; err != nil {
+				return fmt.Errorf("failed to add users.%s generated column: %w", identity.mysqlGeneratedColumn, err)
+			}
+		}
+		createIndexSQL := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s)",
+			quoteDBIdentifier(identity.indexName),
+			quoteDBIdentifier("users"),
+			quoteDBIdentifier(identity.mysqlGeneratedColumn),
+		)
+		if err := db.Exec(createIndexSQL).Error; err != nil {
+			return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
+		}
+		return nil
+	}
+
+	quotedColumn := quoteDBIdentifier(identity.column)
+	createIndexSQL := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s) WHERE %s IS NOT NULL AND %s <> ''",
+		quoteDBIdentifier(identity.indexName),
+		quoteDBIdentifier("users"),
+		quotedColumn,
+		quotedColumn,
+		quotedColumn,
+	)
+	if err := db.Exec(createIndexSQL).Error; err != nil {
+		return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
+	}
+	return nil
+}
+
+func userOAuthIdentityGeneratedColumnSQL(identity userOAuthIdentityMigration) string {
+	return fmt.Sprintf(
+		"ALTER TABLE %s ADD COLUMN %s varchar(%d) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
+		quoteDBIdentifier("users"),
+		quoteDBIdentifier(identity.mysqlGeneratedColumn),
+		userOAuthIdentityMaxLength,
+		quoteDBIdentifier(identity.column),
+	)
 }
 
 func migrateLOGDB() error {
@@ -672,15 +928,22 @@ func migrateTokenModelLimitsToText() error {
 // a noticeable time, so operators with large deployments should schedule this
 // upgrade off-peak or run an equivalent online-DDL migration before booting.
 func migrateUserQuotaColumnsToBigInt() error {
-	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(&User{}) {
+	return migrateQuotaColumnsToBigInt(&User{}, "users", []string{"quota", "used_quota", "aff_quota", "aff_history"})
+}
+
+// migrateTokenQuotaColumnsToBigInt keeps token accounting columns aligned
+// with User quota columns on MySQL and PostgreSQL.
+func migrateTokenQuotaColumnsToBigInt() error {
+	return migrateQuotaColumnsToBigInt(&Token{}, "tokens", []string{"remain_quota", "used_quota"})
+}
+
+func migrateQuotaColumnsToBigInt(modelValue interface{}, tableName string, columnNames []string) error {
+	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(modelValue) {
 		return nil
 	}
 
-	tableName := "users"
-	columnNames := []string{"quota", "used_quota", "aff_quota", "aff_history"}
-
 	for _, columnName := range columnNames {
-		if !DB.Migrator().HasColumn(&User{}, columnName) {
+		if !DB.Migrator().HasColumn(modelValue, columnName) {
 			continue
 		}
 
