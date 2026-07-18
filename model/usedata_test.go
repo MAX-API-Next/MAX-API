@@ -294,7 +294,7 @@ func TestCleanupQuotaDataSnapshotMarkersDeletesOnlyOldMarkersWithinBatch(t *test
 	oldDB := DB
 	DB = db
 	t.Cleanup(func() { DB = oldDB })
-	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
+	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}, &QuotaDataSnapshotRetry{}))
 
 	require.NoError(t, db.Create(&[]QuotaDataSnapshot{
 		{SnapshotID: "old-a", CreatedAt: 100},
@@ -335,7 +335,7 @@ func TestCleanupQuotaDataSnapshotMarkersKeepsRetryableMarkers(t *testing.T) {
 		CacheQuotaData = oldCache
 		CacheQuotaDataLock.Unlock()
 	})
-	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
+	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}, &QuotaDataSnapshotRetry{}))
 
 	retryableID := "old-retryable"
 	require.NoError(t, db.Create(&[]QuotaDataSnapshot{
@@ -343,9 +343,11 @@ func TestCleanupQuotaDataSnapshotMarkersKeepsRetryableMarkers(t *testing.T) {
 		{SnapshotID: "old-delete", CreatedAt: 200},
 		{SnapshotID: "recent", CreatedAt: 1000},
 	}).Error)
-	CacheQuotaDataLock.Lock()
-	CacheQuotaData["retryable"] = &QuotaData{SnapshotID: &retryableID}
-	CacheQuotaDataLock.Unlock()
+	require.NoError(t, db.Create(&QuotaDataSnapshotRetry{
+		SnapshotID: retryableID,
+		RetryUntil: time.Now().Unix() + quotaDataSnapshotRetentionSeconds,
+		UpdatedAt:  time.Now().Unix(),
+	}).Error)
 
 	deleted, err := cleanupQuotaDataSnapshotMarkers(context.Background(), 500, 1)
 	require.NoError(t, err)
@@ -356,6 +358,38 @@ func TestCleanupQuotaDataSnapshotMarkersKeepsRetryableMarkers(t *testing.T) {
 	require.Len(t, remaining, 2)
 	assert.Equal(t, retryableID, remaining[0].SnapshotID)
 	assert.Equal(t, "recent", remaining[1].SnapshotID)
+}
+
+func TestSaveQuotaDataRetiresDurableRetryAfterSuccess(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}, &QuotaDataSnapshotRetry{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+
+	snapshotID := "retry-state-retired"
+	require.NoError(t, db.Create(&QuotaDataSnapshotRetry{
+		SnapshotID: snapshotID,
+		RetryUntil: time.Now().Unix() + quotaDataSnapshotRetentionSeconds,
+		UpdatedAt:  time.Now().Unix(),
+	}).Error)
+
+	require.NoError(t, saveQuotaData(&QuotaData{
+		SnapshotID: &snapshotID,
+		UserID:     1,
+		Username:   "quota-user",
+		ModelName:  "test-model",
+		CreatedAt:  3600,
+		Count:      1,
+		Quota:      7,
+		TokenUsed:  3,
+	}))
+
+	var retryCount int64
+	require.NoError(t, db.Model(&QuotaDataSnapshotRetry{}).Where("snapshot_id = ?", snapshotID).Count(&retryCount).Error)
+	assert.Zero(t, retryCount)
 }
 
 func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {

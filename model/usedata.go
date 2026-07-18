@@ -73,6 +73,12 @@ type QuotaDataSnapshot struct {
 	CreatedAt  int64  `gorm:"bigint;index"`
 }
 
+type QuotaDataSnapshotRetry struct {
+	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
+	RetryUntil int64  `gorm:"bigint;index"`
+	UpdatedAt  int64  `gorm:"bigint;index"`
+}
+
 type QuotaDataLogParams struct {
 	UserID    int
 	Username  string
@@ -965,6 +971,10 @@ func SaveQuotaDataCache(ctx context.Context) error {
 				}
 				if err := saveQuotaDataLocked(ctx, quotaData); err != nil {
 					common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
+					if retryErr := markQuotaDataSnapshotRetryable(context.Background(), quotaData); retryErr != nil {
+						common.SysLog(fmt.Sprintf("mark quota_data snapshot retryable error: %s", retryErr))
+						err = errors.Join(err, retryErr)
+					}
 					failed = append(failed, quotaData)
 					if saveErr == nil {
 						saveErr = err
@@ -980,6 +990,10 @@ func SaveQuotaDataCache(ctx context.Context) error {
 			common.SysLog(fmt.Sprintf("saveQuotaData lock error: %s", flushErr))
 			failed = make([]*QuotaData, 0, len(snapshot))
 			for _, quotaData := range snapshot {
+				if retryErr := markQuotaDataSnapshotRetryable(context.Background(), quotaData); retryErr != nil {
+					common.SysLog(fmt.Sprintf("mark quota_data snapshot retryable error: %s", retryErr))
+					flushErr = errors.Join(flushErr, retryErr)
+				}
 				failed = append(failed, quotaData)
 			}
 		}
@@ -1034,59 +1048,89 @@ func cleanupQuotaDataSnapshotMarkers(ctx context.Context, cutoff int64, batchSiz
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if DB == nil || !DB.Migrator().HasTable(&QuotaDataSnapshot{}) {
+	if DB == nil || !DB.Migrator().HasTable(&QuotaDataSnapshot{}) || !DB.Migrator().HasTable(&QuotaDataSnapshotRetry{}) {
 		return 0, nil
 	}
 	if batchSize <= 0 {
 		batchSize = quotaDataSnapshotCleanupBatchDefault
 	}
-	retryableIDs := quotaDataRetryableSnapshotIDs()
-	candidateLimit := batchSize
-	if len(retryableIDs) > 0 {
-		candidateLimit += len(retryableIDs)
+	now := common.GetTimestamp()
+	if err := cleanupExpiredQuotaDataSnapshotRetries(ctx, now, batchSize); err != nil {
+		return 0, err
 	}
 	var ids []string
+	activeRetries := DB.
+		Model(&QuotaDataSnapshotRetry{}).
+		Select("snapshot_id").
+		Where("retry_until >= ?", now)
 	if err := DB.WithContext(ctx).
 		Model(&QuotaDataSnapshot{}).
 		Where("created_at < ?", cutoff).
+		Where("snapshot_id NOT IN (?)", activeRetries).
 		Order("created_at ASC").
-		Limit(candidateLimit).
+		Limit(batchSize).
 		Pluck("snapshot_id", &ids).Error; err != nil {
 		return 0, fmt.Errorf("failed to load old quota_data snapshot markers: %w", err)
 	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	deleteIDs := make([]string, 0, batchSize)
-	for _, id := range ids {
-		if retryableIDs[id] {
-			continue
-		}
-		deleteIDs = append(deleteIDs, id)
-		if len(deleteIDs) >= batchSize {
-			break
-		}
-	}
-	if len(deleteIDs) == 0 {
-		return 0, nil
-	}
-	result := DB.WithContext(ctx).Where("snapshot_id IN ?", deleteIDs).Delete(&QuotaDataSnapshot{})
+	result := DB.WithContext(ctx).Where("snapshot_id IN ?", ids).Delete(&QuotaDataSnapshot{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("failed to delete old quota_data snapshot markers: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }
 
-func quotaDataRetryableSnapshotIDs() map[string]bool {
-	CacheQuotaDataLock.Lock()
-	defer CacheQuotaDataLock.Unlock()
-	ids := make(map[string]bool, len(CacheQuotaData))
-	for _, quotaData := range CacheQuotaData {
-		if quotaData != nil && quotaData.SnapshotID != nil && *quotaData.SnapshotID != "" {
-			ids[*quotaData.SnapshotID] = true
-		}
+func cleanupExpiredQuotaDataSnapshotRetries(ctx context.Context, now int64, batchSize int) error {
+	var ids []string
+	if err := DB.WithContext(ctx).
+		Model(&QuotaDataSnapshotRetry{}).
+		Where("retry_until < ?", now).
+		Order("retry_until ASC").
+		Limit(batchSize).
+		Pluck("snapshot_id", &ids).Error; err != nil {
+		return fmt.Errorf("failed to load expired quota_data snapshot retries: %w", err)
 	}
-	return ids
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := DB.WithContext(ctx).Where("snapshot_id IN ?", ids).Delete(&QuotaDataSnapshotRetry{}).Error; err != nil {
+		return fmt.Errorf("failed to delete expired quota_data snapshot retries: %w", err)
+	}
+	return nil
+}
+
+func markQuotaDataSnapshotRetryable(ctx context.Context, quotaData *QuotaData) error {
+	if quotaData == nil || quotaData.SnapshotID == nil || *quotaData.SnapshotID == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if DB == nil || !DB.Migrator().HasTable(&QuotaDataSnapshotRetry{}) {
+		return nil
+	}
+	now := common.GetTimestamp()
+	retry := &QuotaDataSnapshotRetry{
+		SnapshotID: *quotaData.SnapshotID,
+		RetryUntil: now + quotaDataSnapshotRetentionSeconds,
+		UpdatedAt:  now,
+	}
+	return DB.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "snapshot_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"retry_until": retry.RetryUntil,
+			"updated_at":  retry.UpdatedAt,
+		}),
+	}).Create(retry).Error
+}
+
+func retireQuotaDataSnapshotRetryTx(tx *gorm.DB, snapshotID string) error {
+	if snapshotID == "" || tx == nil || !tx.Migrator().HasTable(&QuotaDataSnapshotRetry{}) {
+		return nil
+	}
+	return tx.Where("snapshot_id = ?", snapshotID).Delete(&QuotaDataSnapshotRetry{}).Error
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
@@ -1117,10 +1161,13 @@ func saveQuotaDataLocked(ctx context.Context, quotaData *QuotaData) error {
 			return markerResult.Error
 		}
 		if markerResult.RowsAffected == 0 {
-			return nil
+			return retireQuotaDataSnapshotRetryTx(tx, *quotaData.SnapshotID)
 		}
 
-		return increaseQuotaDataTx(tx, quotaData)
+		if err := increaseQuotaDataTx(tx, quotaData); err != nil {
+			return err
+		}
+		return retireQuotaDataSnapshotRetryTx(tx, *quotaData.SnapshotID)
 	})
 }
 
