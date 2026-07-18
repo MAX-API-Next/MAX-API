@@ -95,6 +95,24 @@ func TestUnlimitedTokenQuotaDeductionRemainsUnbounded(t *testing.T) {
 	assert.EqualValues(t, 7, got.UsedQuota)
 }
 
+func TestAtomicTokenAndUserPreConsumeRollsBackTokenOnUserFailure(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 38, Username: "atomic-preconsume-user", Quota: 5, Status: common.UserStatusEnabled}
+	token := Token{Id: 39, UserId: user.Id, Key: "atomic-preconsume-token", RemainQuota: 10}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&token).Error)
+
+	require.ErrorIs(t, DecreaseTokenAndUserQuota(token.Id, user.Id, token.Key, 7), ErrUserQuotaInsufficient)
+
+	var storedToken Token
+	require.NoError(t, DB.First(&storedToken, token.Id).Error)
+	assert.EqualValues(t, 10, storedToken.RemainQuota)
+	assert.Zero(t, storedToken.UsedQuota)
+	var storedUser User
+	require.NoError(t, DB.First(&storedUser, user.Id).Error)
+	assert.EqualValues(t, 5, storedUser.Quota)
+}
+
 func TestQuotaMutationDoesNotTouchCacheAfterDatabaseFailure(t *testing.T) {
 	setupUserUpdateTestState(t)
 
@@ -202,6 +220,14 @@ func TestFillOAuthUserMethodsDistinguishSoftDeletedUsers(t *testing.T) {
 	}
 }
 
+func TestIsOidcIdAlreadyTakenHandlesDuplicateLegacyRows(t *testing.T) {
+	setupUserUpdateTestState(t)
+	require.NoError(t, DB.Create(&User{Id: 36, Username: "oidc-duplicate-a", OidcId: "duplicate-oidc", AffCode: "oidc-a"}).Error)
+	require.NoError(t, DB.Create(&User{Id: 37, Username: "oidc-duplicate-b", OidcId: "duplicate-oidc", AffCode: "oidc-b"}).Error)
+
+	require.True(t, IsOidcIdAlreadyTaken("duplicate-oidc"))
+}
+
 type blockingCacheFillHook struct {
 	started    chan struct{}
 	release    chan struct{}
@@ -298,6 +324,27 @@ func TestUserQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {
 		cached, err := client.HGet(context.Background(), getUserCacheKey(user.Id), "Quota").Int64()
 		return err == nil && cached == 90
 	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestUserGroupInvalidationRejectsOlderNarrowRefill(t *testing.T) {
+	setupUserUpdateTestState(t)
+	hook, _ := useBlockingCacheFillRedis(t)
+	user := User{Id: 40, Username: "user-group-cache-fence", Group: "old", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+
+	group, err := GetUserGroup(user.Id, true)
+	require.NoError(t, err)
+	require.Equal(t, "old", group)
+	waitForCacheHook(t, hook.started, "narrow fill start")
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("group", "new").Error)
+	require.NoError(t, invalidateUserCache(user.Id))
+	close(hook.release)
+	waitForCacheHook(t, hook.finished, "narrow fill completion")
+
+	group, err = GetUserGroup(user.Id, false)
+	require.NoError(t, err)
+	require.Equal(t, "new", group)
 }
 
 func TestTokenQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {

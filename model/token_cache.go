@@ -32,6 +32,13 @@ func invalidateTokenCache(key string) error {
 	return common.RedisInvalidateVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
 }
 
+func deleteTokenCache(key string) error {
+	if !common.RedisEnabled || key == "" {
+		return nil
+	}
+	return common.RedisDeleteVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
+}
+
 func cacheSetTokenField(key string, field string, value string) error {
 	key = common.GenerateHMAC(key)
 	err := common.RedisHSetField(fmt.Sprintf("token:%s", key), field, value)

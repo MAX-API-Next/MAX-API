@@ -332,7 +332,7 @@ func (token *Token) SelectUpdate() (err error) {
 func (token *Token) Delete() (err error) {
 	err = DB.Delete(token).Error
 	if err == nil && common.RedisEnabled {
-		if cacheErr := invalidateTokenCache(token.Key); cacheErr != nil {
+		if cacheErr := deleteTokenCache(token.Key); cacheErr != nil {
 			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
 		}
 	}
@@ -430,6 +430,52 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	return nil
 }
 
+// DecreaseTokenAndUserQuota atomically consumes both balances. This is used by
+// legacy pre-consume callers so a failed user update cannot strand a token
+// deduction that would otherwise require a best-effort rollback.
+func DecreaseTokenAndUserQuota(tokenId, userId int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if quota == 0 {
+		return nil
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		tokenResult := tx.Model(&Token{}).
+			Where("id = ? AND user_id = ? AND (unlimited_quota = ? OR remain_quota >= ?)", tokenId, userId, true, quota).
+			Updates(map[string]interface{}{
+				"remain_quota":  gorm.Expr("remain_quota - ?", quota),
+				"used_quota":    gorm.Expr("used_quota + ?", quota),
+				"accessed_time": common.GetTimestamp(),
+			})
+		if tokenResult.Error != nil {
+			return tokenResult.Error
+		}
+		if tokenResult.RowsAffected != 1 {
+			return fmt.Errorf("%w: id=%d, need=%d", ErrTokenQuotaInsufficient, tokenId, quota)
+		}
+
+		userResult := tx.Model(&User{}).
+			Where("id = ? AND quota >= ?", userId, quota).
+			Update("quota", gorm.Expr("quota - ?", quota))
+		if userResult.Error != nil {
+			return userResult.Error
+		}
+		if userResult.RowsAffected != 1 {
+			return fmt.Errorf("%w: id=%d, need=%d", ErrUserQuotaInsufficient, userId, quota)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	invalidateTokenQuotaCache(key)
+	if cacheErr := invalidateUserQuotaCache(userId); cacheErr != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate user quota cache after atomic pre-consume (user_id=%d): %v", userId, cacheErr))
+	}
+	return nil
+}
+
 func decreaseTokenQuota(id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
@@ -494,7 +540,7 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	if common.RedisEnabled {
 		gopool.Go(func() {
 			for _, t := range tokens {
-				_ = invalidateTokenCache(t.Key)
+				_ = deleteTokenCache(t.Key)
 			}
 		})
 	}

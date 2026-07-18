@@ -7,23 +7,31 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // QuotaData 柱状图数据
 type QuotaData struct {
-	Id        int    `json:"id"`
-	UserID    int    `json:"user_id" gorm:"index"`
-	Username  string `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
-	ModelName string `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
-	CreatedAt int64  `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
-	UseGroup  string `json:"use_group" gorm:"index;size:64;default:''"`
-	TokenID   int    `json:"token_id" gorm:"index;default:0"`
-	ChannelID int    `json:"channel_id" gorm:"index;default:0"`
-	NodeName  string `json:"node_name" gorm:"index;size:64;default:''"`
-	TokenUsed int    `json:"token_used" gorm:"default:0"`
-	Count     int    `json:"count" gorm:"default:0"`
-	Quota     int    `json:"quota" gorm:"default:0"`
+	Id         int     `json:"id"`
+	SnapshotID *string `json:"-" gorm:"-:all"`
+	UserID     int     `json:"user_id" gorm:"index"`
+	Username   string  `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
+	ModelName  string  `json:"model_name" gorm:"index:idx_qdt_model_user_name,priority:1;size:64;default:''"`
+	CreatedAt  int64   `json:"created_at" gorm:"bigint;index:idx_qdt_created_at,priority:2"`
+	UseGroup   string  `json:"use_group" gorm:"index;size:64;default:''"`
+	TokenID    int     `json:"token_id" gorm:"index;default:0"`
+	ChannelID  int     `json:"channel_id" gorm:"index;default:0"`
+	NodeName   string  `json:"node_name" gorm:"index;size:64;default:''"`
+	TokenUsed  int     `json:"token_used" gorm:"default:0"`
+	Count      int     `json:"count" gorm:"default:0"`
+	Quota      int     `json:"quota" gorm:"default:0"`
+}
+
+type QuotaDataSnapshot struct {
+	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
+	CreatedAt  int64  `gorm:"bigint;index"`
 }
 
 type QuotaDataLogParams struct {
@@ -54,16 +62,11 @@ var CacheQuotaDataLock = sync.Mutex{}
 var cacheQuotaDataSaveLock sync.Mutex
 
 func logQuotaDataCache(quotaData *QuotaData) {
-	key := fmt.Sprintf("%d\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d\x00%s",
-		quotaData.UserID,
-		quotaData.Username,
-		quotaData.ModelName,
-		quotaData.CreatedAt,
-		quotaData.UseGroup,
-		quotaData.TokenID,
-		quotaData.ChannelID,
-		quotaData.NodeName,
-	)
+	if quotaData.SnapshotID == nil {
+		snapshotID := uuid.NewString()
+		quotaData.SnapshotID = &snapshotID
+	}
+	key := quotaDataCacheKey(quotaData)
 	count := quotaData.Count
 	quota := quotaData.Quota
 	tokenUsed := quotaData.TokenUsed
@@ -75,6 +78,42 @@ func logQuotaDataCache(quotaData *QuotaData) {
 		quotaData = cachedQuotaData
 	}
 	CacheQuotaData[key] = quotaData
+}
+
+func quotaDataCacheKey(quotaData *QuotaData) string {
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d\x00%s",
+		quotaData.UserID,
+		quotaData.Username,
+		quotaData.ModelName,
+		quotaData.CreatedAt,
+		quotaData.UseGroup,
+		quotaData.TokenID,
+		quotaData.ChannelID,
+		quotaData.NodeName,
+	)
+}
+
+func requeueQuotaDataCache(quotaData *QuotaData) {
+	if quotaData.SnapshotID == nil {
+		snapshotID := uuid.NewString()
+		quotaData.SnapshotID = &snapshotID
+	}
+	baseKey := quotaDataCacheKey(quotaData)
+	key := baseKey
+	if existing, ok := CacheQuotaData[key]; ok && !sameQuotaDataSnapshot(existing, quotaData) {
+		key = baseKey + "\x00retry\x00" + *quotaData.SnapshotID
+	}
+	if existing, ok := CacheQuotaData[key]; ok && sameQuotaDataSnapshot(existing, quotaData) {
+		existing.Count += quotaData.Count
+		existing.Quota += quotaData.Quota
+		existing.TokenUsed += quotaData.TokenUsed
+		return
+	}
+	CacheQuotaData[key] = quotaData
+}
+
+func sameQuotaDataSnapshot(left, right *QuotaData) bool {
+	return left != nil && right != nil && left.SnapshotID != nil && right.SnapshotID != nil && *left.SnapshotID == *right.SnapshotID
 }
 
 func LogQuotaData(params QuotaDataLogParams) {
@@ -124,7 +163,7 @@ func SaveQuotaDataCache() {
 	if len(failed) > 0 {
 		CacheQuotaDataLock.Lock()
 		for _, quotaData := range failed {
-			logQuotaDataCache(quotaData)
+			requeueQuotaDataCache(quotaData)
 		}
 		CacheQuotaDataLock.Unlock()
 	}
@@ -132,22 +171,39 @@ func SaveQuotaDataCache() {
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
-	quotaDataDB := &QuotaData{}
-	err := DB.Table("quota_data").
-		Where("user_id = ? and username = ? and model_name = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
-			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
-		First(quotaDataDB).Error
-	if err == nil {
-		return increaseQuotaData(quotaData)
+	if quotaData.SnapshotID == nil {
+		snapshotID := uuid.NewString()
+		quotaData.SnapshotID = &snapshotID
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-	return DB.Table("quota_data").Create(quotaData).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		marker := &QuotaDataSnapshot{SnapshotID: *quotaData.SnapshotID, CreatedAt: common.GetTimestamp()}
+		markerResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(marker)
+		if markerResult.Error != nil {
+			return markerResult.Error
+		}
+		if markerResult.RowsAffected == 0 {
+			return nil
+		}
+
+		var existing QuotaData
+		err := tx.Table("quota_data").
+			Where("user_id = ? and username = ? and model_name = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
+				quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
+			First(&existing).Error
+		if err == nil {
+			return increaseQuotaDataTx(tx, quotaData)
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		record := *quotaData
+		record.Id = 0
+		return tx.Table("quota_data").Create(&record).Error
+	})
 }
 
-func increaseQuotaData(quotaData *QuotaData) error {
-	return DB.Table("quota_data").
+func increaseQuotaDataTx(tx *gorm.DB, quotaData *QuotaData) error {
+	return tx.Table("quota_data").
 		Where("user_id = ? and username = ? and model_name = ? and created_at = ? and use_group = ? and token_id = ? and channel_id = ? and node_name = ?",
 			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, quotaData.UseGroup, quotaData.TokenID, quotaData.ChannelID, quotaData.NodeName).
 		Updates(map[string]interface{}{

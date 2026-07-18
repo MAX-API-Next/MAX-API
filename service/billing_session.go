@@ -32,7 +32,7 @@ type BillingSession struct {
 	trusted             bool  // 是否命中信任额度旁路
 	fundingSettled      bool  // funding.Settle 已成功，资金来源已提交
 	appliedFundingDelta int64 // 已提交、尚未完成令牌对账的资金差额
-	compensationFailed  bool  // 非幂等资金补偿失败后只重试令牌，不重复补偿
+	compensationFailed  bool  // 资金补偿未完成；先补齐剩余差额，再仅重试令牌
 	settled             bool  // Settle 全部完成（资金 + 令牌）
 	refunded            bool  // Refund 已调用
 	mu                  sync.Mutex
@@ -40,7 +40,7 @@ type BillingSession struct {
 
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交。若令牌调整失败，会优先反向补偿已提交的
-// 资金差额；补偿失败时保留 fundingSettled，使后续重试只补令牌步骤。
+// 资金差额；补偿不完整时记录剩余差额，补齐后再仅重试令牌步骤。
 func (s *BillingSession) Settle(actualQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +77,23 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 		s.appliedFundingDelta = applied
 		s.fundingSettled = true
 		s.compensationFailed = false
+	} else if s.compensationFailed {
+		// A partial compensation leaves a residual funding delta committed.
+		// Reconcile that residual to the target before retrying the token step.
+		needed := int64(delta) - s.appliedFundingDelta
+		if needed != 0 {
+			applied, err := s.funding.Settle(int(needed))
+			s.appliedFundingDelta += applied
+			if err != nil {
+				return err
+			}
+			if applied != needed {
+				return fmt.Errorf("funding reconciliation incomplete: needed=%d applied=%d", needed, applied)
+			}
+		}
+		if s.appliedFundingDelta != int64(delta) {
+			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta)
+		}
 	}
 	// 2) 调整令牌额度
 	var tokenErr error
@@ -95,11 +112,14 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 			if s.appliedFundingDelta == 0 {
 				s.fundingSettled = false
 			} else {
-				compensated, compensationErr := s.funding.Settle(-int(s.appliedFundingDelta))
-				if compensationErr != nil || compensated != -s.appliedFundingDelta {
+				committed := s.appliedFundingDelta
+				compensated, compensationErr := s.funding.Settle(-int(committed))
+				residual := committed + compensated
+				if compensationErr != nil || compensated != -committed {
+					s.appliedFundingDelta = residual
 					s.compensationFailed = true
 					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
-						s.relayInfo.UserId, s.relayInfo.TokenId, delta, s.appliedFundingDelta, compensated, compensationErr))
+						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
 				} else {
 					s.fundingSettled = false
 					s.appliedFundingDelta = 0
@@ -113,6 +133,7 @@ func (s *BillingSession) settleLocked(actualQuota int) error {
 	if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += s.appliedFundingDelta
 	}
+	s.compensationFailed = false
 	s.settled = true
 	return nil
 }

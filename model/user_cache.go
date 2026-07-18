@@ -62,6 +62,29 @@ func invalidateUserCache(userId int) error {
 	return common.RedisInvalidateVersionedHash(getUserCacheKey(userId), getUserCacheVersionKey(userId))
 }
 
+func enqueueUserCacheInvalidationRetry(userId int, cause error) {
+	gopool.Go(func() {
+		delay := 50 * time.Millisecond
+		for attempt := 1; attempt <= 3; attempt++ {
+			time.Sleep(delay)
+			if err := invalidateUserCache(userId); err == nil {
+				return
+			} else {
+				common.SysLog(fmt.Sprintf("user cache invalidation retry %d/3 failed (user_id=%d, initial_error=%v): %v",
+					attempt, userId, cause, err))
+			}
+			delay *= 2
+		}
+	})
+}
+
+func deleteUserCache(userId int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	return common.RedisDeleteVersionedHash(getUserCacheKey(userId), getUserCacheVersionKey(userId))
+}
+
 // InvalidateUserCache is the exported version of invalidateUserCache.
 // 供 controller 等上层包在用户状态变更（如禁用、删除、角色变更）后主动清理缓存。
 func InvalidateUserCache(userId int) error {
@@ -89,22 +112,9 @@ func updateUserCache(user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	if err := updateUserRoleCache(user.Id, user.Role); err != nil {
-		return err
-	}
-	if err := updateUserGroupCache(user.Id, user.Group); err != nil {
-		return err
-	}
-	if err := updateUserEmailCache(user.Id, user.Email); err != nil {
-		return err
-	}
-	if err := updateUserStatusCache(user.Id, user.Status == common.UserStatusEnabled); err != nil {
-		return err
-	}
-	if err := updateUserNameCache(user.Id, user.Username); err != nil {
-		return err
-	}
-	return updateUserSettingCache(user.Id, user.Setting)
+	// User mutations must advance the generation before any later DB refill can
+	// write a stale snapshot. The next read repopulates the complete hash.
+	return invalidateUserCache(user.Id)
 }
 
 // GetUserCache gets complete user cache from hash
@@ -219,7 +229,7 @@ func updateUserStatusCache(userId int, status bool) error {
 	if !status {
 		statusInt = common.UserStatusDisabled
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Status", fmt.Sprintf("%d", statusInt))
+	return updateUserCacheField(userId, "Status", fmt.Sprintf("%d", statusInt))
 }
 
 func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error {
@@ -241,14 +251,14 @@ func updateUserGroupCache(userId int, group string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+	return updateUserCacheField(userId, "Group", group)
 }
 
 func updateUserRoleCache(userId int, role int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Role", fmt.Sprintf("%d", role))
+	return updateUserCacheField(userId, "Role", fmt.Sprintf("%d", role))
 }
 
 func UpdateUserGroupCache(userId int, group string) error {
@@ -259,21 +269,44 @@ func updateUserEmailCache(userId int, email string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Email", email)
+	return updateUserCacheField(userId, "Email", email)
 }
 
 func updateUserNameCache(userId int, username string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Username", username)
+	return updateUserCacheField(userId, "Username", username)
 }
 
 func updateUserSettingCache(userId int, setting string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Setting", setting)
+	return updateUserCacheField(userId, "Setting", setting)
+}
+
+func updateUserCacheField(userId int, field string, value interface{}) error {
+	if err := invalidateUserCache(userId); err != nil {
+		return err
+	}
+	version, err := common.RedisGetCacheVersion(getUserCacheVersionKey(userId))
+	if err != nil {
+		return err
+	}
+	return updateUserCacheFieldIfVersion(userId, field, value, version)
+}
+
+func updateUserCacheFieldIfVersion(userId int, field string, value interface{}, version int64) error {
+	_, err := common.RedisHSetFieldIfVersion(
+		getUserCacheKey(userId),
+		getUserCacheVersionKey(userId),
+		version,
+		field,
+		value,
+		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
+	)
+	return err
 }
 
 // GetUserLanguage returns the user's language preference from cache

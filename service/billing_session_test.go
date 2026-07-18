@@ -94,6 +94,43 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 	assert.True(t, session.settled)
 }
 
+type partialCompensationFundingSource struct {
+	deltas []int
+}
+
+func (f *partialCompensationFundingSource) Source() string       { return BillingSourceWallet }
+func (f *partialCompensationFundingSource) PreConsume(int) error { return nil }
+func (f *partialCompensationFundingSource) Refund() error        { return nil }
+func (f *partialCompensationFundingSource) Settle(delta int) (int64, error) {
+	f.deltas = append(f.deltas, delta)
+	if delta < 0 {
+		return -2, nil
+	}
+	return int64(delta), nil
+}
+
+func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testing.T) {
+	truncate(t)
+	funding := &partialCompensationFundingSource{}
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{UserId: 56, TokenId: 57, TokenKey: "partial-compensation-token"},
+		funding:   funding, preConsumedQuota: 10,
+	}
+
+	require.Error(t, session.Settle(15))
+	require.NotEmpty(t, funding.deltas)
+	require.True(t, session.compensationFailed)
+	require.EqualValues(t, 5, session.appliedFundingDelta)
+
+	require.NoError(t, model.DB.Create(&model.Token{
+		Id: 57, UserId: 56, Key: "partial-compensation-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
+	}).Error)
+	require.NoError(t, session.Settle(15))
+	assert.True(t, session.settled)
+	assert.EqualValues(t, 5, session.appliedFundingDelta)
+	assert.Equal(t, int64(2), int64(funding.deltas[len(funding.deltas)-1]))
+}
+
 type tokenRecoveringFundingSource struct {
 	t      *testing.T
 	deltas []int

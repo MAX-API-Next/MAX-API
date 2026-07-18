@@ -81,6 +81,42 @@ end
 return 0
 `)
 
+const redisCacheVersionSequenceKey = "cache-version:sequence"
+
+var redisGetOrInitCacheVersionScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if current then
+	return current
+end
+local next = redis.call("INCR", KEYS[2])
+redis.call("SET", KEYS[1], next)
+return next
+`)
+
+var redisInvalidateVersionedHashScript = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local sequence = tonumber(redis.call("GET", KEYS[2]) or "0")
+if current > sequence then
+	redis.call("SET", KEYS[2], current)
+	sequence = current
+end
+local next = redis.call("INCR", KEYS[2])
+redis.call("SET", KEYS[1], next)
+redis.call("DEL", KEYS[3])
+return next
+`)
+
+var redisDeleteVersionedHashScript = redis.NewScript(`
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+local sequence = tonumber(redis.call("GET", KEYS[2]) or "0")
+if current > sequence then
+	redis.call("SET", KEYS[2], current)
+end
+redis.call("DEL", KEYS[3])
+redis.call("DEL", KEYS[1])
+return 1
+`)
+
 var errRedisCacheVersionChanged = errors.New("redis cache version changed")
 
 func RedisSet(key string, value string, expiration time.Duration) error {
@@ -192,13 +228,13 @@ func redisHashData(obj interface{}) (map[string]interface{}, error) {
 }
 
 // RedisGetCacheVersion reads a version used to fence cache-aside refills.
-// A missing version key is the initial version 0.
+// A missing key is initialized from one shared monotonic sequence so deleting
+// an entity's version marker never reuses its prior generation.
 func RedisGetCacheVersion(key string) (int64, error) {
-	version, err := RDB.Get(context.Background(), key).Int64()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
-	}
-	return version, err
+	result, err := redisGetOrInitCacheVersionScript.Run(
+		context.Background(), RDB, []string{key, redisCacheVersionSequenceKey},
+	).Int64()
+	return result, err
 }
 
 // RedisHSetObjIfVersion stores a DB snapshot only while its cache generation
@@ -223,7 +259,10 @@ func redisHSetIfVersion(key, versionKey string, expectedVersion int64, data map[
 	err := RDB.Watch(ctx, func(tx *redis.Tx) error {
 		version, err := tx.Get(ctx, versionKey).Int64()
 		if errors.Is(err, redis.Nil) {
-			version, err = 0, nil
+			// A deleted version key must not reset the fence to the initial
+			// generation. All live cache readers obtain a non-negative version;
+			// treating a missing key as -1 rejects stale in-flight refills.
+			version, err = -1, nil
 		}
 		if err != nil {
 			return err
@@ -256,12 +295,22 @@ func redisHSetIfVersion(key, versionKey string, expectedVersion int64, data map[
 // RedisInvalidateVersionedHash advances the shared generation and removes the
 // cached hash atomically, preventing older DB snapshots from refilling it.
 func RedisInvalidateVersionedHash(key, versionKey string) error {
-	ctx := context.Background()
-	_, err := RDB.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Incr(ctx, versionKey)
-		pipe.Del(ctx, key)
-		return nil
-	})
+	_, err := redisInvalidateVersionedHashScript.Run(
+		context.Background(), RDB,
+		[]string{versionKey, redisCacheVersionSequenceKey, key},
+	).Result()
+	return err
+}
+
+// RedisDeleteVersionedHash removes an entity cache and its generation marker.
+// This is reserved for permanent entity deletion. Cache refills treat a missing
+// generation as a fence miss, so deleting the marker cannot re-admit a snapshot
+// captured before the entity was removed.
+func RedisDeleteVersionedHash(key, versionKey string) error {
+	_, err := redisDeleteVersionedHashScript.Run(
+		context.Background(), RDB,
+		[]string{versionKey, redisCacheVersionSequenceKey, key},
+	).Result()
 	return err
 }
 

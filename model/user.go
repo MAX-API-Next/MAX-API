@@ -150,7 +150,7 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	if err = ensureUserUpdateMatchedTx(DB, result, userId, errors.New("用户不存在")); err != nil {
 		return err
 	}
-	if err = updateUserSettingCache(userId, settingValue); err != nil {
+	if err = invalidateUserCache(userId); err != nil {
 		common.SysLog(fmt.Sprintf("failed to update user setting cache: user_id=%d, error=%v", userId, err))
 	}
 	return nil
@@ -1091,7 +1091,7 @@ func (user *User) Delete() error {
 	}
 
 	// 清除缓存
-	return invalidateUserCache(user.Id)
+	return deleteUserCache(user.Id)
 }
 
 func (user *User) HardDelete() error {
@@ -1104,7 +1104,7 @@ func (user *User) HardDelete() error {
 	if err := DB.Unscoped().Delete(user).Error; err != nil {
 		return err
 	}
-	return invalidateUserCache(user.Id)
+	return deleteUserCache(user.Id)
 }
 
 func (user *User) ensureCanDelete() error {
@@ -1259,23 +1259,23 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 }
 
 func IsWeChatIdAlreadyTaken(wechatId string) bool {
-	return DB.Unscoped().Where("wechat_id = ?", wechatId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("wechat_id = ?", wechatId).Limit(1).Find(&User{}).RowsAffected > 0
 }
 
 func IsGitHubIdAlreadyTaken(githubId string) bool {
-	return DB.Unscoped().Where("github_id = ?", githubId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("github_id = ?", githubId).Limit(1).Find(&User{}).RowsAffected > 0
 }
 
 func IsDiscordIdAlreadyTaken(discordId string) bool {
-	return DB.Unscoped().Where("discord_id = ?", discordId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("discord_id = ?", discordId).Limit(1).Find(&User{}).RowsAffected > 0
 }
 
 func IsOidcIdAlreadyTaken(oidcId string) bool {
-	return DB.Unscoped().Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("oidc_id = ?", oidcId).Limit(1).Find(&User{}).RowsAffected > 0
 }
 
 func IsTelegramIdAlreadyTaken(telegramId string) bool {
-	return DB.Unscoped().Where("telegram_id = ?", telegramId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("telegram_id = ?", telegramId).Limit(1).Find(&User{}).RowsAffected > 0
 }
 
 func ResetUserPasswordByEmail(email string, password string) error {
@@ -1396,11 +1396,13 @@ func GetUserEmail(id int) (email string, err error) {
 
 // GetUserGroup gets group from Redis first, falls back to DB if needed
 func GetUserGroup(id int, fromDB bool) (group string, err error) {
+	var cacheVersion int64
+	cacheVersionValid := false
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
+		if shouldUpdateRedis(fromDB, err) && cacheVersionValid {
 			gopool.Go(func() {
-				if err := updateUserGroupCache(id, group); err != nil {
+				if err := updateUserCacheFieldIfVersion(id, "Group", group, cacheVersion); err != nil {
 					common.SysLog("failed to update user group cache: " + err.Error())
 				}
 			})
@@ -1414,6 +1416,13 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
+	if common.RedisEnabled {
+		version, versionErr := common.RedisGetCacheVersion(getUserCacheVersionKey(id))
+		if versionErr == nil {
+			cacheVersion = version
+			cacheVersionValid = true
+		}
+	}
 	err = DB.Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
 	if err != nil {
 		return "", err
@@ -1425,11 +1434,13 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
 func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
 	var setting string
+	var cacheVersion int64
+	cacheVersionValid := false
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
+		if shouldUpdateRedis(fromDB, err) && cacheVersionValid {
 			gopool.Go(func() {
-				if err := updateUserSettingCache(id, setting); err != nil {
+				if err := updateUserCacheFieldIfVersion(id, "Setting", setting, cacheVersion); err != nil {
 					common.SysLog("failed to update user setting cache: " + err.Error())
 				}
 			})
@@ -1443,6 +1454,13 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
+	if common.RedisEnabled {
+		version, versionErr := common.RedisGetCacheVersion(getUserCacheVersionKey(id))
+		if versionErr == nil {
+			cacheVersion = version
+			cacheVersionValid = true
+		}
+	}
 	// can be nil setting
 	var safeSetting sql.NullString
 	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
@@ -1477,7 +1495,9 @@ func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if err := increaseUserQuota(id, delta); err != nil {
 		return err
 	}
-	invalidateUserQuotaCache(id)
+	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
+		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
+	}
 	return nil
 }
 
@@ -1507,7 +1527,9 @@ func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if err := decreaseUserQuota(id, delta); err != nil {
 		return err
 	}
-	invalidateUserQuotaCache(id)
+	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
+		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
+	}
 	return nil
 }
 
@@ -1526,13 +1548,11 @@ func decreaseUserQuota(id int, quota int64) (err error) {
 	return nil
 }
 
-func invalidateUserQuotaCache(id int) {
+func invalidateUserQuotaCache(id int) error {
 	if !common.RedisEnabled {
-		return
+		return nil
 	}
-	if err := invalidateUserCache(id); err != nil {
-		common.SysLog("failed to invalidate user quota cache: " + err.Error())
-	}
+	return invalidateUserCache(id)
 }
 
 func DeltaUpdateUserQuota[T quotaDeltaInteger](id int, delta T) (err error) {
@@ -1626,11 +1646,13 @@ func updateUserRequestCount(id int, count int) {
 
 // GetUsernameById gets username from Redis first, falls back to DB if needed
 func GetUsernameById(id int, fromDB bool) (username string, err error) {
+	var cacheVersion int64
+	cacheVersionValid := false
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
+		if shouldUpdateRedis(fromDB, err) && cacheVersionValid {
 			gopool.Go(func() {
-				if err := updateUserNameCache(id, username); err != nil {
+				if err := updateUserCacheFieldIfVersion(id, "Username", username, cacheVersion); err != nil {
 					common.SysLog("failed to update user name cache: " + err.Error())
 				}
 			})
@@ -1644,6 +1666,13 @@ func GetUsernameById(id int, fromDB bool) (username string, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
+	if common.RedisEnabled {
+		version, versionErr := common.RedisGetCacheVersion(getUserCacheVersionKey(id))
+		if versionErr == nil {
+			cacheVersion = version
+			cacheVersionValid = true
+		}
+	}
 	err = DB.Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
 	if err != nil {
 		return "", err

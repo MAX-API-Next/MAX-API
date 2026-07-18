@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -67,16 +68,20 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	}
 
 	if preConsumedQuota > 0 {
-		err := PreConsumeTokenQuota(relayInfo, preConsumedQuota)
+		token, err := model.GetTokenByKey(relayInfo.TokenKey, false)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		err = model.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota, false)
+		if !relayInfo.TokenUnlimited && token.RemainQuota < int64(preConsumedQuota) {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(preConsumedQuota)),
+				types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		err = model.DecreaseTokenAndUserQuota(relayInfo.TokenId, relayInfo.UserId, relayInfo.TokenKey, preConsumedQuota)
+		if errors.Is(err, model.ErrTokenQuotaInsufficient) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		if err != nil {
-			if rollbackErr := model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); rollbackErr != nil {
-				common.SysLog(fmt.Sprintf("error rolling back token quota after user pre-consume failure (userId=%d, tokenId=%d, amount=%d): %s",
-					relayInfo.UserId, relayInfo.TokenId, preConsumedQuota, rollbackErr.Error()))
-			}
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 预扣费 %s, 预扣费后剩余额度: %s", relayInfo.UserId, logger.FormatQuota(preConsumedQuota), logger.FormatQuota(userQuota-int64(preConsumedQuota))))
