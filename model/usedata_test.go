@@ -128,6 +128,36 @@ func TestSaveQuotaDataCacheRequeuesFailedSnapshot(t *testing.T) {
 	assert.Equal(t, 3, got.TokenUsed)
 }
 
+func TestSaveQuotaDataCacheReturnsIndividualPersistenceFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	CacheQuotaDataLock.Lock()
+	oldCache := CacheQuotaData
+	CacheQuotaData = make(map[string]*QuotaData)
+	CacheQuotaDataLock.Unlock()
+	t.Cleanup(func() {
+		DB = oldDB
+		CacheQuotaDataLock.Lock()
+		CacheQuotaData = oldCache
+		CacheQuotaDataLock.Unlock()
+	})
+
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+	require.NoError(t, db.Migrator().DropTable(&QuotaDataSnapshot{}))
+	LogQuotaData(QuotaDataLogParams{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", Quota: 7, CreatedAt: 3601, TokenUsed: 3,
+	})
+
+	err = SaveQuotaDataCache(context.Background())
+	require.Error(t, err)
+	CacheQuotaDataLock.Lock()
+	assert.Len(t, CacheQuotaData, 1)
+	CacheQuotaDataLock.Unlock()
+}
+
 func TestSaveQuotaDataIsIdempotentForRepeatedSnapshot(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -851,6 +881,82 @@ func TestQuotaDataUpsertUsesPortableConflictSyntax(t *testing.T) {
 			assert.True(t, strings.Contains(statement, tt.wantConflict), statement)
 			assert.Contains(t, statement, "count")
 			assert.Contains(t, statement, "token_used")
+		})
+	}
+}
+
+func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
+	tests := []struct {
+		name         string
+		open         func(*testing.T) *gorm.DB
+		wantNow      string
+		wantConflict string
+	}{
+		{
+			name: "sqlite",
+			open: func(t *testing.T) *gorm.DB {
+				db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DryRun: true})
+				require.NoError(t, err)
+				return db
+			},
+			wantNow:      "STRFTIME('%S','NOW')",
+			wantConflict: "ON CONFLICT DO NOTHING",
+		},
+		{
+			name: "mysql",
+			open: func(t *testing.T) *gorm.DB {
+				conn, err := sql.Open("mysql", "")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = conn.Close() })
+				db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: conn, SkipInitializeWithVersion: true}), &gorm.Config{
+					DryRun: true, DisableAutomaticPing: true,
+				})
+				require.NoError(t, err)
+				return db
+			},
+			wantNow:      "UNIX_TIMESTAMP()",
+			wantConflict: "ON DUPLICATE KEY UPDATE",
+		},
+		{
+			name: "postgres",
+			open: func(t *testing.T) *gorm.DB {
+				conn, err := sql.Open("pgx", "")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = conn.Close() })
+				db, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: conn}), &gorm.Config{
+					DryRun: true, DisableAutomaticPing: true,
+				})
+				require.NoError(t, err)
+				return db
+			},
+			wantNow:      "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
+			wantConflict: "ON CONFLICT DO NOTHING",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := tt.open(t)
+			nowSQL, err := quotaDataOperationLockNowSQL(db)
+			require.NoError(t, err)
+			statements := []string{
+				db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+					return createQuotaDataOperationLockAttempt(tx, "test-owner", nowSQL)
+				}),
+				db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+					return claimExpiredQuotaDataOperationLockAttempt(tx, "test-owner", nowSQL)
+				}),
+				db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+					return renewQuotaDataOperationLockAttempt(tx, "test-owner", nowSQL)
+				}),
+			}
+
+			for _, statement := range statements {
+				upperStatement := strings.ToUpper(statement)
+				assert.Contains(t, upperStatement, strings.ToUpper(quotaDataOperationLockTable), statement)
+				assert.Contains(t, upperStatement, tt.wantNow, statement)
+			}
+			assert.Contains(t, strings.ToUpper(statements[0]), tt.wantConflict, statements[0])
 		})
 	}
 }

@@ -554,6 +554,51 @@ func updateQuotaDataAggregateSurvivorsTx(tx *gorm.DB) error {
 	return nil
 }
 
+func quotaDataOperationLockNowSQL(tx *gorm.DB) (string, error) {
+	if tx == nil || tx.Dialector == nil {
+		return "", fmt.Errorf("quota_data operation lock database dialect is unavailable")
+	}
+	switch tx.Dialector.Name() {
+	case "sqlite":
+		return "CAST(strftime('%s','now') AS INTEGER)", nil
+	case "mysql":
+		return "UNIX_TIMESTAMP()", nil
+	case "postgres":
+		return "CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) AS BIGINT)", nil
+	default:
+		return "", fmt.Errorf("unsupported quota_data operation lock database dialect: %s", tx.Dialector.Name())
+	}
+}
+
+func createQuotaDataOperationLockAttempt(tx *gorm.DB, owner, nowSQL string) *gorm.DB {
+	return tx.Model(&quotaDataOperationLock{}).Clauses(clause.OnConflict{DoNothing: true}).Create(map[string]interface{}{
+		"name":       quotaDataOperationLockName,
+		"owner":      owner,
+		"expires_at": gorm.Expr("("+nowSQL+") + ?", quotaDataOperationLockLeaseSecondsValue()),
+		"created_at": gorm.Expr(nowSQL),
+		"updated_at": gorm.Expr(nowSQL),
+	})
+}
+
+func claimExpiredQuotaDataOperationLockAttempt(tx *gorm.DB, owner, nowSQL string) *gorm.DB {
+	return tx.Model(&quotaDataOperationLock{}).
+		Where("name = ? AND expires_at < "+nowSQL, quotaDataOperationLockName).
+		Updates(map[string]interface{}{
+			"owner":      owner,
+			"expires_at": gorm.Expr("("+nowSQL+") + ?", quotaDataOperationLockLeaseSecondsValue()),
+			"updated_at": gorm.Expr(nowSQL),
+		})
+}
+
+func renewQuotaDataOperationLockAttempt(tx *gorm.DB, owner, nowSQL string) *gorm.DB {
+	return tx.Model(&quotaDataOperationLock{}).
+		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
+		Updates(map[string]interface{}{
+			"expires_at": gorm.Expr("("+nowSQL+") + ?", quotaDataOperationLockLeaseSecondsValue()),
+			"updated_at": gorm.Expr(nowSQL),
+		})
+}
+
 func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -569,21 +614,18 @@ func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
 	defer cancel()
+	lockDB := DB.WithContext(waitCtx)
+	nowSQL, err := quotaDataOperationLockNowSQL(lockDB)
+	if err != nil {
+		return "", err
+	}
 
 	for {
 		if err := waitCtx.Err(); err != nil {
 			return "", err
 		}
-		now := common.GetTimestamp()
-		lock := &quotaDataOperationLock{
-			Name:      quotaDataOperationLockName,
-			Owner:     owner,
-			ExpiresAt: now + quotaDataOperationLockLeaseSecondsValue(),
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
 		notifyQuotaDataOperationLockAttempt(owner)
-		result := DB.WithContext(waitCtx).Clauses(clause.OnConflict{DoNothing: true}).Create(lock)
+		result := createQuotaDataOperationLockAttempt(lockDB, owner, nowSQL)
 		if result.Error != nil {
 			if err := waitCtx.Err(); err != nil {
 				return "", err
@@ -594,13 +636,7 @@ func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 			return owner, nil
 		}
 
-		result = DB.WithContext(waitCtx).Model(&quotaDataOperationLock{}).
-			Where("name = ? AND expires_at < ?", quotaDataOperationLockName, now).
-			Updates(map[string]interface{}{
-				"owner":      owner,
-				"expires_at": now + quotaDataOperationLockLeaseSecondsValue(),
-				"updated_at": now,
-			})
+		result = claimExpiredQuotaDataOperationLockAttempt(lockDB, owner, nowSQL)
 		if result.Error != nil {
 			if err := waitCtx.Err(); err != nil {
 				return "", err
@@ -666,13 +702,12 @@ func refreshQuotaDataOperationLock(ctx context.Context, owner string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	now := common.GetTimestamp()
-	result := DB.WithContext(ctx).Model(&quotaDataOperationLock{}).
-		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
-		Updates(map[string]interface{}{
-			"expires_at": now + quotaDataOperationLockLeaseSecondsValue(),
-			"updated_at": now,
-		})
+	lockDB := DB.WithContext(ctx)
+	nowSQL, err := quotaDataOperationLockNowSQL(lockDB)
+	if err != nil {
+		return err
+	}
+	result := renewQuotaDataOperationLockAttempt(lockDB, owner, nowSQL)
 	if result.Error != nil {
 		return fmt.Errorf("failed to refresh quota_data operation lock: %w", result.Error)
 	}
@@ -873,6 +908,7 @@ func SaveQuotaDataCache(ctx context.Context) error {
 	size := len(snapshot)
 	failed := make([]*QuotaData, 0)
 	var flushErr error
+	var saveErr error
 	// 如果缓存中有数据，就保存到数据库中
 	// 1. 先查询数据库中是否有数据
 	// 2. 如果有数据，就更新数据
@@ -886,6 +922,9 @@ func SaveQuotaDataCache(ctx context.Context) error {
 				if err := saveQuotaDataLocked(ctx, quotaData); err != nil {
 					common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
 					failed = append(failed, quotaData)
+					if saveErr == nil {
+						saveErr = err
+					}
 				}
 				if err := lock.Check(); err != nil {
 					return err
@@ -910,7 +949,10 @@ func SaveQuotaDataCache(ctx context.Context) error {
 		CacheQuotaDataLock.Unlock()
 	}
 	common.SysLog(fmt.Sprintf("保存数据看板数据完成，成功%d条，待重试%d条", size-len(failed), len(failed)))
-	return flushErr
+	if flushErr != nil {
+		return flushErr
+	}
+	return saveErr
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
