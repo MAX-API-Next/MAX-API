@@ -47,7 +47,7 @@ func quotaDataAggregateKeyForTest(quotaData *QuotaData) string {
 
 func ensureQuotaDataAggregateKeySchemaForTest(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if !db.Migrator().HasColumn("quota_data", "aggregate_key") {
+	if !db.Migrator().HasColumn(&QuotaData{}, "aggregate_key") {
 		require.NoError(t, db.Exec("ALTER TABLE quota_data ADD COLUMN aggregate_key TEXT").Error)
 	}
 	require.NoError(t, db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_quota_data_aggregate_key ON quota_data (aggregate_key)").Error)
@@ -199,7 +199,7 @@ func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&QuotaData{}))
 	require.NoError(t, migrateQuotaDataAggregateKeys())
 
-	assert.True(t, db.Migrator().HasColumn("quota_data", "aggregate_key"))
+	assert.True(t, db.Migrator().HasColumn(&QuotaData{}, "aggregate_key"))
 	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, "ux_quota_data_aggregate_key"))
 }
 
@@ -237,7 +237,7 @@ func TestQuotaDataMigrationBackfillsAndMergesLegacyRows(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
 
 	require.NoError(t, migrateQuotaDataAggregateKeys())
-	assert.True(t, db.Migrator().HasColumn("quota_data", "aggregate_key"))
+	assert.True(t, db.Migrator().HasColumn(&QuotaData{}, "aggregate_key"))
 	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, "ux_quota_data_aggregate_key"))
 
 	aggregateKey := quotaDataAggregateKeyForTest(&QuotaData{

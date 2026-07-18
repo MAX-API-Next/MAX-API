@@ -2,7 +2,9 @@ package model
 
 import (
 	"database/sql"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +40,24 @@ func TestIsZeroColumnDefault(t *testing.T) {
 				t.Fatalf("isZeroColumnDefault(%q) = %v, want %v", tt.value.String, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStartupMigrationSchemaChecksUseModelValues(t *testing.T) {
+	data, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := string(data)
+	forbiddenSnippets := []string{
+		`.HasColumn("users",`,
+		`.HasColumn(tableName,`,
+		`.HasIndex("users",`,
+	}
+	for _, snippet := range forbiddenSnippets {
+		if strings.Contains(source, snippet) {
+			t.Fatalf("startup migrations must pass model values to GORM schema checks; found %q", snippet)
+		}
 	}
 }

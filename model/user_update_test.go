@@ -910,7 +910,7 @@ func TestMigrateUserOAuthIdentityConstraintsBackfillsAndEnforcesUniqueness(t *te
 	require.NoError(t, DB.Delete(&User{Id: 103}).Error)
 
 	require.NoError(t, migrateUserOAuthIdentityConstraints())
-	assert.True(t, DB.Migrator().HasIndex("users", "ux_users_oidc_id"))
+	assert.True(t, DB.Migrator().HasIndex(&User{}, "ux_users_oidc_id"))
 
 	var duplicateUsers []User
 	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{103, 104}).Order("id asc").Find(&duplicateUsers).Error)

@@ -473,7 +473,7 @@ func migrateUserOAuthIdentityConstraints() error {
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		for _, identity := range userOAuthIdentityMigrations {
-			if !tx.Migrator().HasColumn("users", identity.column) {
+			if !tx.Migrator().HasColumn(&User{}, identity.column) {
 				continue
 			}
 			quotedColumn := quoteDBIdentifier(identity.column)
@@ -491,7 +491,7 @@ func migrateUserOAuthIdentityConstraints() error {
 		return err
 	}
 	for _, identity := range userOAuthIdentityMigrations {
-		if !DB.Migrator().HasColumn("users", identity.column) {
+		if !DB.Migrator().HasColumn(&User{}, identity.column) {
 			continue
 		}
 		if err := ensureUserOAuthIdentityUniqueIndex(identity); err != nil {
@@ -573,11 +573,11 @@ func duplicateUserOAuthIdentityValuesTx(tx *gorm.DB, column string) ([]string, e
 }
 
 func ensureUserOAuthIdentityUniqueIndex(identity userOAuthIdentityMigration) error {
-	if DB.Migrator().HasIndex("users", identity.indexName) {
+	if DB.Migrator().HasIndex(&User{}, identity.indexName) {
 		return nil
 	}
 	if common.UsingMySQL {
-		if !DB.Migrator().HasColumn("users", identity.mysqlGeneratedColumn) {
+		if !DB.Migrator().HasColumn(&User{}, identity.mysqlGeneratedColumn) {
 			addColumnSQL := fmt.Sprintf(
 				"ALTER TABLE %s ADD COLUMN %s varchar(256) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
 				quoteDBIdentifier("users"),
@@ -860,22 +860,22 @@ func migrateTokenModelLimitsToText() error {
 // a noticeable time, so operators with large deployments should schedule this
 // upgrade off-peak or run an equivalent online-DDL migration before booting.
 func migrateUserQuotaColumnsToBigInt() error {
-	return migrateQuotaColumnsToBigInt("users", []string{"quota", "used_quota", "aff_quota", "aff_history"})
+	return migrateQuotaColumnsToBigInt(&User{}, "users", []string{"quota", "used_quota", "aff_quota", "aff_history"})
 }
 
 // migrateTokenQuotaColumnsToBigInt keeps token accounting columns aligned
 // with User quota columns on MySQL and PostgreSQL.
 func migrateTokenQuotaColumnsToBigInt() error {
-	return migrateQuotaColumnsToBigInt("tokens", []string{"remain_quota", "used_quota"})
+	return migrateQuotaColumnsToBigInt(&Token{}, "tokens", []string{"remain_quota", "used_quota"})
 }
 
-func migrateQuotaColumnsToBigInt(tableName string, columnNames []string) error {
-	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(tableName) {
+func migrateQuotaColumnsToBigInt(modelValue interface{}, tableName string, columnNames []string) error {
+	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(modelValue) {
 		return nil
 	}
 
 	for _, columnName := range columnNames {
-		if !DB.Migrator().HasColumn(tableName, columnName) {
+		if !DB.Migrator().HasColumn(modelValue, columnName) {
 			continue
 		}
 
