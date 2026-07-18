@@ -190,6 +190,104 @@ func TestSaveQuotaDataIsIdempotentForRepeatedSnapshot(t *testing.T) {
 	assert.Equal(t, 3, rows[0].TokenUsed)
 }
 
+func TestSaveQuotaDataFallsBackWhenAggregateKeyIndexIsMissing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, ensureQuotaDataOperationLockTable())
+	require.False(t, db.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName))
+
+	snapshotA := "quota-snapshot-legacy-a"
+	snapshotB := "quota-snapshot-legacy-b"
+	base := QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+	}
+	first := base
+	first.SnapshotID = &snapshotA
+	first.Count = 1
+	first.Quota = 7
+	first.TokenUsed = 3
+	second := base
+	second.SnapshotID = &snapshotB
+	second.Count = 2
+	second.Quota = 11
+	second.TokenUsed = 4
+
+	require.NoError(t, saveQuotaData(&first))
+	require.NoError(t, saveQuotaData(&second))
+
+	var rows []QuotaData
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].AggregateKey)
+	assert.Equal(t, quotaDataAggregateKeyForTest(&base), *rows[0].AggregateKey)
+	assert.Equal(t, 3, rows[0].Count)
+	assert.Equal(t, 18, rows[0].Quota)
+	assert.Equal(t, 7, rows[0].TokenUsed)
+}
+
+func TestQuotaDataStartupAggregateMigrationDefaultsToSkip(t *testing.T) {
+	t.Setenv(quotaDataAggregateMigrationEnv, "")
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, db.Create(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+		Count: 1, Quota: 7, TokenUsed: 3,
+	}).Error)
+	require.NoError(t, db.Create(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+		Count: 2, Quota: 11, TokenUsed: 4,
+	}).Error)
+
+	require.NoError(t, migrateQuotaDataAggregateKeysOnStartup())
+
+	assert.False(t, db.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName))
+	assert.True(t, db.Migrator().HasTable(&quotaDataOperationLock{}))
+	var rows []QuotaData
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 2)
+}
+
+func TestQuotaDataStartupAggregateMigrationRunsWhenEnabled(t *testing.T) {
+	t.Setenv(quotaDataAggregateMigrationEnv, "true")
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, db.Create(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+		Count: 1, Quota: 7, TokenUsed: 3,
+	}).Error)
+	require.NoError(t, db.Create(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+		Count: 2, Quota: 11, TokenUsed: 4,
+	}).Error)
+
+	require.NoError(t, migrateQuotaDataAggregateKeysOnStartup())
+
+	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName))
+	var rows []QuotaData
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 3, rows[0].Count)
+	assert.Equal(t, 18, rows[0].Quota)
+	assert.Equal(t, 7, rows[0].TokenUsed)
+}
+
 func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)

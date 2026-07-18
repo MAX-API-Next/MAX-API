@@ -341,7 +341,7 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
-	if err := migrateQuotaDataAggregateKeys(); err != nil {
+	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
 		return err
 	}
 	if err := migrateUserOAuthIdentityConstraints(); err != nil {
@@ -432,7 +432,7 @@ func migrateDBFast() error {
 			return err
 		}
 	}
-	if err := migrateQuotaDataAggregateKeys(); err != nil {
+	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
 		return err
 	}
 	if err := migrateUserOAuthIdentityConstraints(); err != nil {

@@ -34,6 +34,7 @@ type QuotaData struct {
 }
 
 const (
+	quotaDataAggregateMigrationEnv            = "QUOTA_DATA_AGGREGATE_MIGRATION_ENABLED"
 	quotaDataAggregateKeyIndexName            = "ux_quota_data_aggregate_key"
 	quotaDataAggregateMigrationSummaryTable   = "quota_data_aggregate_key_migration"
 	quotaDataAggregateMigrationMemberTable    = "quota_data_aggregate_key_migration_members"
@@ -54,6 +55,10 @@ var (
 	quotaDataOperationLockReleaseRetries = 3
 	quotaDataOperationLockAttemptHookMu  sync.Mutex
 	quotaDataOperationLockAttemptHook    func(owner string)
+	quotaDataAggregateKeyIndexCacheMu    sync.RWMutex
+	quotaDataAggregateKeyIndexCacheDB    *gorm.DB
+	quotaDataAggregateKeyIndexCacheSet   bool
+	quotaDataAggregateKeyIndexCacheValue bool
 )
 
 var errQuotaDataOperationLockLost = errors.New("quota_data operation lock lost")
@@ -249,7 +254,22 @@ func migrateQuotaDataAggregateKeys() error {
 			return err
 		}
 	}
+	setQuotaDataAggregateKeyIndexCache(true)
 	return nil
+}
+
+func migrateQuotaDataAggregateKeysOnStartup() error {
+	if DB == nil || !DB.Migrator().HasTable(&QuotaData{}) {
+		return nil
+	}
+	if err := ensureQuotaDataOperationLockTable(); err != nil {
+		return err
+	}
+	if !common.GetEnvOrDefaultBool(quotaDataAggregateMigrationEnv, false) {
+		common.SysLog(fmt.Sprintf("skipping quota_data aggregate-key startup migration; set %s=true to run it", quotaDataAggregateMigrationEnv))
+		return nil
+	}
+	return migrateQuotaDataAggregateKeys()
 }
 
 func quotaDataAggregateKeyCleanupNeeded(indexExists bool) (bool, error) {
@@ -859,6 +879,7 @@ func createQuotaDataAggregateKeyIndex() error {
 	if err := DB.Exec(sql).Error; err != nil {
 		return fmt.Errorf("failed to create quota_data aggregate key index: %w", err)
 	}
+	setQuotaDataAggregateKeyIndexCache(true)
 	return nil
 }
 
@@ -1009,7 +1030,81 @@ func saveQuotaDataLocked(ctx context.Context, quotaData *QuotaData) error {
 }
 
 func increaseQuotaDataTx(tx *gorm.DB, quotaData *QuotaData) error {
+	if !quotaDataAggregateKeyIndexAvailable(tx) {
+		return increaseQuotaDataByDimensionsTx(tx, quotaData)
+	}
 	return quotaDataUpsert(tx, quotaData).Error
+}
+
+func quotaDataAggregateKeyIndexAvailable(tx *gorm.DB) bool {
+	baseDB := DB
+	quotaDataAggregateKeyIndexCacheMu.RLock()
+	if quotaDataAggregateKeyIndexCacheSet && quotaDataAggregateKeyIndexCacheDB == baseDB {
+		available := quotaDataAggregateKeyIndexCacheValue
+		quotaDataAggregateKeyIndexCacheMu.RUnlock()
+		return available
+	}
+	quotaDataAggregateKeyIndexCacheMu.RUnlock()
+
+	available := tx.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName)
+	quotaDataAggregateKeyIndexCacheMu.Lock()
+	if DB == baseDB {
+		quotaDataAggregateKeyIndexCacheDB = baseDB
+		quotaDataAggregateKeyIndexCacheSet = true
+		quotaDataAggregateKeyIndexCacheValue = available
+	}
+	quotaDataAggregateKeyIndexCacheMu.Unlock()
+	return available
+}
+
+func setQuotaDataAggregateKeyIndexCache(available bool) {
+	quotaDataAggregateKeyIndexCacheMu.Lock()
+	defer quotaDataAggregateKeyIndexCacheMu.Unlock()
+	quotaDataAggregateKeyIndexCacheDB = DB
+	quotaDataAggregateKeyIndexCacheSet = true
+	quotaDataAggregateKeyIndexCacheValue = available
+}
+
+func increaseQuotaDataByDimensionsTx(tx *gorm.DB, quotaData *QuotaData) error {
+	var existing struct {
+		Id int `gorm:"column:id"`
+	}
+	if err := quotaDataDimensionQuery(tx, quotaData).
+		Select("id").
+		Order("id ASC").
+		Limit(1).
+		Scan(&existing).Error; err != nil {
+		return err
+	}
+	if existing.Id > 0 {
+		return tx.Table("quota_data").
+			Where("id = ?", existing.Id).
+			Updates(map[string]interface{}{
+				"count":      gorm.Expr("count + ?", quotaData.Count),
+				"quota":      gorm.Expr("quota + ?", quotaData.Quota),
+				"token_used": gorm.Expr("token_used + ?", quotaData.TokenUsed),
+			}).Error
+	}
+
+	aggregateKey := quotaDataAggregateKey(quotaData)
+	record := *quotaData
+	record.Id = 0
+	record.AggregateKey = &aggregateKey
+	return tx.Table("quota_data").Create(&record).Error
+}
+
+func quotaDataDimensionQuery(tx *gorm.DB, quotaData *QuotaData) *gorm.DB {
+	return tx.Table("quota_data").Where(
+		"user_id = ? AND username = ? AND model_name = ? AND created_at = ? AND use_group = ? AND token_id = ? AND channel_id = ? AND node_name = ?",
+		quotaData.UserID,
+		quotaData.Username,
+		quotaData.ModelName,
+		quotaData.CreatedAt,
+		quotaData.UseGroup,
+		quotaData.TokenID,
+		quotaData.ChannelID,
+		quotaData.NodeName,
+	)
 }
 
 func quotaDataUpsert(tx *gorm.DB, quotaData *QuotaData) *gorm.DB {
