@@ -506,6 +506,11 @@ func cleanupUserOAuthIdentityDuplicatesTx(tx *gorm.DB) error {
 			Update(identity.column, nil).Error; err != nil {
 			return fmt.Errorf("failed to null empty users.%s values: %w", identity.column, err)
 		}
+		if common.UsingMySQL {
+			if err := rejectOversizedUserOAuthIdentityValuesTx(tx, identity); err != nil {
+				return err
+			}
+		}
 		if err := clearDuplicateUserOAuthIdentityTx(tx, identity); err != nil {
 			return err
 		}
@@ -541,6 +546,20 @@ func lockUserOAuthIdentityTableForConstraintMigrationTx(tx *gorm.DB) error {
 	default:
 		return nil
 	}
+}
+
+func rejectOversizedUserOAuthIdentityValuesTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
+	quotedColumn := quoteDBIdentifier(identity.column)
+	var count int64
+	if err := tx.Table("users").
+		Where(fmt.Sprintf("%s IS NOT NULL AND %s <> ? AND CHAR_LENGTH(%s) > ?", quotedColumn, quotedColumn, quotedColumn), "", userOAuthIdentityMaxLength).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to inspect users.%s length before unique OAuth identity migration: %w", identity.column, err)
+	}
+	if count > 0 {
+		return fmt.Errorf("users.%s contains %d OAuth identity values longer than %d characters; clean them before creating the unique index", identity.column, count, userOAuthIdentityMaxLength)
+	}
+	return nil
 }
 
 func clearDuplicateUserOAuthIdentityTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
@@ -620,12 +639,7 @@ func ensureUserOAuthIdentityUniqueIndex(db *gorm.DB, identity userOAuthIdentityM
 	}
 	if common.UsingMySQL {
 		if !db.Migrator().HasColumn(&User{}, identity.mysqlGeneratedColumn) {
-			addColumnSQL := fmt.Sprintf(
-				"ALTER TABLE %s ADD COLUMN %s varchar(256) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
-				quoteDBIdentifier("users"),
-				quoteDBIdentifier(identity.mysqlGeneratedColumn),
-				quoteDBIdentifier(identity.column),
-			)
+			addColumnSQL := userOAuthIdentityGeneratedColumnSQL(identity)
 			if err := db.Exec(addColumnSQL).Error; err != nil {
 				return fmt.Errorf("failed to add users.%s generated column: %w", identity.mysqlGeneratedColumn, err)
 			}
@@ -653,6 +667,16 @@ func ensureUserOAuthIdentityUniqueIndex(db *gorm.DB, identity userOAuthIdentityM
 		return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
 	}
 	return nil
+}
+
+func userOAuthIdentityGeneratedColumnSQL(identity userOAuthIdentityMigration) string {
+	return fmt.Sprintf(
+		"ALTER TABLE %s ADD COLUMN %s varchar(%d) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
+		quoteDBIdentifier("users"),
+		quoteDBIdentifier(identity.mysqlGeneratedColumn),
+		userOAuthIdentityMaxLength,
+		quoteDBIdentifier(identity.column),
+	)
 }
 
 func migrateLOGDB() error {

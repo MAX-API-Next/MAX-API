@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -17,7 +18,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const UserNameMaxLength = 20
+const (
+	UserNameMaxLength          = 20
+	userOAuthIdentityMaxLength = 512
+)
 
 const userOAuthIdentityLockName = "maxapi:user-oauth-identity"
 
@@ -62,11 +66,11 @@ type User struct {
 	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
 	Email            string         `json:"email" gorm:"index" validate:"max=50"`
 	NormalizedEmail  string         `json:"-" gorm:"column:normalized_email;size:50;index"`
-	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
+	GitHubId         string         `json:"github_id" gorm:"column:github_id;size:512;index" validate:"max=512"`
+	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;size:512;index" validate:"max=512"`
+	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;size:512;index" validate:"max=512"`
+	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;size:512;index" validate:"max=512"`
+	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;size:512;index" validate:"max=512"`
 	VerificationCode string         `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
 	AccessToken      *string        `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int64          `json:"quota" gorm:"type:bigint;default:0"`
@@ -79,7 +83,7 @@ type User struct {
 	AffHistoryQuota  int64          `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
 	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt        gorm.DeletedAt `gorm:"index"`
-	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;size:512;index" validate:"max=512"`
 	Setting          string         `json:"setting" gorm:"type:text;column:setting"`
 	Remark           string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
@@ -89,7 +93,7 @@ type User struct {
 
 func (user *User) BeforeSave(_ *gorm.DB) error {
 	user.NormalizedEmail = NormalizeEmail(user.Email)
-	return nil
+	return user.ValidateOAuthIdentityLengths()
 }
 
 func (user *User) normalizeEmailFields() {
@@ -275,11 +279,7 @@ func withUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) 
 			}()
 			err := fn(conn)
 			releaseErr := releasePostgreSQLAdvisoryLock(conn, userOAuthIdentityLockName)
-			released = true
-			if err != nil {
-				return err
-			}
-			return releaseErr
+			return finishUserOAuthIdentityLock(err, releaseErr, &released)
 		})
 	case common.UsingMySQL:
 		return db.Connection(func(conn *gorm.DB) error {
@@ -298,17 +298,26 @@ func withUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) 
 			}()
 			err = fn(conn)
 			releaseErr := releaseMySQLNamedLock(conn, userOAuthIdentityLockName)
-			released = true
-			if err != nil {
-				return err
-			}
-			return releaseErr
+			return finishUserOAuthIdentityLock(err, releaseErr, &released)
 		})
 	default:
 		userOAuthIdentityLockMu.Lock()
 		defer userOAuthIdentityLockMu.Unlock()
 		return fn(db)
 	}
+}
+
+func finishUserOAuthIdentityLock(callbackErr, releaseErr error, released *bool) error {
+	if releaseErr == nil && released != nil {
+		*released = true
+	}
+	if callbackErr != nil && releaseErr != nil {
+		return errors.Join(callbackErr, releaseErr)
+	}
+	if callbackErr != nil {
+		return callbackErr
+	}
+	return releaseErr
 }
 
 func releasePostgreSQLAdvisoryLock(db *gorm.DB, lockName string) error {
@@ -362,6 +371,30 @@ func EnsureEmailAvailable(email string, excludeUserID int) error {
 	}
 	if !available {
 		return ErrEmailAlreadyTaken
+	}
+	return nil
+}
+
+func (user *User) ValidateOAuthIdentityLengths() error {
+	values := map[string]string{
+		"github_id":   user.GitHubId,
+		"discord_id":  user.DiscordId,
+		"oidc_id":     user.OidcId,
+		"wechat_id":   user.WeChatId,
+		"telegram_id": user.TelegramId,
+		"linux_do_id": user.LinuxDOId,
+	}
+	for column, value := range values {
+		if err := validateOAuthIdentityLength(column, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOAuthIdentityLength(column, value string) error {
+	if utf8.RuneCountInString(value) > userOAuthIdentityMaxLength {
+		return fmt.Errorf("users.%s exceeds %d characters", column, userOAuthIdentityMaxLength)
 	}
 	return nil
 }
@@ -926,11 +959,32 @@ func (user *User) updateWithTx(tx *gorm.DB, updatePassword bool, fields []UserUp
 	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-	result := tx.Model(&current).Updates(buildUserUpdateValues(current, newUser, updatePassword, fields...))
+	updates := buildUserUpdateValues(current, newUser, updatePassword, fields...)
+	if err = validateOAuthIdentityUpdateValues(updates); err != nil {
+		return err
+	}
+	result := tx.Model(&current).Updates(updates)
 	if err = ensureUserUpdateMatchedTx(tx, result, user.Id, errors.New("用户不存在")); err != nil {
 		return err
 	}
 	return tx.First(user, user.Id).Error
+}
+
+func validateOAuthIdentityUpdateValues(updates map[string]interface{}) error {
+	for _, column := range []string{"github_id", "discord_id", "oidc_id", "wechat_id", "telegram_id", "linux_do_id"} {
+		value, ok := updates[column]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if err := validateOAuthIdentityLength(column, text); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildUserUpdateValues(current User, newUser User, updatePassword bool, fields ...UserUpdateField) map[string]interface{} {
@@ -1276,6 +1330,9 @@ func (user *User) FillUserByGitHubId() error {
 func (user *User) UpdateGitHubId(newGitHubId string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
+	}
+	if err := validateOAuthIdentityLength("github_id", newGitHubId); err != nil {
+		return err
 	}
 	return withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
 		return db.Model(user).Update("github_id", newGitHubId).Error

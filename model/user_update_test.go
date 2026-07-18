@@ -818,6 +818,44 @@ func TestMySQLNamedLockResultSuccessRequiresOne(t *testing.T) {
 	assert.False(t, isMySQLNamedLockSuccess(sql.NullInt64{Valid: false}))
 }
 
+func TestUserOAuthIdentityGeneratedColumnUsesIdentityMaxLength(t *testing.T) {
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	common.UsingPostgreSQL = false
+	t.Cleanup(func() { common.UsingPostgreSQL = oldUsingPostgreSQL })
+
+	statement := userOAuthIdentityGeneratedColumnSQL(userOAuthIdentityMigrations[1])
+
+	assert.Contains(t, statement, fmt.Sprintf("varchar(%d)", userOAuthIdentityMaxLength))
+	assert.NotContains(t, statement, "varchar(256)")
+}
+
+func TestUserOAuthIdentityLengthValidation(t *testing.T) {
+	exactLimit := strings.Repeat("x", userOAuthIdentityMaxLength)
+	tooLong := exactLimit + "x"
+
+	assert.NoError(t, (&User{GitHubId: exactLimit}).ValidateOAuthIdentityLengths())
+	err := (&User{GitHubId: tooLong}).ValidateOAuthIdentityLengths()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "users.github_id")
+	assert.Contains(t, err.Error(), fmt.Sprint(userOAuthIdentityMaxLength))
+}
+
+func TestFinishUserOAuthIdentityLockRetriesReleaseAndJoinsErrors(t *testing.T) {
+	callbackErr := errors.New("callback failed")
+	releaseErr := errors.New("release failed")
+
+	released := false
+	err := finishUserOAuthIdentityLock(callbackErr, releaseErr, &released)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, callbackErr)
+	assert.ErrorIs(t, err, releaseErr)
+	assert.False(t, released)
+
+	err = finishUserOAuthIdentityLock(callbackErr, nil, &released)
+	require.ErrorIs(t, err, callbackErr)
+	assert.True(t, released)
+}
+
 func mysqlDSNWithClientFoundRowsFalse(dsn string) string {
 	base, rawQuery, ok := strings.Cut(dsn, "?")
 	values, err := url.ParseQuery(rawQuery)
@@ -929,13 +967,8 @@ func TestMigrateUserOAuthIdentityConstraintsBackfillsAndEnforcesUniqueness(t *te
 	require.NoError(t, DB.Create(&User{Id: 107, Username: "oauth-empty-d", AffCode: "oed", Status: common.UserStatusEnabled}).Error)
 }
 
-func TestMigrateUserOAuthIdentityConstraintsWaitsForOAuthIdentityLock(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	useSQLiteUserMigrationTestDB(t, db)
-	require.NoError(t, db.AutoMigrate(&User{}))
-	require.NoError(t, DB.Create(&User{Id: 201, Username: "oauth-lock-a", OidcId: "lock-oidc", AffCode: "ola", Status: common.UserStatusEnabled}).Error)
-
+func assertWorkerBlocksUntilOAuthIdentityLockReleased(t *testing.T, run func() error, blockedMessage string) {
+	t.Helper()
 	userOAuthIdentityLockMu.Lock()
 	locked := true
 	t.Cleanup(func() {
@@ -944,21 +977,39 @@ func TestMigrateUserOAuthIdentityConstraintsWaitsForOAuthIdentityLock(t *testing
 		}
 	})
 
+	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- migrateUserOAuthIdentityConstraints()
+		close(started)
+		done <- run()
 	}()
+	<-started
 
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-		t.Fatal("migration completed while OAuth identity lock was held")
+		t.Fatal(blockedMessage)
 	case <-time.After(50 * time.Millisecond):
 	}
 
 	userOAuthIdentityLockMu.Unlock()
 	locked = false
-	require.NoError(t, <-done)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("operation did not complete after releasing the OAuth identity lock")
+	}
+}
+
+func TestMigrateUserOAuthIdentityConstraintsWaitsForOAuthIdentityLock(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	useSQLiteUserMigrationTestDB(t, db)
+	require.NoError(t, db.AutoMigrate(&User{}))
+	require.NoError(t, DB.Create(&User{Id: 201, Username: "oauth-lock-a", OidcId: "lock-oidc", AffCode: "ola", Status: common.UserStatusEnabled}).Error)
+
+	assertWorkerBlocksUntilOAuthIdentityLockReleased(t, migrateUserOAuthIdentityConstraints, "migration completed while OAuth identity lock was held")
 }
 
 func TestOAuthIdentityUpdateWaitsForMigrationLock(t *testing.T) {
@@ -974,29 +1025,9 @@ func TestOAuthIdentityUpdateWaitsForMigrationLock(t *testing.T) {
 	require.NoError(t, DB.Create(&user).Error)
 	user.GitHubId = "after"
 
-	userOAuthIdentityLockMu.Lock()
-	locked := true
-	t.Cleanup(func() {
-		if locked {
-			userOAuthIdentityLockMu.Unlock()
-		}
-	})
-
-	done := make(chan error, 1)
-	go func() {
-		done <- user.UpdateFields(false, UserUpdateFieldGitHubId)
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-		t.Fatal("OAuth identity update completed while migration lock was held")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	userOAuthIdentityLockMu.Unlock()
-	locked = false
-	require.NoError(t, <-done)
+	assertWorkerBlocksUntilOAuthIdentityLockReleased(t, func() error {
+		return user.UpdateFields(false, UserUpdateFieldGitHubId)
+	}, "OAuth identity update completed while migration lock was held")
 
 	var stored User
 	require.NoError(t, DB.First(&stored, user.Id).Error)
@@ -1016,29 +1047,9 @@ func TestUserFieldUpdateWaitsForOAuthIdentityMigrationLock(t *testing.T) {
 	require.NoError(t, DB.Create(&user).Error)
 	user.DisplayName = "after"
 
-	userOAuthIdentityLockMu.Lock()
-	locked := true
-	t.Cleanup(func() {
-		if locked {
-			userOAuthIdentityLockMu.Unlock()
-		}
-	})
-
-	done := make(chan error, 1)
-	go func() {
-		done <- user.UpdateFields(false, UserUpdateFieldDisplayName)
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-		t.Fatal("user field update completed while OAuth identity migration lock was held")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	userOAuthIdentityLockMu.Unlock()
-	locked = false
-	require.NoError(t, <-done)
+	assertWorkerBlocksUntilOAuthIdentityLockReleased(t, func() error {
+		return user.UpdateFields(false, UserUpdateFieldDisplayName)
+	}, "user field update completed while OAuth identity migration lock was held")
 
 	var stored User
 	require.NoError(t, DB.First(&stored, user.Id).Error)

@@ -1040,23 +1040,53 @@ func cleanupQuotaDataSnapshotMarkers(ctx context.Context, cutoff int64, batchSiz
 	if batchSize <= 0 {
 		batchSize = quotaDataSnapshotCleanupBatchDefault
 	}
+	retryableIDs := quotaDataRetryableSnapshotIDs()
+	candidateLimit := batchSize
+	if len(retryableIDs) > 0 {
+		candidateLimit += len(retryableIDs)
+	}
 	var ids []string
 	if err := DB.WithContext(ctx).
 		Model(&QuotaDataSnapshot{}).
 		Where("created_at < ?", cutoff).
 		Order("created_at ASC").
-		Limit(batchSize).
+		Limit(candidateLimit).
 		Pluck("snapshot_id", &ids).Error; err != nil {
 		return 0, fmt.Errorf("failed to load old quota_data snapshot markers: %w", err)
 	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	result := DB.WithContext(ctx).Where("snapshot_id IN ?", ids).Delete(&QuotaDataSnapshot{})
+	deleteIDs := make([]string, 0, batchSize)
+	for _, id := range ids {
+		if retryableIDs[id] {
+			continue
+		}
+		deleteIDs = append(deleteIDs, id)
+		if len(deleteIDs) >= batchSize {
+			break
+		}
+	}
+	if len(deleteIDs) == 0 {
+		return 0, nil
+	}
+	result := DB.WithContext(ctx).Where("snapshot_id IN ?", deleteIDs).Delete(&QuotaDataSnapshot{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("failed to delete old quota_data snapshot markers: %w", result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+func quotaDataRetryableSnapshotIDs() map[string]bool {
+	CacheQuotaDataLock.Lock()
+	defer CacheQuotaDataLock.Unlock()
+	ids := make(map[string]bool, len(CacheQuotaData))
+	for _, quotaData := range CacheQuotaData {
+		if quotaData != nil && quotaData.SnapshotID != nil && *quotaData.SnapshotID != "" {
+			ids[*quotaData.SnapshotID] = true
+		}
+	}
+	return ids
 }
 
 func saveQuotaData(quotaData *QuotaData) error {

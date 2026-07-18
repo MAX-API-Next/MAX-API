@@ -320,6 +320,44 @@ func TestCleanupQuotaDataSnapshotMarkersDeletesOnlyOldMarkersWithinBatch(t *test
 	assert.Equal(t, "recent", remaining[0].SnapshotID)
 }
 
+func TestCleanupQuotaDataSnapshotMarkersKeepsRetryableMarkers(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	CacheQuotaDataLock.Lock()
+	oldCache := CacheQuotaData
+	CacheQuotaData = make(map[string]*QuotaData)
+	CacheQuotaDataLock.Unlock()
+	t.Cleanup(func() {
+		DB = oldDB
+		CacheQuotaDataLock.Lock()
+		CacheQuotaData = oldCache
+		CacheQuotaDataLock.Unlock()
+	})
+	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
+
+	retryableID := "old-retryable"
+	require.NoError(t, db.Create(&[]QuotaDataSnapshot{
+		{SnapshotID: retryableID, CreatedAt: 100},
+		{SnapshotID: "old-delete", CreatedAt: 200},
+		{SnapshotID: "recent", CreatedAt: 1000},
+	}).Error)
+	CacheQuotaDataLock.Lock()
+	CacheQuotaData["retryable"] = &QuotaData{SnapshotID: &retryableID}
+	CacheQuotaDataLock.Unlock()
+
+	deleted, err := cleanupQuotaDataSnapshotMarkers(context.Background(), 500, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+
+	var remaining []QuotaDataSnapshot
+	require.NoError(t, db.Order("created_at ASC").Find(&remaining).Error)
+	require.Len(t, remaining, 2)
+	assert.Equal(t, retryableID, remaining[0].SnapshotID)
+	assert.Equal(t, "recent", remaining[1].SnapshotID)
+}
+
 func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
