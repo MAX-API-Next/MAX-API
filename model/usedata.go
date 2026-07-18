@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,22 +33,29 @@ type QuotaData struct {
 }
 
 const (
-	quotaDataAggregateKeyIndexName          = "ux_quota_data_aggregate_key"
-	quotaDataAggregateMigrationSummaryTable = "quota_data_aggregate_key_migration"
-	quotaDataAggregateMigrationMemberTable  = "quota_data_aggregate_key_migration_members"
-	quotaDataAggregateMigrationMemberKeyIdx = "idx_quota_data_aggregate_key_migration_members_key"
-	quotaDataAggregateMigrationSurvivorIdx  = "idx_quota_data_aggregate_key_migration_survivor"
-	quotaDataAggregateMigrationBatchDefault = 1000
-	quotaDataOperationLockTable             = "quota_data_operation_locks"
-	quotaDataOperationLockName              = "quota_data_aggregate_migration"
-	quotaDataOperationLockTTLSeconds        = int64(6 * 60 * 60)
+	quotaDataAggregateKeyIndexName            = "ux_quota_data_aggregate_key"
+	quotaDataAggregateMigrationSummaryTable   = "quota_data_aggregate_key_migration"
+	quotaDataAggregateMigrationMemberTable    = "quota_data_aggregate_key_migration_members"
+	quotaDataAggregateMigrationMemberKeyIdx   = "idx_quota_data_aggregate_key_migration_members_key"
+	quotaDataAggregateMigrationSurvivorIdx    = "idx_quota_data_aggregate_key_migration_survivor"
+	quotaDataAggregateMigrationBatchDefault   = 1000
+	quotaDataOperationLockTable               = "quota_data_operation_locks"
+	quotaDataOperationLockName                = "quota_data_aggregate_migration"
+	quotaDataOperationLockLeaseSecondsDefault = int64(60)
 )
 
 var (
 	quotaDataAggregateMigrationBatchSize = quotaDataAggregateMigrationBatchDefault
+	quotaDataOperationLockLeaseSeconds   = quotaDataOperationLockLeaseSecondsDefault
 	quotaDataOperationLockRetryInterval  = 200 * time.Millisecond
 	quotaDataOperationLockMaxWait        = 30 * time.Minute
+	quotaDataOperationLockHeartbeatEvery = 15 * time.Second
+	quotaDataOperationLockReleaseRetries = 3
+	quotaDataOperationLockAttemptHookMu  sync.Mutex
+	quotaDataOperationLockAttemptHook    func(owner string)
 )
+
+var errQuotaDataOperationLockLost = errors.New("quota_data operation lock lost")
 
 type QuotaDataSnapshot struct {
 	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
@@ -158,6 +166,52 @@ func (quotaDataOperationLock) TableName() string {
 	return quotaDataOperationLockTable
 }
 
+type quotaDataOperationLockGuard struct {
+	owner    string
+	stop     chan struct{}
+	stopped  chan struct{}
+	stopOnce sync.Once
+	lostMu   sync.Mutex
+	lostErr  error
+}
+
+func (g *quotaDataOperationLockGuard) Owner() string {
+	if g == nil {
+		return ""
+	}
+	return g.owner
+}
+
+func (g *quotaDataOperationLockGuard) Check() error {
+	if g == nil {
+		return nil
+	}
+	g.lostMu.Lock()
+	defer g.lostMu.Unlock()
+	return g.lostErr
+}
+
+func (g *quotaDataOperationLockGuard) setLost(err error) {
+	if err == nil || g == nil {
+		return
+	}
+	g.lostMu.Lock()
+	defer g.lostMu.Unlock()
+	if g.lostErr == nil {
+		g.lostErr = err
+	}
+}
+
+func (g *quotaDataOperationLockGuard) stopHeartbeat() {
+	if g == nil {
+		return
+	}
+	g.stopOnce.Do(func() {
+		close(g.stop)
+		<-g.stopped
+	})
+}
+
 func migrateQuotaDataAggregateKeys() error {
 	if DB == nil || !DB.Migrator().HasTable(&QuotaData{}) {
 		return nil
@@ -221,7 +275,7 @@ func mergeQuotaDataAggregateRows() error {
 	if err := ensureQuotaDataOperationLockTable(); err != nil {
 		return err
 	}
-	return withQuotaDataOperationLock("aggregate-key migration", func(lockOwner string) error {
+	return withQuotaDataOperationLock("aggregate-key migration", func(lock *quotaDataOperationLockGuard) error {
 		if err := resetQuotaDataAggregateMigrationTables(); err != nil {
 			return err
 		}
@@ -234,13 +288,16 @@ func mergeQuotaDataAggregateRows() error {
 			}
 		}()
 
-		if err := buildQuotaDataAggregateMigrationTables(lockOwner); err != nil {
+		if err := buildQuotaDataAggregateMigrationTables(lock); err != nil {
 			return err
 		}
-		if err := refreshQuotaDataOperationLock(lockOwner); err != nil {
+		if err := lock.Check(); err != nil {
 			return err
 		}
 		if err := applyQuotaDataAggregateMigrationTables(); err != nil {
+			return err
+		}
+		if err := lock.Check(); err != nil {
 			return err
 		}
 		if err := dropQuotaDataAggregateMigrationTables(); err != nil {
@@ -297,17 +354,15 @@ func dropQuotaDataAggregateMigrationTables() error {
 	return nil
 }
 
-func buildQuotaDataAggregateMigrationTables(lockOwner string) error {
+func buildQuotaDataAggregateMigrationTables(lock *quotaDataOperationLockGuard) error {
 	batchSize := quotaDataAggregateMigrationBatchSize
 	if batchSize <= 0 {
 		batchSize = quotaDataAggregateMigrationBatchDefault
 	}
 	lastID := int64(0)
 	for {
-		if lockOwner != "" {
-			if err := refreshQuotaDataOperationLock(lockOwner); err != nil {
-				return err
-			}
+		if err := lock.Check(); err != nil {
+			return err
 		}
 		rows := make([]quotaDataAggregateMigrationSourceRow, 0, batchSize)
 		if err := DB.Table("quota_data").
@@ -323,6 +378,9 @@ func buildQuotaDataAggregateMigrationTables(lockOwner string) error {
 		}
 		lastID = rows[len(rows)-1].Id
 		if err := insertQuotaDataAggregateMigrationBatch(rows); err != nil {
+			return err
+		}
+		if err := lock.Check(); err != nil {
 			return err
 		}
 	}
@@ -504,10 +562,11 @@ func acquireQuotaDataOperationLock() (string, error) {
 		lock := &quotaDataOperationLock{
 			Name:      quotaDataOperationLockName,
 			Owner:     owner,
-			ExpiresAt: now + quotaDataOperationLockTTLSeconds,
+			ExpiresAt: now + quotaDataOperationLockLeaseSecondsValue(),
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
+		notifyQuotaDataOperationLockAttempt(owner)
 		result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(lock)
 		if result.Error != nil {
 			return "", fmt.Errorf("failed to acquire quota_data operation lock: %w", result.Error)
@@ -520,7 +579,7 @@ func acquireQuotaDataOperationLock() (string, error) {
 			Where("name = ? AND expires_at < ?", quotaDataOperationLockName, now).
 			Updates(map[string]interface{}{
 				"owner":      owner,
-				"expires_at": now + quotaDataOperationLockTTLSeconds,
+				"expires_at": now + quotaDataOperationLockLeaseSecondsValue(),
 				"updated_at": now,
 			})
 		if result.Error != nil {
@@ -536,12 +595,49 @@ func acquireQuotaDataOperationLock() (string, error) {
 	}
 }
 
+func notifyQuotaDataOperationLockAttempt(owner string) {
+	quotaDataOperationLockAttemptHookMu.Lock()
+	hook := quotaDataOperationLockAttemptHook
+	quotaDataOperationLockAttemptHookMu.Unlock()
+	if hook != nil {
+		hook(owner)
+	}
+}
+
+func quotaDataOperationLockLeaseSecondsValue() int64 {
+	if quotaDataOperationLockLeaseSeconds <= 0 {
+		return 60
+	}
+	return quotaDataOperationLockLeaseSeconds
+}
+
+func quotaDataOperationLockLeaseDuration() time.Duration {
+	return time.Duration(quotaDataOperationLockLeaseSecondsValue()) * time.Second
+}
+
+func quotaDataOperationLockHeartbeatInterval() time.Duration {
+	interval := quotaDataOperationLockHeartbeatEvery
+	if interval <= 0 {
+		interval = quotaDataOperationLockLeaseDuration() / 4
+	}
+	if interval <= 0 {
+		return time.Second
+	}
+	if lease := quotaDataOperationLockLeaseDuration(); interval >= lease {
+		interval = lease / 2
+		if interval <= 0 {
+			interval = time.Second
+		}
+	}
+	return interval
+}
+
 func refreshQuotaDataOperationLock(owner string) error {
 	now := common.GetTimestamp()
 	result := DB.Model(&quotaDataOperationLock{}).
 		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
 		Updates(map[string]interface{}{
-			"expires_at": now + quotaDataOperationLockTTLSeconds,
+			"expires_at": now + quotaDataOperationLockLeaseSecondsValue(),
 			"updated_at": now,
 		})
 	if result.Error != nil {
@@ -555,29 +651,93 @@ func refreshQuotaDataOperationLock(owner string) error {
 			return fmt.Errorf("failed to verify quota_data operation lock ownership: %w", err)
 		}
 		if owned == 0 {
-			return fmt.Errorf("quota_data operation lock lost")
+			return errQuotaDataOperationLockLost
 		}
 	}
 	return nil
 }
 
 func releaseQuotaDataOperationLock(owner string) error {
+	retries := quotaDataOperationLockReleaseRetries
+	if retries <= 0 {
+		retries = 1
+	}
+	retryInterval := quotaDataOperationLockRetryInterval
+	if retryInterval <= 0 {
+		retryInterval = 200 * time.Millisecond
+	}
+	var lastErr error
+	for attempt := 0; attempt < retries; attempt++ {
+		lastErr = releaseQuotaDataOperationLockOnce(owner)
+		if lastErr == nil {
+			return nil
+		}
+		if errors.Is(lastErr, errQuotaDataOperationLockLost) {
+			return lastErr
+		}
+		if attempt+1 < retries {
+			time.Sleep(retryInterval)
+		}
+	}
+	return lastErr
+}
+
+func releaseQuotaDataOperationLockOnce(owner string) error {
 	result := DB.Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).Delete(&quotaDataOperationLock{})
 	if result.Error != nil {
 		return fmt.Errorf("failed to release quota_data operation lock: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("quota_data operation lock was not held by this owner")
+		return fmt.Errorf("%w: owner %s no longer holds the lock", errQuotaDataOperationLockLost, owner)
 	}
 	return nil
 }
 
-func withQuotaDataOperationLock(operation string, fn func(lockOwner string) error) (returnErr error) {
+func startQuotaDataOperationLockHeartbeat(operation, owner string) *quotaDataOperationLockGuard {
+	guard := &quotaDataOperationLockGuard{
+		owner:   owner,
+		stop:    make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+	interval := quotaDataOperationLockHeartbeatInterval()
+	leaseDuration := quotaDataOperationLockLeaseDuration()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(guard.stopped)
+
+		lastRenewed := time.Now()
+		for {
+			select {
+			case <-ticker.C:
+				err := refreshQuotaDataOperationLock(owner)
+				if err == nil {
+					lastRenewed = time.Now()
+					continue
+				}
+				if errors.Is(err, errQuotaDataOperationLockLost) || time.Since(lastRenewed) >= leaseDuration {
+					guard.setLost(fmt.Errorf("quota_data operation lock heartbeat failed for %s: %w", operation, err))
+					return
+				}
+			case <-guard.stop:
+				return
+			}
+		}
+	}()
+	return guard
+}
+
+func withQuotaDataOperationLock(operation string, fn func(lock *quotaDataOperationLockGuard) error) (returnErr error) {
 	lockOwner, err := acquireQuotaDataOperationLock()
 	if err != nil {
 		return fmt.Errorf("failed to acquire quota_data operation lock for %s: %w", operation, err)
 	}
+	lock := startQuotaDataOperationLockHeartbeat(operation, lockOwner)
 	defer func() {
+		lock.stopHeartbeat()
+		if err := lock.Check(); err != nil && returnErr == nil {
+			returnErr = err
+		}
 		if err := releaseQuotaDataOperationLock(lockOwner); err != nil {
 			wrappedErr := fmt.Errorf("failed to release quota_data operation lock for %s: %w", operation, err)
 			if returnErr == nil {
@@ -587,7 +747,7 @@ func withQuotaDataOperationLock(operation string, fn func(lockOwner string) erro
 			}
 		}
 	}()
-	return fn(lockOwner)
+	return fn(lock)
 }
 
 func createQuotaDataAggregateKeyIndex() error {
@@ -663,11 +823,17 @@ func SaveQuotaDataCache() {
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
 	if len(snapshot) > 0 {
-		if err := withQuotaDataOperationLock("quota cache flush", func(_ string) error {
+		if err := withQuotaDataOperationLock("quota cache flush", func(lock *quotaDataOperationLockGuard) error {
 			for _, quotaData := range snapshot {
+				if err := lock.Check(); err != nil {
+					return err
+				}
 				if err := saveQuotaDataLocked(quotaData); err != nil {
 					common.SysLog(fmt.Sprintf("saveQuotaData error: %s", err))
 					failed = append(failed, quotaData)
+				}
+				if err := lock.Check(); err != nil {
+					return err
 				}
 			}
 			return nil
@@ -691,8 +857,14 @@ func SaveQuotaDataCache() {
 }
 
 func saveQuotaData(quotaData *QuotaData) error {
-	return withQuotaDataOperationLock("quota write", func(_ string) error {
-		return saveQuotaDataLocked(quotaData)
+	return withQuotaDataOperationLock("quota write", func(lock *quotaDataOperationLockGuard) error {
+		if err := lock.Check(); err != nil {
+			return err
+		}
+		if err := saveQuotaDataLocked(quotaData); err != nil {
+			return err
+		}
+		return lock.Check()
 	})
 }
 

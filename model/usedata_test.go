@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,42 @@ func ensureQuotaDataAggregateKeySchemaForTest(t *testing.T, db *gorm.DB) {
 		require.NoError(t, db.Exec("ALTER TABLE quota_data ADD COLUMN aggregate_key TEXT").Error)
 	}
 	require.NoError(t, db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS ux_quota_data_aggregate_key ON quota_data (aggregate_key)").Error)
+}
+
+func observeQuotaDataOperationLockAttemptForTest(t *testing.T, ignoredOwner string) <-chan struct{} {
+	t.Helper()
+	attempted := make(chan struct{}, 1)
+	quotaDataOperationLockAttemptHookMu.Lock()
+	oldHook := quotaDataOperationLockAttemptHook
+	quotaDataOperationLockAttemptHook = func(owner string) {
+		if owner == ignoredOwner {
+			return
+		}
+		select {
+		case attempted <- struct{}{}:
+		default:
+		}
+	}
+	quotaDataOperationLockAttemptHookMu.Unlock()
+	t.Cleanup(func() {
+		quotaDataOperationLockAttemptHookMu.Lock()
+		defer quotaDataOperationLockAttemptHookMu.Unlock()
+		quotaDataOperationLockAttemptHook = oldHook
+	})
+	return attempted
+}
+
+func waitForQuotaDataOperationLockAttempt(t *testing.T, attempted <-chan struct{}, done <-chan error, releaseHolder func()) {
+	t.Helper()
+	select {
+	case <-attempted:
+	case err := <-done:
+		releaseHolder()
+		t.Fatalf("operation completed before attempting the quota_data operation lock: %v", err)
+	case <-time.After(time.Second):
+		releaseHolder()
+		t.Fatal("operation did not attempt to acquire the quota_data operation lock")
+	}
 }
 
 func TestSaveQuotaDataCacheRequeuesFailedSnapshot(t *testing.T) {
@@ -377,20 +414,31 @@ func TestQuotaDataMigrationWaitsForOperationLock(t *testing.T) {
 	require.NoError(t, migrateQuotaDataAggregateKeys())
 	holder, err := acquireQuotaDataOperationLock()
 	require.NoError(t, err)
+	holderReleased := false
+	releaseHolder := func() {
+		if holderReleased {
+			return
+		}
+		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		holderReleased = true
+	}
+	t.Cleanup(releaseHolder)
+	attempted := observeQuotaDataOperationLockAttemptForTest(t, holder)
 
 	done := make(chan error, 1)
 	go func() {
 		done <- mergeQuotaDataAggregateRows()
 	}()
 
+	waitForQuotaDataOperationLockAttempt(t, attempted, done, releaseHolder)
 	select {
 	case err := <-done:
-		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		releaseHolder()
 		t.Fatalf("migration completed before the operation lock was released: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	require.NoError(t, releaseQuotaDataOperationLock(holder))
+	releaseHolder()
 	select {
 	case err := <-done:
 		require.NoError(t, err)
@@ -423,6 +471,16 @@ func TestSaveQuotaDataWaitsForAggregateMigrationLock(t *testing.T) {
 	require.NoError(t, migrateQuotaDataAggregateKeys())
 	holder, err := acquireQuotaDataOperationLock()
 	require.NoError(t, err)
+	holderReleased := false
+	releaseHolder := func() {
+		if holderReleased {
+			return
+		}
+		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		holderReleased = true
+	}
+	t.Cleanup(releaseHolder)
+	attempted := observeQuotaDataOperationLockAttemptForTest(t, holder)
 
 	done := make(chan error, 1)
 	go func() {
@@ -433,14 +491,15 @@ func TestSaveQuotaDataWaitsForAggregateMigrationLock(t *testing.T) {
 		})
 	}()
 
+	waitForQuotaDataOperationLockAttempt(t, attempted, done, releaseHolder)
 	select {
 	case err := <-done:
-		require.NoError(t, releaseQuotaDataOperationLock(holder))
+		releaseHolder()
 		t.Fatalf("quota write completed before the migration lock was released: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	require.NoError(t, releaseQuotaDataOperationLock(holder))
+	releaseHolder()
 	select {
 	case err := <-done:
 		require.NoError(t, err)
@@ -453,6 +512,173 @@ func TestSaveQuotaDataWaitsForAggregateMigrationLock(t *testing.T) {
 	assert.Equal(t, 1, row.Count)
 	assert.Equal(t, 7, row.Quota)
 	assert.Equal(t, 3, row.TokenUsed)
+}
+
+func TestQuotaDataOperationLockHeartbeatRenewsLease(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_lock_heartbeat?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldLease := quotaDataOperationLockLeaseSeconds
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldMaxWait := quotaDataOperationLockMaxWait
+	oldHeartbeat := quotaDataOperationLockHeartbeatEvery
+	DB = db
+	quotaDataOperationLockLeaseSeconds = 1
+	quotaDataOperationLockRetryInterval = 5 * time.Millisecond
+	quotaDataOperationLockMaxWait = 500 * time.Millisecond
+	quotaDataOperationLockHeartbeatEvery = 20 * time.Millisecond
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockLeaseSeconds = oldLease
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockMaxWait = oldMaxWait
+		quotaDataOperationLockHeartbeatEvery = oldHeartbeat
+	})
+
+	require.NoError(t, ensureQuotaDataOperationLockTable())
+	err = withQuotaDataOperationLock("heartbeat renewal test", func(lock *quotaDataOperationLockGuard) error {
+		var current quotaDataOperationLock
+		if err := db.Where("name = ? AND owner = ?", quotaDataOperationLockName, lock.Owner()).First(&current).Error; err != nil {
+			return err
+		}
+		initialExpiresAt := current.ExpiresAt
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := lock.Check(); err != nil {
+				return err
+			}
+			if err := db.Where("name = ? AND owner = ?", quotaDataOperationLockName, lock.Owner()).First(&current).Error; err != nil {
+				return err
+			}
+			if current.ExpiresAt > initialExpiresAt {
+				return nil
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		return errors.New("quota_data operation lock lease was not renewed")
+	})
+	require.NoError(t, err)
+}
+
+func TestQuotaDataOperationLockHeartbeatDetectsLostOwnership(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_lock_lost?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldLease := quotaDataOperationLockLeaseSeconds
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldMaxWait := quotaDataOperationLockMaxWait
+	oldHeartbeat := quotaDataOperationLockHeartbeatEvery
+	DB = db
+	quotaDataOperationLockLeaseSeconds = 1
+	quotaDataOperationLockRetryInterval = 5 * time.Millisecond
+	quotaDataOperationLockMaxWait = 500 * time.Millisecond
+	quotaDataOperationLockHeartbeatEvery = 10 * time.Millisecond
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockLeaseSeconds = oldLease
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockMaxWait = oldMaxWait
+		quotaDataOperationLockHeartbeatEvery = oldHeartbeat
+	})
+
+	require.NoError(t, ensureQuotaDataOperationLockTable())
+	acquired := make(chan *quotaDataOperationLockGuard, 1)
+	unblock := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withQuotaDataOperationLock("heartbeat lost-owner test", func(lock *quotaDataOperationLockGuard) error {
+			acquired <- lock
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-unblock:
+					return nil
+				case <-ticker.C:
+					if err := lock.Check(); err != nil {
+						return err
+					}
+				}
+			}
+		})
+	}()
+
+	var lock *quotaDataOperationLockGuard
+	select {
+	case lock = <-acquired:
+	case <-time.After(time.Second):
+		close(unblock)
+		t.Fatal("operation did not acquire the quota_data operation lock")
+	}
+	require.NoError(t, db.Where("name = ? AND owner = ?", quotaDataOperationLockName, lock.Owner()).Delete(&quotaDataOperationLock{}).Error)
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errQuotaDataOperationLockLost)
+	case <-time.After(time.Second):
+		close(unblock)
+		t.Fatal("operation did not stop after losing the quota_data operation lock")
+	}
+}
+
+func TestQuotaDataOperationLockReleaseRetriesTransientFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_lock_release_retry?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldReleaseRetries := quotaDataOperationLockReleaseRetries
+	DB = db
+	quotaDataOperationLockRetryInterval = 5 * time.Millisecond
+	quotaDataOperationLockReleaseRetries = 2
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockReleaseRetries = oldReleaseRetries
+	})
+
+	require.NoError(t, ensureQuotaDataOperationLockTable())
+	holder, err := acquireQuotaDataOperationLock()
+	require.NoError(t, err)
+
+	attempts := 0
+	var failOnce sync.Once
+	callbackName := "test:quota-data-operation-lock-release-retry"
+	require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		table := tx.Statement.Table
+		if table == "" && tx.Statement.Schema != nil {
+			table = tx.Statement.Schema.Table
+		}
+		if table != quotaDataOperationLockTable {
+			return
+		}
+		attempts++
+		failOnce.Do(func() {
+			tx.AddError(errors.New("transient quota_data operation lock release failure"))
+		})
+	}))
+	t.Cleanup(func() { db.Callback().Delete().Remove(callbackName) })
+
+	require.NoError(t, releaseQuotaDataOperationLock(holder))
+	assert.Equal(t, 2, attempts)
+	var remaining int64
+	require.NoError(t, db.Model(&quotaDataOperationLock{}).Count(&remaining).Error)
+	assert.Zero(t, remaining)
 }
 
 func TestSaveQuotaDataAtomicallyMergesCompetingAggregateInsert(t *testing.T) {
