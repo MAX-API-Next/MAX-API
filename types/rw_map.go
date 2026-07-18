@@ -96,8 +96,8 @@ func LoadFromJsonStringWithCallback[K comparable, V any](m *RWMap[K, V], jsonStr
 		return err
 	}
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	m.data = data
+	m.mutex.Unlock()
 	if onSuccess != nil {
 		onSuccess()
 	}

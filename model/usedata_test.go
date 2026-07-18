@@ -1,12 +1,14 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -14,7 +16,28 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
+
+type sqlStatementRecorder struct {
+	gormlogger.Interface
+	statements []string
+}
+
+func (r *sqlStatementRecorder) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, _ := fc()
+	r.statements = append(r.statements, sql)
+}
+
+func (r *sqlStatementRecorder) hasStatementContaining(needle string) bool {
+	needle = strings.ToUpper(needle)
+	for _, statement := range r.statements {
+		if strings.Contains(strings.ToUpper(statement), needle) {
+			return true
+		}
+	}
+	return false
+}
 
 func quotaDataAggregateKeyForTest(quotaData *QuotaData) string {
 	digest := sha256.Sum256([]byte(quotaDataCacheKey(quotaData)))
@@ -174,6 +197,121 @@ func TestQuotaDataMigrationBackfillsAndMergesLegacyRows(t *testing.T) {
 	assert.Equal(t, 4, rows[0].Count)
 	assert.Equal(t, 23, rows[0].Quota)
 	assert.Equal(t, 9, rows[0].TokenUsed)
+}
+
+func TestQuotaDataMigrationKeepsExistingIndexWhileMergingLegacyRows(t *testing.T) {
+	recorder := &sqlStatementRecorder{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: recorder})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	require.NoError(t, db.Exec(`CREATE TABLE quota_data (
+		id integer primary key autoincrement,
+		aggregate_key text,
+		user_id integer,
+		username text,
+		model_name text,
+		created_at integer,
+		use_group text,
+		token_id integer,
+		channel_id integer,
+		node_name text,
+		token_used integer,
+		count integer,
+		quota integer
+	)`).Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX ux_quota_data_aggregate_key ON quota_data (aggregate_key)").Error)
+
+	aggregateKey := quotaDataAggregateKeyForTest(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+	})
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (id, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		1, 1, "quota-user", "test-model", int64(3600), "default", 2, 3, "node-a", 1, 7, 3,
+	).Error)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (id, aggregate_key, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		2, aggregateKey, 1, "quota-user", "test-model", int64(3600), "default", 2, 3, "node-a", 2, 11, 4,
+	).Error)
+
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+	require.False(t, recorder.hasStatementContaining("DROP INDEX"), "migration must not drop the live aggregate-key index")
+
+	var rows []QuotaData
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 1, rows[0].Id)
+	require.NotNil(t, rows[0].AggregateKey)
+	assert.Equal(t, aggregateKey, *rows[0].AggregateKey)
+	assert.Equal(t, 3, rows[0].Count)
+	assert.Equal(t, 18, rows[0].Quota)
+	assert.Equal(t, 7, rows[0].TokenUsed)
+	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, "ux_quota_data_aggregate_key"))
+}
+
+func TestQuotaDataMigrationBatchesAndRepairsStaleKeysWithLiveIndex(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	oldBatchSize := quotaDataAggregateMigrationBatchSize
+	DB = db
+	quotaDataAggregateMigrationBatchSize = 2
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataAggregateMigrationBatchSize = oldBatchSize
+	})
+
+	require.NoError(t, db.Exec(`CREATE TABLE quota_data (
+		id integer primary key autoincrement,
+		aggregate_key text,
+		user_id integer,
+		username text,
+		model_name text,
+		created_at integer,
+		use_group text,
+		token_id integer,
+		channel_id integer,
+		node_name text,
+		token_used integer,
+		count integer,
+		quota integer
+	)`).Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX ux_quota_data_aggregate_key ON quota_data (aggregate_key)").Error)
+
+	rowA := QuotaData{Id: 1, UserID: 1, Username: "quota-user-a", ModelName: "model-a", CreatedAt: 3600, UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a"}
+	rowB := QuotaData{Id: 2, UserID: 2, Username: "quota-user-b", ModelName: "model-b", CreatedAt: 3600, UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-b"}
+	keyA := quotaDataAggregateKeyForTest(&rowA)
+	keyB := quotaDataAggregateKeyForTest(&rowB)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (id, aggregate_key, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		1, keyB, rowA.UserID, rowA.Username, rowA.ModelName, rowA.CreatedAt, rowA.UseGroup, rowA.TokenID, rowA.ChannelID, rowA.NodeName, 1, 7, 3,
+	).Error)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (id, aggregate_key, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		2, keyA, rowB.UserID, rowB.Username, rowB.ModelName, rowB.CreatedAt, rowB.UseGroup, rowB.TokenID, rowB.ChannelID, rowB.NodeName, 2, 11, 4,
+	).Error)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (id, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		3, rowA.UserID, rowA.Username, rowA.ModelName, rowA.CreatedAt, rowA.UseGroup, rowA.TokenID, rowA.ChannelID, rowA.NodeName, 3, 13, 5,
+	).Error)
+
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+
+	var rows []QuotaData
+	require.NoError(t, db.Order("id asc").Find(&rows).Error)
+	require.Len(t, rows, 2)
+	require.NotNil(t, rows[0].AggregateKey)
+	require.NotNil(t, rows[1].AggregateKey)
+	assert.Equal(t, 1, rows[0].Id)
+	assert.Equal(t, keyA, *rows[0].AggregateKey)
+	assert.Equal(t, 4, rows[0].Count)
+	assert.Equal(t, 20, rows[0].Quota)
+	assert.Equal(t, 8, rows[0].TokenUsed)
+	assert.Equal(t, 2, rows[1].Id)
+	assert.Equal(t, keyB, *rows[1].AggregateKey)
 }
 
 func TestSaveQuotaDataAtomicallyMergesCompetingAggregateInsert(t *testing.T) {

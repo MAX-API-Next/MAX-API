@@ -31,7 +31,16 @@ type QuotaData struct {
 	Quota        int     `json:"quota" gorm:"default:0"`
 }
 
-const quotaDataAggregateKeyIndexName = "ux_quota_data_aggregate_key"
+const (
+	quotaDataAggregateKeyIndexName          = "ux_quota_data_aggregate_key"
+	quotaDataAggregateMigrationSummaryTable = "quota_data_aggregate_key_migration"
+	quotaDataAggregateMigrationMemberTable  = "quota_data_aggregate_key_migration_members"
+	quotaDataAggregateMigrationMemberKeyIdx = "idx_quota_data_aggregate_key_migration_members_key"
+	quotaDataAggregateMigrationSurvivorIdx  = "idx_quota_data_aggregate_key_migration_survivor"
+	quotaDataAggregateMigrationBatchDefault = 1000
+)
+
+var quotaDataAggregateMigrationBatchSize = quotaDataAggregateMigrationBatchDefault
 
 type QuotaDataSnapshot struct {
 	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
@@ -102,12 +111,17 @@ func quotaDataAggregateKey(quotaData *QuotaData) string {
 	return hex.EncodeToString(digest[:])
 }
 
-type quotaDataAggregateMigrationGroup struct {
-	survivor  QuotaData
-	ids       []int
-	count     int
-	quota     int
-	tokenUsed int
+type quotaDataAggregateMigrationMember struct {
+	Id           int    `gorm:"column:id;primaryKey"`
+	AggregateKey string `gorm:"column:aggregate_key"`
+}
+
+type quotaDataAggregateMigrationSummary struct {
+	AggregateKey string `gorm:"column:aggregate_key;primaryKey"`
+	SurvivorID   int    `gorm:"column:survivor_id"`
+	CountSum     int    `gorm:"column:count_sum"`
+	QuotaSum     int    `gorm:"column:quota_sum"`
+	TokenUsedSum int    `gorm:"column:token_used_sum"`
 }
 
 func migrateQuotaDataAggregateKeys() error {
@@ -126,11 +140,6 @@ func migrateQuotaDataAggregateKeys() error {
 		return err
 	}
 	if needsCleanup {
-		if indexExists {
-			if err := DB.Migrator().DropIndex(&QuotaData{}, quotaDataAggregateKeyIndexName); err != nil {
-				return fmt.Errorf("failed to drop stale quota_data aggregate key index: %w", err)
-			}
-		}
 		if err := mergeQuotaDataAggregateRows(); err != nil {
 			return err
 		}
@@ -157,51 +166,247 @@ func quotaDataAggregateKeyCleanupNeeded(indexExists bool) (bool, error) {
 }
 
 func mergeQuotaDataAggregateRows() error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var rows []QuotaData
-		if err := tx.Table("quota_data").Order("id ASC").Find(&rows).Error; err != nil {
+	if err := resetQuotaDataAggregateMigrationTables(); err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			if err := dropQuotaDataAggregateMigrationTables(); err != nil {
+				common.SysLog("failed to drop quota_data aggregate migration tables: " + err.Error())
+			}
+		}
+	}()
+
+	if err := buildQuotaDataAggregateMigrationTables(); err != nil {
+		return err
+	}
+	if err := applyQuotaDataAggregateMigrationTables(); err != nil {
+		return err
+	}
+	if err := dropQuotaDataAggregateMigrationTables(); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+func resetQuotaDataAggregateMigrationTables() error {
+	if err := dropQuotaDataAggregateMigrationTables(); err != nil {
+		return err
+	}
+	statements := []string{
+		fmt.Sprintf("CREATE TABLE %s (%s varchar(64) PRIMARY KEY, %s integer NOT NULL, %s integer NOT NULL, %s integer NOT NULL, %s integer NOT NULL)",
+			quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable),
+			quoteDBIdentifier("aggregate_key"),
+			quoteDBIdentifier("survivor_id"),
+			quoteDBIdentifier("count_sum"),
+			quoteDBIdentifier("quota_sum"),
+			quoteDBIdentifier("token_used_sum"),
+		),
+		fmt.Sprintf("CREATE INDEX %s ON %s (%s)",
+			quoteDBIdentifier(quotaDataAggregateMigrationSurvivorIdx),
+			quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable),
+			quoteDBIdentifier("survivor_id"),
+		),
+		fmt.Sprintf("CREATE TABLE %s (%s integer PRIMARY KEY, %s varchar(64) NOT NULL)",
+			quoteDBIdentifier(quotaDataAggregateMigrationMemberTable),
+			quoteDBIdentifier("id"),
+			quoteDBIdentifier("aggregate_key"),
+		),
+		fmt.Sprintf("CREATE INDEX %s ON %s (%s)",
+			quoteDBIdentifier(quotaDataAggregateMigrationMemberKeyIdx),
+			quoteDBIdentifier(quotaDataAggregateMigrationMemberTable),
+			quoteDBIdentifier("aggregate_key"),
+		),
+	}
+	for _, statement := range statements {
+		if err := DB.Exec(statement).Error; err != nil {
+			return fmt.Errorf("failed to create quota_data aggregate migration table: %w", err)
+		}
+	}
+	return nil
+}
+
+func dropQuotaDataAggregateMigrationTables() error {
+	for _, table := range []string{quotaDataAggregateMigrationMemberTable, quotaDataAggregateMigrationSummaryTable} {
+		if err := DB.Exec("DROP TABLE IF EXISTS " + quoteDBIdentifier(table)).Error; err != nil {
+			return fmt.Errorf("failed to drop quota_data aggregate migration table %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func buildQuotaDataAggregateMigrationTables() error {
+	batchSize := quotaDataAggregateMigrationBatchSize
+	if batchSize <= 0 {
+		batchSize = quotaDataAggregateMigrationBatchDefault
+	}
+	lastID := 0
+	for {
+		rows := make([]QuotaData, 0, batchSize)
+		if err := DB.Table("quota_data").
+			Select("id, user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used").
+			Where("id > ?", lastID).
+			Order("id ASC").
+			Limit(batchSize).
+			Find(&rows).Error; err != nil {
 			return fmt.Errorf("failed to load quota_data rows for aggregate key migration: %w", err)
 		}
-		groups := make(map[string]*quotaDataAggregateMigrationGroup, len(rows))
-		keys := make([]string, 0, len(rows))
-		for _, row := range rows {
-			key := quotaDataAggregateKey(&row)
-			group, ok := groups[key]
-			if !ok {
-				group = &quotaDataAggregateMigrationGroup{survivor: row}
-				groups[key] = group
-				keys = append(keys, key)
-			}
-			group.ids = append(group.ids, row.Id)
-			group.count += row.Count
-			group.quota += row.Quota
-			group.tokenUsed += row.TokenUsed
+		if len(rows) == 0 {
+			return nil
 		}
+		lastID = rows[len(rows)-1].Id
+		if err := insertQuotaDataAggregateMigrationBatch(rows); err != nil {
+			return err
+		}
+	}
+}
 
-		for _, key := range keys {
-			group := groups[key]
-			if group.survivor.Id == 0 {
-				continue
+func insertQuotaDataAggregateMigrationBatch(rows []QuotaData) error {
+	members := make([]quotaDataAggregateMigrationMember, 0, len(rows))
+	summaries := make(map[string]*quotaDataAggregateMigrationSummary, len(rows))
+	for _, row := range rows {
+		key := quotaDataAggregateKey(&row)
+		members = append(members, quotaDataAggregateMigrationMember{Id: row.Id, AggregateKey: key})
+		summary, ok := summaries[key]
+		if !ok {
+			summary = &quotaDataAggregateMigrationSummary{
+				AggregateKey: key,
+				SurvivorID:   row.Id,
 			}
-			if err := tx.Table("quota_data").
-				Where("id = ?", group.survivor.Id).
-				Updates(map[string]interface{}{
-					"aggregate_key": key,
-					"count":         group.count,
-					"quota":         group.quota,
-					"token_used":    group.tokenUsed,
-				}).Error; err != nil {
-				return fmt.Errorf("failed to update quota_data aggregate row %d: %w", group.survivor.Id, err)
+			summaries[key] = summary
+		}
+		if row.Id < summary.SurvivorID {
+			summary.SurvivorID = row.Id
+		}
+		summary.CountSum += row.Count
+		summary.QuotaSum += row.Quota
+		summary.TokenUsedSum += row.TokenUsed
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if len(members) > 0 {
+			if err := tx.Table(quotaDataAggregateMigrationMemberTable).CreateInBatches(members, len(members)).Error; err != nil {
+				return fmt.Errorf("failed to record quota_data aggregate migration members: %w", err)
 			}
-			if len(group.ids) <= 1 {
-				continue
-			}
-			if err := tx.Where("id IN ?", group.ids[1:]).Delete(&QuotaData{}).Error; err != nil {
-				return fmt.Errorf("failed to remove duplicate quota_data aggregate rows: %w", err)
+		}
+		for _, summary := range summaries {
+			if err := upsertQuotaDataAggregateMigrationSummaryTx(tx, summary); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+}
+
+func upsertQuotaDataAggregateMigrationSummaryTx(tx *gorm.DB, summary *quotaDataAggregateMigrationSummary) error {
+	survivorIDCol := quoteDBIdentifier("survivor_id")
+	if err := tx.Table(quotaDataAggregateMigrationSummaryTable).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "aggregate_key"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"survivor_id":    gorm.Expr("CASE WHEN "+survivorIDCol+" > ? THEN ? ELSE "+survivorIDCol+" END", summary.SurvivorID, summary.SurvivorID),
+			"count_sum":      gorm.Expr(quoteDBIdentifier("count_sum")+" + ?", summary.CountSum),
+			"quota_sum":      gorm.Expr(quoteDBIdentifier("quota_sum")+" + ?", summary.QuotaSum),
+			"token_used_sum": gorm.Expr(quoteDBIdentifier("token_used_sum")+" + ?", summary.TokenUsedSum),
+		}),
+	}).Create(summary).Error; err != nil {
+		return fmt.Errorf("failed to record quota_data aggregate migration summary: %w", err)
+	}
+	return nil
+}
+
+func applyQuotaDataAggregateMigrationTables() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := clearStaleQuotaDataAggregateKeysTx(tx); err != nil {
+			return err
+		}
+		if err := deleteDuplicateQuotaDataAggregateRowsTx(tx); err != nil {
+			return err
+		}
+		if err := updateQuotaDataAggregateSurvivorsTx(tx); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func clearStaleQuotaDataAggregateKeysTx(tx *gorm.DB) error {
+	quotaTable := quoteDBIdentifier("quota_data")
+	memberTable := quoteDBIdentifier(quotaDataAggregateMigrationMemberTable)
+	idCol := quoteDBIdentifier("id")
+	aggregateKeyCol := quoteDBIdentifier("aggregate_key")
+	sql := fmt.Sprintf(
+		"UPDATE %s SET %s = NULL WHERE %s IS NOT NULL AND EXISTS (SELECT 1 FROM %s AS m WHERE m.%s = %s.%s AND m.%s <> %s.%s)",
+		quotaTable,
+		aggregateKeyCol,
+		aggregateKeyCol,
+		memberTable,
+		idCol,
+		quotaTable,
+		idCol,
+		aggregateKeyCol,
+		quotaTable,
+		aggregateKeyCol,
+	)
+	if err := tx.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to clear stale quota_data aggregate keys: %w", err)
+	}
+	return nil
+}
+
+func deleteDuplicateQuotaDataAggregateRowsTx(tx *gorm.DB) error {
+	quotaTable := quoteDBIdentifier("quota_data")
+	memberTable := quoteDBIdentifier(quotaDataAggregateMigrationMemberTable)
+	summaryTable := quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable)
+	idCol := quoteDBIdentifier("id")
+	survivorIDCol := quoteDBIdentifier("survivor_id")
+	sql := fmt.Sprintf(
+		"DELETE FROM %s WHERE %s IN (SELECT m.%s FROM %s AS m WHERE m.%s NOT IN (SELECT s.%s FROM %s AS s))",
+		quotaTable,
+		idCol,
+		idCol,
+		memberTable,
+		idCol,
+		survivorIDCol,
+		summaryTable,
+	)
+	if err := tx.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to remove duplicate quota_data aggregate rows: %w", err)
+	}
+	return nil
+}
+
+func updateQuotaDataAggregateSurvivorsTx(tx *gorm.DB) error {
+	quotaTable := quoteDBIdentifier("quota_data")
+	summaryTable := quoteDBIdentifier(quotaDataAggregateMigrationSummaryTable)
+	idCol := quoteDBIdentifier("id")
+	aggregateKeyCol := quoteDBIdentifier("aggregate_key")
+	survivorIDCol := quoteDBIdentifier("survivor_id")
+	countCol := quoteDBIdentifier("count")
+	quotaCol := quoteDBIdentifier("quota")
+	tokenUsedCol := quoteDBIdentifier("token_used")
+	countSumCol := quoteDBIdentifier("count_sum")
+	quotaSumCol := quoteDBIdentifier("quota_sum")
+	tokenUsedSumCol := quoteDBIdentifier("token_used_sum")
+	targetID := quotaTable + "." + idCol
+	sql := fmt.Sprintf(
+		"UPDATE %s SET "+
+			"%s = (SELECT s.%s FROM %s AS s WHERE s.%s = %s), "+
+			"%s = (SELECT s.%s FROM %s AS s WHERE s.%s = %s), "+
+			"%s = (SELECT s.%s FROM %s AS s WHERE s.%s = %s), "+
+			"%s = (SELECT s.%s FROM %s AS s WHERE s.%s = %s) "+
+			"WHERE %s IN (SELECT s.%s FROM %s AS s)",
+		quotaTable,
+		aggregateKeyCol, aggregateKeyCol, summaryTable, survivorIDCol, targetID,
+		countCol, countSumCol, summaryTable, survivorIDCol, targetID,
+		quotaCol, quotaSumCol, summaryTable, survivorIDCol, targetID,
+		tokenUsedCol, tokenUsedSumCol, summaryTable, survivorIDCol, targetID,
+		idCol, survivorIDCol, summaryTable,
+	)
+	if err := tx.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to update quota_data aggregate survivor rows: %w", err)
+	}
+	return nil
 }
 
 func createQuotaDataAggregateKeyIndex() error {
