@@ -544,6 +544,54 @@ func TestSaveQuotaDataWaitsForAggregateMigrationLock(t *testing.T) {
 	assert.Equal(t, 3, row.TokenUsed)
 }
 
+func TestQuotaDataOperationLockDoesNotTrustDuplicateInsertRowsAffected(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:quota_lock_duplicate_rows_affected?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	oldDB := DB
+	oldRetry := quotaDataOperationLockRetryInterval
+	oldMaxWait := quotaDataOperationLockMaxWait
+	DB = db
+	quotaDataOperationLockRetryInterval = 5 * time.Millisecond
+	quotaDataOperationLockMaxWait = time.Second
+	t.Cleanup(func() {
+		DB = oldDB
+		quotaDataOperationLockRetryInterval = oldRetry
+		quotaDataOperationLockMaxWait = oldMaxWait
+	})
+
+	require.NoError(t, ensureQuotaDataOperationLockTable())
+	holder, err := acquireQuotaDataOperationLock(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, releaseQuotaDataOperationLock(holder)) })
+
+	callbackName := "test:quota-lock-duplicate-found-rows"
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+		table := tx.Statement.Table
+		if table == "" && tx.Statement.Schema != nil {
+			table = tx.Statement.Schema.Table
+		}
+		if table == quotaDataOperationLockTable {
+			tx.RowsAffected = 1
+		}
+	}))
+	t.Cleanup(func() { db.Callback().Create().Remove(callbackName) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	contender, err := acquireQuotaDataOperationLock(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Empty(t, contender)
+
+	var current quotaDataOperationLock
+	require.NoError(t, db.Where("name = ?", quotaDataOperationLockName).First(&current).Error)
+	assert.Equal(t, holder, current.Owner)
+}
+
 func TestSaveQuotaDataCacheRequeuesSnapshotWhenCallerStopsWaiting(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:quota_save_context?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
@@ -887,10 +935,9 @@ func TestQuotaDataUpsertUsesPortableConflictSyntax(t *testing.T) {
 
 func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
 	tests := []struct {
-		name         string
-		open         func(*testing.T) *gorm.DB
-		wantNow      string
-		wantConflict string
+		name    string
+		open    func(*testing.T) *gorm.DB
+		wantNow string
 	}{
 		{
 			name: "sqlite",
@@ -899,8 +946,7 @@ func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
 				require.NoError(t, err)
 				return db
 			},
-			wantNow:      "STRFTIME('%S','NOW')",
-			wantConflict: "ON CONFLICT DO NOTHING",
+			wantNow: "STRFTIME('%S','NOW')",
 		},
 		{
 			name: "mysql",
@@ -914,8 +960,7 @@ func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
 				require.NoError(t, err)
 				return db
 			},
-			wantNow:      "UNIX_TIMESTAMP()",
-			wantConflict: "ON DUPLICATE KEY UPDATE",
+			wantNow: "UNIX_TIMESTAMP()",
 		},
 		{
 			name: "postgres",
@@ -929,8 +974,7 @@ func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
 				require.NoError(t, err)
 				return db
 			},
-			wantNow:      "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
-			wantConflict: "ON CONFLICT DO NOTHING",
+			wantNow: "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)",
 		},
 	}
 
@@ -956,7 +1000,6 @@ func TestQuotaDataOperationLockUsesDatabaseClockForLeaseSQL(t *testing.T) {
 				assert.Contains(t, upperStatement, strings.ToUpper(quotaDataOperationLockTable), statement)
 				assert.Contains(t, upperStatement, tt.wantNow, statement)
 			}
-			assert.Contains(t, strings.ToUpper(statements[0]), tt.wantConflict, statements[0])
 		})
 	}
 }

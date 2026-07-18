@@ -599,6 +599,16 @@ func renewQuotaDataOperationLockAttempt(tx *gorm.DB, owner, nowSQL string) *gorm
 		})
 }
 
+func quotaDataOperationLockOwnedBy(tx *gorm.DB, owner string) (bool, error) {
+	var owned int64
+	if err := tx.Model(&quotaDataOperationLock{}).
+		Where("name = ? AND owner = ?", quotaDataOperationLockName, owner).
+		Count(&owned).Error; err != nil {
+		return false, err
+	}
+	return owned > 0, nil
+}
+
 func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -632,7 +642,11 @@ func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 			}
 			return "", fmt.Errorf("failed to acquire quota_data operation lock: %w", result.Error)
 		}
-		if result.RowsAffected == 1 {
+		owned, err := quotaDataOperationLockOwnedBy(lockDB, owner)
+		if err != nil {
+			return "", fmt.Errorf("failed to verify quota_data operation lock acquisition: %w", err)
+		}
+		if owned {
 			return owner, nil
 		}
 
@@ -643,7 +657,11 @@ func acquireQuotaDataOperationLock(ctx context.Context) (string, error) {
 			}
 			return "", fmt.Errorf("failed to claim expired quota_data operation lock: %w", result.Error)
 		}
-		if result.RowsAffected == 1 {
+		owned, err = quotaDataOperationLockOwnedBy(lockDB, owner)
+		if err != nil {
+			return "", fmt.Errorf("failed to verify expired quota_data operation lock claim: %w", err)
+		}
+		if owned {
 			return owner, nil
 		}
 		timer := time.NewTimer(retryInterval)
