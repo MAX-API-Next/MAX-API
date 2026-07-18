@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -11,6 +12,10 @@ type testConfigWithMap struct {
 	Modes map[string]string `json:"modes"`
 	Exprs map[string]string `json:"exprs"`
 	Name  string            `json:"name"`
+}
+
+type testConfigWithRWMap struct {
+	Ratios *types.RWMap[string, float64] `json:"ratios"`
 }
 
 func TestUpdateConfigFromMap_MapReplacement(t *testing.T) {
@@ -96,6 +101,20 @@ func TestUpdateConfigFromMap_ScalarFieldsUnchanged(t *testing.T) {
 	if cfg.Modes["m"] != "v" {
 		t.Errorf("Modes should be unchanged, got %v", cfg.Modes)
 	}
+}
+
+func TestUpdateConfigFromMap_PointerUnmarshalerUpdatesInPlace(t *testing.T) {
+	ratios := types.NewRWMap[string, float64]()
+	ratios.Set("old", 1)
+	cfg := &testConfigWithRWMap{Ratios: ratios}
+
+	err := UpdateConfigFromMap(cfg, map[string]string{
+		"ratios": `{"new":2}`,
+	})
+
+	require.NoError(t, err)
+	require.Same(t, ratios, cfg.Ratios)
+	assert.Equal(t, map[string]float64{"new": 2}, cfg.Ratios.ReadAll())
 }
 
 func TestLoadFromDBReturnsInvalidSubConfigError(t *testing.T) {

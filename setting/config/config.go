@@ -242,6 +242,14 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 			if strValue == "null" {
 				field.Set(reflect.Zero(field.Type()))
 			} else {
+				if !field.IsNil() {
+					if unmarshaler, ok := field.Interface().(interface{ UnmarshalJSON([]byte) error }); ok {
+						if err := unmarshaler.UnmarshalJSON([]byte(strValue)); err != nil {
+							return fmt.Errorf("invalid value for %s: %w", key, err)
+						}
+						continue
+					}
+				}
 				fresh := reflect.New(field.Type().Elem())
 				if !field.IsNil() {
 					fresh.Elem().Set(field.Elem())

@@ -705,9 +705,13 @@ func handleConfigUpdate(key, value string) (bool, error) {
 	// GroupRatio option. Keep both paths on the package-owned RWMap so the
 	// runtime readers and the registered config stay connected.
 	if configName == "group_ratio_setting" && configKey == "group_ratio" {
-		return true, ratio_setting.UpdateGroupRatioByJSONString(value)
+		if err := ratio_setting.UpdateGroupRatioByJSONString(value); err != nil {
+			return true, err
+		}
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	if err := config.UpdateConfigFromMap(cfg, configMap); err != nil {
+		return true, err
+	}
 
 	// 特定配置的后处理
 	if configName == "performance_setting" {

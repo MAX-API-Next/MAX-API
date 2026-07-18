@@ -152,6 +152,7 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	}
 	if err = invalidateUserCache(userId); err != nil {
 		common.SysLog(fmt.Sprintf("failed to update user setting cache: user_id=%d, error=%v", userId, err))
+		enqueueUserCacheInvalidationRetry(userId, err)
 	}
 	return nil
 }
@@ -1091,7 +1092,8 @@ func (user *User) Delete() error {
 	}
 
 	// 清除缓存
-	return deleteUserCache(user.Id)
+	deleteUserCacheAfterCommittedDelete(user.Id)
+	return nil
 }
 
 func (user *User) HardDelete() error {
@@ -1104,7 +1106,8 @@ func (user *User) HardDelete() error {
 	if err := DB.Unscoped().Delete(user).Error; err != nil {
 		return err
 	}
-	return deleteUserCache(user.Id)
+	deleteUserCacheAfterCommittedDelete(user.Id)
+	return nil
 }
 
 func (user *User) ensureCanDelete() error {

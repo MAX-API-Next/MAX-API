@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +84,8 @@ func TestUpdateOptionFiltersAutoRouteGroupRatioNamesBeforePersistence(t *testing
 
 func TestUpdateOptionMapFiltersAutoRouteGroupRatioNames(t *testing.T) {
 	setupOptionMapTestState(t)
+	groupRatioSetting := ratio_setting.GetGroupRatioSetting()
+	registeredGroupRatio := groupRatioSetting.GroupRatio
 
 	err := updateOptionMap("GroupRatio", `{"auto":1,"default":1.25}`)
 	require.NoError(t, err)
@@ -93,9 +96,13 @@ func TestUpdateOptionMapFiltersAutoRouteGroupRatioNames(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, ratio_setting.GetGroupRatioCopy(), "auto:fast")
 	require.Equal(t, 0.5, ratio_setting.GetGroupRatio("vip"))
+	require.Same(t, registeredGroupRatio, ratio_setting.GetGroupRatioSetting().GroupRatio)
+	require.JSONEq(t, `{"vip":0.5}`, config.GlobalConfig.ExportAllConfigs()["group_ratio_setting.group_ratio"])
 
 	require.NoError(t, updateOptionMap("GroupRatio", `{"default":1,"vip":0.5}`))
 	require.Equal(t, 0.5, ratio_setting.GetGroupRatio("vip"))
+	require.Same(t, registeredGroupRatio, ratio_setting.GetGroupRatioSetting().GroupRatio)
+	require.JSONEq(t, `{"default":1,"vip":0.5}`, config.GlobalConfig.ExportAllConfigs()["group_ratio_setting.group_ratio"])
 }
 
 func TestValidateOptionUpdateRejectsRuntimeConfigParseErrors(t *testing.T) {

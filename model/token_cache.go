@@ -80,6 +80,14 @@ func deleteTokenCache(key string) error {
 	return common.RedisDeleteVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
 }
 
+func tokenCacheRetryWindow() time.Duration {
+	window := time.Duration(common.RedisKeyCacheSeconds()) * time.Second
+	if window <= 0 {
+		window = time.Minute
+	}
+	return window
+}
+
 func enqueueTokenCacheRetry(key string, deleteEntry bool, cause error) {
 	if key == "" {
 		return
@@ -103,13 +111,7 @@ func enqueueTokenCacheRetry(key string, deleteEntry bool, cause error) {
 		if cause != nil {
 			state.nextAttempt = now.Add(tokenCacheRetryInitialDelay)
 		}
-		if !deleteEntry {
-			window := time.Duration(common.RedisKeyCacheSeconds()) * time.Second
-			if window <= 0 {
-				window = time.Minute
-			}
-			state.deadline = now.Add(window)
-		}
+		state.deadline = now.Add(tokenCacheRetryWindow())
 		tokenCacheRetries.pending[cacheKey] = state
 	} else {
 		state.revision++
@@ -118,7 +120,7 @@ func enqueueTokenCacheRetry(key string, deleteEntry bool, cause error) {
 		}
 		if deleteEntry && !state.deleteEntry {
 			state.deleteEntry = true
-			state.deadline = time.Time{}
+			state.deadline = now.Add(tokenCacheRetryWindow())
 			state.delay = tokenCacheRetryInitialDelay
 			state.nextAttempt = now
 		}
@@ -178,8 +180,13 @@ func claimTokenCacheRetryAttempts() ([]tokenCacheRetryAttempt, time.Duration, bo
 	attempts := make([]tokenCacheRetryAttempt, 0)
 	var nextAttempt time.Time
 	for cacheKey, state := range tokenCacheRetries.pending {
-		if !state.deleteEntry && !state.deadline.IsZero() && !now.Before(state.deadline) {
-			common.SysLog(fmt.Sprintf("token cache invalidation retry expired after %d attempts (initial_error=%v)", state.attempts, state.cause))
+		if !state.deadline.IsZero() && !now.Before(state.deadline) {
+			operation := "invalidation"
+			if state.deleteEntry {
+				operation = "deletion"
+			}
+			common.SysLog(fmt.Sprintf("token cache %s retry expired after %d attempts (cache_key=%s, initial_error=%v)",
+				operation, state.attempts, cacheKey, state.cause))
 			delete(tokenCacheRetries.pending, cacheKey)
 			continue
 		}

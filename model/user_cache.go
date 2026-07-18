@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -12,6 +13,40 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 )
+
+const (
+	userCacheRetryInitialDelay = 50 * time.Millisecond
+	userCacheRetryMaxDelay     = 5 * time.Second
+)
+
+type userCacheRetryState struct {
+	userId      int
+	revision    uint64
+	deleteEntry bool
+	cause       error
+	attempts    int
+	delay       time.Duration
+	nextAttempt time.Time
+	deadline    time.Time
+}
+
+type userCacheRetryAttempt struct {
+	userId      int
+	revision    uint64
+	deleteEntry bool
+	cause       error
+	attempt     int
+}
+
+var userCacheRetries = struct {
+	sync.Mutex
+	pending map[int]*userCacheRetryState
+	running bool
+	wake    chan struct{}
+}{
+	pending: make(map[int]*userCacheRetryState),
+	wake:    make(chan struct{}, 1),
+}
 
 // UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
@@ -63,19 +98,11 @@ func invalidateUserCache(userId int) error {
 }
 
 func enqueueUserCacheInvalidationRetry(userId int, cause error) {
-	gopool.Go(func() {
-		delay := 50 * time.Millisecond
-		for attempt := 1; attempt <= 3; attempt++ {
-			time.Sleep(delay)
-			if err := invalidateUserCache(userId); err == nil {
-				return
-			} else {
-				common.SysLog(fmt.Sprintf("user cache invalidation retry %d/3 failed (user_id=%d, initial_error=%v): %v",
-					attempt, userId, cause, err))
-			}
-			delay *= 2
-		}
-	})
+	enqueueUserCacheRetry(userId, false, cause)
+}
+
+func enqueueUserCacheDeletionRetry(userId int, cause error) {
+	enqueueUserCacheRetry(userId, true, cause)
 }
 
 func deleteUserCache(userId int) error {
@@ -83,6 +110,200 @@ func deleteUserCache(userId int) error {
 		return nil
 	}
 	return common.RedisDeleteVersionedHash(getUserCacheKey(userId), getUserCacheVersionKey(userId))
+}
+
+func deleteUserCacheAfterCommittedDelete(userId int) {
+	if err := deleteUserCache(userId); err != nil {
+		common.SysLog(fmt.Sprintf("failed to delete user cache after user deletion: user_id=%d, error=%v", userId, err))
+		enqueueUserCacheDeletionRetry(userId, err)
+	}
+}
+
+func userCacheRetryWindow() time.Duration {
+	window := time.Duration(common.RedisKeyCacheSeconds()) * time.Second
+	if window <= 0 {
+		window = time.Minute
+	}
+	return window
+}
+
+func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
+	if userId <= 0 {
+		return
+	}
+	now := time.Now()
+	userCacheRetries.Lock()
+	state, exists := userCacheRetries.pending[userId]
+	if !exists {
+		state = &userCacheRetryState{
+			userId:      userId,
+			revision:    1,
+			deleteEntry: deleteEntry,
+			cause:       cause,
+			delay:       userCacheRetryInitialDelay,
+			nextAttempt: now,
+			deadline:    now.Add(userCacheRetryWindow()),
+		}
+		if cause != nil {
+			state.nextAttempt = now.Add(userCacheRetryInitialDelay)
+		}
+		userCacheRetries.pending[userId] = state
+	} else {
+		state.revision++
+		if cause != nil {
+			state.cause = cause
+		}
+		if deleteEntry && !state.deleteEntry {
+			state.deleteEntry = true
+			state.deadline = now.Add(userCacheRetryWindow())
+			state.delay = userCacheRetryInitialDelay
+			state.nextAttempt = now
+		}
+	}
+	startWorker := !userCacheRetries.running
+	if startWorker {
+		userCacheRetries.running = true
+	}
+	userCacheRetries.Unlock()
+
+	select {
+	case userCacheRetries.wake <- struct{}{}:
+	default:
+	}
+	if startWorker {
+		gopool.Go(runUserCacheRetryWorker)
+	}
+}
+
+func runUserCacheRetryWorker() {
+	for {
+		attempts, wait, done := claimUserCacheRetryAttempts()
+		if done {
+			return
+		}
+		if len(attempts) == 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-userCacheRetries.wake:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}
+			continue
+		}
+		for _, attempt := range attempts {
+			err := runUserCacheRetryAttempt(attempt)
+			completeUserCacheRetryAttempt(attempt, err)
+		}
+	}
+}
+
+func claimUserCacheRetryAttempts() ([]userCacheRetryAttempt, time.Duration, bool) {
+	now := time.Now()
+	userCacheRetries.Lock()
+	defer userCacheRetries.Unlock()
+
+	if len(userCacheRetries.pending) == 0 {
+		userCacheRetries.running = false
+		return nil, 0, true
+	}
+
+	attempts := make([]userCacheRetryAttempt, 0)
+	var nextAttempt time.Time
+	for userId, state := range userCacheRetries.pending {
+		if !state.deadline.IsZero() && !now.Before(state.deadline) {
+			operation := "invalidation"
+			if state.deleteEntry {
+				operation = "deletion"
+			}
+			common.SysLog(fmt.Sprintf("user cache %s retry expired after %d attempts (user_id=%d, initial_error=%v)",
+				operation, state.attempts, userId, state.cause))
+			delete(userCacheRetries.pending, userId)
+			continue
+		}
+		if now.Before(state.nextAttempt) {
+			if nextAttempt.IsZero() || state.nextAttempt.Before(nextAttempt) {
+				nextAttempt = state.nextAttempt
+			}
+			continue
+		}
+
+		state.attempts++
+		attempts = append(attempts, userCacheRetryAttempt{
+			userId: state.userId, deleteEntry: state.deleteEntry, revision: state.revision,
+			cause: state.cause, attempt: state.attempts,
+		})
+		state.nextAttempt = now.Add(state.delay)
+		state.delay *= 2
+		if state.delay > userCacheRetryMaxDelay {
+			state.delay = userCacheRetryMaxDelay
+		}
+	}
+
+	if len(attempts) > 0 {
+		return attempts, 0, false
+	}
+	if len(userCacheRetries.pending) == 0 {
+		userCacheRetries.running = false
+		return nil, 0, true
+	}
+	if nextAttempt.IsZero() {
+		nextAttempt = now.Add(userCacheRetryInitialDelay)
+	}
+	return nil, time.Until(nextAttempt), false
+}
+
+func runUserCacheRetryAttempt(attempt userCacheRetryAttempt) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if attempt.deleteEntry {
+		return deleteUserCache(attempt.userId)
+	}
+	return invalidateUserCache(attempt.userId)
+}
+
+func completeUserCacheRetryAttempt(attempt userCacheRetryAttempt, err error) {
+	userCacheRetries.Lock()
+	defer userCacheRetries.Unlock()
+	state, exists := userCacheRetries.pending[attempt.userId]
+	if !exists {
+		return
+	}
+	if err != nil && state.cause == nil {
+		state.cause = err
+	}
+	if state.revision != attempt.revision {
+		state.nextAttempt = time.Now()
+		state.delay = userCacheRetryInitialDelay
+		return
+	}
+	if err == nil {
+		if state.deleteEntry && !attempt.deleteEntry {
+			state.nextAttempt = time.Now()
+			state.delay = userCacheRetryInitialDelay
+			return
+		}
+		delete(userCacheRetries.pending, attempt.userId)
+		return
+	}
+
+	if attempt.attempt <= 3 || attempt.attempt%10 == 0 {
+		operation := "invalidation"
+		if attempt.deleteEntry {
+			operation = "deletion"
+		}
+		initialErr := attempt.cause
+		if initialErr == nil {
+			initialErr = err
+		}
+		common.SysLog(fmt.Sprintf("user cache %s retry %d failed (user_id=%d, initial_error=%v): %v",
+			operation, attempt.attempt, attempt.userId, initialErr, err))
+	}
 }
 
 // InvalidateUserCache is the exported version of invalidateUserCache.

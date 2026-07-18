@@ -55,6 +55,7 @@ func TestSaveQuotaDataCacheRequeuesFailedSnapshot(t *testing.T) {
 	CacheQuotaDataLock.Unlock()
 
 	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
 	SaveQuotaDataCache()
 
 	CacheQuotaDataLock.Lock()
@@ -74,6 +75,7 @@ func TestSaveQuotaDataIsIdempotentForRepeatedSnapshot(t *testing.T) {
 	DB = db
 	t.Cleanup(func() { DB = oldDB })
 	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
 
 	snapshotID := "quota-snapshot-idempotency"
 	snapshot := &QuotaData{
@@ -101,10 +103,77 @@ func TestSaveQuotaDataIsIdempotentForRepeatedSnapshot(t *testing.T) {
 func TestQuotaDataMigrationCreatesUniqueAggregateKey(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
 	require.NoError(t, db.AutoMigrate(&QuotaData{}))
+	require.NoError(t, migrateQuotaDataAggregateKeys())
 
 	assert.True(t, db.Migrator().HasColumn("quota_data", "aggregate_key"))
 	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, "ux_quota_data_aggregate_key"))
+}
+
+func TestQuotaDataMigrationBackfillsAndMergesLegacyRows(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	require.NoError(t, db.Exec(`CREATE TABLE quota_data (
+		id integer primary key autoincrement,
+		aggregate_key text,
+		user_id integer,
+		username text,
+		model_name text,
+		created_at integer,
+		use_group text,
+		token_id integer,
+		channel_id integer,
+		node_name text,
+		token_used integer,
+		count integer,
+		quota integer
+	)`).Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX ux_quota_data_aggregate_key ON quota_data (aggregate_key)").Error)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		1, "quota-user", "test-model", int64(3600), "default", 2, 3, "node-a", 1, 7, 3,
+	).Error)
+	require.NoError(t, db.Exec(
+		"INSERT INTO quota_data (user_id, username, model_name, created_at, use_group, token_id, channel_id, node_name, count, quota, token_used) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		1, "quota-user", "test-model", int64(3600), "default", 2, 3, "node-a", 2, 11, 4,
+	).Error)
+	require.NoError(t, db.AutoMigrate(&QuotaDataSnapshot{}))
+
+	require.NoError(t, migrateQuotaDataAggregateKeys())
+	assert.True(t, db.Migrator().HasColumn("quota_data", "aggregate_key"))
+	assert.True(t, db.Migrator().HasIndex(&QuotaData{}, "ux_quota_data_aggregate_key"))
+
+	aggregateKey := quotaDataAggregateKeyForTest(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+	})
+	var rows []QuotaData
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.NotNil(t, rows[0].AggregateKey)
+	assert.Equal(t, aggregateKey, *rows[0].AggregateKey)
+	assert.Equal(t, 3, rows[0].Count)
+	assert.Equal(t, 18, rows[0].Quota)
+	assert.Equal(t, 7, rows[0].TokenUsed)
+
+	require.NoError(t, saveQuotaData(&QuotaData{
+		UserID: 1, Username: "quota-user", ModelName: "test-model", CreatedAt: 3600,
+		UseGroup: "default", TokenID: 2, ChannelID: 3, NodeName: "node-a",
+		Count: 1, Quota: 5, TokenUsed: 2,
+	}))
+	rows = nil
+	require.NoError(t, db.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 4, rows[0].Count)
+	assert.Equal(t, 23, rows[0].Quota)
+	assert.Equal(t, 9, rows[0].TokenUsed)
 }
 
 func TestSaveQuotaDataAtomicallyMergesCompetingAggregateInsert(t *testing.T) {
@@ -114,7 +183,7 @@ func TestSaveQuotaDataAtomicallyMergesCompetingAggregateInsert(t *testing.T) {
 	DB = db
 	t.Cleanup(func() { DB = oldDB })
 	require.NoError(t, db.AutoMigrate(&QuotaData{}, &QuotaDataSnapshot{}))
-	ensureQuotaDataAggregateKeySchemaForTest(t, db)
+	require.NoError(t, migrateQuotaDataAggregateKeys())
 
 	snapshotID := "quota-snapshot-racing-insert"
 	snapshot := &QuotaData{

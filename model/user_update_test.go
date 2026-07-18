@@ -473,6 +473,55 @@ func TestTokenDeleteRetriesCacheDeletion(t *testing.T) {
 	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
 }
 
+func TestUpdateUserSettingRetriesCacheInvalidation(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 86, Username: "setting-cache-retry-user", Quota: 10, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheUserForRetryTest(t, client, user)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+	requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
+}
+
+func TestUserDeletesRetryCacheDeletionAfterDatabaseCommit(t *testing.T) {
+	tests := []struct {
+		name       string
+		userID     int
+		deleteUser func(*User) error
+		wantRows   int64
+	}{
+		{
+			name:       "soft delete",
+			userID:     93,
+			deleteUser: (*User).Delete,
+			wantRows:   1,
+		},
+		{
+			name:       "hard delete",
+			userID:     94,
+			deleteUser: (*User).HardDelete,
+			wantRows:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupUserUpdateTestState(t)
+			user := User{Id: tt.userID, Username: "delete-cache-retry-user-" + tt.name, Status: common.UserStatusEnabled}
+			require.NoError(t, DB.Create(&user).Error)
+			client, _ := useFailingCacheMutationRedis(t, 1)
+			cacheUserForRetryTest(t, client, user)
+
+			require.NoError(t, tt.deleteUser(&user))
+			var count int64
+			require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
+			assert.Equal(t, tt.wantRows, count)
+			requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
+		})
+	}
+}
+
 func TestTokenDeleteRetriesUntilCacheRecovers(t *testing.T) {
 	setupUserUpdateTestState(t)
 	token := Token{Id: 91, UserId: 92, Key: "token-delete-cache-recovery", RemainQuota: 10, Status: common.TokenStatusEnabled}
@@ -820,6 +869,64 @@ func useUserUpdateTestDB(t *testing.T, db *gorm.DB) {
 		common.BatchUpdateEnabled = oldBatchUpdateEnabled
 		initCol()
 	})
+}
+
+func useSQLiteUserMigrationTestDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	oldDB := DB
+	oldLOGDB := LOG_DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	initCol()
+
+	t.Cleanup(func() {
+		DB = oldDB
+		LOG_DB = oldLOGDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		initCol()
+	})
+}
+
+func TestMigrateUserOAuthIdentityConstraintsBackfillsAndEnforcesUniqueness(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	useSQLiteUserMigrationTestDB(t, db)
+	require.NoError(t, db.AutoMigrate(&User{}))
+
+	require.NoError(t, DB.Create(&User{Id: 101, Username: "oauth-empty-a", AffCode: "oea", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Create(&User{Id: 102, Username: "oauth-empty-b", AffCode: "oeb", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Create(&User{Id: 103, Username: "oauth-duplicate-a", OidcId: "duplicate-oidc", AffCode: "oda", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Create(&User{Id: 104, Username: "oauth-duplicate-b", OidcId: "duplicate-oidc", AffCode: "odb", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Delete(&User{Id: 103}).Error)
+
+	require.NoError(t, migrateUserOAuthIdentityConstraints())
+	assert.True(t, DB.Migrator().HasIndex("users", "ux_users_oidc_id"))
+
+	var duplicateUsers []User
+	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{103, 104}).Order("id asc").Find(&duplicateUsers).Error)
+	require.Len(t, duplicateUsers, 2)
+	assert.Empty(t, duplicateUsers[0].OidcId)
+	assert.Equal(t, "duplicate-oidc", duplicateUsers[1].OidcId)
+
+	var nullGitHubIDs int64
+	require.NoError(t, DB.Table("users").Where("github_id IS NULL").Count(&nullGitHubIDs).Error)
+	assert.GreaterOrEqual(t, nullGitHubIDs, int64(2))
+
+	err = DB.Create(&User{Id: 105, Username: "oauth-duplicate-c", OidcId: "duplicate-oidc", AffCode: "odc", Status: common.UserStatusEnabled}).Error
+	require.Error(t, err)
+
+	require.NoError(t, DB.Create(&User{Id: 106, Username: "oauth-empty-c", AffCode: "oec", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, DB.Create(&User{Id: 107, Username: "oauth-empty-d", AffCode: "oed", Status: common.UserStatusEnabled}).Error)
 }
 
 func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {

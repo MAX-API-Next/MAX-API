@@ -16,7 +16,7 @@ import (
 // QuotaData 柱状图数据
 type QuotaData struct {
 	Id           int     `json:"id"`
-	AggregateKey *string `json:"-" gorm:"type:varchar(64);uniqueIndex:ux_quota_data_aggregate_key"`
+	AggregateKey *string `json:"-" gorm:"type:varchar(64)"`
 	SnapshotID   *string `json:"-" gorm:"-:all"`
 	UserID       int     `json:"user_id" gorm:"index"`
 	Username     string  `json:"username" gorm:"index:idx_qdt_model_user_name,priority:2;size:64;default:''"`
@@ -30,6 +30,8 @@ type QuotaData struct {
 	Count        int     `json:"count" gorm:"default:0"`
 	Quota        int     `json:"quota" gorm:"default:0"`
 }
+
+const quotaDataAggregateKeyIndexName = "ux_quota_data_aggregate_key"
 
 type QuotaDataSnapshot struct {
 	SnapshotID string `gorm:"type:varchar(64);primaryKey"`
@@ -98,6 +100,120 @@ func quotaDataCacheKey(quotaData *QuotaData) string {
 func quotaDataAggregateKey(quotaData *QuotaData) string {
 	digest := sha256.Sum256([]byte(quotaDataCacheKey(quotaData)))
 	return hex.EncodeToString(digest[:])
+}
+
+type quotaDataAggregateMigrationGroup struct {
+	survivor  QuotaData
+	ids       []int
+	count     int
+	quota     int
+	tokenUsed int
+}
+
+func migrateQuotaDataAggregateKeys() error {
+	if DB == nil || !DB.Migrator().HasTable(&QuotaData{}) {
+		return nil
+	}
+	if !DB.Migrator().HasColumn(&QuotaData{}, "aggregate_key") {
+		if err := DB.Migrator().AddColumn(&QuotaData{}, "AggregateKey"); err != nil {
+			return fmt.Errorf("failed to add quota_data.aggregate_key: %w", err)
+		}
+	}
+
+	indexExists := DB.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName)
+	needsCleanup, err := quotaDataAggregateKeyCleanupNeeded(indexExists)
+	if err != nil {
+		return err
+	}
+	if needsCleanup {
+		if indexExists {
+			if err := DB.Migrator().DropIndex(&QuotaData{}, quotaDataAggregateKeyIndexName); err != nil {
+				return fmt.Errorf("failed to drop stale quota_data aggregate key index: %w", err)
+			}
+		}
+		if err := mergeQuotaDataAggregateRows(); err != nil {
+			return err
+		}
+	}
+	if !DB.Migrator().HasIndex(&QuotaData{}, quotaDataAggregateKeyIndexName) {
+		if err := createQuotaDataAggregateKeyIndex(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func quotaDataAggregateKeyCleanupNeeded(indexExists bool) (bool, error) {
+	if !indexExists {
+		return true, nil
+	}
+	var legacyRows int64
+	if err := DB.Table("quota_data").
+		Where("aggregate_key IS NULL OR aggregate_key = ?", "").
+		Count(&legacyRows).Error; err != nil {
+		return false, fmt.Errorf("failed to inspect legacy quota_data aggregate keys: %w", err)
+	}
+	return legacyRows > 0, nil
+}
+
+func mergeQuotaDataAggregateRows() error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var rows []QuotaData
+		if err := tx.Table("quota_data").Order("id ASC").Find(&rows).Error; err != nil {
+			return fmt.Errorf("failed to load quota_data rows for aggregate key migration: %w", err)
+		}
+		groups := make(map[string]*quotaDataAggregateMigrationGroup, len(rows))
+		keys := make([]string, 0, len(rows))
+		for _, row := range rows {
+			key := quotaDataAggregateKey(&row)
+			group, ok := groups[key]
+			if !ok {
+				group = &quotaDataAggregateMigrationGroup{survivor: row}
+				groups[key] = group
+				keys = append(keys, key)
+			}
+			group.ids = append(group.ids, row.Id)
+			group.count += row.Count
+			group.quota += row.Quota
+			group.tokenUsed += row.TokenUsed
+		}
+
+		for _, key := range keys {
+			group := groups[key]
+			if group.survivor.Id == 0 {
+				continue
+			}
+			if err := tx.Table("quota_data").
+				Where("id = ?", group.survivor.Id).
+				Updates(map[string]interface{}{
+					"aggregate_key": key,
+					"count":         group.count,
+					"quota":         group.quota,
+					"token_used":    group.tokenUsed,
+				}).Error; err != nil {
+				return fmt.Errorf("failed to update quota_data aggregate row %d: %w", group.survivor.Id, err)
+			}
+			if len(group.ids) <= 1 {
+				continue
+			}
+			if err := tx.Where("id IN ?", group.ids[1:]).Delete(&QuotaData{}).Error; err != nil {
+				return fmt.Errorf("failed to remove duplicate quota_data aggregate rows: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func createQuotaDataAggregateKeyIndex() error {
+	sql := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s)",
+		quoteDBIdentifier(quotaDataAggregateKeyIndexName),
+		quoteDBIdentifier("quota_data"),
+		quoteDBIdentifier("aggregate_key"),
+	)
+	if err := DB.Exec(sql).Error; err != nil {
+		return fmt.Errorf("failed to create quota_data aggregate key index: %w", err)
+	}
+	return nil
 }
 
 func requeueQuotaDataCache(quotaData *QuotaData) {

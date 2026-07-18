@@ -36,6 +36,21 @@ var logRetryMarkerBackfillAsyncRunner = func(fn func()) {
 	gopool.Go(fn)
 }
 
+type userOAuthIdentityMigration struct {
+	column               string
+	indexName            string
+	mysqlGeneratedColumn string
+}
+
+var userOAuthIdentityMigrations = []userOAuthIdentityMigration{
+	{column: "wechat_id", indexName: "ux_users_wechat_id", mysqlGeneratedColumn: "wechat_id_unique"},
+	{column: "github_id", indexName: "ux_users_github_id", mysqlGeneratedColumn: "github_id_unique"},
+	{column: "discord_id", indexName: "ux_users_discord_id", mysqlGeneratedColumn: "discord_id_unique"},
+	{column: "oidc_id", indexName: "ux_users_oidc_id", mysqlGeneratedColumn: "oidc_id_unique"},
+	{column: "telegram_id", indexName: "ux_users_telegram_id", mysqlGeneratedColumn: "telegram_id_unique"},
+	{column: "linux_do_id", indexName: "ux_users_linux_do_id", mysqlGeneratedColumn: "linux_do_id_unique"},
+}
+
 func logRetryMarkerBackfillCompletionKey() string {
 	logDSN := strings.TrimSpace(os.Getenv("LOG_SQL_DSN"))
 	if logDSN == "" {
@@ -84,6 +99,13 @@ func initCol() {
 	}
 	// log sql type and database type
 	//common.SysLog("Using Log SQL Type: " + common.LogSqlType)
+}
+
+func quoteDBIdentifier(identifier string) string {
+	if common.UsingPostgreSQL {
+		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	}
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
 }
 
 var DB *gorm.DB
@@ -319,6 +341,12 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateQuotaDataAggregateKeys(); err != nil {
+		return err
+	}
+	if err := migrateUserOAuthIdentityConstraints(); err != nil {
+		return err
+	}
 	if err := backfillUserNormalizedEmails(); err != nil {
 		return err
 	}
@@ -404,6 +432,12 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migrateQuotaDataAggregateKeys(); err != nil {
+		return err
+	}
+	if err := migrateUserOAuthIdentityConstraints(); err != nil {
+		return err
+	}
 	if err := backfillUserNormalizedEmails(); err != nil {
 		return err
 	}
@@ -429,6 +463,152 @@ func backfillUserNormalizedEmails() error {
 		Update("normalized_email", gorm.Expr("LOWER(TRIM(email))"))
 	if result.Error != nil {
 		return fmt.Errorf("failed to backfill user normalized emails: %w", result.Error)
+	}
+	return nil
+}
+
+func migrateUserOAuthIdentityConstraints() error {
+	if DB == nil || !DB.Migrator().HasTable(&User{}) {
+		return nil
+	}
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, identity := range userOAuthIdentityMigrations {
+			if !tx.Migrator().HasColumn("users", identity.column) {
+				continue
+			}
+			quotedColumn := quoteDBIdentifier(identity.column)
+			if err := tx.Table("users").
+				Where(quotedColumn+" = ?", "").
+				Update(identity.column, nil).Error; err != nil {
+				return fmt.Errorf("failed to null empty users.%s values: %w", identity.column, err)
+			}
+			if err := clearDuplicateUserOAuthIdentityTx(tx, identity); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, identity := range userOAuthIdentityMigrations {
+		if !DB.Migrator().HasColumn("users", identity.column) {
+			continue
+		}
+		if err := ensureUserOAuthIdentityUniqueIndex(identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func clearDuplicateUserOAuthIdentityTx(tx *gorm.DB, identity userOAuthIdentityMigration) error {
+	values, err := duplicateUserOAuthIdentityValuesTx(tx, identity.column)
+	if err != nil {
+		return err
+	}
+	quotedColumn := quoteDBIdentifier(identity.column)
+	for _, value := range values {
+		var ids []int
+		rows, err := tx.Table("users").
+			Select("id").
+			Where(quotedColumn+" = ?", value).
+			Order("CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END ASC, id ASC").
+			Rows()
+		if err != nil {
+			return fmt.Errorf("failed to load duplicate users.%s ids: %w", identity.column, err)
+		}
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(ids) <= 1 {
+			continue
+		}
+		if err := tx.Table("users").
+			Where("id IN ?", ids[1:]).
+			Update(identity.column, nil).Error; err != nil {
+			return fmt.Errorf("failed to clear duplicate users.%s values: %w", identity.column, err)
+		}
+		common.SysLog(fmt.Sprintf("cleared %d duplicate users.%s OAuth identities during migration", len(ids)-1, identity.column))
+	}
+	return nil
+}
+
+func duplicateUserOAuthIdentityValuesTx(tx *gorm.DB, column string) ([]string, error) {
+	quotedColumn := quoteDBIdentifier(column)
+	rows, err := tx.Raw(fmt.Sprintf(
+		"SELECT %s FROM %s WHERE %s IS NOT NULL AND %s <> ? GROUP BY %s HAVING COUNT(*) > 1",
+		quotedColumn,
+		quoteDBIdentifier("users"),
+		quotedColumn,
+		quotedColumn,
+		quotedColumn,
+	), "").Rows()
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect duplicate users.%s values: %w", column, err)
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	for rows.Next() {
+		var value sql.NullString
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		if value.Valid && value.String != "" {
+			values = append(values, value.String)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func ensureUserOAuthIdentityUniqueIndex(identity userOAuthIdentityMigration) error {
+	if DB.Migrator().HasIndex("users", identity.indexName) {
+		return nil
+	}
+	if common.UsingMySQL {
+		if !DB.Migrator().HasColumn("users", identity.mysqlGeneratedColumn) {
+			addColumnSQL := fmt.Sprintf(
+				"ALTER TABLE %s ADD COLUMN %s varchar(256) GENERATED ALWAYS AS (NULLIF(%s, '')) STORED",
+				quoteDBIdentifier("users"),
+				quoteDBIdentifier(identity.mysqlGeneratedColumn),
+				quoteDBIdentifier(identity.column),
+			)
+			if err := DB.Exec(addColumnSQL).Error; err != nil {
+				return fmt.Errorf("failed to add users.%s generated column: %w", identity.mysqlGeneratedColumn, err)
+			}
+		}
+		createIndexSQL := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s)",
+			quoteDBIdentifier(identity.indexName),
+			quoteDBIdentifier("users"),
+			quoteDBIdentifier(identity.mysqlGeneratedColumn),
+		)
+		if err := DB.Exec(createIndexSQL).Error; err != nil {
+			return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
+		}
+		return nil
+	}
+
+	quotedColumn := quoteDBIdentifier(identity.column)
+	createIndexSQL := fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (%s) WHERE %s IS NOT NULL AND %s <> ''",
+		quoteDBIdentifier(identity.indexName),
+		quoteDBIdentifier("users"),
+		quotedColumn,
+		quotedColumn,
+		quotedColumn,
+	)
+	if err := DB.Exec(createIndexSQL).Error; err != nil {
+		return fmt.Errorf("failed to create unique OAuth identity index %s: %w", identity.indexName, err)
 	}
 	return nil
 }
