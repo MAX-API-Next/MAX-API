@@ -69,11 +69,15 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			return value
 		},
 		"header": func(key string) string {
-			return headers[strings.ToLower(strings.TrimSpace(key))]
+			key = strings.ToLower(strings.TrimSpace(key))
+			if !isAllowedHeaderName(key) {
+				return ""
+			}
+			return headers[key]
 		},
 		"param": func(path string) interface{} {
 			path = strings.TrimSpace(path)
-			if path == "" || len(request.Body) == 0 {
+			if len(request.Body) == 0 || !isAllowedParamPath(path) {
 				return nil
 			}
 			result := gjson.GetBytes(request.Body, path)
@@ -109,6 +113,47 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 		return 0, trace, fmt.Errorf("expr result is %T, want float64", out)
 	}
 	return f, trace, nil
+}
+
+func isAllowedHeaderName(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	switch key {
+	case "anthropic-beta", "openai-beta":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedParamPath(path string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(path))
+	if normalized == "" || strings.ContainsAny(normalized, `@*?[]{}|\\"' `) {
+		return false
+	}
+
+	switch normalized {
+	case "service_tier", "stream", "fast", "stream_options.fast_mode",
+		"messages.#", "input.#", "tools.#", "modalities.#",
+		"response_format.type", "reasoning.effort", "thinking.type", "thinking.budget_tokens":
+		return true
+	}
+
+	segments := strings.Split(normalized, ".")
+	if len(segments) != 3 {
+		return false
+	}
+	switch segments[0] {
+	case "messages", "input", "tools":
+		if segments[1] != "#" {
+			for _, r := range segments[1] {
+				if r < '0' || r > '9' {
+					return false
+				}
+			}
+		}
+		return segments[1] != "" && (segments[2] == "role" || segments[2] == "type")
+	}
+	return false
 }
 
 func timeInZone(tz string) time.Time {

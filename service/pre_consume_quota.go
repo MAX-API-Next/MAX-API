@@ -52,8 +52,8 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 		// 用户额度充足，判断令牌额度是否充足
 		if !relayInfo.TokenUnlimited {
 			// 非无限令牌，判断令牌额度是否充足
-			tokenQuota := c.GetInt("token_quota")
-			if tokenQuota > trustQuota {
+			tokenQuota := c.GetInt64("token_quota")
+			if tokenQuota > int64(trustQuota) {
 				// 令牌额度充足，信任令牌
 				preConsumedQuota = 0
 				logger.LogInfo(c, fmt.Sprintf("用户 %d 剩余额度 %s 且令牌 %d 额度 %d 充足, 信任且不需要预扣费", relayInfo.UserId, logger.FormatQuota(userQuota), relayInfo.TokenId, tokenQuota))
@@ -73,6 +73,10 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 		}
 		err = model.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota, false)
 		if err != nil {
+			if rollbackErr := model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, preConsumedQuota); rollbackErr != nil {
+				common.SysLog(fmt.Sprintf("error rolling back token quota after user pre-consume failure (userId=%d, tokenId=%d, amount=%d): %s",
+					relayInfo.UserId, relayInfo.TokenId, preConsumedQuota, rollbackErr.Error()))
+			}
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 预扣费 %s, 预扣费后剩余额度: %s", relayInfo.UserId, logger.FormatQuota(preConsumedQuota), logger.FormatQuota(userQuota-int64(preConsumedQuota))))

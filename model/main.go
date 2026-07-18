@@ -282,6 +282,9 @@ func migrateDB() error {
 	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
 		return err
 	}
+	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -336,6 +339,9 @@ func migrateDB() error {
 
 func migrateDBFast() error {
 	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
+		return err
+	}
+	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
 		return err
 	}
 
@@ -672,15 +678,22 @@ func migrateTokenModelLimitsToText() error {
 // a noticeable time, so operators with large deployments should schedule this
 // upgrade off-peak or run an equivalent online-DDL migration before booting.
 func migrateUserQuotaColumnsToBigInt() error {
-	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(&User{}) {
+	return migrateQuotaColumnsToBigInt("users", []string{"quota", "used_quota", "aff_quota", "aff_history"})
+}
+
+// migrateTokenQuotaColumnsToBigInt keeps token accounting columns aligned
+// with User quota columns on MySQL and PostgreSQL.
+func migrateTokenQuotaColumnsToBigInt() error {
+	return migrateQuotaColumnsToBigInt("tokens", []string{"remain_quota", "used_quota"})
+}
+
+func migrateQuotaColumnsToBigInt(tableName string, columnNames []string) error {
+	if DB == nil || common.UsingSQLite || !DB.Migrator().HasTable(tableName) {
 		return nil
 	}
 
-	tableName := "users"
-	columnNames := []string{"quota", "used_quota", "aff_quota", "aff_history"}
-
 	for _, columnName := range columnNames {
-		if !DB.Migrator().HasColumn(&User{}, columnName) {
+		if !DB.Migrator().HasColumn(tableName, columnName) {
 			continue
 		}
 

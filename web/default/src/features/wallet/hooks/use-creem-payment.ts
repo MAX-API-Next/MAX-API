@@ -36,7 +36,7 @@ export function useCreemPayment() {
       })
 
       if (isApiSuccess(response) && response.data?.checkout_url) {
-        window.open(response.data.checkout_url, '_blank')
+        window.open(response.data.checkout_url, '_blank', 'noopener,noreferrer')
         toast.success(i18next.t('Redirecting to Creem checkout...'))
         return true
       }

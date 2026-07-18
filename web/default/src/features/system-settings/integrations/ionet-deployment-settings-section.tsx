@@ -221,7 +221,11 @@ export function IoNetDeploymentSettingsSection({
                       type='button'
                       variant='outline'
                       onClick={() =>
-                        window.open('https://ai.io.net/ai/api-keys', '_blank')
+                        window.open(
+                          'https://ai.io.net/ai/api-keys',
+                          '_blank',
+                          'noopener,noreferrer'
+                        )
                       }
                     >
                       {t('Go to io.net API Keys')}

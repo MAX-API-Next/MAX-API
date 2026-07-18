@@ -2,8 +2,22 @@ package model
 
 import (
 	"database/sql"
+	"reflect"
 	"testing"
 )
+
+func TestTokenQuotaFieldsUseInt64(t *testing.T) {
+	tokenType := reflect.TypeOf(Token{})
+	for _, fieldName := range []string{"RemainQuota", "UsedQuota"} {
+		field, ok := tokenType.FieldByName(fieldName)
+		if !ok {
+			t.Fatalf("Token.%s is missing", fieldName)
+		}
+		if field.Type.Kind() != reflect.Int64 {
+			t.Fatalf("Token.%s kind = %s, want int64", fieldName, field.Type.Kind())
+		}
+	}
+}
 
 func TestIsZeroColumnDefault(t *testing.T) {
 	tests := []struct {

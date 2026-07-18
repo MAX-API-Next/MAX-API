@@ -77,10 +77,11 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 	status = strings.TrimSpace(status)
 
 	if keyword != "" {
+		keywordPattern := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(keyword) + "%"
 		if id, err := strconv.Atoi(keyword); err == nil {
-			query = query.Where("id = ? OR name LIKE ?", id, keyword+"%")
+			query = query.Where("id = ? OR name LIKE ? ESCAPE '!'", id, keywordPattern)
 		} else {
-			query = query.Where("name LIKE ?", keyword+"%")
+			query = query.Where("name LIKE ? ESCAPE '!'", keywordPattern)
 		}
 	}
 

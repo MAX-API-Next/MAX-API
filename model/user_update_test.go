@@ -9,10 +9,14 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +24,305 @@ import (
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+func TestConcurrentUserQuotaDeductionCannotOverdraw(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{Id: 31, Username: "quota-guard-user", Quota: 10, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if DecreaseUserQuota(user.Id, 7, false) == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.EqualValues(t, 1, successes.Load())
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.EqualValues(t, 3, got.Quota)
+}
+
+func TestConcurrentTokenQuotaDeductionCannotOverdraw(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	token := Token{Id: 32, UserId: 31, Key: "quota-guard-token", RemainQuota: 10}
+	require.NoError(t, DB.Create(&token).Error)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if DecreaseTokenQuota(token.Id, token.Key, 7) == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.EqualValues(t, 1, successes.Load())
+	var got Token
+	require.NoError(t, DB.First(&got, token.Id).Error)
+	assert.EqualValues(t, 3, got.RemainQuota)
+	assert.EqualValues(t, 7, got.UsedQuota)
+}
+
+func TestUnlimitedTokenQuotaDeductionRemainsUnbounded(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	token := Token{Id: 34, UserId: 31, Key: "unlimited-token", RemainQuota: 0, UnlimitedQuota: true}
+	require.NoError(t, DB.Create(&token).Error)
+	require.NoError(t, DecreaseTokenQuota(token.Id, token.Key, 7))
+
+	var got Token
+	require.NoError(t, DB.First(&got, token.Id).Error)
+	assert.EqualValues(t, -7, got.RemainQuota)
+	assert.EqualValues(t, 7, got.UsedQuota)
+}
+
+func TestQuotaMutationDoesNotTouchCacheAfterDatabaseFailure(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	oldRDB := common.RDB
+	var dialAttempts atomic.Int32
+	client := redis.NewClient(&redis.Options{
+		Addr:       "cache-unavailable",
+		MaxRetries: 0,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialAttempts.Add(1)
+			return nil, errors.New("cache unavailable")
+		},
+	})
+	common.RedisEnabled = true
+	common.RDB = client
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+	})
+
+	require.Error(t, DecreaseUserQuota(999999, 1, false))
+	require.Error(t, DecreaseTokenQuota(999999, "missing-token", 1))
+	assert.Zero(t, dialAttempts.Load())
+}
+
+func TestInviteUserUpdatesOnlyAffiliateCounters(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:              33,
+		Username:        "inviter",
+		Quota:           100,
+		Status:          common.UserStatusEnabled,
+		AffCount:        2,
+		AffQuota:        10,
+		AffHistoryQuota: 20,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	require.NoError(t, inviteUser(user.Id))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, 3, got.AffCount)
+	assert.EqualValues(t, 10+common.QuotaForInviter, got.AffQuota)
+	assert.EqualValues(t, 20+common.QuotaForInviter, got.AffHistoryQuota)
+	assert.EqualValues(t, 100, got.Quota)
+	assert.Equal(t, common.UserStatusEnabled, got.Status)
+}
+
+func TestFillUserMethodsReturnDatabaseErrors(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := DB
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	tests := []struct {
+		name string
+		user User
+		call func(*User) error
+	}{
+		{name: "id", user: User{Id: 1}, call: (*User).FillUserById},
+		{name: "email", user: User{Email: "user@example.com"}, call: (*User).FillUserByEmail},
+		{name: "github", user: User{GitHubId: "github-id"}, call: (*User).FillUserByGitHubId},
+		{name: "discord", user: User{DiscordId: "discord-id"}, call: (*User).FillUserByDiscordId},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			user := tt.user
+			require.Error(t, tt.call(&user))
+		})
+	}
+}
+
+func TestFillOAuthUserMethodsDistinguishSoftDeletedUsers(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{
+		Id: 35, Username: "deleted-oauth-user", GitHubId: "deleted-github",
+		DiscordId: "deleted-discord", OidcId: "deleted-oidc", WeChatId: "deleted-wechat",
+		TelegramId: "deleted-telegram", LinuxDOId: "deleted-linuxdo",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Delete(&user).Error)
+
+	tests := []struct {
+		name string
+		user User
+		call func(*User) error
+	}{
+		{name: "github", user: User{GitHubId: user.GitHubId}, call: (*User).FillUserByGitHubId},
+		{name: "discord", user: User{DiscordId: user.DiscordId}, call: (*User).FillUserByDiscordId},
+		{name: "oidc", user: User{OidcId: user.OidcId}, call: (*User).FillUserByOidcId},
+		{name: "wechat", user: User{WeChatId: user.WeChatId}, call: (*User).FillUserByWeChatId},
+		{name: "telegram", user: User{TelegramId: user.TelegramId}, call: (*User).FillUserByTelegramId},
+		{name: "linuxdo", user: User{LinuxDOId: user.LinuxDOId}, call: (*User).FillUserByLinuxDOId},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookup := tt.user
+			require.ErrorIs(t, tt.call(&lookup), ErrUserDeleted)
+		})
+	}
+}
+
+type blockingCacheFillHook struct {
+	started    chan struct{}
+	release    chan struct{}
+	finished   chan struct{}
+	beforeOnce sync.Once
+	afterOnce  sync.Once
+}
+
+func newBlockingCacheFillHook() *blockingCacheFillHook {
+	return &blockingCacheFillHook{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+}
+
+func (h *blockingCacheFillHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (h *blockingCacheFillHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
+
+func (h *blockingCacheFillHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
+	if cacheFillPipeline(cmds) {
+		h.beforeOnce.Do(func() {
+			close(h.started)
+			<-h.release
+		})
+	}
+	return ctx, nil
+}
+
+func (h *blockingCacheFillHook) AfterProcessPipeline(_ context.Context, cmds []redis.Cmder) error {
+	if cacheFillPipeline(cmds) {
+		h.afterOnce.Do(func() { close(h.finished) })
+	}
+	return nil
+}
+
+func cacheFillPipeline(cmds []redis.Cmder) bool {
+	for _, cmd := range cmds {
+		if strings.EqualFold(cmd.Name(), "hset") {
+			return true
+		}
+	}
+	return false
+}
+
+func useBlockingCacheFillRedis(t *testing.T) (*blockingCacheFillHook, *redis.Client) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	hook := newBlockingCacheFillHook()
+	client.AddHook(hook)
+
+	oldRDB := common.RDB
+	common.RDB = client
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = client.Close()
+		common.RDB = oldRDB
+	})
+	return hook, client
+}
+
+func waitForCacheHook(t *testing.T, ch <-chan struct{}, stage string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for cache %s", stage)
+	}
+}
+
+func TestUserQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {
+	setupUserUpdateTestState(t)
+	hook, client := useBlockingCacheFillRedis(t)
+	user := User{Id: 36, Username: "user-cache-fence", Quota: 100, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+
+	quota, err := GetUserQuota(user.Id, true)
+	require.NoError(t, err)
+	assert.EqualValues(t, 100, quota)
+	waitForCacheHook(t, hook.started, "fill start")
+
+	require.NoError(t, DecreaseUserQuota(user.Id, 10, false))
+	close(hook.release)
+	waitForCacheHook(t, hook.finished, "fill completion")
+
+	quota, err = GetUserQuota(user.Id, false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 90, quota)
+	require.Eventually(t, func() bool {
+		cached, err := client.HGet(context.Background(), getUserCacheKey(user.Id), "Quota").Int64()
+		return err == nil && cached == 90
+	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestTokenQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {
+	setupUserUpdateTestState(t)
+	hook, client := useBlockingCacheFillRedis(t)
+	token := Token{Id: 37, UserId: 36, Key: "token-cache-fence", RemainQuota: 100, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+
+	got, err := GetTokenByKey(token.Key, true)
+	require.NoError(t, err)
+	assert.EqualValues(t, 100, got.RemainQuota)
+	waitForCacheHook(t, hook.started, "fill start")
+
+	require.NoError(t, DecreaseTokenQuota(token.Id, token.Key, 10))
+	close(hook.release)
+	waitForCacheHook(t, hook.finished, "fill completion")
+
+	got, err = GetTokenByKey(token.Key, false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 90, got.RemainQuota)
+	require.Eventually(t, func() bool {
+		cached, err := client.HGet(context.Background(), getTokenCacheKey(token.Key), "RemainQuota").Int64()
+		return err == nil && cached == 90
+	}, 3*time.Second, 10*time.Millisecond)
+}
 
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()

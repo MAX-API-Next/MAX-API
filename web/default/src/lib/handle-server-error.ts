@@ -20,9 +20,33 @@ import { AxiosError } from 'axios'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
+interface SafeErrorDebugInfo {
+  name: string
+  message: string
+  code?: string
+  status?: number
+}
+
+export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {
+  if (error instanceof AxiosError) {
+    return {
+      name: error.name || 'AxiosError',
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+    }
+  }
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message }
+  }
+  return { name: 'UnknownError', message: 'Unknown error' }
+}
+
 export function handleServerError(error: unknown) {
-  // eslint-disable-next-line no-console
-  console.log(error)
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.error('[handleServerError]', getSafeErrorDebugInfo(error))
+  }
 
   let errMsg = i18next.t('Something went wrong!')
 
@@ -36,7 +60,12 @@ export function handleServerError(error: unknown) {
   }
 
   if (error instanceof AxiosError) {
-    errMsg = error.response?.data.title
+    const responseTitle = (
+      error.response?.data as { title?: unknown } | undefined
+    )?.title
+    if (typeof responseTitle === 'string' && responseTitle) {
+      errMsg = responseTitle
+    }
   }
 
   toast.error(errMsg)

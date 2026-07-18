@@ -33,8 +33,9 @@ type cachedEntry struct {
 }
 
 var (
-	cacheMu sync.RWMutex
-	cache   = make(map[string]*cachedEntry, 64)
+	cacheMu    sync.RWMutex
+	cache      = make(map[string]*cachedEntry, 64)
+	cacheOrder []string
 )
 
 // compileEnvPrototypeV1 is the v1 type-checking prototype used at compile time.
@@ -101,10 +102,17 @@ func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 	vars := extractUsedVars(prog)
 
 	cacheMu.Lock()
+	if entry, ok := cache[hash]; ok {
+		cacheMu.Unlock()
+		return entry.prog, nil
+	}
 	if len(cache) >= maxCacheSize {
-		cache = make(map[string]*cachedEntry, 64)
+		oldest := cacheOrder[0]
+		cacheOrder = cacheOrder[1:]
+		delete(cache, oldest)
 	}
 	cache[hash] = &cachedEntry{prog: prog, usedVars: vars, version: version}
+	cacheOrder = append(cacheOrder, hash)
 	cacheMu.Unlock()
 
 	return prog, nil
@@ -171,5 +179,6 @@ func UsedVars(exprStr string) map[string]bool {
 func InvalidateCache() {
 	cacheMu.Lock()
 	cache = make(map[string]*cachedEntry, 64)
+	cacheOrder = nil
 	cacheMu.Unlock()
 }

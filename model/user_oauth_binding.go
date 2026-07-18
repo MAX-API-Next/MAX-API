@@ -48,6 +48,16 @@ func GetUserByOAuthBinding(providerId int, providerUserId string) (*User, error)
 	var user User
 	err = DB.First(&user, binding.UserId).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			var deleted User
+			unscopedErr := DB.Unscoped().First(&deleted, binding.UserId).Error
+			if unscopedErr == nil && deleted.DeletedAt.Valid {
+				return nil, ErrUserDeleted
+			}
+			if unscopedErr != nil && !errors.Is(unscopedErr, gorm.ErrRecordNotFound) {
+				return nil, unscopedErr
+			}
+		}
 		return nil, err
 	}
 	return &user, nil

@@ -132,11 +132,7 @@ func DiscordOAuth(c *gin.Context) {
 	}
 	if model.IsDiscordIdAlreadyTaken(user.DiscordId) {
 		err := user.FillUserByDiscordId()
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+		if handleOAuthUserLookupError(c, err) {
 			return
 		}
 	} else {

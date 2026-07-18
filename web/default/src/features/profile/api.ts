@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
+import { getTurnstileHeaders } from '@/features/auth/lib/turnstile-request'
 import type {
   ApiResponse,
   UserProfile,
@@ -107,11 +108,10 @@ export async function sendEmailVerification(
   email: string,
   turnstileToken?: string
 ): Promise<ApiResponse> {
-  const params = new URLSearchParams({ email })
-  if (turnstileToken) {
-    params.append('turnstile', turnstileToken)
-  }
-  const res = await api.get(`/api/verification?${params}`)
+  const res = await api.get('/api/verification', {
+    params: { email },
+    headers: getTurnstileHeaders(turnstileToken),
+  })
   return res.data
 }
 
@@ -187,9 +187,8 @@ export async function getCheckinStatus(
 export async function performCheckin(
   turnstileToken?: string
 ): Promise<ApiResponse<CheckinResponse>> {
-  const url = turnstileToken
-    ? `/api/user/checkin?turnstile=${encodeURIComponent(turnstileToken)}`
-    : '/api/user/checkin'
-  const res = await api.post(url)
+  const res = await api.post('/api/user/checkin', undefined, {
+    headers: getTurnstileHeaders(turnstileToken),
+  })
   return res.data
 }

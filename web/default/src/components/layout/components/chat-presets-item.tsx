@@ -210,7 +210,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
 
       if (typeof window === 'undefined') return
 
-      window.open(url, '_blank', 'noopener')
+      window.open(url, '_blank', 'noopener,noreferrer')
       setOpenMobile(false)
     },
     [serverAddress, setOpenMobile, t]

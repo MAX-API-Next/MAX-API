@@ -579,14 +579,18 @@ func HardDeleteUserById(id int) error {
 }
 
 func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
+	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
+		"aff_count":   gorm.Expr("aff_count + 1"),
+		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
+		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	user.AffCount++
-	user.AffQuota += int64(common.QuotaForInviter)
-	user.AffHistoryQuota += int64(common.QuotaForInviter)
-	return DB.Save(user).Error
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, inviterId)
+	}
+	return nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int64) error {
@@ -1153,24 +1157,21 @@ func (user *User) FillUserById() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	DB.Where(User{Id: user.Id}).First(user)
-	return nil
+	return DB.Where(User{Id: user.Id}).First(user).Error
 }
 
 func (user *User) FillUserByEmail() error {
 	if user.Email == "" {
 		return errors.New("email 为空！")
 	}
-	DB.Where(User{Email: user.Email}).First(user)
-	return nil
+	return DB.Where(User{Email: user.Email}).First(user).Error
 }
 
 func (user *User) FillUserByGitHubId() error {
 	if user.GitHubId == "" {
 		return errors.New("GitHub id 为空！")
 	}
-	DB.Where(User{GitHubId: user.GitHubId}).First(user)
-	return nil
+	return fillOAuthUser(user, "github_id", user.GitHubId)
 }
 
 // UpdateGitHubId updates the user's GitHub ID (used for migration from login to numeric ID)
@@ -1185,35 +1186,52 @@ func (user *User) FillUserByDiscordId() error {
 	if user.DiscordId == "" {
 		return errors.New("discord id 为空！")
 	}
-	DB.Where(User{DiscordId: user.DiscordId}).First(user)
-	return nil
+	return fillOAuthUser(user, "discord_id", user.DiscordId)
 }
 
 func (user *User) FillUserByOidcId() error {
 	if user.OidcId == "" {
 		return errors.New("oidc id 为空！")
 	}
-	DB.Where(User{OidcId: user.OidcId}).First(user)
-	return nil
+	return fillOAuthUser(user, "oidc_id", user.OidcId)
 }
 
 func (user *User) FillUserByWeChatId() error {
 	if user.WeChatId == "" {
 		return errors.New("WeChat id 为空！")
 	}
-	DB.Where(User{WeChatId: user.WeChatId}).First(user)
-	return nil
+	return fillOAuthUser(user, "wechat_id", user.WeChatId)
 }
 
 func (user *User) FillUserByTelegramId() error {
 	if user.TelegramId == "" {
 		return errors.New("Telegram id 为空！")
 	}
-	err := DB.Where(User{TelegramId: user.TelegramId}).First(user).Error
+	err := fillOAuthUser(user, "telegram_id", user.TelegramId)
+	if errors.Is(err, ErrUserDeleted) {
+		return err
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.New("该 Telegram 账户未绑定")
 	}
-	return nil
+	return err
+}
+
+func fillOAuthUser(user *User, field string, value interface{}) error {
+	err := DB.Where(field+" = ?", value).First(user).Error
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	var deleted User
+	unscopedErr := DB.Unscoped().Where(field+" = ?", value).First(&deleted).Error
+	if unscopedErr == nil && deleted.DeletedAt.Valid {
+		return ErrUserDeleted
+	}
+	if unscopedErr != nil && !errors.Is(unscopedErr, gorm.ErrRecordNotFound) {
+		return unscopedErr
+	}
+	return err
 }
 
 func IsEmailAlreadyTaken(email string) bool {
@@ -1253,7 +1271,7 @@ func IsDiscordIdAlreadyTaken(discordId string) bool {
 }
 
 func IsOidcIdAlreadyTaken(oidcId string) bool {
-	return DB.Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
+	return DB.Unscoped().Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
 }
 
 func IsTelegramIdAlreadyTaken(telegramId string) bool {
@@ -1337,16 +1355,6 @@ func ValidateAccessToken(token string) (*User, error) {
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
 func GetUserQuota(id int, fromDB bool) (quota int64, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserQuotaCache(id, quota); err != nil {
-					common.SysLog("failed to update user quota cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
 		quota, err := getUserQuotaCache(id)
 		if err == nil {
@@ -1354,10 +1362,23 @@ func GetUserQuota(id int, fromDB bool) (quota int64, err error) {
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
+	var cacheVersion int64
+	cacheVersionValid := false
+	if common.RedisEnabled {
+		cacheVersion, err = common.RedisGetCacheVersion(getUserCacheVersionKey(id))
+		cacheVersionValid = err == nil
+	}
 	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
 	if err != nil {
 		return 0, err
+	}
+	if cacheVersionValid {
+		quotaSnapshot := quota
+		gopool.Go(func() {
+			if err := updateUserQuotaCacheIfVersion(id, quotaSnapshot, cacheVersion); err != nil {
+				common.SysLog("failed to update user quota cache: " + err.Error())
+			}
+		})
 	}
 
 	return quota, nil
@@ -1443,56 +1464,75 @@ type quotaDeltaInteger interface {
 	~int | ~int64
 }
 
-func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, db bool) (err error) {
+// The final boolean is retained for caller compatibility. Accounting mutations
+// always write the database directly so conditional deductions remain atomic.
+func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error) {
 	delta := int64(quota)
 	if delta < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, delta)
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, delta)
+	if delta == 0 {
 		return nil
 	}
-	return increaseUserQuota(id, delta)
+	if err := increaseUserQuota(id, delta); err != nil {
+		return err
+	}
+	invalidateUserQuotaCache(id)
+	return nil
 }
 
 func increaseUserQuota(id int, quota int64) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota)).Error
-	if err != nil {
-		return err
+	if quota == 0 {
+		return nil
 	}
-	return err
+	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, id)
+	}
+	return nil
 }
 
-func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, db bool) (err error) {
+// See IncreaseUserQuota for why the compatibility flag is ignored.
+func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error) {
 	delta := int64(quota)
 	if delta < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, delta)
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, -delta)
+	if delta == 0 {
 		return nil
 	}
-	return decreaseUserQuota(id, delta)
+	if err := decreaseUserQuota(id, delta); err != nil {
+		return err
+	}
+	invalidateUserQuotaCache(id)
+	return nil
 }
 
 func decreaseUserQuota(id int, quota int64) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
-	if err != nil {
-		return err
+	if quota == 0 {
+		return nil
 	}
-	return err
+	result := DB.Model(&User{}).Where("id = ? AND quota >= ?", id, quota).
+		Update("quota", gorm.Expr("quota - ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: id=%d, need=%d", ErrUserQuotaInsufficient, id, quota)
+	}
+	return nil
+}
+
+func invalidateUserQuotaCache(id int) {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := invalidateUserCache(id); err != nil {
+		common.SysLog("failed to invalidate user quota cache: " + err.Error())
+	}
 }
 
 func DeltaUpdateUserQuota[T quotaDeltaInteger](id int, delta T) (err error) {
@@ -1622,8 +1662,7 @@ func (user *User) FillUserByLinuxDOId() error {
 	if user.LinuxDOId == "" {
 		return errors.New("linux do id is empty")
 	}
-	err := DB.Where("linux_do_id = ?", user.LinuxDOId).First(user).Error
-	return err
+	return fillOAuthUser(user, "linux_do_id", user.LinuxDOId)
 }
 
 func RootUserExists() bool {

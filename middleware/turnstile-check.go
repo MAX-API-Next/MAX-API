@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/gin-contrib/sessions"
@@ -12,6 +12,15 @@ import (
 
 type turnstileCheckResponse struct {
 	Success bool `json:"success"`
+}
+
+const turnstileTokenHeader = "X-Turnstile-Token"
+
+func getTurnstileToken(c *gin.Context) string {
+	if token := strings.TrimSpace(c.GetHeader(turnstileTokenHeader)); token != "" {
+		return token
+	}
+	return strings.TrimSpace(c.Query("turnstile"))
 }
 
 func TurnstileCheck() gin.HandlerFunc {
@@ -23,7 +32,7 @@ func TurnstileCheck() gin.HandlerFunc {
 				c.Next()
 				return
 			}
-			response := c.Query("turnstile")
+			response := getTurnstileToken(c)
 			if response == "" {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
@@ -48,7 +57,7 @@ func TurnstileCheck() gin.HandlerFunc {
 			}
 			defer rawRes.Body.Close()
 			var res turnstileCheckResponse
-			err = json.NewDecoder(rawRes.Body).Decode(&res)
+			err = common.DecodeJson(rawRes.Body, &res)
 			if err != nil {
 				common.SysLog(err.Error())
 				c.JSON(http.StatusOK, gin.H{

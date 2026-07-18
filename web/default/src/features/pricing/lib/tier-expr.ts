@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { Parser, type Value } from 'expr-eval'
 import { BILLING_CACHE_VAR_MAP } from './billing-expr'
 
 export const CACHE_MODE_TIMED = 'timed'
@@ -268,6 +269,57 @@ export type EvalResult = {
   error: string | null
 }
 
+const estimatorParser = new Parser({
+  allowMemberAccess: false,
+  operators: {
+    assignment: false,
+    fndef: false,
+  },
+})
+
+function normalizeEstimatorExpression(exprStr: string): string {
+  const body = exprStr.trim().replace(/^v\d+:/, '')
+  let quote = ''
+  let escaped = false
+  let normalized = ''
+
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index]
+    if (quote) {
+      normalized += char
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = ''
+      }
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      normalized += char
+      continue
+    }
+    if (char === '&' && body[index + 1] === '&') {
+      normalized += ' and '
+      index += 1
+      continue
+    }
+    if (char === '|' && body[index + 1] === '|') {
+      normalized += ' or '
+      index += 1
+      continue
+    }
+    if (char === '!' && body[index + 1] !== '=') {
+      normalized += ' not '
+      continue
+    }
+    normalized += char
+  }
+  return normalized
+}
+
 export function evalExprLocally(
   exprStr: string,
   promptTokens: number,
@@ -302,11 +354,11 @@ export function evalExprLocally(
     for (const field of ESTIMATOR_VARS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0
     }
-    const fn = new Function(
-      ...Object.keys(env),
-      `"use strict"; return (${exprStr});`
+    const expression = estimatorParser.parse(
+      normalizeEstimatorExpression(exprStr)
     )
-    const cost = Number(fn(...Object.values(env))) || 0
+    const rawCost: unknown = expression.evaluate(env as unknown as Value)
+    const cost = Number(rawCost) || 0
     return { cost, matchedTier, error: null }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)

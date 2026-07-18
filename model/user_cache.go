@@ -50,12 +50,16 @@ func getUserCacheKey(userId int) string {
 	return fmt.Sprintf("user:%d", userId)
 }
 
+func getUserCacheVersionKey(userId int) string {
+	return fmt.Sprintf("cache-version:user:%d", userId)
+}
+
 // invalidateUserCache clears user cache
 func invalidateUserCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisDelKey(getUserCacheKey(userId))
+	return common.RedisInvalidateVersionedHash(getUserCacheKey(userId), getUserCacheVersionKey(userId))
 }
 
 // InvalidateUserCache is the exported version of invalidateUserCache.
@@ -64,16 +68,18 @@ func InvalidateUserCache(userId int) error {
 	return invalidateUserCache(userId)
 }
 
-func populateUserCache(user User) error {
+func populateUserCacheIfVersion(user User, version int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-
-	return common.RedisHSetObj(
+	_, err := common.RedisHSetObjIfVersion(
 		getUserCacheKey(user.Id),
+		getUserCacheVersionKey(user.Id),
+		version,
 		user.ToBaseUser(),
 		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
 	)
+	return err
 }
 
 // updateUserCache refreshes non-quota user cache fields.
@@ -103,19 +109,6 @@ func updateUserCache(user User) error {
 
 // GetUserCache gets complete user cache from hash
 func GetUserCache(userId int) (userCache *UserBase, err error) {
-	var user *User
-	var fromDB bool
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) && user != nil {
-			gopool.Go(func() {
-				if err := populateUserCache(*user); err != nil {
-					common.SysLog("failed to update user status cache: " + err.Error())
-				}
-			})
-		}
-	}()
-
 	// Try getting from Redis first
 	userCache, err = cacheGetUserBase(userId)
 	if err == nil {
@@ -123,8 +116,13 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	}
 
 	// If Redis fails, get from DB
-	fromDB = true
-	user, err = GetUserById(userId, false)
+	var cacheVersion int64
+	cacheVersionValid := false
+	if common.RedisEnabled {
+		cacheVersion, err = common.RedisGetCacheVersion(getUserCacheVersionKey(userId))
+		cacheVersionValid = err == nil
+	}
+	user, err := GetUserById(userId, false)
 	if err != nil {
 		return nil, err // Return nil and error if DB lookup fails
 	}
@@ -139,6 +137,14 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		Username: user.Username,
 		Setting:  user.Setting,
 		Email:    user.Email,
+	}
+	if cacheVersionValid {
+		userSnapshot := *user
+		gopool.Go(func() {
+			if err := populateUserCacheIfVersion(userSnapshot, cacheVersion); err != nil {
+				common.SysLog("failed to update user status cache: " + err.Error())
+			}
+		})
 	}
 
 	return userCache, nil
@@ -161,18 +167,6 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 		return nil, fmt.Errorf("stale user cache")
 	}
 	return &userCache, nil
-}
-
-// Add atomic quota operations using hash fields
-func cacheIncrUserQuota(userId int, delta int64) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return common.RedisHIncrBy(getUserCacheKey(userId), "Quota", delta)
-}
-
-func cacheDecrUserQuota(userId int, delta int64) error {
-	return cacheIncrUserQuota(userId, -delta)
 }
 
 // Helper functions to get individual fields if needed
@@ -228,11 +222,19 @@ func updateUserStatusCache(userId int, status bool) error {
 	return common.RedisHSetField(getUserCacheKey(userId), "Status", fmt.Sprintf("%d", statusInt))
 }
 
-func updateUserQuotaCache(userId int, quota int64) error {
+func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Quota", fmt.Sprintf("%d", quota))
+	_, err := common.RedisHSetFieldIfVersion(
+		getUserCacheKey(userId),
+		getUserCacheVersionKey(userId),
+		version,
+		"Quota",
+		quota,
+		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
+	)
+	return err
 }
 
 func updateUserGroupCache(userId int, group string) error {

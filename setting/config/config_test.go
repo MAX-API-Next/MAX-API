@@ -2,6 +2,9 @@ package config
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type testConfigWithMap struct {
@@ -93,4 +96,18 @@ func TestUpdateConfigFromMap_ScalarFieldsUnchanged(t *testing.T) {
 	if cfg.Modes["m"] != "v" {
 		t.Errorf("Modes should be unchanged, got %v", cfg.Modes)
 	}
+}
+
+func TestLoadFromDBReturnsInvalidSubConfigError(t *testing.T) {
+	manager := NewConfigManager()
+	cfg := &testConfigWithMap{Modes: map[string]string{"existing": "tiered_expr"}}
+	manager.Register("billing", cfg)
+
+	err := manager.LoadFromDB(map[string]string{
+		"billing.modes": `{not-json}`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "billing")
+	assert.Equal(t, map[string]string{"existing": "tiered_expr"}, cfg.Modes)
 }

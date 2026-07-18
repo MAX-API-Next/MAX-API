@@ -134,11 +134,7 @@ func OidcAuth(c *gin.Context) {
 	}
 	if model.IsOidcIdAlreadyTaken(user.OidcId) {
 		err := user.FillUserByOidcId()
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+		if handleOAuthUserLookupError(c, err) {
 			return
 		}
 	} else {

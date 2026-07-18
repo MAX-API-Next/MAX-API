@@ -35,6 +35,18 @@ func oauthProviderUserUpdateField(provider oauth.Provider) (model.UserUpdateFiel
 	}
 }
 
+func handleOAuthUserLookupError(c *gin.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, model.ErrUserDeleted) {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "用户已注销"})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	}
+	return true
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
@@ -230,6 +242,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
 		if err != nil {
+			if errors.Is(err, model.ErrUserDeleted) {
+				return nil, &OAuthUserDeletedError{}
+			}
 			return nil, err
 		}
 		// Check if user has been deleted
@@ -244,6 +259,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		if provider.IsUserIDTaken(legacyID) {
 			err := provider.FillUserByProviderID(user, legacyID)
 			if err != nil {
+				if errors.Is(err, model.ErrUserDeleted) {
+					return nil, &OAuthUserDeletedError{}
+				}
 				return nil, err
 			}
 			if user.Id != 0 {
