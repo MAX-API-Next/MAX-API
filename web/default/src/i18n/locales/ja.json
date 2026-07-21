@@ -133,6 +133,8 @@
     "`, and `-nothinking` suffixes while routing to the correct Gemini variant.": "`, および `-nothinking` サフィックスを、正しい Gemini バリアントにルーティングする際に使用します。",
     "© 2025 Your Company. All rights reserved.": "© 2025 Your Company. 全著作権所有。",
     "+{{count}} more": "他 {{count}} 件",
+    "+{{count}} more mapping(s)": "他 {{count}} 件のマッピング",
+    "$/1M tokens": "$/100万トークン",
     "= {{count}} tokens": "= {{count}} トークン",
     "= {{count}}K tokens": "= {{count}}K トークン",
     "= {{count}}M tokens": "= {{count}}M トークン",

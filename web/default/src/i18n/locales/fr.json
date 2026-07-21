@@ -133,6 +133,8 @@
     "`, and `-nothinking` suffixes while routing to the correct Gemini variant.": "`, et les suffixes `-nothinking` lors du routage vers la variante Gemini correcte.",
     "© 2025 Your Company. All rights reserved.": "© 2025 Votre entreprise. Tous droits réservés.",
     "+{{count}} more": "+{{count}} de plus",
+    "+{{count}} more mapping(s)": "+{{count}} mappage(s) en plus",
+    "$/1M tokens": "$/1M jetons",
     "= {{count}} tokens": "= {{count}} jetons",
     "= {{count}}K tokens": "= {{count}} milliers de jetons",
     "= {{count}}M tokens": "= {{count}} millions de jetons",

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -54,7 +54,7 @@ import {
   unitCostToPrice,
 } from './tiered-pricing-utils'
 
-const PRICE_SUFFIX = '$/1M tokens'
+const PRICE_SUFFIX_KEY = '$/1M tokens'
 const CACHE_PRICE_VARS = BILLING_EXTRA_VARS.filter(
   (variable) => variable.group === 'cache'
 )
@@ -80,9 +80,15 @@ type ConditionRowProps = {
   condition: TierConditionInput
   onChange: (next: TierConditionInput) => void
   onRemove: () => void
+  removeDisabled?: boolean
 }
 
-function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
+function ConditionRow({
+  condition,
+  onChange,
+  onRemove,
+  removeDisabled,
+}: ConditionRowProps) {
   const { t } = useTranslation()
   const currentInputOption = CONDITION_INPUT_OPTIONS.find(
     (option) => option.value === condition.var
@@ -143,16 +149,19 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
         min={0}
         value={condition.value}
         onValueChange={(value) => onChange({ ...condition, value })}
-        placeholder='tokens'
+        aria-label={t('Condition Value')}
+        placeholder={t('tokens')}
         className='w-32'
       />
       <span className='text-muted-foreground text-xs'>
         {formatTokenHint(condition.value, t)}
       </span>
       <Button
+        type='button'
         variant='ghost'
         size='icon'
         onClick={onRemove}
+        disabled={removeDisabled}
         aria-label={t('Remove')}
         className='ml-auto'
       >
@@ -174,10 +183,14 @@ type PriceFieldProps = {
 }
 
 function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
+  const inputId = useId()
   return (
     <div className='w-36 space-y-0.5'>
-      <Label className='text-muted-foreground text-xs'>{label}</Label>
+      <Label htmlFor={inputId} className='text-muted-foreground text-xs'>
+        {label}
+      </Label>
       <DraftNumberInput
+        id={inputId}
         min={0}
         step={0.000001}
         value={Number.isFinite(value) ? value : 0}
@@ -212,6 +225,7 @@ function VisualTierCard({
 }: VisualTierCardProps) {
   const { t } = useTranslation()
   const cacheMode = getTierCacheMode(tier)
+  const isFallbackTier = index === total - 1
 
   const handleConditionChange = (
     conditionIndex: number,
@@ -223,6 +237,7 @@ function VisualTierCard({
   }
 
   const handleConditionRemove = (conditionIndex: number) => {
+    if (!isFallbackTier && tier.conditions.length <= 1) return
     onChange({
       ...tier,
       conditions: tier.conditions.filter((_, i) => i !== conditionIndex),
@@ -287,15 +302,17 @@ function VisualTierCard({
             onChange={(event) =>
               onChange({ ...tier, label: event.target.value })
             }
+            aria-label={t('Tier name')}
             placeholder={t('Tier name')}
             className='h-7 w-36'
           />
         </div>
         <Button
+          type='button'
           variant='ghost'
           size='icon'
           onClick={onRemove}
-          disabled={total <= 1}
+          disabled={total <= 1 || isFallbackTier}
           aria-label={t('Remove tier')}
         >
           <Trash2 className='text-destructive h-4 w-4' />
@@ -307,10 +324,11 @@ function VisualTierCard({
         <div className='flex h-7 items-center justify-between'>
           <Label className='text-xs font-medium'>{t('Tier conditions')}</Label>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={onAddCondition}
-            disabled={tier.conditions.length >= 2}
+            disabled={isFallbackTier || tier.conditions.length >= 2}
             className='h-7 px-2 text-xs'
           >
             <Plus className='mr-1 h-3 w-3' />
@@ -328,6 +346,7 @@ function VisualTierCard({
               condition={condition}
               onChange={(next) => handleConditionChange(conditionIndex, next)}
               onRemove={() => handleConditionRemove(conditionIndex)}
+              removeDisabled={!isFallbackTier && tier.conditions.length <= 1}
             />
           ))
         )}
@@ -337,7 +356,7 @@ function VisualTierCard({
         <div className='flex items-center justify-between gap-3'>
           <Label className='text-sm font-semibold'>{t('Token prices')}</Label>
           <span className='bg-muted text-muted-foreground rounded-md px-2 py-1 text-xs'>
-            {PRICE_SUFFIX}
+            {t(PRICE_SUFFIX_KEY)}
           </span>
         </div>
 
@@ -440,7 +459,12 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
 
   const handleTierChange = (index: number, next: VisualTier) => {
     const tiers = [...config.tiers]
-    tiers[index] = normalizeVisualTier(next)
+    const lastIndex = tiers.length - 1
+    const normalized = normalizeVisualTier(
+      index === lastIndex ? { ...next, conditions: [] } : next
+    )
+    if (index < lastIndex && normalized.conditions.length === 0) return
+    tiers[index] = normalized
     onChange({ ...config, tiers })
   }
 
@@ -468,12 +492,14 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
   }
 
   const handleRemoveTier = (index: number) => {
+    if (index === config.tiers.length - 1) return
     const tiers = config.tiers.filter((_, i) => i !== index)
     onChange({ ...config, tiers: tiers.length > 0 ? tiers : config.tiers })
   }
 
   const handleAddCondition = (index: number) => {
     const tier = config.tiers[index]
+    if (index === config.tiers.length - 1) return
     if (tier.conditions.length >= 2) return
     // Prefer `len` (input length) over `p`/`c` for tier conditions because
     // `p` is subject to auto-exclusion when sub-categories like `cr` are
@@ -516,6 +542,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
         />
       ))}
       <Button
+        type='button'
         variant='outline'
         size='sm'
         className='h-9 w-36 justify-center'

@@ -133,6 +133,8 @@
     "`, and `-nothinking` suffixes while routing to the correct Gemini variant.": ", và",
     "© 2025 Your Company. All rights reserved.": "© 2025 Công ty của bạn. Mọi quyền được bảo lưu.",
     "+{{count}} more": "thêm {{count}} mục",
+    "+{{count}} more mapping(s)": "thêm {{count}} ánh xạ",
+    "$/1M tokens": "$/1 triệu token",
     "= {{count}} tokens": "= {{count}} token",
     "= {{count}}K tokens": "= {{count}} nghìn token",
     "= {{count}}M tokens": "= {{count}} triệu token",

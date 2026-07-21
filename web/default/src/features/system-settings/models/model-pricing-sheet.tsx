@@ -274,9 +274,15 @@ function createInitialLaneState(data?: ModelRatioData | null) {
 }
 
 function getInitialPricingMode(data?: ModelRatioData | null): PricingMode {
-  if (data?.billingMode === 'tiered_expr') return 'tiered_expr'
+  if (isPricingMode(data?.billingMode)) return data.billingMode
   if (data?.price) return 'per-request'
   return 'per-token'
+}
+
+function isPricingMode(value: unknown): value is PricingMode {
+  return (
+    value === 'per-token' || value === 'per-request' || value === 'tiered_expr'
+  )
 }
 
 function createInitialFormValues(
@@ -494,13 +500,7 @@ function ModelPricingEditorPanelContent({
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      setPricingMode(getInitialPricingMode(editData))
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
     } else {

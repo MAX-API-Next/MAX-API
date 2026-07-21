@@ -64,11 +64,19 @@ export type TieredPricingEditorProps = {
 
 type EditorMode = 'visual' | 'raw'
 
+type RawExprFallback = {
+  rawExpr: string
+  billingExpr: string
+  requestRuleExpr: string
+}
+
 type InitialEditorState = {
   editorMode: EditorMode
   visualConfig: VisualConfig | null
   rawExpr: string
   requestRuleGroups: RequestRuleGroup[]
+  requestRulesCompatible: boolean
+  rawExprFallback: RawExprFallback | null
 }
 
 function createInitialEditorState(
@@ -76,13 +84,33 @@ function createInitialEditorState(
   requestRuleExpr: string
 ): InitialEditorState {
   const parsedConfig = tryParseVisualConfig(billingExpr)
+  const parsedRequestRuleGroups = tryParseRequestRuleExpr(requestRuleExpr)
+  const rawExpr = combineBillingExpr(billingExpr || '', requestRuleExpr || '')
   return {
     editorMode: parsedConfig || !billingExpr ? 'visual' : 'raw',
     visualConfig:
       parsedConfig || (!billingExpr ? createDefaultVisualConfig() : null),
-    rawExpr: combineBillingExpr(billingExpr || '', requestRuleExpr || ''),
-    requestRuleGroups: tryParseRequestRuleExpr(requestRuleExpr) || [],
+    rawExpr,
+    requestRuleGroups: parsedRequestRuleGroups ?? [],
+    requestRulesCompatible: parsedRequestRuleGroups !== null,
+    rawExprFallback:
+      parsedRequestRuleGroups === null && billingExpr && requestRuleExpr
+        ? { rawExpr, billingExpr, requestRuleExpr }
+        : null,
   }
+}
+
+function splitRawExprWithFallback(
+  rawExpr: string,
+  fallback: RawExprFallback | null
+) {
+  if (fallback?.rawExpr === rawExpr) {
+    return {
+      billingExpr: fallback.billingExpr,
+      requestRuleExpr: fallback.requestRuleExpr,
+    }
+  }
+  return splitBillingExprAndRequestRules(rawExpr)
 }
 
 const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
@@ -106,14 +134,19 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
   const [requestRuleGroups, setRequestRuleGroups] = useState<
     RequestRuleGroup[]
   >(initialState.requestRuleGroups)
+  const [requestRulesCompatible, setRequestRulesCompatible] = useState(
+    initialState.requestRulesCompatible
+  )
+  const [rawExprFallback, setRawExprFallback] =
+    useState<RawExprFallback | null>(initialState.rawExprFallback)
 
   const effectiveExpr = useMemo(() => {
     if (editorMode === 'visual') {
       return generateExprFromVisualConfig(visualConfig)
     }
-    const { billingExpr } = splitBillingExprAndRequestRules(rawExpr)
+    const { billingExpr } = splitRawExprWithFallback(rawExpr, rawExprFallback)
     return billingExpr
-  }, [editorMode, visualConfig, rawExpr])
+  }, [editorMode, visualConfig, rawExpr, rawExprFallback])
 
   useEffect(() => {
     if (effectiveExpr !== currentExpr) {
@@ -122,7 +155,7 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
   }, [effectiveExpr, currentExpr, onBillingExprChange])
 
   useEffect(() => {
-    if (editorMode !== 'visual') return
+    if (editorMode !== 'visual' || !requestRulesCompatible) return
     const ruleExpr = buildRequestRuleExpr(requestRuleGroups)
     if (ruleExpr !== currentRequestRuleExpr) {
       onRequestRuleExprChange(ruleExpr)
@@ -130,6 +163,7 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
   }, [
     editorMode,
     requestRuleGroups,
+    requestRulesCompatible,
     currentRequestRuleExpr,
     onRequestRuleExprChange,
   ])
@@ -140,9 +174,11 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
 
   const handleRawChange = useCallback(
     (value: string) => {
+      setRawExprFallback(null)
       setRawExpr(value)
       const { requestRuleExpr: ruleStr } =
         splitBillingExprAndRequestRules(value)
+      setRequestRulesCompatible(tryParseRequestRuleExpr(ruleStr) !== null)
       onRequestRuleExprChange(ruleStr)
     },
     [onRequestRuleExprChange]
@@ -152,7 +188,8 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
     (next: EditorMode) => {
       if (next === 'visual') {
         const { billingExpr, requestRuleExpr: ruleStr } =
-          splitBillingExprAndRequestRules(rawExpr)
+          splitRawExprWithFallback(rawExpr, rawExprFallback)
+        setRawExprFallback(null)
         const parsed = tryParseVisualConfig(billingExpr)
         if (parsed) {
           setVisualConfig(parsed)
@@ -160,16 +197,41 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
           setVisualConfig(createDefaultVisualConfig())
         }
         const parsedGroups = tryParseRequestRuleExpr(ruleStr)
-        setRequestRuleGroups(parsedGroups || [])
+        if (parsedGroups !== null) {
+          setRequestRuleGroups(parsedGroups)
+          setRequestRulesCompatible(true)
+        } else {
+          setRequestRulesCompatible(false)
+        }
         onRequestRuleExprChange(ruleStr)
       } else {
         const expr = generateExprFromVisualConfig(visualConfig)
-        const ruleExpr = buildRequestRuleExpr(requestRuleGroups)
-        setRawExpr(combineBillingExpr(expr, ruleExpr) || expr)
+        const ruleExpr = requestRulesCompatible
+          ? buildRequestRuleExpr(requestRuleGroups)
+          : currentRequestRuleExpr
+        const combined = combineBillingExpr(expr, ruleExpr) || expr
+        setRawExpr(combined)
+        setRawExprFallback(
+          !requestRulesCompatible && ruleExpr
+            ? {
+                rawExpr: combined,
+                billingExpr: expr,
+                requestRuleExpr: ruleExpr,
+              }
+            : null
+        )
       }
       setEditorMode(next)
     },
-    [rawExpr, visualConfig, requestRuleGroups, onRequestRuleExprChange]
+    [
+      rawExpr,
+      rawExprFallback,
+      visualConfig,
+      requestRuleGroups,
+      requestRulesCompatible,
+      currentRequestRuleExpr,
+      onRequestRuleExprChange,
+    ]
   )
 
   const applyPreset = useCallback(
@@ -187,6 +249,8 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
         setVisualConfig(null)
       }
       setRequestRuleGroups(presetGroups)
+      setRequestRulesCompatible(true)
+      setRawExprFallback(null)
       onRequestRuleExprChange(ruleExpr)
     },
     [onRequestRuleExprChange]
@@ -194,6 +258,7 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
 
   const handleRuleGroupsChange = useCallback((next: RequestRuleGroup[]) => {
     setRequestRuleGroups(next)
+    setRequestRulesCompatible(true)
   }, [])
 
   return (

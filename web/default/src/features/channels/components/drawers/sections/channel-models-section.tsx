@@ -385,8 +385,9 @@ export function ChannelModelsSection(props: ChannelModelsSectionProps) {
                             ))}
                             {remainingMappingCount > 0 && (
                               <div className='text-[11px] opacity-70'>
-                                +{remainingMappingCount} {t('more mapping')}
-                                {remainingMappingCount > 1 ? 's' : ''}
+                                {t('+{{count}} more mapping(s)', {
+                                  count: remainingMappingCount,
+                                })}
                               </div>
                             )}
                           </div>

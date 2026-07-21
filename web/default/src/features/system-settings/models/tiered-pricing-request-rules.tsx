@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -221,6 +221,7 @@ function RuleConditionRow({
             onValueChange={(value) =>
               onChange({ ...timeCond, rangeStart: String(value) })
             }
+            aria-label={t('Start')}
             placeholder={t('Start')}
             className='w-20'
           />
@@ -230,6 +231,7 @@ function RuleConditionRow({
             onValueChange={(value) =>
               onChange({ ...timeCond, rangeEnd: String(value) })
             }
+            aria-label={t('End')}
             placeholder={t('End')}
             className='w-20'
           />
@@ -240,6 +242,7 @@ function RuleConditionRow({
           onValueChange={(value) =>
             onChange({ ...timeCond, value: String(value) })
           }
+          aria-label={t('Condition Value')}
           placeholder={t('Value')}
           className='w-24'
         />
@@ -252,6 +255,7 @@ function RuleConditionRow({
       <Input
         value={phCond.path}
         onChange={(event) => onChange({ ...phCond, path: event.target.value })}
+        aria-label={t('Condition Path')}
         placeholder={
           phCond.source === SOURCE_HEADER ? 'X-Header-Name' : 'service_tier'
         }
@@ -286,6 +290,7 @@ function RuleConditionRow({
           onChange={(event) =>
             onChange({ ...phCond, value: event.target.value })
           }
+          aria-label={t('Condition Value')}
           placeholder={t('Value')}
           className='w-44'
         />
@@ -319,6 +324,7 @@ function RuleConditionRow({
         ? renderTimeCondition(condition as TimeCondition)
         : renderParamHeaderCondition(condition as ParamHeaderCondition)}
       <Button
+        type='button'
         variant='ghost'
         size='icon'
         onClick={onRemove}
@@ -349,6 +355,7 @@ function RuleGroupCard({
   onRemove,
 }: RuleGroupCardProps) {
   const { t } = useTranslation()
+  const multiplierInputId = useId()
 
   const handleConditionChange = (
     conditionIndex: number,
@@ -376,6 +383,7 @@ function RuleGroupCard({
           {t('Rule group')} #{index + 1}
         </Badge>
         <Button
+          type='button'
           variant='ghost'
           size='icon'
           onClick={onRemove}
@@ -403,6 +411,7 @@ function RuleGroupCard({
         ))}
         <div className='flex flex-wrap gap-2'>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={() => handleAddCondition(false)}
@@ -411,6 +420,7 @@ function RuleGroupCard({
             {t('Add param/header')}
           </Button>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={() => handleAddCondition(true)}
@@ -422,8 +432,11 @@ function RuleGroupCard({
       </div>
 
       <div className='flex items-center gap-2'>
-        <Label className='text-xs'>{t('Multiplier')}</Label>
+        <Label htmlFor={multiplierInputId} className='text-xs'>
+          {t('Multiplier')}
+        </Label>
         <DraftNumberInput
+          id={multiplierInputId}
           min={0}
           step={0.000001}
           value={group.multiplier}
@@ -495,6 +508,7 @@ export function RequestRuleEditor({
             />
           ))}
           <Button
+            type='button'
             variant='outline'
             size='sm'
             className='h-9 w-36 justify-center'
