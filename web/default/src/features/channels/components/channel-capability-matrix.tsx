@@ -25,6 +25,8 @@ import {
   Info,
   ShieldCheck,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Collapsible,
@@ -32,7 +34,6 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { StatusBadge } from '@/components/status-badge'
-import { cn } from '@/lib/utils'
 import {
   CHANNEL_CAPABILITY_STATUS_LABELS,
   CHANNEL_CAPABILITY_STATUS_VARIANTS,
@@ -58,16 +59,21 @@ const ISSUE_VARIANT_MAP = {
 } as const
 
 const ISSUE_LABEL_MAP = {
-  error: '错误',
-  warning: '警告',
-  info: '提示',
+  error: 'Error',
+  warning: 'Warning',
+  info: 'Info',
 } as const
 
 export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const rows = getChannelCapabilityRows(props.channelType)
-  const supportedCount = rows.filter((row) => row.status !== 'unsupported').length
-  const errorCount = props.issues.filter((issue) => issue.severity === 'error').length
+  const supportedCount = rows.filter(
+    (row) => row.status !== 'unsupported'
+  ).length
+  const errorCount = props.issues.filter(
+    (issue) => issue.severity === 'error'
+  ).length
   const warningCount = props.issues.filter(
     (issue) => issue.severity === 'warning'
   ).length
@@ -95,29 +101,40 @@ export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
           </span>
           <div className='min-w-0 space-y-1'>
             <div className='flex flex-wrap items-center gap-2'>
-              <h3 className='text-sm font-semibold'>渠道能力矩阵</h3>
+              <h3 className='text-sm font-semibold'>
+                {t('Channel capability matrix')}
+              </h3>
               <StatusBadge
-                label={`${supportedCount}/${rows.length} 项可用`}
+                label={t('{{supported}}/{{total}} available', {
+                  supported: supportedCount,
+                  total: rows.length,
+                })}
                 variant='info'
                 copyable={false}
                 size='sm'
               />
             </div>
             <p className='text-muted-foreground text-xs'>
-              展示当前渠道类型支持的请求接口、任务能力与运营能力。
+              {t(
+                'Shows the request APIs, task capabilities, and operational features supported by this channel type.'
+              )}
             </p>
           </div>
         </div>
         <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
           <StatusBadge
-            label={hasBlockingIssues ? `${errorCount} 个阻断问题` : '配置一致'}
+            label={
+              hasBlockingIssues
+                ? t('{{count}} blocking issue(s)', { count: errorCount })
+                : t('Configuration valid')
+            }
             variant={hasBlockingIssues ? 'danger' : 'success'}
             copyable={false}
             size='sm'
           />
           {hasWarnings && (
             <StatusBadge
-              label={`${warningCount} 个警告`}
+              label={t('{{count}} warning(s)', { count: warningCount })}
               variant='warning'
               copyable={false}
               size='sm'
@@ -133,7 +150,7 @@ export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
         </div>
       </CollapsibleTrigger>
 
-      <CollapsibleContent className='border-t px-4 pb-4 pt-4'>
+      <CollapsibleContent className='border-t px-4 pt-4 pb-4'>
         <div className='grid gap-2 md:grid-cols-2 xl:grid-cols-3'>
           {rows.map((row) => (
             <div
@@ -143,13 +160,13 @@ export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
               <div className='space-y-1'>
                 <div className='flex items-start justify-between gap-2'>
                   <div className='min-w-0 space-y-0.5'>
-                    <div className='text-sm font-medium'>{row.label}</div>
+                    <div className='text-sm font-medium'>{t(row.label)}</div>
                     <div className='text-muted-foreground text-xs leading-relaxed'>
-                      {row.description}
+                      {t(row.description)}
                     </div>
                   </div>
                   <StatusBadge
-                    label={CHANNEL_CAPABILITY_STATUS_LABELS[row.status]}
+                    label={t(CHANNEL_CAPABILITY_STATUS_LABELS[row.status])}
                     variant={CHANNEL_CAPABILITY_STATUS_VARIANTS[row.status]}
                     copyable={false}
                     size='sm'
@@ -164,13 +181,17 @@ export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
         <div className='mt-4 border-t pt-4'>
           <div className='mb-2 flex items-center gap-2'>
             <CircleCheckBig className='text-muted-foreground h-4 w-4' />
-            <h4 className='text-sm font-semibold'>配置校验</h4>
+            <h4 className='text-sm font-semibold'>
+              {t('Configuration validation')}
+            </h4>
           </div>
 
           {props.issues.length === 0 ? (
             <Alert>
               <AlertDescription>
-                当前渠道类型未检测到阻断性配置问题。
+                {t(
+                  'No blocking configuration issues were detected for this channel type.'
+                )}
               </AlertDescription>
             </Alert>
           ) : (
@@ -193,12 +214,12 @@ export function ChannelCapabilityMatrix(props: ChannelCapabilityMatrixProps) {
                       <div className='space-y-0.5'>
                         <div className='flex items-center gap-2'>
                           <StatusBadge
-                            label={ISSUE_LABEL_MAP[issue.severity]}
+                            label={t(ISSUE_LABEL_MAP[issue.severity])}
                             variant={ISSUE_VARIANT_MAP[issue.severity]}
                             copyable={false}
                             size='sm'
                           />
-                          <span className='text-sm'>{issue.message}</span>
+                          <span className='text-sm'>{t(issue.message)}</span>
                         </div>
                       </div>
                     </AlertDescription>

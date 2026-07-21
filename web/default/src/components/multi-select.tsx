@@ -59,6 +59,9 @@ interface MultiSelectProps {
   id?: string
   /** Disable the entire control. */
   disabled?: boolean
+  /** Connect the composite input to form help and validation messages. */
+  'aria-describedby'?: React.AriaAttributes['aria-describedby']
+  'aria-invalid'?: React.AriaAttributes['aria-invalid']
   /**
    * Limits rendered chips while keeping all values selected.
    * Hidden values remain searchable/removable from the dropdown.
@@ -260,6 +263,8 @@ export function MultiSelect(props: MultiSelectProps) {
           placeholder={props.selected.length === 0 ? placeholder : undefined}
           onKeyDown={handleKeyDown}
           aria-label={placeholder}
+          aria-describedby={props['aria-describedby']}
+          aria-invalid={props['aria-invalid']}
         />
       </ComboboxChips>
 

@@ -34,6 +34,59 @@ export const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
   exposedTargetModels: [],
 })
 
+export function getModelMappingGuardrail(
+  modelMapping: string | undefined,
+  publishedModels: string[]
+): ModelMappingGuardrail {
+  if (!modelMapping?.trim()) {
+    return createEmptyModelMappingGuardrail()
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(modelMapping)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
+    }
+
+    const entries = Object.entries(parsed).reduce<
+      Array<{ source: string; target: string }>
+    >((acc, [rawSource, rawTarget]) => {
+      const source = String(rawSource).trim()
+      const target = String(rawTarget ?? '').trim()
+
+      if (source && target) {
+        acc.push({ source, target })
+      }
+      return acc
+    }, [])
+
+    const publishedModelSet = new Set(publishedModels)
+    const missingSourceModels = Array.from(
+      new Set(
+        entries
+          .filter((entry) => !publishedModelSet.has(entry.source))
+          .map((entry) => entry.source)
+      )
+    )
+    const exposedTargetModels = Array.from(
+      new Set(
+        entries
+          .filter((entry) => publishedModelSet.has(entry.target))
+          .map((entry) => entry.target)
+      )
+    )
+
+    return {
+      invalidJson: false,
+      entries,
+      missingSourceModels,
+      exposedTargetModels,
+    }
+  } catch {
+    return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
+  }
+}
+
 export const formatModelNames = (models: string[]): string =>
   models.map((model) => `"${model}"`).join(', ')
 

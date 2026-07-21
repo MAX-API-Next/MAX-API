@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Code, Plus, Table, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -70,68 +70,71 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
   const nextRowIdRef = useRef(0)
   const duplicateSources = useMemo(() => getDuplicateSources(rows), [rows])
 
-  const createRowId = () => {
+  const createRowId = useCallback(() => {
     nextRowIdRef.current += 1
     return `mapping-${nextRowIdRef.current}`
-  }
+  }, [])
 
-  const parseJsonToRows = (json: string): boolean => {
-    try {
-      if (!json.trim()) {
-        setRows([])
-        setJsonError(null)
-        return true
-      }
-      const parsed = JSON.parse(json)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        setJsonError(t('Model mapping must be a valid JSON object'))
-        return false
-      }
-      const entries = Object.entries(parsed)
-      const invalidValue = entries.find(([, to]) => typeof to !== 'string')
-      if (invalidValue) {
-        setJsonError(t('Model mapping values must be strings'))
-        return false
-      }
-      setRows((previousRows) => {
-        const remainingRows = [...previousRows]
-        return entries.map(([from, to], index) => {
-          const toString = String(to)
-          const existingIndex = remainingRows.findIndex(
-            (row) =>
-              row.from === from ||
-              (row.from === from && row.to === toString) ||
-              previousRows[index]?.id === row.id
-          )
-          if (existingIndex >= 0) {
-            const [existing] = remainingRows.splice(existingIndex, 1)
+  const parseJsonToRows = useCallback(
+    (json: string): boolean => {
+      try {
+        if (!json.trim()) {
+          setRows([])
+          setJsonError(null)
+          return true
+        }
+        const parsed = JSON.parse(json)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setJsonError(t('Model mapping must be a valid JSON object'))
+          return false
+        }
+        const entries = Object.entries(parsed)
+        const invalidValue = entries.find(([, to]) => typeof to !== 'string')
+        if (invalidValue) {
+          setJsonError(t('Model mapping values must be strings'))
+          return false
+        }
+        setRows((previousRows) => {
+          const remainingRows = [...previousRows]
+          return entries.map(([from, to], index) => {
+            const toString = String(to)
+            const existingIndex = remainingRows.findIndex(
+              (row) =>
+                row.from === from ||
+                (row.from === from && row.to === toString) ||
+                previousRows[index]?.id === row.id
+            )
+            if (existingIndex >= 0) {
+              const [existing] = remainingRows.splice(existingIndex, 1)
+              return {
+                id: existing.id,
+                from,
+                to: toString,
+              }
+            }
             return {
-              id: existing.id,
+              id: createRowId(),
               from,
               to: toString,
             }
-          }
-          return {
-            id: createRowId(),
-            from,
-            to: toString,
-          }
+          })
         })
-      })
-      setJsonError(null)
-      return true
-    } catch (_error) {
-      setJsonError(t('Model mapping must be valid JSON format'))
-      return false
-    }
-  }
+        setJsonError(null)
+        return true
+      } catch (_error) {
+        setJsonError(t('Model mapping must be valid JSON format'))
+        return false
+      }
+    },
+    [createRowId, t]
+  )
 
   // Parse JSON to rows when value changes externally
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setJsonValue(props.value)
     parseJsonToRows(props.value)
-  }, [props.value])
+  }, [parseJsonToRows, props.value])
 
   const convertRowsToJson = (updatedRows: MappingRow[]): string => {
     if (updatedRows.length === 0) {
@@ -222,7 +225,7 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
   return (
     <div className='space-y-2'>
       <Tabs value={mode} onValueChange={handleModeChange} className='space-y-2'>
-        <div className='flex items-center justify-between gap-3'>
+        <div className='flex flex-wrap items-center justify-between gap-3'>
           <TabsList>
             <TabsTrigger value='visual'>
               <Table className='h-4 w-4' aria-hidden='true' />
@@ -264,7 +267,7 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
         <TabsContent value='visual' className='space-y-2'>
           {rows.length > 0 ? (
             <div className='space-y-2'>
-              <div className='grid grid-cols-[1fr_1fr_auto] gap-2 text-sm font-medium'>
+              <div className='hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 text-sm font-medium sm:grid'>
                 <div>{t('Original Model')}</div>
                 <div>{t('Replacement Model')}</div>
                 <div className='w-10'></div>
@@ -272,9 +275,10 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
               {rows.map((row) => (
                 <div
                   key={row.id}
-                  className='grid grid-cols-[1fr_1fr_auto] gap-2'
+                  className='grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]'
                 >
                   <Input
+                    className='col-span-2 sm:col-span-1'
                     value={row.from}
                     onChange={(e) =>
                       handleRowChange(row.id, 'from', e.target.value)
@@ -282,6 +286,7 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
                     placeholder='gpt-3.5-turbo'
                     disabled={props.disabled}
                     list={sourceListId}
+                    aria-label={t('Original Model')}
                   />
                   <Input
                     value={row.to}
@@ -291,6 +296,7 @@ export function ModelMappingEditor(props: ModelMappingEditorProps) {
                     placeholder='gpt-3.5-turbo-0125'
                     disabled={props.disabled}
                     list={targetListId}
+                    aria-label={t('Replacement Model')}
                   />
                   <Button
                     type='button'

@@ -273,6 +273,28 @@ function createInitialLaneState(data?: ModelRatioData | null) {
   }
 }
 
+function getInitialPricingMode(data?: ModelRatioData | null): PricingMode {
+  if (data?.billingMode === 'tiered_expr') return 'tiered_expr'
+  if (data?.price) return 'per-request'
+  return 'per-token'
+}
+
+function createInitialFormValues(
+  data?: ModelRatioData | null
+): ModelPricingFormValues {
+  return {
+    name: data?.name || '',
+    price: data?.price || '',
+    ratio: data?.ratio || '',
+    cacheRatio: data?.cacheRatio || '',
+    createCacheRatio: data?.createCacheRatio || '',
+    completionRatio: data?.completionRatio || '',
+    imageRatio: data?.imageRatio || '',
+    audioRatio: data?.audioRatio || '',
+    audioCompletionRatio: data?.audioCompletionRatio || '',
+  }
+}
+
 function getModeLabel(mode: PricingMode) {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
@@ -414,7 +436,12 @@ export function ModelPricingSheet({
   )
 }
 
-export function ModelPricingEditorPanel({
+export function ModelPricingEditorPanel(props: ModelPricingEditorPanelProps) {
+  const identity = props.editData?.name ?? '__new-model-pricing__'
+  return <ModelPricingEditorPanelContent key={identity} {...props} />
+}
+
+function ModelPricingEditorPanelContent({
   onSave,
   editData,
   selectedTargetCount = 0,
@@ -422,32 +449,34 @@ export function ModelPricingEditorPanel({
   className,
 }: ModelPricingEditorPanelProps) {
   const { t } = useTranslation()
-  const [pricingMode, setPricingMode] = useState<PricingMode>('per-token')
-  const [promptPrice, setPromptPrice] = useState('')
-  const [lanePrices, setLanePrices] = useState<Record<LaneKey, string>>({
-    ...EMPTY_LANE_PRICES,
-  })
-  const [laneEnabled, setLaneEnabled] = useState<Record<LaneKey, boolean>>({
-    ...EMPTY_LANE_ENABLED,
-  })
-  const [billingExpr, setBillingExpr] = useState('')
-  const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [initialState] = useState(() => ({
+    laneState: createInitialLaneState(editData),
+    pricingMode: getInitialPricingMode(editData),
+    billingExpr: editData?.billingExpr || '',
+    requestRuleExpr: editData?.requestRuleExpr || '',
+  }))
+  const [pricingMode, setPricingMode] = useState<PricingMode>(
+    initialState.pricingMode
+  )
+  const [promptPrice, setPromptPrice] = useState(
+    initialState.laneState.promptPrice
+  )
+  const [lanePrices, setLanePrices] = useState<Record<LaneKey, string>>(
+    initialState.laneState.prices
+  )
+  const [laneEnabled, setLaneEnabled] = useState<Record<LaneKey, boolean>>(
+    initialState.laneState.enabled
+  )
+  const [billingExpr, setBillingExpr] = useState(initialState.billingExpr)
+  const [requestRuleExpr, setRequestRuleExpr] = useState(
+    initialState.requestRuleExpr
+  )
   const [previewOpen, setPreviewOpen] = useState(true)
   const isEditMode = !!editData
 
   const form = useForm<ModelPricingFormValues>({
     resolver: zodResolver(createModelPricingSchema(t)),
-    defaultValues: {
-      name: '',
-      price: '',
-      ratio: '',
-      cacheRatio: '',
-      createCacheRatio: '',
-      completionRatio: '',
-      imageRatio: '',
-      audioRatio: '',
-      audioCompletionRatio: '',
-    },
+    defaultValues: createInitialFormValues(editData),
   })
 
   useEffect(() => {
@@ -908,6 +937,7 @@ export function ModelPricingEditorPanel({
                 >
                   <TieredPricingEditor
                     modelName={watchedValues.name}
+                    modelIdentity={editData?.name ?? '__new-model-pricing__'}
                     billingExpr={billingExpr}
                     requestRuleExpr={requestRuleExpr}
                     onBillingExprChange={setBillingExpr}

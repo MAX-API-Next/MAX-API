@@ -27,11 +27,17 @@ declare module '@tanstack/react-table' {
     description?: string
     // Whether this column can be sorted (overrides default behavior)
     sortable?: boolean
-    // Custom CSS classes to apply to the column cells
+    // Shared CSS classes applied to both the header and body cells
     className?: string
+    // Header-only CSS classes for layout that should not affect row content
+    headerClassName?: string
+    // Body-cell-only CSS classes for content wrapping, sizing, or alignment
+    cellClassName?: string
     // Mobile list placement hints
     mobileTitle?: boolean
     mobileBadge?: boolean
     mobileHidden?: boolean
+    // Mobile-only CSS classes applied to the rendered value container
+    mobileClassName?: string
   }
 }

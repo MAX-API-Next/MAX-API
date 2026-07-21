@@ -79,6 +79,12 @@ const sizeMap = {
   lg: 'h-6 gap-1.5 px-2 text-xs leading-none',
 } as const
 
+const wrapSizeMap = {
+  sm: 'min-h-5 gap-1 px-1.5 py-1 text-xs leading-tight',
+  md: 'min-h-5 gap-1 px-1.5 py-1 text-xs leading-tight',
+  lg: 'min-h-6 gap-1.5 px-2 py-1 text-xs leading-tight',
+} as const
+
 export interface StatusBadgeProps extends Omit<
   React.HTMLAttributes<HTMLSpanElement>,
   'children'
@@ -94,6 +100,8 @@ export interface StatusBadgeProps extends Omit<
   copyable?: boolean
   copyText?: string
   autoColor?: string
+  /** Allow long badge content to wrap instead of truncating to one line. */
+  wrap?: boolean
 }
 
 export function StatusBadge({
@@ -107,6 +115,7 @@ export function StatusBadge({
   copyable = true,
   copyText,
   autoColor,
+  wrap = false,
   className,
   onClick,
   ...props
@@ -126,17 +135,29 @@ export function StatusBadge({
   }
 
   const content =
-    children ?? (label ? <span className='truncate'>{label}</span> : null)
+    children ??
+    (label ? (
+      <span
+        className={cn(
+          'min-w-0',
+          wrap ? '[overflow-wrap:anywhere] whitespace-normal' : 'truncate'
+        )}
+      >
+        {label}
+      </span>
+    ) : null)
 
   return (
     <span
       className={cn(
-        'inline-flex w-fit max-w-full shrink-0 items-center rounded-4xl font-medium tracking-normal whitespace-nowrap transition-colors',
-        sizeMap[size ?? 'sm'],
+        'inline-flex w-fit max-w-full items-center rounded-4xl font-medium tracking-normal transition-colors',
+        wrap
+          ? 'min-w-0 shrink whitespace-normal'
+          : 'shrink-0 whitespace-nowrap',
+        wrap ? wrapSizeMap[size ?? 'sm'] : sizeMap[size ?? 'sm'],
         textColorMap[computedVariant],
         pulse && 'animate-pulse',
-        copyable &&
-          'cursor-copy hover:brightness-95 active:scale-95 dark:hover:brightness-110',
+        copyable && 'cursor-copy hover:opacity-80 active:scale-95',
         className
       )}
       onClick={handleClick}

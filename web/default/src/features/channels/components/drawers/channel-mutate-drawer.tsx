@@ -21,18 +21,13 @@ import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowRight,
   Boxes,
   ClipboardPaste,
-  HelpCircle,
   Loader2,
   Server,
-  Sparkles,
   Trash2,
   Copy,
   FileText,
-  Eraser,
-  Plus,
   Eye,
   Link2,
   RefreshCw,
@@ -55,7 +50,6 @@ import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Combobox } from '@/components/ui/combobox'
 import {
   Form,
   FormControl,
@@ -74,7 +68,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetClose,
@@ -84,24 +77,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import {
   sideDrawerContentClassName,
   sideDrawerFooterClassName,
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
   sideDrawerSectionClassName,
-  sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
 import { JsonEditor } from '@/components/json-editor'
-import { MultiSelect } from '@/components/multi-select'
 import {
   SecureVerificationDialog,
   useSecureVerification,
@@ -166,7 +151,6 @@ import {
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
-import { ModelMappingEditor } from '../model-mapping-editor'
 import {
   CardHeading,
   ChannelEditorNav,
@@ -182,10 +166,7 @@ import {
   ADVANCED_SETTINGS_SECTION_IDS,
   CHANNEL_EDITOR_MAIN_SECTION_IDS,
   CHANNEL_EDITOR_SECTION_IDS,
-  MODEL_MAPPING_PREVIEW_FALLBACK,
   UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT,
-  createEmptyModelMappingGuardrail,
-  formatModelNames,
   formatUnixTime,
   getCompletionStatus,
   getSectionStatusLabel,
@@ -193,7 +174,6 @@ import {
   hasConfiguredOverrideValue,
   parseSettingsRecord,
   readAdvancedSettingsPreference,
-  type ModelMappingGuardrail,
 } from './channel-editor-state'
 import {
   ChannelAdvancedSection,
@@ -736,84 +716,6 @@ export function ChannelMutateDrawer({
     [currentModelMapping]
   )
 
-  // Transform models to multi-select options
-  const modelOptions = useMemo(() => {
-    const allModels = new Set([...allModelsList, ...currentModelsArray])
-    return Array.from(allModels).map((model) => ({
-      value: model,
-      label: model,
-    }))
-  }, [allModelsList, currentModelsArray])
-
-  const modelMappingGuardrail = useMemo<ModelMappingGuardrail>(() => {
-    if (!currentModelMapping?.trim()) {
-      return createEmptyModelMappingGuardrail()
-    }
-
-    try {
-      const parsed = JSON.parse(currentModelMapping)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
-      }
-
-      const entries = Object.entries(parsed).reduce<
-        Array<{ source: string; target: string }>
-      >((acc, [rawSource, rawTarget]) => {
-        const source = String(rawSource).trim()
-        const target = String(rawTarget ?? '').trim()
-
-        if (!source || !target) {
-          return acc
-        }
-
-        acc.push({ source, target })
-        return acc
-      }, [])
-
-      const missingSourceModels = Array.from(
-        new Set(
-          entries
-            .filter(
-              (entry) =>
-                Boolean(entry.source) &&
-                !currentModelsArray.includes(entry.source)
-            )
-            .map((entry) => entry.source)
-        )
-      )
-
-      const exposedTargetModels = Array.from(
-        new Set(
-          entries
-            .filter(
-              (entry) =>
-                Boolean(entry.target) &&
-                currentModelsArray.includes(entry.target)
-            )
-            .map((entry) => entry.target)
-        )
-      )
-
-      return {
-        invalidJson: false,
-        entries,
-        missingSourceModels,
-        exposedTargetModels,
-      }
-    } catch {
-      return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
-    }
-  }, [currentModelMapping, currentModelsArray])
-
-  const mappingPreviewPairs =
-    modelMappingGuardrail.entries.length > 0
-      ? modelMappingGuardrail.entries.slice(0, 3)
-      : MODEL_MAPPING_PREVIEW_FALLBACK
-  const remainingMappingCount =
-    modelMappingGuardrail.entries.length > 3
-      ? modelMappingGuardrail.entries.length - 3
-      : 0
-
   const upstreamUpdateMeta = useMemo(() => {
     const settings = parseSettingsRecord(currentSettings)
     const detectedModels = Array.isArray(
@@ -990,18 +892,6 @@ export function ChannelMutateDrawer({
     }
   }, [channelId, queryClient, t])
 
-  // Unified function to update models
-  const updateModels = useCallback(
-    (newModels: string[], merge: boolean = false) => {
-      const finalModels = merge
-        ? formatModelsArray([...currentModelsArray, ...newModels])
-        : formatModelsArray(newModels)
-      form.setValue('models', finalModels)
-      return newModels.length
-    },
-    [currentModelsArray, form]
-  )
-
   // Handle fetching models from upstream
   const handleFetchModels = useCallback(async () => {
     const type = form.getValues('type')
@@ -1034,77 +924,6 @@ export function ChannelMutateDrawer({
     }
     throw new Error(response.message || 'No models fetched from upstream')
   }, [form])
-
-  // Handle model operations
-  const handleFillRelatedModels = useCallback(() => {
-    if (!basicModels.length) {
-      toast.info(t('No related models available for this channel type'))
-      return
-    }
-    updateModels(basicModels)
-    toast.success(
-      t('Filled {{count}} related model(s)', { count: basicModels.length })
-    )
-  }, [basicModels, updateModels, t])
-
-  const handleFillAllModels = useCallback(() => {
-    if (!allModelsList.length) {
-      toast.info(t('No models available'))
-      return
-    }
-    updateModels(allModelsList)
-    toast.success(
-      t('Filled {{count}} model(s)', { count: allModelsList.length })
-    )
-  }, [allModelsList, updateModels, t])
-
-  const handleClearModels = useCallback(() => {
-    form.setValue('models', '')
-    toast.success(t('Cleared all models'))
-  }, [form, t])
-
-  const handleCopyModels = useCallback(async () => {
-    const models = form.getValues('models')
-    if (!models?.trim()) {
-      toast.info(t('No models to copy'))
-      return
-    }
-    await copyToClipboard(models)
-  }, [form, copyToClipboard, t])
-
-  // Handle adding prefill group models
-  const handleAddPrefillGroup = useCallback(
-    (group: { id: number; name: string; items: string | string[] }) => {
-      try {
-        const items = Array.isArray(group.items)
-          ? group.items
-          : JSON.parse(group.items)
-
-        if (!Array.isArray(items)) {
-          throw new Error('Invalid items format')
-        }
-
-        const count = updateModels(items, true)
-        toast.success(
-          t('Added {{count}} models from "{{name}}"', {
-            count,
-            name: group.name,
-          })
-        )
-      } catch {
-        toast.error(t('Failed to parse group items'))
-      }
-    },
-    [updateModels, t]
-  )
-
-  // Handle model selection change from MultiSelect
-  const handleModelsChange = useCallback(
-    (selected: string[]) => {
-      form.setValue('models', selected.join(','))
-    },
-    [form]
-  )
 
   // Handle successful submission
   const handleSuccess = useCallback(() => {
@@ -1502,134 +1321,10 @@ export function ChannelMutateDrawer({
                       id={CHANNEL_EDITOR_SECTION_IDS.identity}
                       className='scroll-mt-4'
                     >
-                      <ChannelBasicSection>
-                        <div className='grid gap-4 sm:grid-cols-2'>
-                          <FormField
-                            control={form.control}
-                            name='name'
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>{t('Name *')}</FormLabel>
-                                <FormControl>
-                                  <Input
-                                    placeholder={t(FIELD_PLACEHOLDERS.NAME)}
-                                    {...field}
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-
-                          <FormField
-                            control={form.control}
-                            name='type'
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>{t('Type *')}</FormLabel>
-                                <FormControl>
-                                  <Combobox
-                                    options={channelTypeOptions}
-                                    value={String(field.value)}
-                                    onValueChange={(value) => {
-                                      const nextType = Number(value)
-                                      if (
-                                        Number.isInteger(nextType) &&
-                                        nextType > 0
-                                      ) {
-                                        field.onChange(nextType)
-                                        if (
-                                          !isEditing &&
-                                          nextType !== field.value
-                                        ) {
-                                          const scopedDefaults =
-                                            getChannelTypeScopedFieldDefaults(
-                                              nextType
-                                            )
-                                          form.setValue(
-                                            'base_url',
-                                            scopedDefaults.base_url,
-                                            {
-                                              shouldDirty: true,
-                                              shouldTouch: true,
-                                              shouldValidate: true,
-                                            }
-                                          )
-                                          form.setValue(
-                                            'other',
-                                            scopedDefaults.other,
-                                            {
-                                              shouldDirty: true,
-                                              shouldTouch: true,
-                                              shouldValidate: true,
-                                            }
-                                          )
-                                        }
-                                      }
-                                    }}
-                                    placeholder={t('Select channel type')}
-                                    searchPlaceholder={t(
-                                      'Search channel type...'
-                                    )}
-                                    emptyText={t('No channel type found.')}
-                                    allowCustomValue
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-
-                        <FormField
-                          control={form.control}
-                          name='status'
-                          render={({ field }) => (
-                            <FormItem
-                              className={sideDrawerSwitchItemClassName()}
-                            >
-                              <div className='flex flex-col gap-0.5'>
-                                <FormLabel>{t('Enabled')}</FormLabel>
-                                <FormDescription className='text-xs'>
-                                  {t('Enable or disable this channel')}
-                                </FormDescription>
-                              </div>
-                              <FormControl>
-                                <Switch
-                                  checked={field.value === 1}
-                                  onCheckedChange={(checked) =>
-                                    field.onChange(checked ? 1 : 2)
-                                  }
-                                />
-                              </FormControl>
-                            </FormItem>
-                          )}
-                        />
-
-                        {currentType === 1 && (
-                          <FormField
-                            control={form.control}
-                            name='openai_organization'
-                            render={({ field }) => (
-                              <FormItem>
-                                <FormLabel>
-                                  {t('OpenAI Organization')}
-                                </FormLabel>
-                                <FormControl>
-                                  <Input
-                                    placeholder={t('org-...')}
-                                    {...field}
-                                  />
-                                </FormControl>
-                                <FormDescription>
-                                  {t(FIELD_DESCRIPTIONS.OPENAI_ORG)}
-                                </FormDescription>
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        )}
-                      </ChannelBasicSection>
+                      <ChannelBasicSection
+                        channelTypeOptions={channelTypeOptions}
+                        isEditing={isEditing}
+                      />
 
                       <ChannelCapabilityMatrix
                         channelType={currentType}
@@ -2708,354 +2403,15 @@ export function ChannelMutateDrawer({
                       id={CHANNEL_EDITOR_SECTION_IDS.models}
                       className='scroll-mt-4'
                     >
-                      <ChannelModelsSection>
-                        <div className='space-y-5'>
-                          <div className='border-border/60 bg-muted/10 rounded-lg border p-4'>
-                            <FormField
-                              control={form.control}
-                              name='models'
-                              render={() => (
-                                <FormItem className='space-y-3'>
-                                  <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                                    <div className='space-y-1'>
-                                      <FormLabel>{t('Models *')}</FormLabel>
-                                      <FormDescription>
-                                        {t(FIELD_DESCRIPTIONS.MODELS)}
-                                      </FormDescription>
-                                    </div>
-                                    <Badge variant='outline' className='w-fit'>
-                                      {t('Selected {{count}}', {
-                                        count: currentModelsArray.length,
-                                      })}
-                                    </Badge>
-                                  </div>
-                                  <FormControl>
-                                    <MultiSelect
-                                      options={modelOptions}
-                                      selected={currentModelsArray}
-                                      onChange={handleModelsChange}
-                                      placeholder={t(
-                                        'Select models or add custom ones'
-                                      )}
-                                      allowCreate
-                                      createLabel='Add custom model "{{value}}"'
-                                    />
-                                  </FormControl>
-                                  {modelMappingGuardrail.exposedTargetModels
-                                    .length > 0 && (
-                                    <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
-                                      <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-                                        <span>
-                                          {t('The mapped upstream model(s)')}{' '}
-                                          {formatModelNames(
-                                            modelMappingGuardrail.exposedTargetModels
-                                          )}{' '}
-                                          {t(
-                                            'are also listed here. Remove them from Models to keep the `/v1/models` response user-friendly and hide vendor-specific names.'
-                                          )}
-                                        </span>
-                                        <Button
-                                          type='button'
-                                          variant='outline'
-                                          size='sm'
-                                          onClick={() => {
-                                            const hiddenTargets = new Set(
-                                              modelMappingGuardrail.exposedTargetModels
-                                            )
-                                            updateModels(
-                                              currentModelsArray.filter(
-                                                (model) =>
-                                                  !hiddenTargets.has(model)
-                                              )
-                                            )
-                                          }}
-                                        >
-                                          {t('Remove mapped targets')}
-                                        </Button>
-                                      </AlertDescription>
-                                    </Alert>
-                                  )}
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-
-                            <Separator className='my-4' />
-
-                            <div className='space-y-3'>
-                              <div>
-                                <p className='text-sm font-medium'>
-                                  {t('Quick actions')}
-                                </p>
-                                <p className='text-muted-foreground text-xs'>
-                                  {t(
-                                    'Use presets or upstream discovery to populate the model list faster.'
-                                  )}
-                                </p>
-                              </div>
-                              <div className='flex flex-wrap gap-2'>
-                                <Button
-                                  type='button'
-                                  variant='outline'
-                                  size='sm'
-                                  onClick={handleFillRelatedModels}
-                                  disabled={!basicModels.length}
-                                >
-                                  <FileText
-                                    className='mr-2 h-4 w-4'
-                                    aria-hidden='true'
-                                  />
-                                  {t('Fill Related Models')}
-                                </Button>
-                                <Button
-                                  type='button'
-                                  variant='outline'
-                                  size='sm'
-                                  onClick={handleFillAllModels}
-                                  disabled={!allModelsList.length}
-                                >
-                                  <Plus
-                                    className='mr-2 h-4 w-4'
-                                    aria-hidden='true'
-                                  />
-                                  {t('Fill All Models')}
-                                </Button>
-                                {MODEL_FETCHABLE_TYPES.has(currentType) && (
-                                  <Button
-                                    type='button'
-                                    variant='outline'
-                                    size='sm'
-                                    onClick={handleFetchModels}
-                                  >
-                                    <Sparkles
-                                      className='mr-2 h-4 w-4'
-                                      aria-hidden='true'
-                                    />
-                                    {t('Fetch from Upstream')}
-                                  </Button>
-                                )}
-                                <Button
-                                  type='button'
-                                  variant='outline'
-                                  size='sm'
-                                  onClick={handleCopyModels}
-                                  disabled={currentModelsArray.length === 0}
-                                >
-                                  <Copy
-                                    className='mr-2 h-4 w-4'
-                                    aria-hidden='true'
-                                  />
-                                  {t('Copy All')}
-                                </Button>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  onClick={handleClearModels}
-                                  disabled={currentModelsArray.length === 0}
-                                >
-                                  <Eraser
-                                    className='mr-2 h-4 w-4'
-                                    aria-hidden='true'
-                                  />
-                                  {t('Clear All')}
-                                </Button>
-                              </div>
-                              {prefillGroups.length > 0 && (
-                                <div className='flex flex-wrap items-center gap-2'>
-                                  <span className='text-muted-foreground text-xs'>
-                                    {t('Preset groups')}:
-                                  </span>
-                                  {prefillGroups.map((group) => (
-                                    <Button
-                                      key={group.id}
-                                      type='button'
-                                      variant='secondary'
-                                      size='sm'
-                                      onClick={() =>
-                                        handleAddPrefillGroup(group)
-                                      }
-                                    >
-                                      {group.name}
-                                    </Button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className='border-border/60 rounded-lg border p-4'>
-                            <FormField
-                              control={form.control}
-                              name='model_mapping'
-                              render={({ field }) => (
-                                <FormItem className='space-y-3'>
-                                  <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
-                                    <div className='space-y-1'>
-                                      <div className='flex items-center gap-2'>
-                                        <FormLabel className='mb-0'>
-                                          {t('Model Mapping')}
-                                        </FormLabel>
-                                        <Tooltip>
-                                          <TooltipTrigger
-                                            render={
-                                              <Button
-                                                type='button'
-                                                variant='ghost'
-                                                size='icon-sm'
-                                                className='text-muted-foreground hover:text-foreground size-auto p-0'
-                                                aria-label={t(
-                                                  'How model mapping works'
-                                                )}
-                                              />
-                                            }
-                                          >
-                                            <HelpCircle
-                                              className='h-4 w-4'
-                                              aria-hidden='true'
-                                            />
-                                          </TooltipTrigger>
-                                          <TooltipContent
-                                            side='top'
-                                            align='start'
-                                            className='max-w-xs space-y-2 text-left'
-                                          >
-                                            <p className='text-xs font-semibold uppercase'>
-                                              {t('Request flow')}
-                                            </p>
-                                            <div className='space-y-1 font-mono text-xs'>
-                                              {mappingPreviewPairs.map(
-                                                (pair) => (
-                                                  <div
-                                                    key={`${pair.source}-${pair.target}`}
-                                                    className='flex items-center gap-1'
-                                                  >
-                                                    <span>{pair.source}</span>
-                                                    <ArrowRight
-                                                      className='h-3.5 w-3.5 opacity-70'
-                                                      aria-hidden='true'
-                                                    />
-                                                    <span>{pair.target}</span>
-                                                  </div>
-                                                )
-                                              )}
-                                              {remainingMappingCount > 0 && (
-                                                <div className='text-[11px] opacity-70'>
-                                                  +{remainingMappingCount}{' '}
-                                                  {t('more mapping')}
-                                                  {remainingMappingCount > 1
-                                                    ? 's'
-                                                    : ''}
-                                                </div>
-                                              )}
-                                            </div>
-                                            <p className='text-[11px] leading-relaxed opacity-80'>
-                                              {t(
-                                                'Users call the model on the left. The platform forwards the request to the upstream model on the right.'
-                                              )}
-                                            </p>
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      </div>
-                                      <FormDescription>
-                                        {t(FIELD_DESCRIPTIONS.MODEL_MAPPING)}
-                                      </FormDescription>
-                                    </div>
-                                  </div>
-                                  <FormControl>
-                                    <ModelMappingEditor
-                                      value={field.value || ''}
-                                      onChange={field.onChange}
-                                      disabled={isSubmitting}
-                                      sourceModelOptions={currentModelsArray}
-                                      targetModelOptions={modelOptions.map(
-                                        (option) => option.value
-                                      )}
-                                    />
-                                  </FormControl>
-                                  {modelMappingGuardrail.invalidJson && (
-                                    <Alert variant='destructive'>
-                                      <AlertDescription>
-                                        {t(
-                                          'Model Mapping must be a JSON object like'
-                                        )}{' '}
-                                        <code className='font-mono'>
-                                          {'{"gpt-4":"Azure-GPT4"}'}
-                                        </code>
-                                        {t(
-                                          '. Please fix the JSON before saving.'
-                                        )}
-                                      </AlertDescription>
-                                    </Alert>
-                                  )}
-                                  {modelMappingGuardrail.missingSourceModels
-                                    .length > 0 && (
-                                    <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
-                                      <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-                                        <span>
-                                          {t('Add')}{' '}
-                                          {formatModelNames(
-                                            modelMappingGuardrail.missingSourceModels
-                                          )}{' '}
-                                          {t(
-                                            'to the Models list so users can use them before the mapping sends traffic upstream.'
-                                          )}
-                                        </span>
-                                        <Button
-                                          type='button'
-                                          variant='outline'
-                                          size='sm'
-                                          onClick={() => {
-                                            updateModels([
-                                              ...currentModelsArray,
-                                              ...modelMappingGuardrail.missingSourceModels,
-                                            ])
-                                          }}
-                                        >
-                                          {t('Add missing models')}
-                                        </Button>
-                                      </AlertDescription>
-                                    </Alert>
-                                  )}
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          </div>
-
-                          <div className='border-border/60 rounded-lg border p-4'>
-                            <FormField
-                              control={form.control}
-                              name='group'
-                              render={({ field }) => (
-                                <FormItem className='space-y-3'>
-                                  <div className='space-y-1'>
-                                    <FormLabel>{t('Groups *')}</FormLabel>
-                                    <FormDescription>
-                                      {t(FIELD_DESCRIPTIONS.GROUP)}
-                                    </FormDescription>
-                                  </div>
-                                  <FormControl>
-                                    {isLoadingGroups ? (
-                                      <Skeleton className='h-10 w-full' />
-                                    ) : (
-                                      <MultiSelect
-                                        options={groupOptions}
-                                        selected={field.value}
-                                        onChange={field.onChange}
-                                        placeholder={t(
-                                          FIELD_PLACEHOLDERS.GROUP
-                                        )}
-                                      />
-                                    )}
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          </div>
-                        </div>
-                      </ChannelModelsSection>
+                      <ChannelModelsSection
+                        allModels={allModelsList}
+                        basicModels={basicModels}
+                        groupOptions={groupOptions}
+                        isLoadingGroups={isLoadingGroups}
+                        isSubmitting={isSubmitting}
+                        onFetchModels={handleFetchModels}
+                        prefillGroups={prefillGroups}
+                      />
                     </div>
 
                     <div
@@ -4446,7 +3802,10 @@ export function ChannelMutateDrawer({
         open={fetchModelsDialogOpen}
         onOpenChange={setFetchModelsDialogOpen}
         onModelsSelected={(models) => {
-          form.setValue('models', formatModelsArray(models))
+          form.setValue('models', formatModelsArray(models), {
+            shouldDirty: true,
+            shouldValidate: true,
+          })
         }}
         redirectModels={redirectModelList}
         redirectSourceModels={redirectModelKeyList}

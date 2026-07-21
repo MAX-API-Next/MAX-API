@@ -473,7 +473,12 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
     // Name column
     {
       accessorKey: 'name',
-      meta: { label: t('Name'), mobileTitle: true },
+      meta: {
+        label: t('Name'),
+        mobileTitle: true,
+        cellClassName: 'max-w-[28rem] whitespace-normal',
+        mobileClassName: '[overflow-wrap:anywhere]',
+      },
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Name')} />
       ),
