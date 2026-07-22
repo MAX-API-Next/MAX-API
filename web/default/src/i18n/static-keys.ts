@@ -340,6 +340,7 @@ export const STATIC_I18N_KEYS = [
   'Not Set',
   'Only enabled parameters are sent with the request.',
   'Parameter settings',
+  'Presence Penalty',
   'Reduces repeated wording',
   'Seed',
   'Temperature',

@@ -3332,6 +3332,7 @@
     "Max Tokens": "Số token tối đa",
     "Only enabled parameters are sent with the request.": "Chỉ gửi các tham số đã bật trong yêu cầu.",
     "Parameter settings": "Cài đặt tham số",
+    "Presence Penalty": "Hình phạt hiện diện",
     "Reduces repeated wording": "Giảm lặp lại từ ngữ",
     "Seed": "Seed",
     "Temperature": "Nhiệt độ",

@@ -3332,6 +3332,7 @@
     "Max Tokens": "Nombre maximal de tokens",
     "Only enabled parameters are sent with the request.": "Seuls les paramètres activés sont envoyés avec la requête.",
     "Parameter settings": "Paramètres",
+    "Presence Penalty": "Pénalité de présence",
     "Reduces repeated wording": "Réduit les formulations répétées",
     "Seed": "Graine",
     "Temperature": "Température",

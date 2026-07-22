@@ -116,10 +116,7 @@ export function PlaygroundInput({
   onGroupChange,
   hasMessages = false,
   onClearHistory,
-  config,
-  parameterEnabled,
-  onConfigChange,
-  onParameterEnabledChange,
+  ...parameterProps
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -214,13 +211,7 @@ export function PlaygroundInput({
               <span className='sr-only sm:hidden'>{t('Search')}</span>
             </PromptInputButton>
 
-            <PlaygroundParameterPanel
-              config={config}
-              disabled={disabled}
-              onConfigChange={onConfigChange}
-              onParameterEnabledChange={onParameterEnabledChange}
-              parameterEnabled={parameterEnabled}
-            />
+            <PlaygroundParameterPanel disabled={disabled} {...parameterProps} />
 
             <TooltipProvider delay={300}>
               <Tooltip>

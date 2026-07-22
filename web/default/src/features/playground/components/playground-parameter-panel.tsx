@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useState } from 'react'
 import { SlidersHorizontalIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -69,26 +70,34 @@ type PlaygroundParameterContentProps = PlaygroundParameterPanelProps & {
   compact?: boolean
 }
 
-function PlaygroundParameterContent({
-  compact = false,
-  config,
-  disabled,
-  onConfigChange,
-  onParameterEnabledChange,
-  parameterEnabled,
-}: PlaygroundParameterContentProps) {
+function PlaygroundParameterContent(props: PlaygroundParameterContentProps) {
   const { t } = useTranslation()
+  const [parameterDrafts, setParameterDrafts] = useState<
+    Partial<Record<PlaygroundParameterKey, string>>
+  >({})
 
   const updateParameterConfig = (
     key: PlaygroundParameterKey,
     value: number | null
   ) => {
     if (key === 'seed') {
-      onConfigChange('seed', value)
+      props.onConfigChange('seed', value)
       return
     }
 
-    onConfigChange(key, value ?? 0)
+    props.onConfigChange(key, value ?? 0)
+  }
+
+  const commitParameterDraft = (
+    key: PlaygroundParameterKey,
+    rawValue: string
+  ) => {
+    updateParameterConfig(key, normalizeParameterNumberValue(key, rawValue))
+    setParameterDrafts((current) => {
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
   }
 
   return (
@@ -96,19 +105,19 @@ function PlaygroundParameterContent({
       className={cn(
         'grid gap-3',
         PLAYGROUND_PARAMETER_PANEL_SCROLL_CLASS,
-        compact ? 'px-4 pb-4' : 'p-1'
+        props.compact ? 'px-4 pb-4' : 'p-1'
       )}
     >
       {PLAYGROUND_PARAMETER_CONTROLS.map((control) => {
-        const enabled = parameterEnabled[control.key]
-        const value = config[control.key]
+        const enabled = props.parameterEnabled[control.key]
+        const value = props.config[control.key]
         const controlId = `playground-${control.key}`
 
         return (
           <div
             className={cn(
               'border-border/70 bg-background/60 grid gap-2 rounded-lg border p-3 transition-opacity',
-              (!enabled || disabled) && 'opacity-55'
+              (!enabled || props.disabled) && 'opacity-55'
             )}
             key={control.key}
           >
@@ -138,9 +147,9 @@ function PlaygroundParameterContent({
                   parameter: t(control.labelKey),
                 })}
                 checked={enabled}
-                disabled={disabled}
+                disabled={props.disabled}
                 onCheckedChange={(checked) =>
-                  onParameterEnabledChange(control.key, checked)
+                  props.onParameterEnabledChange(control.key, checked)
                 }
                 size='sm'
               />
@@ -149,7 +158,7 @@ function PlaygroundParameterContent({
             {control.valueType === 'slider' ? (
               <Slider
                 className='py-1.5'
-                disabled={disabled || !enabled}
+                disabled={props.disabled || !enabled}
                 id={controlId}
                 max={control.max}
                 min={control.min}
@@ -167,23 +176,29 @@ function PlaygroundParameterContent({
               />
             ) : (
               <Input
-                disabled={disabled || !enabled}
+                disabled={props.disabled || !enabled}
                 id={controlId}
                 inputMode='numeric'
                 max={control.max}
                 min={control.min}
-                onChange={(event) => {
-                  updateParameterConfig(
-                    control.key,
-                    normalizeParameterNumberValue(
-                      control.key,
-                      event.target.value
-                    )
-                  )
+                onChange={(event) =>
+                  setParameterDrafts((current) => ({
+                    ...current,
+                    [control.key]: event.target.value,
+                  }))
+                }
+                onBlur={(event) =>
+                  commitParameterDraft(control.key, event.currentTarget.value)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    event.currentTarget.blur()
+                  }
                 }}
                 step={control.step}
                 type='number'
-                value={value ?? ''}
+                value={parameterDrafts[control.key] ?? value ?? ''}
               />
             )}
           </div>

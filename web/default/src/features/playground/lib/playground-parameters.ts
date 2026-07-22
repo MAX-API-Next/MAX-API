@@ -16,9 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ParameterEnabled, PlaygroundConfig } from '../types'
-
-type ParameterValue = PlaygroundConfig[keyof PlaygroundConfig]
+import type { ParameterEnabled } from '../types'
 
 export type PlaygroundParameterKey = keyof ParameterEnabled
 
@@ -119,7 +117,7 @@ export function normalizeParameterNumberValue(
 
 export function getParameterControlValueText(
   key: PlaygroundParameterKey,
-  value: ParameterValue
+  value: number | null
 ): string {
   if (key === 'seed' && value === null) {
     return 'Not Set'
