@@ -74,7 +74,10 @@ function PlaygroundParameterContent(props: PlaygroundParameterContentProps) {
       return
     }
 
-    props.onConfigChange(key, value ?? 0)
+    const fallback = PLAYGROUND_PARAMETER_CONTROLS.find(
+      (control) => control.key === key
+    )?.min
+    props.onConfigChange(key, value ?? fallback ?? 0)
   }
 
   return (
