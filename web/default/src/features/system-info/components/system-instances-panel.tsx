@@ -20,7 +20,6 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, RefreshCw, ServerCog, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -41,11 +40,11 @@ import {
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ErrorState } from '@/components/error-state'
+import { listSystemInstances } from '../api'
 import {
-  deleteStaleSystemInstances,
-  deleteSystemInstance,
-  listSystemInstances,
-} from '../api'
+  SYSTEM_INSTANCES_QUERY_KEY,
+  useStaleInstanceCleanup,
+} from '../hooks/use-stale-instance-cleanup'
 import type { SystemInstance, SystemInstanceStatus } from '../types'
 
 const INSTANCE_POLL_INTERVAL_MS = 30_000
@@ -240,10 +239,12 @@ export function SystemInstancesPanel() {
   const [instanceToDelete, setInstanceToDelete] =
     useState<SystemInstance | null>(null)
   const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false)
-  const [deletingNodeName, setDeletingNodeName] = useState<string | null>(null)
-  const [deletingAllStale, setDeletingAllStale] = useState(false)
+  const cleanup = useStaleInstanceCleanup({
+    onDeletedAllStale: () => setDeleteAllConfirmOpen(false),
+    onDeletedInstance: () => setInstanceToDelete(null),
+  })
   const instancesQuery = useQuery({
-    queryKey: ['system-info', 'instances'],
+    queryKey: SYSTEM_INSTANCES_QUERY_KEY,
     queryFn: async () => {
       const res = await listSystemInstances()
       if (!res.success || !Array.isArray(res.data)) {
@@ -264,51 +265,15 @@ export function SystemInstancesPanel() {
   const deleteNodeName = instanceToDelete
     ? getNodeName(instanceToDelete)
     : undefined
-  const isDeletingAnyInstance = Boolean(deletingNodeName) || deletingAllStale
 
-  const handleConfirmDelete = async () => {
+  const handleConfirmDelete = () => {
     if (!instanceToDelete) return
 
-    const nodeName = instanceToDelete.node_name
-    setDeletingNodeName(nodeName)
-    try {
-      const res = await deleteSystemInstance(nodeName)
-      if (!res.success) {
-        toast.error(t(res.message || 'Delete failed'))
-        return
-      }
-
-      toast.success(t('Instance deleted'))
-      setInstanceToDelete(null)
-      await instancesQuery.refetch()
-    } catch (_error: unknown) {
-      toast.error(_error instanceof Error ? _error.message : t('Delete failed'))
-    } finally {
-      setDeletingNodeName(null)
-    }
+    cleanup.deleteInstance(instanceToDelete.node_name)
   }
 
-  const handleConfirmDeleteAll = async () => {
-    setDeletingAllStale(true)
-    try {
-      const res = await deleteStaleSystemInstances()
-      if (!res.success) {
-        toast.error(t(res.message || 'Delete failed'))
-        return
-      }
-
-      toast.success(
-        t('Deleted {{count}} stale instances', {
-          count: res.data?.deleted_count ?? 0,
-        })
-      )
-      setDeleteAllConfirmOpen(false)
-      await instancesQuery.refetch()
-    } catch (_error: unknown) {
-      toast.error(_error instanceof Error ? _error.message : t('Delete failed'))
-    } finally {
-      setDeletingAllStale(false)
-    }
+  const handleConfirmDeleteAll = () => {
+    cleanup.deleteAllStale()
   }
 
   return (
@@ -335,9 +300,9 @@ export function SystemInstancesPanel() {
                 variant='destructive'
                 size='sm'
                 onClick={() => setDeleteAllConfirmOpen(true)}
-                disabled={isDeletingAnyInstance}
+                disabled={cleanup.isDeletingAnyInstance}
               >
-                {deletingAllStale ? (
+                {cleanup.deletingAllStale ? (
                   <Loader2
                     data-icon='inline-start'
                     className='animate-spin'
@@ -354,7 +319,9 @@ export function SystemInstancesPanel() {
               variant='outline'
               size='sm'
               onClick={() => void instancesQuery.refetch()}
-              disabled={instancesQuery.isFetching || isDeletingAnyInstance}
+              disabled={
+                instancesQuery.isFetching || cleanup.isDeletingAnyInstance
+              }
             >
               <RefreshCw
                 data-icon='inline-start'
@@ -391,8 +358,8 @@ export function SystemInstancesPanel() {
           <div className='p-4 sm:p-5'>
             <SystemInstancesTable
               instances={instances}
-              deletingNodeName={deletingNodeName}
-              deleteDisabled={deletingAllStale}
+              deletingNodeName={cleanup.deletingNodeName}
+              deleteDisabled={cleanup.deletingAllStale}
               onDeleteRequest={setInstanceToDelete}
             />
           </div>
@@ -407,8 +374,8 @@ export function SystemInstancesPanel() {
           { count: staleInstances.length }
         )}
         destructive
-        isLoading={deletingAllStale}
-        confirmText={deletingAllStale ? t('Deleting...') : t('Delete')}
+        isLoading={cleanup.deletingAllStale}
+        confirmText={cleanup.deletingAllStale ? t('Deleting...') : t('Delete')}
         handleConfirm={handleConfirmDeleteAll}
       />
       <ConfirmDialog
@@ -422,8 +389,8 @@ export function SystemInstancesPanel() {
           { node: deleteNodeName ?? '-' }
         )}
         destructive
-        isLoading={Boolean(deletingNodeName)}
-        confirmText={deletingNodeName ? t('Deleting...') : t('Delete')}
+        isLoading={Boolean(cleanup.deletingNodeName)}
+        confirmText={cleanup.deletingNodeName ? t('Deleting...') : t('Delete')}
         handleConfirm={handleConfirmDelete}
       />
     </>
