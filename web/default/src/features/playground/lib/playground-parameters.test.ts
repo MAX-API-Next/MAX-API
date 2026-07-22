@@ -37,4 +37,14 @@ describe('playground parameter controls', () => {
     assert.equal(getParameterControlValueText('seed', null), 'Not Set')
     assert.equal(normalizeParameterNumberValue('temperature', ''), 0)
   })
+
+  test('falls back to the control minimum for empty or invalid values', () => {
+    assert.equal(normalizeParameterNumberValue('max_tokens', ''), 1)
+    assert.equal(normalizeParameterNumberValue('max_tokens', 'invalid'), 1)
+    assert.equal(
+      normalizeParameterNumberValue('frequency_penalty', 'invalid'),
+      -2
+    )
+    assert.equal(normalizeParameterNumberValue('seed', 'invalid'), null)
+  })
 })

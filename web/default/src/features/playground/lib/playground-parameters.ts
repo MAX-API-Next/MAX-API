@@ -94,15 +94,16 @@ export function normalizeParameterNumberValue(
   key: PlaygroundParameterKey,
   value: string | number
 ): number | null {
+  const control = PLAYGROUND_PARAMETER_CONTROLS.find((item) => item.key === key)
+
   if (value === '') {
-    return key === 'seed' ? null : 0
+    return key === 'seed' ? null : (control?.min ?? 0)
   }
 
-  const control = PLAYGROUND_PARAMETER_CONTROLS.find((item) => item.key === key)
   const parsed = typeof value === 'number' ? value : Number.parseFloat(value)
 
   if (!control || Number.isNaN(parsed)) {
-    return key === 'seed' ? null : 0
+    return key === 'seed' ? null : (control?.min ?? 0)
   }
 
   const clamped = Math.min(control.max, Math.max(control.min, parsed))

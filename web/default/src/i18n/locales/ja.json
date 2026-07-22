@@ -3332,7 +3332,7 @@
     "Max Tokens": "最大トークン数",
     "Only enabled parameters are sent with the request.": "有効なパラメータのみリクエストに送信されます。",
     "Parameter settings": "パラメータ設定",
-    "Presence Penalty": "存在ペナルティ",
+    "Presence Penalty": "プレゼンスペナルティ",
     "Reduces repeated wording": "繰り返し表現を減らす",
     "Seed": "シード",
     "Temperature": "温度",

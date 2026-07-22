@@ -16,13 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState } from 'react'
 import { SlidersHorizontalIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/use-mobile'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import {
   Popover,
   PopoverContent,
@@ -35,8 +32,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import { Slider } from '@/components/ui/slider'
-import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
@@ -44,13 +39,12 @@ import {
 } from '@/components/ui/tooltip'
 import { PromptInputButton } from '@/components/ai-elements/prompt-input'
 import {
-  getParameterControlValueText,
-  normalizeParameterNumberValue,
   PLAYGROUND_PARAMETER_CONTROLS,
   PLAYGROUND_PARAMETER_PANEL_SCROLL_CLASS,
   type PlaygroundParameterKey,
 } from '../lib/playground-parameters'
 import type { ParameterEnabled, PlaygroundConfig } from '../types'
+import { PlaygroundParameterRow } from './playground-parameter-row'
 
 type PlaygroundParameterPanelProps = {
   config: PlaygroundConfig
@@ -71,11 +65,6 @@ type PlaygroundParameterContentProps = PlaygroundParameterPanelProps & {
 }
 
 function PlaygroundParameterContent(props: PlaygroundParameterContentProps) {
-  const { t } = useTranslation()
-  const [parameterDrafts, setParameterDrafts] = useState<
-    Partial<Record<PlaygroundParameterKey, string>>
-  >({})
-
   const updateParameterConfig = (
     key: PlaygroundParameterKey,
     value: number | null
@@ -88,18 +77,6 @@ function PlaygroundParameterContent(props: PlaygroundParameterContentProps) {
     props.onConfigChange(key, value ?? 0)
   }
 
-  const commitParameterDraft = (
-    key: PlaygroundParameterKey,
-    rawValue: string
-  ) => {
-    updateParameterConfig(key, normalizeParameterNumberValue(key, rawValue))
-    setParameterDrafts((current) => {
-      const next = { ...current }
-      delete next[key]
-      return next
-    })
-  }
-
   return (
     <div
       className={cn(
@@ -108,102 +85,19 @@ function PlaygroundParameterContent(props: PlaygroundParameterContentProps) {
         props.compact ? 'px-4 pb-4' : 'p-1'
       )}
     >
-      {PLAYGROUND_PARAMETER_CONTROLS.map((control) => {
-        const enabled = props.parameterEnabled[control.key]
-        const value = props.config[control.key]
-        const controlId = `playground-${control.key}`
-
-        return (
-          <div
-            className={cn(
-              'border-border/70 bg-background/60 grid gap-2 rounded-lg border p-3 transition-opacity',
-              (!enabled || props.disabled) && 'opacity-55'
-            )}
-            key={control.key}
-          >
-            <div className='flex items-start justify-between gap-3'>
-              <div className='min-w-0 space-y-1'>
-                <div className='flex min-w-0 items-center gap-2'>
-                  <label
-                    className='truncate text-sm leading-5 font-medium'
-                    htmlFor={controlId}
-                  >
-                    {t(control.labelKey)}
-                  </label>
-                  <Badge
-                    className='h-5 max-w-24 shrink-0 px-1.5 font-mono text-[11px]'
-                    variant='outline'
-                  >
-                    {t(getParameterControlValueText(control.key, value))}
-                  </Badge>
-                </div>
-                <p className='text-muted-foreground text-xs leading-4'>
-                  {t(control.descriptionKey)}
-                </p>
-              </div>
-
-              <Switch
-                aria-label={t('Enable {{parameter}}', {
-                  parameter: t(control.labelKey),
-                })}
-                checked={enabled}
-                disabled={props.disabled}
-                onCheckedChange={(checked) =>
-                  props.onParameterEnabledChange(control.key, checked)
-                }
-                size='sm'
-              />
-            </div>
-
-            {control.valueType === 'slider' ? (
-              <Slider
-                className='py-1.5'
-                disabled={props.disabled || !enabled}
-                id={controlId}
-                max={control.max}
-                min={control.min}
-                onValueChange={(nextValue) => {
-                  const firstValue = Array.isArray(nextValue)
-                    ? nextValue[0]
-                    : nextValue
-                  updateParameterConfig(
-                    control.key,
-                    normalizeParameterNumberValue(control.key, firstValue)
-                  )
-                }}
-                step={control.step}
-                value={[Number(value)]}
-              />
-            ) : (
-              <Input
-                disabled={props.disabled || !enabled}
-                id={controlId}
-                inputMode='numeric'
-                max={control.max}
-                min={control.min}
-                onChange={(event) =>
-                  setParameterDrafts((current) => ({
-                    ...current,
-                    [control.key]: event.target.value,
-                  }))
-                }
-                onBlur={(event) =>
-                  commitParameterDraft(control.key, event.currentTarget.value)
-                }
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    event.currentTarget.blur()
-                  }
-                }}
-                step={control.step}
-                type='number'
-                value={parameterDrafts[control.key] ?? value ?? ''}
-              />
-            )}
-          </div>
-        )
-      })}
+      {PLAYGROUND_PARAMETER_CONTROLS.map((control) => (
+        <PlaygroundParameterRow
+          control={control}
+          disabled={props.disabled}
+          enabled={props.parameterEnabled[control.key]}
+          key={control.key}
+          onEnabledChange={(enabled) =>
+            props.onParameterEnabledChange(control.key, enabled)
+          }
+          onValueChange={(value) => updateParameterConfig(control.key, value)}
+          value={props.config[control.key]}
+        />
+      ))}
     </div>
   )
 }
