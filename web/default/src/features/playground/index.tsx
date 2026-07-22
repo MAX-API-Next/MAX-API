@@ -42,6 +42,7 @@ export function Playground() {
     setModels,
     setGroups,
     updateConfig,
+    updateParameterEnabled,
     clearMessages,
   } = usePlaygroundState()
 
@@ -200,6 +201,10 @@ export function Playground() {
           onGroupChange={(value) => updateConfig('group', value)}
           onClearHistory={handleClearHistory}
           onModelChange={(value) => updateConfig('model', value)}
+          config={config}
+          onConfigChange={updateConfig}
+          onParameterEnabledChange={updateParameterEnabled}
+          parameterEnabled={parameterEnabled}
           onStop={stopGeneration}
           onSubmit={handleSendMessage}
         />
