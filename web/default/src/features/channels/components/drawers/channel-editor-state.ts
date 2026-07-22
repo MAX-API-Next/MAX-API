@@ -114,6 +114,7 @@ export const ADVANCED_SETTINGS_SECTION_IDS = {
   internalNotes: 'channel-section-advanced-internal-notes',
   overrideRules: 'channel-section-advanced-override-rules',
   videoTaskProtocol: 'channel-section-advanced-video-task-protocol',
+  videoTaskBilling: 'channel-section-advanced-video-task-billing',
   responseMapping: 'channel-section-advanced-response-mapping',
   fieldPassthrough: 'channel-section-advanced-field-passthrough',
   extraSettings: 'channel-section-advanced-extra-settings',
@@ -148,6 +149,7 @@ export const ADVANCED_ERROR_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  'video_task_delta_settlement_enabled',
   'video_task_path_override_enabled',
   'video_task_protocol_enabled',
   'video_task_submit_path',
@@ -206,6 +208,7 @@ export function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.claude_beta_query ||
+    values.video_task_delta_settlement_enabled === false ||
     values.video_task_path_override_enabled ||
     values.video_task_protocol_enabled ||
     values.upstream_model_update_check_enabled ||

@@ -501,7 +501,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	if shouldSettle {
-		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -563,10 +563,14 @@ func truncateBase64(s string) string {
 //
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
-func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo, channelType int, channelSettings ...dto.ChannelOtherSettings) {
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
+		return
+	}
+	if task.DeltaSettlementDisabledForChannel(channelType, channelSettings...) {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 已按渠道设置跳过完成态差额结算", task.TaskID))
 		return
 	}
 	// 1. 优先让 adaptor 决定最终额度

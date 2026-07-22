@@ -49,6 +49,7 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateIgnoredModels      []string              `json:"upstream_model_update_ignored_models,omitempty"`
 	TaskProtocol                          string                `json:"task_protocol,omitempty"`
 	TaskProtocolConfig                    *TaskProtocolConfig   `json:"task_protocol_config,omitempty"`
+	DisableTaskDeltaSettlement            bool                  `json:"disable_task_delta_settlement,omitempty"`
 	AdvancedCustom                        *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
 }
 

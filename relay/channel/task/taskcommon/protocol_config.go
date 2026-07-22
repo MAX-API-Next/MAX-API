@@ -203,14 +203,18 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		status = string(model.TaskStatusSuccess)
 	}
 	progress := NormalizeConfiguredProgress(progressRaw, status)
+	completionTokens := int(gjson.GetBytes(respBody, "usage.completion_tokens").Int())
+	totalTokens := int(gjson.GetBytes(respBody, "usage.total_tokens").Int())
 
 	return &relaycommon.TaskInfo{
-		Code:     0,
-		TaskID:   taskID,
-		Status:   status,
-		Progress: progress,
-		Url:      resultURL,
-		Reason:   reason,
+		Code:             0,
+		TaskID:           taskID,
+		Status:           status,
+		Progress:         progress,
+		Url:              resultURL,
+		Reason:           reason,
+		CompletionTokens: completionTokens,
+		TotalTokens:      totalTokens,
 	}, true, nil
 }
 

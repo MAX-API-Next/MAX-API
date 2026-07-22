@@ -103,6 +103,7 @@ import {
 import {
   ADD_MODE_OPTIONS,
   CHANNEL_STATUS_LABELS,
+  CHANNEL_TYPE_DOUBAO_VIDEO,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
@@ -221,6 +222,7 @@ export function ChannelMutateDrawer({
   >(null)
   const channelFormRef = useRef<HTMLFormElement>(null)
   const advancedNavScrollPendingRef = useRef(false)
+  const doubaoVideoAdvancedAutoOpenedRef = useRef(false)
   const [activeEditorSectionId, setActiveEditorSectionId] = useState<string>(
     CHANNEL_EDITOR_SECTION_IDS.identity
   )
@@ -299,7 +301,7 @@ export function ChannelMutateDrawer({
   const multiKeyType = form.watch('multi_key_type')
   const keyMode = form.watch('key_mode')
   const currentGroups = form.watch('group')
-  const currentType = form.watch('type')
+  const currentType = Number(form.watch('type') || 0)
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentName = form.watch('name')
@@ -313,6 +315,9 @@ export function ChannelMutateDrawer({
     'video_task_path_override_enabled'
   )
   const videoTaskProtocolEnabled = form.watch('video_task_protocol_enabled')
+  const videoTaskDeltaSettlementEnabled = form.watch(
+    'video_task_delta_settlement_enabled'
+  )
   const currentAdvancedCustom = form.watch('advanced_custom')
   const formSnapshot = form.watch() as ChannelFormValues
   const currentStatus = formSnapshot.status
@@ -347,6 +352,7 @@ export function ChannelMutateDrawer({
   const showVideoTaskPathFields =
     videoTaskPathOverrideEnabled || videoTaskProtocolEnabled
   const isVideoTaskChannel = VIDEO_TASK_CHANNEL_TYPES.has(currentType)
+  const isDoubaoVideoChannel = currentType === CHANNEL_TYPE_DOUBAO_VIDEO
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -577,6 +583,9 @@ export function ChannelMutateDrawer({
   const responseMappingConfigured = Boolean(
     isVideoTaskChannel && videoTaskProtocolEnabled
   )
+  const videoTaskBillingConfigured = Boolean(
+    isDoubaoVideoChannel && videoTaskDeltaSettlementEnabled === false
+  )
   const extraSettingsConfigured = Boolean(
     currentForceFormat ||
     currentThinkingToContent ||
@@ -613,6 +622,7 @@ export function ChannelMutateDrawer({
     overrideRulesConfigured ||
     videoTaskProtocolConfigured ||
     responseMappingConfigured ||
+    videoTaskBillingConfigured ||
     fieldPassthroughConfigured ||
     extraSettingsConfigured ||
     upstreamModelDetectionConfigured
@@ -640,6 +650,13 @@ export function ChannelMutateDrawer({
       title: t('Video Task Protocol'),
       configured: videoTaskProtocolConfigured,
     })
+    if (isDoubaoVideoChannel) {
+      advancedNavChildren.push({
+        id: ADVANCED_SETTINGS_SECTION_IDS.videoTaskBilling,
+        title: t('Video Task Billing'),
+        configured: videoTaskBillingConfigured,
+      })
+    }
     if (videoTaskProtocolEnabled) {
       advancedNavChildren.push({
         id: ADVANCED_SETTINGS_SECTION_IDS.responseMapping,
@@ -748,9 +765,16 @@ export function ChannelMutateDrawer({
   useEffect(() => {
     if (isEditing && channelData?.data) {
       const defaults = transformChannelToFormDefaults(channelData.data)
+      const shouldOpenAdvancedSettings =
+        readAdvancedSettingsPreference() ||
+        hasAdvancedSettingsValues(defaults) ||
+        defaults.type === CHANNEL_TYPE_DOUBAO_VIDEO
       form.reset(defaults)
-      setAdvancedSettingsOpen(
-        readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
+      setAdvancedSettingsOpen(shouldOpenAdvancedSettings)
+      setExpandedEditorNavItemId(
+        shouldOpenAdvancedSettings
+          ? CHANNEL_EDITOR_SECTION_IDS.advanced
+          : undefined
       )
       // Store initial values for comparison
       initialModelsRef.current = parseModelsString(
@@ -762,11 +786,26 @@ export function ChannelMutateDrawer({
     } else if (!isEditing) {
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       setAdvancedSettingsOpen(false)
+      setExpandedEditorNavItemId(undefined)
+      doubaoVideoAdvancedAutoOpenedRef.current = false
       initialModelsRef.current = []
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
     }
   }, [isEditing, channelData, form])
+
+  useEffect(() => {
+    if (currentType !== CHANNEL_TYPE_DOUBAO_VIDEO) {
+      doubaoVideoAdvancedAutoOpenedRef.current = false
+      return
+    }
+
+    if (doubaoVideoAdvancedAutoOpenedRef.current) return
+
+    doubaoVideoAdvancedAutoOpenedRef.current = true
+    setAdvancedSettingsOpen(true)
+    setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
+  }, [currentType])
 
   // Handle type change - set default values for specific types
   useEffect(() => {
@@ -1098,6 +1137,8 @@ export function ChannelMutateDrawer({
       if (!nextOpen) {
         advancedNavScrollPendingRef.current = false
         setExpandedEditorNavItemId(undefined)
+      } else {
+        setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
       }
       setAdvancedSettingsOpen(nextOpen)
       if (persist && typeof window !== 'undefined') {
@@ -1172,7 +1213,9 @@ export function ChannelMutateDrawer({
         advancedSettingsOpen ? CHANNEL_EDITOR_SECTION_IDS.advanced : undefined
       )
     } else if (!advancedNavScrollPendingRef.current) {
-      setExpandedEditorNavItemId(undefined)
+      setExpandedEditorNavItemId(
+        advancedSettingsOpen ? CHANNEL_EDITOR_SECTION_IDS.advanced : undefined
+      )
     }
   }, [advancedSettingsOpen])
 
@@ -2961,6 +3004,45 @@ export function ChannelMutateDrawer({
                                   />
                                 </div>
                               )}
+                            </div>
+                          )}
+                          {isDoubaoVideoChannel && (
+                            <div
+                              id={
+                                ADVANCED_SETTINGS_SECTION_IDS.videoTaskBilling
+                              }
+                              className='border-border/60 flex scroll-mt-4 flex-col gap-4 border-y py-4'
+                            >
+                              <SubHeading
+                                title={t('Video Task Billing')}
+                                icon={<FileText className='h-3.5 w-3.5' />}
+                              />
+                              <div className='divide-border space-y-0 divide-y border-y'>
+                                <FormField
+                                  control={form.control}
+                                  name='video_task_delta_settlement_enabled'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel>
+                                          {t('Completion delta settlement')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Recalculate successful DoubaoVideo tasks from upstream usage tokens when polling completes; turn this off only for emergency containment because successful tasks will keep the pre-consumed quota.'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value !== false}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+                              </div>
                             </div>
                           )}
                           {isVideoTaskChannel && videoTaskProtocolEnabled && (

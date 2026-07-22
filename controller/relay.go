@@ -582,6 +582,10 @@ func RelayTask(c *gin.Context) {
 		}
 		service.LogTaskConsumption(c, relayInfo)
 
+		deltaSettlementDisabled := false
+		if relayInfo.ChannelMeta != nil && relayInfo.ChannelType == constant.ChannelTypeDoubaoVideo {
+			deltaSettlementDisabled = relayInfo.ChannelOtherSettings.DisableTaskDeltaSettlement
+		}
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
@@ -589,13 +593,14 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios,
-			TaskBilling:     relayInfo.TaskBilling,
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice || relayInfo.TaskBilling != nil,
+			ModelPrice:              relayInfo.PriceData.ModelPrice,
+			GroupRatio:              relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			ModelRatio:              relayInfo.PriceData.ModelRatio,
+			OtherRatios:             relayInfo.PriceData.OtherRatios,
+			TaskBilling:             relayInfo.TaskBilling,
+			OriginModelName:         relayInfo.OriginModelName,
+			PerCallBilling:          common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice || relayInfo.TaskBilling != nil,
+			DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

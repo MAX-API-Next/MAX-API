@@ -78,6 +78,28 @@ func TestBuildTaskQueryURLKeepsFallbackWithoutConfig(t *testing.T) {
 	assert.Equal(t, "https://fallback.example.com/task_abc", got)
 }
 
+func TestParseConfiguredTaskResultReadsUsageTokens(t *testing.T) {
+	taskInfo, ok, err := ParseConfiguredTaskResult([]byte(`{
+		"object": "media.task",
+		"task_id": "task_123",
+		"status": "succeeded",
+		"progress": 100,
+		"result": {
+			"url": "https://example.com/result.mp4"
+		},
+		"usage": {
+			"completion_tokens": 40594,
+			"total_tokens": 40594
+		}
+	}`), dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo})
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, taskInfo)
+	assert.Equal(t, 40594, taskInfo.CompletionTokens)
+	assert.Equal(t, 40594, taskInfo.TotalTokens)
+}
+
 func TestBuildConfiguredTaskPassThroughBodyUsesChannelPassThrough(t *testing.T) {
 	c := newJSONTaskContext(`{
 		"model": "local-model",
