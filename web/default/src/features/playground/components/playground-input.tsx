@@ -57,7 +57,13 @@ import {
 } from '@/components/ai-elements/prompt-input'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
 import { ModelGroupSelector } from '@/components/model-group-selector'
-import type { ModelOption, GroupOption } from '../types'
+import type {
+  GroupOption,
+  ModelOption,
+  ParameterEnabled,
+  PlaygroundConfig,
+} from '../types'
+import { PlaygroundParameterPanel } from './playground-parameter-panel'
 
 interface PlaygroundInputProps {
   onSubmit: (text: string) => void
@@ -74,6 +80,16 @@ interface PlaygroundInputProps {
   onGroupChange: (value: string) => void
   hasMessages?: boolean
   onClearHistory?: () => void
+  config: PlaygroundConfig
+  parameterEnabled: ParameterEnabled
+  onConfigChange: <K extends keyof PlaygroundConfig>(
+    key: K,
+    value: PlaygroundConfig[K]
+  ) => void
+  onParameterEnabledChange: (
+    key: keyof ParameterEnabled,
+    value: boolean
+  ) => void
 }
 
 const suggestions = [
@@ -100,6 +116,7 @@ export function PlaygroundInput({
   onGroupChange,
   hasMessages = false,
   onClearHistory,
+  ...parameterProps
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -193,6 +210,8 @@ export function PlaygroundInput({
               <span className='hidden sm:inline'>{t('Search')}</span>
               <span className='sr-only sm:hidden'>{t('Search')}</span>
             </PromptInputButton>
+
+            <PlaygroundParameterPanel disabled={disabled} {...parameterProps} />
 
             <TooltipProvider delay={300}>
               <Tooltip>

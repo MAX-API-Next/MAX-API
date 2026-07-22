@@ -26,52 +26,53 @@ export const CHANNEL_CAPABILITY_DEFINITIONS = [
   {
     id: 'chat',
     label: 'chat/completions',
-    description: '用于 OpenAI 兼容的聊天与补全接口请求。',
+    description: 'Routes OpenAI-compatible chat and completion requests.',
   },
   {
     id: 'responses',
     label: 'responses',
-    description: '用于 OpenAI Responses 风格接口请求。',
+    description: 'Routes OpenAI Responses API requests.',
   },
   {
     id: 'claude_messages',
     label: 'Claude Messages',
-    description: '用于 Anthropic Messages 兼容接口请求。',
+    description: 'Routes Anthropic Messages-compatible requests.',
   },
   {
     id: 'gemini_native',
     label: 'Gemini native',
-    description: '用于 Gemini 原生 /v1beta 模型路由。',
+    description: 'Routes Gemini native /v1beta model requests.',
   },
   {
     id: 'embeddings',
     label: 'embeddings',
-    description: '用于 embedding 向量接口请求。',
+    description: 'Routes embedding vector requests.',
   },
   {
     id: 'images',
     label: 'images',
-    description: '用于图像生成或图像编辑接口请求。',
+    description: 'Routes image generation and editing requests.',
   },
   {
     id: 'audio',
     label: 'audio',
-    description: '用于语音、转写、翻译或音乐任务接口。',
+    description:
+      'Routes speech, transcription, translation, or music requests.',
   },
   {
     id: 'rerank',
     label: 'rerank',
-    description: '用于搜索重排序接口请求。',
+    description: 'Routes search reranking requests.',
   },
   {
     id: 'video_tasks',
     label: 'video tasks',
-    description: '用于异步视频生成任务接口。',
+    description: 'Routes asynchronous video generation tasks.',
   },
   {
     id: 'model_discovery',
     label: 'model discovery',
-    description: '用于直接从上游拉取模型列表。',
+    description: 'Fetches model lists directly from the upstream provider.',
   },
 ] as const
 
@@ -89,11 +90,11 @@ export const CHANNEL_CAPABILITY_STATUS_LABELS: Record<
   ChannelCapabilityStatus,
   string
 > = {
-  native: '原生支持',
-  compatible: '兼容支持',
-  configurable: '可配置',
-  limited: '有限支持',
-  unsupported: '不支持',
+  native: 'Native support',
+  compatible: 'Compatible support',
+  configurable: 'Configurable',
+  limited: 'Limited support',
+  unsupported: 'Not supported',
 }
 
 export const CHANNEL_CAPABILITY_STATUS_VARIANTS: Record<

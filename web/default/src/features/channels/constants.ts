@@ -81,6 +81,7 @@ export const CHANNEL_TYPES = {
 
 export const CHANNEL_TYPE_XUNFEI = 18
 export const CHANNEL_TYPE_VOLCENGINE = 45
+export const CHANNEL_TYPE_DOUBAO_VIDEO = 54
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
   1, 14, 33, 24, 43, 3, 41, 48, 58, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15, 46,

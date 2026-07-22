@@ -48,6 +48,7 @@ interface MobileColumnMeta {
   mobileTitle?: boolean
   mobileBadge?: boolean
   mobileHidden?: boolean
+  mobileClassName?: string
 }
 
 function getCellMeta<TData>(
@@ -150,7 +151,12 @@ function CompactRow<TData>({ row }: { row: Row<TData> }) {
               <div className='shrink-0'>{renderCellContent(selectCell)}</div>
             )}
             {titleCell && (
-              <div className='min-w-0 flex-1 overflow-hidden text-sm font-medium'>
+              <div
+                className={cn(
+                  'min-w-0 flex-1 overflow-hidden text-sm font-medium [overflow-wrap:anywhere]',
+                  getCellMeta(titleCell)?.mobileClassName
+                )}
+              >
                 {renderCellContent(titleCell)}
               </div>
             )}
@@ -176,7 +182,12 @@ function CompactRow<TData>({ row }: { row: Row<TData> }) {
                     {label}
                   </div>
                 )}
-                <div className='min-w-0 overflow-hidden text-xs'>
+                <div
+                  className={cn(
+                    'min-w-0 overflow-hidden text-xs [overflow-wrap:anywhere]',
+                    getCellMeta(cell)?.mobileClassName
+                  )}
+                >
                   {renderCellContent(cell) ?? '-'}
                 </div>
               </div>
@@ -220,7 +231,13 @@ function FallbackRow<TData>({ row }: { row: Row<TData> }) {
 
         if (!label) {
           return (
-            <div key={cell.id} className='flex justify-end overflow-hidden'>
+            <div
+              key={cell.id}
+              className={cn(
+                'flex min-w-0 justify-end overflow-hidden [overflow-wrap:anywhere]',
+                getCellMeta(cell)?.mobileClassName
+              )}
+            >
               {content}
             </div>
           )
@@ -234,7 +251,12 @@ function FallbackRow<TData>({ row }: { row: Row<TData> }) {
             <span className='text-muted-foreground shrink-0 text-[10px] font-medium select-none'>
               {label}
             </span>
-            <div className='flex min-w-0 flex-1 items-center justify-end overflow-hidden text-xs'>
+            <div
+              className={cn(
+                'flex min-w-0 flex-1 items-center justify-end overflow-hidden text-xs [overflow-wrap:anywhere]',
+                getCellMeta(cell)?.mobileClassName
+              )}
+            >
               {content ?? '-'}
             </div>
           </div>
@@ -254,6 +276,7 @@ function FallbackRow<TData>({ row }: { row: Row<TData> }) {
  * - `mobileTitle`  — card header (left, larger text)
  * - `mobileBadge`  — inline with title (right, e.g. status badge)
  * - `mobileHidden` — hidden on mobile
+ * - `mobileClassName` — value-container layout for long mobile content
  *
  * When mobileTitle or mobileBadge is set on any column, uses a structured
  * two-tier layout: title+badge header, then 2 key fields side-by-side.

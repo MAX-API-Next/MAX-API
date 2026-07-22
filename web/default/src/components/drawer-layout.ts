@@ -90,7 +90,7 @@ export function SideDrawerSectionHeader(props: {
       { className: 'min-w-0 flex-1' },
       createElement(
         'h3',
-        { className: 'text-sm leading-none font-semibold tracking-tight' },
+        { className: 'text-sm leading-none font-semibold' },
         props.title
       ),
       props.description

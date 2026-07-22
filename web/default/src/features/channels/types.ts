@@ -108,6 +108,7 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_removed_models?: string[]
   task_protocol?: string
   task_protocol_config?: TaskProtocolConfig
+  disable_task_delta_settlement?: boolean
   advanced_custom?: AdvancedCustomConfig
 }
 

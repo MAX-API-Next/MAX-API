@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "rsbuild dev",
-    "build": "rsbuild build",
-    "build:check": "tsc -b && rsbuild build",
+    "build": "rsbuild build && node scripts/verify-tailwind-build.mjs",
+    "build:check": "tsc -b && rsbuild build && node scripts/verify-tailwind-build.mjs",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "rsbuild preview",

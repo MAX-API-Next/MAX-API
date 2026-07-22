@@ -329,6 +329,23 @@ export const STATIC_I18N_KEYS = [
   'Param Override',
   'Override request parameters',
 
+  // Playground parameter controls
+  'Caps the response length',
+  'Controls randomness and creativity',
+  'Encourages new topics',
+  'Frequency Penalty',
+  'Keeps compatible responses more repeatable',
+  'Limits token selection to a probability mass',
+  'Max Tokens',
+  'Not Set',
+  'Only enabled parameters are sent with the request.',
+  'Parameter settings',
+  'Presence Penalty',
+  'Reduces repeated wording',
+  'Seed',
+  'Temperature',
+  'Top P',
+
   // Profile / 2FA
   'Backed up',
   'Not backed up',

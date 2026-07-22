@@ -137,7 +137,8 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       meta: {
         label: t('Model Name'),
         mobileTitle: true,
-        className: 'max-w-[28rem] whitespace-normal',
+        cellClassName: 'max-w-[28rem] whitespace-normal',
+        mobileClassName: '[overflow-wrap:anywhere]',
       },
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Model Name')} />
@@ -150,6 +151,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
             variant='neutral'
             copyText={name}
             size='sm'
+            wrap
             className='max-w-[min(100%,24rem)] font-mono'
           />
         )

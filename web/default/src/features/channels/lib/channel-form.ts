@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { z } from 'zod'
 import {
   CHANNEL_STATUS,
+  CHANNEL_TYPE_DOUBAO_VIDEO,
   CHANNEL_TYPE_VOLCENGINE,
   CHANNEL_TYPE_XUNFEI,
   ERROR_MESSAGES,
@@ -246,6 +247,7 @@ export const channelFormSchema = z
     // Video task protocol settings (stored in settings JSON)
     video_task_path_override_enabled: z.boolean().optional(),
     video_task_protocol_enabled: z.boolean().optional(),
+    video_task_delta_settlement_enabled: z.boolean().optional(),
     video_task_submit_path: z.string().optional(),
     video_task_query_path: z.string().optional(),
     video_task_task_id_path: z.string().optional(),
@@ -376,7 +378,6 @@ export const channelFormSchema = z
         )
       }
     }
-
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -437,6 +438,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_ignored_models: '',
   video_task_path_override_enabled: false,
   video_task_protocol_enabled: false,
+  video_task_delta_settlement_enabled: true,
   video_task_submit_path: DEFAULT_VIDEO_TASK_SUBMIT_PATH,
   video_task_query_path: DEFAULT_VIDEO_TASK_QUERY_PATH,
   video_task_task_id_path: DEFAULT_VIDEO_TASK_TASK_ID_PATH,
@@ -587,6 +589,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let videoTaskPathOverrideEnabled = false
   let videoTaskProtocolEnabled = false
+  let videoTaskDeltaSettlementEnabled = true
   let videoTaskSubmitPath = DEFAULT_VIDEO_TASK_SUBMIT_PATH
   let videoTaskQueryPath = DEFAULT_VIDEO_TASK_QUERY_PATH
   let videoTaskIDPath = DEFAULT_VIDEO_TASK_TASK_ID_PATH
@@ -624,6 +627,8 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      videoTaskDeltaSettlementEnabled =
+        parsed.disable_task_delta_settlement !== true
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -743,6 +748,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     video_task_path_override_enabled: videoTaskPathOverrideEnabled,
     video_task_protocol_enabled: videoTaskProtocolEnabled,
+    video_task_delta_settlement_enabled: videoTaskDeltaSettlementEnabled,
     video_task_submit_path: videoTaskSubmitPath,
     video_task_query_path: videoTaskQueryPath,
     video_task_task_id_path: videoTaskIDPath,
@@ -880,6 +886,16 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   }
 
   const isVideoTaskChannel = VIDEO_TASK_CHANNEL_TYPES.has(formData.type)
+  const isDoubaoVideoChannel = formData.type === CHANNEL_TYPE_DOUBAO_VIDEO
+  if (
+    isDoubaoVideoChannel &&
+    formData.video_task_delta_settlement_enabled === false
+  ) {
+    settingsObj.disable_task_delta_settlement = true
+  } else if ('disable_task_delta_settlement' in settingsObj) {
+    delete settingsObj.disable_task_delta_settlement
+  }
+
   const enableVideoTaskProtocol =
     isVideoTaskChannel && formData.video_task_protocol_enabled === true
   const enableVideoTaskPathOverride =

@@ -34,7 +34,7 @@ export function ChannelAuthSection(props: ChannelAuthSectionProps) {
           className='text-muted-foreground h-3.5 w-3.5'
           aria-hidden='true'
         />
-        <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
+        <h4 className='text-muted-foreground text-xs font-medium uppercase'>
           {t('Authentication')}
         </h4>
       </div>

@@ -66,7 +66,14 @@ export function TableSkeleton<TData>({
               SKELETON_WIDTHS.length
 
             return (
-              <TableCell key={column.id} className='py-3'>
+              <TableCell
+                key={column.id}
+                className={cn(
+                  'py-3',
+                  column.columnDef.meta?.className,
+                  column.columnDef.meta?.cellClassName
+                )}
+              >
                 <Skeleton
                   className={cn(
                     'h-4 rounded-sm',

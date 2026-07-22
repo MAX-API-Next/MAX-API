@@ -74,7 +74,7 @@ export function FailReasonDialog({
                     <Copy className='size-4' />
                   )}
                 </Button>
-                <p className='overflow-wrap-anywhere pr-10 text-sm leading-relaxed break-all whitespace-pre-wrap text-red-600'>
+                <p className='pr-10 text-sm leading-relaxed [overflow-wrap:anywhere] break-all whitespace-pre-wrap text-red-600'>
                   {failReason || '-'}
                 </p>
               </div>
