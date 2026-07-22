@@ -83,6 +83,14 @@ func ListSystemInstances() ([]*SystemInstance, error) {
 	return instances, err
 }
 
+func DeleteStaleSystemInstances(now int64) (int64, error) {
+	if now == 0 {
+		now = common.GetTimestamp()
+	}
+	result := DB.Where("last_seen_at < ?", now-SystemInstanceStaleAfterSeconds).Delete(&SystemInstance{})
+	return result.RowsAffected, result.Error
+}
+
 func DeleteStaleSystemInstance(nodeName string, now int64) error {
 	nodeName = strings.TrimSpace(nodeName)
 	if nodeName == "" {

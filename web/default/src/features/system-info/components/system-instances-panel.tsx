@@ -23,8 +23,6 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import { ErrorState } from '@/components/error-state'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -41,7 +39,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { deleteSystemInstance, listSystemInstances } from '../api'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { ErrorState } from '@/components/error-state'
+import {
+  deleteStaleSystemInstances,
+  deleteSystemInstance,
+  listSystemInstances,
+} from '../api'
 import type { SystemInstance, SystemInstanceStatus } from '../types'
 
 const INSTANCE_POLL_INTERVAL_MS = 30_000
@@ -101,10 +105,12 @@ function RuntimeCell({ instance }: { instance: SystemInstance }) {
 function SystemInstancesTable({
   instances,
   deletingNodeName,
+  deleteDisabled,
   onDeleteRequest,
 }: {
   instances: SystemInstance[]
   deletingNodeName?: string | null
+  deleteDisabled?: boolean
   onDeleteRequest: (instance: SystemInstance) => void
 }) {
   const { t, i18n } = useTranslation()
@@ -147,7 +153,10 @@ function SystemInstancesTable({
                 <TableCell className='py-3'>
                   <Badge
                     variant='secondary'
-                    className={cn('capitalize', STATUS_CLASS_NAME[instance.status])}
+                    className={cn(
+                      'capitalize',
+                      STATUS_CLASS_NAME[instance.status]
+                    )}
                   >
                     {t(getStatusLabel(instance.status))}
                   </Badge>
@@ -157,7 +166,9 @@ function SystemInstancesTable({
                 </TableCell>
                 <TableCell className='text-muted-foreground py-3 text-xs'>
                   <div className='grid gap-1 font-mono'>
-                    <span>CPU {formatPercent(resources?.cpu?.usage_percent)}</span>
+                    <span>
+                      CPU {formatPercent(resources?.cpu?.usage_percent)}
+                    </span>
                     <span>
                       MEM {formatPercent(resources?.memory?.usage_percent)}
                     </span>
@@ -193,13 +204,16 @@ function SystemInstancesTable({
                             variant='ghost'
                             size='icon'
                             onClick={() => onDeleteRequest(instance)}
-                            disabled={isDeleting}
+                            disabled={isDeleting || deleteDisabled}
                             aria-label={t('Delete stale instance')}
                           />
                         }
                       >
                         {isDeleting ? (
-                          <Loader2 className='animate-spin' aria-hidden='true' />
+                          <Loader2
+                            className='animate-spin'
+                            aria-hidden='true'
+                          />
                         ) : (
                           <Trash2 aria-hidden='true' />
                         )}
@@ -225,7 +239,9 @@ export function SystemInstancesPanel() {
   const { t } = useTranslation()
   const [instanceToDelete, setInstanceToDelete] =
     useState<SystemInstance | null>(null)
+  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false)
   const [deletingNodeName, setDeletingNodeName] = useState<string | null>(null)
+  const [deletingAllStale, setDeletingAllStale] = useState(false)
   const instancesQuery = useQuery({
     queryKey: ['system-info', 'instances'],
     queryFn: async () => {
@@ -240,11 +256,15 @@ export function SystemInstancesPanel() {
   })
 
   const instances = instancesQuery.data ?? []
+  const staleInstances = instances.filter(
+    (instance) => instance.status === 'stale'
+  )
   const loading = instancesQuery.isLoading
   const refreshing = instancesQuery.isFetching && !loading
   const deleteNodeName = instanceToDelete
     ? getNodeName(instanceToDelete)
     : undefined
+  const isDeletingAnyInstance = Boolean(deletingNodeName) || deletingAllStale
 
   const handleConfirmDelete = async () => {
     if (!instanceToDelete) return
@@ -262,11 +282,32 @@ export function SystemInstancesPanel() {
       setInstanceToDelete(null)
       await instancesQuery.refetch()
     } catch (_error: unknown) {
-      toast.error(
-        _error instanceof Error ? _error.message : t('Delete failed')
-      )
+      toast.error(_error instanceof Error ? _error.message : t('Delete failed'))
     } finally {
       setDeletingNodeName(null)
+    }
+  }
+
+  const handleConfirmDeleteAll = async () => {
+    setDeletingAllStale(true)
+    try {
+      const res = await deleteStaleSystemInstances()
+      if (!res.success) {
+        toast.error(t(res.message || 'Delete failed'))
+        return
+      }
+
+      toast.success(
+        t('Deleted {{count}} stale instances', {
+          count: res.data?.deleted_count ?? 0,
+        })
+      )
+      setDeleteAllConfirmOpen(false)
+      await instancesQuery.refetch()
+    } catch (_error: unknown) {
+      toast.error(_error instanceof Error ? _error.message : t('Delete failed'))
+    } finally {
+      setDeletingAllStale(false)
     }
   }
 
@@ -287,24 +328,46 @@ export function SystemInstancesPanel() {
               </p>
             </div>
           </div>
-          <Button
-            type='button'
-            variant='outline'
-            size='sm'
-            onClick={() => void instancesQuery.refetch()}
-            disabled={instancesQuery.isFetching}
-          >
-            <RefreshCw
-              data-icon='inline-start'
-              className={cn(refreshing && 'animate-spin')}
-              aria-hidden='true'
-            />
-            {refreshing ? t('Refreshing...') : t('Refresh')}
-          </Button>
+          <div className='flex shrink-0 flex-wrap items-center gap-2 sm:justify-end'>
+            {staleInstances.length > 0 ? (
+              <Button
+                type='button'
+                variant='destructive'
+                size='sm'
+                onClick={() => setDeleteAllConfirmOpen(true)}
+                disabled={isDeletingAnyInstance}
+              >
+                {deletingAllStale ? (
+                  <Loader2
+                    data-icon='inline-start'
+                    className='animate-spin'
+                    aria-hidden='true'
+                  />
+                ) : (
+                  <Trash2 data-icon='inline-start' aria-hidden='true' />
+                )}
+                {t('Delete all stale')}
+              </Button>
+            ) : null}
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void instancesQuery.refetch()}
+              disabled={instancesQuery.isFetching || isDeletingAnyInstance}
+            >
+              <RefreshCw
+                data-icon='inline-start'
+                className={cn(refreshing && 'animate-spin')}
+                aria-hidden='true'
+              />
+              {refreshing ? t('Refreshing...') : t('Refresh')}
+            </Button>
+          </div>
         </div>
 
         {loading ? (
-          <div className='space-y-2 p-4 sm:p-5'>
+          <div className='flex flex-col gap-2 p-4 sm:p-5'>
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className='h-9 w-full rounded-md' />
             ))}
@@ -329,11 +392,25 @@ export function SystemInstancesPanel() {
             <SystemInstancesTable
               instances={instances}
               deletingNodeName={deletingNodeName}
+              deleteDisabled={deletingAllStale}
               onDeleteRequest={setInstanceToDelete}
             />
           </div>
         )}
       </section>
+      <ConfirmDialog
+        open={deleteAllConfirmOpen}
+        onOpenChange={setDeleteAllConfirmOpen}
+        title={t('Delete stale instances')}
+        desc={t(
+          'Delete {{count}} stale instance records? Online instances will not be deleted.',
+          { count: staleInstances.length }
+        )}
+        destructive
+        isLoading={deletingAllStale}
+        confirmText={deletingAllStale ? t('Deleting...') : t('Delete')}
+        handleConfirm={handleConfirmDeleteAll}
+      />
       <ConfirmDialog
         open={Boolean(instanceToDelete)}
         onOpenChange={(nextOpen) => {
@@ -346,7 +423,7 @@ export function SystemInstancesPanel() {
         )}
         destructive
         isLoading={Boolean(deletingNodeName)}
-        confirmText={t('Delete')}
+        confirmText={deletingNodeName ? t('Deleting...') : t('Delete')}
         handleConfirm={handleConfirmDelete}
       />
     </>

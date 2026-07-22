@@ -68,4 +68,7 @@ export type SystemInstanceListResponse = {
 export type SystemInstanceDeleteResponse = {
   success: boolean
   message: string
+  data?: {
+    deleted_count?: number
+  }
 }

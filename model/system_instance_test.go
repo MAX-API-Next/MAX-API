@@ -34,6 +34,36 @@ func TestDeleteStaleSystemInstanceDeletesOnlyStaleNodes(t *testing.T) {
 	require.EqualValues(t, 1, count)
 }
 
+func TestDeleteStaleSystemInstancesDeletesOnlyStaleNodes(t *testing.T) {
+	truncateTables(t)
+
+	now := int64(10_000)
+	require.NoError(t, DB.Create(&SystemInstance{
+		NodeName:   "stale-node-a",
+		LastSeenAt: now - SystemInstanceStaleAfterSeconds - 1,
+	}).Error)
+	require.NoError(t, DB.Create(&SystemInstance{
+		NodeName:   "stale-node-b",
+		LastSeenAt: now - SystemInstanceStaleAfterSeconds - 20,
+	}).Error)
+	require.NoError(t, DB.Create(&SystemInstance{
+		NodeName:   "boundary-node",
+		LastSeenAt: now - SystemInstanceStaleAfterSeconds,
+	}).Error)
+	require.NoError(t, DB.Create(&SystemInstance{
+		NodeName:   "online-node",
+		LastSeenAt: now,
+	}).Error)
+
+	deletedCount, err := DeleteStaleSystemInstances(now)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deletedCount)
+
+	var nodeNames []string
+	require.NoError(t, DB.Model(&SystemInstance{}).Order("node_name asc").Pluck("node_name", &nodeNames).Error)
+	require.Equal(t, []string{"boundary-node", "online-node"}, nodeNames)
+}
+
 func TestDeleteStaleSystemInstanceMissingNode(t *testing.T) {
 	truncateTables(t)
 
