@@ -45,3 +45,15 @@ func DeleteSystemInstance(c *gin.Context) {
 
 	common.ApiSuccess(c, nil)
 }
+
+func DeleteStaleSystemInstances(c *gin.Context) {
+	deletedCount, err := model.DeleteStaleSystemInstances(common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"deleted_count": deletedCount,
+	})
+}

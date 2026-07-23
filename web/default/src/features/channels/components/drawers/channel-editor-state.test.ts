@@ -45,4 +45,20 @@ describe('model mapping guardrail', () => {
     assert.equal(getModelMappingGuardrail('[]', []).invalidJson, true)
     assert.equal(getModelMappingGuardrail('', []).invalidJson, false)
   })
+
+  test('rejects mappings with non-string targets', () => {
+    const guardrail = getModelMappingGuardrail(
+      JSON.stringify({
+        valid: 'upstream-model',
+        number: 123,
+        object: { model: 'upstream-model' },
+      }),
+      ['valid', 'upstream-model']
+    )
+
+    assert.equal(guardrail.invalidJson, true)
+    assert.deepEqual(guardrail.entries, [])
+    assert.deepEqual(guardrail.missingSourceModels, [])
+    assert.deepEqual(guardrail.exposedTargetModels, [])
+  })
 })

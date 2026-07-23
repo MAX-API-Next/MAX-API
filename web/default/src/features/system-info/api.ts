@@ -36,3 +36,11 @@ export async function deleteSystemInstance(nodeName: string) {
   )
   return res.data
 }
+
+export async function deleteStaleSystemInstances() {
+  const res = await api.delete<SystemInstanceDeleteResponse>(
+    '/api/system-info/stale-instances',
+    { skipBusinessError: true }
+  )
+  return res.data
+}

@@ -48,17 +48,26 @@ export function getModelMappingGuardrail(
       return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
     }
 
+    let hasInvalidTarget = false
     const entries = Object.entries(parsed).reduce<
       Array<{ source: string; target: string }>
     >((acc, [rawSource, rawTarget]) => {
       const source = String(rawSource).trim()
-      const target = String(rawTarget ?? '').trim()
+      if (typeof rawTarget !== 'string') {
+        hasInvalidTarget = true
+        return acc
+      }
+      const target = rawTarget.trim()
 
       if (source && target) {
         acc.push({ source, target })
       }
       return acc
     }, [])
+
+    if (hasInvalidTarget) {
+      return { ...createEmptyModelMappingGuardrail(), invalidJson: true }
+    }
 
     const publishedModelSet = new Set(publishedModels)
     const missingSourceModels = Array.from(

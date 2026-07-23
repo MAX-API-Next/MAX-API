@@ -88,7 +88,7 @@ func TestParseConfiguredTaskResultReadsUsageTokens(t *testing.T) {
 			"url": "https://example.com/result.mp4"
 		},
 		"usage": {
-			"completion_tokens": 40594,
+			"completion_tokens": 12345,
 			"total_tokens": 40594
 		}
 	}`), dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo})
@@ -96,7 +96,7 @@ func TestParseConfiguredTaskResultReadsUsageTokens(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, taskInfo)
-	assert.Equal(t, 40594, taskInfo.CompletionTokens)
+	assert.Equal(t, 12345, taskInfo.CompletionTokens)
 	assert.Equal(t, 40594, taskInfo.TotalTokens)
 }
 
