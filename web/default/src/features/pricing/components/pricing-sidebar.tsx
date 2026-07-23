@@ -192,29 +192,63 @@ function AutoRouteGroupIntro(props: {
             'Auto route groups are selectable aliases that point to administrator-configured billing groups.'
           )}
         </p>
-        <div className='flex flex-col gap-1.5'>
-          {routeChains.map(({ route, groups }) => (
-            <div key={route.key} className='flex flex-wrap items-center gap-1'>
-              <GroupBadge
-                group={route.key}
-                label={getAutoRouteLabelOverride(route)}
+        <Collapsible>
+          <CollapsibleTrigger
+            render={
+              <Button
+                type='button'
+                variant='outline'
                 size='sm'
+                className='group h-auto w-full justify-between gap-2 px-2.5 py-2 text-left'
               />
-              <span className='text-muted-foreground/40'>→</span>
-              {groups.map((group, index) => (
-                <span
-                  key={`${route.key}-${group}-${index}`}
-                  className='flex items-center gap-1'
+            }
+          >
+            <span className='flex min-w-0 items-center gap-2'>
+              <span className='text-foreground truncate font-medium'>
+                {t('Auto route chains')}
+              </span>
+              <Badge
+                variant='secondary'
+                className='h-5 px-1.5 text-[10px] tabular-nums'
+              >
+                {routeChains.length}
+              </Badge>
+            </span>
+            <ChevronDown
+              data-icon='inline-end'
+              className='text-muted-foreground shrink-0 transition-transform group-data-[panel-open]:rotate-180'
+              aria-hidden='true'
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent className='mt-2'>
+            <div className='bg-background/70 flex max-h-52 flex-col gap-1.5 overflow-y-auto overscroll-contain rounded-md border px-2.5 py-2'>
+              {routeChains.map(({ route, groups }) => (
+                <div
+                  key={route.key}
+                  className='flex flex-wrap items-center gap-1'
                 >
-                  <GroupBadge group={group} size='sm' />
-                  {index < groups.length - 1 && (
-                    <span className='text-muted-foreground/40'>→</span>
-                  )}
-                </span>
+                  <GroupBadge
+                    group={route.key}
+                    label={getAutoRouteLabelOverride(route)}
+                    size='sm'
+                  />
+                  <span className='text-muted-foreground/40'>→</span>
+                  {groups.map((group, index) => (
+                    <span
+                      key={`${route.key}-${group}-${index}`}
+                      className='flex items-center gap-1'
+                    >
+                      <GroupBadge group={group} size='sm' />
+                      {index < groups.length - 1 && (
+                        <span className='text-muted-foreground/40'>→</span>
+                      )}
+                    </span>
+                  ))}
+                </div>
               ))}
             </div>
-          ))}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
         <p>
           {t(
             'Billing and group ratios are calculated from the real group that handles the request.'
