@@ -1054,9 +1054,6 @@ func applyNonZeroUserUpdateValues(updates map[string]interface{}, newUser User) 
 	if newUser.TelegramId != "" {
 		updates["telegram_id"] = newUser.TelegramId
 	}
-	if newUser.AccessToken != nil {
-		updates["access_token"] = newUser.AccessToken
-	}
 	if newUser.Group != "" {
 		updates["group"] = newUser.Group
 	}
@@ -1154,7 +1151,6 @@ func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current Use
 		"oidc_id":          current.OidcId,
 		"wechat_id":        current.WeChatId,
 		"telegram_id":      current.TelegramId,
-		"access_token":     current.AccessToken,
 		"group":            current.Group,
 		"aff_code":         current.AffCode,
 		"aff_count":        current.AffCount,

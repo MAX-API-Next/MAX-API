@@ -1102,6 +1102,17 @@ func TestAccessTokenUpdateDoesNotWaitForOAuthIdentityMigrationLock(t *testing.T)
 	assert.Equal(t, "after-token", stored.GetAccessToken())
 }
 
+func TestPartialUserUpdateValuesDoNotWriteUnspecifiedAccessToken(t *testing.T) {
+	current := User{Id: 232, Username: "partial-token-current", DisplayName: "before", Status: common.UserStatusEnabled}
+	current.SetAccessToken("current-token")
+	newUser := User{Id: current.Id, DisplayName: "after"}
+
+	updates := buildUserUpdateValues(current, newUser, false, UserUpdateFieldDisplayName)
+
+	assert.Equal(t, "after", updates["display_name"])
+	assert.NotContains(t, updates, "access_token")
+}
+
 func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	setupUserUpdateTestState(t)
 
@@ -1115,6 +1126,7 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 		UsedQuota:    20,
 		RequestCount: 3,
 	}
+	user.SetAccessToken("stale-token")
 	require.NoError(t, DB.Create(&user).Error)
 
 	staleUser, err := GetUserById(user.Id, true)
@@ -1124,6 +1136,7 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 		"quota":         gorm.Expr("quota - ?", 400),
 		"used_quota":    gorm.Expr("used_quota + ?", 400),
 		"request_count": gorm.Expr("request_count + ?", 1),
+		"access_token":  "fresh-token",
 	}).Error)
 
 	staleUser.DisplayName = "after"
@@ -1135,6 +1148,7 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	assert.EqualValues(t, 600, got.Quota)
 	assert.EqualValues(t, 420, got.UsedQuota)
 	assert.Equal(t, 4, got.RequestCount)
+	assert.Equal(t, "fresh-token", got.GetAccessToken())
 }
 
 func TestUserUpdatePersistsZeroValueProfileFields(t *testing.T) {
