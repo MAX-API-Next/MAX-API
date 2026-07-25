@@ -24,6 +24,7 @@ import {
   type SystemConfig,
   DEFAULT_CURRENCY_CONFIG,
 } from '@/stores/system-config-store'
+import { getStatus } from '@/lib/api'
 import {
   DEFAULT_SYSTEM_NAME,
   DEFAULT_LOGO,
@@ -36,21 +37,18 @@ interface UseSystemConfigOptions {
   autoLoad?: boolean
 }
 
-interface StatusApiResponse {
-  success: boolean
-  data: {
-    system_name?: string
-    logo?: string
-    footer_html?: string
-    demo_site_enabled?: boolean
-    display_token_stat_enabled?: boolean
-    display_in_currency?: boolean
-    quota_display_type?: CurrencyDisplayType
-    quota_per_unit?: number
-    usd_exchange_rate?: number
-    custom_currency_symbol?: string
-    custom_currency_exchange_rate?: number
-  }
+type StatusData = {
+  system_name?: string
+  logo?: string
+  footer_html?: string
+  demo_site_enabled?: boolean
+  display_token_stat_enabled?: boolean
+  display_in_currency?: boolean
+  quota_display_type?: CurrencyDisplayType
+  quota_per_unit?: number
+  usd_exchange_rate?: number
+  custom_currency_symbol?: string
+  custom_currency_exchange_rate?: number
 }
 
 function toNumber(value: unknown, fallback: number): number {
@@ -66,7 +64,7 @@ function toNumber(value: unknown, fallback: number): number {
  * Map `/api/status` response data to our persisted system config structure
  */
 export function mapStatusDataToConfig(
-  data: StatusApiResponse['data'] | undefined
+  data: StatusData | undefined
 ): Partial<SystemConfig> {
   if (!data) return {}
 
@@ -107,13 +105,9 @@ export function mapStatusDataToConfig(
 
 // Fetch system config from API
 async function fetchSystemConfig(): Promise<Partial<SystemConfig>> {
-  const response = await fetch('/api/status')
-  if (!response.ok) throw new Error('Failed to fetch status')
-
-  const data: StatusApiResponse = await response.json()
-  if (!data.success) throw new Error('API returned error')
-
-  return mapStatusDataToConfig(data.data)
+  const status = await getStatus()
+  if (!status) throw new Error('Failed to fetch status')
+  return mapStatusDataToConfig(status as StatusData)
 }
 
 // Preload image and return cleanup function
