@@ -927,9 +927,16 @@ func (user *User) Update(updatePassword bool) error {
 }
 
 func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
-	if err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
+	update := func(db *gorm.DB) error {
 		return user.updateWithTx(db, updatePassword, fields)
-	}); err != nil {
+	}
+	var err error
+	if isAccessTokenOnlyUserUpdate(updatePassword, fields) {
+		err = update(DB)
+	} else {
+		err = withUserOAuthIdentityMutationLock(DB, update)
+	}
+	if err != nil {
 		return err
 	}
 	if err := updateUserCache(*user); err != nil {
@@ -944,6 +951,10 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 
 func (user *User) UpdateFieldsWithTx(tx *gorm.DB, updatePassword bool, fields ...UserUpdateField) error {
 	return user.updateWithTx(tx, updatePassword, fields)
+}
+
+func isAccessTokenOnlyUserUpdate(updatePassword bool, fields []UserUpdateField) bool {
+	return !updatePassword && len(fields) == 1 && fields[0] == UserUpdateFieldAccessToken
 }
 
 func (user *User) updateWithTx(tx *gorm.DB, updatePassword bool, fields []UserUpdateField) error {
@@ -989,6 +1000,11 @@ func validateOAuthIdentityUpdateValues(updates map[string]interface{}) error {
 
 func buildUserUpdateValues(current User, newUser User, updatePassword bool, fields ...UserUpdateField) map[string]interface{} {
 	updates := map[string]interface{}{}
+
+	if isAccessTokenOnlyUserUpdate(updatePassword, fields) {
+		updates["access_token"] = newUser.AccessToken
+		return updates
+	}
 
 	if len(fields) > 0 {
 		for _, field := range fields {
@@ -1037,9 +1053,6 @@ func applyNonZeroUserUpdateValues(updates map[string]interface{}, newUser User) 
 	}
 	if newUser.TelegramId != "" {
 		updates["telegram_id"] = newUser.TelegramId
-	}
-	if newUser.AccessToken != nil {
-		updates["access_token"] = newUser.AccessToken
 	}
 	if newUser.Group != "" {
 		updates["group"] = newUser.Group
@@ -1138,7 +1151,6 @@ func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current Use
 		"oidc_id":          current.OidcId,
 		"wechat_id":        current.WeChatId,
 		"telegram_id":      current.TelegramId,
-		"access_token":     current.AccessToken,
 		"group":            current.Group,
 		"aff_code":         current.AffCode,
 		"aff_count":        current.AffCount,
