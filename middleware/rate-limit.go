@@ -11,12 +11,15 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/gin-gonic/gin"
 )
 
 var inMemoryRateLimiter common.InMemoryRateLimiter
 
 var timeFormat = "2006-01-02T15:04:05.000Z"
+
+const rateLimitRedisTimeout = 500 * time.Millisecond
 
 var defNext = func(c *gin.Context) {
 	c.Next()
@@ -92,27 +95,22 @@ func applyRateLimit(c *gin.Context, maxRequestNum int, duration int64, key strin
 }
 
 func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, key string, policy string) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), rateLimitRedisTimeout)
+	defer cancel()
 	result, err := common.RDB.Eval(ctx, rollingWindowRateLimitScript, []string{key}, duration*1000, maxRequestNum).Result()
 	if err != nil {
-		fmt.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+		logRedisRateLimitFailure(c, policy, "evaluation", err)
 		return
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) != 2 {
-		fmt.Println("unexpected Redis rate limit response")
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+		logRedisRateLimitFailure(c, policy, "response", fmt.Errorf("unexpected result type %T", result))
 		return
 	}
 	allowed, err := redisRateLimitInt(values[0])
 	if err != nil {
-		fmt.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+		logRedisRateLimitFailure(c, policy, "allowed value", err)
 		return
 	}
 	if allowed == 1 {
@@ -120,15 +118,17 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, key str
 	}
 	retryAfter, err := redisRateLimitInt(values[1])
 	if err != nil {
-		fmt.Println(err.Error())
-		c.Status(http.StatusInternalServerError)
-		c.Abort()
+		logRedisRateLimitFailure(c, policy, "retry value", err)
 		return
 	}
 	if retryAfter < 1 {
 		retryAfter = 1
 	}
 	abortRateLimited(c, maxRequestNum, time.Duration(retryAfter)*time.Second, policy)
+}
+
+func logRedisRateLimitFailure(c *gin.Context, policy string, stage string, err error) {
+	logger.LogError(c.Request.Context(), fmt.Sprintf("rate limit Redis %s failed for policy %s; request allowed: %v", stage, policy, err))
 }
 
 func redisRateLimitInt(value interface{}) (int64, error) {

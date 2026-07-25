@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -280,4 +281,83 @@ func TestRedisRateLimitIsAtomicUnderConcurrentRequests(t *testing.T) {
 		<-done
 	}
 	require.Equal(t, int32(5), atomic.LoadInt32(&allowed))
+}
+
+func TestRedisRateLimitFailureFailsOpen(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	address := server.Addr()
+	server.Close()
+
+	oldRedisEnabled := common.RedisEnabled
+	oldRDB := common.RDB
+	common.RedisEnabled = true
+	common.RDB = redis.NewClient(&redis.Options{
+		Addr:        address,
+		DialTimeout: 50 * time.Millisecond,
+		MaxRetries:  -1,
+	})
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RedisEnabled = oldRedisEnabled
+		common.RDB = oldRDB
+	})
+
+	engine := gin.New()
+	engine.GET("/", rateLimitFactory(1, 60, "redis-failure-test"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+}
+
+func TestRedisRateLimitUsesBoundedTimeoutAndFailsOpen(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			accepted <- connection
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case connection := <-accepted:
+			_ = connection.Close()
+		default:
+		}
+	})
+
+	oldRedisEnabled := common.RedisEnabled
+	oldRDB := common.RDB
+	common.RedisEnabled = true
+	common.RDB = redis.NewClient(&redis.Options{
+		Addr:         listener.Addr().String(),
+		DialTimeout:  100 * time.Millisecond,
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+		MaxRetries:   -1,
+	})
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RedisEnabled = oldRedisEnabled
+		common.RDB = oldRDB
+	})
+
+	engine := gin.New()
+	engine.GET("/", rateLimitFactory(1, 60, "redis-timeout-test"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	startedAt := time.Now()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	require.Less(t, time.Since(startedAt), time.Second)
+	require.Equal(t, http.StatusNoContent, recorder.Code)
 }
