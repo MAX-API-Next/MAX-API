@@ -225,9 +225,17 @@ var (
 	GlobalWebRateLimitNum      int
 	GlobalWebRateLimitDuration int64
 
-	CriticalRateLimitEnable   bool
-	CriticalRateLimitNum            = 20
-	CriticalRateLimitDuration int64 = 20 * 60
+	CriticalRateLimitEnable        bool
+	CriticalRateLimitNum                 = 20
+	CriticalRateLimitDuration      int64 = 20 * 60
+	CriticalRouteRateLimitNum            = 20
+	CriticalRouteRateLimitDuration int64 = 20 * 60
+
+	// Password login is limited by account as well as the shared API bucket.
+	// This prevents a shared NAT address from making unrelated users unable to log in.
+	LoginRateLimitEnable   bool
+	LoginRateLimitNum            = 10
+	LoginRateLimitDuration int64 = 15 * 60
 
 	UploadRateLimitNum            = 10
 	UploadRateLimitDuration int64 = 60

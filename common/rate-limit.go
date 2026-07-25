@@ -43,10 +43,17 @@ func (l *InMemoryRateLimiter) clearExpiredItems() {
 
 // Request parameter duration's unit is seconds
 func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration int64) bool {
+	allowed, _ := l.RequestWithRetry(key, maxRequestNum, duration)
+	return allowed
+}
+
+// RequestWithRetry records a request and returns the approximate time until
+// the oldest request leaves the window when the request is rejected.
+func (l *InMemoryRateLimiter) RequestWithRetry(key string, maxRequestNum int, duration int64) (bool, time.Duration) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if maxRequestNum <= 0 {
-		return true
+		return true, 0
 	}
 	// [old <-- new]
 	queue, ok := l.store[key]
@@ -54,14 +61,18 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 	if ok {
 		if len(*queue) < maxRequestNum {
 			*queue = append(*queue, now)
-			return true
+			return true, 0
 		} else {
 			if now-(*queue)[0] >= duration {
 				*queue = (*queue)[1:]
 				*queue = append(*queue, now)
-				return true
+				return true, 0
 			} else {
-				return false
+				waitSeconds := duration - (now - (*queue)[0])
+				if waitSeconds < 1 {
+					waitSeconds = 1
+				}
+				return false, time.Duration(waitSeconds) * time.Second
 			}
 		}
 	} else {
@@ -69,7 +80,7 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 		l.store[key] = &s
 		*(l.store[key]) = append(*(l.store[key]), now)
 	}
-	return true
+	return true, 0
 }
 
 func (l *InMemoryRateLimiter) Allow(key string, maxRequestNum int, duration int64) bool {

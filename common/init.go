@@ -138,6 +138,12 @@ func InitEnv() {
 	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
 	CriticalRateLimitNum = GetEnvOrDefault("CRITICAL_RATE_LIMIT", 20)
 	CriticalRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", 20*60))
+	CriticalRouteRateLimitNum = GetEnvOrDefault("CRITICAL_ROUTE_RATE_LIMIT", 20)
+	CriticalRouteRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_ROUTE_RATE_LIMIT_DURATION", 20*60))
+
+	LoginRateLimitEnable = GetEnvOrDefaultBool("LOGIN_RATE_LIMIT_ENABLE", true)
+	LoginRateLimitNum = GetEnvOrDefault("LOGIN_RATE_LIMIT", 10)
+	LoginRateLimitDuration = int64(GetEnvOrDefault("LOGIN_RATE_LIMIT_DURATION", 15*60))
 
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
