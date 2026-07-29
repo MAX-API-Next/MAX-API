@@ -73,7 +73,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	if info.PersistedTaskID > 0 {
 		var task model.Task
 		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
-			return nil, taskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
+			return nil, TaskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
 		}
 		fresh := model.InitTask(platform, info)
 		task.Platform = platform
@@ -85,7 +85,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		task.Quota = info.PriceData.Quota
 		populateTaskBillingMetadata(&task, info)
 		if err := task.Update(); err != nil {
-			return nil, taskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
+			return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
 		}
 		return &task, nil
 	}
@@ -95,13 +95,13 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	task.PrivateData.AwaitingUpstreamID = true
 	populateTaskBillingMetadata(task, info)
 	if err := task.Insert(); err != nil {
-		return nil, taskPersistenceError(err, "persist_task_failed", "failed to persist task")
+		return nil, TaskPersistenceError(err, "persist_task_failed", "failed to persist task")
 	}
 	info.PersistedTaskID = task.ID
 	return task, nil
 }
 
-func taskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
+func TaskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
 	common.SysLog(fmt.Sprintf("%s: %s", code, err.Error()))
 	return service.TaskErrorWrapperLocal(errors.New(safeMessage), code, http.StatusInternalServerError)
 }
@@ -324,6 +324,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
+		if resp.Body != nil {
+			defer resp.Body.Close()
+		}
 		responseBody, _ := io.ReadAll(resp.Body)
 		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 		return nil, mapUpstreamTaskError(c, taskErr)

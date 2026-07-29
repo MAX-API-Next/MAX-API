@@ -308,7 +308,7 @@ func TestSetTaskOtherRatioHeadersUsesFinalRatios(t *testing.T) {
 }
 
 func TestTaskPersistenceErrorReturnsSafeClientMessage(t *testing.T) {
-	taskErr := taskPersistenceError(errors.New("sql: failed near secret_table"), "persist_task_failed", "failed to persist task")
+	taskErr := TaskPersistenceError(errors.New("sql: failed near secret_table"), "persist_task_failed", "failed to persist task")
 
 	require.NotNil(t, taskErr)
 	assert.Equal(t, "persist_task_failed", taskErr.Code)

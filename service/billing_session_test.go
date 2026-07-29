@@ -602,3 +602,50 @@ func TestBillingSessionRefundUsesDurableOperation(t *testing.T) {
 	require.NoError(t, model.DB.Where("operation_key = ?", "request:durable-refund-request:finalize").First(&settlement).Error)
 	require.Equal(t, "applied", settlement.Status)
 }
+
+func TestBillingSessionDurableSettleEffectConflictDoesNotRemainRefundable(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 83, 84
+	const requestID = "durable-effect-conflict-request"
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "durable-effect-conflict-token", 100)
+
+	effect := &model.BillingSettlementEffect{
+		LogType: model.LogTypeConsume, Content: "settlement effect conflict",
+		ModelName: "test-model", TokenID: tokenID, Group: "default",
+	}
+	operationKey := "request:" + requestID + ":finalize"
+	applied, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		TokenKey:     "durable-effect-conflict-token",
+		FundingDelta: 5,
+		TokenDelta:   5,
+		Effect:       effect,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, applied)
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("operation_key = ?", operationKey).
+		Update("effect_status", model.BillingSettlementEffectApplying).Error)
+
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId: requestID, UserId: userID,
+			TokenId: tokenID, TokenKey: "durable-effect-conflict-token",
+		},
+		funding:          &WalletFunding{userId: userID, consumed: 10},
+		preConsumedQuota: 10,
+		tokenConsumed:    10,
+	}
+
+	require.NoError(t, session.SettleWithEffect(15, effect))
+	assert.True(t, session.settled)
+	assert.True(t, session.fundingSettled)
+	assert.EqualValues(t, 5, session.appliedFundingDelta)
+	assert.False(t, session.NeedsRefund())
+	assert.EqualValues(t, 95, getUserQuota(t, userID))
+	assert.EqualValues(t, 95, getTokenRemainQuota(t, tokenID))
+}

@@ -67,11 +67,29 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+
+	includeDataInUpdate        bool `gorm:"-"`
+	includePrivateDataInUpdate bool `gorm:"-"`
 }
 
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
+	t.includeDataInUpdate = true
+}
+
+func (t *Task) ClearDataForUpdate() {
+	t.Data = nil
+	t.includeDataInUpdate = true
+}
+
+func (t *Task) ClearPrivateDataForUpdate() {
+	t.PrivateData = TaskPrivateData{}
+	t.includePrivateDataInUpdate = true
+}
+
+func (t *Task) IncludePrivateDataInUpdate() {
+	t.includePrivateDataInUpdate = true
 }
 
 func (t *Task) GetData(v any) error {
@@ -466,10 +484,10 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"fail_reason": t.FailReason,
 		"updated_at":  updatedAt,
 	}
-	if t.Data != nil {
+	if t.Data != nil || t.includeDataInUpdate {
 		values["data"] = t.Data
 	}
-	if t.PrivateData != (TaskPrivateData{}) {
+	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
 		values["private_data"] = t.PrivateData
 	}
 	return values
@@ -484,10 +502,10 @@ func (t *Task) submitResultUpdateValues() map[string]interface{} {
 		"quota":      t.Quota,
 		"updated_at": updatedAt,
 	}
-	if t.Data != nil {
+	if t.Data != nil || t.includeDataInUpdate {
 		values["data"] = t.Data
 	}
-	if t.PrivateData != (TaskPrivateData{}) {
+	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
 		values["private_data"] = t.PrivateData
 	}
 	return values
@@ -575,10 +593,24 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return fmt.Errorf("persisted task not found: id=%d", t.ID)
+			return taskSubmitResultUpdateMissError(tx, t.ID)
 		}
 		return nil
 	})
+}
+
+func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {
+	var existing Task
+	if err := tx.Select("id", "status").First(&existing, taskID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("persisted task not found: id=%d", taskID)
+		}
+		return err
+	}
+	if existing.Status == TaskStatusFailure || existing.Status == TaskStatusSuccess {
+		return fmt.Errorf("task already terminal (status=%s): id=%d", existing.Status, taskID)
+	}
+	return fmt.Errorf("persisted task not updated: id=%d status=%s", taskID, existing.Status)
 }
 
 func MarkTaskSubmitFailed(taskID int64, reason string) error {

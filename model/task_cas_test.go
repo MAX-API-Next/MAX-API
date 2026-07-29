@@ -186,6 +186,33 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 	assert.Equal(t, "100%", reloaded.Progress)
 }
 
+func TestUpdateWithStatusCanExplicitlyClearJSONColumns(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID:      "task_clear_json_columns",
+		Status:      TaskStatusInProgress,
+		Progress:    "50%",
+		Data:        json.RawMessage(`{"id":"upstream"}`),
+		PrivateData: TaskPrivateData{ResultURL: "https://example.com/result.mp4"},
+	}
+	insertTask(t, task)
+
+	task.Status = TaskStatusQueued
+	task.Progress = "75%"
+	task.ClearDataForUpdate()
+	task.ClearPrivateDataForUpdate()
+	won, err := task.UpdateWithStatus(TaskStatusInProgress)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, TaskStatusQueued, reloaded.Status)
+	assert.Empty(t, reloaded.Data)
+	assert.Equal(t, TaskPrivateData{}, reloaded.PrivateData)
+}
+
 func TestUpdateWithStatusAndSettlementCommitsIntentAtomically(t *testing.T) {
 	truncateTables(t)
 	task := &Task{TaskID: "atomic-settlement", Status: TaskStatusInProgress, Quota: 10}
@@ -299,6 +326,8 @@ func TestUpdateWithSettlementIntentDoesNotResurrectTerminalTask(t *testing.T) {
 		TokenDelta:   5,
 	})
 	require.Error(t, err)
+	require.ErrorContains(t, err, "task already terminal")
+	require.NotContains(t, err.Error(), "persisted task not found")
 
 	var reloaded Task
 	require.NoError(t, DB.First(&reloaded, task.ID).Error)

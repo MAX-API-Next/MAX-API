@@ -266,13 +266,19 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	if state.Total < state.Processed {
 		state.Total = state.Processed
 	}
-	if _, err := model.DeleteOldBillingLogReceipts(ctx, payload.TargetTimestamp, payload.BatchSize); err != nil {
-		failSystemTask(task, runnerID, err)
-		return
-	}
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
-		logSystemTaskLockError(ctx, task, err)
-		return
+	for {
+		rowsAffected, err := model.DeleteOldBillingLogReceiptsBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+		if rowsAffected < int64(payload.BatchSize) {
+			break
+		}
 	}
 
 	result := LogCleanupResult{DeletedCount: state.Processed}

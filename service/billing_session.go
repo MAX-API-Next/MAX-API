@@ -38,6 +38,7 @@ type BillingSession struct {
 	settled                 bool  // Settle 全部完成（资金 + 令牌）
 	refunded                bool  // Refund 已调用
 	refundInFlight          bool
+	settleInFlight          bool
 	mu                      sync.Mutex
 }
 
@@ -46,6 +47,10 @@ type SettlementPreparer interface {
 }
 
 var _ SettlementPreparer = (*BillingSession)(nil)
+
+type billingSettleIntent struct {
+	input model.BillingSettlementInput
+}
 
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交。若令牌调整失败，会优先反向补偿已提交的
@@ -60,12 +65,10 @@ func (s *BillingSession) SettleWithEffect(actualQuota int, effect *model.Billing
 }
 
 func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.BillingSettlementEffect) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var lastErr error
 	const maxAttempts = 3
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err := s.settleLocked(actualQuota, effect); err == nil {
+		if err := s.settleAttempt(actualQuota, effect); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -77,39 +80,72 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 	return fmt.Errorf("billing settlement failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
-func (s *BillingSession) settleLocked(actualQuota int, effect *model.BillingSettlementEffect) error {
+func (s *BillingSession) settleAttempt(actualQuota int, effect *model.BillingSettlementEffect) error {
+	intent, ok, err := s.prepareSettleAttemptLocked(actualQuota, effect)
+	if err != nil || !ok {
+		return err
+	}
+	return s.applyDurableSettleIntent(intent)
+}
+
+func (s *BillingSession) prepareSettleAttemptLocked(actualQuota int, effect *model.BillingSettlementEffect) (*billingSettleIntent, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.settled || s.refunded {
-		return nil
+		return nil, false, nil
 	}
 	if s.refundInFlight {
-		return errors.New("billing refund is already in progress")
+		return nil, false, errors.New("billing refund is already in progress")
+	}
+	if s.settleInFlight {
+		return nil, false, errors.New("billing settlement is already in progress")
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 && effect == nil {
 		s.settled = true
-		return nil
+		return nil, false, nil
 	}
 	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
-		applied, _, err := model.ApplyBillingSettlementOnce(*input)
-		if err != nil {
-			return err
-		}
-		if effect != nil {
-			if err := model.ProcessBillingSettlementEffect(input.OperationKey); err != nil {
-				return err
-			}
-		}
-		s.appliedFundingDelta = applied
-		s.fundingSettled = true
-		if s.funding.Source() == BillingSourceSubscription {
-			s.relayInfo.SubscriptionPostDelta += applied
-		}
-		s.settled = true
-		return nil
+		s.settleInFlight = true
+		return &billingSettleIntent{input: *input}, true, nil
 	}
 	if effect != nil {
-		return errors.New("billing settlement effects require a durable funding source and request id")
+		return nil, false, errors.New("billing settlement effects require a durable funding source and request id")
 	}
+	return nil, false, s.settleNonDurableLocked(delta)
+}
+
+func (s *BillingSession) applyDurableSettleIntent(intent *billingSettleIntent) error {
+	applied, _, err := model.ApplyBillingSettlementOnce(intent.input)
+	if err != nil {
+		s.finishDurableSettleIntent(false, 0)
+		return err
+	}
+
+	var effectErr error
+	if intent.input.Effect != nil {
+		effectErr = model.ProcessBillingSettlementEffect(intent.input.OperationKey)
+	}
+	s.finishDurableSettleIntent(true, applied)
+	return effectErr
+}
+
+func (s *BillingSession) finishDurableSettleIntent(applied bool, appliedDelta int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settleInFlight = false
+	if !applied {
+		return
+	}
+	s.appliedFundingDelta = appliedDelta
+	s.fundingSettled = true
+	if s.funding.Source() == BillingSourceSubscription {
+		s.relayInfo.SubscriptionPostDelta += appliedDelta
+	}
+	s.settled = true
+}
+
+func (s *BillingSession) settleNonDurableLocked(delta int) error {
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
 		applied, err := s.funding.Settle(delta)
@@ -267,7 +303,7 @@ type billingRefundIntent struct {
 func (s *BillingSession) prepareRefundIntent() (*billingRefundIntent, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.settled || s.refunded || s.refundInFlight || !s.needsRefundLocked() {
+	if s.settled || s.refunded || s.refundInFlight || s.settleInFlight || !s.needsRefundLocked() {
 		return nil, false
 	}
 	refundFunding := s.refundFundingAmountLocked()
@@ -370,7 +406,7 @@ func (s *BillingSession) NeedsRefund() bool {
 }
 
 func (s *BillingSession) needsRefundLocked() bool {
-	if s.settled || s.refunded || s.fundingSettled {
+	if s.settled || s.refunded || s.fundingSettled || s.settleInFlight {
 		// fundingSettled 时资金来源已提交结算，不能再退预扣费
 		return false
 	}

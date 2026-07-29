@@ -197,7 +197,11 @@ export function DeleteAccountDialog({
         methods={verificationMethods}
         state={verificationState}
         onVerify={async (method, code) => {
-          await executeVerification(method, code)
+          try {
+            await executeVerification(method, code)
+          } catch {
+            // executeVerification already reports verification failures.
+          }
         }}
         onCancel={cancelVerification}
         onCodeChange={setVerificationCode}

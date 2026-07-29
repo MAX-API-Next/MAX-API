@@ -49,7 +49,7 @@ export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {
 export function handleServerError(
   error: unknown,
   options: HandleServerErrorOptions = {}
-) {
+): void {
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
     console.error('[handleServerError]', getSafeErrorDebugInfo(error))
