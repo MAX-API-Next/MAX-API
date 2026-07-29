@@ -73,7 +73,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	if info.PersistedTaskID > 0 {
 		var task model.Task
 		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "load_persisted_task_failed", http.StatusInternalServerError)
+			return nil, taskPersistenceError(err, "load_persisted_task_failed", "failed to load persisted task")
 		}
 		fresh := model.InitTask(platform, info)
 		task.Platform = platform
@@ -85,7 +85,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		task.Quota = info.PriceData.Quota
 		populateTaskBillingMetadata(&task, info)
 		if err := task.Update(); err != nil {
-			return nil, service.TaskErrorWrapperLocal(err, "update_persisted_task_failed", http.StatusInternalServerError)
+			return nil, taskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
 		}
 		return &task, nil
 	}
@@ -95,10 +95,15 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	task.PrivateData.AwaitingUpstreamID = true
 	populateTaskBillingMetadata(task, info)
 	if err := task.Insert(); err != nil {
-		return nil, service.TaskErrorWrapperLocal(err, "persist_task_failed", http.StatusInternalServerError)
+		return nil, taskPersistenceError(err, "persist_task_failed", "failed to persist task")
 	}
 	info.PersistedTaskID = task.ID
 	return task, nil
+}
+
+func taskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
+	common.SysLog(fmt.Sprintf("%s: %s", code, err.Error()))
+	return service.TaskErrorWrapperLocal(errors.New(safeMessage), code, http.StatusInternalServerError)
 }
 
 type taskBillingEstimator interface {
@@ -339,13 +344,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		c.Writer = bufferedWriter
 		defer func() { c.Writer = originalWriter }()
 
-		otherRatios := info.PriceData.OtherRatios
-		if otherRatios == nil {
-			otherRatios = map[string]float64{}
-		}
-		ratiosJSON, _ := common.Marshal(otherRatios)
-		c.Header("X-Max-Api-Other-Ratios", string(ratiosJSON))
-		c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
+		setTaskOtherRatioHeaders(bufferedWriter.Header(), info.PriceData.OtherRatios)
 
 		upstreamTaskID, taskData, taskErr = adaptor.DoResponse(c, resp, info)
 		responseSnapshot = bufferedWriter.snapshot()
@@ -367,6 +366,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			info.PriceData.Quota = finalQuota
 		}
 	}
+	if responseSnapshot != nil {
+		setTaskOtherRatioHeaders(responseSnapshot.header, info.PriceData.OtherRatios)
+	}
 	task.PrivateData.UpstreamTaskID = upstreamTaskID
 	task.PrivateData.AwaitingUpstreamID = false
 	task.Quota = finalQuota
@@ -381,6 +383,22 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Task:           task,
 		response:       responseSnapshot,
 	}, nil
+}
+
+func setTaskOtherRatioHeaders(header http.Header, otherRatios map[string]float64) {
+	if header == nil {
+		return
+	}
+	if otherRatios == nil {
+		otherRatios = map[string]float64{}
+	}
+	ratiosJSON, err := common.Marshal(otherRatios)
+	if err != nil {
+		common.SysLog("failed to marshal task ratio headers: " + err.Error())
+		ratiosJSON = []byte("{}")
+	}
+	header.Set("X-Max-Api-Other-Ratios", string(ratiosJSON))
+	header.Set("X-New-Api-Other-Ratios", string(ratiosJSON))
 }
 
 // mapUpstreamTaskError is only called after an upstream response is available.

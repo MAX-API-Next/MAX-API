@@ -1043,17 +1043,30 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return 0, err
 	}
 	if len(ids) == 0 {
+		_, err := DeleteOldBillingLogReceiptsBatch(ctx, targetTimestamp, limit)
+		if err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
-	if nil != result.Error {
-		return 0, result.Error
+	var rowsAffected int64
+	err = LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id IN ?", ids).Delete(&Log{})
+		if nil != result.Error {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		_, err := deleteOldBillingLogReceiptsBatchTx(ctx, tx, targetTimestamp, limit)
+		return err
+	})
+	if err != nil {
+		return 0, err
 	}
-	return result.RowsAffected, nil
+	return rowsAffected, nil
 }
 
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
@@ -1073,7 +1086,67 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 		}
 		total += rowsAffected
 		if rowsAffected < int64(limit) {
+			if _, err := DeleteOldBillingLogReceipts(ctx, targetTimestamp, limit); err != nil {
+				return total, err
+			}
 			return total, nil
 		}
 	}
+}
+
+func DeleteOldBillingLogReceipts(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		rowsAffected, err := DeleteOldBillingLogReceiptsBatch(ctx, targetTimestamp, limit)
+		if err != nil {
+			return total, err
+		}
+		total += rowsAffected
+		if rowsAffected < int64(limit) {
+			return total, nil
+		}
+	}
+}
+
+func DeleteOldBillingLogReceiptsBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return deleteOldBillingLogReceiptsBatchTx(ctx, LOG_DB, targetTimestamp, limit)
+}
+
+func deleteOldBillingLogReceiptsBatchTx(ctx context.Context, db *gorm.DB, targetTimestamp int64, limit int) (int64, error) {
+	if db == nil {
+		return 0, errors.New("log database is not initialized")
+	}
+	ids := make([]int64, 0, limit)
+	if err := db.WithContext(ctx).
+		Model(&BillingLogReceipt{}).
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at ASC, id ASC").
+		Limit(limit).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	result := db.WithContext(ctx).Where("id IN ?", ids).Delete(&BillingLogReceipt{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

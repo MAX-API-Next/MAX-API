@@ -135,11 +135,12 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 	if userId <= 0 {
 		return
 	}
-	persistCacheInvalidationTask(cacheInvalidationKindUser, fmt.Sprintf("%d", userId), getUserCacheVersionKey(userId), deleteEntry, cause)
 	now := time.Now()
+	shouldPersist := false
 	userCacheRetries.Lock()
 	state, exists := userCacheRetries.pending[userId]
 	if !exists {
+		shouldPersist = true
 		state = &userCacheRetryState{
 			userId:      userId,
 			revision:    1,
@@ -159,6 +160,7 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 			state.cause = cause
 		}
 		if deleteEntry && !state.deleteEntry {
+			shouldPersist = true
 			state.deleteEntry = true
 			state.deadline = now.Add(userCacheRetryWindow())
 			state.delay = userCacheRetryInitialDelay
@@ -170,6 +172,10 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 		userCacheRetries.running = true
 	}
 	userCacheRetries.Unlock()
+
+	if shouldPersist {
+		persistCacheInvalidationTask(cacheInvalidationKindUser, fmt.Sprintf("%d", userId), getUserCacheVersionKey(userId), deleteEntry, cause)
+	}
 
 	select {
 	case userCacheRetries.wake <- struct{}{}:

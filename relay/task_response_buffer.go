@@ -20,6 +20,9 @@ func (s *taskResponseSnapshot) writeTo(c *gin.Context) error {
 	if s == nil || c == nil {
 		return errors.New("task response snapshot is unavailable")
 	}
+	for key := range c.Writer.Header() {
+		delete(c.Writer.Header(), key)
+	}
 	for key, values := range s.header {
 		c.Writer.Header()[key] = append([]string(nil), values...)
 	}

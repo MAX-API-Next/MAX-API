@@ -610,9 +610,7 @@ func RelayTask(c *gin.Context) {
 		} else {
 			var settlementIntent *model.BillingSettlementInput
 			if relayInfo.Billing != nil {
-				preparer, ok := relayInfo.Billing.(interface {
-					PrepareSettlement(int) (*model.BillingSettlementInput, error)
-				})
+				preparer, ok := relayInfo.Billing.(service.SettlementPreparer)
 				if !ok {
 					taskErr = service.TaskErrorWrapperLocal(errors.New("task billing session cannot prepare a durable settlement"), "persist_billing_intent_failed", http.StatusInternalServerError)
 				} else if settlementIntent, err = preparer.PrepareSettlement(result.Quota); err != nil {
@@ -625,7 +623,7 @@ func RelayTask(c *gin.Context) {
 					settlementEffectOperationKey = settlementIntent.OperationKey
 				}
 				if err = result.Task.UpdateWithSettlementIntent(settlementIntent); err != nil {
-					taskErr = service.TaskErrorWrapperLocal(err, "persist_task_result_failed", http.StatusInternalServerError)
+					taskErr = taskPersistenceError(err, "persist_task_result_failed", "failed to persist task result")
 				}
 			}
 		}
@@ -657,6 +655,11 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
 	}
 	c.JSON(taskErr.StatusCode, taskErr)
+}
+
+func taskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
+	common.SysLog(fmt.Sprintf("%s: %s", code, err.Error()))
+	return service.TaskErrorWrapperLocal(errors.New(safeMessage), code, http.StatusInternalServerError)
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {

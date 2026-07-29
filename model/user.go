@@ -1260,17 +1260,19 @@ func (user *User) deleteWithCacheInvalidation(hardDelete bool) error {
 		if err != nil {
 			return err
 		}
-		tokenTasks, err := stageUserTokenCacheInvalidationsTx(tx, user.Id, false)
+		tokenTasks, err := stageUserTokenCacheInvalidationsTx(tx, user.Id, hardDelete)
 		if err != nil {
 			return err
 		}
 		tasks = append(tasks, userTask)
 		tasks = append(tasks, tokenTasks...)
-		deleteDB := tx
 		if hardDelete {
-			deleteDB = tx.Unscoped()
+			if err := tx.Unscoped().Where("user_id = ?", user.Id).Delete(&Token{}).Error; err != nil {
+				return err
+			}
+			return tx.Unscoped().Where("id = ?", user.Id).Delete(&User{}).Error
 		}
-		return deleteDB.Delete(user).Error
+		return tx.Delete(user).Error
 	})
 	if err != nil {
 		return err

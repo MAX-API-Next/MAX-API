@@ -1301,10 +1301,8 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		}); err != nil {
 			return err
 		}
-		var alreadyConsumed bool
 		var err error
-		returnValue, alreadyConsumed, err = preConsumeUserSubscriptionTx(tx, requestId, userId, 0, modelName, quotaType, now, amount)
-		_ = alreadyConsumed
+		returnValue, _, err = preConsumeUserSubscriptionTx(tx, requestId, userId, 0, modelName, quotaType, now, amount)
 		return err
 	})
 	if err != nil {
@@ -1345,6 +1343,12 @@ func PreConsumeTokenAndUserSubscription(requestId string, userId int, tokenId in
 		var err error
 		returnValue, alreadyConsumed, err = preConsumeUserSubscriptionTx(tx, requestId, userId, tokenId, modelName, quotaType, now, amount)
 		if err != nil || alreadyConsumed {
+			if alreadyConsumed {
+				var token Token
+				if tokenErr := tx.Unscoped().Select("key").First(&token, tokenId).Error; tokenErr == nil {
+					resolvedTokenKey = token.Key
+				}
+			}
 			return err
 		}
 		result := tx.Model(&Token{}).
@@ -1500,7 +1504,7 @@ func preConsumeUserSubscriptionTx(tx *gorm.DB, requestId string, userId int, tok
 		returnValue.AmountUsedAfter = updatedSub.AmountUsed
 		return returnValue, false, nil
 	}
-	return returnValue, false, fmt.Errorf("subscription quota insufficient, need=%d", amount)
+	return returnValue, false, fmt.Errorf("%w: need=%d", ErrSubscriptionQuotaInsufficient, amount)
 }
 
 func validateSubscriptionPreConsumeReplay(existing SubscriptionPreConsumeRecord, userId int, tokenId int, modelName string, quotaType int, amount int64) error {
@@ -1611,11 +1615,33 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	return resetCount, nil
 }
 
-// CleanupSubscriptionPreConsumeRecords intentionally retains idempotency records.
-// Tasks and reconciliation can remain pending indefinitely, so no finite TTL is
-// currently proven safe for deleting replay tombstones.
+// CleanupSubscriptionPreConsumeRecords removes only old replay tombstones whose
+// linked billing settlements have reached terminal applied/manual states.
+// olderThanSeconds is retained for the scheduled cleanup API; non-positive
+// values disable deletion, and pending settlement rows are always preserved.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
-	return 0, nil
+	if olderThanSeconds <= 0 {
+		return 0, nil
+	}
+	cutoff := common.GetTimestamp() - olderThanSeconds
+	if cutoff <= 0 {
+		return 0, nil
+	}
+	terminalStatuses := []string{BillingSettlementStatusApplied, BillingSettlementStatusManual}
+	nonterminalSettlements := DB.Model(&BillingSettlement{}).
+		Select("1").
+		Where("billing_settlements.subscription_pre_consume_request_id = subscription_pre_consume_records.request_id").
+		Where("billing_settlements.status NOT IN ?", terminalStatuses)
+	terminalSettlements := DB.Model(&BillingSettlement{}).
+		Select("1").
+		Where("billing_settlements.subscription_pre_consume_request_id = subscription_pre_consume_records.request_id").
+		Where("billing_settlements.status IN ?", terminalStatuses)
+	result := DB.
+		Where("created_at < ?", cutoff).
+		Where("EXISTS (?)", terminalSettlements).
+		Where("NOT EXISTS (?)", nonterminalSettlements).
+		Delete(&SubscriptionPreConsumeRecord{})
+	return result.RowsAffected, result.Error
 }
 
 type SubscriptionPlanInfo struct {

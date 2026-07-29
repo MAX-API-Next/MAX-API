@@ -235,6 +235,7 @@ func TestBillingSessionTrustedWalletReplayFailsClosedInsteadOfSwitchingFunding(t
 	truncate(t)
 	const userID, tokenID, planID, subscriptionID = 815, 816, 817, 818
 	trustQuota := common.GetTrustQuota()
+	require.Positive(t, trustQuota, "trust quota must be enabled for this scenario")
 	seedUser(t, userID, trustQuota+100)
 	seedToken(t, tokenID, userID, "trusted-wallet-replay-token", trustQuota+100)
 	seedBillingSubscription(t, planID, subscriptionID, userID, 100)
@@ -594,9 +595,8 @@ func TestBillingSessionRefundUsesDurableOperation(t *testing.T) {
 	}
 
 	session.Refund(ctx)
-	require.Eventually(t, func() bool {
-		return getUserQuota(t, userID) == 110 && getTokenRemainQuota(t, tokenID) == 110
-	}, time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 110, getUserQuota(t, userID))
+	require.EqualValues(t, 110, getTokenRemainQuota(t, tokenID))
 
 	var settlement model.BillingSettlement
 	require.NoError(t, model.DB.Where("operation_key = ?", "request:durable-refund-request:finalize").First(&settlement).Error)

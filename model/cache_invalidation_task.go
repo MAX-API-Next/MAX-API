@@ -1,9 +1,11 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -16,6 +18,8 @@ const (
 	cacheInvalidationKindUser  = "user"
 	cacheInvalidationKindToken = "token"
 )
+
+var errCacheInvalidationPermanent = errors.New("permanent cache invalidation failure")
 
 // CacheInvalidationTask persists Redis invalidations so process restarts do not
 // lose work queued after a committed database mutation.
@@ -72,12 +76,9 @@ func upsertCacheInvalidationTask(db *gorm.DB, kind, entityKey, versionKey string
 	if err := db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "kind"}, {Name: "entity_key"}, {Name: "delete_entry"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"version_key":  versionKey,
-			"last_error":   lastError,
-			"next_attempt": now,
-			"updated_at":   now,
-			"attempts":     0,
-			"revision":     gorm.Expr("revision + ?", 1),
+			"version_key": versionKey,
+			"updated_at":  now,
+			"revision":    gorm.Expr("revision + ?", 1),
 		}),
 	}).Create(&task).Error; err != nil {
 		return CacheInvalidationTask{}, err
@@ -108,18 +109,56 @@ func dispatchStagedCacheInvalidations(tasks []CacheInvalidationTask) {
 	}
 }
 
+var cacheInvalidationRunnerOnce sync.Once
+var cacheInvalidationRunnerState struct {
+	sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 func StartCacheInvalidationTaskRunner() {
 	if !common.RedisEnabled || DB == nil {
 		return
 	}
-	gopool.Go(func() {
-		processCacheInvalidationTasks()
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
+	cacheInvalidationRunnerOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		cacheInvalidationRunnerState.Lock()
+		cacheInvalidationRunnerState.cancel = cancel
+		cacheInvalidationRunnerState.done = done
+		cacheInvalidationRunnerState.Unlock()
+		gopool.Go(func() {
+			defer close(done)
 			processCacheInvalidationTasks()
-		}
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					processCacheInvalidationTasks()
+				}
+			}
+		})
 	})
+}
+
+func StopCacheInvalidationTaskRunner(ctx context.Context) error {
+	cacheInvalidationRunnerState.Lock()
+	cancel := cacheInvalidationRunnerState.cancel
+	done := cacheInvalidationRunnerState.done
+	cacheInvalidationRunnerState.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func processCacheInvalidationTasks() {
@@ -131,6 +170,13 @@ func processCacheInvalidationTasks() {
 	}
 	for _, task := range tasks {
 		if err := executeCacheInvalidationTask(task); err != nil {
+			if errors.Is(err, errCacheInvalidationPermanent) {
+				if deleteErr := DB.Where("id = ? AND revision = ?", task.ID, task.Revision).Delete(&CacheInvalidationTask{}).Error; deleteErr != nil {
+					common.SysLog("failed to drop permanent cache invalidation task: " + deleteErr.Error())
+				}
+				common.SysLog(fmt.Sprintf("dropped permanent cache invalidation task: kind=%s entity=%s error=%v", task.Kind, task.EntityKey, err))
+				continue
+			}
 			attempts := task.Attempts + 1
 			delay := 1 << min(attempts, 6)
 			if updateErr := DB.Model(&CacheInvalidationTask{}).Where("id = ? AND revision = ?", task.ID, task.Revision).Updates(map[string]interface{}{
@@ -138,6 +184,7 @@ func processCacheInvalidationTasks() {
 				"last_error":   err.Error(),
 				"next_attempt": time.Now().Add(time.Duration(delay) * time.Second).Unix(),
 				"updated_at":   time.Now().Unix(),
+				"revision":     gorm.Expr("revision + ?", 1),
 			}).Error; updateErr != nil {
 				common.SysLog("failed to reschedule cache invalidation task: " + updateErr.Error())
 			}
@@ -154,18 +201,21 @@ func executeCacheInvalidationTask(task CacheInvalidationTask) error {
 	case cacheInvalidationKindUser:
 		userID, err := strconv.Atoi(task.EntityKey)
 		if err != nil || userID <= 0 {
-			return fmt.Errorf("invalid persisted user cache key: %s", task.EntityKey)
+			return fmt.Errorf("%w: invalid persisted user cache key: %s", errCacheInvalidationPermanent, task.EntityKey)
 		}
 		if task.DeleteEntry {
 			return common.RedisDeleteVersionedHash(getUserCacheKey(userID), getUserCacheVersionKey(userID))
 		}
 		return common.RedisInvalidateVersionedHash(getUserCacheKey(userID), getUserCacheVersionKey(userID))
 	case cacheInvalidationKindToken:
+		if task.EntityKey == "" || task.VersionKey == "" {
+			return fmt.Errorf("%w: invalid persisted token cache key", errCacheInvalidationPermanent)
+		}
 		if task.DeleteEntry {
 			return common.RedisDeleteVersionedHash(task.EntityKey, task.VersionKey)
 		}
 		return common.RedisInvalidateVersionedHash(task.EntityKey, task.VersionKey)
 	default:
-		return fmt.Errorf("unknown cache invalidation kind: %s", task.Kind)
+		return fmt.Errorf("%w: unknown cache invalidation kind: %s", errCacheInvalidationPermanent, task.Kind)
 	}
 }

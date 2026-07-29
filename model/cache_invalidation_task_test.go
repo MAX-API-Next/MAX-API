@@ -30,7 +30,7 @@ func TestCacheInvalidationTargetIndexFitsMySQL57CompactUtf8mb4Limit(t *testing.T
 	require.LessOrEqual(t, indexBytes, 767)
 }
 
-func useRecoverableCacheMutationRedis(t *testing.T) (*redis.Client, *recoverableCacheMutationHook) {
+func useCacheMutationRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -39,15 +39,30 @@ func useRecoverableCacheMutationRedis(t *testing.T) (*redis.Client, *recoverable
 	oldRedisEnabled := common.RedisEnabled
 	common.RDB = client
 	common.RedisEnabled = true
-	require.NoError(t, common.RedisInvalidateVersionedHash("persistent-retry-warmup", "persistent-retry-warmup-version"))
-	hook := &recoverableCacheMutationHook{}
-	client.AddHook(hook)
 	t.Cleanup(func() {
 		_ = client.Close()
 		common.RDB = oldRDB
 		common.RedisEnabled = oldRedisEnabled
 	})
+	return client
+}
+
+func useRecoverableCacheMutationRedis(t *testing.T) (*redis.Client, *recoverableCacheMutationHook) {
+	t.Helper()
+	client := useCacheMutationRedis(t)
+	require.NoError(t, common.RedisInvalidateVersionedHash("persistent-retry-warmup", "persistent-retry-warmup-version"))
+	hook := &recoverableCacheMutationHook{}
+	client.AddHook(hook)
 	return client, hook
+}
+
+func failCacheOutboxInserts(t *testing.T) {
+	t.Helper()
+	if !common.UsingSQLite {
+		t.Skip("cache outbox trigger failure injection uses SQLite trigger syntax")
+	}
+	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
+	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
 }
 
 func clearTokenCacheRetryMemory(t *testing.T) {
@@ -70,17 +85,7 @@ func TestApplyBillingSettlementOnceResolvesTokenKeyForCacheInvalidation(t *testi
 	require.NoError(t, DB.Create(&user).Error)
 	require.NoError(t, DB.Create(&token).Error)
 
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	oldRDB := common.RDB
-	oldRedisEnabled := common.RedisEnabled
-	common.RDB = client
-	common.RedisEnabled = true
-	t.Cleanup(func() {
-		_ = client.Close()
-		common.RDB = oldRDB
-		common.RedisEnabled = oldRedisEnabled
-	})
+	client := useCacheMutationRedis(t)
 	cacheTokenForRetryTest(t, client, token)
 
 	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
@@ -148,6 +153,60 @@ func TestPersistedCacheInvalidationRevisionProtectsNewerTask(t *testing.T) {
 
 	hook.available.Store(true)
 	processCacheInvalidationTasks()
+	var count int64
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestCacheInvalidationRestagePreservesDurableBackoff(t *testing.T) {
+	setupUserUpdateTestState(t)
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = true
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+
+	task, err := upsertCacheInvalidationTask(DB, cacheInvalidationKindUser, "301", getUserCacheVersionKey(301), false, errors.New("first outage"))
+	require.NoError(t, err)
+	nextAttempt := time.Now().Add(time.Minute).Unix()
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"attempts":     4,
+		"next_attempt": nextAttempt,
+		"last_error":   "first outage",
+	}).Error)
+
+	restaged, err := upsertCacheInvalidationTask(DB, cacheInvalidationKindUser, "301", "new-version", false, errors.New("second outage"))
+	require.NoError(t, err)
+
+	assert.EqualValues(t, 4, restaged.Attempts)
+	assert.EqualValues(t, nextAttempt, restaged.NextAttempt)
+	assert.Equal(t, "first outage", restaged.LastError)
+	assert.Equal(t, "new-version", restaged.VersionKey)
+	assert.Greater(t, restaged.Revision, task.Revision)
+}
+
+func TestProcessCacheInvalidationTasksDropsPermanentFailures(t *testing.T) {
+	setupUserUpdateTestState(t)
+	now := time.Now().Unix()
+	require.NoError(t, DB.Create(&CacheInvalidationTask{
+		Kind:        "unknown",
+		EntityKey:   "entity",
+		VersionKey:  "version",
+		NextAttempt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Revision:    1,
+	}).Error)
+	require.NoError(t, DB.Create(&CacheInvalidationTask{
+		Kind:        cacheInvalidationKindUser,
+		EntityKey:   "not-a-user-id",
+		VersionKey:  "version",
+		NextAttempt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Revision:    1,
+	}).Error)
+
+	processCacheInvalidationTasks()
+
 	var count int64
 	require.NoError(t, DB.Model(&CacheInvalidationTask{}).Count(&count).Error)
 	assert.Zero(t, count)

@@ -436,8 +436,7 @@ func TestUserMutationRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
 	user := User{Id: 93, Username: "cache-outbox-user", Quota: 10, Status: common.UserStatusEnabled}
 	require.NoError(t, DB.Create(&user).Error)
 	useFailingUserUpdateRedis(t)
-	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
+	failCacheOutboxInserts(t)
 
 	user.Status = common.UserStatusDisabled
 	err := user.UpdateFields(false, UserUpdateFieldStatus)
@@ -506,8 +505,7 @@ func TestDirectUserMutationsRollBackWhenCacheOutboxCannotPersist(t *testing.T) {
 			}
 			require.NoError(t, DB.Create(&user).Error)
 			useFailingUserUpdateRedis(t)
-			require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-			t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
+			failCacheOutboxInserts(t)
 
 			require.Error(t, tt.mutate(&user))
 			var stored User
@@ -522,8 +520,7 @@ func TestTokenMutationRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
 	token := Token{Id: 94, UserId: 95, Key: "cache-outbox-token", Status: common.TokenStatusEnabled, RemainQuota: 10}
 	require.NoError(t, DB.Create(&token).Error)
 	useFailingUserUpdateRedis(t)
-	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
+	failCacheOutboxInserts(t)
 
 	token.Status = common.TokenStatusDisabled
 	err := token.Update()
@@ -574,19 +571,22 @@ func TestUserDeletesRetryCacheDeletionAfterDatabaseCommit(t *testing.T) {
 		name       string
 		userID     int
 		deleteUser func(*User) error
-		wantRows   int64
+		wantUsers  int64
+		wantTokens int64
 	}{
 		{
 			name:       "soft delete",
 			userID:     93,
 			deleteUser: (*User).Delete,
-			wantRows:   1,
+			wantUsers:  1,
+			wantTokens: 1,
 		},
 		{
 			name:       "hard delete",
 			userID:     94,
 			deleteUser: (*User).HardDelete,
-			wantRows:   0,
+			wantUsers:  0,
+			wantTokens: 0,
 		},
 	}
 
@@ -605,7 +605,9 @@ func TestUserDeletesRetryCacheDeletionAfterDatabaseCommit(t *testing.T) {
 			processCacheInvalidationTasks()
 			var count int64
 			require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
-			assert.Equal(t, tt.wantRows, count)
+			assert.Equal(t, tt.wantUsers, count)
+			require.NoError(t, DB.Unscoped().Model(&Token{}).Where("id = ?", token.Id).Count(&count).Error)
+			assert.Equal(t, tt.wantTokens, count)
 			requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
 			requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
 		})
@@ -617,8 +619,7 @@ func TestUserDeleteRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
 	user := User{Id: 395, Username: "delete-outbox-rollback", Status: common.UserStatusEnabled}
 	require.NoError(t, DB.Create(&user).Error)
 	useFailingUserUpdateRedis(t)
-	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
+	failCacheOutboxInserts(t)
 
 	require.Error(t, user.Delete())
 	var count int64

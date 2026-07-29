@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { handleServerError } from '@/lib/handle-server-error'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -113,9 +114,7 @@ export function DeleteAccountDialog({
         ),
       })
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to delete account')
-      )
+      handleServerError(error, { fallback: t('Failed to delete account') })
     }
   }
 

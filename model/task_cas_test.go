@@ -349,7 +349,6 @@ func TestGetAllUnFinishSyncTasksRotatesPollingBatch(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		insertTask(t, &Task{
 			TaskID: fmt.Sprintf("poll-fair-%d", i), Status: TaskStatusInProgress,
-			CreatedAt: int64(i), UpdatedAt: int64(i),
 		})
 	}
 

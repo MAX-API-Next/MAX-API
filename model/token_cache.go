@@ -103,7 +103,7 @@ func stageUserTokenCacheInvalidationsTx(tx *gorm.DB, userID int, deleteEntry boo
 		return nil, nil
 	}
 	var tokens []Token
-	if err := tx.Unscoped().Where("user_id = ?", userID).Find(&tokens).Error; err != nil {
+	if err := tx.Unscoped().Select("key").Where("user_id = ?", userID).Find(&tokens).Error; err != nil {
 		return nil, err
 	}
 	tasks := make([]CacheInvalidationTask, 0, len(tokens))
@@ -142,11 +142,12 @@ func enqueueTokenCacheRetryByTarget(cacheKey string, versionKey string, deleteEn
 		return
 	}
 	now := time.Now()
-	persistCacheInvalidationTask(cacheInvalidationKindToken, cacheKey, versionKey, deleteEntry, cause)
+	shouldPersist := false
 
 	tokenCacheRetries.Lock()
 	state, exists := tokenCacheRetries.pending[cacheKey]
 	if !exists {
+		shouldPersist = true
 		state = &tokenCacheRetryState{
 			cacheKey:    cacheKey,
 			versionKey:  versionKey,
@@ -167,6 +168,7 @@ func enqueueTokenCacheRetryByTarget(cacheKey string, versionKey string, deleteEn
 			state.cause = cause
 		}
 		if deleteEntry && !state.deleteEntry {
+			shouldPersist = true
 			state.deleteEntry = true
 			state.deadline = now.Add(tokenCacheRetryWindow())
 			state.delay = tokenCacheRetryInitialDelay
@@ -178,6 +180,10 @@ func enqueueTokenCacheRetryByTarget(cacheKey string, versionKey string, deleteEn
 		tokenCacheRetries.running = true
 	}
 	tokenCacheRetries.Unlock()
+
+	if shouldPersist {
+		persistCacheInvalidationTask(cacheInvalidationKindToken, cacheKey, versionKey, deleteEntry, cause)
+	}
 
 	select {
 	case tokenCacheRetries.wake <- struct{}{}:

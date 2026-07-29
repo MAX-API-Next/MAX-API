@@ -138,6 +138,7 @@ func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, a
 	helper.SetEventStreamHeaders(c)
 	var usage dto.Usage
 	var streamErr error
+	wrote := false
 	c.Stream(func(w io.Writer) bool {
 		event, ok := <-events
 		if !ok {
@@ -146,6 +147,9 @@ func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, a
 		}
 		if event.Err != nil {
 			streamErr = event.Err
+			if wrote {
+				c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+			}
 			return false
 		}
 		if event.Response != nil {
@@ -160,12 +164,16 @@ func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, a
 				return true
 			}
 			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonResponse)})
+			wrote = true
 			return true
 		}
 		return true
 	})
-	if streamErr != nil {
+	if streamErr != nil && !wrote {
 		return nil, types.NewError(streamErr, types.ErrorCodeBadResponse)
+	}
+	if streamErr != nil {
+		common.SysLog("xunfei stream terminated early: " + streamErr.Error())
 	}
 	return &usage, nil
 }
@@ -254,6 +262,7 @@ func xunfeiMakeRequest(ctx context.Context, textRequest dto.GeneralOpenAIRequest
 	}
 
 	data := requestOpenAI2Xunfei(textRequest, appId, domain)
+	_ = conn.SetWriteDeadline(xunfeiOperationDeadline(ctx, 10*time.Second))
 	err = conn.WriteJSON(data)
 	if err != nil {
 		_ = conn.Close()
@@ -276,6 +285,7 @@ func xunfeiMakeRequest(ctx context.Context, textRequest dto.GeneralOpenAIRequest
 			_ = conn.Close()
 		}()
 		for {
+			_ = conn.SetReadDeadline(xunfeiOperationDeadline(ctx, 60*time.Second))
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				if ctx.Err() != nil {
@@ -304,6 +314,14 @@ func xunfeiMakeRequest(ctx context.Context, textRequest dto.GeneralOpenAIRequest
 	}()
 
 	return events, nil
+}
+
+func xunfeiOperationDeadline(ctx context.Context, fallback time.Duration) time.Time {
+	deadline := time.Now().Add(fallback)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		return ctxDeadline
+	}
+	return deadline
 }
 
 func apiVersion2domain(apiVersion string) string {

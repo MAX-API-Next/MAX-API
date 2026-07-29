@@ -443,26 +443,22 @@ func TestBackgroundTaskSettlementRecoveryRestoresLogAndUsageExactlyOnce(t *testi
 
 	seedToken(t, tokenID, userID, "background-recovery-token", 100)
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("id = ?", pending.ID).Update("next_attempt", 0).Error)
-	model.StartBillingSettlementTaskRunner()
+	model.ProcessPendingBillingSettlementsOnce()
 
-	require.Eventually(t, func() bool {
-		var reloadedTask model.Task
-		var user model.User
-		var token model.Token
-		return model.DB.First(&reloadedTask, task.ID).Error == nil && reloadedTask.Quota == 15 &&
-			model.DB.First(&user, userID).Error == nil && user.Quota == 995 &&
-			model.DB.First(&token, tokenID).Error == nil && token.RemainQuota == 95
-	}, 3*time.Second, 20*time.Millisecond)
-
-	require.Eventually(t, func() bool {
-		var user model.User
-		var channel model.Channel
-		return countLogs(t) == 1 &&
-			model.DB.First(&user, userID).Error == nil && user.UsedQuota == 5 && user.RequestCount == 1 &&
-			model.DB.First(&channel, channelID).Error == nil && channel.UsedQuota == 5
-	}, 3*time.Second, 20*time.Millisecond)
-
-	time.Sleep(1100 * time.Millisecond)
+	var reloadedTask model.Task
+	require.NoError(t, model.DB.First(&reloadedTask, task.ID).Error)
+	assert.EqualValues(t, 15, reloadedTask.Quota)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.EqualValues(t, 995, user.Quota)
+	assert.EqualValues(t, 5, user.UsedQuota)
+	assert.EqualValues(t, 1, user.RequestCount)
+	var token model.Token
+	require.NoError(t, model.DB.First(&token, tokenID).Error)
+	assert.EqualValues(t, 95, token.RemainQuota)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	assert.EqualValues(t, 5, channel.UsedQuota)
 	assert.Equal(t, int64(1), countLogs(t))
 }
 

@@ -104,3 +104,66 @@ func TestDeleteOldLogDeletesAllMatchingRows(t *testing.T) {
 	require.NoError(t, LOG_DB.Model(&Log{}).Count(&total).Error)
 	assert.EqualValues(t, 1, total)
 }
+
+func TestDeleteOldLogBatchDeletesOldBillingLogReceipts(t *testing.T) {
+	truncateTables(t)
+
+	logs := []Log{
+		{UserId: 1, CreatedAt: 10, Type: LogTypeConsume},
+		{UserId: 1, CreatedAt: 1000, Type: LogTypeConsume},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+	receipts := []BillingLogReceipt{
+		{OperationKey: "old-receipt", ClaimToken: "old", CreatedAt: 10},
+		{OperationKey: "new-receipt", ClaimToken: "new", CreatedAt: 1000},
+	}
+	require.NoError(t, LOG_DB.Create(&receipts).Error)
+
+	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rows)
+
+	var oldReceiptCount int64
+	require.NoError(t, LOG_DB.Model(&BillingLogReceipt{}).Where("operation_key = ?", "old-receipt").Count(&oldReceiptCount).Error)
+	assert.Zero(t, oldReceiptCount)
+	var newReceiptCount int64
+	require.NoError(t, LOG_DB.Model(&BillingLogReceipt{}).Where("operation_key = ?", "new-receipt").Count(&newReceiptCount).Error)
+	assert.EqualValues(t, 1, newReceiptCount)
+}
+
+func TestDeleteOldLogBatchDeletesOldBillingLogReceiptsWithoutOldLogs(t *testing.T) {
+	truncateTables(t)
+
+	require.NoError(t, LOG_DB.Create(&BillingLogReceipt{OperationKey: "old-receipt-only", ClaimToken: "old", CreatedAt: 10}).Error)
+
+	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	require.NoError(t, err)
+	assert.Zero(t, rows)
+
+	var count int64
+	require.NoError(t, LOG_DB.Model(&BillingLogReceipt{}).Where("operation_key = ?", "old-receipt-only").Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestDeleteOldLogDeletesAllOldBillingLogReceipts(t *testing.T) {
+	truncateTables(t)
+
+	receipts := []BillingLogReceipt{
+		{OperationKey: "old-receipt-1", ClaimToken: "old-1", CreatedAt: 10},
+		{OperationKey: "old-receipt-2", ClaimToken: "old-2", CreatedAt: 11},
+		{OperationKey: "old-receipt-3", ClaimToken: "old-3", CreatedAt: 12},
+		{OperationKey: "new-receipt", ClaimToken: "new", CreatedAt: 1000},
+	}
+	require.NoError(t, LOG_DB.Create(&receipts).Error)
+
+	rows, err := DeleteOldLog(context.Background(), 100, 2)
+	require.NoError(t, err)
+	assert.Zero(t, rows)
+
+	var oldReceiptCount int64
+	require.NoError(t, LOG_DB.Model(&BillingLogReceipt{}).Where("created_at < ?", 100).Count(&oldReceiptCount).Error)
+	assert.Zero(t, oldReceiptCount)
+	var newReceiptCount int64
+	require.NoError(t, LOG_DB.Model(&BillingLogReceipt{}).Where("operation_key = ?", "new-receipt").Count(&newReceiptCount).Error)
+	assert.EqualValues(t, 1, newReceiptCount)
+}

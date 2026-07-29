@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -79,6 +80,10 @@ type BillingSettlement struct {
 	FinalizeSubscriptionPreConsume  bool   `gorm:"not null;default:false"`
 	AllowMissingToken               bool   `gorm:"not null;default:false"`
 	ManualOnFailure                 bool   `gorm:"not null;default:false"`
+	PreConsumeRequestID             string `gorm:"type:varchar(64);index"`
+	PreConsumeModelName             string `gorm:"type:varchar(191);not null;default:''"`
+	PreConsumeRequestedQuota        int64  `gorm:"not null;default:0"`
+	PreConsumeEffectiveQuota        int64  `gorm:"not null;default:0"`
 	EffectPayload                   string `gorm:"type:text"`
 	EffectStatus                    string `gorm:"type:varchar(16);index"`
 	CreatedAt                       int64  `gorm:"not null"`
@@ -140,24 +145,62 @@ type BillingSettlementInput struct {
 }
 
 var billingSettlementRunnerOnce sync.Once
+var billingSettlementRunnerState struct {
+	sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}
 
 // StartBillingSettlementTaskRunner retries durable settlement intents after a
 // process restart or a transient database failure. All balance mutations are
 // still protected by ApplyBillingSettlementOnce's operation key.
 func StartBillingSettlementTaskRunner() {
+	if DB == nil {
+		return
+	}
 	billingSettlementRunnerOnce.Do(func() {
-		if DB == nil {
-			return
-		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		billingSettlementRunnerState.Lock()
+		billingSettlementRunnerState.cancel = cancel
+		billingSettlementRunnerState.done = done
+		billingSettlementRunnerState.Unlock()
 		gopool.Go(func() {
-			processPendingBillingSettlements()
+			defer close(done)
+			ProcessPendingBillingSettlementsOnce()
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				processPendingBillingSettlements()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					ProcessPendingBillingSettlementsOnce()
+				}
 			}
 		})
 	})
+}
+
+func StopBillingSettlementTaskRunner(ctx context.Context) error {
+	billingSettlementRunnerState.Lock()
+	cancel := billingSettlementRunnerState.cancel
+	done := billingSettlementRunnerState.done
+	billingSettlementRunnerState.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func ProcessPendingBillingSettlementsOnce() {
+	processPendingBillingSettlements()
 }
 
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
@@ -183,9 +226,9 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 			}
 		}
 		if resolvedTokenKey == "" {
-			resolvedTokenKey = lookupBillingTokenKey(input.TokenID)
+			resolvedTokenKey = lookupBillingTokenKey(record.TokenID)
 		}
-		invalidateBillingSettlementCaches(input, resolvedTokenKey)
+		invalidateBillingSettlementCaches(record, resolvedTokenKey)
 		return record.AppliedFundingDelta, true, nil
 	}
 
@@ -436,6 +479,10 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 		AllowMissingToken:               input.AllowMissingToken,
 		FinalizeSubscriptionPreConsume:  input.FinalizeSubscriptionPreConsume,
 		ManualOnFailure:                 input.ManualOnFailure,
+		PreConsumeRequestID:             input.PreConsumeRequestID,
+		PreConsumeModelName:             input.PreConsumeModelName,
+		PreConsumeRequestedQuota:        input.PreConsumeRequestedQuota,
+		PreConsumeEffectiveQuota:        input.PreConsumeEffectiveQuota,
 		EffectPayload:                   effectPayload,
 		Status:                          BillingSettlementStatusPending, NextAttempt: now, CreatedAt: now, UpdatedAt: now, Revision: 1,
 	}
@@ -498,13 +545,13 @@ func lookupBillingTokenKey(tokenID int) string {
 	return token.Key
 }
 
-func invalidateBillingSettlementCaches(input BillingSettlementInput, tokenKey string) {
-	if input.UserID > 0 {
-		if cacheErr := invalidateUserQuotaCache(input.UserID); cacheErr != nil {
-			enqueueUserCacheInvalidationRetry(input.UserID, cacheErr)
+func invalidateBillingSettlementCaches(record BillingSettlement, tokenKey string) {
+	if record.UserID > 0 {
+		if cacheErr := invalidateUserQuotaCache(record.UserID); cacheErr != nil {
+			enqueueUserCacheInvalidationRetry(record.UserID, cacheErr)
 		}
 	}
-	if input.TokenID > 0 && input.TokenDelta != 0 && tokenKey != "" {
+	if record.TokenID > 0 && record.AppliedTokenDelta != 0 && tokenKey != "" {
 		invalidateTokenQuotaCache(tokenKey)
 	}
 }
@@ -563,6 +610,10 @@ func processPendingBillingSettlements() {
 			FinalizeSubscriptionPreConsume:  record.FinalizeSubscriptionPreConsume,
 			AllowMissingToken:               record.AllowMissingToken,
 			ManualOnFailure:                 record.ManualOnFailure,
+			PreConsumeRequestID:             record.PreConsumeRequestID,
+			PreConsumeModelName:             record.PreConsumeModelName,
+			PreConsumeRequestedQuota:        record.PreConsumeRequestedQuota,
+			PreConsumeEffectiveQuota:        record.PreConsumeEffectiveQuota,
 			Effect:                          effect,
 		})
 		if err != nil {
@@ -594,7 +645,21 @@ func validateBillingSettlement(existing BillingSettlement, input BillingSettleme
 		existing.ManualOnFailure != input.ManualOnFailure {
 		return permanentBillingSettlement(fmt.Errorf("%w: operation key reused with different parameters: %s", ErrBillingSettlementOperationConflict, input.OperationKey))
 	}
+	if billingSettlementHasPreConsumeFields(existing) &&
+		(existing.PreConsumeRequestID != input.PreConsumeRequestID ||
+			existing.PreConsumeModelName != input.PreConsumeModelName ||
+			existing.PreConsumeRequestedQuota != input.PreConsumeRequestedQuota ||
+			existing.PreConsumeEffectiveQuota != input.PreConsumeEffectiveQuota) {
+		return permanentBillingSettlement(fmt.Errorf("%w: operation key reused with different pre-consume parameters: %s", ErrBillingSettlementOperationConflict, input.OperationKey))
+	}
 	return nil
+}
+
+func billingSettlementHasPreConsumeFields(record BillingSettlement) bool {
+	return record.PreConsumeRequestID != "" ||
+		record.PreConsumeModelName != "" ||
+		record.PreConsumeRequestedQuota != 0 ||
+		record.PreConsumeEffectiveQuota != 0
 }
 
 func processPendingBillingSettlementEffects() {

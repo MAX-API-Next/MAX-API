@@ -342,7 +342,7 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	}
 	var tasks []*Task
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		if err := withRowLock(tx).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
 			Limit(limit).
 			Order("updated_at ASC, id ASC").
 			Find(&tasks).Error; err != nil {
@@ -453,6 +453,46 @@ func (t *Task) Snapshot() taskSnapshot {
 	}
 }
 
+func (t *Task) statusUpdateValues() map[string]interface{} {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= 0 {
+		updatedAt = time.Now().Unix()
+	}
+	values := map[string]interface{}{
+		"status":      t.Status,
+		"progress":    t.Progress,
+		"start_time":  t.StartTime,
+		"finish_time": t.FinishTime,
+		"fail_reason": t.FailReason,
+		"updated_at":  updatedAt,
+	}
+	if t.Data != nil {
+		values["data"] = t.Data
+	}
+	if t.PrivateData != (TaskPrivateData{}) {
+		values["private_data"] = t.PrivateData
+	}
+	return values
+}
+
+func (t *Task) submitResultUpdateValues() map[string]interface{} {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= 0 {
+		updatedAt = time.Now().Unix()
+	}
+	values := map[string]interface{}{
+		"quota":      t.Quota,
+		"updated_at": updatedAt,
+	}
+	if t.Data != nil {
+		values["data"] = t.Data
+	}
+	if t.PrivateData != (TaskPrivateData{}) {
+		values["private_data"] = t.PrivateData
+	}
+	return values
+}
+
 func (Task *Task) Update() error {
 	var err error
 	err = DB.Save(Task).Error
@@ -467,11 +507,11 @@ func (t *Task) UpdateQuota() error {
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus.
 //
-// Uses Model().Select("*").Updates() instead of Save() because GORM's Save
-// falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
-// zero rows, which silently bypasses the CAS guard.
+// Uses a column map instead of Save() because GORM's Save falls back to
+// INSERT ON CONFLICT when the WHERE-guarded UPDATE matches zero rows, which
+// silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	result := DB.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -498,7 +538,7 @@ func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input Billin
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
 		}
-		result := tx.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+		result := tx.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
 		if result.Error != nil {
 			return result.Error
 		}
@@ -530,7 +570,7 @@ func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
 		}
 		result := tx.Model(&Task{}).
 			Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
-			Select("*").Updates(t)
+			Updates(t.submitResultUpdateValues())
 		if result.Error != nil {
 			return result.Error
 		}

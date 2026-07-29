@@ -85,7 +85,7 @@ describe('channel form settings round trip', () => {
       ...CHANNEL_FORM_DEFAULT_VALUES,
       name: 'channel',
       models: 'model',
-      status_code_mapping: '{"429":503,"0429":502}',
+      status_code_mapping: '{"429":503," 429":502}',
     })
 
     assert.equal(result.success, false)

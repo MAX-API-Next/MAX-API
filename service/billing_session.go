@@ -37,8 +37,15 @@ type BillingSession struct {
 	reserveRevision         int64 // 单次请求内累计预留的单调修订号
 	settled                 bool  // Settle 全部完成（资金 + 令牌）
 	refunded                bool  // Refund 已调用
+	refundInFlight          bool
 	mu                      sync.Mutex
 }
+
+type SettlementPreparer interface {
+	PrepareSettlement(actualQuota int) (*model.BillingSettlementInput, error)
+}
+
+var _ SettlementPreparer = (*BillingSession)(nil)
 
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交。若令牌调整失败，会优先反向补偿已提交的
@@ -71,8 +78,11 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 }
 
 func (s *BillingSession) settleLocked(actualQuota int, effect *model.BillingSettlementEffect) error {
-	if s.settled {
+	if s.settled || s.refunded {
 		return nil
+	}
+	if s.refundInFlight {
+		return errors.New("billing refund is already in progress")
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 && effect == nil {
@@ -246,13 +256,19 @@ func durableFundingIdentity(funding FundingSource) (source string, userID int, s
 	}
 }
 
-// Refund 退还所有预扣费。普通钱包/订阅会话必须通过持久化结算记录执行；
-// 没有稳定 request id 的自定义资金来源不会被自动修改，避免无法证明幂等时重复退款。
-func (s *BillingSession) Refund(c *gin.Context) {
+type billingRefundIntent struct {
+	input         model.BillingSettlementInput
+	userID        int
+	requestID     string
+	tokenConsumed int
+	fundingSource string
+}
+
+func (s *BillingSession) prepareRefundIntent() (*billingRefundIntent, bool) {
 	s.mu.Lock()
-	if s.settled || s.refunded || !s.needsRefundLocked() {
-		s.mu.Unlock()
-		return
+	defer s.mu.Unlock()
+	if s.settled || s.refunded || s.refundInFlight || !s.needsRefundLocked() {
+		return nil, false
 	}
 	refundFunding := s.refundFundingAmountLocked()
 	refundToken := int64(s.tokenConsumed)
@@ -262,45 +278,70 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	requestID := s.relayInfo.RequestId
 	funding := s.funding
 	if requestID == "" || refundFunding <= 0 {
-		s.mu.Unlock()
 		common.SysLog(fmt.Sprintf("billing refund requires manual review (userId=%d, requestId=%q, funding=%d)", s.relayInfo.UserId, requestID, refundFunding))
-		return
+		return nil, false
 	}
 	source, userID, subscriptionID, ok := durableFundingIdentity(funding)
 	if !ok {
-		s.mu.Unlock()
 		common.SysLog(fmt.Sprintf("billing refund skipped for non-durable funding source (userId=%d, requestId=%s)", s.relayInfo.UserId, requestID))
-		return
+		return nil, false
 	}
 
-	logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费（token_quota=%s, funding=%s）",
-		s.relayInfo.UserId,
-		logger.FormatQuota(s.tokenConsumed),
-		funding.Source(),
-	))
-	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
-		OperationKey:                    "request:" + requestID + ":finalize",
-		Source:                          source,
-		UserID:                          userID,
-		SubscriptionID:                  subscriptionID,
-		TokenID:                         s.relayInfo.TokenId,
-		TokenKey:                        s.relayInfo.TokenKey,
-		FundingDelta:                    -refundFunding,
-		TokenDelta:                      -refundToken,
-		SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(funding),
-		FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription,
-		AllowMissingToken:               true,
-	})
-	if err != nil {
-		common.SysLog(fmt.Sprintf("billing refund remains pending/manual (userId=%d, requestId=%s): %s", s.relayInfo.UserId, requestID, err.Error()))
-		s.mu.Unlock()
+	s.refundInFlight = true
+	return &billingRefundIntent{
+		input: model.BillingSettlementInput{
+			OperationKey:                    "request:" + requestID + ":finalize",
+			Source:                          source,
+			UserID:                          userID,
+			SubscriptionID:                  subscriptionID,
+			TokenID:                         s.relayInfo.TokenId,
+			TokenKey:                        s.relayInfo.TokenKey,
+			FundingDelta:                    -refundFunding,
+			TokenDelta:                      -refundToken,
+			SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(funding),
+			FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription,
+			AllowMissingToken:               true,
+		},
+		userID:        s.relayInfo.UserId,
+		requestID:     requestID,
+		tokenConsumed: s.tokenConsumed,
+		fundingSource: funding.Source(),
+	}, true
+}
+
+func (s *BillingSession) finishRefundIntent(applied bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refundInFlight = false
+	if !applied {
 		return
 	}
 	s.refunded = true
 	s.tokenConsumed = 0
 	s.extraReserved = 0
 	s.preConsumedQuota = 0
-	s.mu.Unlock()
+}
+
+// Refund 退还所有预扣费。普通钱包/订阅会话必须通过持久化结算记录执行；
+// 没有稳定 request id 的自定义资金来源不会被自动修改，避免无法证明幂等时重复退款。
+func (s *BillingSession) Refund(c *gin.Context) {
+	intent, ok := s.prepareRefundIntent()
+	if !ok {
+		return
+	}
+
+	logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费（token_quota=%s, funding=%s）",
+		intent.userID,
+		logger.FormatQuota(intent.tokenConsumed),
+		intent.fundingSource,
+	))
+	_, _, err := model.ApplyBillingSettlementOnce(intent.input)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("billing refund remains pending/manual (userId=%d, requestId=%s): %s", intent.userID, intent.requestID, err.Error()))
+		s.finishRefundIntent(false)
+		return
+	}
+	s.finishRefundIntent(true)
 }
 
 func (s *BillingSession) refundFundingAmountLocked() int64 {
@@ -501,12 +542,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				}
 				s.tokenConsumed = 0
 			}
-			// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
-				return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
-			}
-			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			return mapAtomicPreConsumeError(err)
 		}
 	}
 
@@ -525,6 +561,9 @@ func mapAtomicPreConsumeError(err error) *types.MaxAPIError {
 	if errors.Is(err, model.ErrUserQuotaInsufficient) {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
+	if errors.Is(err, model.ErrSubscriptionQuotaInsufficient) {
+		return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	}
 	errMsg := err.Error()
 	if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 		return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
@@ -542,13 +581,7 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		return nil
 	case *SubscriptionFunding:
 		if _, err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
-				types.ErrorCodeInsufficientUserQuota,
-				http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(),
-				types.ErrOptionWithNoRecordErrorLog(),
-			)
+			return mapAtomicPreConsumeError(err)
 		}
 		return nil
 	default:

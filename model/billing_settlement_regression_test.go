@@ -117,6 +117,44 @@ func TestFailedSettlementLeavesDurablePendingOperation(t *testing.T) {
 	require.EqualValues(t, 90, getRegressionTokenRemainQuota(t, token.Id))
 }
 
+func TestPendingPreConsumeSettlementRetryClaimsPersistedSelection(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 966, Username: "pending-pre-consume-user", Quota: 100, Status: common.UserStatusEnabled}
+	token := Token{Id: 967, UserId: user.Id, Key: "pending-pre-consume-token", RemainQuota: 100, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&token).Error)
+	input := BillingSettlementInput{
+		OperationKey:             "request:pending-pre-consume-selection:pre-consume",
+		Source:                   BillingSettlementSourceWallet,
+		UserID:                   user.Id,
+		TokenID:                  token.Id,
+		TokenKey:                 token.Key,
+		FundingDelta:             10,
+		TokenDelta:               10,
+		ManualOnFailure:          true,
+		PreConsumeRequestID:      "pending-pre-consume-selection",
+		PreConsumeModelName:      "selection-model",
+		PreConsumeRequestedQuota: 12,
+		PreConsumeEffectiveQuota: 10,
+	}
+	_, alreadyApplied, err := ensureBillingSettlementRecord(input)
+	require.NoError(t, err)
+	require.False(t, alreadyApplied)
+
+	ProcessPendingBillingSettlementsOnce()
+
+	var selection BillingPreConsumeSelection
+	require.NoError(t, DB.Where("request_id = ?", input.PreConsumeRequestID).First(&selection).Error)
+	assert.Equal(t, BillingSettlementSourceWallet, selection.Source)
+	assert.EqualValues(t, user.Id, selection.UserID)
+	assert.EqualValues(t, token.Id, selection.TokenID)
+	assert.Equal(t, "selection-model", selection.ModelName)
+	assert.EqualValues(t, 12, selection.RequestedQuota)
+	assert.EqualValues(t, 10, selection.EffectiveQuota)
+	assert.EqualValues(t, 90, getRegressionUserQuota(t, user.Id))
+	assert.EqualValues(t, 90, getRegressionTokenRemainQuota(t, token.Id))
+}
+
 func TestWalletSettlementRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 960, Username: "wallet-outbox-rollback", Quota: 100, Status: common.UserStatusEnabled}
@@ -179,11 +217,8 @@ func failCacheInvalidationOutboxInserts(t *testing.T) {
 	t.Helper()
 	oldRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = true
-	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() {
-		_ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure")
-		common.RedisEnabled = oldRedisEnabled
-	})
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+	failCacheOutboxInserts(t)
 }
 
 func TestFailedRealtimeReserveIsNotRetriedAfterRequestAborts(t *testing.T) {
@@ -498,6 +533,40 @@ func TestSubscriptionPreConsumeCleanupRetainsIdempotencyTombstones(t *testing.T)
 	var count int64
 	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", record.RequestId).Count(&count).Error)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestSubscriptionPreConsumeCleanupDeletesOldTerminalTombstones(t *testing.T) {
+	setupUserUpdateTestState(t)
+	record := SubscriptionPreConsumeRecord{
+		RequestId: "regression:cleanup-terminal-pre-consume", UserId: 937, UserSubscriptionId: 938,
+		PreConsumed: 10, Status: "consumed",
+	}
+	require.NoError(t, DB.Create(&record).Error)
+	oldTimestamp := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id = ?", record.RequestId).
+		UpdateColumns(map[string]interface{}{"created_at": oldTimestamp, "updated_at": oldTimestamp}).Error)
+	now := time.Now().Unix()
+	require.NoError(t, DB.Create(&BillingSettlement{
+		OperationKey:                    "regression:cleanup-terminal-settlement",
+		Source:                          BillingSettlementSourceSubscription,
+		UserID:                          record.UserId,
+		SubscriptionID:                  record.UserSubscriptionId,
+		FundingDelta:                    -10,
+		AppliedFundingDelta:             -10,
+		Status:                          BillingSettlementStatusApplied,
+		SubscriptionPreConsumeRequestID: record.RequestId,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
+		Revision:                        1,
+	}).Error)
+
+	deleted, err := CleanupSubscriptionPreConsumeRecords(7 * 24 * 3600)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	var count int64
+	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", record.RequestId).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func getRegressionUserQuota(t *testing.T, userID int) int64 {

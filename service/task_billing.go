@@ -171,7 +171,7 @@ func buildTaskRefundSettlementInput(task *model.Task, reason string) *model.Bill
 		FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription,
 		AllowMissingToken:               true,
 		Effect: &model.BillingSettlementEffect{
-			LogType: model.LogTypeRefund, Content: "", ChannelID: task.ChannelId,
+			LogType: model.LogTypeRefund, Content: reason, ChannelID: task.ChannelId,
 			ModelName: taskModelName(task), TokenID: task.PrivateData.TokenId,
 			Group: task.Group, Other: other, NodeName: task.PrivateData.NodeName,
 		},
