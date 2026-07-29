@@ -462,6 +462,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if err := service.ValidateStatusCodeMapping(channel.GetStatusCodeMapping()); err != nil {
+		return fmt.Errorf("渠道状态码映射[status code mapping]格式错误：%s", err.Error())
+	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())

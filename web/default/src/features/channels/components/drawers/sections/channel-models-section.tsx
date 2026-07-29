@@ -188,7 +188,6 @@ export function ChannelModelsSection(props: ChannelModelsSectionProps) {
                     placeholder={t('Select models or add custom ones')}
                     allowCreate
                     createLabel='Add custom model "{{value}}"'
-                    maxVisibleChips={6}
                   />
                 </FormControl>
                 {modelMappingGuardrail.exposedTargetModels.length > 0 && (

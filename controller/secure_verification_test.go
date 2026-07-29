@@ -112,6 +112,15 @@ func TestUniversalVerifyPasswordRequiresAccessTokenScope(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "密码验证不可用")
 }
 
+func TestSecureVerificationScopeAllowlist(t *testing.T) {
+	require.True(t, isSupportedSecureVerificationScope(""))
+	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccessToken))
+	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccountDelete))
+	require.False(t, isSupportedSecureVerificationScope("admin_delete"))
+	require.True(t, passwordVerificationAllowed(secureVerificationScopeAccountDelete))
+	require.False(t, passwordVerificationAllowed(""))
+}
+
 func TestVerificationMethodsUsePasswordOnlyAsFallback(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(

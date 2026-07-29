@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	common2 "github.com/MAX-API-Next/MAX-API/common"
@@ -607,6 +609,14 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
+	var requestWritten atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(traceInfo httptrace.WroteRequestInfo) {
+			if traceInfo.Err == nil {
+				requestWritten.Store(true)
+			}
+		},
+	}))
 
 	err = a.BuildRequestHeader(c, req, info)
 	if err != nil {
@@ -619,6 +629,9 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	applyHeaderOverrideToRequest(req, headerOverride)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
+		if info != nil && info.TaskRelayInfo != nil && requestWritten.Load() {
+			info.UpstreamTaskOutcomeUnknown = true
+		}
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil

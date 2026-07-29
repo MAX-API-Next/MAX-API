@@ -291,7 +291,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			if errors.Is(err, model.ErrUserDeleted) {
 				return nil, &OAuthUserDeletedError{}
 			}
-			return nil, err
+			return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: err}
 		}
 		// Check if user has been deleted
 		if user.Id == 0 {
@@ -312,7 +312,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 				if errors.Is(err, model.ErrUserDeleted) {
 					return nil, &OAuthUserDeletedError{}
 				}
-				return nil, err
+				return nil, &oauthIdentityLookupError{provider: provider.GetName(), err: err}
 			}
 			if user.Id != 0 {
 				// Found user with legacy ID, migrate to new ID

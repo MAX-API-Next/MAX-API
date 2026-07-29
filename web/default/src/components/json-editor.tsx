@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Code, Table, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -43,6 +43,23 @@ type EditorRow = {
   value: string
 }
 
+let nextEditorRowId = 0
+
+function parseJsonRows(json: string): EditorRow[] | null {
+  try {
+    if (!json.trim()) return []
+    const parsed = JSON.parse(json)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    return Object.entries(parsed).map(([key, val]) => ({
+      id: `json-editor-row-${nextEditorRowId++}`,
+      key,
+      value: typeof val === 'object' ? JSON.stringify(val) : String(val),
+    }))
+  } catch {
+    return null
+  }
+}
+
 export function JsonEditor({
   value,
   onChange,
@@ -63,38 +80,35 @@ export function JsonEditor({
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
-  const [rows, setRows] = useState<EditorRow[]>([])
+  const [rows, setRows] = useState<EditorRow[]>(
+    () => parseJsonRows(value) ?? []
+  )
   const [jsonValue, setJsonValue] = useState(value)
+  const handledValueRef = useRef(value)
 
-  const parseJsonToRows = (json: string) => {
-    try {
-      if (!json.trim()) {
-        setRows([])
-        return
-      }
-      const parsed = JSON.parse(json)
-      const newRows: EditorRow[] = Object.entries(parsed).map(
-        ([key, val], index) => ({
-          id: `${Date.now()}-${index}`,
-          key,
-          value: typeof val === 'object' ? JSON.stringify(val) : String(val),
-        })
-      )
-      setRows(newRows)
-    } catch (_error) {
-      // Invalid JSON, keep current rows
-    }
+  const syncRowsFromJson = (json: string) => {
+    const parsedRows = parseJsonRows(json)
+    if (parsedRows !== null) setRows(parsedRows)
+  }
+
+  const emitChange = (newValue: string) => {
+    handledValueRef.current = newValue
+    setJsonValue(newValue)
+    onChange(newValue)
   }
 
   // Parse JSON to rows when value changes externally
   useEffect(() => {
-    if (value !== jsonValue) {
+    if (value !== handledValueRef.current) {
+      handledValueRef.current = value
       // External updates replace the local visual/JSON draft together.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setJsonValue(value)
-      parseJsonToRows(value)
+      const parsedRows = parseJsonRows(value)
+      if (parsedRows !== null) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setRows(parsedRows)
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
   const convertRowsToJson = (updatedRows: EditorRow[]): string => {
@@ -139,8 +153,7 @@ export function JsonEditor({
     const updatedRows = rows.filter((row) => row.id !== id)
     setRows(updatedRows)
     const json = convertRowsToJson(updatedRows)
-    setJsonValue(json)
-    onChange(json)
+    emitChange(json)
   }
 
   const handleRowChange = (
@@ -153,36 +166,24 @@ export function JsonEditor({
     )
     setRows(updatedRows)
     const json = convertRowsToJson(updatedRows)
-    setJsonValue(json)
-    onChange(json)
+    emitChange(json)
   }
 
   const handleJsonChange = (newJson: string) => {
-    setJsonValue(newJson)
-    onChange(newJson)
-    parseJsonToRows(newJson)
+    emitChange(newJson)
+    syncRowsFromJson(newJson)
   }
 
   const handleFillTemplate = () => {
     if (!template) return
     const templateJson = JSON.stringify(template, null, 2)
-    setJsonValue(templateJson)
-    onChange(templateJson)
-    parseJsonToRows(templateJson)
+    emitChange(templateJson)
+    syncRowsFromJson(templateJson)
   }
 
   const toggleMode = () => {
-    if (mode === 'visual') {
-      // Switching to JSON mode: sync rows to JSON
-      const json = convertRowsToJson(rows)
-      setJsonValue(json)
-      onChange(json)
-      setMode('json')
-    } else {
-      // Switching to visual mode: sync JSON to rows
-      parseJsonToRows(jsonValue)
-      setMode('visual')
-    }
+    if (mode === 'json') syncRowsFromJson(jsonValue)
+    setMode(mode === 'visual' ? 'json' : 'visual')
   }
 
   return (

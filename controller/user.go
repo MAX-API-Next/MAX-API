@@ -915,9 +915,6 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.InvalidateUserTokensCache(id); err != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", id, err.Error()))
-	}
 	recordManageAuditFor(c, originUser.Id, "user.delete", map[string]interface{}{
 		"username": originUser.Username,
 		"id":       originUser.Id,
@@ -942,9 +939,6 @@ func DeleteSelf(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
-	}
-	if err := model.InvalidateUserTokensCache(id); err != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", id, err.Error()))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1169,14 +1163,9 @@ func ManageUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	// 禁用 / 角色调整后，强制失效用户缓存与其全部令牌缓存，
-	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
-	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
-	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
-	if req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
-		if err := model.InvalidateUserCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-		}
+	// UpdateFields 已在同一事务中登记用户缓存失效；状态或角色变化时
+	// 额外刷新该用户的 Token 缓存，避免令牌侧继续使用旧快照。
+	if req.Action == "enable" || req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
 		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}

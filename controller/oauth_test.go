@@ -96,6 +96,29 @@ type publicLookupFailingOAuthProvider struct {
 	deletedUserOAuthProvider
 }
 
+type publicFillFailingOAuthProvider struct {
+	publicLookupFailingOAuthProvider
+}
+
+func (*publicFillFailingOAuthProvider) IsUserIDTaken(string) (bool, error) { return true, nil }
+func (*publicFillFailingOAuthProvider) FillUserByProviderID(*model.User, string) error {
+	return errors.New("internal database host db.internal:5432")
+}
+
+func TestFindOrCreateOAuthUserWrapsProviderFillDatabaseError(t *testing.T) {
+	_, err := findOrCreateOAuthUser(nil, &publicFillFailingOAuthProvider{}, &oauth.OAuthUser{
+		ProviderUserID: "existing-user-id",
+		Extra:          map[string]any{},
+	}, nil)
+	var lookupErr *oauthIdentityLookupError
+	if !errors.As(err, &lookupErr) {
+		t.Fatalf("expected masked identity lookup error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "db.internal") {
+		t.Fatalf("public error leaked database details: %q", err.Error())
+	}
+}
+
 func (*publicLookupFailingOAuthProvider) ExchangeToken(context.Context, string, *gin.Context) (*oauth.OAuthToken, error) {
 	return &oauth.OAuthToken{AccessToken: "test-token"}, nil
 }

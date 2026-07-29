@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,18 @@ func TestResetStatusCode(t *testing.T) {
 			statusCodeConfig: `{"200":503}`,
 			expectedCode:     200,
 		},
+		{
+			name:             "skip out of range target",
+			statusCode:       429,
+			statusCodeConfig: `{"429":999}`,
+			expectedCode:     429,
+		},
+		{
+			name:             "ignore unrelated invalid entry",
+			statusCode:       429,
+			statusCodeConfig: `{"429":503,"500":999}`,
+			expectedCode:     503,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -62,6 +75,25 @@ func TestResetStatusCode(t *testing.T) {
 			require.Equal(t, tc.expectedCode, maxAPIError.StatusCode)
 		})
 	}
+}
+
+func TestResetTaskStatusCodePreservesOriginalUpstreamStatus(t *testing.T) {
+	t.Parallel()
+
+	upstreamErr := &dto.TaskError{StatusCode: http.StatusTooManyRequests}
+	ResetTaskStatusCode(upstreamErr, `{"429":"503"}`)
+	require.Equal(t, http.StatusServiceUnavailable, upstreamErr.StatusCode)
+	require.Equal(t, http.StatusTooManyRequests, upstreamErr.UpstreamStatusCode)
+}
+
+func TestValidateStatusCodeMapping(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, ValidateStatusCodeMapping(`{"429":"503","500":502}`))
+	require.Error(t, ValidateStatusCodeMapping(`null`))
+	require.Error(t, ValidateStatusCodeMapping(`{"bad":503}`))
+	require.Error(t, ValidateStatusCodeMapping(`{"429":999}`))
+	require.Error(t, ValidateStatusCodeMapping(`{"429":503,"0429":502}`))
 }
 
 func TestRelayErrorHandlerTruncatesInvalidJSONBodyInLog(t *testing.T) {

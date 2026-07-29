@@ -154,6 +154,31 @@ func TestValidateOptionUpdateRejectsRuntimeConfigParseErrors(t *testing.T) {
 	}
 }
 
+func TestValidateOptionUpdateRejectsUnsafePricingValues(t *testing.T) {
+	pricingKeys := []string{
+		"ModelRatio",
+		"ModelPrice",
+		"CacheRatio",
+		"CreateCacheRatio",
+		"CompletionRatio",
+		"ImageRatio",
+		"AudioRatio",
+		"AudioCompletionRatio",
+	}
+
+	for _, key := range pricingKeys {
+		t.Run(key+" rejects null", func(t *testing.T) {
+			require.Error(t, validateOptionUpdate(key, `{"unsafe-model":null}`))
+		})
+		t.Run(key+" rejects negative values", func(t *testing.T) {
+			require.Error(t, validateOptionUpdate(key, `{"unsafe-model":-0.01}`))
+		})
+		t.Run(key+" allows zero", func(t *testing.T) {
+			require.NoError(t, validateOptionUpdate(key, `{"free-model":0}`))
+		})
+	}
+}
+
 func TestUpdateOptionsBulkRejectsRuntimeConfigErrorsBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
 	deleteOptionsForTest(t, "SystemName", "ModelRatio")

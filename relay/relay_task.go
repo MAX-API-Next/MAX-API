@@ -28,7 +28,77 @@ type TaskSubmitResult struct {
 	TaskData       []byte
 	Platform       constant.TaskPlatform
 	Quota          int
+	Task           *model.Task
+	response       *taskResponseSnapshot
 	//PerCallPrice   types.PriceData
+}
+
+func (r *TaskSubmitResult) WriteResponse(c *gin.Context) error {
+	if r == nil {
+		return errors.New("task submit result is nil")
+	}
+	return r.response.writeTo(c)
+}
+
+func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) {
+	if task == nil || info == nil {
+		return
+	}
+	deltaSettlementDisabled := false
+	if info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeDoubaoVideo {
+		deltaSettlementDisabled = info.ChannelOtherSettings.DisableTaskDeltaSettlement
+	}
+	task.PrivateData.BillingSource = info.BillingSource
+	task.PrivateData.BillingRequestId = info.RequestId
+	task.PrivateData.SubscriptionId = info.SubscriptionId
+	task.PrivateData.TokenId = info.TokenId
+	task.PrivateData.NodeName = common.NodeName
+	task.PrivateData.BillingContext = &model.TaskBillingContext{
+		ModelPrice:              info.PriceData.ModelPrice,
+		GroupRatio:              info.PriceData.GroupRatioInfo.GroupRatio,
+		ModelRatio:              info.PriceData.ModelRatio,
+		OtherRatios:             info.PriceData.OtherRatios,
+		TaskBilling:             info.TaskBilling,
+		OriginModelName:         info.OriginModelName,
+		PerCallBilling:          common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice || info.TaskBilling != nil,
+		DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
+	}
+	task.Action = info.Action
+}
+
+func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.RelayInfo) (*model.Task, *dto.TaskError) {
+	if info == nil || info.TaskRelayInfo == nil {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task relay metadata is unavailable"), "persist_task_failed", http.StatusInternalServerError)
+	}
+	if info.PersistedTaskID > 0 {
+		var task model.Task
+		if err := model.DB.First(&task, info.PersistedTaskID).Error; err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "load_persisted_task_failed", http.StatusInternalServerError)
+		}
+		fresh := model.InitTask(platform, info)
+		task.Platform = platform
+		task.ChannelId = fresh.ChannelId
+		task.Group = fresh.Group
+		task.Properties = fresh.Properties
+		task.PrivateData.Key = fresh.PrivateData.Key
+		task.PrivateData.AwaitingUpstreamID = true
+		task.Quota = info.PriceData.Quota
+		populateTaskBillingMetadata(&task, info)
+		if err := task.Update(); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "update_persisted_task_failed", http.StatusInternalServerError)
+		}
+		return &task, nil
+	}
+
+	task := model.InitTask(platform, info)
+	task.Quota = info.PriceData.Quota
+	task.PrivateData.AwaitingUpstreamID = true
+	populateTaskBillingMetadata(task, info)
+	if err := task.Insert(); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "persist_task_failed", http.StatusInternalServerError)
+	}
+	info.PersistedTaskID = task.ID
+	return task, nil
 }
 
 type taskBillingEstimator interface {
@@ -235,6 +305,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			return nil, service.TaskErrorFromAPIError(apiErr)
 		}
 	}
+	task, taskErr := ensureTaskPlaceholder(platform, info)
+	if taskErr != nil {
+		return nil, taskErr
+	}
 
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
@@ -246,22 +320,41 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		return nil, mapUpstreamTaskError(c, taskErr)
 	}
-
-	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
-	otherRatios := info.PriceData.OtherRatios
-	if otherRatios == nil {
-		otherRatios = map[string]float64{}
+	if resp == nil {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task upstream response is nil"), "empty_upstream_response", http.StatusBadGateway)
 	}
-	ratiosJSON, _ := common.Marshal(otherRatios)
-	c.Header("X-Max-Api-Other-Ratios", string(ratiosJSON))
-	c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
+	info.UpstreamTaskResponseReceived = true
 
-	// 11. 解析响应
-	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
+	// 10-11. Buffer the adapter response until the task row and settlement
+	// intent are durable. Adapters may write the body while parsing.
+	var upstreamTaskID string
+	var taskData []byte
+	var responseSnapshot *taskResponseSnapshot
+	func() {
+		originalWriter := c.Writer
+		bufferedWriter := newTaskResponseBuffer(originalWriter)
+		c.Writer = bufferedWriter
+		defer func() { c.Writer = originalWriter }()
+
+		otherRatios := info.PriceData.OtherRatios
+		if otherRatios == nil {
+			otherRatios = map[string]float64{}
+		}
+		ratiosJSON, _ := common.Marshal(otherRatios)
+		c.Header("X-Max-Api-Other-Ratios", string(ratiosJSON))
+		c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
+
+		upstreamTaskID, taskData, taskErr = adaptor.DoResponse(c, resp, info)
+		responseSnapshot = bufferedWriter.snapshot()
+	}()
 	if taskErr != nil {
-		return nil, taskErr
+		return nil, mapUpstreamTaskError(c, taskErr)
+	}
+	if strings.TrimSpace(upstreamTaskID) == "" {
+		return nil, service.TaskErrorWrapperLocal(errors.New("task upstream response did not contain a task id"), "missing_upstream_task_id", http.StatusBadGateway)
 	}
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
@@ -274,13 +367,28 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			info.PriceData.Quota = finalQuota
 		}
 	}
+	task.PrivateData.UpstreamTaskID = upstreamTaskID
+	task.PrivateData.AwaitingUpstreamID = false
+	task.Quota = finalQuota
+	task.Data = taskData
+	populateTaskBillingMetadata(task, info)
 
 	return &TaskSubmitResult{
 		UpstreamTaskID: upstreamTaskID,
 		TaskData:       taskData,
 		Platform:       platform,
 		Quota:          finalQuota,
+		Task:           task,
+		response:       responseSnapshot,
 	}, nil
+}
+
+// mapUpstreamTaskError is only called after an upstream response is available.
+func mapUpstreamTaskError(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError {
+	if c != nil {
+		service.ResetTaskStatusCode(taskErr, c.GetString("status_code_mapping"))
+	}
+	return taskErr
 }
 
 func estimateTaskBilling(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor, platform constant.TaskPlatform) (*types.TaskBillingResult, error) {
@@ -619,7 +727,10 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
 
-	if !snap.Equal(task.Snapshot()) {
+	// Terminal transitions must go through the polling settlement path. The
+	// realtime fetch may report terminal data to this caller, but must not make
+	// that state durable without the matching refund/final-settlement intent.
+	if !isTerminalTaskStatus(task.Status) && !snap.Equal(task.Snapshot()) {
 		_, _ = task.UpdateWithStatus(snap.Status)
 	}
 
@@ -643,6 +754,10 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		Data: out,
 	})
 	return respBody
+}
+
+func isTerminalTaskStatus(status model.TaskStatus) bool {
+	return status == model.TaskStatusSuccess || status == model.TaskStatusFailure
 }
 
 // detectVideoFormat 从 Gemini/Vertex 原始响应中探测视频格式

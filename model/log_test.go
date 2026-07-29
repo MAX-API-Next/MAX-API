@@ -27,6 +27,40 @@ func withLogAuditSettings(t *testing.T, requestEnabled bool, responseEnabled boo
 	})
 }
 
+func TestRecordTaskBillingLogOnceUsesReceiptClaimForIdempotency(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	params := RecordTaskBillingLogParams{
+		UserId:  1,
+		LogType: LogTypeSystem,
+		Content: "idempotent task billing effect",
+	}
+	require.NoError(t, RecordTaskBillingLogOnce("task:test:effect", params))
+	require.NoError(t, RecordTaskBillingLogOnce("task:test:effect", params))
+
+	var logCount int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Count(&logCount).Error)
+	require.EqualValues(t, 1, logCount)
+
+	var receipt BillingLogReceipt
+	require.NoError(t, LOG_DB.Where("operation_key = ?", "task:test:effect").Take(&receipt).Error)
+	require.NotEmpty(t, receipt.ClaimToken)
+
+	require.NoError(t, LOG_DB.Create(&BillingLogReceipt{
+		OperationKey: "task:legacy:effect",
+		ClaimToken:   "",
+		CreatedAt:    time.Now().Unix(),
+	}).Error)
+	require.NoError(t, RecordTaskBillingLogOnce("task:legacy:effect", params))
+	require.NoError(t, LOG_DB.Model(&Log{}).Count(&logCount).Error)
+	require.EqualValues(t, 1, logCount)
+}
+
 func markRetryLogBackfillCompletedForTest(t *testing.T) {
 	t.Helper()
 	markerKey := logRetryMarkerBackfillCompletionKey()
@@ -74,6 +108,12 @@ func TestLogQuotaFilterIndexes(t *testing.T) {
 
 	require.True(t, db.Migrator().HasIndex(&Log{}, "idx_logs_quota"))
 	require.True(t, db.Migrator().HasIndex(&Log{}, "idx_logs_type_quota_created_at"))
+}
+
+func TestLogSchemaDoesNotAddBillingSettlementIdempotencyColumn(t *testing.T) {
+	db := newRetryBackfillTestDB(t, &Log{})
+
+	require.False(t, db.Migrator().HasColumn(&Log{}, "billing_settlement_operation_key"))
 }
 
 func TestGetAllLogsRetryFilter(t *testing.T) {

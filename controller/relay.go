@@ -171,10 +171,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if maxAPIError != nil {
 			maxAPIError = service.NormalizeViolationFeeError(maxAPIError)
-			if relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
-			}
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, maxAPIError)
+			service.HandleFailedBilling(c, relayInfo, maxAPIError)
 		}
 	}()
 
@@ -505,9 +502,37 @@ func RelayTask(c *gin.Context) {
 
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
+	var settlementEffectOperationKey string
 	defer func() {
-		if taskErr != nil && relayInfo.Billing != nil {
-			relayInfo.Billing.Refund(c)
+		if taskErr != nil {
+			upstreamAmbiguous := relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown
+			upstreamPersisted := result != nil && result.Task != nil
+			if relayInfo.Billing != nil && !upstreamAmbiguous {
+				relayInfo.Billing.Refund(c)
+			}
+			if relayInfo.PersistedTaskID > 0 {
+				reason := taskErr.Message
+				if reason == "" && taskErr.Error != nil {
+					reason = taskErr.Error.Error()
+				}
+				if upstreamPersisted {
+					reason += "（上游已接受任务，本地结算记录未完成；已保留预扣费，请人工核对）"
+					if markErr := model.MarkTaskSubmitNeedsReview(result.Task, reason); markErr != nil {
+						common.SysError("mark task submit for manual review error: " + markErr.Error())
+					}
+				} else if upstreamAmbiguous {
+					if relayInfo.UpstreamTaskOutcomeUnknown {
+						reason += "（上游请求已发送但响应结果未知；已保留预扣费，请人工核对）"
+					} else {
+						reason += "（已收到上游成功响应但无法确认任务 ID；已保留预扣费，请人工核对）"
+					}
+					if markErr := model.MarkTaskSubmitAmbiguous(relayInfo.PersistedTaskID, reason); markErr != nil {
+						common.SysError("mark ambiguous task submit error: " + markErr.Error())
+					}
+				} else if markErr := model.MarkTaskSubmitFailed(relayInfo.PersistedTaskID, reason); markErr != nil {
+					common.SysError("mark failed task submit error: " + markErr.Error())
+				}
+			}
 		}
 	}()
 
@@ -556,6 +581,9 @@ func RelayTask(c *gin.Context) {
 		if taskErr == nil {
 			break
 		}
+		if relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown {
+			break
+		}
 
 		if !taskErr.LocalError {
 			processChannelError(c,
@@ -575,38 +603,46 @@ func RelayTask(c *gin.Context) {
 		logger.LogInfo(c, retryLogStr)
 	}
 
-	// ── 成功：结算 + 日志 + 插入任务 ──
+	// ── 成功：原子持久化任务 + 结算 intent，再释放缓冲响应 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-			common.SysError("settle task billing error: " + settleErr.Error())
+		if result == nil || result.Task == nil {
+			taskErr = service.TaskErrorWrapperLocal(errors.New("task submit result is incomplete"), "persist_task_failed", http.StatusInternalServerError)
+		} else {
+			var settlementIntent *model.BillingSettlementInput
+			if relayInfo.Billing != nil {
+				preparer, ok := relayInfo.Billing.(interface {
+					PrepareSettlement(int) (*model.BillingSettlementInput, error)
+				})
+				if !ok {
+					taskErr = service.TaskErrorWrapperLocal(errors.New("task billing session cannot prepare a durable settlement"), "persist_billing_intent_failed", http.StatusInternalServerError)
+				} else if settlementIntent, err = preparer.PrepareSettlement(result.Quota); err != nil {
+					taskErr = service.TaskErrorWrapperLocal(err, "persist_billing_intent_failed", http.StatusInternalServerError)
+				}
+			}
+			if taskErr == nil {
+				if settlementIntent != nil {
+					settlementIntent.Effect = service.BuildTaskSubmissionSettlementEffect(c, relayInfo, result.Quota)
+					settlementEffectOperationKey = settlementIntent.OperationKey
+				}
+				if err = result.Task.UpdateWithSettlementIntent(settlementIntent); err != nil {
+					taskErr = service.TaskErrorWrapperLocal(err, "persist_task_result_failed", http.StatusInternalServerError)
+				}
+			}
 		}
-		service.LogTaskConsumption(c, relayInfo)
-
-		deltaSettlementDisabled := false
-		if relayInfo.ChannelMeta != nil && relayInfo.ChannelType == constant.ChannelTypeDoubaoVideo {
-			deltaSettlementDisabled = relayInfo.ChannelOtherSettings.DisableTaskDeltaSettlement
-		}
-		task := model.InitTask(result.Platform, relayInfo)
-		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
-		task.PrivateData.BillingSource = relayInfo.BillingSource
-		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
-		task.PrivateData.TokenId = relayInfo.TokenId
-		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:              relayInfo.PriceData.ModelPrice,
-			GroupRatio:              relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:              relayInfo.PriceData.ModelRatio,
-			OtherRatios:             relayInfo.PriceData.OtherRatios,
-			TaskBilling:             relayInfo.TaskBilling,
-			OriginModelName:         relayInfo.OriginModelName,
-			PerCallBilling:          common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice || relayInfo.TaskBilling != nil,
-			DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
-		}
-		task.Quota = result.Quota
-		task.Data = result.TaskData
-		task.Action = relayInfo.Action
-		if insertErr := task.Insert(); insertErr != nil {
-			common.SysError("insert task error: " + insertErr.Error())
+		if taskErr == nil {
+			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+				common.SysError("settle task billing remains pending/manual: " + settleErr.Error())
+			}
+			if settlementEffectOperationKey != "" {
+				if effectErr := model.ProcessBillingSettlementEffect(settlementEffectOperationKey); effectErr != nil {
+					common.SysError("task billing effect remains pending/manual: " + effectErr.Error())
+				}
+			} else {
+				service.LogTaskConsumption(c, relayInfo)
+			}
+			if writeErr := result.WriteResponse(c); writeErr != nil {
+				common.SysError("write task response error: " + writeErr.Error())
+			}
 		}
 	}
 
@@ -639,27 +675,34 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	if taskErr.LocalError {
 		return false
 	}
-	if taskErr.StatusCode == http.StatusTooManyRequests {
+	if taskErr.UpstreamStatusCode != 0 && !shouldRetryTaskStatusCode(taskErr.UpstreamStatusCode) {
+		return false
+	}
+	return shouldRetryTaskStatusCode(taskErr.StatusCode)
+}
+
+func shouldRetryTaskStatusCode(statusCode int) bool {
+	if statusCode == http.StatusTooManyRequests {
 		return true
 	}
-	if taskErr.StatusCode == 307 {
+	if statusCode == 307 {
 		return true
 	}
-	if taskErr.StatusCode/100 == 5 {
+	if statusCode/100 == 5 {
 		// 超时不重试
-		if operation_setting.IsAlwaysSkipRetryStatusCode(taskErr.StatusCode) {
+		if operation_setting.IsAlwaysSkipRetryStatusCode(statusCode) {
 			return false
 		}
 		return true
 	}
-	if taskErr.StatusCode == http.StatusBadRequest {
+	if statusCode == http.StatusBadRequest {
 		return false
 	}
-	if taskErr.StatusCode == 408 {
+	if statusCode == 408 {
 		// azure处理超时不重试
 		return false
 	}
-	if taskErr.StatusCode/100 == 2 {
+	if statusCode/100 == 2 {
 		return false
 	}
 	return true

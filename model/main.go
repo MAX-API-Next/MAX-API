@@ -215,7 +215,11 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	common.UsingSQLite = true
+	if !isLog {
+		common.UsingSQLite = true
+	} else {
+		common.LogSqlType = common.DatabaseTypeSQLite
+	}
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
@@ -317,6 +321,7 @@ func migrateDB() error {
 		&Redemption{},
 		&Ability{},
 		&Log{},
+		&BillingLogReceipt{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -333,6 +338,9 @@ func migrateDB() error {
 		&SubscriptionOrder{},
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
+		&BillingSettlement{},
+		&BillingPreConsumeSelection{},
+		&CacheInvalidationTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
@@ -364,95 +372,6 @@ func migrateDB() error {
 		LOG_DB = DB
 		scheduleLogRetryMarkerBackfill()
 	}
-	return nil
-}
-
-func migrateDBFast() error {
-	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
-		return err
-	}
-	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
-		return err
-	}
-
-	var wg sync.WaitGroup
-
-	migrations := []struct {
-		model interface{}
-		name  string
-	}{
-		{&Channel{}, "Channel"},
-		{&Token{}, "Token"},
-		{&User{}, "User"},
-		{&PasskeyCredential{}, "PasskeyCredential"},
-		{&Option{}, "Option"},
-		{&Redemption{}, "Redemption"},
-		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
-		{&Midjourney{}, "Midjourney"},
-		{&TopUp{}, "TopUp"},
-		{&QuotaData{}, "QuotaData"},
-		{&QuotaDataSnapshot{}, "QuotaDataSnapshot"},
-		{&QuotaDataSnapshotRetry{}, "QuotaDataSnapshotRetry"},
-		{&Task{}, "Task"},
-		{&Model{}, "Model"},
-		{&Vendor{}, "Vendor"},
-		{&PrefillGroup{}, "PrefillGroup"},
-		{&Setup{}, "Setup"},
-		{&TwoFA{}, "TwoFA"},
-		{&TwoFABackupCode{}, "TwoFABackupCode"},
-		{&Checkin{}, "Checkin"},
-		{&SubscriptionOrder{}, "SubscriptionOrder"},
-		{&UserSubscription{}, "UserSubscription"},
-		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
-		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
-		{&UserOAuthBinding{}, "UserOAuthBinding"},
-		{&PerfMetric{}, "PerfMetric"},
-		{&SystemTask{}, "SystemTask"},
-		{&SystemInstance{}, "SystemInstance"},
-	}
-	// 动态计算migration数量，确保errChan缓冲区足够大
-	errChan := make(chan error, len(migrations))
-
-	for _, m := range migrations {
-		wg.Add(1)
-		go func(model interface{}, name string) {
-			defer wg.Done()
-			if err := DB.AutoMigrate(model); err != nil {
-				errChan <- fmt.Errorf("failed to migrate %s: %v", name, err)
-			}
-		}(m.model, m.name)
-	}
-
-	// Wait for all migrations to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
-		return err
-	}
-	if err := migrateUserOAuthIdentityConstraints(); err != nil {
-		return err
-	}
-	if err := backfillUserNormalizedEmails(); err != nil {
-		return err
-	}
-	if common.UsingSQLite {
-		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
-			return err
-		}
-	} else {
-		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
-			return err
-		}
-	}
-	common.SysLog("database migrated")
 	return nil
 }
 
@@ -683,7 +602,7 @@ func userOAuthIdentityGeneratedColumnSQL(identity userOAuthIdentityMigration) st
 
 func migrateLOGDB() error {
 	var err error
-	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
+	if err = LOG_DB.AutoMigrate(&Log{}, &BillingLogReceipt{}); err != nil {
 		return err
 	}
 	scheduleLogRetryMarkerBackfill()

@@ -68,7 +68,7 @@ function ChannelModelsSectionFixture() {
 }
 
 describe('ChannelModelsSection', () => {
-  test('caps selected chips while preserving the complete model count', () => {
+  test('shows every selected model chip and preserves the complete count', () => {
     const markup = renderToStaticMarkup(
       <I18nextProvider i18n={i18n}>
         <ChannelModelsSectionFixture />
@@ -76,9 +76,10 @@ describe('ChannelModelsSection', () => {
     )
 
     assert.match(markup, /Selected 8/)
-    assert.match(markup, /\+2 more/)
-    assert.doesNotMatch(markup, />long-vendor-model-7</)
-    assert.doesNotMatch(markup, />long-vendor-model-8</)
+    assert.doesNotMatch(markup, /\+2 more/)
+    for (const model of selectedModels) {
+      assert.match(markup, new RegExp(`>${model}<`))
+    }
   })
 
   test('keeps long mapping warnings wrap-safe and form descriptions linked', () => {

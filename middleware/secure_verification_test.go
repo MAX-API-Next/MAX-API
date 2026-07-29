@@ -71,14 +71,17 @@ func TestPasswordVerificationIsRestrictedToMatchingScope(t *testing.T) {
 	router.GET("/other-sensitive", setUser, SecureVerificationRequired(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
+	router.DELETE("/account", setUser, SecureVerificationRequired("account_delete"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
 
 	seedRecorder := httptest.NewRecorder()
 	router.ServeHTTP(seedRecorder, httptest.NewRequest(http.MethodGet, "/seed", nil))
 	require.Equal(t, http.StatusNoContent, seedRecorder.Code)
 
-	perform := func(path string) *httptest.ResponseRecorder {
+	perform := func(method, path string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request := httptest.NewRequest(method, path, nil)
 		for _, sessionCookie := range seedRecorder.Result().Cookies() {
 			request.AddCookie(sessionCookie)
 		}
@@ -86,8 +89,11 @@ func TestPasswordVerificationIsRestrictedToMatchingScope(t *testing.T) {
 		return recorder
 	}
 
-	require.Equal(t, http.StatusNoContent, perform("/token").Code)
-	otherRecorder := perform("/other-sensitive")
+	require.Equal(t, http.StatusNoContent, perform(http.MethodGet, "/token").Code)
+	otherRecorder := perform(http.MethodGet, "/other-sensitive")
 	require.Equal(t, http.StatusForbidden, otherRecorder.Code)
 	require.Contains(t, otherRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+	deleteRecorder := perform(http.MethodDelete, "/account")
+	require.Equal(t, http.StatusForbidden, deleteRecorder.Code)
+	require.Contains(t, deleteRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }

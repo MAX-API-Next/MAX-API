@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 export type VerificationMethod = '2fa' | 'passkey' | 'password'
-export type VerificationScope = 'access_token'
+export type VerificationScope = 'access_token' | 'account_delete'
 
 export interface VerificationMethods {
   has2FA: boolean

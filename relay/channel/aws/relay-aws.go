@@ -2,7 +2,6 @@ package aws
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,11 +39,15 @@ func getAwsErrorStatusCode(err error) int {
 	return http.StatusInternalServerError
 }
 
-func newAwsInvokeContext() (context.Context, context.CancelFunc) {
-	if common.RelayTimeout <= 0 {
-		return context.Background(), func() {}
+func newAwsInvokeContext(c *gin.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if c != nil && c.Request != nil {
+		base = c.Request.Context()
 	}
-	return context.WithTimeout(context.Background(), time.Duration(common.RelayTimeout)*time.Second)
+	if common.RelayTimeout <= 0 {
+		return context.WithCancel(base)
+	}
+	return context.WithTimeout(base, time.Duration(common.RelayTimeout)*time.Second)
 }
 
 func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.Client, error) {
@@ -223,7 +226,7 @@ func getAwsModelID(requestModel string) string {
 
 func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.MaxAPIError, *dto.Usage) {
 
-	ctx, cancel := newAwsInvokeContext()
+	ctx, cancel := newAwsInvokeContext(c)
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
@@ -253,7 +256,7 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 }
 
 func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.MaxAPIError, *dto.Usage) {
-	ctx, cancel := newAwsInvokeContext()
+	ctx, cancel := newAwsInvokeContext(c)
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
@@ -296,7 +299,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 // Nova模型处理函数
 func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.MaxAPIError, *dto.Usage) {
 
-	ctx, cancel := newAwsInvokeContext()
+	ctx, cancel := newAwsInvokeContext(c)
 	defer cancel()
 
 	awsResp, err := a.AwsClient.InvokeModel(ctx, a.AwsReq.(*bedrockruntime.InvokeModelInput))
@@ -305,7 +308,33 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		return types.NewOpenAIError(errors.Wrap(err, "InvokeModel"), types.ErrorCodeAwsInvokeError, statusCode), nil
 	}
 
-	// 解析Nova响应
+	content, usage, err := parseNovaResponse(awsResp.Body)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
+	}
+
+	// 构造OpenAI格式响应
+	response := dto.OpenAITextResponse{
+		Id:      helper.GetResponseID(c),
+		Object:  "chat.completion",
+		Created: common.GetTimestamp(),
+		Model:   info.UpstreamModelName,
+		Choices: []dto.OpenAITextResponseChoice{{
+			Index: 0,
+			Message: dto.Message{
+				Role:    "assistant",
+				Content: content,
+			},
+			FinishReason: "stop",
+		}},
+		Usage: usage,
+	}
+
+	c.JSON(http.StatusOK, response)
+	return nil, &response.Usage
+}
+
+func parseNovaResponse(body []byte) (string, dto.Usage, error) {
 	var novaResp struct {
 		Output struct {
 			Message struct {
@@ -321,31 +350,16 @@ func handleNovaRequest(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) 
 		} `json:"usage"`
 	}
 
-	if err := json.Unmarshal(awsResp.Body, &novaResp); err != nil {
-		return types.NewError(errors.Wrap(err, "unmarshal nova response"), types.ErrorCodeBadResponseBody), nil
+	if err := common.Unmarshal(body, &novaResp); err != nil {
+		return "", dto.Usage{}, errors.Wrap(err, "unmarshal nova response")
+	}
+	if len(novaResp.Output.Message.Content) == 0 {
+		return "", dto.Usage{}, errors.New("nova response content is empty")
 	}
 
-	// 构造OpenAI格式响应
-	response := dto.OpenAITextResponse{
-		Id:      helper.GetResponseID(c),
-		Object:  "chat.completion",
-		Created: common.GetTimestamp(),
-		Model:   info.UpstreamModelName,
-		Choices: []dto.OpenAITextResponseChoice{{
-			Index: 0,
-			Message: dto.Message{
-				Role:    "assistant",
-				Content: novaResp.Output.Message.Content[0].Text,
-			},
-			FinishReason: "stop",
-		}},
-		Usage: dto.Usage{
-			PromptTokens:     novaResp.Usage.InputTokens,
-			CompletionTokens: novaResp.Usage.OutputTokens,
-			TotalTokens:      novaResp.Usage.TotalTokens,
-		},
-	}
-
-	c.JSON(http.StatusOK, response)
-	return nil, &response.Usage
+	return novaResp.Output.Message.Content[0].Text, dto.Usage{
+		PromptTokens:     novaResp.Usage.InputTokens,
+		CompletionTokens: novaResp.Usage.OutputTokens,
+		TotalTokens:      novaResp.Usage.TotalTokens,
+	}, nil
 }

@@ -30,6 +30,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	_ "github.com/MAX-API-Next/MAX-API/setting/performance_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
@@ -70,9 +71,13 @@ func main() {
 		}
 	}()
 
+	// Recover durable balance settlements after process restarts or transient DB failures.
+	model.StartBillingSettlementTaskRunner()
+
 	if common.RedisEnabled {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
+		model.StartCacheInvalidationTaskRunner()
 	}
 	if common.MemoryCacheEnabled {
 		common.SysLog("memory cache enabled")
@@ -184,6 +189,12 @@ func main() {
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
 	// Initialize session store
+	if _, explicitlyConfigured := os.LookupEnv("SESSION_COOKIE_SECURE"); !explicitlyConfigured {
+		common.SessionCookieSecure = common.SessionCookieSecureForServerAddress(system_setting.ServerAddress)
+		if !common.SessionCookieSecure {
+			common.SysLog("SESSION_COOKIE_SECURE is not set and ServerAddress is not HTTPS; session cookies may traverse plain HTTP. Set SESSION_COOKIE_SECURE=true for HTTPS deployments")
+		}
+	}
 	store := cookie.NewStore([]byte(common.SessionSecret))
 	store.Options(sessions.Options{
 		Path:     "/",

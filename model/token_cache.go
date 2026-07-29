@@ -1,12 +1,14 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 const (
@@ -80,6 +82,44 @@ func deleteTokenCache(key string) error {
 	return common.RedisDeleteVersionedHash(getTokenCacheKey(key), getTokenCacheVersionKey(key))
 }
 
+func stageTokenCacheInvalidationTx(tx *gorm.DB, key string, deleteEntry bool) (CacheInvalidationTask, error) {
+	if key == "" {
+		return CacheInvalidationTask{}, errors.New("token key is required for cache invalidation")
+	}
+	return stageCacheInvalidationTaskTx(
+		tx,
+		cacheInvalidationKindToken,
+		getTokenCacheKey(key),
+		getTokenCacheVersionKey(key),
+		deleteEntry,
+	)
+}
+
+func stageUserTokenCacheInvalidationsTx(tx *gorm.DB, userID int, deleteEntry bool) ([]CacheInvalidationTask, error) {
+	if userID <= 0 {
+		return nil, errors.New("user id is required for token cache invalidation")
+	}
+	if !common.RedisEnabled {
+		return nil, nil
+	}
+	var tokens []Token
+	if err := tx.Unscoped().Where("user_id = ?", userID).Find(&tokens).Error; err != nil {
+		return nil, err
+	}
+	tasks := make([]CacheInvalidationTask, 0, len(tokens))
+	for _, token := range tokens {
+		if token.Key == "" {
+			continue
+		}
+		task, err := stageTokenCacheInvalidationTx(tx, token.Key, deleteEntry)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
 func tokenCacheRetryWindow() time.Duration {
 	window := time.Duration(common.RedisKeyCacheSeconds()) * time.Second
 	if window <= 0 {
@@ -92,9 +132,17 @@ func enqueueTokenCacheRetry(key string, deleteEntry bool, cause error) {
 	if key == "" {
 		return
 	}
-	now := time.Now()
 	cacheKey := getTokenCacheKey(key)
 	versionKey := getTokenCacheVersionKey(key)
+	enqueueTokenCacheRetryByTarget(cacheKey, versionKey, deleteEntry, cause)
+}
+
+func enqueueTokenCacheRetryByTarget(cacheKey string, versionKey string, deleteEntry bool, cause error) {
+	if cacheKey == "" || versionKey == "" {
+		return
+	}
+	now := time.Now()
+	persistCacheInvalidationTask(cacheInvalidationKindToken, cacheKey, versionKey, deleteEntry, cause)
 
 	tokenCacheRetries.Lock()
 	state, exists := tokenCacheRetries.pending[cacheKey]

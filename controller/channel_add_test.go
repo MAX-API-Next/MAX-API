@@ -26,3 +26,16 @@ func TestBuildChannelsForInsertUsesIndependentNamesWithKeyPrefixes(t *testing.T)
 	assert.Equal(t, "bravo-key-2", channels[1].Key)
 	assert.Equal(t, []string{"OpenAI Prod alpha-ke", "OpenAI Prod bravo-ke"}, names)
 }
+
+func TestValidateChannelRejectsInvalidStatusCodeMapping(t *testing.T) {
+	invalidMapping := `{"429":999}`
+	channel := &model.Channel{
+		Name:              "OpenAI Prod",
+		Type:              1,
+		Key:               "key",
+		Models:            "gpt-test",
+		StatusCodeMapping: &invalidMapping,
+	}
+
+	require.ErrorContains(t, validateChannel(channel, true), "status code mapping")
+}

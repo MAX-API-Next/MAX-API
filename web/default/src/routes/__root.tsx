@@ -29,6 +29,7 @@ import { ThemeCustomizationProvider } from '@/context/theme-customization-provid
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { Toaster } from '@/components/ui/sonner'
 import { NavigationProgress } from '@/components/navigation-progress'
+import { appSessionVerifier } from '@/features/auth/lib/app-session-verifier'
 import { saveAffiliateCode } from '@/features/auth/lib/storage'
 import { GeneralError } from '@/features/errors/general-error'
 import { NotFoundError } from '@/features/errors/not-found-error'
@@ -73,9 +74,6 @@ export const Route = createRootRouteWithContext<{
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
 
-    // 根路由只负责 setup 检查；受保护路由会在 _authenticated 的
-    // beforeLoad 中调用 getSelf() 校验服务端会话并刷新本地用户信息。
-
     // 只检查 setup 状态（如果需要）
     if (needsSetupCheck) {
       const status = await getSetupStatus().catch((error) => {
@@ -91,6 +89,17 @@ export const Route = createRootRouteWithContext<{
       }
       setupStatusChecked = true
     }
+
+    // Restore a valid cookie session before public pages render. Public routes
+    // ignore non-authentication failures and never redirect on a 401; the
+    // protected route still owns access control.
+    await appSessionVerifier.verify().catch((error: unknown) => {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn('[root.beforeLoad] session check failed', error)
+      }
+      return true
+    })
   },
   component: RootComponent,
   notFoundComponent: NotFoundError,

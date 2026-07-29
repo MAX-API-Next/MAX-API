@@ -2320,13 +2320,14 @@
                   "password": {
                     "type": "string",
                     "format": "password",
-                    "description": "当前账户密码，仅method=password且scope=access_token时使用"
+                    "description": "当前账户密码，仅method=password且scope=access_token或account_delete时使用"
                   },
                   "scope": {
                     "type": "string",
-                    "description": "验证作用域；密码验证仅支持access_token",
+                    "description": "验证作用域；密码验证仅支持access_token或account_delete",
                     "enum": [
-                      "access_token"
+                      "access_token",
+                      "account_delete"
                     ]
                   }
                 }
@@ -2363,11 +2364,12 @@
             "name": "scope",
             "in": "query",
             "required": false,
-            "description": "验证作用域；传access_token时，无2FA或Passkey的用户可使用密码验证",
+            "description": "验证作用域；传access_token或account_delete时，无2FA或Passkey的用户可使用密码验证",
             "schema": {
               "type": "string",
               "enum": [
-                "access_token"
+                "access_token",
+                "account_delete"
               ]
             }
           }

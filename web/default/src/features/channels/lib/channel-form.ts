@@ -48,6 +48,8 @@ const DEFAULT_VIDEO_TASK_QUERY_PATH = '/v1/videos/{task_id}'
 const DEFAULT_VIDEO_TASK_TASK_ID_PATH = 'task_id'
 const DEFAULT_VIDEO_TASK_STATUS_PATH = 'status'
 const DEFAULT_VIDEO_TASK_PROGRESS_PATH = 'progress'
+const DEFAULT_VIDEO_TASK_CREATED_AT_PATH = 'created_at'
+const DEFAULT_VIDEO_TASK_UPDATED_AT_PATH = 'updated_at'
 const DEFAULT_VIDEO_TASK_RESULT_URL_PATHS =
   'result.primary_url,result.urls.0,result.url,result.video_url,result.output_url,data.result.primary_url,data.result.urls.0,data.result.url,data.result.video_url,data.result.output_url,url,video_url,output_url,file_url,download_url,result'
 const DEFAULT_VIDEO_TASK_ERROR_MESSAGE_PATH = 'error_message'
@@ -96,17 +98,22 @@ function isOptionalStatusCodeMapping(value: string | undefined): boolean {
     const parsed = parseOptionalJson(value)
     if (parsed === undefined) return true
     if (!isJsonObjectValue(parsed)) return false
+    const seenSourceCodes = new Set<number>()
     return Object.entries(parsed).every(([from, to]) => {
+      const normalizedFrom = from.trim()
       const fromCode = Number(from)
       const toCode = Number(to)
-      return (
+      const valid =
+        /^[1-5]\d{2}$/.test(normalizedFrom) &&
         Number.isInteger(fromCode) &&
         Number.isInteger(toCode) &&
         fromCode >= 100 &&
         fromCode <= 599 &&
         toCode >= 100 &&
-        toCode <= 599
-      )
+        toCode <= 599 &&
+        !seenSourceCodes.has(fromCode)
+      seenSourceCodes.add(fromCode)
+      return valid
     })
   } catch {
     return false
@@ -253,6 +260,8 @@ export const channelFormSchema = z
     video_task_task_id_path: z.string().optional(),
     video_task_status_path: z.string().optional(),
     video_task_progress_path: z.string().optional(),
+    video_task_created_at_path: z.string().optional(),
+    video_task_updated_at_path: z.string().optional(),
     video_task_result_url_paths: z.string().optional(),
     video_task_error_message_path: z.string().optional(),
     video_task_status_submitted: z.string().optional(),
@@ -444,6 +453,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   video_task_task_id_path: DEFAULT_VIDEO_TASK_TASK_ID_PATH,
   video_task_status_path: DEFAULT_VIDEO_TASK_STATUS_PATH,
   video_task_progress_path: DEFAULT_VIDEO_TASK_PROGRESS_PATH,
+  video_task_created_at_path: DEFAULT_VIDEO_TASK_CREATED_AT_PATH,
+  video_task_updated_at_path: DEFAULT_VIDEO_TASK_UPDATED_AT_PATH,
   video_task_result_url_paths: DEFAULT_VIDEO_TASK_RESULT_URL_PATHS,
   video_task_error_message_path: DEFAULT_VIDEO_TASK_ERROR_MESSAGE_PATH,
   video_task_status_submitted: DEFAULT_VIDEO_TASK_STATUS_SUBMITTED,
@@ -595,6 +606,8 @@ export function transformChannelToFormDefaults(
   let videoTaskIDPath = DEFAULT_VIDEO_TASK_TASK_ID_PATH
   let videoTaskStatusPath = DEFAULT_VIDEO_TASK_STATUS_PATH
   let videoTaskProgressPath = DEFAULT_VIDEO_TASK_PROGRESS_PATH
+  let videoTaskCreatedAtPath = DEFAULT_VIDEO_TASK_CREATED_AT_PATH
+  let videoTaskUpdatedAtPath = DEFAULT_VIDEO_TASK_UPDATED_AT_PATH
   let videoTaskResultURLPaths = DEFAULT_VIDEO_TASK_RESULT_URL_PATHS
   let videoTaskErrorMessagePath = DEFAULT_VIDEO_TASK_ERROR_MESSAGE_PATH
   let videoTaskStatusSubmitted = DEFAULT_VIDEO_TASK_STATUS_SUBMITTED
@@ -663,6 +676,12 @@ export function transformChannelToFormDefaults(
         videoTaskProgressPath =
           String(taskProtocolConfig.progress_path || '').trim() ||
           DEFAULT_VIDEO_TASK_PROGRESS_PATH
+        videoTaskCreatedAtPath =
+          String(taskProtocolConfig.created_at_path || '').trim() ||
+          DEFAULT_VIDEO_TASK_CREATED_AT_PATH
+        videoTaskUpdatedAtPath =
+          String(taskProtocolConfig.updated_at_path || '').trim() ||
+          DEFAULT_VIDEO_TASK_UPDATED_AT_PATH
         videoTaskResultURLPaths = joinCSV(
           taskProtocolConfig.result_url_paths,
           DEFAULT_VIDEO_TASK_RESULT_URL_PATHS
@@ -754,6 +773,8 @@ export function transformChannelToFormDefaults(
     video_task_task_id_path: videoTaskIDPath,
     video_task_status_path: videoTaskStatusPath,
     video_task_progress_path: videoTaskProgressPath,
+    video_task_created_at_path: videoTaskCreatedAtPath,
+    video_task_updated_at_path: videoTaskUpdatedAtPath,
     video_task_result_url_paths: videoTaskResultURLPaths,
     video_task_error_message_path: videoTaskErrorMessagePath,
     video_task_status_submitted: videoTaskStatusSubmitted,
@@ -904,6 +925,11 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       enableVideoTaskProtocol)
 
   if (enableVideoTaskProtocol) {
+    const existingTaskProtocolConfig = isJsonObjectValue(
+      settingsObj.task_protocol_config
+    )
+      ? settingsObj.task_protocol_config
+      : {}
     const statusMap: Record<string, string> = {}
     setVideoTaskStatusMap(
       statusMap,
@@ -933,6 +959,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
     settingsObj.task_protocol = VIDEO_TASK_PROTOCOL
     settingsObj.task_protocol_config = {
+      ...existingTaskProtocolConfig,
       submit_path:
         formData.video_task_submit_path?.trim() ||
         DEFAULT_VIDEO_TASK_SUBMIT_PATH,
@@ -947,6 +974,12 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       progress_path:
         formData.video_task_progress_path?.trim() ||
         DEFAULT_VIDEO_TASK_PROGRESS_PATH,
+      created_at_path:
+        formData.video_task_created_at_path?.trim() ||
+        DEFAULT_VIDEO_TASK_CREATED_AT_PATH,
+      updated_at_path:
+        formData.video_task_updated_at_path?.trim() ||
+        DEFAULT_VIDEO_TASK_UPDATED_AT_PATH,
       result_url_paths: splitCSV(
         formData.video_task_result_url_paths,
         DEFAULT_VIDEO_TASK_RESULT_URL_PATHS

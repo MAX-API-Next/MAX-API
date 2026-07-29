@@ -304,7 +304,7 @@ func validateOptionUpdate(key string, value string) error {
 	case "ModelRequestRateLimitGroup":
 		return setting.CheckModelRequestRateLimitGroup(value)
 	case "ModelRatio", "ModelPrice", "CacheRatio", "CreateCacheRatio", "CompletionRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
-		return validateJSONOption[map[string]float64](value)
+		return ratio_setting.ValidatePricingMapJSONString(value)
 	case "GroupRatio", "group_ratio_setting.group_ratio":
 		return ratio_setting.CheckGroupRatio(value)
 	case "GroupGroupRatio":

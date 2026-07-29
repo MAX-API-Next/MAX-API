@@ -90,6 +90,14 @@ func (s *SubscriptionFunding) PreConsume(amount int) error {
 	if err != nil {
 		return err
 	}
+	s.applyPreConsumeResult(res)
+	return nil
+}
+
+func (s *SubscriptionFunding) applyPreConsumeResult(res *model.SubscriptionPreConsumeResult) {
+	if res == nil {
+		return
+	}
 	s.subscriptionId = res.UserSubscriptionId
 	s.preConsumed = res.PreConsumed
 	s.AmountTotal = res.AmountTotal
@@ -99,7 +107,6 @@ func (s *SubscriptionFunding) PreConsume(amount int) error {
 		s.PlanId = planInfo.PlanId
 		s.PlanTitle = planInfo.PlanTitle
 	}
-	return nil
 }
 
 func (s *SubscriptionFunding) Settle(delta int) (int64, error) {

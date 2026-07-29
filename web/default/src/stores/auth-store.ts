@@ -58,48 +58,15 @@ interface AuthState {
   }
 }
 
-export const useAuthStore = create<AuthState>()((set) => {
-  // Restore user info from localStorage
-  const initUser = (() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const saved = window.localStorage.getItem('user')
-        return saved ? JSON.parse(saved) : null
-      }
-    } catch {
-      // Clear dirty data when parsing fails
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('user')
-      }
-    }
-    return null
-  })()
-
-  return {
-    auth: {
-      user: initUser,
-      setUser: (user) =>
-        set((state) => {
-          // Persist user to localStorage
-          if (typeof window !== 'undefined') {
-            if (user) {
-              window.localStorage.setItem('user', JSON.stringify(user))
-            } else {
-              window.localStorage.removeItem('user')
-            }
-          }
-          return { ...state, auth: { ...state.auth, user } }
-        }),
-      reset: () =>
-        set((state) => {
-          if (typeof window !== 'undefined') {
-            window.localStorage.removeItem('user')
-          }
-          return {
-            ...state,
-            auth: { ...state.auth, user: null },
-          }
-        }),
-    },
-  }
-})
+export const useAuthStore = create<AuthState>()((set) => ({
+  auth: {
+    user: null,
+    setUser: (user) =>
+      set((state) => ({ ...state, auth: { ...state.auth, user } })),
+    reset: () =>
+      set((state) => ({
+        ...state,
+        auth: { ...state.auth, user: null },
+      })),
+  },
+}))

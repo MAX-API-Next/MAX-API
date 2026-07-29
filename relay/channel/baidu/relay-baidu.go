@@ -160,6 +160,9 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	if err != nil {
+		common.SysLog("failed to write Baidu response: " + err.Error())
+	}
 	return nil, &fullTextResponse.Usage
 }
 
@@ -185,6 +188,9 @@ func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	if err != nil {
+		common.SysLog("failed to write Baidu embedding response: " + err.Error())
+	}
 	return nil, &fullTextResponse.Usage
 }
 

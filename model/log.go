@@ -14,8 +14,10 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm.DB, error) {
@@ -58,6 +60,15 @@ type Log struct {
 	IsErrorRetry      bool   `json:"is_error_retry" gorm:"default:false;index"`
 	IsEmptyRetry      bool   `json:"is_empty_retry" gorm:"default:false;index"`
 	LogId             int    `json:"log_id,omitempty" gorm:"-"`
+}
+
+// BillingLogReceipt keeps task-billing log idempotency off the high-volume
+// logs table. The receipt and its log row are committed in one LOG_DB transaction.
+type BillingLogReceipt struct {
+	ID           int64  `gorm:"primaryKey"`
+	OperationKey string `gorm:"type:varchar(191);uniqueIndex;not null"`
+	ClaimToken   string `gorm:"type:varchar(36);not null;default:''"`
+	CreatedAt    int64  `gorm:"not null"`
 }
 
 func (log *Log) BeforeSave(*gorm.DB) error {
@@ -642,8 +653,24 @@ type RecordTaskBillingLogParams struct {
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
+	if err := recordTaskBillingLog("", params); err != nil {
+		common.SysLog("failed to record task billing log: " + err.Error())
+	}
+}
+
+func RecordTaskBillingLogOnce(operationKey string, params RecordTaskBillingLogParams) error {
+	if operationKey == "" {
+		return errors.New("task billing log operation key is required")
+	}
+	return recordTaskBillingLog(operationKey, params)
+}
+
+func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams) error {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return nil
+	}
+	if LOG_DB == nil {
+		return errors.New("log database is not initialized")
 	}
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
@@ -667,9 +694,45 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     common.MapToJsonStr(params.Other),
 	}
-	err := LOG_DB.Create(log).Error
-	if err != nil {
-		common.SysLog("failed to record task billing log: " + err.Error())
+	inserted := true
+	if operationKey == "" {
+		if err := LOG_DB.Create(log).Error; err != nil {
+			return err
+		}
+	} else {
+		err := LOG_DB.Transaction(func(tx *gorm.DB) error {
+			claimToken := uuid.NewString()
+			receipt := BillingLogReceipt{
+				OperationKey: operationKey,
+				ClaimToken:   claimToken,
+				CreatedAt:    createdAt,
+			}
+			result := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "operation_key"}},
+				DoNothing: true,
+			}).Create(&receipt)
+			if result.Error != nil {
+				return result.Error
+			}
+			// MySQL implements DoNothing as a no-op UPDATE. Its RowsAffected can
+			// report 1 when clientFoundRows is enabled, so verify ownership using
+			// a per-attempt claim instead of relying on driver-specific row counts.
+			var storedReceipt BillingLogReceipt
+			if err := tx.Select("claim_token").Where("operation_key = ?", operationKey).Take(&storedReceipt).Error; err != nil {
+				return err
+			}
+			if storedReceipt.ClaimToken != claimToken {
+				inserted = false
+				return nil
+			}
+			return tx.Create(log).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if !inserted {
+		return nil
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		nodeName := params.NodeName
@@ -688,6 +751,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			NodeName:  nodeName,
 		})
 	}
+	return nil
 }
 
 func GetAllLogs(params LogQueryParams) (logs []*Log, total int64, err error) {
