@@ -125,6 +125,7 @@ func TestBillingSettlementPendingInvalidationBypassesStaleUserCache(t *testing.T
 	cacheUserForRetryTest(t, client, user)
 	hook := newBlockingCacheInvalidationHook()
 	client.AddHook(hook)
+	t.Cleanup(hook.unblock)
 	done := make(chan error, 1)
 
 	go func() {
@@ -137,7 +138,6 @@ func TestBillingSettlementPendingInvalidationBypassesStaleUserCache(t *testing.T
 		done <- err
 	}()
 	waitForCacheHook(t, hook.started, "settlement invalidation start")
-	t.Cleanup(hook.unblock)
 
 	quota, err := GetUserQuota(user.Id, false)
 	require.NoError(t, err)
