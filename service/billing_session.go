@@ -81,14 +81,14 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 }
 
 func (s *BillingSession) settleAttempt(actualQuota int, effect *model.BillingSettlementEffect) error {
-	intent, ok, err := s.prepareSettleAttemptLocked(actualQuota, effect)
+	intent, ok, err := s.beginSettleAttempt(actualQuota, effect)
 	if err != nil || !ok {
 		return err
 	}
 	return s.applyDurableSettleIntent(intent)
 }
 
-func (s *BillingSession) prepareSettleAttemptLocked(actualQuota int, effect *model.BillingSettlementEffect) (*billingSettleIntent, bool, error) {
+func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.BillingSettlementEffect) (*billingSettleIntent, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.settled || s.refunded {

@@ -61,8 +61,9 @@ func failCacheOutboxInserts(t *testing.T) {
 	if !common.UsingSQLite {
 		t.Skip("cache outbox trigger failure injection uses SQLite trigger syntax")
 	}
+	require.NoError(t, DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure").Error)
 	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure") })
+	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure").Error })
 }
 
 func clearTokenCacheRetryMemory(t *testing.T) {

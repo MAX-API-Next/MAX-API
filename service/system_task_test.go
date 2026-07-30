@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestLogCleanupTaskRenewsLockBetweenBillingReceiptBatches(t *testing.T) {
@@ -26,19 +28,26 @@ func TestLogCleanupTaskRenewsLockBetweenBillingReceiptBatches(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	require.NoError(t, model.DB.Exec("DROP TRIGGER IF EXISTS system_task_update_audit_trigger").Error)
-	require.NoError(t, model.DB.Exec("DROP TABLE IF EXISTS system_task_update_audit").Error)
-	require.NoError(t, model.DB.Exec("CREATE TABLE system_task_update_audit (id INTEGER PRIMARY KEY AUTOINCREMENT)").Error)
-	require.NoError(t, model.DB.Exec(`
-CREATE TRIGGER system_task_update_audit_trigger
-AFTER UPDATE ON system_tasks
-WHEN NEW.status = 'running'
-BEGIN
-	INSERT INTO system_task_update_audit (id) VALUES (NULL);
-END`).Error)
+	var renewals atomic.Int64
+	const callbackName = "test:system_task_state_renewal_count"
+	require.NoError(t, model.DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "system_tasks" || tx.RowsAffected <= 0 {
+			return
+		}
+		updates, ok := tx.Statement.Dest.(map[string]any)
+		if !ok {
+			return
+		}
+		if _, hasState := updates["state"]; !hasState {
+			return
+		}
+		if _, hasLockUntil := updates["locked_until"]; !hasLockUntil {
+			return
+		}
+		renewals.Add(tx.RowsAffected)
+	}))
 	t.Cleanup(func() {
-		_ = model.DB.Exec("DROP TRIGGER IF EXISTS system_task_update_audit_trigger").Error
-		_ = model.DB.Exec("DROP TABLE IF EXISTS system_task_update_audit").Error
+		_ = model.DB.Callback().Update().Remove(callbackName)
 		_ = model.DB.Exec("DELETE FROM system_tasks").Error
 	})
 
@@ -54,9 +63,7 @@ END`).Error)
 	require.NoError(t, model.DB.Model(&model.BillingLogReceipt{}).Where("created_at < ?", 100).Count(&remaining).Error)
 	assert.Zero(t, remaining)
 
-	var renewals int64
-	require.NoError(t, model.DB.Table("system_task_update_audit").Count(&renewals).Error)
-	assert.GreaterOrEqual(t, renewals, int64(4))
+	assert.GreaterOrEqual(t, renewals.Load(), int64(4))
 
 	var reloaded model.SystemTask
 	require.NoError(t, model.DB.First(&reloaded, claimedTask.ID).Error)
