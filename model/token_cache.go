@@ -57,9 +57,14 @@ func getTokenCacheVersionKey(key string) string {
 
 func cacheSetTokenIfVersion(token Token, version int64) error {
 	key := token.Key
+	cacheKey := getTokenCacheKey(key)
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindToken, cacheKey)
+	if err != nil || pending {
+		return err
+	}
 	token.Clean()
-	_, err := common.RedisHSetObjIfVersion(
-		getTokenCacheKey(key),
+	_, err = common.RedisHSetObjIfVersion(
+		cacheKey,
 		getTokenCacheVersionKey(key),
 		version,
 		&token,
@@ -331,9 +336,17 @@ func cacheGetTokenByKey(key string) (*Token, error) {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
 	var token Token
-	err := common.RedisHGetObj(getTokenCacheKey(key), &token)
+	cacheKey := getTokenCacheKey(key)
+	err := common.RedisHGetObj(cacheKey, &token)
 	if err != nil {
 		return nil, err
+	}
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindToken, cacheKey)
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, fmt.Errorf("token cache invalidation pending")
 	}
 	token.Key = key
 	return &token, nil

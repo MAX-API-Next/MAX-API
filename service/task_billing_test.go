@@ -53,6 +53,7 @@ func TestMain(m *testing.M) {
 		&model.SubscriptionPreConsumeRecord{},
 		&model.BillingSettlement{},
 		&model.BillingPreConsumeSelection{},
+		&model.CacheInvalidationTask{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}

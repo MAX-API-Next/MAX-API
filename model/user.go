@@ -1645,21 +1645,27 @@ func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if delta == 0 {
 		return nil
 	}
-	if err := increaseUserQuota(id, delta); err != nil {
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := increaseUserQuotaTx(tx, id, delta); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, id, false)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
-		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
-		enqueueUserCacheInvalidationRetry(id, cacheErr)
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
-func increaseUserQuota(id int, quota int64) (err error) {
+func increaseUserQuotaTx(tx *gorm.DB, id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
+	result := tx.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -1678,21 +1684,27 @@ func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if delta == 0 {
 		return nil
 	}
-	if err := decreaseUserQuota(id, delta); err != nil {
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := decreaseUserQuotaTx(tx, id, delta); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, id, false)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
-		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
-		enqueueUserCacheInvalidationRetry(id, cacheErr)
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
-func decreaseUserQuota(id int, quota int64) (err error) {
+func decreaseUserQuotaTx(tx *gorm.DB, id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
 	}
-	result := DB.Model(&User{}).Where("id = ? AND quota >= ?", id, quota).
+	result := tx.Model(&User{}).Where("id = ? AND quota >= ?", id, quota).
 		Update("quota", gorm.Expr("quota - ?", quota))
 	if result.Error != nil {
 		return result.Error

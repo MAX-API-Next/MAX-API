@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"time"
 
@@ -94,6 +93,7 @@ func UserCheckin(userId int) (*Checkin, error) {
 
 // userCheckinWithTransaction 使用事务执行签到（适用于 MySQL 和 PostgreSQL）
 func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
+	var cacheTask CacheInvalidationTask
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		// 步骤1: 创建签到记录
 		// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
@@ -107,19 +107,16 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 			return errors.New("签到失败：更新额度出错")
 		}
 
-		return nil
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, userId, false)
+		return err
 	})
 
 	if err != nil {
 		return nil, err
 	}
 
-	// 事务成功后同步失效缓存，下一次读取以数据库结果回填。
-	if cacheErr := invalidateUserQuotaCache(userId); cacheErr != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate check-in quota cache (user_id=%d): %v", userId, cacheErr))
-		enqueueUserCacheInvalidationRetry(userId, cacheErr)
-	}
-
+	dispatchStagedCacheInvalidation(cacheTask)
 	return checkin, nil
 }
 

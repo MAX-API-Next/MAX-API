@@ -152,6 +152,7 @@ func Redeem(key string, userId int) (quota int, err error) {
 		keyCol = `"key"`
 	}
 	common.RandomSleep()
+	var cacheTask CacheInvalidationTask
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := withRowLock(tx).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
@@ -185,6 +186,10 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if err := ensureUserUpdateMatchedTx(tx, userResult, userId, errors.New("无效的 user id")); err != nil {
 			return err
 		}
+		cacheTask, err = stageUserCacheInvalidationTx(tx, userId, false)
+		if err != nil {
+			return err
+		}
 		redemption.RedeemedTime = now
 		redemption.Status = common.RedemptionCodeStatusUsed
 		redemption.UsedUserId = userId
@@ -195,6 +200,7 @@ func Redeem(key string, userId int) (quota int, err error) {
 		common.SysError("redemption failed: " + err.Error())
 		return 0, ErrRedeemFailed
 	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
 	return redemption.Quota, nil
 }

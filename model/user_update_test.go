@@ -249,6 +249,13 @@ type blockingCacheFillHook struct {
 	afterOnce  sync.Once
 }
 
+type blockingCacheInvalidationHook struct {
+	started     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+	seen        atomic.Int32
+}
+
 type failCacheMutationHook struct {
 	seen   atomic.Int32
 	failAt int32
@@ -298,6 +305,43 @@ func (*overlappingCacheMutationHook) BeforeProcessPipeline(ctx context.Context, 
 
 func (*overlappingCacheMutationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
 	return nil
+}
+
+func newBlockingCacheInvalidationHook() *blockingCacheInvalidationHook {
+	return &blockingCacheInvalidationHook{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (h *blockingCacheInvalidationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	name := strings.ToLower(cmd.Name())
+	if name != "eval" && name != "evalsha" {
+		return ctx, nil
+	}
+	if h.seen.Add(1) == 1 {
+		close(h.started)
+		<-h.release
+	}
+	return ctx, nil
+}
+
+func (*blockingCacheInvalidationHook) AfterProcess(context.Context, redis.Cmder) error {
+	return nil
+}
+
+func (*blockingCacheInvalidationHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*blockingCacheInvalidationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func (h *blockingCacheInvalidationHook) unblock() {
+	h.releaseOnce.Do(func() {
+		close(h.release)
+	})
 }
 
 func (h *recoverableCacheMutationHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
@@ -413,6 +457,7 @@ func TestUserQuotaMutationsRetryCacheInvalidation(t *testing.T) {
 			cacheUserForRetryTest(t, client, user)
 
 			require.NoError(t, tt.mutate(user.Id))
+			processCacheInvalidationTasks()
 			requireCacheKeyDeletedEventually(t, client, getUserCacheKey(user.Id))
 		})
 	}
@@ -795,6 +840,30 @@ func TestUserQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {
 	}, 3*time.Second, 10*time.Millisecond)
 }
 
+func TestUserQuotaMutationPendingInvalidationBypassesStaleCache(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 39, Username: "quota-pending-invalidation-user", Quota: 100, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	client := useCacheMutationRedis(t)
+	cacheUserForRetryTest(t, client, user)
+	hook := newBlockingCacheInvalidationHook()
+	client.AddHook(hook)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- IncreaseUserQuota(user.Id, 10, false)
+	}()
+	waitForCacheHook(t, hook.started, "invalidation start")
+	t.Cleanup(hook.unblock)
+
+	quota, err := GetUserQuota(user.Id, false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 110, quota)
+
+	hook.unblock()
+	require.NoError(t, <-done)
+}
+
 func TestUserGroupInvalidationRejectsOlderNarrowRefill(t *testing.T) {
 	setupUserUpdateTestState(t)
 	hook, _ := useBlockingCacheFillRedis(t)
@@ -838,6 +907,29 @@ func TestTokenQuotaInvalidationRejectsOlderAsyncRefill(t *testing.T) {
 		cached, err := client.HGet(context.Background(), getTokenCacheKey(token.Key), "RemainQuota").Int64()
 		return err == nil && cached == 90
 	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestTokenPendingInvalidationBypassesStaleCache(t *testing.T) {
+	setupUserUpdateTestState(t)
+	client := useCacheMutationRedis(t)
+	token := Token{Id: 38, UserId: 36, Key: "token-pending-cache", RemainQuota: 90, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+	staleToken := token
+	staleToken.RemainQuota = 100
+	cacheTokenForRetryTest(t, client, staleToken)
+	_, err := upsertCacheInvalidationTask(
+		DB,
+		cacheInvalidationKindToken,
+		getTokenCacheKey(token.Key),
+		getTokenCacheVersionKey(token.Key),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+
+	got, err := GetTokenByKey(token.Key, false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 90, got.RemainQuota)
 }
 
 func setupUserUpdateTestState(t *testing.T) {

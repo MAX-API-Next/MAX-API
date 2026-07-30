@@ -90,6 +90,31 @@ func upsertCacheInvalidationTask(db *gorm.DB, kind, entityKey, versionKey string
 	return stored, nil
 }
 
+// cacheInvalidationTaskPending makes the durable outbox a read-side cache fence.
+// A committed DB mutation may be visible before its Redis invalidation is
+// delivered; readers must not trust or refill that entity cache while its task
+// is still pending.
+func cacheInvalidationTaskPending(kind, entityKey string) (bool, error) {
+	if !common.RedisEnabled {
+		return false, nil
+	}
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	if kind == "" || entityKey == "" {
+		return false, errors.New("cache invalidation target is required")
+	}
+	var task CacheInvalidationTask
+	result := DB.Select("id").
+		Where("kind = ? AND entity_key = ?", kind, entityKey).
+		Limit(1).
+		Find(&task)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
 func dispatchStagedCacheInvalidation(task CacheInvalidationTask) {
 	if task.ID <= 0 || !common.RedisEnabled {
 		return

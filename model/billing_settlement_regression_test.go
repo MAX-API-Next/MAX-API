@@ -117,6 +117,36 @@ func TestFailedSettlementLeavesDurablePendingOperation(t *testing.T) {
 	require.EqualValues(t, 90, getRegressionTokenRemainQuota(t, token.Id))
 }
 
+func TestBillingSettlementPendingInvalidationBypassesStaleUserCache(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 977, Username: "settlement-pending-cache-user", Quota: 100, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	client := useCacheMutationRedis(t)
+	cacheUserForRetryTest(t, client, user)
+	hook := newBlockingCacheInvalidationHook()
+	client.AddHook(hook)
+	done := make(chan error, 1)
+
+	go func() {
+		_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+			OperationKey: "regression:settlement-pending-cache",
+			Source:       BillingSettlementSourceWallet,
+			UserID:       user.Id,
+			FundingDelta: 10,
+		})
+		done <- err
+	}()
+	waitForCacheHook(t, hook.started, "settlement invalidation start")
+	t.Cleanup(hook.unblock)
+
+	quota, err := GetUserQuota(user.Id, false)
+	require.NoError(t, err)
+	assert.EqualValues(t, 90, quota)
+
+	hook.unblock()
+	require.NoError(t, <-done)
+}
+
 func TestPendingPreConsumeSettlementRetryClaimsPersistedSelection(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 966, Username: "pending-pre-consume-user", Quota: 100, Status: common.UserStatusEnabled}

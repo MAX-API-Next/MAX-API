@@ -331,7 +331,11 @@ func populateUserCacheIfVersion(user User, version int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	_, err := common.RedisHSetObjIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", user.Id))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetObjIfVersion(
 		getUserCacheKey(user.Id),
 		getUserCacheVersionKey(user.Id),
 		version,
@@ -416,6 +420,13 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if userCache.Role < common.RoleCommonUser || userCache.Status == 0 {
 		return nil, fmt.Errorf("stale user cache")
 	}
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, fmt.Errorf("user cache invalidation pending")
+	}
 	return &userCache, nil
 }
 
@@ -464,7 +475,11 @@ func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error
 	if !common.RedisEnabled {
 		return nil
 	}
-	_, err := common.RedisHSetFieldIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetFieldIfVersion(
 		getUserCacheKey(userId),
 		getUserCacheVersionKey(userId),
 		version,
@@ -476,7 +491,11 @@ func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error
 }
 
 func updateUserCacheFieldIfVersion(userId int, field string, value interface{}, version int64) error {
-	_, err := common.RedisHSetFieldIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetFieldIfVersion(
 		getUserCacheKey(userId),
 		getUserCacheVersionKey(userId),
 		version,
