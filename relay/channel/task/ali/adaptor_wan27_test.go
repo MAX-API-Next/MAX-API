@@ -6,6 +6,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,6 +91,27 @@ func TestConvertToAliRequestResolvesDurationFromTaskSubmitReq(t *testing.T) {
 			assert.Equal(t, tt.want, aliReq.Parameters.Duration)
 		})
 	}
+}
+
+func TestApplyAliMetadataPreservesExplicitFalseAndZeroParameters(t *testing.T) {
+	aliReq := &AliVideoRequest{
+		Parameters: &AliVideoParameters{
+			PromptExtend: lo.ToPtr(true),
+			Watermark:    lo.ToPtr(true),
+		},
+	}
+	metadata := map[string]interface{}{
+		"parameters": map[string]interface{}{
+			"prompt_extend": false,
+			"watermark":     false,
+			"seed":          0,
+		},
+	}
+
+	require.NoError(t, applyAliMetadata(metadata, aliReq))
+	payload, err := common.Marshal(aliReq)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"","input":{},"parameters":{"prompt_extend":false,"watermark":false,"seed":0}}`, string(payload))
 }
 
 func TestConvertToAliRequestWan27I2VPrefersInputReferenceOverImage(t *testing.T) {

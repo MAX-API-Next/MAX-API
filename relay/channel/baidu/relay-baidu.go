@@ -17,8 +17,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
-	"github.com/samber/lo"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,9 +27,9 @@ var baiduTokenStore sync.Map
 func requestOpenAI2Baidu(request dto.GeneralOpenAIRequest) *BaiduChatRequest {
 	baiduRequest := BaiduChatRequest{
 		Temperature:    request.Temperature,
-		TopP:           lo.FromPtrOr(request.TopP, 0),
-		PenaltyScore:   lo.FromPtrOr(request.FrequencyPenalty, 0),
-		Stream:         lo.FromPtrOr(request.Stream, false),
+		TopP:           request.TopP,
+		PenaltyScore:   request.FrequencyPenalty,
+		Stream:         request.Stream,
 		DisableSearch:  false,
 		EnableCitation: false,
 		UserId:         request.User,
@@ -235,8 +233,25 @@ func getBaiduAccessTokenHelper(apiKey string) (*BaiduAccessToken, error) {
 	}
 	defer res.Body.Close()
 
+	accessToken, err := parseBaiduAccessTokenResponse(res)
+	if err != nil {
+		return nil, err
+	}
+	accessToken.ExpiresAt = time.Now().Add(time.Duration(accessToken.ExpiresIn) * time.Second)
+	baiduTokenStore.Store(apiKey, *accessToken)
+	return accessToken, nil
+}
+
+func parseBaiduAccessTokenResponse(res *http.Response) (*BaiduAccessToken, error) {
+	if res == nil || res.Body == nil {
+		return nil, errors.New("baidu access token response is empty")
+	}
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("baidu access token endpoint returned HTTP %d", res.StatusCode)
+	}
+
 	var accessToken BaiduAccessToken
-	err = json.NewDecoder(res.Body).Decode(&accessToken)
+	err := common.DecodeJson(res.Body, &accessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +261,5 @@ func getBaiduAccessTokenHelper(apiKey string) (*BaiduAccessToken, error) {
 	if accessToken.AccessToken == "" {
 		return nil, errors.New("getBaiduAccessTokenHelper get empty access token")
 	}
-	accessToken.ExpiresAt = time.Now().Add(time.Duration(accessToken.ExpiresIn) * time.Second)
-	baiduTokenStore.Store(apiKey, accessToken)
 	return &accessToken, nil
 }

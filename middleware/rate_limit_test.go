@@ -283,8 +283,9 @@ func TestRedisRateLimitIsAtomicUnderConcurrentRequests(t *testing.T) {
 	require.Equal(t, int32(5), atomic.LoadInt32(&allowed))
 }
 
-func TestRedisRateLimitFailureFailsOpen(t *testing.T) {
+func TestRedisRateLimitFailureFallsBackToInMemory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	testRun := atomic.AddUint64(&rateLimitTestRun, 1)
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	address := server.Addr()
@@ -305,17 +306,27 @@ func TestRedisRateLimitFailureFailsOpen(t *testing.T) {
 	})
 
 	engine := gin.New()
-	engine.GET("/", rateLimitFactory(1, 60, "redis-failure-test"), func(c *gin.Context) {
+	mark := fmt.Sprintf("redis-failure-fallback-test-%d", testRun)
+	engine.GET("/", rateLimitFactory(1, 60, mark), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	request := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = fmt.Sprintf("[2001:db8:%x::8]:1234", testRun)
+		engine.ServeHTTP(recorder, req)
+		return recorder
+	}
 
-	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, http.StatusNoContent, request().Code)
+	limited := request()
+	require.Equal(t, http.StatusTooManyRequests, limited.Code)
+	require.Equal(t, mark, limited.Header().Get("X-RateLimit-Policy"))
 }
 
-func TestRedisRateLimitUsesBoundedTimeoutAndFailsOpen(t *testing.T) {
+func TestRedisRateLimitUsesBoundedTimeoutAndFallsBackToInMemory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	testRun := atomic.AddUint64(&rateLimitTestRun, 1)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	accepted := make(chan net.Conn, 1)
@@ -351,13 +362,23 @@ func TestRedisRateLimitUsesBoundedTimeoutAndFailsOpen(t *testing.T) {
 	})
 
 	engine := gin.New()
-	engine.GET("/", rateLimitFactory(1, 60, "redis-timeout-test"), func(c *gin.Context) {
+	mark := fmt.Sprintf("redis-timeout-fallback-test-%d", testRun)
+	engine.GET("/", rateLimitFactory(1, 60, mark), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	recorder := httptest.NewRecorder()
+	request := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = fmt.Sprintf("[2001:db8:%x::9]:1234", testRun)
+		engine.ServeHTTP(recorder, req)
+		return recorder
+	}
 	startedAt := time.Now()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	recorder := request()
 
 	require.Less(t, time.Since(startedAt), time.Second)
 	require.Equal(t, http.StatusNoContent, recorder.Code)
+	limited := request()
+	require.Equal(t, http.StatusTooManyRequests, limited.Code)
+	require.Equal(t, mark, limited.Header().Get("X-RateLimit-Policy"))
 }

@@ -17,8 +17,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/types"
-	"github.com/samber/lo"
-
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -50,8 +48,12 @@ func requestOpenAI2Xunfei(request dto.GeneralOpenAIRequest, xunfeiAppId string, 
 	xunfeiRequest.Header.AppId = xunfeiAppId
 	xunfeiRequest.Parameter.Chat.Domain = domain
 	xunfeiRequest.Parameter.Chat.Temperature = request.Temperature
-	xunfeiRequest.Parameter.Chat.TopK = lo.FromPtrOr(request.N, 0)
-	xunfeiRequest.Parameter.Chat.MaxTokens = request.GetMaxTokens()
+	xunfeiRequest.Parameter.Chat.TopK = request.N
+	maxTokens := request.MaxTokens
+	if request.MaxCompletionTokens != nil && (*request.MaxCompletionTokens != 0 || maxTokens == nil) {
+		maxTokens = request.MaxCompletionTokens
+	}
+	xunfeiRequest.Parameter.Chat.MaxTokens = maxTokens
 	xunfeiRequest.Payload.Message.Text = messages
 	return &xunfeiRequest
 }

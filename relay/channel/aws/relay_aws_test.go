@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
@@ -83,4 +84,20 @@ func TestParseNovaResponseRejectsEmptyContent(t *testing.T) {
 	require.ErrorContains(t, err, "nova response content is empty")
 	require.Empty(t, content)
 	require.Zero(t, usage)
+}
+
+func TestConvertToNovaRequestPreservesExplicitZeroValues(t *testing.T) {
+	zeroFloat := 0.0
+	zeroInt := 0
+	zeroUint := uint(0)
+	novaRequest := convertToNovaRequest(&dto.GeneralOpenAIRequest{
+		MaxTokens:   &zeroUint,
+		Temperature: &zeroFloat,
+		TopP:        &zeroFloat,
+		TopK:        &zeroInt,
+	})
+
+	payload, err := common.Marshal(novaRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"schemaVersion":"messages-v1","messages":[],"inferenceConfig":{"maxTokens":0,"temperature":0,"topP":0,"topK":0}}`, string(payload))
 }

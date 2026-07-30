@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -74,4 +75,17 @@ func TestXunfeiMakeRequestSurfacesUpstreamHeaderError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("xunfei upstream error was not delivered")
 	}
+}
+
+func TestRequestOpenAI2XunfeiPreservesExplicitZeroValues(t *testing.T) {
+	zeroInt := 0
+	zeroUint := uint(0)
+	request := requestOpenAI2Xunfei(dto.GeneralOpenAIRequest{
+		N:         &zeroInt,
+		MaxTokens: &zeroUint,
+	}, "app-id", "generalv3")
+
+	payload, err := common.Marshal(request)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"header":{"app_id":"app-id"},"parameter":{"chat":{"domain":"generalv3","top_k":0,"max_tokens":0}},"payload":{"message":{"text":[]}}}`, string(payload))
 }

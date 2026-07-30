@@ -36,7 +36,7 @@ type OllamaChatRequest struct {
 	Messages  []OllamaChatMessage `json:"messages"`
 	Tools     interface{}         `json:"tools,omitempty"`
 	Format    interface{}         `json:"format,omitempty"`
-	Stream    bool                `json:"stream,omitempty"`
+	Stream    *bool               `json:"stream,omitempty"`
 	Options   map[string]any      `json:"options,omitempty"`
 	KeepAlive interface{}         `json:"keep_alive,omitempty"`
 	Think     json.RawMessage     `json:"think,omitempty"`
@@ -48,7 +48,7 @@ type OllamaGenerateRequest struct {
 	Suffix    string          `json:"suffix,omitempty"`
 	Images    []string        `json:"images,omitempty"`
 	Format    interface{}     `json:"format,omitempty"`
-	Stream    bool            `json:"stream,omitempty"`
+	Stream    *bool           `json:"stream,omitempty"`
 	Options   map[string]any  `json:"options,omitempty"`
 	KeepAlive interface{}     `json:"keep_alive,omitempty"`
 	Think     json.RawMessage `json:"think,omitempty"`

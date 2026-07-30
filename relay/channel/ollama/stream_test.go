@@ -94,6 +94,43 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 	}
 }
 
+func TestOllamaRequestConvertersPreserveStreamFalse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	stream := false
+	request := &dto.GeneralOpenAIRequest{Model: "llama-test", Stream: &stream}
+
+	chatRequest, err := openAIChatToOllamaChat(c, request)
+	require.NoError(t, err)
+	chatPayload, err := common.Marshal(chatRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"llama-test","messages":[],"stream":false}`, string(chatPayload))
+
+	generateRequest, err := openAIToGenerate(c, request)
+	require.NoError(t, err)
+	generatePayload, err := common.Marshal(generateRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"llama-test","stream":false}`, string(generatePayload))
+}
+
+func TestOllamaRequestConvertersOmitUnsetStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	request := &dto.GeneralOpenAIRequest{Model: "llama-test"}
+
+	chatRequest, err := openAIChatToOllamaChat(c, request)
+	require.NoError(t, err)
+	chatPayload, err := common.Marshal(chatRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"llama-test","messages":[]}`, string(chatPayload))
+
+	generateRequest, err := openAIToGenerate(c, request)
+	require.NoError(t, err)
+	generatePayload, err := common.Marshal(generateRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"llama-test"}`, string(generatePayload))
+}
+
 func TestOllamaStreamHandlerToolCalls(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

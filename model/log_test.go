@@ -1191,3 +1191,7 @@ func TestFormatUserLogsHidesAuditContentWhenDisabled(t *testing.T) {
 	require.NotContains(t, other, "admin_info")
 	require.NotContains(t, other, "audit_info")
 }
+
+func TestSumUsedTokenUsesPortableAggregate(t *testing.T) {
+	require.Equal(t, "COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0)", sumUsedTokenSelect)
+}

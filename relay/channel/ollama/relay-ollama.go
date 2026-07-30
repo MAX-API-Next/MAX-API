@@ -22,7 +22,7 @@ import (
 func openAIChatToOllamaChat(c *gin.Context, r *dto.GeneralOpenAIRequest) (*OllamaChatRequest, error) {
 	chatReq := &OllamaChatRequest{
 		Model:   r.Model,
-		Stream:  lo.FromPtrOr(r.Stream, false),
+		Stream:  r.Stream,
 		Options: map[string]any{},
 		Think:   r.Think,
 	}
@@ -149,7 +149,7 @@ func openAIChatToOllamaChat(c *gin.Context, r *dto.GeneralOpenAIRequest) (*Ollam
 func openAIToGenerate(c *gin.Context, r *dto.GeneralOpenAIRequest) (*OllamaGenerateRequest, error) {
 	gen := &OllamaGenerateRequest{
 		Model:   r.Model,
-		Stream:  lo.FromPtrOr(r.Stream, false),
+		Stream:  r.Stream,
 		Options: map[string]any{},
 		Think:   r.Think,
 	}
