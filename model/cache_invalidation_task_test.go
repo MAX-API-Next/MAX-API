@@ -63,7 +63,9 @@ func failCacheOutboxInserts(t *testing.T) {
 	}
 	require.NoError(t, DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure").Error)
 	require.NoError(t, DB.Exec("CREATE TRIGGER cache_outbox_insert_failure BEFORE INSERT ON cache_invalidation_tasks BEGIN SELECT RAISE(FAIL, 'cache outbox unavailable'); END").Error)
-	t.Cleanup(func() { _ = DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure").Error })
+	t.Cleanup(func() {
+		require.NoError(t, DB.Exec("DROP TRIGGER IF EXISTS cache_outbox_insert_failure").Error)
+	})
 }
 
 func clearTokenCacheRetryMemory(t *testing.T) {

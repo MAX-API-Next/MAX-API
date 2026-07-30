@@ -8,7 +8,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func TestLogCleanupTaskRenewsLockBetweenBillingReceiptBatches(t *testing.T) {
@@ -29,25 +28,16 @@ func TestLogCleanupTaskRenewsLockBetweenBillingReceiptBatches(t *testing.T) {
 	require.True(t, claimed)
 
 	var renewals atomic.Int64
-	const callbackName = "test:system_task_state_renewal_count"
-	require.NoError(t, model.DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "system_tasks" || tx.RowsAffected <= 0 {
-			return
+	oldUpdateSystemTaskState := updateSystemTaskState
+	updateSystemTaskState = func(taskID string, lockedBy string, state any, lockUntil int64) error {
+		err := oldUpdateSystemTaskState(taskID, lockedBy, state, lockUntil)
+		if err == nil {
+			renewals.Add(1)
 		}
-		updates, ok := tx.Statement.Dest.(map[string]any)
-		if !ok {
-			return
-		}
-		if _, hasState := updates["state"]; !hasState {
-			return
-		}
-		if _, hasLockUntil := updates["locked_until"]; !hasLockUntil {
-			return
-		}
-		renewals.Add(tx.RowsAffected)
-	}))
+		return err
+	}
 	t.Cleanup(func() {
-		_ = model.DB.Callback().Update().Remove(callbackName)
+		updateSystemTaskState = oldUpdateSystemTaskState
 		_ = model.DB.Exec("DELETE FROM system_tasks").Error
 	})
 
@@ -63,7 +53,7 @@ func TestLogCleanupTaskRenewsLockBetweenBillingReceiptBatches(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.BillingLogReceipt{}).Where("created_at < ?", 100).Count(&remaining).Error)
 	assert.Zero(t, remaining)
 
-	assert.GreaterOrEqual(t, renewals.Load(), int64(4))
+	assert.EqualValues(t, 5, renewals.Load())
 
 	var reloaded model.SystemTask
 	require.NoError(t, model.DB.First(&reloaded, claimedTask.ID).Error)
