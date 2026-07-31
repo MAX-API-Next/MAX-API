@@ -27,6 +27,7 @@ import {
   ModelPricingEditorPanel,
   type ModelRatioData,
 } from './model-pricing-sheet'
+import { ModelRatioVisualEditor } from './model-ratio-visual-editor'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -48,6 +49,7 @@ const globalKeys = [
   'requestAnimationFrame',
   'cancelAnimationFrame',
   'ResizeObserver',
+  'localStorage',
   'IS_REACT_ACT_ENVIRONMENT',
 ] as const
 const previousDescriptors = new Map<
@@ -90,6 +92,20 @@ function createContainer() {
 async function unmount(root: Root, container: HTMLElement) {
   await act(async () => root.unmount())
   container.remove()
+}
+
+function getInputValueByLabel(container: HTMLElement, labelText: string) {
+  const label = Array.from(container.querySelectorAll('label')).find(
+    (candidate) => candidate.textContent === labelText
+  )
+  assert.ok(label, `missing ${labelText} label`)
+
+  const inputId = label.getAttribute('for')
+  assert.ok(inputId, `missing input id for ${labelText}`)
+
+  const input = dom.window.document.getElementById(inputId) as HTMLInputElement
+  assert.ok(input, `missing input for ${labelText}`)
+  return input.value
 }
 
 const modelA: ModelRatioData = {
@@ -144,6 +160,7 @@ before(async () => {
   )
   setGlobal('cancelAnimationFrame', (handle: number) => clearTimeout(handle))
   setGlobal('ResizeObserver', ResizeObserverStub)
+  setGlobal('localStorage', window.localStorage)
   setGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 })
 
@@ -228,6 +245,8 @@ describe('TieredPricingEditor runtime behavior', () => {
     try {
       await act(async () => root.render(renderPanel(modelA)))
       assert.match(container.textContent || '', /tier\("a", p \* 1 \+ c \* 2\)/)
+      assert.equal(getInputValueByLabel(container, 'Input price'), '1')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '2')
 
       await act(async () => root.render(renderPanel(modelB)))
 
@@ -235,6 +254,103 @@ describe('TieredPricingEditor runtime behavior', () => {
       assert.match(text, /tier\("b", p \* 3 \+ c \* 4\)/)
       assert.doesNotMatch(text, /tier\("a", p \* 1 \+ c \* 2\)/)
       assert.doesNotMatch(text, /tier\("base", p \* 0 \+ c \* 0\)/)
+      assert.equal(getInputValueByLabel(container, 'Input price'), '3')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '4')
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('replaces expression state when the selected model snapshot changes', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const updatedModelA: ModelRatioData = {
+      ...modelA,
+      billingExpr: 'tier("a-updated", p * 5 + c * 6)',
+    }
+    const renderPanel = (editData: ModelRatioData) => (
+      <I18nextProvider i18n={i18n}>
+        <ModelPricingEditorPanel
+          editData={editData}
+          onSave={() => undefined}
+          onCancel={() => undefined}
+        />
+      </I18nextProvider>
+    )
+
+    try {
+      await act(async () => root.render(renderPanel(modelA)))
+      assert.equal(getInputValueByLabel(container, 'Input price'), '1')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '2')
+
+      await act(async () => root.render(renderPanel(updatedModelA)))
+      assert.equal(getInputValueByLabel(container, 'Input price'), '5')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '6')
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('updates expression prices when selecting another model row', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const modeMap = JSON.stringify({
+      [modelA.name]: 'tiered_expr',
+      [modelB.name]: 'tiered_expr',
+    })
+    const exprMap = JSON.stringify({
+      [modelA.name]: modelA.billingExpr,
+      [modelB.name]: modelB.billingExpr,
+    })
+    const renderEditor = () => (
+      <I18nextProvider i18n={i18n}>
+        <ModelRatioVisualEditor
+          savedModelPrice='{}'
+          savedModelRatio='{}'
+          savedCacheRatio='{}'
+          savedCreateCacheRatio='{}'
+          savedCompletionRatio='{}'
+          savedImageRatio='{}'
+          savedAudioRatio='{}'
+          savedAudioCompletionRatio='{}'
+          savedBillingMode={modeMap}
+          savedBillingExpr={exprMap}
+          modelPrice='{}'
+          modelRatio='{}'
+          cacheRatio='{}'
+          createCacheRatio='{}'
+          completionRatio='{}'
+          imageRatio='{}'
+          audioRatio='{}'
+          audioCompletionRatio='{}'
+          billingMode={modeMap}
+          billingExpr={exprMap}
+          onChange={() => undefined}
+        />
+      </I18nextProvider>
+    )
+    const selectRow = async (modelName: string) => {
+      const cell = Array.from(container.querySelectorAll('td')).find(
+        (candidate) => candidate.textContent?.trim().startsWith(modelName)
+      )
+      assert.ok(cell, `missing ${modelName} table cell`)
+      const row = cell.closest('tr')
+      assert.ok(row, `missing ${modelName} table row`)
+      await act(async () =>
+        row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      )
+    }
+
+    try {
+      await act(async () => root.render(renderEditor()))
+
+      await selectRow(modelA.name)
+      assert.equal(getInputValueByLabel(container, 'Input price'), '1')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '2')
+
+      await selectRow(modelB.name)
+      assert.equal(getInputValueByLabel(container, 'Input price'), '3')
+      assert.equal(getInputValueByLabel(container, 'Output price'), '4')
     } finally {
       await unmount(root, container)
     }

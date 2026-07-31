@@ -443,7 +443,22 @@ export function ModelPricingSheet({
 }
 
 export function ModelPricingEditorPanel(props: ModelPricingEditorPanelProps) {
-  const identity = props.editData?.name ?? '__new-model-pricing__'
+  const identity = props.editData
+    ? JSON.stringify([
+        props.editData.name,
+        props.editData.billingMode,
+        props.editData.billingExpr,
+        props.editData.requestRuleExpr,
+        props.editData.price,
+        props.editData.ratio,
+        props.editData.cacheRatio,
+        props.editData.createCacheRatio,
+        props.editData.completionRatio,
+        props.editData.imageRatio,
+        props.editData.audioRatio,
+        props.editData.audioCompletionRatio,
+      ])
+    : '__new-model-pricing__'
   return <ModelPricingEditorPanelContent key={identity} {...props} />
 }
 
