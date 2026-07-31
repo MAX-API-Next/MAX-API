@@ -23,7 +23,8 @@ type BoundChannel struct {
 
 type Model struct {
 	Id           int            `json:"id"`
-	ModelName    string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
+	ModelName    string         `json:"model_name" gorm:"size:128;not null"`
+	NameKey      string         `json:"-" gorm:"size:191;not null;default:''"`
 	Description  string         `json:"description,omitempty" gorm:"type:text"`
 	Icon         string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
 	Tags         string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
@@ -33,7 +34,7 @@ type Model struct {
 	SyncOfficial int            `json:"sync_official" gorm:"default:1"`
 	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
 	UpdatedTime  int64          `json:"updated_time" gorm:"bigint"`
-	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index;uniqueIndex:uk_model_name_delete_at,priority:2"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 
 	BoundChannels []BoundChannel `json:"bound_channels,omitempty" gorm:"-"`
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
@@ -48,6 +49,7 @@ func (mi *Model) Insert() error {
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
+	mi.NameKey = activeMetadataNameKey(mi.ModelName)
 
 	// 保存原始值（因为 Create 后可能被 GORM 的 default 标签覆盖为 1）
 	originalStatus := mi.Status
@@ -76,14 +78,20 @@ func IsModelNameDuplicated(id int, name string) (bool, error) {
 
 func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
+	mi.NameKey = activeMetadataNameKey(mi.ModelName)
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "name_key", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 
 func (mi *Model) Delete() error {
-	return DB.Delete(mi).Error
+	return softDeleteMetadataWithNameKey(DB, &Model{}, mi.Id, retiredMetadataNameKey("model", mi.Id))
+}
+
+func (mi *Model) BeforeCreate(_ *gorm.DB) error {
+	mi.NameKey = activeMetadataNameKey(mi.ModelName)
+	return nil
 }
 
 func GetVendorModelCounts() (map[int64]int64, error) {

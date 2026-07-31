@@ -128,6 +128,13 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	if !model.IsRegisteredOptionKey(option.Key) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "不支持的设置项",
+		})
+		return
+	}
 	switch option.Value.(type) {
 	case bool:
 		option.Value = common.Interface2String(option.Value.(bool))

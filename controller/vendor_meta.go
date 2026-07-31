@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -116,7 +117,16 @@ func DeleteVendorMeta(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Delete(&model.Vendor{}, id).Error; err != nil {
+	v, err := model.GetVendorByID(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := v.Delete(); err != nil {
+		if errors.Is(err, model.ErrVendorHasModels) {
+			common.ApiErrorMsg(c, "供应商仍有关联模型，请先重新分配或删除这些模型")
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}

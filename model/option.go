@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,10 @@ func InitOptionMap() {
 	common.OptionMap["Notice"] = ""
 	common.OptionMap["About"] = ""
 	common.OptionMap["HomePageContent"] = ""
+	common.OptionMap["Midjourney"] = ""
+	common.OptionMap["HeaderNavModules"] = ""
+	common.OptionMap["RankingsModule"] = ""
+	common.OptionMap["SidebarModulesAdmin"] = ""
 	common.OptionMap["Footer"] = common.Footer
 	common.OptionMap["SystemName"] = common.SystemName
 	common.OptionMap["Logo"] = common.Logo
@@ -195,11 +200,24 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	for _, option := range options {
+		if !IsRegisteredOptionKey(option.Key) {
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
+}
+
+// IsRegisteredOptionKey reports whether a key is part of the initialized
+// system/configuration option registry. It intentionally excludes arbitrary
+// rows that may exist in the options table from older deployments.
+func IsRegisteredOptionKey(key string) bool {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	_, ok := common.OptionMap[key]
+	return ok
 }
 
 func SyncOptions(frequency int) {
@@ -285,9 +303,23 @@ func normalizeOptionUpdateValue(key string, value string) (string, error) {
 	switch key {
 	case "GroupRatio", "group_ratio_setting.group_ratio":
 		return ratio_setting.NormalizeGroupRatioJSONString(value)
+	case "DataExportInterval":
+		interval, err := parseDataExportInterval(value)
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(interval), nil
 	default:
 		return value, nil
 	}
+}
+
+func parseDataExportInterval(value string) (int, error) {
+	interval, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || interval < 1 || interval > 1440 {
+		return 0, errors.New("DataExportInterval must be an integer between 1 and 1440 minutes")
+	}
+	return interval, nil
 }
 
 func validateOptionUpdate(key string, value string) error {

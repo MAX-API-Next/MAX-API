@@ -1,10 +1,14 @@
 package model
 
 import (
+	"errors"
+
 	"github.com/MAX-API-Next/MAX-API/common"
 
 	"gorm.io/gorm"
 )
+
+var ErrVendorHasModels = errors.New("vendor is still referenced by models")
 
 // Vendor 用于存储供应商信息，供模型引用
 // Name 唯一，用于在模型中关联
@@ -14,13 +18,14 @@ import (
 
 type Vendor struct {
 	Id          int            `json:"id"`
-	Name        string         `json:"name" gorm:"size:128;not null;uniqueIndex:uk_vendor_name_delete_at,priority:1"`
+	Name        string         `json:"name" gorm:"size:128;not null"`
+	NameKey     string         `json:"-" gorm:"size:191;not null;default:''"`
 	Description string         `json:"description,omitempty" gorm:"type:text"`
 	Icon        string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
 	Status      int            `json:"status" gorm:"default:1"`
 	CreatedTime int64          `json:"created_time" gorm:"bigint"`
 	UpdatedTime int64          `json:"updated_time" gorm:"bigint"`
-	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index;uniqueIndex:uk_vendor_name_delete_at,priority:2"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 // Insert 创建新的供应商记录
@@ -28,6 +33,7 @@ func (v *Vendor) Insert() error {
 	now := common.GetTimestamp()
 	v.CreatedTime = now
 	v.UpdatedTime = now
+	v.NameKey = activeMetadataNameKey(v.Name)
 	return DB.Create(v).Error
 }
 
@@ -44,12 +50,27 @@ func IsVendorNameDuplicated(id int, name string) (bool, error) {
 // Update 更新供应商记录
 func (v *Vendor) Update() error {
 	v.UpdatedTime = common.GetTimestamp()
+	v.NameKey = activeMetadataNameKey(v.Name)
 	return DB.Save(v).Error
 }
 
 // Delete 软删除供应商
 func (v *Vendor) Delete() error {
-	return DB.Delete(v).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var modelCount int64
+		if err := tx.Model(&Model{}).Where("vendor_id = ?", v.Id).Count(&modelCount).Error; err != nil {
+			return err
+		}
+		if modelCount > 0 {
+			return ErrVendorHasModels
+		}
+		return softDeleteMetadataWithNameKey(tx, &Vendor{}, v.Id, retiredMetadataNameKey("vendor", v.Id))
+	})
+}
+
+func (v *Vendor) BeforeCreate(_ *gorm.DB) error {
+	v.NameKey = activeMetadataNameKey(v.Name)
+	return nil
 }
 
 // GetVendorByID 根据 ID 获取供应商

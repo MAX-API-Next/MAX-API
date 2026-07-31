@@ -348,6 +348,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateMetadataNameKeys(); err != nil {
+		return err
+	}
 	// Run the legacy subscription price migration only after current core schemas exist.
 	if err := migrateSubscriptionPlanPriceAmount(); err != nil {
 		return err

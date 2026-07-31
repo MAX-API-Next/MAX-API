@@ -244,6 +244,27 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	require.NotContains(t, ids, "zz-token-unpriced-model")
 }
 
+func TestListModelsAnthropicAllowsEmptyModelList(t *testing.T) {
+	withSelfUseModeDisabled(t)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, map[string]bool{})
+
+	ListModels(ctx, constant.ChannelTypeAnthropic)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var payload struct {
+		Data    []dto.AnthropicModel `json:"data"`
+		HasMore bool                 `json:"has_more"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Empty(t, payload.Data)
+	require.False(t, payload.HasMore)
+}
+
 func TestCheckUpdatePasswordRequiresCurrentPassword(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	hashedPassword, err := common.Password2Hash("CurrentPassword123")

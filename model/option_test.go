@@ -191,6 +191,19 @@ func TestValidateOptionUpdateRejectsNullRWMapConfigs(t *testing.T) {
 	}
 }
 
+func TestNormalizeDataExportIntervalRejectsUnsafeValues(t *testing.T) {
+	for _, value := range []string{"0", "-1", "1441", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			_, err := normalizeOptionUpdateValue("DataExportInterval", value)
+			require.Error(t, err)
+		})
+	}
+
+	normalized, err := normalizeOptionUpdateValue("DataExportInterval", " 60 ")
+	require.NoError(t, err)
+	require.Equal(t, "60", normalized)
+}
+
 func TestUpdateOptionsBulkRejectsNullRWMapConfigBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
 	deleteOptionsForTest(t, "SystemName", "billing_setting.billing_mode")
