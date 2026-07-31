@@ -637,6 +637,51 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestUpdateTokenCanRestoreExpiredTokenWithNewValues(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "expired-token", "expired1234token5678")
+	token.Status = common.TokenStatusExpired
+	token.ExpiredTime = common.GetTimestamp() - 1
+	token.RemainQuota = 0
+	token.UnlimitedQuota = false
+	if err := db.Save(token).Error; err != nil {
+		t.Fatalf("failed to expire token: %v", err)
+	}
+
+	newExpiry := common.GetTimestamp() + 3600
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "restored-token",
+		"status":               common.TokenStatusEnabled,
+		"expired_time":         newExpiry,
+		"remain_quota":         100,
+		"unlimited_quota":      false,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "default",
+		"cross_group_retry":    false,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected one-step token restore to succeed, got message: %s", response.Message)
+	}
+
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload restored token: %v", err)
+	}
+	if stored.Status != common.TokenStatusEnabled {
+		t.Fatalf("expected restored token status %d, got %d", common.TokenStatusEnabled, stored.Status)
+	}
+	if stored.ExpiredTime != newExpiry || stored.RemainQuota != 100 {
+		t.Fatalf("expected restored values expiry=%d quota=100, got expiry=%d quota=%d", newExpiry, stored.ExpiredTime, stored.RemainQuota)
+	}
+}
+
 func TestUpdateTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)

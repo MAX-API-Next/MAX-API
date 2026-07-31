@@ -6,6 +6,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestTokenQuotaFieldsUseInt64(t *testing.T) {
@@ -59,5 +63,38 @@ func TestStartupMigrationSchemaChecksUseModelValues(t *testing.T) {
 		if strings.Contains(source, snippet) {
 			t.Fatalf("startup migrations must pass model values to GORM schema checks; found %q", snippet)
 		}
+	}
+}
+
+func TestMigrateDBReturnsSubscriptionPlanPriceMigrationError(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousSQLite := common.UsingSQLite
+	previousMySQL := common.UsingMySQL
+	previousPostgreSQL := common.UsingPostgreSQL
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+		common.UsingSQLite = previousSQLite
+		common.UsingMySQL = previousMySQL
+		common.UsingPostgreSQL = previousPostgreSQL
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	common.UsingPostgreSQL = false
+
+	if err := db.AutoMigrate(&SubscriptionPlan{}); err != nil {
+		t.Fatalf("failed to create subscription plans table: %v", err)
+	}
+
+	if err := migrateDB(); err == nil {
+		t.Fatal("expected subscription price migration failure to abort startup migration")
 	}
 }

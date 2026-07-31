@@ -1384,6 +1384,13 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 
+	// Read the channel only after taking the same lock used by multi-key polling.
+	// Multi-key operations rewrite the complete ChannelInfo value, so a snapshot
+	// obtained before the lock could overwrite another administrator's update.
+	lock := model.GetChannelPollingLock(request.ChannelId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	channel, err := model.GetChannelById(request.ChannelId, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1410,10 +1417,6 @@ func ManageMultiKeys(c *gin.Context) {
 			"id":     channel.Id,
 		})
 	}
-
-	lock := model.GetChannelPollingLock(channel.Id)
-	lock.Lock()
-	defer lock.Unlock()
 
 	switch request.Action {
 	case "get_key_status":
