@@ -212,9 +212,17 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 			taskResult.Progress = "50%"
 		}
 	case TaskStatusSuccess:
-		taskResult.Status = model.TaskStatusSuccess
-		taskResult.Progress = "100%"
-		taskResult.Url = a.buildVideoURL(resTask.TaskID, resTask.FileID)
+		// A completed Hailuo task still needs a retrievable file URL. Reporting
+		// success without one settles billing while the video proxy has nothing
+		// to serve. Keep polling so a transient file-retrieval failure can recover.
+		if videoURL := a.buildVideoURL(resTask.TaskID, resTask.FileID); videoURL != "" {
+			taskResult.Status = model.TaskStatusSuccess
+			taskResult.Progress = "100%"
+			taskResult.Url = videoURL
+		} else {
+			taskResult.Status = model.TaskStatusInProgress
+			taskResult.Progress = "90%"
+		}
 	case TaskStatusFailed:
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"

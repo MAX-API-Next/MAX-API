@@ -30,11 +30,11 @@ type RateCard struct {
 }
 
 type TaskBillingSetting struct {
-	RateCards map[string]RateCard `json:"rate_cards"`
+	RateCards *types.RWMap[string, RateCard] `json:"rate_cards"`
 }
 
 var taskBillingSetting = TaskBillingSetting{
-	RateCards: defaultRateCards(),
+	RateCards: newRateCardMap(defaultRateCards()),
 }
 
 func init() {
@@ -42,7 +42,7 @@ func init() {
 }
 
 func GetRateCardsCopy() map[string]RateCard {
-	return cloneRateCards(taskBillingSetting.RateCards)
+	return cloneRateCards(taskBillingSetting.RateCards.ReadAll())
 }
 
 func GetRateCardCopy(models ...string) (*RateCard, string) {
@@ -137,7 +137,7 @@ func validQuantity(value float64) bool {
 }
 
 func findRateCard(models ...string) (*RateCard, string) {
-	rateCards := taskBillingSetting.RateCards
+	rateCards := taskBillingSetting.RateCards.ReadAll()
 	for _, model := range models {
 		model = strings.TrimSpace(model)
 		if model == "" {
@@ -168,6 +168,12 @@ func findRateCard(models ...string) (*RateCard, string) {
 		}
 	}
 	return nil, ""
+}
+
+func newRateCardMap(rateCards map[string]RateCard) *types.RWMap[string, RateCard] {
+	m := types.NewRWMap[string, RateCard]()
+	m.AddAll(rateCards)
+	return m
 }
 
 func matchPattern(pattern, value string) bool {

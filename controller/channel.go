@@ -1384,9 +1384,17 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 
-	// Read the channel only after taking the same lock used by multi-key polling.
-	// Multi-key operations rewrite the complete ChannelInfo value, so a snapshot
-	// obtained before the lock could overwrite another administrator's update.
+	// Avoid allocating a permanent per-channel lock for arbitrary nonexistent
+	// channel IDs. The mutation still reloads after taking the lock because
+	// multi-key operations rewrite the complete ChannelInfo value.
+	if _, err := model.GetChannelById(request.ChannelId, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "渠道不存在",
+		})
+		return
+	}
+
 	lock := model.GetChannelPollingLock(request.ChannelId)
 	lock.Lock()
 	defer lock.Unlock()

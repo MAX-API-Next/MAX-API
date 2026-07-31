@@ -2,10 +2,13 @@ package task_billing_setting
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/stretchr/testify/require"
 )
 
 func withQuotaPerUnit(t *testing.T, value float64) {
@@ -74,4 +77,29 @@ func TestCalculateUnknownModelFallsBack(t *testing.T) {
 	if got != nil {
 		t.Fatalf("Calculate returned %+v, want nil", got)
 	}
+}
+
+func TestRateCardsSupportConcurrentReloads(t *testing.T) {
+	setting := TaskBillingSetting{RateCards: newRateCardMap(nil)}
+	raw := `{"model":{"rows":[{"match":{"quality":"std"},"unit_price":1}]}}`
+
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for range 200 {
+				_, _ = setting.RateCards.Get("model")
+			}
+		}()
+	}
+
+	for range 200 {
+		require.NoError(t, config.UpdateConfigFromMap(&setting, map[string]string{"rate_cards": raw}))
+	}
+	readers.Wait()
+
+	card, ok := setting.RateCards.Get("model")
+	require.True(t, ok)
+	require.Len(t, card.Rows, 1)
 }

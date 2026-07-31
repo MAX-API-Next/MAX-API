@@ -12,7 +12,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestManageMultiKeysLoadsChannelAfterPollingLock(t *testing.T) {
+func TestManageMultiKeysValidatesThenReloadsChannelUnderPollingLock(t *testing.T) {
 	db := openTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Log{}, &model.User{}))
 
@@ -59,14 +59,14 @@ func TestManageMultiKeysLoadsChannelAfterPollingLock(t *testing.T) {
 		}()
 	}
 
-	readBeforeLock := false
+	validatedBeforeLock := false
 	select {
 	case <-bothReads:
-		readBeforeLock = true
+		validatedBeforeLock = true
 	case <-time.After(250 * time.Millisecond):
 	}
 	lock.Unlock()
-	require.False(t, readBeforeLock, "multi-key handlers must not load a channel before its polling lock is available")
+	require.True(t, validatedBeforeLock, "multi-key handlers must validate channel existence before allocating a polling lock")
 
 	for range 2 {
 		select {
