@@ -529,12 +529,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				maskPart, err := helper.CreateFormFileWithContentType(writer, "mask", maskFiles[0].Filename, mimeType)
 				if err != nil {
 					_ = maskFile.Close()
-					return nil, errors.New("create form file failed for mask")
+					return nil, fmt.Errorf("create form part failed for mask: %w", err)
 				}
 
 				if _, err := io.Copy(maskPart, maskFile); err != nil {
 					_ = maskFile.Close()
-					return nil, errors.New("copy mask file failed")
+					return nil, fmt.Errorf("copy mask file failed: %w", err)
 				}
 				_ = maskFile.Close()
 			}
