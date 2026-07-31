@@ -80,8 +80,10 @@ func TestXunfeiMakeRequestSurfacesUpstreamHeaderError(t *testing.T) {
 func TestRequestOpenAI2XunfeiPreservesExplicitZeroValues(t *testing.T) {
 	zeroInt := 0
 	zeroUint := uint(0)
+	completionCount := 2
 	request := requestOpenAI2Xunfei(dto.GeneralOpenAIRequest{
-		N:         &zeroInt,
+		TopK:      &zeroInt,
+		N:         &completionCount,
 		MaxTokens: &zeroUint,
 	}, "app-id", "generalv3")
 

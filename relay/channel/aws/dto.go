@@ -95,10 +95,7 @@ func convertToNovaRequest(req *dto.GeneralOpenAIRequest) *NovaRequest {
 	}
 
 	// 设置推理配置
-	maxTokens := req.MaxTokens
-	if req.MaxCompletionTokens != nil && (*req.MaxCompletionTokens != 0 || maxTokens == nil) {
-		maxTokens = req.MaxCompletionTokens
-	}
+	maxTokens := dto.ResolveMaxTokens(req.MaxTokens, req.MaxCompletionTokens)
 	if maxTokens != nil || req.Temperature != nil || req.TopP != nil || req.TopK != nil || req.Stop != nil {
 		novaReq.InferenceConfig = &NovaInferenceConfig{}
 		if maxTokens != nil {
