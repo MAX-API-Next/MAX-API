@@ -179,6 +179,37 @@ func TestValidateOptionUpdateRejectsUnsafePricingValues(t *testing.T) {
 	}
 }
 
+func TestValidateOptionUpdateRejectsNullRWMapConfigs(t *testing.T) {
+	for _, key := range []string{
+		"billing_setting.billing_mode",
+		"billing_setting.billing_expr",
+		"task_billing_setting.rate_cards",
+	} {
+		t.Run(key, func(t *testing.T) {
+			require.Error(t, validateOptionUpdate(key, "null"))
+		})
+	}
+}
+
+func TestUpdateOptionsBulkRejectsNullRWMapConfigBeforePersistence(t *testing.T) {
+	setupOptionMapTestState(t)
+	deleteOptionsForTest(t, "SystemName", "billing_setting.billing_mode")
+	t.Cleanup(func() {
+		deleteOptionsForTest(t, "SystemName", "billing_setting.billing_mode")
+	})
+
+	err := UpdateOptionsBulk(map[string]string{
+		"SystemName":                   "should-not-persist",
+		"billing_setting.billing_mode": "null",
+	})
+
+	require.Error(t, err)
+	require.False(t, optionExistsForTest(t, "SystemName"))
+	require.False(t, optionExistsForTest(t, "billing_setting.billing_mode"))
+	require.False(t, optionMapContainsForTest("SystemName"))
+	require.False(t, optionMapContainsForTest("billing_setting.billing_mode"))
+}
+
 func TestUpdateOptionsBulkRejectsRuntimeConfigErrorsBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
 	deleteOptionsForTest(t, "SystemName", "ModelRatio")

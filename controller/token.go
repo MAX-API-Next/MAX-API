@@ -260,6 +260,11 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Full updates omit status with its zero value. Status-only updates must persist a valid status.
+	if (statusOnly != "" || token.Status != 0) && !isValidTokenStatus(token.Status) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
@@ -329,6 +334,15 @@ func UpdateToken(c *gin.Context) {
 		"message": "",
 		"data":    buildMaskedTokenResponse(cleanToken),
 	})
+}
+
+func isValidTokenStatus(status int) bool {
+	switch status {
+	case common.TokenStatusEnabled, common.TokenStatusDisabled, common.TokenStatusExpired, common.TokenStatusExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 type TokenBatch struct {

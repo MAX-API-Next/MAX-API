@@ -299,10 +299,6 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
-	// Migrate price_amount column from float/double to decimal for existing tables
-	if err := migrateSubscriptionPlanPriceAmount(); err != nil {
-		return err
-	}
 	// Migrate model_limits column from varchar to text for existing tables
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
@@ -350,6 +346,10 @@ func migrateDB() error {
 		&SystemInstance{},
 	)
 	if err != nil {
+		return err
+	}
+	// Run the legacy subscription price migration only after current core schemas exist.
+	if err := migrateSubscriptionPlanPriceAmount(); err != nil {
 		return err
 	}
 	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {

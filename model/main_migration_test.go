@@ -66,7 +66,7 @@ func TestStartupMigrationSchemaChecksUseModelValues(t *testing.T) {
 	}
 }
 
-func TestMigrateDBReturnsSubscriptionPlanPriceMigrationError(t *testing.T) {
+func TestMigrateDBRunsCoreAutoMigrateBeforeSubscriptionPlanPriceMigrationFailure(t *testing.T) {
 	previousDB := DB
 	previousLogDB := LOG_DB
 	previousSQLite := common.UsingSQLite
@@ -95,6 +95,9 @@ func TestMigrateDBReturnsSubscriptionPlanPriceMigrationError(t *testing.T) {
 	}
 
 	if err := migrateDB(); err == nil {
-		t.Fatal("expected subscription price migration failure to abort startup migration")
+		t.Fatal("expected subscription price migration failure to be returned")
+	}
+	if !db.Migrator().HasTable(&Channel{}) {
+		t.Fatal("expected core schema auto-migration to run before subscription price migration failure")
 	}
 }

@@ -291,6 +291,9 @@ func normalizeOptionUpdateValue(key string, value string) (string, error) {
 }
 
 func validateOptionUpdate(key string, value string) error {
+	if err := validateRegisteredConfigOption(key, value); err != nil {
+		return err
+	}
 	switch key {
 	case "Chats":
 		return validateJSONOption[[]map[string]string](value)
@@ -321,6 +324,18 @@ func validateOptionUpdate(key string, value string) error {
 	default:
 		return nil
 	}
+}
+
+func validateRegisteredConfigOption(key string, value string) error {
+	parts := strings.SplitN(key, ".", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	cfg := config.GlobalConfig.Get(parts[0])
+	if cfg == nil {
+		return nil
+	}
+	return config.ValidateConfigPointerNulls(cfg, map[string]string{parts[1]: value})
 }
 
 func validateJSONOption[T any](value string) error {
