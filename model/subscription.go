@@ -509,13 +509,15 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 	if currentGroup != upgradeGroup {
 		return "", nil
 	}
-	var activeSub UserSubscription
 	activeQuery := tx.Where("user_id = ? AND status = ? AND end_time > ? AND id <> ? AND upgrade_group <> ''",
 		sub.UserId, "active", now, sub.Id).
-		Order("end_time desc, id desc").
+		Where("TRIM(upgrade_group) = ?", currentGroup).
 		Limit(1).
-		Find(&activeSub)
-	if activeQuery.Error == nil && activeQuery.RowsAffected > 0 {
+		Find(&UserSubscription{})
+	if activeQuery.Error != nil {
+		return "", activeQuery.Error
+	}
+	if activeQuery.RowsAffected > 0 {
 		return "", nil
 	}
 	prevGroup := strings.TrimSpace(sub.PrevUserGroup)
@@ -618,7 +620,10 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
 		if err := withRowLock(tx).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
-			return ErrSubscriptionOrderNotFound
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrSubscriptionOrderNotFound
+			}
+			return err
 		}
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
 			return ErrPaymentMethodMismatch
@@ -1165,18 +1170,8 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 			}
 			expiredCount += int(res.RowsAffected)
 
-			// If there's an active upgraded subscription, keep current group.
-			var activeSub UserSubscription
-			activeQuery := tx.Where("user_id = ? AND status = ? AND end_time > ? AND upgrade_group <> ''",
-				userId, "active", now).
-				Order("end_time desc, id desc").
-				Limit(1).
-				Find(&activeSub)
-			if activeQuery.Error == nil && activeQuery.RowsAffected > 0 {
-				return nil
-			}
-
-			// No active upgraded subscription, downgrade to previous group if needed.
+			// Select the most recent expired upgrade and restore its previous group
+			// unless an active subscription still grants the current group.
 			var lastExpired UserSubscription
 			expiredQuery := tx.Where("user_id = ? AND status = ? AND upgrade_group <> ''",
 				userId, "expired").
@@ -1196,6 +1191,20 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 				return err
 			}
 			if currentGroup != upgradeGroup || currentGroup == prevGroup {
+				return nil
+			}
+			// Keep the current group only when another active subscription grants
+			// that exact group. Any other active upgrade must not retain a higher
+			// group from the subscription that just expired.
+			activeQuery := tx.Where("user_id = ? AND status = ? AND end_time > ? AND upgrade_group <> ''",
+				userId, "active", now).
+				Where("TRIM(upgrade_group) = ?", currentGroup).
+				Limit(1).
+				Find(&UserSubscription{})
+			if activeQuery.Error != nil {
+				return activeQuery.Error
+			}
+			if activeQuery.RowsAffected > 0 {
 				return nil
 			}
 			if err := tx.Model(&User{}).Where("id = ?", userId).

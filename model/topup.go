@@ -109,13 +109,21 @@ func GetTopUpById(id int) *TopUp {
 }
 
 func GetTopUpByTradeNo(tradeNo string) *TopUp {
-	var topUp *TopUp
-	var err error
-	err = DB.Where("trade_no = ?", tradeNo).First(&topUp).Error
-	if err != nil {
-		return nil
-	}
+	topUp, _ := GetTopUpByTradeNoWithError(tradeNo)
 	return topUp
+}
+
+// GetTopUpByTradeNoWithError keeps database failures distinct from a missing
+// order for payment callbacks, which must retry when the database is unhealthy.
+func GetTopUpByTradeNoWithError(tradeNo string) (*TopUp, error) {
+	topUp := &TopUp{}
+	if err := DB.Where("trade_no = ?", tradeNo).First(topUp).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTopUpNotFound
+		}
+		return nil, err
+	}
+	return topUp, nil
 }
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {

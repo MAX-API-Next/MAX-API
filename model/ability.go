@@ -66,6 +66,12 @@ func GetAllEnableAbilities() []Ability {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetChannelExcluding(group, model, retry, requestPath, nil)
+}
+
+// GetChannelExcluding selects a channel while excluding channels already tried
+// during the current request's retry sequence.
+func GetChannelExcluding(group string, model string, retry int, requestPath string, excludedChannelIDs map[int]struct{}) (*Channel, error) {
 	channelQuery, err := getChannelQuery(group, model, retry)
 	if err != nil {
 		return nil, err
@@ -88,7 +94,7 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 		return nil, nil
 	}
 
-	channelId, ok := selectChannelIdFromAbilities(abilities, retry)
+	channelId, ok := selectChannelIdFromAbilities(abilities, retry, excludedChannelIDs)
 	if !ok {
 		return nil, nil
 	}
@@ -160,13 +166,16 @@ func abilityCol(name string) string {
 	return "`abilities`.`" + name + "`"
 }
 
-func selectChannelIdFromAbilities(abilities []Ability, retry int) (int, bool) {
+func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChannelIDs map[int]struct{}) (int, bool) {
 	if len(abilities) == 0 {
 		return 0, false
 	}
 	priorities := make([]int64, 0, len(abilities))
 	seenPriorities := make(map[int64]struct{}, len(abilities))
 	for _, ability := range abilities {
+		if _, excluded := excludedChannelIDs[ability.ChannelId]; excluded {
+			continue
+		}
 		priority := abilityPriority(ability)
 		if _, ok := seenPriorities[priority]; ok {
 			continue
@@ -184,7 +193,7 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int) (int, bool) {
 
 	targetAbilities := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		if abilityPriority(ability) == targetPriority {
+		if _, excluded := excludedChannelIDs[ability.ChannelId]; !excluded && abilityPriority(ability) == targetPriority {
 			targetAbilities = append(targetAbilities, ability)
 		}
 	}

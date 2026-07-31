@@ -18,6 +18,10 @@ import (
 
 func TestConvertImageEditRequestMultipart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	pngContent := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	}
 
 	newMultipartContext := func(t *testing.T, prompt string) *gin.Context {
 		var body bytes.Buffer
@@ -28,7 +32,7 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		require.NoError(t, writer.WriteField("partial_images", "3"))
 		part, err := writer.CreateFormFile("image", "input.png")
 		require.NoError(t, err)
-		_, err = part.Write([]byte("fake image"))
+		_, err = part.Write(pngContent)
 		require.NoError(t, err)
 		require.NoError(t, writer.Close())
 
@@ -68,7 +72,7 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		defer file.Close()
 		fileBytes, err := io.ReadAll(file)
 		require.NoError(t, err)
-		require.Equal(t, []byte("fake image"), fileBytes)
+		require.Equal(t, pngContent, fileBytes)
 	}
 
 	t.Run("with pre-parsed form", func(t *testing.T) {
@@ -91,4 +95,23 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 
 		convertAndReplay(t, c, prompt)
 	})
+}
+
+func TestConvertImageEditRequestRejectsNonImageContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
+	require.NoError(t, writer.WriteField("prompt", "edit this"))
+	part, err := writer.CreateFormFile("image", "claimed-image.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("not an image"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	_, err = (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits}, dto.ImageRequest{Model: "gpt-image-1", Prompt: "edit this"})
+	require.ErrorContains(t, err, "unsupported image content type")
 }
