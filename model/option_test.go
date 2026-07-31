@@ -26,11 +26,37 @@ func setupOptionMapTestState(t *testing.T) {
 	})
 }
 
-func optionMapContainsForTest(key string) bool {
-	common.OptionMapRWMutex.RLock()
-	defer common.OptionMapRWMutex.RUnlock()
-	_, ok := common.OptionMap[key]
-	return ok
+func registerOptionKeysForTest(keys ...string) {
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	for _, key := range keys {
+		common.OptionMap[key] = ""
+	}
+}
+
+func TestUpdateOptionRejectsUnregisteredKeyBeforePersistence(t *testing.T) {
+	setupOptionMapTestState(t)
+	deleteOptionsForTest(t, "unregistered.option")
+	t.Cleanup(func() { deleteOptionsForTest(t, "unregistered.option") })
+
+	err := UpdateOption("unregistered.option", "value")
+	require.Error(t, err)
+	require.False(t, optionExistsForTest(t, "unregistered.option"))
+}
+
+func TestUpdateOptionsBulkRejectsUnregisteredKeyBeforePersistence(t *testing.T) {
+	setupOptionMapTestState(t)
+	registerOptionKeysForTest("SystemName")
+	deleteOptionsForTest(t, "SystemName", "unregistered.option")
+	t.Cleanup(func() { deleteOptionsForTest(t, "SystemName", "unregistered.option") })
+
+	err := UpdateOptionsBulk(map[string]string{
+		"SystemName":          "should-not-persist",
+		"unregistered.option": "value",
+	})
+	require.Error(t, err)
+	require.False(t, optionExistsForTest(t, "SystemName"))
+	require.False(t, optionExistsForTest(t, "unregistered.option"))
 }
 
 func deleteOptionsForTest(t *testing.T, keys ...string) {
@@ -60,6 +86,7 @@ func optionMapValueForTest(key string) string {
 
 func TestUpdateOptionFiltersAutoRouteGroupRatioNamesBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
+	registerOptionKeysForTest("GroupRatio", "group_ratio_setting.group_ratio")
 	deleteOptionsForTest(t, "GroupRatio", "group_ratio_setting.group_ratio")
 	t.Cleanup(func() {
 		deleteOptionsForTest(t, "GroupRatio", "group_ratio_setting.group_ratio")
@@ -206,6 +233,7 @@ func TestNormalizeDataExportIntervalRejectsUnsafeValues(t *testing.T) {
 
 func TestUpdateOptionsBulkRejectsNullRWMapConfigBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
+	registerOptionKeysForTest("SystemName", "billing_setting.billing_mode")
 	deleteOptionsForTest(t, "SystemName", "billing_setting.billing_mode")
 	t.Cleanup(func() {
 		deleteOptionsForTest(t, "SystemName", "billing_setting.billing_mode")
@@ -219,12 +247,13 @@ func TestUpdateOptionsBulkRejectsNullRWMapConfigBeforePersistence(t *testing.T) 
 	require.Error(t, err)
 	require.False(t, optionExistsForTest(t, "SystemName"))
 	require.False(t, optionExistsForTest(t, "billing_setting.billing_mode"))
-	require.False(t, optionMapContainsForTest("SystemName"))
-	require.False(t, optionMapContainsForTest("billing_setting.billing_mode"))
+	require.Equal(t, "", optionMapValueForTest("SystemName"))
+	require.Equal(t, "", optionMapValueForTest("billing_setting.billing_mode"))
 }
 
 func TestUpdateOptionsBulkRejectsRuntimeConfigErrorsBeforePersistence(t *testing.T) {
 	setupOptionMapTestState(t)
+	registerOptionKeysForTest("SystemName", "ModelRatio")
 	deleteOptionsForTest(t, "SystemName", "ModelRatio")
 	t.Cleanup(func() {
 		deleteOptionsForTest(t, "SystemName", "ModelRatio")
@@ -237,6 +266,6 @@ func TestUpdateOptionsBulkRejectsRuntimeConfigErrorsBeforePersistence(t *testing
 	require.Error(t, err)
 	require.False(t, optionExistsForTest(t, "SystemName"))
 	require.False(t, optionExistsForTest(t, "ModelRatio"))
-	require.False(t, optionMapContainsForTest("SystemName"))
-	require.False(t, optionMapContainsForTest("ModelRatio"))
+	require.Equal(t, "", optionMapValueForTest("SystemName"))
+	require.Equal(t, "", optionMapValueForTest("ModelRatio"))
 }

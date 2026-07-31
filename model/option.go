@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -229,6 +230,9 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if err := requireRegisteredOptionKey(key); err != nil {
+		return err
+	}
 	var err error
 	value, err = normalizeOptionUpdateValue(key, value)
 	if err != nil {
@@ -261,6 +265,11 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	for key := range values {
+		if err := requireRegisteredOptionKey(key); err != nil {
+			return err
+		}
 	}
 	normalizedValues := make(map[string]string, len(values))
 	for k, v := range values {
@@ -297,6 +306,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 	return nil
+}
+
+func requireRegisteredOptionKey(key string) error {
+	if IsRegisteredOptionKey(key) {
+		return nil
+	}
+	return fmt.Errorf("unsupported option key: %s", key)
 }
 
 func normalizeOptionUpdateValue(key string, value string) (string, error) {

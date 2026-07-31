@@ -68,6 +68,47 @@ func TestMetadataNameKeyMigrationEnforcesActiveUniquenessAndAllowsReuseAfterDele
 	require.NoError(t, secondVendor.Insert())
 }
 
+func TestMetadataNameKeyMigrationRetiresDuplicateActiveKeysDeterministically(t *testing.T) {
+	db := setupMetadataNameKeyTestDB(t)
+
+	firstVendor := &Vendor{Name: "Duplicate Vendor", Status: 1}
+	secondVendor := &Vendor{Name: "Duplicate Vendor", Status: 1}
+	require.NoError(t, db.Create(firstVendor).Error)
+	require.NoError(t, db.Create(secondVendor).Error)
+	firstModel := &Model{ModelName: "duplicate-model", Status: 1, SyncOfficial: 1}
+	secondModel := &Model{ModelName: "duplicate-model", Status: 1, SyncOfficial: 1}
+	require.NoError(t, db.Create(firstModel).Error)
+	require.NoError(t, db.Create(secondModel).Error)
+
+	require.NoError(t, migrateMetadataNameKeys())
+
+	var vendors []Vendor
+	require.NoError(t, db.Order("id ASC").Find(&vendors).Error)
+	require.Len(t, vendors, 2)
+	require.Equal(t, "Duplicate Vendor", vendors[0].NameKey)
+	require.Equal(t, retiredMetadataNameKey("vendor", vendors[1].Id), vendors[1].NameKey)
+
+	var models []Model
+	require.NoError(t, db.Order("id ASC").Find(&models).Error)
+	require.Len(t, models, 2)
+	require.Equal(t, "duplicate-model", models[0].NameKey)
+	require.Equal(t, retiredMetadataNameKey("model", models[1].Id), models[1].NameKey)
+}
+
+func TestModelDeleteRollsBackNameKeyChangeWhenDeleteFails(t *testing.T) {
+	db := setupMetadataNameKeyTestDB(t)
+	model := &Model{ModelName: "rollback-model", Status: 1, SyncOfficial: 1}
+	require.NoError(t, model.Insert())
+	require.NoError(t, migrateMetadataNameKeys())
+	require.NoError(t, db.Exec(`CREATE TRIGGER fail_model_soft_delete BEFORE UPDATE OF deleted_at ON models WHEN NEW.deleted_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'delete blocked'); END`).Error)
+
+	require.Error(t, model.Delete())
+	var stored Model
+	require.NoError(t, db.Unscoped().First(&stored, model.Id).Error)
+	require.Equal(t, "rollback-model", stored.NameKey)
+	require.False(t, stored.DeletedAt.Valid)
+}
+
 func TestVendorDeleteRejectsReferencedModels(t *testing.T) {
 	setupMetadataNameKeyTestDB(t)
 	vendor := &Vendor{Name: "Referenced Vendor", Status: 1}

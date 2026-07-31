@@ -86,7 +86,9 @@ func (mi *Model) Update() error {
 }
 
 func (mi *Model) Delete() error {
-	return softDeleteMetadataWithNameKey(DB, &Model{}, mi.Id, retiredMetadataNameKey("model", mi.Id))
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return softDeleteMetadataWithNameKey(tx, &Model{}, mi.Id, retiredMetadataNameKey("model", mi.Id))
+	})
 }
 
 func (mi *Model) BeforeCreate(_ *gorm.DB) error {
