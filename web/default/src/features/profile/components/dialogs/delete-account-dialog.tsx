@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { handleServerError } from '@/lib/handle-server-error'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,6 +36,10 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { deleteUserAccount } from '../../api'
 
 // ============================================================================
@@ -57,6 +62,41 @@ export function DeleteAccountDialog({
   const { reset } = useAuthStore((state) => state.auth)
   const [loading, setLoading] = useState(false)
   const [confirmation, setConfirmation] = useState('')
+  const {
+    open: verificationOpen,
+    methods: verificationMethods,
+    state: verificationState,
+    executeVerification,
+    withVerification,
+    cancel: cancelVerification,
+    setCode: setVerificationCode,
+    switchMethod: switchVerificationMethod,
+  } = useSecureVerification()
+
+  const performDelete = async () => {
+    try {
+      setLoading(true)
+      const response = await deleteUserAccount()
+
+      if (!response.success) {
+        throw new Error(response.message || t('Failed to delete account'))
+      }
+
+      toast.success(t('Account deleted successfully'))
+
+      try {
+        await api.get('/api/user/logout')
+      } catch {
+        // The account is already deleted; local auth state still needs clearing.
+      }
+
+      reset()
+      navigate({ to: '/sign-in' })
+      return response
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleDelete = async () => {
     if (confirmation !== username) {
@@ -65,29 +105,16 @@ export function DeleteAccountDialog({
     }
 
     try {
-      setLoading(true)
-      const response = await deleteUserAccount()
-
-      if (response.success) {
-        toast.success(t('Account deleted successfully'))
-
-        // Logout and redirect
-        try {
-          await api.get('/api/user/logout')
-        } catch {
-          // Ignore logout errors
-        }
-
-        reset()
-        localStorage.removeItem('user')
-        navigate({ to: '/sign-in' })
-      } else {
-        toast.error(response.message || t('Failed to delete account'))
-      }
-    } catch (_error) {
-      toast.error(t('Failed to delete account'))
-    } finally {
-      setLoading(false)
+      await withVerification(performDelete, {
+        preferredMethod: 'passkey',
+        scope: 'account_delete',
+        title: t('Security verification'),
+        description: t(
+          'Verify your identity before permanently deleting your account.'
+        ),
+      })
+    } catch (error) {
+      handleServerError(error, { fallback: t('Failed to delete account') })
     }
   }
 
@@ -101,7 +128,8 @@ export function DeleteAccountDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
           <DialogTitle className='text-destructive flex items-center gap-2'>
@@ -159,6 +187,26 @@ export function DeleteAccountDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+
+      <SecureVerificationDialog
+        open={verificationOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) cancelVerification()
+        }}
+        methods={verificationMethods}
+        state={verificationState}
+        onVerify={async (method, code) => {
+          try {
+            await executeVerification(method, code)
+          } catch {
+            // executeVerification already reports verification failures.
+          }
+        }}
+        onCancel={cancelVerification}
+        onCodeChange={setVerificationCode}
+        onMethodChange={switchVerificationMethod}
+      />
+    </>
   )
 }

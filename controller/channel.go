@@ -462,6 +462,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if err := service.ValidateStatusCodeMapping(channel.GetStatusCodeMapping()); err != nil {
+		return fmt.Errorf("渠道状态码映射[status code mapping]格式错误：%s", err.Error())
+	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -1381,6 +1384,21 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 
+	// Avoid allocating a permanent per-channel lock for arbitrary nonexistent
+	// channel IDs. The mutation still reloads after taking the lock because
+	// multi-key operations rewrite the complete ChannelInfo value.
+	if _, err := model.GetChannelById(request.ChannelId, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "渠道不存在",
+		})
+		return
+	}
+
+	lock := model.GetChannelPollingLock(request.ChannelId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	channel, err := model.GetChannelById(request.ChannelId, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1407,10 +1425,6 @@ func ManageMultiKeys(c *gin.Context) {
 			"id":     channel.Id,
 		})
 	}
-
-	lock := model.GetChannelPollingLock(channel.Id)
-	lock.Lock()
-	defer lock.Unlock()
 
 	switch request.Action {
 	case "get_key_status":

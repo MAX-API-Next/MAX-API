@@ -81,7 +81,10 @@ export async function updateUserLanguage(
 export async function deleteUserAccount(
   data?: DeleteAccountRequest
 ): Promise<ApiResponse> {
-  const res = await api.delete('/api/user/self', { data })
+  const res = await api.delete('/api/user/self', {
+    ...sensitiveActionConfig,
+    data,
+  })
   return res.data
 }
 

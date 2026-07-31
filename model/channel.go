@@ -197,9 +197,25 @@ func (channel *Channel) GetKeys() []string {
 }
 
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.MaxAPIError) {
+	channelID := channel.Id
+	foundCachedChannel := false
+	if common.MemoryCacheEnabled {
+		// Keep the cache read lock while taking the per-channel lock. Cache sync
+		// takes the same locks in this order before replacing the channel pointer.
+		channelSyncLock.RLock()
+		defer channelSyncLock.RUnlock()
+		if cached, ok := channelsIDM[channelID]; ok {
+			channel = cached
+			foundCachedChannel = true
+		}
+	}
+
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {
 		return channel.Key, 0, nil
+	}
+	if common.MemoryCacheEnabled && !foundCachedChannel {
+		return "", 0, types.NewError(fmt.Errorf("渠道# %d，已不存在", channelID), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
 	// Obtain all keys (split by \n)
@@ -246,10 +262,13 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.MaxAPIError) {
 		return keys[selectedIdx], selectedIdx, nil
 	case constant.MultiKeyModePolling:
 		// Use channel-specific lock to ensure thread-safe polling
-
-		channelInfo, err := CacheGetChannelInfo(channel.Id)
-		if err != nil {
-			return "", 0, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		channelInfo := &channel.ChannelInfo
+		if !common.MemoryCacheEnabled {
+			var err error
+			channelInfo, err = CacheGetChannelInfo(channel.Id)
+			if err != nil {
+				return "", 0, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
 		}
 		defer func() {
 			if common.DebugEnabled {

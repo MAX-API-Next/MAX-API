@@ -26,15 +26,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func writeMidjourneyStatusCode(c *gin.Context, upstreamStatusCode int) {
+	c.Writer.WriteHeader(service.MapStatusCode(upstreamStatusCode, c.GetString("status_code_mapping")))
+}
+
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
-	midjourneyTask := model.GetByOnlyMJId(taskId)
-	if midjourneyTask == nil {
-		c.JSON(400, gin.H{
-			"error": "midjourney_task_not_found",
+	userID, userErr := strconv.Atoi(c.Query("uid"))
+	expiresAt, expiresErr := strconv.ParseInt(c.Query("expires"), 10, 64)
+	if userErr != nil || expiresErr != nil ||
+		!service.ValidateMidjourneyImageURL(taskId, userID, expiresAt, c.Query("signature"), time.Now()) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "midjourney_image_authorization_failed",
 		})
 		return
 	}
+	midjourneyTask := model.GetByMJId(userID, taskId)
+	if midjourneyTask == nil {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "midjourney_image_authorization_failed",
+		})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=300")
 	var httpClient *http.Client
 	if channel, err := model.CacheGetChannel(midjourneyTask.ChannelId); err == nil {
 		proxy := channel.GetSetting().Proxy
@@ -141,9 +155,9 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
 	if originTask.ImageUrl != "" && setting.MjForwardUrlEnabled {
-		midjourneyTask.ImageUrl = system_setting.ServerAddress + "/mj/image/" + originTask.MjId
+		midjourneyTask.ImageUrl = service.BuildMidjourneyImageURL(system_setting.ServerAddress, originTask.MjId, originTask.UserId, time.Now())
 		if originTask.Status != "SUCCESS" {
-			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+			midjourneyTask.ImageUrl += "&rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
 	} else {
 		midjourneyTask.ImageUrl = originTask.ImageUrl
@@ -225,7 +239,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	}
 	defer func() {
 		if mjResp.StatusCode == 200 && mjResp.Response.Code == 1 {
-			err := service.PostConsumeQuota(info, priceData.Quota, 0, true)
+			err := service.PostConsumeQuotaOnce(info, "midjourney-success", priceData.Quota, 0, true)
 			if err != nil {
 				common.SysLog("error consuming token remain quota: " + err.Error())
 			}
@@ -271,7 +285,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if err != nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "insert_midjourney_task_failed")
 	}
-	c.Writer.WriteHeader(mjResp.StatusCode)
+	writeMidjourneyStatusCode(c, mjResp.StatusCode)
 	respBody, err := json.Marshal(midjResponse)
 	if err != nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "unmarshal_response_body_failed")
@@ -307,7 +321,7 @@ func RelayMidjourneyTaskImageSeed(c *gin.Context) *dto.MidjourneyResponse {
 		return &midjResponseWithStatus.Response
 	}
 	midjResponse := &midjResponseWithStatus.Response
-	c.Writer.WriteHeader(midjResponseWithStatus.StatusCode)
+	writeMidjourneyStatusCode(c, midjResponseWithStatus.StatusCode)
 	respBody, err := json.Marshal(midjResponse)
 	if err != nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "unmarshal_response_body_failed")
@@ -532,7 +546,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 
 	defer func() {
 		if consumeQuota && midjResponseWithStatus.StatusCode == 200 {
-			err := service.PostConsumeQuota(relayInfo, priceData.Quota, 0, true)
+			err := service.PostConsumeQuotaOnce(relayInfo, "midjourney-success", priceData.Quota, 0, true)
 			if err != nil {
 				common.SysLog("error consuming token remain quota: " + err.Error())
 			}
@@ -642,7 +656,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	//for k, v := range resp.Header {
 	//	c.Writer.Header().Set(k, v[0])
 	//}
-	c.Writer.WriteHeader(midjResponseWithStatus.StatusCode)
+	writeMidjourneyStatusCode(c, midjResponseWithStatus.StatusCode)
 
 	_, err = io.Copy(c.Writer, bodyReader)
 	if err != nil {

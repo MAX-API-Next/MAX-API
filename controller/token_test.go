@@ -637,6 +637,101 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestUpdateTokenCanRestoreExpiredTokenWithNewValues(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "expired-token", "expired1234token5678")
+	token.Status = common.TokenStatusExpired
+	token.ExpiredTime = common.GetTimestamp() - 1
+	token.RemainQuota = 0
+	token.UnlimitedQuota = false
+	if err := db.Save(token).Error; err != nil {
+		t.Fatalf("failed to expire token: %v", err)
+	}
+
+	newExpiry := common.GetTimestamp() + 3600
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "restored-token",
+		"status":               common.TokenStatusEnabled,
+		"expired_time":         newExpiry,
+		"remain_quota":         100,
+		"unlimited_quota":      false,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "default",
+		"cross_group_retry":    false,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected one-step token restore to succeed, got message: %s", response.Message)
+	}
+
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload restored token: %v", err)
+	}
+	if stored.Status != common.TokenStatusEnabled {
+		t.Fatalf("expected restored token status %d, got %d", common.TokenStatusEnabled, stored.Status)
+	}
+	if stored.ExpiredTime != newExpiry || stored.RemainQuota != 100 {
+		t.Fatalf("expected restored values expiry=%d quota=100, got expiry=%d quota=%d", newExpiry, stored.ExpiredTime, stored.RemainQuota)
+	}
+}
+
+func TestUpdateTokenRejectsInvalidStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		status     int
+		statusOnly bool
+	}{
+		{name: "full update unsupported status", target: "/api/token/", status: 99},
+		{name: "status only zero status", target: "/api/token/?status_only=true", status: 0, statusOnly: true},
+		{name: "status only unsupported status", target: "/api/token/?status_only=true", status: 99, statusOnly: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTokenControllerTestDB(t)
+			token := seedToken(t, db, 1, "editable-token", "invalidstatus123456")
+			body := map[string]any{
+				"id":     token.Id,
+				"status": tt.status,
+			}
+			if !tt.statusOnly {
+				body["name"] = "updated-token"
+				body["expired_time"] = -1
+				body["remain_quota"] = 100
+				body["unlimited_quota"] = true
+				body["model_limits_enabled"] = false
+				body["model_limits"] = ""
+				body["group"] = "default"
+				body["cross_group_retry"] = false
+			}
+
+			ctx, recorder := newAuthenticatedContext(t, http.MethodPut, tt.target, body, 1)
+			UpdateToken(ctx)
+
+			response := decodeAPIResponse(t, recorder)
+			if response.Success {
+				t.Fatal("expected invalid token status update to fail")
+			}
+
+			var stored model.Token
+			if err := db.First(&stored, token.Id).Error; err != nil {
+				t.Fatalf("failed to reload token: %v", err)
+			}
+			if stored.Status != common.TokenStatusEnabled {
+				t.Fatalf("expected status to remain %d, got %d", common.TokenStatusEnabled, stored.Status)
+			}
+		})
+	}
+}
+
 func TestUpdateTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)

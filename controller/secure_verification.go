@@ -14,14 +14,15 @@ import (
 
 const (
 	// SecureVerificationSessionKey means the user has fully passed secure verification.
-	SecureVerificationSessionKey       = "secure_verified_at"
-	secureVerificationMethodSessionKey = "secure_verified_method"
-	secureVerificationUserSessionKey   = "secure_verified_user_id"
-	secureVerificationScopeSessionKey  = "secure_verified_scope"
-	secureVerificationMethod2FA        = "2fa"
-	secureVerificationMethodPasskey    = "passkey"
-	secureVerificationMethodPassword   = "password"
-	secureVerificationScopeAccessToken = "access_token"
+	SecureVerificationSessionKey         = "secure_verified_at"
+	secureVerificationMethodSessionKey   = "secure_verified_method"
+	secureVerificationUserSessionKey     = "secure_verified_user_id"
+	secureVerificationScopeSessionKey    = "secure_verified_scope"
+	secureVerificationMethod2FA          = "2fa"
+	secureVerificationMethodPasskey      = "passkey"
+	secureVerificationMethodPassword     = "password"
+	secureVerificationScopeAccessToken   = "access_token"
+	secureVerificationScopeAccountDelete = "account_delete"
 	// PasskeyReadySessionKey means WebAuthn finished and /api/verify can finalize step-up verification.
 	PasskeyReadySessionKey = "secure_passkey_ready_at"
 	// SecureVerificationTimeout 验证有效期（秒）
@@ -94,7 +95,12 @@ func GetVerificationMethods(c *gin.Context) {
 		return
 	}
 
-	methods, err := loadSecureVerificationMethods(user, c.Query("scope") == secureVerificationScopeAccessToken)
+	scope := c.Query("scope")
+	if !isSupportedSecureVerificationScope(scope) {
+		common.ApiError(c, fmt.Errorf("不支持的验证作用域: %s", scope))
+		return
+	}
+	methods, err := loadSecureVerificationMethods(user, passwordVerificationAllowed(scope))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -140,7 +146,11 @@ func UniversalVerify(c *gin.Context) {
 		return
 	}
 
-	methods, err := loadSecureVerificationMethods(user, req.Scope == secureVerificationScopeAccessToken)
+	if !isSupportedSecureVerificationScope(req.Scope) {
+		common.ApiError(c, fmt.Errorf("不支持的验证作用域: %s", req.Scope))
+		return
+	}
+	methods, err := loadSecureVerificationMethods(user, passwordVerificationAllowed(req.Scope))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -224,6 +234,19 @@ func UniversalVerify(c *gin.Context) {
 			"expires_at": now + SecureVerificationTimeout,
 		},
 	})
+}
+
+func isSupportedSecureVerificationScope(scope string) bool {
+	switch scope {
+	case "", secureVerificationScopeAccessToken, secureVerificationScopeAccountDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+func passwordVerificationAllowed(scope string) bool {
+	return scope == secureVerificationScopeAccessToken || scope == secureVerificationScopeAccountDelete
 }
 
 func setSecureVerificationSession(c *gin.Context, userId int, method string, scope string) (int64, error) {

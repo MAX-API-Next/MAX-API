@@ -308,38 +308,56 @@ func (token *Token) Insert() error {
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
-	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
-	if err == nil && common.RedisEnabled {
-		if cacheErr := invalidateTokenCache(token.Key); cacheErr != nil {
-			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
-			enqueueTokenCacheRetry(token.Key, false, cacheErr)
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
+			"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error; err != nil {
+			return err
 		}
+		var err error
+		cacheTask, err = stageTokenCacheInvalidationTx(tx, token.Key, false)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	return err
+	dispatchStagedCacheInvalidation(cacheTask)
+	return nil
 }
 
 func (token *Token) SelectUpdate() (err error) {
 	// This can update zero values
-	err = DB.Model(token).Select("accessed_time", "status").Updates(token).Error
-	if err == nil && common.RedisEnabled {
-		if cacheErr := invalidateTokenCache(token.Key); cacheErr != nil {
-			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
-			enqueueTokenCacheRetry(token.Key, false, cacheErr)
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(token).Select("accessed_time", "status").Updates(token).Error; err != nil {
+			return err
 		}
+		var err error
+		cacheTask, err = stageTokenCacheInvalidationTx(tx, token.Key, false)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	return err
+	dispatchStagedCacheInvalidation(cacheTask)
+	return nil
 }
 
 func (token *Token) Delete() (err error) {
-	err = DB.Delete(token).Error
-	if err == nil && common.RedisEnabled {
-		if cacheErr := deleteTokenCache(token.Key); cacheErr != nil {
-			common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
-			enqueueTokenCacheRetry(token.Key, true, cacheErr)
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(token).Error; err != nil {
+			return err
 		}
+		var err error
+		cacheTask, err = stageTokenCacheInvalidationTx(tx, token.Key, true)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	return err
+	dispatchStagedCacheInvalidation(cacheTask)
+	return nil
 }
 
 func (token *Token) IsModelLimitsEnabled() bool {
@@ -433,53 +451,6 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	return nil
 }
 
-// DecreaseTokenAndUserQuota atomically consumes both balances. This is used by
-// legacy pre-consume callers so a failed user update cannot strand a token
-// deduction that would otherwise require a best-effort rollback.
-func DecreaseTokenAndUserQuota(tokenId, userId int, key string, quota int) error {
-	if quota < 0 {
-		return errors.New("quota 不能为负数！")
-	}
-	if quota == 0 {
-		return nil
-	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		tokenResult := tx.Model(&Token{}).
-			Where("id = ? AND user_id = ? AND (unlimited_quota = ? OR remain_quota >= ?)", tokenId, userId, true, quota).
-			Updates(map[string]interface{}{
-				"remain_quota":  gorm.Expr("remain_quota - ?", quota),
-				"used_quota":    gorm.Expr("used_quota + ?", quota),
-				"accessed_time": common.GetTimestamp(),
-			})
-		if tokenResult.Error != nil {
-			return tokenResult.Error
-		}
-		if tokenResult.RowsAffected != 1 {
-			return fmt.Errorf("%w: id=%d, need=%d", ErrTokenQuotaInsufficient, tokenId, quota)
-		}
-
-		userResult := tx.Model(&User{}).
-			Where("id = ? AND quota >= ?", userId, quota).
-			Update("quota", gorm.Expr("quota - ?", quota))
-		if userResult.Error != nil {
-			return userResult.Error
-		}
-		if userResult.RowsAffected != 1 {
-			return fmt.Errorf("%w: id=%d, need=%d", ErrUserQuotaInsufficient, userId, quota)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	invalidateTokenQuotaCache(key)
-	if cacheErr := invalidateUserQuotaCache(userId); cacheErr != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate user quota cache after atomic pre-consume (user_id=%d): %v", userId, cacheErr))
-		enqueueUserCacheInvalidationRetry(userId, cacheErr)
-	}
-	return nil
-}
-
 func decreaseTokenQuota(id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
@@ -563,30 +534,17 @@ func GetTokenKeysByIds(ids []int, userId int) ([]Token, error) {
 // 配合 InvalidateUserCache 使用，可在用户被禁用/删除时立即阻断其令牌的请求。
 // 下一次请求将从数据库重新加载令牌及用户状态，从而立即识别出被禁用的用户。
 func InvalidateUserTokensCache(userId int) error {
-	if !common.RedisEnabled {
-		return nil
-	}
 	if userId <= 0 {
 		return errors.New("userId 无效")
 	}
-	var tokens []Token
-	if err := DB.Unscoped().
-		Select("id", commonKeyCol).
-		Where("user_id = ?", userId).
-		Find(&tokens).Error; err != nil {
+	var tasks []CacheInvalidationTask
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		tasks, err = stageUserTokenCacheInvalidationsTx(tx, userId, false)
+		return err
+	}); err != nil {
 		return err
 	}
-	var firstErr error
-	for _, t := range tokens {
-		if t.Key == "" {
-			continue
-		}
-		if err := invalidateTokenCache(t.Key); err != nil {
-			enqueueTokenCacheRetry(t.Key, false, err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-	return firstErr
+	dispatchStagedCacheInvalidations(tasks)
+	return nil
 }

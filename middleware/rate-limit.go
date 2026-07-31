@@ -82,11 +82,14 @@ func applyRateLimit(c *gin.Context, maxRequestNum int, duration int64, key strin
 	if maxRequestNum <= 0 {
 		return
 	}
-	if common.RedisEnabled {
-		redisRateLimiter(c, maxRequestNum, duration, key, policy)
+	if common.RedisEnabled && redisRateLimiter(c, maxRequestNum, duration, key, policy) {
 		return
 	}
 
+	applyInMemoryRateLimit(c, maxRequestNum, duration, key, policy)
+}
+
+func applyInMemoryRateLimit(c *gin.Context, maxRequestNum int, duration int64, key string, policy string) {
 	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 	allowed, retryAfter := inMemoryRateLimiter.RequestWithRetry(key, maxRequestNum, duration)
 	if !allowed {
@@ -94,41 +97,48 @@ func applyRateLimit(c *gin.Context, maxRequestNum int, duration int64, key strin
 	}
 }
 
-func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, key string, policy string) {
+// redisRateLimiter returns false when Redis cannot produce a valid decision so
+// callers can preserve a local rate limit without converting an outage to 500.
+func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, key string, policy string) bool {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), rateLimitRedisTimeout)
 	defer cancel()
 	result, err := common.RDB.Eval(ctx, rollingWindowRateLimitScript, []string{key}, duration*1000, maxRequestNum).Result()
 	if err != nil {
 		logRedisRateLimitFailure(c, policy, "evaluation", err)
-		return
+		return false
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) != 2 {
 		logRedisRateLimitFailure(c, policy, "response", fmt.Errorf("unexpected result type %T", result))
-		return
+		return false
 	}
 	allowed, err := redisRateLimitInt(values[0])
 	if err != nil {
 		logRedisRateLimitFailure(c, policy, "allowed value", err)
-		return
+		return false
 	}
 	if allowed == 1 {
-		return
+		return true
+	}
+	if allowed != 0 {
+		logRedisRateLimitFailure(c, policy, "allowed value", fmt.Errorf("unexpected decision %d", allowed))
+		return false
 	}
 	retryAfter, err := redisRateLimitInt(values[1])
 	if err != nil {
 		logRedisRateLimitFailure(c, policy, "retry value", err)
-		return
+		return false
 	}
 	if retryAfter < 1 {
 		retryAfter = 1
 	}
 	abortRateLimited(c, maxRequestNum, time.Duration(retryAfter)*time.Second, policy)
+	return true
 }
 
 func logRedisRateLimitFailure(c *gin.Context, policy string, stage string, err error) {
-	logger.LogError(c.Request.Context(), fmt.Sprintf("rate limit Redis %s failed for policy %s; request allowed: %v", stage, policy, err))
+	logger.LogError(c.Request.Context(), fmt.Sprintf("rate limit Redis %s failed for policy %s; falling back to local limiter: %v", stage, policy, err))
 }
 
 func redisRateLimitInt(value interface{}) (int64, error) {

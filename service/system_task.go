@@ -30,6 +30,8 @@ var (
 	systemTaskHandlers   = map[string]SystemTaskHandler{}
 )
 
+var updateSystemTaskState = model.UpdateSystemTaskState
+
 func RegisterSystemTaskHandler(h SystemTaskHandler) {
 	if h == nil {
 		return
@@ -218,7 +220,7 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 			return
 		}
 		syncLogCleanupStateFromRemaining(&state, remaining)
-		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
+		if err := updateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
 			logSystemTaskLockError(ctx, task, err)
 			return
 		}
@@ -249,7 +251,7 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 			}
 			state.Progress = logCleanupProgress(state.Processed, state.Total)
 
-			if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
+			if err := updateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
 				logSystemTaskLockError(ctx, task, err)
 				return
 			}
@@ -266,9 +268,19 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	if state.Total < state.Processed {
 		state.Total = state.Processed
 	}
-	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
-		logSystemTaskLockError(ctx, task, err)
-		return
+	for {
+		rowsAffected, err := model.DeleteOldBillingLogReceiptsBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if err := updateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil()); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+		if rowsAffected < int64(payload.BatchSize) {
+			break
+		}
 	}
 
 	result := LogCleanupResult{DeletedCount: state.Processed}
@@ -346,7 +358,7 @@ func NewSystemTaskProgressReporter(task *model.SystemTask, runnerID string) func
 		lastWriteAt = time.Now()
 
 		state := SystemTaskProgress{Total: total, Processed: processed, Progress: progress}
-		_ = model.UpdateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil())
+		_ = updateSystemTaskState(task.TaskID, runnerID, state, systemTaskLockUntil())
 	}
 }
 

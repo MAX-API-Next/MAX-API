@@ -50,6 +50,50 @@ func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "return_related_questions").Exists())
 }
 
+func TestResolveMaxTokens(t *testing.T) {
+	legacy := uint(64)
+	completion := uint(128)
+	zero := uint(0)
+	tests := []struct {
+		name                string
+		maxTokens           *uint
+		maxCompletionTokens *uint
+		want                *uint
+	}{
+		{
+			name:                "prefers non-zero max completion tokens",
+			maxTokens:           &legacy,
+			maxCompletionTokens: &completion,
+			want:                &completion,
+		},
+		{
+			name:                "keeps legacy max tokens when completion is zero",
+			maxTokens:           &legacy,
+			maxCompletionTokens: &zero,
+			want:                &legacy,
+		},
+		{
+			name:                "preserves zero max completion tokens without legacy value",
+			maxCompletionTokens: &zero,
+			want:                &zero,
+		},
+		{
+			name:      "keeps legacy max tokens",
+			maxTokens: &legacy,
+			want:      &legacy,
+		},
+		{
+			name: "returns nil when both values are absent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Same(t, tt.want, ResolveMaxTokens(tt.maxTokens, tt.maxCompletionTokens))
+		})
+	}
+}
+
 func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-4.1",

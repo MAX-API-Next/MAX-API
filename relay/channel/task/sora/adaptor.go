@@ -6,7 +6,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"strconv"
 	"strings"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	taskcommon "github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 
 	"github.com/gin-gonic/gin"
@@ -202,10 +202,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 						continue
 					}
 				}
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fh.Filename))
-				h.Set("Content-Type", ct)
-				part, err := writer.CreatePart(h)
+				part, err := helper.CreateFormFileWithContentType(writer, fieldName, fh.Filename, ct)
 				if err != nil {
 					f.Close()
 					continue

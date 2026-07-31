@@ -158,3 +158,42 @@ func TestMemoryCacheSelectionSkipsInvalidAdvancedCustomConfig(t *testing.T) {
 	require.NotNil(t, channel)
 	assert.Equal(t, 2, channel.Id)
 }
+
+func TestChannelSelectionExcludesPreviouslyTriedChannel(t *testing.T) {
+	clearPreferredOwnerTables(t)
+	t.Cleanup(func() {
+		clearPreferredOwnerTables(t)
+		channelSyncLock.Lock()
+		group2model2channels = nil
+		channelsIDM = nil
+		channel2advancedCustomConfig = nil
+		channel2advancedCustomConfigError = nil
+		channelSyncLock.Unlock()
+	})
+
+	const (
+		groupName = "default"
+		modelName = "gpt-exclude-failed-channel"
+	)
+	insertChannelSelectionCandidate(t, 1, constant.ChannelTypeOpenAI, "", modelName, groupName, 10)
+	insertChannelSelectionCandidate(t, 2, constant.ChannelTypeOpenAI, "", modelName, groupName, 10)
+	excluded := map[int]struct{}{1: {}}
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+	})
+
+	common.MemoryCacheEnabled = false
+	channel, err := GetChannelExcluding(groupName, modelName, 0, "/v1/chat/completions", excluded)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+
+	common.MemoryCacheEnabled = true
+	InitChannelCache()
+	channel, err = GetRandomSatisfiedChannelExcluding(groupName, modelName, 0, "/v1/chat/completions", excluded)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}

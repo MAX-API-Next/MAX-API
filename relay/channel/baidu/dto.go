@@ -15,9 +15,9 @@ type BaiduMessage struct {
 type BaiduChatRequest struct {
 	Messages        []BaiduMessage  `json:"messages"`
 	Temperature     *float64        `json:"temperature,omitempty"`
-	TopP            float64         `json:"top_p,omitempty"`
-	PenaltyScore    float64         `json:"penalty_score,omitempty"`
-	Stream          bool            `json:"stream,omitempty"`
+	TopP            *float64        `json:"top_p,omitempty"`
+	PenaltyScore    *float64        `json:"penalty_score,omitempty"`
+	Stream          *bool           `json:"stream,omitempty"`
 	System          string          `json:"system,omitempty"`
 	DisableSearch   bool            `json:"disable_search,omitempty"`
 	EnableCitation  bool            `json:"enable_citation,omitempty"`

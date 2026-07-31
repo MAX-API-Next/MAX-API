@@ -257,12 +257,18 @@ type StreamOptions struct {
 	IncludeObfuscation bool `json:"include_obfuscation,omitempty"`
 }
 
-func (r *GeneralOpenAIRequest) GetMaxTokens() uint {
-	maxCompletionTokens := lo.FromPtrOr(r.MaxCompletionTokens, uint(0))
-	if maxCompletionTokens != 0 {
+// ResolveMaxTokens prefers a non-zero max_completion_tokens value. An explicit
+// zero max_completion_tokens is retained when max_tokens is absent so callers
+// can preserve the distinction between zero and an omitted limit.
+func ResolveMaxTokens(maxTokens, maxCompletionTokens *uint) *uint {
+	if maxCompletionTokens != nil && (*maxCompletionTokens != 0 || maxTokens == nil) {
 		return maxCompletionTokens
 	}
-	return lo.FromPtrOr(r.MaxTokens, uint(0))
+	return maxTokens
+}
+
+func (r *GeneralOpenAIRequest) GetMaxTokens() uint {
+	return lo.FromPtrOr(ResolveMaxTokens(r.MaxTokens, r.MaxCompletionTokens), uint(0))
 }
 
 func (r *GeneralOpenAIRequest) ParseInput() []string {

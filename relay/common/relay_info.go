@@ -680,6 +680,17 @@ type TaskRelayInfo struct {
 	// PublicTaskID 是提交时预生成的 task_xxxx 格式公开 ID，
 	// 供 DoResponse 在返回给客户端时使用（避免暴露上游真实 ID）。
 	PublicTaskID string
+	// PersistedTaskID is the local placeholder row created before the upstream
+	// request. It is reused across channel retries for the same client request.
+	PersistedTaskID int64
+	// UpstreamTaskResponseReceived is set after an upstream 2xx response. Until
+	// parsing proves otherwise, retrying or refunding that state could create a
+	// duplicate or unbilled provider task.
+	UpstreamTaskResponseReceived bool
+	// UpstreamTaskOutcomeUnknown is set when the complete request was written but
+	// the transport failed before a response arrived. Retrying or refunding that
+	// state could duplicate provider work or lose provider spend.
+	UpstreamTaskOutcomeUnknown bool
 
 	ConsumeQuota bool
 

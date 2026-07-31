@@ -59,10 +59,10 @@ type AliVideoParameters struct {
 	Resolution   string `json:"resolution,omitempty"`    // 分辨率: 480P/720P/1080P（图生视频、首尾帧生视频）
 	Size         string `json:"size,omitempty"`          // 尺寸: 如 "832*480"（文生视频）
 	Duration     int    `json:"duration,omitempty"`      // 时长: 3-10秒
-	PromptExtend bool   `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
-	Watermark    bool   `json:"watermark,omitempty"`     // 是否添加水印
+	PromptExtend *bool  `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
+	Watermark    *bool  `json:"watermark,omitempty"`     // 是否添加水印
 	Audio        *bool  `json:"audio,omitempty"`         // 是否添加音频（wan2.5）
-	Seed         int    `json:"seed,omitempty"`          // 随机数种子
+	Seed         *int   `json:"seed,omitempty"`          // 随机数种子
 }
 
 // AliVideoResponse 阿里通义万相响应
@@ -464,8 +464,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 			ImgURL: firstTaskImage(req),
 		},
 		Parameters: &AliVideoParameters{
-			PromptExtend: true, // 默认开启智能改写
-			Watermark:    false,
+			PromptExtend: lo.ToPtr(true), // 默认开启智能改写
+			Watermark:    lo.ToPtr(false),
 		},
 	}
 
@@ -544,7 +544,7 @@ func (a *TaskAdaptor) convertToAliKlingRequest(upstreamModel string, req relayco
 			AspectRatio: sizeToKlingAspectRatio(req.Size),
 			Duration:    5,
 			Audio:       &audio,
-			Watermark:   true,
+			Watermark:   lo.ToPtr(true),
 		},
 	}
 
@@ -601,7 +601,7 @@ func applyKlingOfficialMetadata(metadata map[string]interface{}, aliReq *AliVide
 		aliReq.Parameters.Mode = mode
 	}
 	if watermark, ok := metadataBool(metadata, "watermark"); ok {
-		aliReq.Parameters.Watermark = watermark
+		aliReq.Parameters.Watermark = &watermark
 	}
 	if sound := strings.ToLower(metadataString(metadata, "sound")); sound != "" {
 		audio := sound == "on" || sound == "true" || sound == "1"

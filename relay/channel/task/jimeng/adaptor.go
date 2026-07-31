@@ -444,6 +444,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Reason = resTask.Message
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
+		return &taskResult, nil
 	}
 	switch resTask.Data.Status {
 	case "in_queue":

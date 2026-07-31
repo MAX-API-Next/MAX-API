@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,4 +100,30 @@ func TestShutdownHTTPServerClosesActiveHandlersAfterTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("client request did not finish after forced close")
 	}
+}
+
+func TestConfigureSessionCookieSecureTreatsBlankAsUnset(t *testing.T) {
+	oldSecure := common.SessionCookieSecure
+	t.Cleanup(func() { common.SessionCookieSecure = oldSecure })
+	t.Setenv("SESSION_COOKIE_SECURE", "")
+
+	require.NoError(t, configureSessionCookieSecure("https://example.com"))
+
+	assert.True(t, common.SessionCookieSecure)
+}
+
+func TestConfigureSessionCookieSecurePreservesExplicitFalse(t *testing.T) {
+	oldSecure := common.SessionCookieSecure
+	t.Cleanup(func() { common.SessionCookieSecure = oldSecure })
+	t.Setenv("SESSION_COOKIE_SECURE", "false")
+
+	require.NoError(t, configureSessionCookieSecure("https://example.com"))
+
+	assert.False(t, common.SessionCookieSecure)
+}
+
+func TestConfigureSessionCookieSecureRejectsInvalidValue(t *testing.T) {
+	t.Setenv("SESSION_COOKIE_SECURE", "sometimes")
+
+	require.Error(t, configureSessionCookieSecure("https://example.com"))
 }

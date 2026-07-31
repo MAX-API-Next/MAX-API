@@ -3148,6 +3148,54 @@ export function ChannelMutateDrawer({
                                       </FormItem>
                                     )}
                                   />
+
+                                  <FormField
+                                    control={form.control}
+                                    name='video_task_created_at_path'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Created Time Path')}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            placeholder='created_at'
+                                            {...field}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Response path for task creation timestamp'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
+
+                                  <FormField
+                                    control={form.control}
+                                    name='video_task_updated_at_path'
+                                    render={({ field }) => (
+                                      <FormItem>
+                                        <FormLabel>
+                                          {t('Updated Time Path')}
+                                        </FormLabel>
+                                        <FormControl>
+                                          <Input
+                                            placeholder='updated_at'
+                                            {...field}
+                                          />
+                                        </FormControl>
+                                        <FormDescription>
+                                          {t(
+                                            'Response path for task update timestamp'
+                                          )}
+                                        </FormDescription>
+                                        <FormMessage />
+                                      </FormItem>
+                                    )}
+                                  />
                                 </div>
 
                                 <FormField

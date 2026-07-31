@@ -190,10 +190,11 @@ func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
 			}
 			schema, schemaOK := value["schema"].(map[string]any)
 			values, valuesOK := schema["enum"].([]any)
-			return schemaOK && valuesOK && len(values) == 1 && values[0] == "access_token"
+			return schemaOK && valuesOK && len(values) == 2 &&
+				values[0] == "access_token" && values[1] == "account_delete"
 		}
 		return false
-	}, "expected scope query parameter for GET /api/verify/methods")
+	}, "expected supported scope query parameter for GET /api/verify/methods")
 
 	verifyOperation := document.Paths["/api/verify"]["post"]
 	requestBody, ok := verifyOperation["requestBody"].(map[string]any)

@@ -27,6 +27,10 @@ interface SafeErrorDebugInfo {
   status?: number
 }
 
+interface HandleServerErrorOptions {
+  fallback?: string
+}
+
 export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {
   if (error instanceof AxiosError) {
     return {
@@ -42,13 +46,16 @@ export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {
   return { name: 'UnknownError', message: 'Unknown error' }
 }
 
-export function handleServerError(error: unknown) {
+export function handleServerError(
+  error: unknown,
+  options: HandleServerErrorOptions = {}
+): void {
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
     console.error('[handleServerError]', getSafeErrorDebugInfo(error))
   }
 
-  let errMsg = i18next.t('Something went wrong!')
+  let errMsg = options.fallback || i18next.t('Something went wrong!')
 
   if (
     error &&

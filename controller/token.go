@@ -260,6 +260,11 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Full updates omit status with its zero value. Status-only updates must persist a valid status.
+	if (statusOnly != "" || token.Status != 0) && !isValidTokenStatus(token.Status) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
@@ -281,11 +286,19 @@ func UpdateToken(c *gin.Context) {
 		return
 	}
 	if token.Status == common.TokenStatusEnabled {
-		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
+		expiredTime := cleanToken.ExpiredTime
+		remainQuota := cleanToken.RemainQuota
+		unlimitedQuota := cleanToken.UnlimitedQuota
+		if statusOnly == "" {
+			expiredTime = token.ExpiredTime
+			remainQuota = token.RemainQuota
+			unlimitedQuota = token.UnlimitedQuota
+		}
+		if cleanToken.Status == common.TokenStatusExpired && expiredTime <= common.GetTimestamp() && expiredTime != -1 {
 			common.ApiErrorI18n(c, i18n.MsgTokenExpiredCannotEnable)
 			return
 		}
-		if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
+		if cleanToken.Status == common.TokenStatusExhausted && remainQuota <= 0 && !unlimitedQuota {
 			common.ApiErrorI18n(c, i18n.MsgTokenExhaustedCannotEable)
 			return
 		}
@@ -307,6 +320,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		if token.Status != 0 {
+			cleanToken.Status = token.Status
+		}
 	}
 	err = cleanToken.Update()
 	if err != nil {
@@ -318,6 +334,15 @@ func UpdateToken(c *gin.Context) {
 		"message": "",
 		"data":    buildMaskedTokenResponse(cleanToken),
 	})
+}
+
+func isValidTokenStatus(status int) bool {
+	switch status {
+	case common.TokenStatusEnabled, common.TokenStatusDisabled, common.TokenStatusExpired, common.TokenStatusExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 type TokenBatch struct {

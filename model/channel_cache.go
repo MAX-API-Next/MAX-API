@@ -88,12 +88,15 @@ func InitChannelCache() {
 		if channel.ChannelInfo.IsMultiKey {
 			channel.Keys = channel.GetKeys()
 			if channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
+				pollingLock := GetChannelPollingLock(i)
+				pollingLock.Lock()
 				if oldChannel, ok := channelsIDM[i]; ok {
 					// 存在旧的渠道，如果是多key且轮询，保留轮询索引信息
 					if oldChannel.ChannelInfo.IsMultiKey && oldChannel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
 						channel.ChannelInfo.MultiKeyPollingIndex = oldChannel.ChannelInfo.MultiKeyPollingIndex
 					}
 				}
+				pollingLock.Unlock()
 			}
 		}
 	}
@@ -113,9 +116,15 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelExcluding(group, model, retry, requestPath, nil)
+}
+
+// GetRandomSatisfiedChannelExcluding selects from the cache while excluding
+// channels already attempted by the current relay request.
+func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, requestPath string, excludedChannelIDs map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelExcluding(group, model, retry, requestPath, excludedChannelIDs)
 	}
 
 	channelSyncLock.RLock()
@@ -136,6 +145,18 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		}
 	}
 
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	if len(excludedChannelIDs) > 0 {
+		availableChannels := make([]int, 0, len(channels))
+		for _, channelID := range channels {
+			if _, excluded := excludedChannelIDs[channelID]; !excluded {
+				availableChannels = append(availableChannels, channelID)
+			}
+		}
+		channels = availableChannels
+	}
 	if len(channels) == 0 {
 		return nil, nil
 	}

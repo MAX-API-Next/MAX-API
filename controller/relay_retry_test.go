@@ -96,3 +96,23 @@ func TestShouldRetryTaskRelaySkipsLocalServerError(t *testing.T) {
 		LocalError: true,
 	}, 1))
 }
+
+func TestShouldRetryTaskRelayDoesNotEnableRetryThroughStatusMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	require.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{
+		StatusCode:         http.StatusServiceUnavailable,
+		UpstreamStatusCode: http.StatusBadRequest,
+	}, 1))
+}
+
+func TestShouldRetryTaskRelayAllowsStatusMappingToSuppressRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	require.False(t, shouldRetryTaskRelay(c, 1, &dto.TaskError{
+		StatusCode:         http.StatusBadRequest,
+		UpstreamStatusCode: http.StatusServiceUnavailable,
+	}, 1))
+}

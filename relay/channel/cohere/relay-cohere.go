@@ -99,16 +99,33 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return 0, nil, nil
 	})
 	dataChan := make(chan string)
-	stopChan := make(chan bool)
+	stopChan := make(chan struct{}, 1)
+	done := make(chan struct{})
+	producerDone := make(chan struct{})
 	go func() {
+		defer close(producerDone)
+		defer func() {
+			select {
+			case stopChan <- struct{}{}:
+			case <-done:
+			}
+		}()
 		for scanner.Scan() {
 			data := scanner.Text()
-			dataChan <- data
+			select {
+			case dataChan <- data:
+			case <-done:
+				return
+			}
 		}
 		if err := scanner.Err(); err != nil {
+			select {
+			case <-done:
+				return
+			default:
+			}
 			common.SysLog("error reading stream: " + err.Error())
 		}
-		stopChan <- true
 	}()
 	helper.SetEventStreamHeaders(c)
 	isFirst := true
@@ -166,8 +183,13 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		case <-stopChan:
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
 			return false
+		case <-c.Request.Context().Done():
+			return false
 		}
 	})
+	close(done)
+	service.CloseResponseBodyGracefully(resp)
+	<-producerDone
 	if usage.PromptTokens == 0 {
 		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}
@@ -212,7 +234,9 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, _ = c.Writer.Write(jsonResponse)
+	if _, writeErr := c.Writer.Write(jsonResponse); writeErr != nil {
+		common.SysLog("failed to write Cohere response: " + writeErr.Error())
+	}
 	return &usage, nil
 }
 
@@ -249,5 +273,8 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	if err != nil {
+		common.SysLog("failed to write Cohere rerank response: " + err.Error())
+	}
 	return &usage, nil
 }

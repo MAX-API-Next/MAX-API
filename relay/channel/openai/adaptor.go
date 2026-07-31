@@ -8,9 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
-	"path/filepath"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -27,6 +25,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/common_handler"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/reasoning"
@@ -194,19 +193,24 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		}
 	}
 	if info.RelayMode == relayconstant.RelayModeRealtime {
+		legacyRealtimeBeta := strings.Contains(info.UpstreamModelName, "-realtime-preview")
 		swp := c.Request.Header.Get("Sec-WebSocket-Protocol")
 		if swp != "" {
 			items := []string{
 				"realtime",
 				"openai-insecure-api-key." + info.ApiKey,
-				"openai-beta.realtime-v1",
+			}
+			if legacyRealtimeBeta {
+				items = append(items, "openai-beta.realtime-v1")
 			}
 			header.Set("Sec-WebSocket-Protocol", strings.Join(items, ","))
 			//req.Header.Set("Sec-WebSocket-Key", c.Request.Header.Get("Sec-WebSocket-Key"))
 			//req.Header.Set("Sec-Websocket-Extensions", c.Request.Header.Get("Sec-Websocket-Extensions"))
 			//req.Header.Set("Sec-Websocket-Version", c.Request.Header.Get("Sec-Websocket-Version"))
 		} else {
-			header.Set("openai-beta", "realtime=v1")
+			if legacyRealtimeBeta {
+				header.Set("openai-beta", "realtime=v1")
+			}
 			if !hasAuthOverride {
 				header.Set("Authorization", "Bearer "+info.ApiKey)
 			}
@@ -488,9 +492,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Process all image files
 			for i, fileHeader := range imageFiles {
-				file, err := fileHeader.Open()
+				file, mimeType, err := openValidatedImageFile(fileHeader)
 				if err != nil {
-					return nil, fmt.Errorf("failed to open image file %d: %w", i, err)
+					return nil, fmt.Errorf("invalid image file %d: %w", i, err)
 				}
 
 				// If multiple images, use image[] as the field name
@@ -499,20 +503,14 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 					fieldName = "image[]"
 				}
 
-				// Determine MIME type based on file extension
-				mimeType := detectImageMimeType(fileHeader.Filename)
-
-				// Create a form file with the appropriate content type
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fileHeader.Filename))
-				h.Set("Content-Type", mimeType)
-
-				part, err := writer.CreatePart(h)
+				part, err := helper.CreateFormFileWithContentType(writer, fieldName, fileHeader.Filename, mimeType)
 				if err != nil {
+					_ = file.Close()
 					return nil, fmt.Errorf("create form part failed for image %d: %w", i, err)
 				}
 
 				if _, err := io.Copy(part, file); err != nil {
+					_ = file.Close()
 					return nil, fmt.Errorf("copy file failed for image %d: %w", i, err)
 				}
 
@@ -522,27 +520,21 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Handle mask file if present
 			if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
-				maskFile, err := maskFiles[0].Open()
+				maskFile, mimeType, err := openValidatedImageFile(maskFiles[0])
 				if err != nil {
-					return nil, errors.New("failed to open mask file")
+					return nil, fmt.Errorf("invalid mask file: %w", err)
 				}
 				// 复制完立即关闭，避免在循环内使用 defer 占用资源
 
-				// Determine MIME type for mask file
-				mimeType := detectImageMimeType(maskFiles[0].Filename)
-
-				// Create a form file with the appropriate content type
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="mask"; filename="%s"`, maskFiles[0].Filename))
-				h.Set("Content-Type", mimeType)
-
-				maskPart, err := writer.CreatePart(h)
+				maskPart, err := helper.CreateFormFileWithContentType(writer, "mask", maskFiles[0].Filename, mimeType)
 				if err != nil {
-					return nil, errors.New("create form file failed for mask")
+					_ = maskFile.Close()
+					return nil, fmt.Errorf("create form part failed for mask: %w", err)
 				}
 
 				if _, err := io.Copy(maskPart, maskFile); err != nil {
-					return nil, errors.New("copy mask file failed")
+					_ = maskFile.Close()
+					return nil, fmt.Errorf("copy mask file failed: %w", err)
 				}
 				_ = maskFile.Close()
 			}
@@ -567,24 +559,34 @@ func isJSONRequest(c *gin.Context) bool {
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
 }
 
-// detectImageMimeType determines the MIME type based on the file extension
-func detectImageMimeType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".webp":
-		return "image/webp"
-	default:
-		// Try to detect from extension if possible
-		if strings.HasPrefix(ext, ".jp") {
-			return "image/jpeg"
-		}
-		// Default to png as a fallback
-		return "image/png"
+func openValidatedImageFile(fileHeader *multipart.FileHeader) (multipart.File, string, error) {
+	if fileHeader == nil {
+		return nil, "", errors.New("image file is nil")
 	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, "", err
+	}
+	header := make([]byte, 512)
+	n, readErr := io.ReadFull(file, header)
+	if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+		_ = file.Close()
+		return nil, "", fmt.Errorf("read image header: %w", readErr)
+	}
+	if n == 0 {
+		_ = file.Close()
+		return nil, "", errors.New("image file is empty")
+	}
+	mimeType := http.DetectContentType(header[:n])
+	if mimeType != "image/jpeg" && mimeType != "image/png" && mimeType != "image/webp" {
+		_ = file.Close()
+		return nil, "", fmt.Errorf("unsupported image content type %s", mimeType)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, "", fmt.Errorf("rewind image file: %w", err)
+	}
+	return file, mimeType, nil
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {

@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func seedSubscriptionResetPlan(t *testing.T, plan *SubscriptionPlan) {
@@ -198,4 +200,119 @@ func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	assert.Zero(t, result.ResetCount)
 	assert.Zero(t, result.UserCount)
 	assert.Empty(t, result.AffectedUserIds)
+}
+
+func TestDowngradeUserGroupDoesNotRetainHigherGroupForDifferentActiveSubscription(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := User{Id: 9701, Username: "subscription-downgrade-user", Group: "svip", Status: common.UserStatusEnabled}
+	replaced := UserSubscription{
+		Id: 9702, UserId: user.Id, Status: "cancelled", EndTime: now + 3600,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	remaining := UserSubscription{
+		Id: 9703, UserId: user.Id, Status: "active", EndTime: now + 7200,
+		UpgradeGroup: "vip", PrevUserGroup: "default",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&replaced).Error)
+	require.NoError(t, DB.Create(&remaining).Error)
+
+	var group string
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		group, err = downgradeUserGroupForSubscriptionTx(tx, &replaced, now)
+		return err
+	}))
+	assert.Equal(t, "vip", group)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "vip", stored.Group)
+}
+
+func TestExpireDueSubscriptionsDowngradesToRemainingActiveUpgradeGroup(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := User{Id: 9711, Username: "subscription-expiry-user", Group: "svip", Status: common.UserStatusEnabled}
+	expired := UserSubscription{
+		Id: 9712, UserId: user.Id, Status: "active", EndTime: now - 1,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	remaining := UserSubscription{
+		Id: 9713, UserId: user.Id, Status: "active", EndTime: now + 7200,
+		UpgradeGroup: "vip", PrevUserGroup: "default",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&expired).Error)
+	require.NoError(t, DB.Create(&remaining).Error)
+
+	count, err := ExpireDueSubscriptions(10)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "vip", stored.Group)
+	assert.Equal(t, "expired", getSubscriptionResetSub(t, expired.Id).Status)
+}
+
+func TestDowngradeUserGroupRetainsCurrentGroupWhenAnyActiveSubscriptionGrantsIt(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := User{Id: 9721, Username: "subscription-retain-current-group", Group: "svip", Status: common.UserStatusEnabled}
+	replaced := UserSubscription{
+		Id: 9722, UserId: user.Id, Status: "cancelled", EndTime: now + 3600,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	matching := UserSubscription{
+		Id: 9723, UserId: user.Id, Status: "active", EndTime: now + 7200,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	lower := UserSubscription{
+		Id: 9724, UserId: user.Id, Status: "active", EndTime: now + 10800,
+		UpgradeGroup: "vip", PrevUserGroup: "default",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&replaced).Error)
+	require.NoError(t, DB.Create(&matching).Error)
+	require.NoError(t, DB.Create(&lower).Error)
+
+	var group string
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		group, err = downgradeUserGroupForSubscriptionTx(tx, &replaced, now)
+		return err
+	}))
+	assert.Empty(t, group)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "svip", stored.Group)
+}
+
+func TestExpireDueSubscriptionsRetainsCurrentGroupWhenAnyActiveSubscriptionGrantsIt(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := User{Id: 9731, Username: "subscription-expiry-retain-current", Group: "svip", Status: common.UserStatusEnabled}
+	expired := UserSubscription{
+		Id: 9732, UserId: user.Id, Status: "active", EndTime: now - 1,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	matching := UserSubscription{
+		Id: 9733, UserId: user.Id, Status: "active", EndTime: now + 7200,
+		UpgradeGroup: "svip", PrevUserGroup: "vip",
+	}
+	lower := UserSubscription{
+		Id: 9734, UserId: user.Id, Status: "active", EndTime: now + 10800,
+		UpgradeGroup: "vip", PrevUserGroup: "default",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&expired).Error)
+	require.NoError(t, DB.Create(&matching).Error)
+	require.NoError(t, DB.Create(&lower).Error)
+
+	count, err := ExpireDueSubscriptions(10)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "svip", stored.Group)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,11 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/constant"
 )
+
+func SessionCookieSecureForServerAddress(serverAddress string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(serverAddress))
+	return err == nil && strings.EqualFold(parsed.Scheme, "https") && parsed.Host != ""
+}
 
 var (
 	Port         = flag.Int("port", 3000, "the listening port")
@@ -174,7 +180,8 @@ func initConstantEnv() {
 	constant.ErrorLogEnabled = GetEnvOrDefaultBool("ERROR_LOG_ENABLED", constant.DefaultErrorLogEnabled)
 	// 任务轮询时查询的最大数量
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", constant.DefaultTaskQueryLimit)
-	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
+	// 异步任务超时时间（分钟）。已确认上游 ID 的任务失败后退款；无法确认
+	// 上游是否接受的提交占位只标记人工核对，避免错误退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", constant.DefaultTaskTimeoutMinutes)
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")

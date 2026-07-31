@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 const (
@@ -101,10 +103,6 @@ func enqueueUserCacheInvalidationRetry(userId int, cause error) {
 	enqueueUserCacheRetry(userId, false, cause)
 }
 
-func enqueueUserCacheDeletionRetry(userId int, cause error) {
-	enqueueUserCacheRetry(userId, true, cause)
-}
-
 func deleteUserCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil
@@ -112,11 +110,17 @@ func deleteUserCache(userId int) error {
 	return common.RedisDeleteVersionedHash(getUserCacheKey(userId), getUserCacheVersionKey(userId))
 }
 
-func deleteUserCacheAfterCommittedDelete(userId int) {
-	if err := deleteUserCache(userId); err != nil {
-		common.SysLog(fmt.Sprintf("failed to delete user cache after user deletion: user_id=%d, error=%v", userId, err))
-		enqueueUserCacheDeletionRetry(userId, err)
+func stageUserCacheInvalidationTx(tx *gorm.DB, userID int, deleteEntry bool) (CacheInvalidationTask, error) {
+	if userID <= 0 {
+		return CacheInvalidationTask{}, errors.New("user id is required for cache invalidation")
 	}
+	return stageCacheInvalidationTaskTx(
+		tx,
+		cacheInvalidationKindUser,
+		fmt.Sprintf("%d", userID),
+		getUserCacheVersionKey(userID),
+		deleteEntry,
+	)
 }
 
 func userCacheRetryWindow() time.Duration {
@@ -132,9 +136,11 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 		return
 	}
 	now := time.Now()
+	shouldPersist := false
 	userCacheRetries.Lock()
 	state, exists := userCacheRetries.pending[userId]
 	if !exists {
+		shouldPersist = true
 		state = &userCacheRetryState{
 			userId:      userId,
 			revision:    1,
@@ -154,6 +160,7 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 			state.cause = cause
 		}
 		if deleteEntry && !state.deleteEntry {
+			shouldPersist = true
 			state.deleteEntry = true
 			state.deadline = now.Add(userCacheRetryWindow())
 			state.delay = userCacheRetryInitialDelay
@@ -165,6 +172,10 @@ func enqueueUserCacheRetry(userId int, deleteEntry bool, cause error) {
 		userCacheRetries.running = true
 	}
 	userCacheRetries.Unlock()
+
+	if shouldPersist {
+		persistCacheInvalidationTask(cacheInvalidationKindUser, fmt.Sprintf("%d", userId), getUserCacheVersionKey(userId), deleteEntry, cause)
+	}
 
 	select {
 	case userCacheRetries.wake <- struct{}{}:
@@ -309,14 +320,22 @@ func completeUserCacheRetryAttempt(attempt userCacheRetryAttempt, err error) {
 // InvalidateUserCache is the exported version of invalidateUserCache.
 // 供 controller 等上层包在用户状态变更（如禁用、删除、角色变更）后主动清理缓存。
 func InvalidateUserCache(userId int) error {
-	return invalidateUserCache(userId)
+	if err := invalidateUserCache(userId); err != nil {
+		enqueueUserCacheInvalidationRetry(userId, err)
+		return err
+	}
+	return nil
 }
 
 func populateUserCacheIfVersion(user User, version int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	_, err := common.RedisHSetObjIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", user.Id))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetObjIfVersion(
 		getUserCacheKey(user.Id),
 		getUserCacheVersionKey(user.Id),
 		version,
@@ -335,7 +354,11 @@ func updateUserCache(user User) error {
 	}
 	// User mutations must advance the generation before any later DB refill can
 	// write a stale snapshot. The next read repopulates the complete hash.
-	return invalidateUserCache(user.Id)
+	if err := invalidateUserCache(user.Id); err != nil {
+		enqueueUserCacheInvalidationRetry(user.Id, err)
+		return err
+	}
+	return nil
 }
 
 // GetUserCache gets complete user cache from hash
@@ -397,6 +420,13 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	if userCache.Role < common.RoleCommonUser || userCache.Status == 0 {
 		return nil, fmt.Errorf("stale user cache")
 	}
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, fmt.Errorf("user cache invalidation pending")
+	}
 	return &userCache, nil
 }
 
@@ -445,7 +475,11 @@ func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error
 	if !common.RedisEnabled {
 		return nil
 	}
-	_, err := common.RedisHSetFieldIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetFieldIfVersion(
 		getUserCacheKey(userId),
 		getUserCacheVersionKey(userId),
 		version,
@@ -457,7 +491,11 @@ func updateUserQuotaCacheIfVersion(userId int, quota int64, version int64) error
 }
 
 func updateUserCacheFieldIfVersion(userId int, field string, value interface{}, version int64) error {
-	_, err := common.RedisHSetFieldIfVersion(
+	pending, err := cacheInvalidationTaskPending(cacheInvalidationKindUser, fmt.Sprintf("%d", userId))
+	if err != nil || pending {
+		return err
+	}
+	_, err = common.RedisHSetFieldIfVersion(
 		getUserCacheKey(userId),
 		getUserCacheVersionKey(userId),
 		version,

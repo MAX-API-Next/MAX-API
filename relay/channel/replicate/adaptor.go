@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"strconv"
 	"strings"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -445,15 +445,8 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	hdr := make(textproto.MIMEHeader)
-	hdr.Set("Content-Disposition", fmt.Sprintf("form-data; name=\"content\"; filename=\"%s\"", fileHeader.Filename))
 	contentType := fileHeader.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	hdr.Set("Content-Type", contentType)
-
-	part, err := writer.CreatePart(hdr)
+	part, err := helper.CreateFormFileWithContentType(writer, "content", fileHeader.Filename, contentType)
 	if err != nil {
 		writer.Close()
 		return "", fmt.Errorf("replicate adaptor: create upload form failed: %w", err)

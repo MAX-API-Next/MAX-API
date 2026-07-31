@@ -117,6 +117,18 @@ func TestUpdateConfigFromMap_PointerUnmarshalerUpdatesInPlace(t *testing.T) {
 	assert.Equal(t, map[string]float64{"new": 2}, cfg.Ratios.ReadAll())
 }
 
+func TestUpdateConfigFromMapRejectsNullRWMap(t *testing.T) {
+	ratios := types.NewRWMap[string, float64]()
+	ratios.Set("existing", 1)
+	cfg := &testConfigWithRWMap{Ratios: ratios}
+
+	err := UpdateConfigFromMap(cfg, map[string]string{"ratios": " null "})
+
+	require.Error(t, err)
+	require.Same(t, ratios, cfg.Ratios)
+	assert.Equal(t, map[string]float64{"existing": 1}, cfg.Ratios.ReadAll())
+}
+
 func TestLoadFromDBReturnsInvalidSubConfigError(t *testing.T) {
 	manager := NewConfigManager()
 	cfg := &testConfigWithMap{Modes: map[string]string{"existing": "tiered_expr"}}

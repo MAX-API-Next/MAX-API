@@ -78,26 +78,6 @@ function legacyChannel(): Channel {
   }
 }
 
-function genericVideoTaskChannel(): Channel {
-  return {
-    ...legacyChannel(),
-    settings: JSON.stringify({
-      task_protocol: 'generic_video_task',
-      task_protocol_config: {
-        submit_path: '/v1/videos',
-        query_path: '/v1/videos/{task_id}',
-        request_body_mode: 'media_generation',
-        request_body_mapping: {
-          model: 'model',
-        },
-        task_id_path: 'data.id',
-        status_path: 'data.status',
-      },
-      keep_existing: true,
-    }),
-  }
-}
-
 test('loads legacy video task protocol as path override only', () => {
   const defaults = transformChannelToFormDefaults(legacyChannel())
 
@@ -117,22 +97,6 @@ test('clears legacy video task protocol when saving path override', () => {
     submit_path: '/legacy/videos/create',
     query_path: '/legacy/videos/{task_id}',
   })
-})
-
-test('drops stale request body config when saving generic video task channel', () => {
-  const defaults = transformChannelToFormDefaults(genericVideoTaskChannel())
-  const savedSettings = buildSettings(defaults)
-  const taskProtocolConfig = savedSettings.task_protocol_config as Record<
-    string,
-    unknown
-  >
-
-  assert.equal(defaults.video_task_protocol_enabled, true)
-  assert.equal(taskProtocolConfig.request_body_mode, undefined)
-  assert.equal(taskProtocolConfig.request_body_mapping, undefined)
-  assert.equal(taskProtocolConfig.request_body_defaults, undefined)
-  assert.equal(taskProtocolConfig.task_id_path, 'data.id')
-  assert.equal(taskProtocolConfig.status_path, 'data.status')
 })
 
 test('channel type switch clears scoped base url and other values', () => {

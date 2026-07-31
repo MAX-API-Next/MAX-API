@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
@@ -229,4 +232,94 @@ func TestPrepareTaskSubmitRequestBodyParamOverrideReturnErrorIsLocal(t *testing.
 	assert.Equal(t, http.StatusUnprocessableEntity, taskErr.StatusCode)
 	assert.Equal(t, "forced_bad_request", taskErr.Code)
 	assert.Equal(t, "forced bad request by param override", taskErr.Message)
+}
+
+func TestMapUpstreamTaskErrorAppliesMappingWithoutChangingLocalClassification(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("status_code_mapping", `{"400":"503"}`)
+	taskErr := &dto.TaskError{
+		StatusCode: http.StatusBadRequest,
+		LocalError: true,
+	}
+
+	got := mapUpstreamTaskError(c, taskErr)
+
+	require.Same(t, taskErr, got)
+	assert.Equal(t, http.StatusServiceUnavailable, got.StatusCode)
+	assert.Equal(t, http.StatusBadRequest, got.UpstreamStatusCode)
+	assert.True(t, got.LocalError)
+}
+
+func TestTaskResponseBufferDefersHeadersStatusAndBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	originalWriter := c.Writer
+	bufferedWriter := newTaskResponseBuffer(originalWriter)
+	c.Writer = bufferedWriter
+
+	c.Header("X-Task-Result", "buffered")
+	c.Status(http.StatusAccepted)
+	_, err := c.Writer.WriteString(`{"id":"task_public"}`)
+	require.NoError(t, err)
+
+	require.False(t, originalWriter.Written())
+	require.Empty(t, recorder.Body.String())
+	require.Empty(t, recorder.Header().Get("X-Task-Result"))
+
+	snapshot := bufferedWriter.snapshot()
+	c.Writer = originalWriter
+	require.NoError(t, snapshot.writeTo(c))
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	require.Equal(t, "buffered", recorder.Header().Get("X-Task-Result"))
+	require.JSONEq(t, `{"id":"task_public"}`, recorder.Body.String())
+}
+
+func TestTaskResponseSnapshotClearsHeadersRemovedFromBuffer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Header("X-Stale", "stale")
+	originalWriter := c.Writer
+	bufferedWriter := newTaskResponseBuffer(originalWriter)
+	c.Writer = bufferedWriter
+
+	bufferedWriter.Header().Del("X-Stale")
+	bufferedWriter.Header().Set("X-Fresh", "fresh")
+	_, err := c.Writer.WriteString(`{"ok":true}`)
+	require.NoError(t, err)
+
+	snapshot := bufferedWriter.snapshot()
+	c.Writer = originalWriter
+	require.NoError(t, snapshot.writeTo(c))
+	require.Empty(t, recorder.Header().Get("X-Stale"))
+	require.Equal(t, "fresh", recorder.Header().Get("X-Fresh"))
+}
+
+func TestSetTaskOtherRatioHeadersUsesFinalRatios(t *testing.T) {
+	header := http.Header{}
+
+	setTaskOtherRatioHeaders(header, map[string]float64{"duration": 1.25})
+	setTaskOtherRatioHeaders(header, map[string]float64{"duration": 2})
+
+	require.JSONEq(t, `{"duration":2}`, header.Get("X-Max-Api-Other-Ratios"))
+	require.JSONEq(t, `{"duration":2}`, header.Get("X-New-Api-Other-Ratios"))
+}
+
+func TestTaskPersistenceErrorReturnsSafeClientMessage(t *testing.T) {
+	taskErr := TaskPersistenceError(errors.New("sql: failed near secret_table"), "persist_task_failed", "failed to persist task")
+
+	require.NotNil(t, taskErr)
+	assert.Equal(t, "persist_task_failed", taskErr.Code)
+	assert.Equal(t, "failed to persist task", taskErr.Message)
+	assert.NotContains(t, taskErr.Message, "secret_table")
+	assert.NotContains(t, taskErr.Error.Error(), "secret_table")
+}
+
+func TestTerminalTaskStatusClassification(t *testing.T) {
+	require.True(t, isTerminalTaskStatus(model.TaskStatusSuccess))
+	require.True(t, isTerminalTaskStatus(model.TaskStatusFailure))
+	require.False(t, isTerminalTaskStatus(model.TaskStatusInProgress))
+	require.False(t, isTerminalTaskStatus(model.TaskStatusNotStart))
 }

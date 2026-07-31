@@ -166,6 +166,8 @@ export const ADVANCED_ERROR_FIELDS = [
   'video_task_task_id_path',
   'video_task_status_path',
   'video_task_progress_path',
+  'video_task_created_at_path',
+  'video_task_updated_at_path',
   'video_task_result_url_paths',
   'video_task_error_message_path',
   'video_task_status_submitted',

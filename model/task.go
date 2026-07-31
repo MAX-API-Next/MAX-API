@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -11,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	commonRelay "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -64,11 +67,29 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+
+	includeDataInUpdate        bool `gorm:"-"`
+	includePrivateDataInUpdate bool `gorm:"-"`
 }
 
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
+	t.includeDataInUpdate = true
+}
+
+func (t *Task) ClearDataForUpdate() {
+	t.Data = nil
+	t.includeDataInUpdate = true
+}
+
+func (t *Task) ClearPrivateDataForUpdate() {
+	t.PrivateData = TaskPrivateData{}
+	t.includePrivateDataInUpdate = true
+}
+
+func (t *Task) IncludePrivateDataInUpdate() {
+	t.includePrivateDataInUpdate = true
 }
 
 func (t *Task) GetData(v any) error {
@@ -100,13 +121,17 @@ func (m Properties) Value() (driver.Value, error) {
 type TaskPrivateData struct {
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// AwaitingUpstreamID distinguishes a newly persisted placeholder from
+	// legacy rows where TaskID itself is the provider task identifier.
+	AwaitingUpstreamID bool   `json:"awaiting_upstream_id,omitempty"`
+	ResultURL          string `json:"result_url,omitempty"` // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource    string              `json:"billing_source,omitempty"`     // "wallet" 或 "subscription"
+	BillingRequestId string              `json:"billing_request_id,omitempty"` // 原始预扣 request id，用于跨周期安全结算
+	SubscriptionId   int                 `json:"subscription_id,omitempty"`    // 订阅 ID，用于订阅退款
+	TokenId          int                 `json:"token_id,omitempty"`           // 令牌 ID，用于令牌额度退款
+	NodeName         string              `json:"node_name,omitempty"`          // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
+	BillingContext   *TaskBillingContext `json:"billing_context,omitempty"`    // 计费参数快照（用于轮询阶段重新计算）
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -143,6 +168,9 @@ func (t *Task) DeltaSettlementDisabledForChannel(channelType int, channelSetting
 func (t *Task) GetUpstreamTaskID() string {
 	if t.PrivateData.UpstreamTaskID != "" {
 		return t.PrivateData.UpstreamTaskID
+	}
+	if t.PrivateData.AwaitingUpstreamID {
+		return ""
 	}
 	return t.TaskID
 }
@@ -327,9 +355,35 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
+	if limit <= 0 {
+		limit = 100
+	}
 	var tasks []*Task
-	var err error
-	err = DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).Limit(limit).Order("id").Find(&tasks).Error
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := withRowLock(tx).Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+			Limit(limit).
+			Order("updated_at ASC, id ASC").
+			Find(&tasks).Error; err != nil {
+			return err
+		}
+		if len(tasks) == 0 {
+			return nil
+		}
+		ids := make([]int64, 0, len(tasks))
+		claimedAt := time.Now().Unix()
+		for _, task := range tasks {
+			ids = append(ids, task.ID)
+			if task.UpdatedAt >= claimedAt {
+				claimedAt = task.UpdatedAt + 1
+			}
+		}
+		for _, task := range tasks {
+			task.UpdatedAt = claimedAt
+		}
+		return tx.Model(&Task{}).
+			Where("id IN ? AND status NOT IN ?", ids, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Update("updated_at", claimedAt).Error
+	})
 	if err != nil {
 		return nil
 	}
@@ -417,6 +471,46 @@ func (t *Task) Snapshot() taskSnapshot {
 	}
 }
 
+func (t *Task) statusUpdateValues() map[string]interface{} {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= 0 {
+		updatedAt = time.Now().Unix()
+	}
+	values := map[string]interface{}{
+		"status":      t.Status,
+		"progress":    t.Progress,
+		"start_time":  t.StartTime,
+		"finish_time": t.FinishTime,
+		"fail_reason": t.FailReason,
+		"updated_at":  updatedAt,
+	}
+	if t.Data != nil || t.includeDataInUpdate {
+		values["data"] = t.Data
+	}
+	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
+		values["private_data"] = t.PrivateData
+	}
+	return values
+}
+
+func (t *Task) submitResultUpdateValues() map[string]interface{} {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= 0 {
+		updatedAt = time.Now().Unix()
+	}
+	values := map[string]interface{}{
+		"quota":      t.Quota,
+		"updated_at": updatedAt,
+	}
+	if t.Data != nil || t.includeDataInUpdate {
+		values["data"] = t.Data
+	}
+	if t.PrivateData != (TaskPrivateData{}) || t.includePrivateDataInUpdate {
+		values["private_data"] = t.PrivateData
+	}
+	return values
+}
+
 func (Task *Task) Update() error {
 	var err error
 	err = DB.Save(Task).Error
@@ -431,15 +525,145 @@ func (t *Task) UpdateQuota() error {
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus.
 //
-// Uses Model().Select("*").Updates() instead of Save() because GORM's Save
-// falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
-// zero rows, which silently bypasses the CAS guard.
+// Uses a column map instead of Save() because GORM's Save falls back to
+// INSERT ON CONFLICT when the WHERE-guarded UPDATE matches zero rows, which
+// silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	result := DB.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+var errTaskStatusCASLost = errors.New("task status compare-and-swap lost")
+
+// UpdateWithStatusAndSettlement commits a terminal task transition and its
+// durable settlement intent atomically. Balance mutations are applied after
+// this transaction by ApplyBillingSettlementOnce or its retry runner.
+func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input BillingSettlementInput) (bool, error) {
+	if t == nil || t.ID <= 0 {
+		return false, errors.New("persisted task is required")
+	}
+	if input.TaskID != t.ID {
+		return false, fmt.Errorf("billing settlement task identity mismatch: task=%d input=%d", t.ID, input.TaskID)
+	}
+	if err := validateBillingSettlementInput(input); err != nil {
+		return false, err
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
+			return err
+		}
+		result := tx.Model(t).Where("status = ?", fromStatus).Updates(t.statusUpdateValues())
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errTaskStatusCASLost
+		}
+		return nil
+	})
+	if errors.Is(err, errTaskStatusCASLost) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// UpdateWithSettlementIntent persists upstream task identity and the request's
+// final billing intent in one transaction before the HTTP success response is released.
+func (t *Task) UpdateWithSettlementIntent(input *BillingSettlementInput) error {
+	if t == nil || t.ID <= 0 {
+		return errors.New("persisted task is required")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if input != nil {
+			if err := validateBillingSettlementInput(*input); err != nil {
+				return err
+			}
+			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status NOT IN ?", t.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Updates(t.submitResultUpdateValues())
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return taskSubmitResultUpdateMissError(tx, t.ID)
+		}
+		return nil
+	})
+}
+
+func taskSubmitResultUpdateMissError(tx *gorm.DB, taskID int64) error {
+	var existing Task
+	if err := tx.Select("id", "status").First(&existing, taskID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("persisted task not found: id=%d", taskID)
+		}
+		return err
+	}
+	if existing.Status == TaskStatusFailure || existing.Status == TaskStatusSuccess {
+		return fmt.Errorf("task already terminal (status=%s): id=%d", existing.Status, taskID)
+	}
+	return fmt.Errorf("persisted task not updated: id=%d status=%s", taskID, existing.Status)
+}
+
+func MarkTaskSubmitFailed(taskID int64, reason string) error {
+	if taskID <= 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).
+		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
+		Updates(map[string]interface{}{
+			"status":      TaskStatusFailure,
+			"progress":    "100%",
+			"finish_time": time.Now().Unix(),
+			"fail_reason": reason,
+			"quota":       0,
+			"updated_at":  time.Now().Unix(),
+		}).Error
+}
+
+// MarkTaskSubmitNeedsReview preserves the pre-consumed quota and any upstream
+// identity after the provider accepted a task but local durable finalization
+// failed. Refunding this state would create an unbilled upstream task.
+func MarkTaskSubmitNeedsReview(task *Task, reason string) error {
+	if task == nil || task.ID <= 0 {
+		return nil
+	}
+	task.PrivateData.AwaitingUpstreamID = false
+	return DB.Model(&Task{}).
+		Where("id = ? AND status <> ?", task.ID, TaskStatusSuccess).
+		Updates(map[string]interface{}{
+			"status":       TaskStatusFailure,
+			"progress":     "100%",
+			"finish_time":  time.Now().Unix(),
+			"fail_reason":  reason,
+			"quota":        task.Quota,
+			"private_data": task.PrivateData,
+			"data":         task.Data,
+			"updated_at":   time.Now().Unix(),
+		}).Error
+}
+
+func MarkTaskSubmitAmbiguous(taskID int64, reason string) error {
+	if taskID <= 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).
+		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
+		Updates(map[string]interface{}{
+			"status":      TaskStatusFailure,
+			"progress":    "100%",
+			"finish_time": time.Now().Unix(),
+			"fail_reason": reason,
+			"updated_at":  time.Now().Unix(),
+		}).Error
 }
 
 // TaskBulkUpdate performs an unconditional bulk UPDATE by upstream task_id strings.

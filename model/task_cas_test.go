@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -39,6 +40,7 @@ func TestMain(m *testing.M) {
 		&User{},
 		&Token{},
 		&Log{},
+		&BillingLogReceipt{},
 		&Option{},
 		&Channel{},
 		&Ability{},
@@ -48,6 +50,9 @@ func TestMain(m *testing.M) {
 		&SubscriptionOrder{},
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
+		&BillingSettlement{},
+		&BillingPreConsumeSelection{},
+		&CacheInvalidationTask{},
 		&PerfMetric{},
 		&SystemTask{},
 		&SystemInstance{},
@@ -65,6 +70,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM tokens")
 		DB.Exec("DELETE FROM logs")
+		DB.Exec("DELETE FROM billing_log_receipts")
 		DB.Exec("DELETE FROM channels")
 		DB.Exec("DELETE FROM abilities")
 		DB.Exec("DELETE FROM redemptions")
@@ -73,6 +79,9 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM subscription_plans")
 		DB.Exec("DELETE FROM user_subscriptions")
 		DB.Exec("DELETE FROM subscription_pre_consume_records")
+		DB.Exec("DELETE FROM billing_settlements")
+		DB.Exec("DELETE FROM billing_pre_consume_selections")
+		DB.Exec("DELETE FROM cache_invalidation_tasks")
 		DB.Exec("DELETE FROM perf_metrics")
 		DB.Exec("DELETE FROM system_tasks")
 		DB.Exec("DELETE FROM system_instances")
@@ -175,6 +184,209 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 	require.NoError(t, DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, TaskStatusSuccess, reloaded.Status)
 	assert.Equal(t, "100%", reloaded.Progress)
+}
+
+func TestUpdateWithStatusCanExplicitlyClearJSONColumns(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID:      "task_clear_json_columns",
+		Status:      TaskStatusInProgress,
+		Progress:    "50%",
+		Data:        json.RawMessage(`{"id":"upstream"}`),
+		PrivateData: TaskPrivateData{ResultURL: "https://example.com/result.mp4"},
+	}
+	insertTask(t, task)
+
+	task.Status = TaskStatusQueued
+	task.Progress = "75%"
+	task.ClearDataForUpdate()
+	task.ClearPrivateDataForUpdate()
+	won, err := task.UpdateWithStatus(TaskStatusInProgress)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, TaskStatusQueued, reloaded.Status)
+	assert.Empty(t, reloaded.Data)
+	assert.Equal(t, TaskPrivateData{}, reloaded.PrivateData)
+}
+
+func TestUpdateWithStatusAndSettlementCommitsIntentAtomically(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "atomic-settlement", Status: TaskStatusInProgress, Quota: 10}
+	insertTask(t, task)
+	task.Status = TaskStatusFailure
+
+	won, err := task.UpdateWithStatusAndSettlement(TaskStatusInProgress, BillingSettlementInput{
+		OperationKey:    fmt.Sprintf("task:%d:refund", task.ID),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          1,
+		FundingDelta:    -10,
+		TaskID:          task.ID,
+		TaskQuota:       10,
+		TaskQuotaTarget: 0,
+	})
+	require.NoError(t, err)
+	require.True(t, won)
+
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&settlement).Error)
+	require.Equal(t, BillingSettlementStatusPending, settlement.Status)
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	require.EqualValues(t, TaskStatusFailure, reloaded.Status)
+	require.Equal(t, 10, reloaded.Quota)
+}
+
+func TestUpdateWithStatusAndSettlementCASLossLeavesNoIntent(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "lost-settlement", Status: TaskStatusSuccess, Quota: 10}
+	insertTask(t, task)
+	task.Status = TaskStatusFailure
+	operationKey := fmt.Sprintf("task:%d:refund", task.ID)
+
+	won, err := task.UpdateWithStatusAndSettlement(TaskStatusInProgress, BillingSettlementInput{
+		OperationKey: operationKey, Source: BillingSettlementSourceWallet,
+		UserID: 1, FundingDelta: -10, TaskID: task.ID, TaskQuota: 10, TaskQuotaTarget: 0,
+	})
+	require.NoError(t, err)
+	require.False(t, won)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
+	truncateTables(t)
+	task := &Task{
+		TaskID: "submit-intent-commit", Status: TaskStatusNotStart, Quota: 10,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true},
+	}
+	insertTask(t, task)
+	task.Quota = 15
+	task.Data = json.RawMessage(`{"id":"upstream-1"}`)
+	task.PrivateData.UpstreamTaskID = "upstream-1"
+	task.PrivateData.AwaitingUpstreamID = false
+	operationKey := "request:submit-intent-commit:finalize"
+
+	err := task.UpdateWithSettlementIntent(&BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       1,
+		FundingDelta: 5,
+		TokenDelta:   5,
+	})
+	require.NoError(t, err)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	require.Equal(t, 15, reloaded.Quota)
+	require.Equal(t, "upstream-1", reloaded.PrivateData.UpstreamTaskID)
+	require.False(t, reloaded.PrivateData.AwaitingUpstreamID)
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, int64(5), settlement.FundingDelta)
+}
+
+func TestUpdateWithSettlementIntentRollsBackIntentWhenTaskIsMissing(t *testing.T) {
+	truncateTables(t)
+	operationKey := "request:submit-intent-missing:finalize"
+	task := &Task{ID: 999999, TaskID: "missing", Status: TaskStatusNotStart}
+
+	err := task.UpdateWithSettlementIntent(&BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       1,
+		FundingDelta: 5,
+		TokenDelta:   5,
+	})
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestUpdateWithSettlementIntentDoesNotResurrectTerminalTask(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "terminal-submit", Status: TaskStatusFailure, Quota: 10}
+	insertTask(t, task)
+	task.Status = TaskStatusNotStart
+	task.Quota = 15
+	operationKey := "request:terminal-submit:finalize"
+
+	err := task.UpdateWithSettlementIntent(&BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       1,
+		FundingDelta: 5,
+		TokenDelta:   5,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "task already terminal")
+	require.NotContains(t, err.Error(), "persisted task not found")
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	require.EqualValues(t, TaskStatusFailure, reloaded.Status)
+	require.Equal(t, 10, reloaded.Quota)
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestGetUpstreamTaskIDDistinguishesPlaceholderFromLegacyTask(t *testing.T) {
+	placeholder := &Task{
+		TaskID: "task_public", PrivateData: TaskPrivateData{AwaitingUpstreamID: true},
+	}
+	require.Empty(t, placeholder.GetUpstreamTaskID())
+
+	placeholder.PrivateData.UpstreamTaskID = "provider-task"
+	require.Equal(t, "provider-task", placeholder.GetUpstreamTaskID())
+
+	legacy := &Task{TaskID: "legacy-provider-task"}
+	require.Equal(t, "legacy-provider-task", legacy.GetUpstreamTaskID())
+}
+
+func TestMarkTaskSubmitNeedsReviewPreservesQuotaAndUpstreamIdentity(t *testing.T) {
+	truncateTables(t)
+	task := &Task{
+		TaskID: "manual-review", Status: TaskStatusNotStart, Quota: 20,
+		PrivateData: TaskPrivateData{AwaitingUpstreamID: true},
+	}
+	insertTask(t, task)
+	task.Quota = 25
+	task.PrivateData.UpstreamTaskID = "provider-manual-review"
+	task.Data = json.RawMessage(`{"id":"provider-manual-review"}`)
+
+	require.NoError(t, MarkTaskSubmitNeedsReview(task, "local finalize failed"))
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	require.EqualValues(t, TaskStatusFailure, reloaded.Status)
+	require.Equal(t, 25, reloaded.Quota)
+	require.Equal(t, "provider-manual-review", reloaded.PrivateData.UpstreamTaskID)
+	require.False(t, reloaded.PrivateData.AwaitingUpstreamID)
+	require.Contains(t, reloaded.FailReason, "local finalize failed")
+}
+
+func TestGetAllUnFinishSyncTasksRotatesPollingBatch(t *testing.T) {
+	truncateTables(t)
+	for i := 1; i <= 3; i++ {
+		insertTask(t, &Task{
+			TaskID: fmt.Sprintf("poll-fair-%d", i), Status: TaskStatusInProgress,
+		})
+	}
+
+	first := GetAllUnFinishSyncTasks(2)
+	require.Len(t, first, 2)
+	require.Equal(t, []string{"poll-fair-1", "poll-fair-2"}, []string{first[0].TaskID, first[1].TaskID})
+	second := GetAllUnFinishSyncTasks(2)
+	require.Len(t, second, 2)
+	require.Contains(t, []string{second[0].TaskID, second[1].TaskID}, "poll-fair-3")
 }
 
 func TestGetAllUnFinishSyncTasksIncludesNonTerminalHundredProgress(t *testing.T) {

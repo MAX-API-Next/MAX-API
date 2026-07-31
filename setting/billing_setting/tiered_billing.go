@@ -5,6 +5,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/samber/lo"
 )
 
@@ -18,13 +19,13 @@ const (
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr
 type BillingSetting struct {
-	BillingMode map[string]string `json:"billing_mode"`
-	BillingExpr map[string]string `json:"billing_expr"`
+	BillingMode *types.RWMap[string, string] `json:"billing_mode"`
+	BillingExpr *types.RWMap[string, string] `json:"billing_expr"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	BillingMode: types.NewRWMap[string, string](),
+	BillingExpr: types.NewRWMap[string, string](),
 }
 
 func init() {
@@ -36,23 +37,22 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func GetBillingMode(model string) string {
-	if mode, ok := billingSetting.BillingMode[model]; ok {
+	if mode, ok := billingSetting.BillingMode.Get(model); ok {
 		return mode
 	}
 	return BillingModeRatio
 }
 
 func GetBillingExpr(model string) (string, bool) {
-	expr, ok := billingSetting.BillingExpr[model]
-	return expr, ok
+	return billingSetting.BillingExpr.Get(model)
 }
 
 func GetBillingModeCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingMode)
+	return billingSetting.BillingMode.ReadAll()
 }
 
 func GetBillingExprCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingExpr)
+	return billingSetting.BillingExpr.ReadAll()
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {

@@ -30,6 +30,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	_ "github.com/MAX-API-Next/MAX-API/setting/performance_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
@@ -70,9 +71,13 @@ func main() {
 		}
 	}()
 
+	// Recover durable balance settlements after process restarts or transient DB failures.
+	model.StartBillingSettlementTaskRunner()
+
 	if common.RedisEnabled {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
+		model.StartCacheInvalidationTaskRunner()
 	}
 	if common.MemoryCacheEnabled {
 		common.SysLog("memory cache enabled")
@@ -184,6 +189,9 @@ func main() {
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
 	// Initialize session store
+	if err := configureSessionCookieSecure(system_setting.ServerAddress); err != nil {
+		common.FatalLog(err.Error())
+	}
 	store := cookie.NewStore([]byte(common.SessionSecret))
 	store.Options(sessions.Options{
 		Path:     "/",
@@ -234,6 +242,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	shutdownHTTPServer(ctx, srv)
+	stopBackgroundRunnerCtx, stopBackgroundRunnerCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	if err := model.StopBillingSettlementTaskRunner(stopBackgroundRunnerCtx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping billing settlement runner: %v", err))
+	}
+	if common.RedisEnabled {
+		if err := model.StopCacheInvalidationTaskRunner(stopBackgroundRunnerCtx); err != nil {
+			common.SysError(fmt.Sprintf("timed out stopping cache invalidation runner: %v", err))
+		}
+	}
+	stopBackgroundRunnerCancel()
 	if common.DataExportEnabled {
 		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
 		if !runWithTimeout(saveTimeout, model.WaitPendingLogQuotaData) {
@@ -251,6 +269,25 @@ func main() {
 		}
 	}
 	common.SysLog("server exited")
+}
+
+func configureSessionCookieSecure(serverAddress string) error {
+	value, explicitlyConfigured := os.LookupEnv("SESSION_COOKIE_SECURE")
+	value = strings.TrimSpace(value)
+	if explicitlyConfigured && value != "" {
+		secure, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid SESSION_COOKIE_SECURE value %q: %w", value, err)
+		}
+		common.SessionCookieSecure = secure
+		return nil
+	}
+
+	common.SessionCookieSecure = common.SessionCookieSecureForServerAddress(serverAddress)
+	if !common.SessionCookieSecure {
+		common.SysLog("SESSION_COOKIE_SECURE is not set and ServerAddress is not HTTPS; session cookies may traverse plain HTTP. Set SESSION_COOKIE_SECURE=true for HTTPS deployments")
+	}
+	return nil
 }
 
 func shutdownHTTPServer(ctx context.Context, srv *http.Server) {

@@ -9,8 +9,10 @@ type TaskError struct {
 	Message    string `json:"message"`
 	Data       any    `json:"data"`
 	StatusCode int    `json:"-"`
-	LocalError bool   `json:"-"`
-	Error      error  `json:"-"`
+	// UpstreamStatusCode preserves retry classification when a channel mapping changes the downstream status.
+	UpstreamStatusCode int   `json:"-"`
+	LocalError         bool  `json:"-"`
+	Error              error `json:"-"`
 }
 
 type TaskData interface {

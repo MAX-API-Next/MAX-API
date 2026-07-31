@@ -215,7 +215,11 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	common.UsingSQLite = true
+	if !isLog {
+		common.UsingSQLite = true
+	} else {
+		common.LogSqlType = common.DatabaseTypeSQLite
+	}
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
@@ -295,8 +299,6 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
-	// Migrate price_amount column from float/double to decimal for existing tables
-	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
@@ -317,6 +319,7 @@ func migrateDB() error {
 		&Redemption{},
 		&Ability{},
 		&Log{},
+		&BillingLogReceipt{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -333,6 +336,9 @@ func migrateDB() error {
 		&SubscriptionOrder{},
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
+		&BillingSettlement{},
+		&BillingPreConsumeSelection{},
+		&CacheInvalidationTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
@@ -340,6 +346,13 @@ func migrateDB() error {
 		&SystemInstance{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateMetadataNameKeys(); err != nil {
+		return err
+	}
+	// Run the legacy subscription price migration only after current core schemas exist.
+	if err := migrateSubscriptionPlanPriceAmount(); err != nil {
 		return err
 	}
 	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
@@ -364,95 +377,6 @@ func migrateDB() error {
 		LOG_DB = DB
 		scheduleLogRetryMarkerBackfill()
 	}
-	return nil
-}
-
-func migrateDBFast() error {
-	if err := migrateUserQuotaColumnsToBigInt(); err != nil {
-		return err
-	}
-	if err := migrateTokenQuotaColumnsToBigInt(); err != nil {
-		return err
-	}
-
-	var wg sync.WaitGroup
-
-	migrations := []struct {
-		model interface{}
-		name  string
-	}{
-		{&Channel{}, "Channel"},
-		{&Token{}, "Token"},
-		{&User{}, "User"},
-		{&PasskeyCredential{}, "PasskeyCredential"},
-		{&Option{}, "Option"},
-		{&Redemption{}, "Redemption"},
-		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
-		{&Midjourney{}, "Midjourney"},
-		{&TopUp{}, "TopUp"},
-		{&QuotaData{}, "QuotaData"},
-		{&QuotaDataSnapshot{}, "QuotaDataSnapshot"},
-		{&QuotaDataSnapshotRetry{}, "QuotaDataSnapshotRetry"},
-		{&Task{}, "Task"},
-		{&Model{}, "Model"},
-		{&Vendor{}, "Vendor"},
-		{&PrefillGroup{}, "PrefillGroup"},
-		{&Setup{}, "Setup"},
-		{&TwoFA{}, "TwoFA"},
-		{&TwoFABackupCode{}, "TwoFABackupCode"},
-		{&Checkin{}, "Checkin"},
-		{&SubscriptionOrder{}, "SubscriptionOrder"},
-		{&UserSubscription{}, "UserSubscription"},
-		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
-		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
-		{&UserOAuthBinding{}, "UserOAuthBinding"},
-		{&PerfMetric{}, "PerfMetric"},
-		{&SystemTask{}, "SystemTask"},
-		{&SystemInstance{}, "SystemInstance"},
-	}
-	// 动态计算migration数量，确保errChan缓冲区足够大
-	errChan := make(chan error, len(migrations))
-
-	for _, m := range migrations {
-		wg.Add(1)
-		go func(model interface{}, name string) {
-			defer wg.Done()
-			if err := DB.AutoMigrate(model); err != nil {
-				errChan <- fmt.Errorf("failed to migrate %s: %v", name, err)
-			}
-		}(m.model, m.name)
-	}
-
-	// Wait for all migrations to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	if err := migrateQuotaDataAggregateKeysOnStartup(); err != nil {
-		return err
-	}
-	if err := migrateUserOAuthIdentityConstraints(); err != nil {
-		return err
-	}
-	if err := backfillUserNormalizedEmails(); err != nil {
-		return err
-	}
-	if common.UsingSQLite {
-		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
-			return err
-		}
-	} else {
-		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
-			return err
-		}
-	}
-	common.SysLog("database migrated")
 	return nil
 }
 
@@ -683,7 +607,7 @@ func userOAuthIdentityGeneratedColumnSQL(identity userOAuthIdentityMigration) st
 
 func migrateLOGDB() error {
 	var err error
-	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
+	if err = LOG_DB.AutoMigrate(&Log{}, &BillingLogReceipt{}); err != nil {
 		return err
 	}
 	scheduleLogRetryMarkerBackfill()
@@ -1022,11 +946,11 @@ func isZeroColumnDefault(defaultValue sql.NullString) bool {
 
 // migrateSubscriptionPlanPriceAmount migrates price_amount column from float/double to decimal(10,6)
 // This is safe to run multiple times - it checks the column type first
-func migrateSubscriptionPlanPriceAmount() {
+func migrateSubscriptionPlanPriceAmount() error {
 	// SQLite doesn't support ALTER COLUMN, and its type affinity handles this automatically
 	// Skip early to avoid GORM parsing the existing table DDL which may cause issues
 	if common.UsingSQLite {
-		return
+		return nil
 	}
 
 	tableName := "subscription_plans"
@@ -1034,12 +958,12 @@ func migrateSubscriptionPlanPriceAmount() {
 
 	// Check if table exists first
 	if !DB.Migrator().HasTable(tableName) {
-		return
+		return nil
 	}
 
 	// Check if column exists
 	if !DB.Migrator().HasColumn(&SubscriptionPlan{}, columnName) {
-		return
+		return nil
 	}
 
 	var alterSQL string
@@ -1049,9 +973,9 @@ func migrateSubscriptionPlanPriceAmount() {
 		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
 			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
 			tableName, columnName).Scan(&dataType).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+			return fmt.Errorf("failed to query metadata for %s.%s: %w", tableName, columnName, err)
 		} else if dataType == "numeric" {
-			return // Already decimal/numeric
+			return nil // Already decimal/numeric
 		}
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(10,6) USING %s::decimal(10,6)`,
 			tableName, columnName, columnName)
@@ -1061,23 +985,23 @@ func migrateSubscriptionPlanPriceAmount() {
 		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
 			tableName, columnName).Scan(&columnType).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+			return fmt.Errorf("failed to query metadata for %s.%s: %w", tableName, columnName, err)
 		} else if strings.HasPrefix(strings.ToLower(columnType), "decimal") {
-			return // Already decimal
+			return nil // Already decimal
 		}
 		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s decimal(10,6) NOT NULL DEFAULT 0",
 			tableName, columnName)
 	} else {
-		return
+		return nil
 	}
 
 	if alterSQL != "" {
 		if err := DB.Exec(alterSQL).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to decimal: %v", tableName, columnName, err))
-		} else {
-			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
+			return fmt.Errorf("failed to migrate %s.%s to decimal: %w", tableName, columnName, err)
 		}
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
 	}
+	return nil
 }
 
 func closeDB(db *gorm.DB) error {

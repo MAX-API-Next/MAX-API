@@ -2,16 +2,38 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewAwsInvokeContextFollowsRequestCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(requestContext)
+
+	ctx, cancel := newAwsInvokeContext(c)
+	defer cancel()
+	cancelRequest()
+
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("AWS invoke context did not follow client cancellation")
+	}
+}
 
 func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testing.T) {
 	t.Parallel()
@@ -52,4 +74,30 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	values, ok := anthropicBeta.([]any)
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
+}
+
+func TestParseNovaResponseRejectsEmptyContent(t *testing.T) {
+	content, usage, err := parseNovaResponse([]byte(
+		`{"output":{"message":{"content":[]}},"usage":{"inputTokens":1,"outputTokens":0,"totalTokens":1}}`,
+	))
+
+	require.ErrorContains(t, err, "nova response content is empty")
+	require.Empty(t, content)
+	require.Zero(t, usage)
+}
+
+func TestConvertToNovaRequestPreservesExplicitZeroValues(t *testing.T) {
+	zeroFloat := 0.0
+	zeroInt := 0
+	zeroUint := uint(0)
+	novaRequest := convertToNovaRequest(&dto.GeneralOpenAIRequest{
+		MaxTokens:   &zeroUint,
+		Temperature: &zeroFloat,
+		TopP:        &zeroFloat,
+		TopK:        &zeroInt,
+	})
+
+	payload, err := common.Marshal(novaRequest)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"schemaVersion":"messages-v1","messages":[],"inferenceConfig":{"maxTokens":0,"temperature":0,"topP":0,"topK":0}}`, string(payload))
 }

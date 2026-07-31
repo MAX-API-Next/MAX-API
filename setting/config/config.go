@@ -18,6 +18,12 @@ type ConfigManager struct {
 
 var GlobalConfig = NewConfigManager()
 
+type jsonUnmarshaler interface {
+	UnmarshalJSON([]byte) error
+}
+
+var jsonUnmarshalerType = reflect.TypeOf((*jsonUnmarshaler)(nil)).Elem()
+
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{
 		configs: make(map[string]interface{}),
@@ -172,6 +178,9 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 	if val.Kind() != reflect.Struct {
 		return fmt.Errorf("config must point to a struct, got %s", val.Kind())
 	}
+	if err := validateConfigPointerNulls(val, configMap); err != nil {
+		return err
+	}
 
 	typ := val.Type()
 	for i := 0; i < val.NumField(); i++ {
@@ -281,6 +290,30 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 	return nil
 }
 
+func validateConfigPointerNulls(val reflect.Value, configMap map[string]string) error {
+	typ := val.Type()
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		fieldType := typ.Field(i)
+		if !fieldType.IsExported() || !field.CanSet() {
+			continue
+		}
+
+		key := fieldType.Tag.Get("json")
+		if key == "" || key == "-" {
+			key = fieldType.Name
+		}
+		strValue, ok := configMap[key]
+		if !ok || strings.TrimSpace(strValue) != "null" {
+			continue
+		}
+		if field.Kind() == reflect.Ptr && field.Type().Implements(jsonUnmarshalerType) {
+			return fmt.Errorf("invalid value for %s: null is not allowed", key)
+		}
+	}
+	return nil
+}
+
 // ConfigToMap 将配置对象转换为map（导出函数）
 func ConfigToMap(config interface{}) (map[string]string, error) {
 	return configToMap(config)
@@ -289,6 +322,19 @@ func ConfigToMap(config interface{}) (map[string]string, error) {
 // UpdateConfigFromMap 从map更新配置对象（导出函数）
 func UpdateConfigFromMap(config interface{}, configMap map[string]string) error {
 	return updateConfigFromMap(config, configMap)
+}
+
+// ValidateConfigPointerNulls rejects null for pointer-backed JSON config fields without mutating the config.
+func ValidateConfigPointerNulls(config interface{}, configMap map[string]string) error {
+	val := reflect.ValueOf(config)
+	if val.Kind() != reflect.Ptr {
+		return fmt.Errorf("config must be a pointer, got %s", val.Kind())
+	}
+	val = val.Elem()
+	if val.Kind() != reflect.Struct {
+		return fmt.Errorf("config must point to a struct, got %s", val.Kind())
+	}
+	return validateConfigPointerNulls(val, configMap)
 }
 
 // ExportAllConfigs 导出所有已注册的配置为扁平结构

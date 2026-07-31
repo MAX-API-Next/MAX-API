@@ -155,14 +155,20 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 		return err
 	}
 	settingValue := string(settingBytes)
-	result := DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue)
-	if err = ensureUserUpdateMatchedTx(DB, result, userId, errors.New("用户不存在")); err != nil {
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue)
+		if err := ensureUserUpdateMatchedTx(tx, result, userId, errors.New("用户不存在")); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, userId, false)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if err = invalidateUserCache(userId); err != nil {
-		common.SysLog(fmt.Sprintf("failed to update user setting cache: user_id=%d, error=%v", userId, err))
-		enqueueUserCacheInvalidationRetry(userId, err)
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
@@ -789,6 +795,7 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 // user, preventing concurrent binds from sharing the same normalized address.
 func BindEmailToUser(user *User, email string) error {
 	email = NormalizeEmail(email)
+	var cacheTask CacheInvalidationTask
 	if err := WithNormalizedEmailWriteTx(email, func(tx *gorm.DB) error {
 		if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
 			return err
@@ -801,11 +808,17 @@ func BindEmailToUser(user *User, email string) error {
 		}
 		user.Email = email
 		user.NormalizedEmail = email
-		return tx.First(user, user.Id).Error
+		if err := tx.First(user, user.Id).Error; err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, user.Id, false)
+		return err
 	}); err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	dispatchStagedCacheInvalidation(cacheTask)
+	return nil
 }
 
 func (user *User) Insert(inviterId int) error {
@@ -915,20 +928,34 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 }
 
 func (user *User) Update(updatePassword bool) error {
+	var cacheTask CacheInvalidationTask
 	if err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
-		return user.updateWithTx(db, updatePassword, nil)
+		return db.Transaction(func(tx *gorm.DB) error {
+			if err := user.updateWithTx(tx, updatePassword, nil); err != nil {
+				return err
+			}
+			var err error
+			cacheTask, err = stageUserCacheInvalidationTx(tx, user.Id, false)
+			return err
+		})
 	}); err != nil {
 		return err
 	}
-	if err := updateUserCache(*user); err != nil {
-		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
 func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
+	var cacheTask CacheInvalidationTask
 	update := func(db *gorm.DB) error {
-		return user.updateWithTx(db, updatePassword, fields)
+		return db.Transaction(func(tx *gorm.DB) error {
+			if err := user.updateWithTx(tx, updatePassword, fields); err != nil {
+				return err
+			}
+			var err error
+			cacheTask, err = stageUserCacheInvalidationTx(tx, user.Id, false)
+			return err
+		})
 	}
 	var err error
 	if isAccessTokenOnlyUserUpdate(updatePassword, fields) {
@@ -939,9 +966,7 @@ func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) e
 	if err != nil {
 		return err
 	}
-	if err := updateUserCache(*user); err != nil {
-		common.SysLog(fmt.Sprintf("failed to update user cache: user_id=%d, error=%v", user.Id, err))
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
@@ -1171,31 +1196,13 @@ func copyUnspecifiedUserUpdateValues(updates map[string]interface{}, current Use
 }
 
 func (user *User) Edit(updatePassword bool) error {
-	var err error
-	if updatePassword {
-		user.Password, err = common.Password2Hash(user.Password)
-		if err != nil {
-			return err
-		}
-	}
-
-	newUser := *user
-	updates := map[string]interface{}{
-		"username":     newUser.Username,
-		"display_name": newUser.DisplayName,
-		"group":        newUser.Group,
-		"remark":       newUser.Remark,
-	}
-	if updatePassword {
-		updates["password"] = newUser.Password
-	}
-
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(updates).Error; err != nil {
-		return err
-	}
-
-	return invalidateUserCache(user.Id)
+	return user.UpdateFields(
+		updatePassword,
+		UserUpdateFieldUsername,
+		UserUpdateFieldDisplayName,
+		UserUpdateFieldGroup,
+		UserUpdateFieldRemark,
+	)
 }
 
 func (user *User) ClearBinding(bindingType string) error {
@@ -1203,75 +1210,78 @@ func (user *User) ClearBinding(bindingType string) error {
 		return errors.New("user id is empty")
 	}
 
-	bindingColumnMap := map[string]string{
-		"email":    "email",
-		"github":   "github_id",
-		"discord":  "discord_id",
-		"oidc":     "oidc_id",
-		"wechat":   "wechat_id",
-		"telegram": "telegram_id",
-		"linuxdo":  "linux_do_id",
-	}
-
-	column, ok := bindingColumnMap[bindingType]
-	if !ok {
+	var field UserUpdateField
+	switch bindingType {
+	case "email":
+		user.Email = ""
+		field = UserUpdateFieldEmail
+	case "github":
+		user.GitHubId = ""
+		field = UserUpdateFieldGitHubId
+	case "discord":
+		user.DiscordId = ""
+		field = UserUpdateFieldDiscordId
+	case "oidc":
+		user.OidcId = ""
+		field = UserUpdateFieldOidcId
+	case "wechat":
+		user.WeChatId = ""
+		field = UserUpdateFieldWeChatId
+	case "telegram":
+		user.TelegramId = ""
+		field = UserUpdateFieldTelegramId
+	case "linuxdo":
+		user.LinuxDOId = ""
+		field = UserUpdateFieldLinuxDOId
+	default:
 		return errors.New("invalid binding type")
 	}
-
-	updates := map[string]interface{}{column: ""}
-	if bindingType == "email" {
-		updates["normalized_email"] = ""
-	}
-	update := func(db *gorm.DB) error {
-		if err := db.Model(&User{}).Where("id = ?", user.Id).Updates(updates).Error; err != nil {
-			return err
-		}
-		return db.Where("id = ?", user.Id).First(user).Error
-	}
-	var err error
-	if bindingType == "email" {
-		err = update(DB)
-	} else {
-		err = withUserOAuthIdentityMutationLock(DB, update)
-	}
-	if err != nil {
-		return err
-	}
-
-	return updateUserCache(*user)
+	return user.UpdateFields(false, field)
 }
 
 func (user *User) Delete() error {
-	if user.Id == 0 {
-		return errors.New("id 为空！")
-	}
-	if err := user.ensureCanDelete(); err != nil {
-		return err
-	}
-	if err := DB.Delete(user).Error; err != nil {
-		return err
-	}
-
-	// 清除缓存
-	deleteUserCacheAfterCommittedDelete(user.Id)
-	return nil
+	return user.deleteWithCacheInvalidation(false)
 }
 
 func (user *User) HardDelete() error {
+	return user.deleteWithCacheInvalidation(true)
+}
+
+func (user *User) deleteWithCacheInvalidation(hardDelete bool) error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	if err := user.ensureCanDelete(); err != nil {
+	var tasks []CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := user.ensureCanDeleteTx(tx); err != nil {
+			return err
+		}
+		userTask, err := stageUserCacheInvalidationTx(tx, user.Id, true)
+		if err != nil {
+			return err
+		}
+		tokenTasks, err := stageUserTokenCacheInvalidationsTx(tx, user.Id, hardDelete)
+		if err != nil {
+			return err
+		}
+		tasks = append(tasks, userTask)
+		tasks = append(tasks, tokenTasks...)
+		if hardDelete {
+			if err := tx.Unscoped().Where("user_id = ?", user.Id).Delete(&Token{}).Error; err != nil {
+				return err
+			}
+			return tx.Unscoped().Where("id = ?", user.Id).Delete(&User{}).Error
+		}
+		return tx.Delete(user).Error
+	})
+	if err != nil {
 		return err
 	}
-	if err := DB.Unscoped().Delete(user).Error; err != nil {
-		return err
-	}
-	deleteUserCacheAfterCommittedDelete(user.Id)
+	dispatchStagedCacheInvalidations(tasks)
 	return nil
 }
 
-func (user *User) ensureCanDelete() error {
+func (user *User) ensureCanDeleteTx(tx *gorm.DB) error {
 	if user.Role == common.RoleRootUser {
 		return errors.New("cannot delete root user")
 	}
@@ -1279,7 +1289,7 @@ func (user *User) ensureCanDelete() error {
 		return nil
 	}
 	var existing User
-	if err := DB.Unscoped().Select("role").First(&existing, "id = ?", user.Id).Error; err != nil {
+	if err := tx.Unscoped().Select("role").First(&existing, "id = ?", user.Id).Error; err != nil {
 		return err
 	}
 	if existing.Role == common.RoleRootUser {
@@ -1346,9 +1356,8 @@ func (user *User) UpdateGitHubId(newGitHubId string) error {
 	if err := validateOAuthIdentityLength("github_id", newGitHubId); err != nil {
 		return err
 	}
-	return withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
-		return db.Model(user).Update("github_id", newGitHubId).Error
-	})
+	user.GitHubId = newGitHubId
+	return user.UpdateFields(false, UserUpdateFieldGitHubId)
 }
 
 func (user *User) FillUserByDiscordId() error {
@@ -1636,21 +1645,27 @@ func IncreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if delta == 0 {
 		return nil
 	}
-	if err := increaseUserQuota(id, delta); err != nil {
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := increaseUserQuotaTx(tx, id, delta); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, id, false)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
-		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
-		enqueueUserCacheInvalidationRetry(id, cacheErr)
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
-func increaseUserQuota(id int, quota int64) (err error) {
+func increaseUserQuotaTx(tx *gorm.DB, id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
+	result := tx.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -1669,21 +1684,27 @@ func DecreaseUserQuota[T quotaDeltaInteger](id int, quota T, _ bool) (err error)
 	if delta == 0 {
 		return nil
 	}
-	if err := decreaseUserQuota(id, delta); err != nil {
+	var cacheTask CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := decreaseUserQuotaTx(tx, id, delta); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, id, false)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if cacheErr := invalidateUserQuotaCache(id); cacheErr != nil {
-		common.SysLog("failed to invalidate user quota cache: " + cacheErr.Error())
-		enqueueUserCacheInvalidationRetry(id, cacheErr)
-	}
+	dispatchStagedCacheInvalidation(cacheTask)
 	return nil
 }
 
-func decreaseUserQuota(id int, quota int64) (err error) {
+func decreaseUserQuotaTx(tx *gorm.DB, id int, quota int64) (err error) {
 	if quota == 0 {
 		return nil
 	}
-	result := DB.Model(&User{}).Where("id = ? AND quota >= ?", id, quota).
+	result := tx.Model(&User{}).Where("id = ? AND quota >= ?", id, quota).
 		Update("quota", gorm.Expr("quota - ?", quota))
 	if result.Error != nil {
 		return result.Error

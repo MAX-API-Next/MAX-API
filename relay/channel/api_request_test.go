@@ -400,6 +400,41 @@ func TestDoTaskApiRequestAppliesRuntimeHeaderOverride(t *testing.T) {
 	require.Equal(t, "enabled", gotRuntime)
 }
 
+func TestDoTaskApiRequestMarksWrittenTransportFailureAsOutcomeUnknown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	requestReceived := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(requestReceived)
+		hijacker, ok := w.(http.Hijacker)
+		require.True(t, ok)
+		conn, _, err := hijacker.Hijack()
+		require.NoError(t, err)
+		_ = conn.Close()
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{"prompt":"test"}`))
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:   &relaycommon.ChannelMeta{},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+
+	resp, err := DoTaskApiRequest(taskHeaderAdaptor{url: server.URL}, ctx, info, strings.NewReader(`{"prompt":"test"}`))
+
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.True(t, info.UpstreamTaskOutcomeUnknown)
+	select {
+	case <-requestReceived:
+	default:
+		t.Fatal("upstream did not receive the task request")
+	}
+}
+
 func TestSendPingDataReturnsWhenWriterBlocks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

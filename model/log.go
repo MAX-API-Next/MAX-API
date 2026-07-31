@@ -14,8 +14,10 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm.DB, error) {
@@ -58,6 +60,15 @@ type Log struct {
 	IsErrorRetry      bool   `json:"is_error_retry" gorm:"default:false;index"`
 	IsEmptyRetry      bool   `json:"is_empty_retry" gorm:"default:false;index"`
 	LogId             int    `json:"log_id,omitempty" gorm:"-"`
+}
+
+// BillingLogReceipt keeps task-billing log idempotency off the high-volume
+// logs table. The receipt and its log row are committed in one LOG_DB transaction.
+type BillingLogReceipt struct {
+	ID           int64  `gorm:"primaryKey"`
+	OperationKey string `gorm:"type:varchar(191);uniqueIndex;not null"`
+	ClaimToken   string `gorm:"type:varchar(36);not null;default:''"`
+	CreatedAt    int64  `gorm:"not null"`
 }
 
 func (log *Log) BeforeSave(*gorm.DB) error {
@@ -642,8 +653,24 @@ type RecordTaskBillingLogParams struct {
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
+	if err := recordTaskBillingLog("", params); err != nil {
+		common.SysLog("failed to record task billing log: " + err.Error())
+	}
+}
+
+func RecordTaskBillingLogOnce(operationKey string, params RecordTaskBillingLogParams) error {
+	if operationKey == "" {
+		return errors.New("task billing log operation key is required")
+	}
+	return recordTaskBillingLog(operationKey, params)
+}
+
+func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams) error {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return nil
+	}
+	if LOG_DB == nil {
+		return errors.New("log database is not initialized")
 	}
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
@@ -667,9 +694,45 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     common.MapToJsonStr(params.Other),
 	}
-	err := LOG_DB.Create(log).Error
-	if err != nil {
-		common.SysLog("failed to record task billing log: " + err.Error())
+	inserted := true
+	if operationKey == "" {
+		if err := LOG_DB.Create(log).Error; err != nil {
+			return err
+		}
+	} else {
+		err := LOG_DB.Transaction(func(tx *gorm.DB) error {
+			claimToken := uuid.NewString()
+			receipt := BillingLogReceipt{
+				OperationKey: operationKey,
+				ClaimToken:   claimToken,
+				CreatedAt:    createdAt,
+			}
+			result := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "operation_key"}},
+				DoNothing: true,
+			}).Create(&receipt)
+			if result.Error != nil {
+				return result.Error
+			}
+			// MySQL implements DoNothing as a no-op UPDATE. Its RowsAffected can
+			// report 1 when clientFoundRows is enabled, so verify ownership using
+			// a per-attempt claim instead of relying on driver-specific row counts.
+			var storedReceipt BillingLogReceipt
+			if err := tx.Select("claim_token").Where("operation_key = ?", operationKey).Take(&storedReceipt).Error; err != nil {
+				return err
+			}
+			if storedReceipt.ClaimToken != claimToken {
+				inserted = false
+				return nil
+			}
+			return tx.Create(log).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if !inserted {
+		return nil
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		nodeName := params.NodeName
@@ -688,6 +751,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			NodeName:  nodeName,
 		})
 	}
+	return nil
 }
 
 func GetAllLogs(params LogQueryParams) (logs []*Log, total int64, err error) {
@@ -931,8 +995,10 @@ func SumUsedQuota(params LogQueryParams) (stat Stat, err error) {
 	return stat, nil
 }
 
+const sumUsedTokenSelect = "COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0)"
+
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+	tx := LOG_DB.Table("logs").Select(sumUsedTokenSelect)
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -979,17 +1045,30 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		return 0, err
 	}
 	if len(ids) == 0 {
+		_, err := DeleteOldBillingLogReceiptsBatch(ctx, targetTimestamp, limit)
+		if err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	result := LOG_DB.WithContext(ctx).Where("id IN ?", ids).Delete(&Log{})
-	if nil != result.Error {
-		return 0, result.Error
+	var rowsAffected int64
+	err = LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id IN ?", ids).Delete(&Log{})
+		if nil != result.Error {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		_, err := deleteOldBillingLogReceiptsBatchTx(ctx, tx, targetTimestamp, limit)
+		return err
+	})
+	if err != nil {
+		return 0, err
 	}
-	return result.RowsAffected, nil
+	return rowsAffected, nil
 }
 
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
@@ -1009,7 +1088,67 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 		}
 		total += rowsAffected
 		if rowsAffected < int64(limit) {
+			if _, err := DeleteOldBillingLogReceipts(ctx, targetTimestamp, limit); err != nil {
+				return total, err
+			}
 			return total, nil
 		}
 	}
+}
+
+func DeleteOldBillingLogReceipts(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		rowsAffected, err := DeleteOldBillingLogReceiptsBatch(ctx, targetTimestamp, limit)
+		if err != nil {
+			return total, err
+		}
+		total += rowsAffected
+		if rowsAffected < int64(limit) {
+			return total, nil
+		}
+	}
+}
+
+func DeleteOldBillingLogReceiptsBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return deleteOldBillingLogReceiptsBatchTx(ctx, LOG_DB, targetTimestamp, limit)
+}
+
+func deleteOldBillingLogReceiptsBatchTx(ctx context.Context, db *gorm.DB, targetTimestamp int64, limit int) (int64, error) {
+	if db == nil {
+		return 0, errors.New("log database is not initialized")
+	}
+	ids := make([]int64, 0, limit)
+	if err := db.WithContext(ctx).
+		Model(&BillingLogReceipt{}).
+		Where("created_at < ?", targetTimestamp).
+		Order("created_at ASC, id ASC").
+		Limit(limit).
+		Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	result := db.WithContext(ctx).Where("id IN ?", ids).Delete(&BillingLogReceipt{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

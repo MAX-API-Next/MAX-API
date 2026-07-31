@@ -16,8 +16,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
-	"github.com/samber/lo"
-
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -99,7 +97,7 @@ func requestOpenAI2Zhipu(request dto.GeneralOpenAIRequest) *ZhipuRequest {
 	return &ZhipuRequest{
 		Prompt:      messages,
 		Temperature: request.Temperature,
-		TopP:        lo.FromPtrOr(request.TopP, 0),
+		TopP:        request.TopP,
 		Incremental: false,
 	}
 }
@@ -161,8 +159,17 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	scanner.Split(bufio.ScanLines)
 	dataChan := make(chan string)
 	metaChan := make(chan string)
-	stopChan := make(chan bool)
+	stopChan := make(chan struct{}, 1)
+	done := make(chan struct{})
+	producerDone := make(chan struct{})
 	go func() {
+		defer close(producerDone)
+		defer func() {
+			select {
+			case stopChan <- struct{}{}:
+			case <-done:
+			}
+		}()
 		for scanner.Scan() {
 			data := scanner.Text()
 			lines := strings.Split(data, "\n")
@@ -171,16 +178,35 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 					continue
 				}
 				if line[:5] == "data:" {
-					dataChan <- line[5:]
+					select {
+					case dataChan <- line[5:]:
+					case <-done:
+						return
+					}
 					if i != len(lines)-1 {
-						dataChan <- "\n"
+						select {
+						case dataChan <- "\n":
+						case <-done:
+							return
+						}
 					}
 				} else if line[:5] == "meta:" {
-					metaChan <- line[5:]
+					select {
+					case metaChan <- line[5:]:
+					case <-done:
+						return
+					}
 				}
 			}
 		}
-		stopChan <- true
+		if err := scanner.Err(); err != nil {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			common.SysLog("error reading stream: " + err.Error())
+		}
 	}()
 	helper.SetEventStreamHeaders(c)
 	c.Stream(func(w io.Writer) bool {
@@ -213,9 +239,13 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		case <-stopChan:
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
 			return false
+		case <-c.Request.Context().Done():
+			return false
 		}
 	})
+	close(done)
 	service.CloseResponseBodyGracefully(resp)
+	<-producerDone
 	return usage, nil
 }
 
@@ -244,5 +274,8 @@ func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
+	if err != nil {
+		common.SysLog("failed to write Zhipu response: " + err.Error())
+	}
 	return &fullTextResponse.Usage, nil
 }
