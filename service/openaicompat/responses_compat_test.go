@@ -44,6 +44,32 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsScalarInputAndZeroT
 	assert.Equal(t, "medium", got.ReasoningEffort)
 }
 
+func TestChatCompletionsRequestToResponsesRequestPreservesQwenThinkingBudget(t *testing.T) {
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:          "qwen-plus",
+		Messages:       []dto.Message{{Role: "user", Content: "hello"}},
+		EnableThinking: mustCompatRawMessage(t, false),
+		ThinkingBudget: mustCompatRawMessage(t, 0),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "false", string(got.EnableThinking))
+	assert.Equal(t, "0", string(got.ThinkingBudget))
+}
+
+func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:          "qwen-plus",
+		Input:          mustCompatRawMessage(t, "hello"),
+		EnableThinking: mustCompatRawMessage(t, true),
+		ThinkingBudget: mustCompatRawMessage(t, 0),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "true", string(got.EnableThinking))
+	assert.Equal(t, "0", string(got.ThinkingBudget))
+}
+
 func TestResponsesRequestToChatCompletionsRequestFunctionCallConversation(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",

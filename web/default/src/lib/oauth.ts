@@ -21,22 +21,33 @@ import { api } from './api'
 const oauthBindingStatePrefix = 'oauth:binding:state:'
 const oauthBindingStateTtlMs = 10 * 60 * 1000
 
-function getOAuthBindingStateKey(state: string): string {
+function normalizeOAuthProvider(provider: string): string {
+  return provider.trim().toLowerCase()
+}
+
+function getOAuthBindingStateKey(provider: string, state: string): string {
+  return `${oauthBindingStatePrefix}${normalizeOAuthProvider(provider)}:${state}`
+}
+
+function getLegacyOAuthBindingStateKey(state: string): string {
   return `${oauthBindingStatePrefix}${state}`
 }
 
-function markOAuthBindingState(state: string): void {
+function markOAuthBindingState(provider: string, state: string): void {
   try {
-    localStorage.setItem(getOAuthBindingStateKey(state), String(Date.now()))
+    localStorage.setItem(
+      getOAuthBindingStateKey(provider, state),
+      String(Date.now())
+    )
   } catch {
-    // The callback retains the legacy opener check when storage is unavailable.
+    // Without this marker the callback safely falls back to login mode.
   }
 }
 
-export function isOAuthBindingState(state?: string): boolean {
-  if (!state) return false
+export function isOAuthBindingState(provider?: string, state?: string): boolean {
+  if (!provider || !state) return false
   try {
-    const key = getOAuthBindingStateKey(state)
+    const key = getOAuthBindingStateKey(provider, state)
     const createdAt = Number(localStorage.getItem(key))
     if (
       !Number.isFinite(createdAt) ||
@@ -51,17 +62,27 @@ export function isOAuthBindingState(state?: string): boolean {
   }
 }
 
-export function clearOAuthBindingState(state?: string): void {
+export function clearOAuthBindingState(
+  provider?: string,
+  state?: string
+): void {
   if (!state) return
   try {
-    localStorage.removeItem(getOAuthBindingStateKey(state))
+    if (provider) {
+      localStorage.removeItem(getOAuthBindingStateKey(provider, state))
+    }
+    localStorage.removeItem(getLegacyOAuthBindingStateKey(state))
   } catch {
     // Ignore storage cleanup failures; entries are bounded by their TTL.
   }
 }
 
-function openOAuthBindingWindow(url: string, state: string): void {
-  markOAuthBindingState(state)
+function openOAuthBindingWindow(
+  url: string,
+  provider: string,
+  state: string
+): void {
+  markOAuthBindingState(provider, state)
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
@@ -151,7 +172,7 @@ export async function handleGitHubOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildGitHubOAuthUrl(clientId, state)
-  openOAuthBindingWindow(url, state)
+  openOAuthBindingWindow(url, 'github', state)
 }
 
 /**
@@ -162,7 +183,7 @@ export async function handleDiscordOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildDiscordOAuthUrl(clientId, state)
-  openOAuthBindingWindow(url, state)
+  openOAuthBindingWindow(url, 'discord', state)
 }
 
 /**
@@ -176,7 +197,7 @@ export async function handleOIDCOAuth(
   if (!state) return
 
   const url = buildOIDCOAuthUrl(authUrl, clientId, state)
-  openOAuthBindingWindow(url, state)
+  openOAuthBindingWindow(url, 'oidc', state)
 }
 
 /**
@@ -187,5 +208,5 @@ export async function handleLinuxDOOAuth(clientId: string): Promise<void> {
   if (!state) return
 
   const url = buildLinuxDOOAuthUrl(clientId, state)
-  openOAuthBindingWindow(url, state)
+  openOAuthBindingWindow(url, 'linuxdo', state)
 }

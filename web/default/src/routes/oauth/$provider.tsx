@@ -28,10 +28,11 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import { api, getSelf } from '@/lib/api'
-import { clearOAuthBindingState, isOAuthBindingState } from '@/lib/oauth'
+import { clearOAuthBindingState } from '@/lib/oauth'
 import { normalizeInternalRedirect } from '@/lib/safe-redirect'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
+import { resolveOAuthCallbackMode } from '@/features/auth/lib/oauth-callback-mode'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
@@ -46,19 +47,22 @@ function OAuthCallback() {
     code?: string
     state?: string
     redirect?: string
+    bind?: string
   }
   const [mode, setMode] = useState<'login' | 'bind'>(() => {
-    if (typeof window === 'undefined') return 'login'
-    return window.opener || isOAuthBindingState(search.state) ? 'bind' : 'login'
+    return resolveOAuthCallbackMode(
+      provider,
+      search.state,
+      search.bind === 'true'
+    )
   })
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMode(
-      window.opener || isOAuthBindingState(search.state) ? 'bind' : 'login'
+      resolveOAuthCallbackMode(provider, search.state, search.bind === 'true')
     )
-  }, [search.state])
+  }, [provider, search.bind, search.state])
 
   useEffect(() => {
     ;(async () => {
@@ -86,9 +90,8 @@ function OAuthCallback() {
         return
       }
       const isBindingFlow =
-        typeof window !== 'undefined'
-          ? Boolean(window.opener) || isOAuthBindingState(search.state)
-          : mode === 'bind'
+        resolveOAuthCallbackMode(provider, search.state, search.bind === 'true') ===
+        'bind'
       if (isBindingFlow && mode !== 'bind') {
         setMode('bind')
       } else if (!isBindingFlow && mode !== 'login') {
@@ -96,7 +99,7 @@ function OAuthCallback() {
       }
       const notifyBindingResult = (status: 'success' | 'error') => {
         if (typeof window === 'undefined') return
-        clearOAuthBindingState(search.state)
+        clearOAuthBindingState(provider, search.state)
         try {
           window.localStorage.setItem(
             OAUTH_BIND_STORAGE_KEY,

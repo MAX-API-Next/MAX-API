@@ -1093,7 +1093,9 @@ func TestFormatUserLogDetailExposesOnlyUserAuditContent(t *testing.T) {
 	require.Equal(t, 42, log.Id)
 	require.Empty(t, log.ChannelName)
 	require.NotContains(t, other, "admin_info")
-	require.NotContains(t, other, "stream_status")
+	streamStatus, ok := other["stream_status"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "error", streamStatus["status"])
 
 	auditInfo, ok := other["audit_info"].(map[string]interface{})
 	require.True(t, ok)

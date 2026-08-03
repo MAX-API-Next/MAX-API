@@ -1,9 +1,14 @@
 package service
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 )
 
 // TieredResultWrapper wraps billingexpr.TieredResult for use at the service layer.
@@ -100,6 +105,69 @@ func BuildRealtimeTieredTokenParams(usage *dto.RealtimeUsage, usedVars map[strin
 		CompletionTokenDetails: usage.OutputTokenDetails,
 	}
 	return BuildTieredTokenParams(normalized, false, usedVars)
+}
+
+func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, error) {
+	if relayInfo == nil {
+		return nil, nil
+	}
+	snap := relayInfo.TieredBillingSnapshot
+	if snap == nil || snap.BillingMode != "tiered_expr" {
+		return nil, nil
+	}
+
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	if snap.GroupRatio == groupRatio {
+		return snap, nil
+	}
+
+	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
+	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
+	if err != nil {
+		return nil, err
+	}
+	snap.GroupRatio = groupRatio
+	snap.EstimatedQuotaAfterGroup = estimatedQuota
+	return snap, nil
+}
+
+// PrepareTieredBillingForSelectedGroup refreshes routing-dependent tiered
+// billing after the final group for this upstream attempt has been selected.
+func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
+	snap, err := refreshTieredBillingGroup(relayInfo)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if snap == nil {
+		return nil
+	}
+	if snap.GroupRatio == 0 {
+		return nil
+	}
+
+	relayInfo.PriceData.FreeModel = false
+
+	if relayInfo.Billing == nil {
+		if c == nil {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("tiered billing switched from free to paid group without request context"),
+				types.ErrorCodeModelPriceError,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+		return PreConsumeBilling(c, snap.EstimatedQuotaAfterGroup, relayInfo)
+	}
+	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
 }
 
 // TryTieredSettle checks if the request uses tiered_expr billing and, if so,
