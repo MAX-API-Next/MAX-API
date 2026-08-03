@@ -3,6 +3,7 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http"
 	"sync"
 	"testing"
 
@@ -440,6 +441,25 @@ func TestPrepareTieredBillingForSelectedGroupFreeToPaidInitializesBilling(t *tes
 	require.Equal(t, expectedQuota, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	require.EqualValues(t, initialQuota-expectedQuota, getUserQuota(t, userID))
 	require.Equal(t, initialQuota-expectedQuota, getTokenRemainQuota(t, tokenID))
+}
+
+func TestPrepareTieredBillingForSelectedGroupFreeToPaidRequiresContext(t *testing.T) {
+	const expr = `tier("base", p)`
+	relayInfo := makeRelayInfo(expr, 0, 1_000_000, 0)
+	relayInfo.PriceData = types.PriceData{
+		FreeModel:      true,
+		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+	}
+
+	err := PrepareTieredBillingForSelectedGroup(nil, relayInfo)
+
+	require.NotNil(t, err)
+	require.Equal(t, types.ErrorCodeModelPriceError, err.GetErrorCode())
+	require.Equal(t, http.StatusBadRequest, err.StatusCode)
+	require.True(t, types.IsSkipRetryError(err))
+	require.ErrorContains(t, err, "without request context")
+	require.Nil(t, relayInfo.Billing)
+	require.Zero(t, relayInfo.FinalPreConsumedQuota)
 }
 
 // ---------------------------------------------------------------------------
