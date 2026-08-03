@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -390,6 +391,55 @@ func TestPrepareTieredBillingForSelectedGroupPaidToFreeDoesNotReserve(t *testing
 	require.Equal(t, 50_000, relayInfo.FinalPreConsumedQuota)
 	require.Equal(t, 0.0, relayInfo.TieredBillingSnapshot.GroupRatio)
 	require.Equal(t, 0, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+func TestPrepareTieredBillingForSelectedGroupFreeToPaidInitializesBilling(t *testing.T) {
+	truncate(t)
+	const (
+		userID        = 921
+		tokenID       = 922
+		tokenKey      = "tiered-free-to-paid-token"
+		initialQuota  = 200_000
+		expectedQuota = 100_000
+	)
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, tokenKey, initialQuota)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId:       "tiered-free-to-paid-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        tokenKey,
+		OriginModelName: "tiered-free-to-paid-model",
+		UsingGroup:      "paid",
+		UserSetting: dto.UserSetting{
+			BillingPreference: "wallet_only",
+		},
+		PriceData: types.PriceData{
+			FreeModel:      true,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                `tier("base", p)`,
+			ExprHash:                  billingexpr.ExprHashString(`tier("base", p)`),
+			GroupRatio:                0,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  0,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, relayInfo))
+	require.NotNil(t, relayInfo.Billing)
+	require.Equal(t, expectedQuota, relayInfo.FinalPreConsumedQuota)
+	require.Equal(t, expectedQuota, relayInfo.Billing.GetPreConsumedQuota())
+	require.False(t, relayInfo.PriceData.FreeModel)
+	require.Equal(t, 0.20, relayInfo.TieredBillingSnapshot.GroupRatio)
+	require.Equal(t, expectedQuota, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	require.EqualValues(t, initialQuota-expectedQuota, getUserQuota(t, userID))
+	require.Equal(t, initialQuota-expectedQuota, getTokenRemainQuota(t, tokenID))
 }
 
 // ---------------------------------------------------------------------------

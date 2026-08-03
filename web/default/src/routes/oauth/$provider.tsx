@@ -16,14 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import type { AxiosRequestConfig } from 'axios'
-import {
-  createFileRoute,
-  useNavigate,
-  useParams,
-  useSearch,
-} from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
@@ -32,37 +27,26 @@ import { clearOAuthBindingState } from '@/lib/oauth'
 import { normalizeInternalRedirect } from '@/lib/safe-redirect'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
-import { resolveOAuthCallbackMode } from '@/features/auth/lib/oauth-callback-mode'
+import {
+  oauthCallbackSearchSchema,
+  resolveOAuthCallbackMode,
+} from '@/features/auth/lib/oauth-callback-mode'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
 }
 
+export const Route = createFileRoute('/oauth/$provider')({
+  component: OAuthCallback,
+  validateSearch: oauthCallbackSearchSchema,
+})
+
 function OAuthCallback() {
   const navigate = useNavigate()
-  const { provider } = useParams({ from: '/oauth/$provider' }) as {
-    provider: string
-  }
-  const search = useSearch({ from: '/oauth/$provider' }) as {
-    code?: string
-    state?: string
-    redirect?: string
-    bind?: string
-  }
-  const [mode, setMode] = useState<'login' | 'bind'>(() => {
-    return resolveOAuthCallbackMode(
-      provider,
-      search.state,
-      search.bind === 'true'
-    )
-  })
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMode(
-      resolveOAuthCallbackMode(provider, search.state, search.bind === 'true')
-    )
-  }, [provider, search.bind, search.state])
+  const { provider } = Route.useParams()
+  const search = Route.useSearch()
+  const mode = resolveOAuthCallbackMode(provider, search.state, search.bind)
+  const exchangeAttemptKeysRef = useRef(new Set<string>())
 
   useEffect(() => {
     ;(async () => {
@@ -89,14 +73,17 @@ function OAuthCallback() {
         safeNavigate('/sign-in')
         return
       }
+
+      const exchangeKey = JSON.stringify([
+        provider,
+        search.code,
+        search.state ?? null,
+      ])
+      if (exchangeAttemptKeysRef.current.has(exchangeKey)) return
+      exchangeAttemptKeysRef.current.add(exchangeKey)
+
       const isBindingFlow =
-        resolveOAuthCallbackMode(provider, search.state, search.bind === 'true') ===
-        'bind'
-      if (isBindingFlow && mode !== 'bind') {
-        setMode('bind')
-      } else if (!isBindingFlow && mode !== 'login') {
-        setMode('login')
-      }
+        resolveOAuthCallbackMode(provider, search.state, search.bind) === 'bind'
       const notifyBindingResult = (status: 'success' | 'error') => {
         if (typeof window === 'undefined') return
         clearOAuthBindingState(provider, search.state)
@@ -246,11 +233,14 @@ function OAuthCallback() {
         return
       }
     })()
-  }, [mode, navigate, provider, search])
+  }, [
+    navigate,
+    provider,
+    search.bind,
+    search.code,
+    search.redirect,
+    search.state,
+  ])
 
   return <OAuthCallbackScreen provider={provider} mode={mode} />
 }
-
-export const Route = createFileRoute('/oauth/$provider')({
-  component: OAuthCallback,
-})

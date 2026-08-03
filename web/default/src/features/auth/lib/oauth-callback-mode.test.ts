@@ -1,7 +1,10 @@
+import { defaultParseSearch } from '@tanstack/react-router'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
-
-import { resolveOAuthCallbackMode } from './oauth-callback-mode'
+import {
+  oauthCallbackSearchSchema,
+  resolveOAuthCallbackMode,
+} from './oauth-callback-mode'
 
 const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
@@ -101,5 +104,46 @@ describe('resolveOAuthCallbackMode', () => {
     })
 
     assert.equal(resolveOAuthCallbackMode('github', 'bind-state'), 'login')
+  })
+})
+
+describe('oauthCallbackSearchSchema', () => {
+  test('preserves supported callback parameters', () => {
+    assert.deepEqual(
+      oauthCallbackSearchSchema.parse(
+        defaultParseSearch(
+          '?code=authorization-code&state=callback-state&redirect=/dashboard&bind=true'
+        )
+      ),
+      {
+        code: 'authorization-code',
+        state: 'callback-state',
+        redirect: '/dashboard',
+        bind: true,
+      }
+    )
+  })
+
+  test('normalizes an explicit false bind hint', () => {
+    assert.deepEqual(oauthCallbackSearchSchema.parse({ bind: 'false' }), {
+      bind: false,
+    })
+  })
+
+  test('drops unsupported callback parameter shapes', () => {
+    assert.deepEqual(
+      oauthCallbackSearchSchema.parse({
+        code: ['authorization-code'],
+        state: { value: 'callback-state' },
+        redirect: true,
+        bind: 'yes',
+      }),
+      {
+        code: undefined,
+        state: undefined,
+        redirect: undefined,
+        bind: undefined,
+      }
+    )
   })
 })
