@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactElement } from 'react'
 import { Alert02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
@@ -49,23 +50,21 @@ interface StatusCodeRiskConfirmationContentProps {
   onConfirm: () => void
 }
 
-export function StatusCodeRiskConfirmationContent({
-  detailItems,
-  onCancel,
-  onConfirm,
-}: StatusCodeRiskConfirmationContentProps) {
+export function StatusCodeRiskConfirmationContent(
+  props: StatusCodeRiskConfirmationContentProps
+): ReactElement {
   const { t } = useTranslation()
 
   return (
     <>
       <div className='flex flex-col gap-4'>
-        {detailItems.length > 0 && (
+        {props.detailItems.length > 0 && (
           <div className='border-destructive/30 bg-destructive/5 rounded-lg border p-3'>
             <p className='mb-2 text-sm font-medium'>
               {t('Detected high-risk status code redirect rules')}
             </p>
             <ul className='list-inside list-disc text-sm'>
-              {detailItems.map((item) => (
+              {props.detailItems.map((item) => (
                 <li key={item} className='font-mono text-xs'>
                   {item}
                 </li>
@@ -82,10 +81,10 @@ export function StatusCodeRiskConfirmationContent({
       </div>
 
       <DialogFooter>
-        <Button variant='outline' onClick={onCancel}>
+        <Button variant='outline' onClick={props.onCancel}>
           {t('Cancel')}
         </Button>
-        <Button variant='destructive' onClick={onConfirm}>
+        <Button variant='destructive' onClick={props.onConfirm}>
           {t('I confirm enabling high-risk retry')}
         </Button>
       </DialogFooter>
@@ -93,21 +92,19 @@ export function StatusCodeRiskConfirmationContent({
   )
 }
 
-export function StatusCodeRiskDialog({
-  open,
-  onOpenChange,
-  detailItems,
-  onConfirm,
-}: StatusCodeRiskDialogProps) {
+export function StatusCodeRiskDialog(
+  props: StatusCodeRiskDialogProps
+): ReactElement {
   const { t } = useTranslation()
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className='max-w-lg'>
         <DialogHeader>
           <DialogTitle className='text-destructive flex items-center gap-2'>
             <HugeiconsIcon
               icon={Alert02Icon}
+              aria-hidden='true'
               className='size-5'
               strokeWidth={2}
             />
@@ -119,9 +116,9 @@ export function StatusCodeRiskDialog({
         </DialogHeader>
 
         <StatusCodeRiskConfirmationContent
-          detailItems={detailItems}
-          onCancel={() => onOpenChange(false)}
-          onConfirm={onConfirm}
+          detailItems={props.detailItems}
+          onCancel={() => props.onOpenChange(false)}
+          onConfirm={props.onConfirm}
         />
       </DialogContent>
     </Dialog>

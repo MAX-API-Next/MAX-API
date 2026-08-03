@@ -16,43 +16,67 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { createInstance } from 'i18next'
+import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { I18nextProvider } from 'react-i18next'
+import { after, before, describe, test } from 'node:test'
 import { StatusCodeRiskConfirmationContent } from './status-code-risk-dialog'
 
-const i18n = createInstance()
-await i18n.init({
-  lng: 'en',
-  fallbackLng: 'en',
-  resources: { en: { translation: {} } },
-  interpolation: { escapeValue: false },
-})
+const testEnv = createReactTestEnvironment()
+
+before(() => testEnv.setup())
+
+after(() => testEnv.teardown())
 
 describe('StatusCodeRiskDialog', () => {
-  test('keeps risk notices without checkbox or text confirmation gates', () => {
-    const markup = renderToStaticMarkup(
-      <I18nextProvider i18n={i18n}>
-        <StatusCodeRiskConfirmationContent
-          detailItems={['200 -> 500']}
-          onCancel={() => undefined}
-          onConfirm={() => undefined}
-        />
-      </I18nextProvider>
+  test('keeps risk notices and invokes both available actions', async () => {
+    let cancelCount = 0
+    let confirmCount = 0
+    const view = await testEnv.render(
+      <StatusCodeRiskConfirmationContent
+        detailItems={['200 -> 500']}
+        onCancel={() => {
+          cancelCount += 1
+        }}
+        onConfirm={() => {
+          confirmCount += 1
+        }}
+      />
     )
 
-    assert.match(markup, /200 -&gt; 500/)
-    for (let index = 1; index <= 4; index += 1) {
-      assert.match(
-        markup,
-        new RegExp(`High-risk status code retry risk check ${index}`)
+    try {
+      assert.match(view.container.textContent || '', /200 -> 500/)
+      for (let index = 1; index <= 4; index += 1) {
+        assert.match(
+          view.container.textContent || '',
+          new RegExp(`High-risk status code retry risk check ${index}`)
+        )
+      }
+
+      assert.equal(view.container.querySelector('input'), null)
+      assert.equal(view.container.querySelector('[type="checkbox"]'), null)
+
+      const buttons = Array.from(view.container.querySelectorAll('button'))
+      const cancelButton = buttons.find(
+        (button) => button.textContent === 'Cancel'
       )
+      const confirmButton = buttons.find(
+        (button) => button.textContent === 'I confirm enabling high-risk retry'
+      )
+
+      assert.ok(cancelButton)
+      assert.ok(confirmButton)
+      assert.equal(confirmButton.disabled, false)
+
+      await view.click(cancelButton)
+      assert.equal(cancelCount, 1)
+      assert.equal(confirmCount, 0)
+
+      await view.click(confirmButton)
+
+      assert.equal(cancelCount, 1)
+      assert.equal(confirmCount, 1)
+    } finally {
+      await view.unmount()
     }
-    assert.doesNotMatch(markup, /type="checkbox"/)
-    assert.doesNotMatch(markup, /<input/)
-    assert.doesNotMatch(markup, /<button[^>]*\sdisabled(?:=|\s|>)/)
-    assert.match(markup, /I confirm enabling high-risk retry/)
   })
 })
