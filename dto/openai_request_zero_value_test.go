@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -48,6 +49,55 @@ func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "dimensions").Exists())
 	require.True(t, gjson.GetBytes(encoded, "return_images").Exists())
 	require.True(t, gjson.GetBytes(encoded, "return_related_questions").Exists())
+}
+
+func TestGeneralOpenAIRequestPreserveQwenThinkingBudget(t *testing.T) {
+	raw := []byte(`{
+		"model":"qwen-plus",
+		"thinking_budget":0
+	}`)
+
+	var req GeneralOpenAIRequest
+	err := common.Unmarshal(raw, &req)
+	require.NoError(t, err)
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+
+	value := gjson.GetBytes(encoded, "thinking_budget")
+	require.True(t, value.Exists())
+	require.Equal(t, int64(0), value.Int())
+}
+
+func TestGeneralOpenAIRequestDropsThinkingBudgetForNonQwenModel(t *testing.T) {
+	req := GeneralOpenAIRequest{
+		Model:          "gpt-4.1",
+		ThinkingBudget: json.RawMessage(`128`),
+	}
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+
+	require.False(t, gjson.GetBytes(encoded, "thinking_budget").Exists())
+}
+
+func TestIsQwenThinkingBudgetModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "qwen-plus", want: true},
+		{model: "QWQ-32B", want: true},
+		{model: "accounts/fireworks/models/qwen3-235b-a22b", want: true},
+		{model: "deepseek-r1", want: false},
+		{model: "gpt-4.1", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			require.Equal(t, tt.want, IsQwenThinkingBudgetModel(tt.model))
+		})
+	}
 }
 
 func TestResolveMaxTokens(t *testing.T) {
@@ -114,6 +164,32 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "max_tool_calls").Exists())
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
+}
+
+func TestOpenAIResponsesRequestPreserveQwenThinkingBudget(t *testing.T) {
+	req := OpenAIResponsesRequest{
+		Model:          "qwen-plus",
+		ThinkingBudget: json.RawMessage(`0`),
+	}
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+
+	value := gjson.GetBytes(encoded, "thinking_budget")
+	require.True(t, value.Exists())
+	require.Equal(t, int64(0), value.Int())
+}
+
+func TestOpenAIResponsesRequestDropsThinkingBudgetForNonQwenModel(t *testing.T) {
+	req := OpenAIResponsesRequest{
+		Model:          "gpt-4.1",
+		ThinkingBudget: json.RawMessage(`128`),
+	}
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+
+	require.False(t, gjson.GetBytes(encoded, "thinking_budget").Exists())
 }
 
 func TestGeneralOpenAIRequestGetSystemRoleName(t *testing.T) {

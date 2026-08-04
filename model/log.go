@@ -363,7 +363,7 @@ func formatUserLogOther(other string, stripAuditContent bool) string {
 		delete(otherMap, "admin_info")
 		delete(otherMap, "audit_info")
 		// delete(otherMap, "reject_reason")
-		delete(otherMap, "stream_status")
+		// Keep stream_status visible so users can diagnose interrupted streams.
 		if auditInfo != nil {
 			if stripAuditContent {
 				stripAuditContentFields(auditInfo)
