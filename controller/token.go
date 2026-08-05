@@ -60,7 +60,7 @@ type tokenMutationRequest struct {
 	ModelLimits        string          `json:"model_limits"`
 	AllowIps           *string         `json:"allow_ips"`
 	Group              *string         `json:"group"`
-	CrossGroupRetry    bool            `json:"cross_group_retry"`
+	CrossGroupRetry    *bool           `json:"cross_group_retry"`
 	Routing            json.RawMessage `json:"routing"`
 }
 
@@ -97,13 +97,21 @@ func resolveTokenMutationRouting(request tokenMutationRequest, current *model.To
 	}
 
 	if request.Group != nil {
+		crossGroupRetry := false
+		if request.CrossGroupRetry != nil {
+			crossGroupRetry = *request.CrossGroupRetry
+		}
 		return service.NormalizeLegacyTokenRoutingPolicy(
-			service.LegacyTokenRoutingPolicy(*request.Group, request.CrossGroupRetry, userGroup),
+			service.LegacyTokenRoutingPolicy(*request.Group, crossGroupRetry, userGroup),
 			userGroup,
 		)
 	}
 	if creating {
-		return service.NormalizeLegacyTokenRoutingPolicy(service.DefaultTokenRoutingPolicy(), userGroup)
+		policy := service.DefaultTokenRoutingPolicy()
+		if request.CrossGroupRetry != nil {
+			policy.RetryOnFailure = *request.CrossGroupRetry
+		}
+		return service.NormalizeLegacyTokenRoutingPolicy(policy, userGroup)
 	}
 	if current == nil {
 		return model.TokenRoutingPolicy{}, errors.New("current token is required")
@@ -113,16 +121,21 @@ func resolveTokenMutationRouting(request tokenMutationRequest, current *model.To
 		return model.TokenRoutingPolicy{}, fmt.Errorf("invalid token routing policy: %w", err)
 	}
 	if stored != nil {
-		return stored.Clone(), nil
+		policy := stored.Clone()
+		if request.CrossGroupRetry != nil {
+			policy.RetryOnFailure = *request.CrossGroupRetry
+		}
+		return policy, nil
 	}
-	return service.NormalizeLegacyTokenRoutingPolicy(
-		service.LegacyTokenRoutingPolicy(current.Group, current.CrossGroupRetry, userGroup),
-		userGroup,
-	)
+	policy := service.LegacyTokenRoutingPolicy(current.Group, current.CrossGroupRetry, userGroup)
+	if request.CrossGroupRetry != nil {
+		policy.RetryOnFailure = *request.CrossGroupRetry
+	}
+	return service.NormalizeLegacyTokenRoutingPolicy(policy, userGroup)
 }
 
 func tokenMutationUpdatesRouting(request tokenMutationRequest) bool {
-	return len(request.Routing) > 0 || request.Group != nil
+	return len(request.Routing) > 0 || request.Group != nil || request.CrossGroupRetry != nil
 }
 
 func GetAllTokens(c *gin.Context) {

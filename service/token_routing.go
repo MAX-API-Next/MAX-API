@@ -32,6 +32,9 @@ type tokenRoutingValidationOptions struct {
 
 func LegacyTokenRoutingPolicy(group string, crossGroupRetry bool, userGroup string) model.TokenRoutingPolicy {
 	group = strings.TrimSpace(group)
+	if group == "" {
+		group = strings.TrimSpace(userGroup)
+	}
 	if setting.IsAutoRouteKey(group) {
 		return model.TokenRoutingPolicy{
 			Version:        model.TokenRoutingPolicyVersion,
@@ -41,7 +44,9 @@ func LegacyTokenRoutingPolicy(group string, crossGroupRetry bool, userGroup stri
 		}
 	}
 	if group == "" {
-		group = strings.TrimSpace(userGroup)
+		policy := DefaultTokenRoutingPolicy()
+		policy.RetryOnFailure = crossGroupRetry
+		return policy
 	}
 	return model.TokenRoutingPolicy{
 		Version:        model.TokenRoutingPolicyVersion,
@@ -207,14 +212,16 @@ func BuildContextTokenRoutePlan(c *gin.Context) (*TokenRoutePlan, error) {
 
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	var policy model.TokenRoutingPolicy
-	_, hasStoredPolicy := common.GetContextKey(c, constant.ContextKeyTokenRoutingPolicy)
+	hasStoredPolicy := false
 	if raw, ok := common.GetContextKey(c, constant.ContextKeyTokenRoutingPolicy); ok {
 		switch value := raw.(type) {
 		case model.TokenRoutingPolicy:
 			policy = value.Clone()
+			hasStoredPolicy = true
 		case *model.TokenRoutingPolicy:
 			if value != nil {
 				policy = value.Clone()
+				hasStoredPolicy = true
 			}
 		}
 	}

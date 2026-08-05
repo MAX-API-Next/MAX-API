@@ -242,11 +242,14 @@ func buildModelListGroups(userGroup string, tokenGroup string) modelListGroups {
 
 func getEnabledModelsForGroups(ownerGroups []string) []string {
 	models := make([]string, 0)
+	seen := make(map[string]struct{})
 	for _, ownerGroup := range ownerGroups {
 		for _, groupModel := range model.GetGroupEnabledModels(ownerGroup) {
-			if !common.StringsContains(models, groupModel) {
-				models = append(models, groupModel)
+			if _, exists := seen[groupModel]; exists {
+				continue
 			}
+			seen[groupModel] = struct{}{}
+			models = append(models, groupModel)
 		}
 	}
 	return models

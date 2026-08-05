@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { apiKeySchema, type ApiKey } from '../types'
 import {
+  MAX_MANUAL_ROUTING_GROUPS,
   getApiKeyFormSchema,
   getApiKeyFormDefaultValues,
   shouldIncludeRoutingProjection,
@@ -69,6 +70,61 @@ describe('API key routing form', () => {
     const values = transformApiKeyToFormDefaults(apiKey)
     assert.equal(values.routing_mode, 'manual')
     assert.deepEqual(values.manual_groups, ['vip'])
+  })
+
+  test('uses available manual groups for a legacy key with an empty group', () => {
+    const apiKey = {
+      id: 5,
+      name: 'legacy-empty',
+      key: 'sk-***',
+      status: 1,
+      remain_quota: 0,
+      used_quota: 0,
+      unlimited_quota: true,
+      expired_time: -1,
+      created_time: 1,
+      accessed_time: 1,
+      group: '',
+      cross_group_retry: false,
+      model_limits_enabled: false,
+      model_limits: '',
+      allow_ips: '',
+    } satisfies ApiKey
+
+    const values = transformApiKeyToFormDefaults(apiKey, ['default', 'vip'])
+    assert.equal(values.routing_mode, 'manual')
+    assert.deepEqual(values.manual_groups, ['default', 'vip'])
+    assert.equal(values.manual_groups.includes(''), false)
+  })
+
+  test('normalizes default manual groups to the supported maximum', () => {
+    const values = getApiKeyFormDefaultValues(
+      'auto',
+      Array.from(
+        { length: MAX_MANUAL_ROUTING_GROUPS + 2 },
+        (_, index) => `group-${index}`
+      )
+    )
+
+    assert.equal(values.manual_groups.length, MAX_MANUAL_ROUTING_GROUPS)
+    assert.equal(values.manual_groups.includes(''), false)
+
+    const schema = getApiKeyFormSchema(translate, {
+      smartRoutes: ['auto'],
+      manualGroups: Array.from(
+        { length: MAX_MANUAL_ROUTING_GROUPS + 2 },
+        (_, index) => `group-${index}`
+      ),
+    })
+    const result = schema.safeParse({
+      ...values,
+      routing_mode: 'manual',
+      manual_groups: Array.from(
+        { length: MAX_MANUAL_ROUTING_GROUPS + 1 },
+        (_, index) => `group-${index}`
+      ),
+    })
+    assert.equal(result.success, false)
   })
 
   test('rejects unavailable smart and manual routing selections', () => {

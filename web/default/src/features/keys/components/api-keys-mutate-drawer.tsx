@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { getUserModels, getUserGroups } from '@/lib/api'
 import { DEFAULT_AUTO_ROUTE_KEY } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
@@ -107,6 +108,7 @@ export function ApiKeysMutateDrawer({
   const [preservedManualGroups, setPreservedManualGroups] = useState<string[]>(
     []
   )
+  const currentRowId = currentRow?.id
   const defaultAutoRoute =
     typeof status?.default_auto_route === 'string'
       ? status.default_auto_route
@@ -169,7 +171,9 @@ export function ApiKeysMutateDrawer({
       ? defaultAutoRoute
       : routes[0]?.value || ''
     const routeGroups =
-      routes.find((option) => option.value === route)?.groups.slice(0, 8) || []
+      routes
+        .find((option) => option.value === route)
+        ?.groups.slice(0, MAX_MANUAL_ROUTING_GROUPS) || []
     return {
       realGroups: real,
       autoRouteOptions: routes,
@@ -180,6 +184,19 @@ export function ApiKeysMutateDrawer({
           : real.slice(0, 1).map((option) => option.value),
     }
   }, [defaultAutoRoute, groupsData?.auto_routes, groupsRaw])
+
+  const routingContextRef = useRef({
+    autoRouteOptions,
+    realGroups,
+    defaultManualGroups,
+    effectiveAutoRoute,
+  })
+  routingContextRef.current = {
+    autoRouteOptions,
+    realGroups,
+    defaultManualGroups,
+    effectiveAutoRoute,
+  }
   const schema = useMemo(
     () =>
       getApiKeyFormSchema(t, {
@@ -204,20 +221,36 @@ export function ApiKeysMutateDrawer({
 
   // Load existing data when updating
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
+    if (!open || groupsLoading) return
+
+    let cancelled = false
+    const {
+      autoRouteOptions: availableAutoRoutes,
+      realGroups: availableRealGroups,
+      defaultManualGroups: availableDefaultManualGroups,
+      effectiveAutoRoute: availableAutoRoute,
+    } = routingContextRef.current
+
+    if (isUpdate && currentRowId != null) {
       setEditingLegacyRouting(false)
       setPreservedSmartRoute(undefined)
       setPreservedManualGroups([])
-      getApiKey(currentRow.id).then((result) => {
-        if (result.success && result.data) {
+      getApiKey(currentRowId)
+        .then((result) => {
+          if (cancelled) return
+          if (!result.success || !result.data) {
+            toast.error(result.message || t(ERROR_MESSAGES.UNEXPECTED))
+            return
+          }
+
           setEditingLegacyRouting(Boolean(result.data.routing_legacy))
           const routing = result.data.routing
           const routeKey = routing?.route || result.data.group
           const selectableAutoRoutes = new Set(
-            autoRouteOptions.map((route) => route.value)
+            availableAutoRoutes.map((route) => route.value)
           )
           const selectableManualGroups = new Set(
-            realGroups.map((group) => group.value)
+            availableRealGroups.map((group) => group.value)
           )
           const unavailableSmartRoute =
             routing?.mode === 'smart' &&
@@ -232,31 +265,35 @@ export function ApiKeysMutateDrawer({
           setPreservedSmartRoute(unavailableSmartRoute ? routeKey : undefined)
           setPreservedManualGroups(unavailableManualGroups)
           const routeManualGroups =
-            autoRouteOptions.find((route) => route.value === routeKey)
-              ?.groups || defaultManualGroups
+            availableAutoRoutes.find((route) => route.value === routeKey)
+              ?.groups || availableDefaultManualGroups
           form.reset(
             transformApiKeyToFormDefaults(result.data, routeManualGroups)
           )
-        }
-      })
-    } else if (open && !isUpdate) {
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            handleServerError(error, {
+              fallback: t(ERROR_MESSAGES.UNEXPECTED),
+            })
+          }
+        })
+    } else if (!isUpdate) {
       setEditingLegacyRouting(false)
       setPreservedSmartRoute(undefined)
       setPreservedManualGroups([])
       form.reset(
-        getApiKeyFormDefaultValues(effectiveAutoRoute, defaultManualGroups)
+        getApiKeyFormDefaultValues(
+          availableAutoRoute,
+          availableDefaultManualGroups
+        )
       )
     }
-  }, [
-    open,
-    isUpdate,
-    currentRow,
-    form,
-    effectiveAutoRoute,
-    defaultManualGroups,
-    autoRouteOptions,
-    realGroups,
-  ])
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, isUpdate, currentRowId, form, groupsLoading, t])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)

@@ -761,6 +761,43 @@ func TestResolveTokenMutationRoutingPreservesStoredPolicyWhenRoutingIsOmitted(t 
 	}
 }
 
+func TestUpdateTokenChangesCrossGroupRetryWhenSubmittedWithoutGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "retry-only-token", "retryonly1234token5678")
+	if err := db.Model(token).Updates(map[string]any{
+		"group":             "default",
+		"cross_group_retry": true,
+	}).Error; err != nil {
+		t.Fatalf("failed to prepare token: %v", err)
+	}
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "retry-only-token-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"cross_group_retry":    false,
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected retry-only update to succeed, got %q", response.Message)
+	}
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if stored.CrossGroupRetry {
+		t.Fatal("expected explicit false cross-group retry to be persisted")
+	}
+}
+
 func TestUpdateTokenPreservesLegacyRoutingWhenRoutingFieldsAreOmitted(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "legacy-empty", "legacy1234empty5678")

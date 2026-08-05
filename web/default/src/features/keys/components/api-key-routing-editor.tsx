@@ -176,47 +176,44 @@ function ManualGroupRow(props: ManualGroupRowProps) {
   )
 }
 
-function ManualGroupEditor({
-  value,
-  options,
-  disabled,
-  onChange,
-}: {
+type ManualGroupEditorProps = {
   value: string[]
   options: ApiKeyGroupOption[]
   disabled?: boolean
   onChange: (groups: string[]) => void
-}) {
+}
+
+function ManualGroupEditor(props: ManualGroupEditorProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const optionMap = useMemo(
-    () => new Map(options.map((option) => [option.value, option])),
-    [options]
+    () => new Map(props.options.map((option) => [option.value, option])),
+    [props.options]
   )
-  const atLimit = value.length >= MAX_MANUAL_ROUTING_GROUPS
+  const atLimit = props.value.length >= MAX_MANUAL_ROUTING_GROUPS
 
   useEffect(() => {
-    if (!disabled) return
+    if (!props.disabled) return
     const timeoutId = window.setTimeout(() => setOpen(false), 0)
     return () => window.clearTimeout(timeoutId)
-  }, [disabled])
+  }, [props.disabled])
 
   const toggleGroup = (group: string) => {
-    if (disabled) return
-    if (value.includes(group)) {
-      onChange(value.filter((item) => item !== group))
+    if (props.disabled) return
+    if (props.value.includes(group)) {
+      props.onChange(props.value.filter((item) => item !== group))
       return
     }
-    if (!atLimit) onChange([...value, group])
+    if (!atLimit) props.onChange([...props.value, group])
   }
 
   const moveGroup = (index: number, direction: 'up' | 'down') => {
-    if (disabled) return
+    if (props.disabled) return
     const target = direction === 'up' ? index - 1 : index + 1
-    if (target < 0 || target >= value.length) return
-    const next = [...value]
+    if (target < 0 || target >= props.value.length) return
+    const next = [...props.value]
     ;[next[index], next[target]] = [next[target], next[index]]
-    onChange(next)
+    props.onChange(next)
   }
 
   return (
@@ -225,55 +222,64 @@ function ManualGroupEditor({
         <span className='text-sm font-medium'>{t('Manual group order')}</span>
         <span className='text-muted-foreground text-xs tabular-nums'>
           {t('{{count}} / {{max}} groups selected', {
-            count: value.length,
+            count: props.value.length,
             max: MAX_MANUAL_ROUTING_GROUPS,
           })}
         </span>
       </div>
       <Popover
-        open={disabled ? false : open}
+        open={props.disabled ? false : open}
         onOpenChange={(nextOpen) => {
-          if (!disabled) setOpen(nextOpen)
+          if (!props.disabled) setOpen(nextOpen)
         }}
       >
-        <PopoverTrigger
-          render={
-            <div
-              role='combobox'
-              tabIndex={disabled ? -1 : 0}
-              aria-expanded={open}
-              aria-disabled={disabled}
-              className={cn(
-                'border-input bg-background focus-visible:border-ring focus-visible:ring-ring/20 flex min-h-10 w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5 outline-none focus-visible:ring-[3px]',
-                disabled && 'pointer-events-none opacity-50'
-              )}
-            />
-          }
-        >
-          {value.length === 0 && (
-            <span className='text-muted-foreground px-1 text-sm'>
-              {t('Select groups')}
-            </span>
-          )}
-          {value.map((group) => (
-            <Badge key={group} variant='secondary' className='gap-1 pr-1'>
-              <span className='max-w-28 truncate'>{group}</span>
+        <div className='flex min-w-0 items-stretch gap-1'>
+          <PopoverTrigger
+            render={
               <button
                 type='button'
-                disabled={disabled}
-                className='hover:bg-muted-foreground/15 rounded-full p-0.5'
+                role='combobox'
+                disabled={props.disabled}
+                aria-expanded={props.disabled ? false : open}
+                aria-label={t('Select groups')}
+                className={cn(
+                  'border-input bg-background focus-visible:border-ring focus-visible:ring-ring/20 flex min-h-10 w-full min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5 text-left outline-none focus-visible:ring-[3px]',
+                  props.disabled && 'pointer-events-none opacity-50'
+                )}
+              />
+            }
+          >
+            {props.value.length === 0 && (
+              <span className='text-muted-foreground px-1 text-sm'>
+                {t('Select groups')}
+              </span>
+            )}
+            {props.value.map((group) => (
+              <Badge key={group} variant='secondary' className='max-w-40'>
+                <span className='truncate'>{group}</span>
+              </Badge>
+            ))}
+          </PopoverTrigger>
+          <div className='flex shrink-0 items-center'>
+            {props.value.map((group) => (
+              <Button
+                key={group}
+                type='button'
+                variant='ghost'
+                size='icon-sm'
+                disabled={props.disabled}
                 aria-label={t('Remove {{group}}', { group })}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  toggleGroup(group)
-                }}
+                onClick={() => toggleGroup(group)}
               >
-                <X className='size-3' aria-hidden='true' />
-              </button>
-            </Badge>
-          ))}
-          <ChevronsUpDown className='text-muted-foreground ml-auto size-4 shrink-0' />
-        </PopoverTrigger>
+                <X aria-hidden='true' />
+              </Button>
+            ))}
+          </div>
+          <ChevronsUpDown
+            className='text-muted-foreground my-auto mr-2 size-4 shrink-0'
+            aria-hidden='true'
+          />
+        </div>
         <PopoverContent
           align='start'
           className='w-[var(--anchor-width)] min-w-72 p-0'
@@ -283,14 +289,14 @@ function ManualGroupEditor({
             <CommandList>
               <CommandEmpty>{t('No groups found')}</CommandEmpty>
               <CommandGroup>
-                {options.map((option) => {
-                  const selected = value.includes(option.value)
+                {props.options.map((option) => {
+                  const selected = props.value.includes(option.value)
                   return (
                     <CommandItem
                       key={option.value}
                       value={`${option.value} ${option.label} ${option.desc || ''}`}
                       data-checked={selected}
-                      disabled={disabled || (!selected && atLimit)}
+                      disabled={props.disabled || (!selected && atLimit)}
                       onSelect={() => toggleGroup(option.value)}
                     >
                       <span className='flex min-w-0 flex-1 flex-col'>
@@ -316,36 +322,124 @@ function ManualGroupEditor({
       <p className='text-muted-foreground text-xs'>
         {t('Requests try groups in the order shown below.')}
       </p>
-      {value.length === 0 ? (
+      {props.value.length === 0 ? (
         <div className='border-border text-muted-foreground rounded-md border border-dashed px-3 py-6 text-center text-sm'>
           {t('Select at least one manual routing group')}
         </div>
       ) : (
         <Reorder.Group
           axis='y'
-          values={value}
+          values={props.value}
           onReorder={(groups) => {
-            if (!disabled) onChange(groups)
+            if (!props.disabled) props.onChange(groups)
           }}
           className='overflow-hidden rounded-md border'
         >
-          {value.map((group, index) => (
+          {props.value.map((group, index) => (
             <ManualGroupRow
               key={group}
               group={group}
               index={index}
-              count={value.length}
+              count={props.value.length}
               option={optionMap.get(group)}
-              disabled={disabled}
+              disabled={props.disabled}
               onMove={moveGroup}
               onRemove={(removed) =>
-                onChange(value.filter((item) => item !== removed))
+                props.onChange(props.value.filter((item) => item !== removed))
               }
             />
           ))}
         </Reorder.Group>
       )}
     </div>
+  )
+}
+
+type AutomaticRouteSelectionProps = Pick<
+  ApiKeyRoutingEditorProps,
+  'autoRouteOptions' | 'disabled' | 'onRouteChange' | 'route' | 'routesLoading'
+>
+
+function AutomaticRouteSelection(props: AutomaticRouteSelectionProps) {
+  const { t } = useTranslation()
+
+  if (props.routesLoading) {
+    return (
+      <div className='grid gap-2 sm:grid-cols-2'>
+        <Skeleton className='h-20 w-full rounded-md' />
+        <Skeleton className='h-20 w-full rounded-md' />
+      </div>
+    )
+  }
+
+  if (props.autoRouteOptions.length === 0) {
+    return (
+      <Alert variant='destructive'>
+        <CircleAlert aria-hidden='true' />
+        <AlertTitle>{t('No automatic routing groups')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'No automatic routing groups are currently available. Select manual routing or contact an administrator.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  return (
+    <RadioGroup
+      value={props.route}
+      onValueChange={props.onRouteChange}
+      className='grid gap-2 sm:grid-cols-2'
+    >
+      {props.autoRouteOptions.map((option) => {
+        const selected = props.route === option.value
+        return (
+          <label
+            key={option.value}
+            className={cn(
+              'border-border bg-background hover:bg-muted/25 flex min-h-20 cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors',
+              selected && 'border-foreground bg-muted/40',
+              props.disabled && 'pointer-events-none opacity-50'
+            )}
+          >
+            <Route
+              className='text-muted-foreground mt-0.5 size-4 shrink-0'
+              aria-hidden='true'
+            />
+            <span className='min-w-0 flex-1'>
+              <span className='block truncate text-sm font-medium'>
+                {option.label}
+              </span>
+              <span className='text-muted-foreground block truncate font-mono text-[11px]'>
+                {option.value}
+              </span>
+              <span className='mt-1 flex flex-wrap gap-1'>
+                {option.groups.slice(0, 3).map((group) => (
+                  <Badge
+                    key={group}
+                    variant='secondary'
+                    className='max-w-24 truncate font-mono text-[10px]'
+                  >
+                    {group}
+                  </Badge>
+                ))}
+                {option.groups.length > 3 && (
+                  <Badge variant='outline' className='text-[10px]'>
+                    +{option.groups.length - 3}
+                  </Badge>
+                )}
+              </span>
+            </span>
+            <RadioGroupItem
+              value={option.value}
+              aria-label={option.label}
+              disabled={props.disabled}
+            />
+          </label>
+        )
+      })}
+    </RadioGroup>
   )
 }
 
@@ -408,76 +502,13 @@ export function ApiKeyRoutingEditor(props: ApiKeyRoutingEditorProps) {
                 )}
               </p>
             </div>
-            {props.routesLoading ? (
-              <div className='grid gap-2 sm:grid-cols-2'>
-                <Skeleton className='h-20 w-full rounded-md' />
-                <Skeleton className='h-20 w-full rounded-md' />
-              </div>
-            ) : props.autoRouteOptions.length === 0 ? (
-              <Alert variant='destructive'>
-                <CircleAlert aria-hidden='true' />
-                <AlertTitle>{t('No automatic routing groups')}</AlertTitle>
-                <AlertDescription>
-                  {t(
-                    'No automatic routing groups are currently available. Select manual routing or contact an administrator.'
-                  )}
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <RadioGroup
-                value={props.route}
-                onValueChange={props.onRouteChange}
-                className='grid gap-2 sm:grid-cols-2'
-              >
-                {props.autoRouteOptions.map((option) => {
-                  const selected = props.route === option.value
-                  return (
-                    <label
-                      key={option.value}
-                      className={cn(
-                        'border-border bg-background hover:bg-muted/25 flex min-h-20 cursor-pointer items-start gap-3 rounded-md border px-3 py-2.5 transition-colors',
-                        selected && 'border-foreground bg-muted/40',
-                        props.disabled && 'pointer-events-none opacity-50'
-                      )}
-                    >
-                      <Route
-                        className='text-muted-foreground mt-0.5 size-4 shrink-0'
-                        aria-hidden='true'
-                      />
-                      <span className='min-w-0 flex-1'>
-                        <span className='block truncate text-sm font-medium'>
-                          {option.label}
-                        </span>
-                        <span className='text-muted-foreground block truncate font-mono text-[11px]'>
-                          {option.value}
-                        </span>
-                        <span className='mt-1 flex flex-wrap gap-1'>
-                          {option.groups.slice(0, 3).map((group) => (
-                            <Badge
-                              key={group}
-                              variant='secondary'
-                              className='max-w-24 truncate font-mono text-[10px]'
-                            >
-                              {group}
-                            </Badge>
-                          ))}
-                          {option.groups.length > 3 && (
-                            <Badge variant='outline' className='text-[10px]'>
-                              +{option.groups.length - 3}
-                            </Badge>
-                          )}
-                        </span>
-                      </span>
-                      <RadioGroupItem
-                        value={option.value}
-                        aria-label={option.label}
-                        disabled={props.disabled}
-                      />
-                    </label>
-                  )
-                })}
-              </RadioGroup>
-            )}
+            <AutomaticRouteSelection
+              autoRouteOptions={props.autoRouteOptions}
+              disabled={props.disabled}
+              onRouteChange={props.onRouteChange}
+              route={props.route}
+              routesLoading={props.routesLoading}
+            />
             {props.route && !props.routesLoading && !activeAutoRoute && (
               <Alert variant='destructive'>
                 <CircleAlert aria-hidden='true' />

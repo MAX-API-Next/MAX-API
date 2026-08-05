@@ -467,7 +467,7 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		routingPolicy, legacyRouting, routingErr := service.ResolveTokenRoutingPolicy(token, userGroup)
 		if routingErr != nil {
-			abortWithOpenAiMessage(c, http.StatusForbidden, routingErr.Error())
+			abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, routingErr.Error()))
 			return
 		}
 		tokenGroup, crossGroupRetry := service.ProjectTokenRoutingPolicy(routingPolicy)

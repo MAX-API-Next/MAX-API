@@ -233,7 +233,9 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
           return (
             <Tooltip>
               <TooltipTrigger
-                render={<span className='max-w-60 truncate text-xs' />}
+                render={
+                  <span className='inline-block max-w-60 truncate text-xs' />
+                }
               >
                 {t('Manual {{count}} groups: {{groups}}', {
                   count: groups.length,

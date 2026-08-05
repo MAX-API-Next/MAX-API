@@ -1,12 +1,15 @@
 package service
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +63,31 @@ func TestLegacyEmptyGroupUsesAuthenticatedUserGroup(t *testing.T) {
 	plan, err := BuildTokenRoutePlan(policy, "vip")
 	require.NoError(t, err)
 	require.Equal(t, []string{"vip"}, plan.OrderedGroups)
+}
+
+func TestLegacyEmptyGroupWithoutAuthenticatedGroupUsesDefaultAutomaticRoute(t *testing.T) {
+	setupTokenRoutingTestGroups(t)
+
+	policy := LegacyTokenRoutingPolicy("", false, "")
+	require.Equal(t, model.TokenRoutingModeSmart, policy.Mode)
+	require.Equal(t, setting.GetDefaultAutoRouteKey(), policy.Route)
+
+	plan, err := BuildTokenRoutePlan(policy, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{"default", "vip"}, plan.OrderedGroups)
+}
+
+func TestBuildContextTokenRoutePlanTreatsInvalidStoredPolicyAsLegacy(t *testing.T) {
+	setupTokenRoutingTestGroups(t)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenRoutingPolicy, "not-a-policy")
+
+	plan, err := BuildContextTokenRoutePlan(ctx)
+	require.NoError(t, err)
+	require.True(t, plan.Legacy)
+	require.Equal(t, []string{"default"}, plan.OrderedGroups)
 }
 
 func TestResolveTokenRoutingPolicySkipsUnavailableStoredManualGroups(t *testing.T) {

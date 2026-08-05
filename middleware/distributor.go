@@ -121,21 +121,18 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
-						if routePlan != nil && !routePlan.Legacy && len(routePlan.OrderedGroups) > 0 {
-							firstGroup := routePlan.OrderedGroups[0]
-							if model.IsChannelEnabledForGroupModel(firstGroup, modelRequest.Model, preferred.Id) {
-								selectGroup = firstGroup
-								common.SetContextKey(c, constant.ContextKeyAutoGroup, firstGroup)
-								channel = preferred
-								affinityUsable = true
-								service.MarkChannelAffinityUsed(c, firstGroup, preferred.Id)
-								if routePlan.RetryOnFailure && len(routePlan.OrderedGroups) > 1 {
-									common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, 1)
-									common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 1)
-								} else {
-									common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, 0)
-									common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 0)
-								}
+						if group, groupIndex, matched := findAffinityRouteGroup(routePlan, modelRequest.Model, preferred.Id, model.IsChannelEnabledForGroupModel); matched {
+							selectGroup = group
+							common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+							channel = preferred
+							affinityUsable = true
+							service.MarkChannelAffinityUsed(c, group, preferred.Id)
+							if routePlan.RetryOnFailure && groupIndex < len(routePlan.OrderedGroups)-1 {
+								common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, groupIndex+1)
+								common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 1)
+							} else {
+								common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, groupIndex)
+								common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 0)
 							}
 						} else if service.IsAutoRouteKey(usingGroup) {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
@@ -202,6 +199,23 @@ func Distribute() func(c *gin.Context) {
 
 func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool {
 	return model.ChannelSupportsRequestPath(channel, requestPath)
+}
+
+func findAffinityRouteGroup(
+	plan *service.TokenRoutePlan,
+	modelName string,
+	channelID int,
+	isUsable func(group string, modelName string, channelID int) bool,
+) (string, int, bool) {
+	if plan == nil || plan.Legacy || isUsable == nil {
+		return "", 0, false
+	}
+	for index, group := range plan.OrderedGroups {
+		if isUsable(group, modelName, channelID) {
+			return group, index, true
+		}
+	}
+	return "", 0, false
 }
 
 // getModelFromRequest 从请求中读取模型信息

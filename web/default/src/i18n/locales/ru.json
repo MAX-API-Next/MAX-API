@@ -4366,7 +4366,7 @@
     "Slug must be less than 100 characters": "Slug должен содержать менее 100 символов",
     "Smallest USD amount users can recharge (Epay)": "Минимальная сумма в USD, которую пользователи могут пополнить (Epay)",
     "Automatic routing is disabled. The manual group order is used.": "Автоматическая маршрутизация отключена. Используется ручной порядок групп.",
-    "Automatic routing is enabled. The system follows the selected automatic route group order.": "Автоматическая маршрутизация включена. Система следует настроенному порядку выбранной группы автоматической маршрутизации.",
+    "Automatic routing is enabled. The system follows the selected automatic route group order.": "Автоматическая маршрутизация включена. Система следует порядку групп выбранного маршрута автоматической маршрутизации.",
     "SMTP Email": "Электронная почта SMTP",
     "SMTP encryption": "Шифрование SMTP",
     "SMTP Host": "Хост SMTP",

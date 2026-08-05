@@ -20,7 +20,6 @@ import { z } from 'zod'
 import type { TFunction } from 'i18next'
 import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
-import { DEFAULT_GROUP } from '../constants'
 import {
   type ApiKeyFormData,
   type ApiKey,
@@ -141,22 +140,22 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   allow_ips: '',
   routing_mode: 'smart',
   routing_route: DEFAULT_AUTO_ROUTE_KEY,
-  manual_groups: [DEFAULT_GROUP],
+  manual_groups: [],
   cross_group_retry: true,
   tokenCount: 1,
 }
 
 export function getApiKeyFormDefaultValues(
   defaultAutoRoute: string = DEFAULT_AUTO_ROUTE_KEY,
-  defaultManualGroups: string[] = [DEFAULT_GROUP]
+  defaultManualGroups: string[] = []
 ): ApiKeyFormValues {
+  const availableManualGroups = defaultManualGroups
+    .filter((group) => group.trim() !== '')
+    .slice(0, MAX_MANUAL_ROUTING_GROUPS)
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
     routing_route: defaultAutoRoute,
-    manual_groups:
-      defaultManualGroups.length > 0
-        ? defaultManualGroups.slice(0, MAX_MANUAL_ROUTING_GROUPS)
-        : [DEFAULT_GROUP],
+    manual_groups: availableManualGroups,
   }
 }
 
@@ -232,19 +231,25 @@ export function transformFormDataToPayload(
  */
 export function transformApiKeyToFormDefaults(
   apiKey: ApiKey,
-  smartModeManualGroups: string[] = [DEFAULT_GROUP]
+  smartModeManualGroups: string[] = []
 ): ApiKeyFormValues {
   const routing = apiKey.routing
   const legacySmart = !routing && isAutoRouteKey(apiKey.group)
   const mode = routing?.mode ?? (legacySmart ? 'smart' : 'manual')
+  const availableManualGroups = smartModeManualGroups
+    .filter((group) => group.trim() !== '')
+    .slice(0, MAX_MANUAL_ROUTING_GROUPS)
+  const legacyGroup = apiKey.group?.trim() || ''
+  const storedManualGroups =
+    routing?.groups?.filter((group) => group.trim() !== '') || []
   const manualGroups =
     mode === 'manual'
-      ? routing?.groups?.length
-        ? routing.groups
-        : [apiKey.group || DEFAULT_GROUP]
-      : smartModeManualGroups.length > 0
-        ? smartModeManualGroups.slice(0, MAX_MANUAL_ROUTING_GROUPS)
-        : [DEFAULT_GROUP]
+      ? storedManualGroups.length > 0
+        ? storedManualGroups
+        : legacyGroup
+          ? [legacyGroup]
+          : availableManualGroups
+      : availableManualGroups
   return {
     name: apiKey.name,
     remain_quota_dollars: apiKey.unlimited_quota

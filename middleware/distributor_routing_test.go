@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -111,4 +112,15 @@ func TestPlaygroundExplicitGroupBypassesStoredTokenRoutePlan(t *testing.T) {
 	require.Equal(t, 2, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
 	_, hasPlan := common.GetContextKey(ctx, constant.ContextKeyTokenRoutePlan)
 	require.False(t, hasPlan)
+}
+
+func TestFindAffinityRouteGroupUsesFirstMatchingRouteGroup(t *testing.T) {
+	group, index, ok := findAffinityRouteGroup(&service.TokenRoutePlan{
+		OrderedGroups: []string{"base", "deluxe"},
+	}, "gpt-affinity-route", 7, func(group string, modelName string, channelID int) bool {
+		return group == "deluxe" && modelName == "gpt-affinity-route" && channelID == 7
+	})
+	require.True(t, ok)
+	require.Equal(t, "deluxe", group)
+	require.Equal(t, 1, index)
 }
