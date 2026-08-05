@@ -26,7 +26,6 @@ import {
   GripVertical,
   Route,
   Trash2,
-  X,
 } from 'lucide-react'
 import { Reorder, useDragControls } from 'motion/react'
 import { useTranslation } from 'react-i18next'
@@ -233,53 +232,36 @@ function ManualGroupEditor(props: ManualGroupEditorProps) {
           if (!props.disabled) setOpen(nextOpen)
         }}
       >
-        <div className='flex min-w-0 items-stretch gap-1'>
-          <PopoverTrigger
-            render={
-              <button
-                type='button'
-                role='combobox'
-                disabled={props.disabled}
-                aria-expanded={props.disabled ? false : open}
-                aria-label={t('Select groups')}
-                className={cn(
-                  'border-input bg-background focus-visible:border-ring focus-visible:ring-ring/20 flex min-h-10 w-full min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5 text-left outline-none focus-visible:ring-[3px]',
-                  props.disabled && 'pointer-events-none opacity-50'
-                )}
-              />
-            }
-          >
-            {props.value.length === 0 && (
-              <span className='text-muted-foreground px-1 text-sm'>
-                {t('Select groups')}
-              </span>
-            )}
-            {props.value.map((group) => (
-              <Badge key={group} variant='secondary' className='max-w-40'>
-                <span className='truncate'>{group}</span>
-              </Badge>
-            ))}
-          </PopoverTrigger>
-          <div className='flex shrink-0 items-center'>
-            {props.value.map((group) => (
-              <Button
-                key={group}
-                type='button'
-                variant='ghost'
-                size='icon-sm'
-                disabled={props.disabled}
-                aria-label={t('Remove {{group}}', { group })}
-                onClick={() => toggleGroup(group)}
-              >
-                <X aria-hidden='true' />
-              </Button>
-            ))}
-          </div>
+        <PopoverTrigger
+          render={
+            <button
+              type='button'
+              role='combobox'
+              disabled={props.disabled}
+              aria-expanded={props.disabled ? false : open}
+              aria-label={t('Select groups')}
+              className={cn(
+                'border-input bg-background focus-visible:border-ring focus-visible:ring-ring/20 flex min-h-10 w-full min-w-0 cursor-pointer flex-wrap items-center gap-1.5 rounded-md border px-2 py-1.5 text-left outline-none focus-visible:ring-[3px]',
+                props.disabled && 'pointer-events-none opacity-50'
+              )}
+            />
+          }
+        >
+          {props.value.length === 0 && (
+            <span className='text-muted-foreground px-1 text-sm'>
+              {t('Select groups')}
+            </span>
+          )}
+          {props.value.map((group) => (
+            <Badge key={group} variant='secondary' className='max-w-40'>
+              <span className='truncate'>{group}</span>
+            </Badge>
+          ))}
           <ChevronsUpDown
-            className='text-muted-foreground my-auto mr-2 size-4 shrink-0'
+            className='text-muted-foreground ml-auto size-4 shrink-0'
             aria-hidden='true'
           />
-        </div>
+        </PopoverTrigger>
         <PopoverContent
           align='start'
           className='w-[var(--anchor-width)] min-w-72 p-0'
