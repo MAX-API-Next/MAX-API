@@ -38,7 +38,7 @@ const groups = Array.from(
 )
 
 describe('ApiKeyRoutingEditor', () => {
-  test('keeps the maximum manual selection in one accessible selector', () => {
+  test('keeps the maximum manual selection in one accessible selector', (): void => {
     let changedGroups: string[] | undefined
     const view = render(
       <I18nextProvider i18n={testEnv.i18n}>
@@ -57,7 +57,7 @@ describe('ApiKeyRoutingEditor', () => {
           defaultManualGroups={groups}
           onModeChange={() => undefined}
           onRouteChange={() => undefined}
-          onManualGroupsChange={(nextGroups) => {
+          onManualGroupsChange={(nextGroups: string[]): void => {
             changedGroups = nextGroups
           }}
           onRetryOnFailureChange={() => undefined}
