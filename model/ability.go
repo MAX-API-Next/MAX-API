@@ -186,6 +186,9 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChanne
 	sort.Slice(priorities, func(i, j int) bool {
 		return priorities[i] > priorities[j]
 	})
+	if len(priorities) == 0 {
+		return 0, false
+	}
 	if retry >= len(priorities) {
 		retry = len(priorities) - 1
 	}

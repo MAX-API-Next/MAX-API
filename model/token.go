@@ -28,6 +28,7 @@ type Token struct {
 	UsedQuota          int64          `json:"used_quota" gorm:"type:bigint;default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	RoutingPolicyJSON  *string        `json:"-" gorm:"column:routing_policy;type:text"`
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
 
@@ -311,7 +312,7 @@ func (token *Token) Update() (err error) {
 	var cacheTask CacheInvalidationTask
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-			"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error; err != nil {
+			"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "routing_policy").Updates(token).Error; err != nil {
 			return err
 		}
 		var err error

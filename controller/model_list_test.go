@@ -213,6 +213,21 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	require.Empty(t, missingExprPricing.BillingExpr)
 }
 
+func TestGetEnabledModelsForGroupsIncludesModelsFromEveryOwnerGroup(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "vip", Model: "zz-manual-first-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-manual-later-model", ChannelId: 2, Enabled: true},
+		{Group: "default", Model: "zz-manual-first-model", ChannelId: 3, Enabled: true},
+	}).Error)
+
+	models := getEnabledModelsForGroups([]string{"vip", "default"})
+	require.ElementsMatch(t, []string{
+		"zz-manual-first-model",
+		"zz-manual-later-model",
+	}, models)
+}
+
 func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	withSelfUseModeDisabled(t)
 	withTieredBillingConfig(t, map[string]string{

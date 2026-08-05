@@ -18,6 +18,19 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { z } from 'zod'
 
+export const tokenRoutingModeSchema = z.enum(['smart', 'manual'])
+
+export const tokenRoutingPolicySchema = z.object({
+  version: z.number().default(1),
+  mode: tokenRoutingModeSchema,
+  route: z.string().optional(),
+  groups: z.array(z.string()).optional(),
+  retry_on_failure: z.boolean().default(false),
+})
+
+export type TokenRoutingMode = z.infer<typeof tokenRoutingModeSchema>
+export type TokenRoutingPolicy = z.infer<typeof tokenRoutingPolicySchema>
+
 // ============================================================================
 // API Key Schema & Types
 // ============================================================================
@@ -42,6 +55,8 @@ export const apiKeySchema = z.object({
     }, z.boolean())
     .optional()
     .default(false),
+  routing: tokenRoutingPolicySchema.nullish(),
+  routing_legacy: z.boolean().optional(),
   model_limits_enabled: z.boolean(),
   model_limits: z.string().nullish().default(''),
   allow_ips: z.string().nullish().default(''),
@@ -90,8 +105,9 @@ export interface ApiKeyFormData {
   model_limits_enabled: boolean
   model_limits: string
   allow_ips: string
-  group: string
-  cross_group_retry: boolean
+  group?: string
+  cross_group_retry?: boolean
+  routing?: TokenRoutingPolicy
 }
 
 // ============================================================================

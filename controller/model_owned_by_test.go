@@ -6,6 +6,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +83,21 @@ func TestGetModelListGroupsUsesExplicitTokenGroup(t *testing.T) {
 	require.Equal(t, "default", groups.userGroup)
 	require.Equal(t, "vip", groups.tokenGroup)
 	require.Equal(t, []string{"vip"}, groups.ownerGroups)
+}
+
+func TestGetModelListGroupsUsesManualTokenRoutingGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip")
+	common.SetContextKey(ctx, constant.ContextKeyTokenRoutingPolicy, model.TokenRoutingPolicy{
+		Version:        model.TokenRoutingPolicyVersion,
+		Mode:           model.TokenRoutingModeManual,
+		Groups:         []string{"vip", "default"},
+		RetryOnFailure: true,
+	})
+
+	groups, err := getModelListGroups(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"vip", "default"}, groups.ownerGroups)
 }

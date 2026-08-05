@@ -20,6 +20,7 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { t } from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import type { AutoGroupRoute } from '@/lib/auto-routes'
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
@@ -199,6 +200,7 @@ export async function getUserModels(): Promise<{
 export async function getUserGroups(): Promise<{
   success: boolean
   message?: string
+  auto_routes?: AutoGroupRoute[]
   data?: Record<
     string,
     { desc: string; ratio: number | string; auto?: boolean; groups?: string[] }
