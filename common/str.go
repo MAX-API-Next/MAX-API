@@ -8,8 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"unsafe"
-
-	"github.com/samber/lo"
 )
 
 var (
@@ -41,7 +39,11 @@ func GetRandomString(length int) string {
 	if length <= 0 {
 		return ""
 	}
-	return lo.RandomString(length, lo.AlphanumericCharset)
+	value, err := GenerateRandomCharsKey(length)
+	if err != nil {
+		panic(err)
+	}
+	return value
 }
 
 func MapToJsonStr(m map[string]interface{}) string {

@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"math/rand"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -70,7 +69,11 @@ func UserCheckin(userId int) (*Checkin, error) {
 	// 计算随机额度奖励
 	quotaAwarded := setting.MinQuota
 	if setting.MaxQuota > setting.MinQuota {
-		quotaAwarded = setting.MinQuota + rand.Intn(setting.MaxQuota-setting.MinQuota+1)
+		randomQuota, err := common.SecureRandomInt(setting.MaxQuota - setting.MinQuota + 1)
+		if err != nil {
+			return nil, err
+		}
+		quotaAwarded = setting.MinQuota + randomQuota
 	}
 
 	today := time.Now().Format("2006-01-02")

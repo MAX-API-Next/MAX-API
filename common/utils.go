@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"math/big"
-	"math/rand"
 	"net"
 	"net/url"
 	"os"
@@ -253,8 +252,22 @@ func GenerateKey() (string, error) {
 }
 
 func GetRandomInt(max int) int {
-	//rand.Seed(time.Now().UnixNano())
-	return rand.Intn(max)
+	n, err := SecureRandomInt(max)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func SecureRandomInt(max int) (int, error) {
+	if max <= 0 {
+		return 0, fmt.Errorf("random max must be greater than 0")
+	}
+	n, err := crand.Int(crand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0, err
+	}
+	return int(n.Int64()), nil
 }
 
 func GetTimestamp() int64 {
@@ -280,7 +293,11 @@ func MessageWithRequestId(message string, id string) string {
 
 func RandomSleep() {
 	// Sleep for 0-3000 ms
-	time.Sleep(time.Duration(rand.Intn(3000)) * time.Millisecond)
+	delay, err := SecureRandomInt(3000)
+	if err != nil {
+		delay = 0
+	}
+	time.Sleep(time.Duration(delay) * time.Millisecond)
 }
 
 func GetPointer[T any](v T) *T {

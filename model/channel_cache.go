@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -223,7 +222,10 @@ func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, r
 	totalWeight := sumWeight * smoothingFactor
 
 	// Generate a random value in the range [0, totalWeight)
-	randomWeight := rand.Intn(totalWeight)
+	randomWeight, err := common.SecureRandomInt(totalWeight)
+	if err != nil {
+		return nil, err
+	}
 
 	// Find a channel based on its weight
 	for _, channel := range targetChannels {

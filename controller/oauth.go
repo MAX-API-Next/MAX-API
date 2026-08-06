@@ -79,13 +79,17 @@ func handleOAuthIdentityLookupError(c *gin.Context, provider string, err error) 
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
-	state := common.GetRandomString(12)
+	state, err := common.GenerateRandomCharsKey(12)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	affCode := c.Query("aff")
 	if affCode != "" {
 		session.Set("aff", affCode)
 	}
 	session.Set("oauth_state", state)
-	err := session.Save()
+	err = session.Save()
 	if err != nil {
 		common.ApiError(c, err)
 		return
