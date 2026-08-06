@@ -124,8 +124,11 @@ func TestUpdateFieldsRollsBackChannelWhenAbilityRebuildFails(t *testing.T) {
 func TestUpdateFieldsPersistsMultiKeyInfoWhenOnlyKeyChanges(t *testing.T) {
 	db, channel := setupChannelUpdateFieldsTestDB(t)
 
+	channel.Keys = channel.GetKeys()
+	require.Equal(t, []string{"first-key", "second-key", "third-key"}, channel.Keys)
 	channel.Key = "first-key\nsecond-key"
 	require.NoError(t, channel.UpdateFields("key"))
+	require.Equal(t, []string{"first-key", "second-key"}, channel.GetKeys())
 	require.Equal(t, 2, channel.ChannelInfo.MultiKeySize)
 	require.NotContains(t, channel.ChannelInfo.MultiKeyStatusList, 2)
 	require.NotContains(t, channel.ChannelInfo.MultiKeyDisabledTime, 2)

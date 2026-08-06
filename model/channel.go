@@ -694,6 +694,9 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 		if err := tx.Model(&Channel{}).First(workingChannel, "id = ?", workingChannel.Id).Error; err != nil {
 			return err
 		}
+		if keySelected {
+			workingChannel.Keys = nil
+		}
 		if !updateAbilities {
 			return nil
 		}
