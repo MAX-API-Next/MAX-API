@@ -93,15 +93,10 @@ func InitEnv() {
 	SessionCookieSecure = GetEnvOrDefaultBool("SESSION_COOKIE_SECURE", false)
 	SMTPStartTLSEnabled = GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
 	SMTPInsecureSkipVerify = GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
-	TrustedProxies = append([]string(nil), DefaultTrustedProxies...)
-	if trustedProxies := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); trustedProxies != "" {
-		TrustedProxies = nil
-		for _, proxy := range strings.Split(trustedProxies, ",") {
-			proxy = strings.TrimSpace(proxy)
-			if proxy != "" {
-				TrustedProxies = append(TrustedProxies, proxy)
-			}
-		}
+	var trustedProxyErr error
+	TrustedProxies, trustedProxyErr = parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+	if trustedProxyErr != nil {
+		log.Fatal(trustedProxyErr)
 	}
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
 	initNodeNameIdentity()
