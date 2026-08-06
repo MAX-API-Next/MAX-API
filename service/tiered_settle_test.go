@@ -114,6 +114,24 @@ func TestTryTieredSettleFallsBackToFrozenPreConsumeOnExprError(t *testing.T) {
 	}
 }
 
+func TestTryTieredSettleErrorFallbackUsesHigherFrozenEstimate(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		FinalPreConsumedQuota: 123,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:              "tiered_expr",
+			ExprString:               `invalid +-+ expr`,
+			ExprHash:                 billingexpr.ExprHashString(`invalid +-+ expr`),
+			GroupRatio:               1.0,
+			EstimatedQuotaAfterGroup: 999,
+		},
+	}
+
+	ok, quota, result := TryTieredSettle(relayInfo, billingexpr.TokenParams{P: 100})
+	require.True(t, ok)
+	require.Equal(t, 999, quota)
+	require.Nil(t, result)
+}
+
 // ---------------------------------------------------------------------------
 // Pre-consume vs Post-consume consistency
 // ---------------------------------------------------------------------------

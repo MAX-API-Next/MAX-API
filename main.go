@@ -243,6 +243,12 @@ func main() {
 	defer cancel()
 	shutdownHTTPServer(ctx, srv)
 	stopBackgroundRunnerCtx, stopBackgroundRunnerCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	if err := common.StopSystemMonitor(stopBackgroundRunnerCtx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping system monitor: %v", err))
+	}
+	if err := middleware.StopInMemoryRateLimiter(stopBackgroundRunnerCtx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping in-memory rate limiter: %v", err))
+	}
 	if err := model.StopBillingSettlementTaskRunner(stopBackgroundRunnerCtx); err != nil {
 		common.SysError(fmt.Sprintf("timed out stopping billing settlement runner: %v", err))
 	}

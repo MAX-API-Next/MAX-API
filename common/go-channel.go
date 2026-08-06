@@ -34,12 +34,13 @@ func SafeSendString(ch chan string, value string) (closed bool) {
 	return false
 }
 
-// SafeSendStringTimeout send, return true, else return false
-func SafeSendStringTimeout(ch chan string, value string, timeout int) (closed bool) {
+// SafeSendStringTimeout returns true only when the value is sent before the timeout.
+// A timeout or a closed channel returns false.
+func SafeSendStringTimeout(ch chan string, value string, timeout int) (sent bool) {
 	defer func() {
-		// Recover from panic if one occured. A panic would mean the channel was closed.
+		// Recover from panic if the channel was closed between selection and send.
 		if recover() != nil {
-			closed = false
+			sent = false
 		}
 	}()
 

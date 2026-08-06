@@ -37,8 +37,10 @@ var (
 	channelAffinityUsageCacheStatsOnce  sync.Once
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
-	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+	channelAffinityRegexCache = newChannelAffinityRegexCache(channelAffinityRegexCacheCapacity)
 )
+
+const channelAffinityRegexCacheCapacity = 4096
 
 type channelAffinityMeta struct {
 	CacheKey       string
@@ -253,20 +255,38 @@ func matchAnyRegexCached(patterns []string, s string) bool {
 		if pattern == "" {
 			continue
 		}
-		re, ok := channelAffinityRegexCache.Load(pattern)
-		if !ok {
-			compiled, err := regexp.Compile(pattern)
-			if err != nil {
-				continue
-			}
-			re = compiled
-			channelAffinityRegexCache.Store(pattern, re)
+		re, err := loadChannelAffinityRegex(channelAffinityRegexCache, pattern)
+		if err != nil {
+			continue
 		}
-		if re.(*regexp.Regexp).MatchString(s) {
+		if re.MatchString(s) {
 			return true
 		}
 	}
 	return false
+}
+
+func newChannelAffinityRegexCache(capacity int) *hot.HotCache[string, *regexp.Regexp] {
+	if capacity <= 0 {
+		capacity = 1
+	}
+	return hot.NewHotCache[string, *regexp.Regexp](hot.LRU, capacity).Build()
+}
+
+func loadChannelAffinityRegex(cache *hot.HotCache[string, *regexp.Regexp], pattern string) (*regexp.Regexp, error) {
+	compiled, ok, err := cache.Get(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return compiled, nil
+	}
+	compiled, err = regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	cache.Set(pattern, compiled)
+	return compiled, nil
 }
 
 func matchAnyIncludeFold(patterns []string, s string) bool {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -188,9 +189,11 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
 		quota = relayInfo.FinalPreConsumedQuota
-		if quota <= 0 {
+		if snap.EstimatedQuotaAfterGroup > quota {
 			quota = snap.EstimatedQuotaAfterGroup
 		}
+		common.SysError(fmt.Sprintf("tiered billing settlement expression failed; using frozen fallback quota (requestId=%s, model=%s, preConsumed=%d, estimated=%d, fallback=%d): %v",
+			relayInfo.RequestId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota, snap.EstimatedQuotaAfterGroup, quota, err))
 		return true, quota, nil
 	}
 

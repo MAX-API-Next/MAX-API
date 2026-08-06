@@ -1,6 +1,8 @@
 package common
 
 import (
+	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +30,11 @@ type SystemStatus struct {
 }
 
 var latestSystemStatus atomic.Value
+var systemMonitorState struct {
+	sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+}
 
 func init() {
 	latestSystemStatus.Store(SystemStatus{})
@@ -35,18 +42,67 @@ func init() {
 
 // StartSystemMonitor 启动系统监控
 func StartSystemMonitor() {
+	systemMonitorState.Lock()
+	defer systemMonitorState.Unlock()
+	if systemMonitorState.cancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	systemMonitorState.cancel = cancel
+	systemMonitorState.done = done
 	go func() {
-		for {
-			config := GetPerformanceMonitorConfig()
-			if !config.Enabled {
-				time.Sleep(30 * time.Second)
-				continue
-			}
-
-			updateSystemStatus()
-			time.Sleep(5 * time.Second)
-		}
+		defer close(done)
+		runSystemMonitor(ctx)
 	}()
+}
+
+func runSystemMonitor(ctx context.Context) {
+	for {
+		interval := 30 * time.Second
+		config := GetPerformanceMonitorConfig()
+		if config.Enabled {
+			updateSystemStatus()
+			interval = 5 * time.Second
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func StopSystemMonitor(ctx context.Context) error {
+	systemMonitorState.Lock()
+	cancel := systemMonitorState.cancel
+	done := systemMonitorState.done
+	systemMonitorState.Unlock()
+	if cancel == nil || done == nil {
+		return nil
+	}
+
+	cancel()
+	select {
+	case <-done:
+		systemMonitorState.Lock()
+		if systemMonitorState.done == done {
+			systemMonitorState.cancel = nil
+			systemMonitorState.done = nil
+		}
+		systemMonitorState.Unlock()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func updateSystemStatus() {

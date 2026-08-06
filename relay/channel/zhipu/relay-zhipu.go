@@ -3,6 +3,7 @@ package zhipu
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -164,6 +165,11 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	producerDone := make(chan struct{})
 	go func() {
 		defer close(producerDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				common.SysError(fmt.Sprintf("panic while reading Zhipu stream: %v", recovered))
+			}
+		}()
 		defer func() {
 			select {
 			case stopChan <- struct{}{}:

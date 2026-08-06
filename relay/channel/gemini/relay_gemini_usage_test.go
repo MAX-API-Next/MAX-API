@@ -67,6 +67,28 @@ func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
+func TestGeminiImageHandlerRejectsTooManyPredictions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	payload := dto.GeminiImageResponse{
+		Predictions: make([]dto.GeminiImagePrediction, dto.MaxImageN+1),
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
+
+	usage, maxAPIError := GeminiImageHandler(c, &relaycommon.RelayInfo{}, resp)
+	require.Nil(t, usage)
+	require.NotNil(t, maxAPIError)
+	require.Contains(t, maxAPIError.Error(), "too many image predictions")
+}
+
 func TestGeminiStreamHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
