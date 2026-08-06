@@ -398,10 +398,13 @@ func TestRechargeEpayRejectsPaidAmountMismatchBeforeCompletingOrder(t *testing.T
 	}
 	require.NoError(t, topUp.Insert())
 
-	err := RechargeEpay("epay-amount-mismatch", "alipay", "127.0.0.1",
+	err := RechargeEpay("epay-amount-mismatch", "wxpay", "127.0.0.1",
 		PaymentValidationFromMajorString("6.65", "", "", false))
 	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
 	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "epay-amount-mismatch"))
+	reloaded := GetTopUpByTradeNo("epay-amount-mismatch")
+	require.NotNil(t, reloaded)
+	assert.Equal(t, "alipay", reloaded.PaymentMethod)
 	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 615))
 }
 
@@ -415,10 +418,17 @@ func TestCompleteSubscriptionOrderRejectsPaidCurrencyMismatch(t *testing.T) {
 	err := CompleteSubscriptionOrder("sub-currency-mismatch", `{"provider":"stripe"}`, PaymentProviderStripe, "card",
 		PaymentValidationFromMinorUnits(999, "EUR", "USD", false))
 	require.ErrorIs(t, err, ErrPaymentCurrencyMismatch)
+	insertSubscriptionOrderForPaymentGuardTest(t, "sub-plan-currency-mismatch", 616, plan.Id, PaymentProviderStripe)
+	err = CompleteSubscriptionOrder("sub-plan-currency-mismatch", `{"provider":"stripe"}`, PaymentProviderStripe, "card",
+		PaymentValidationFromMinorUnits(999, "EUR", "", false))
+	require.ErrorIs(t, err, ErrPaymentCurrencyMismatch)
 
 	order := GetSubscriptionOrderByTradeNo("sub-currency-mismatch")
 	require.NotNil(t, order)
 	assert.Equal(t, common.TopUpStatusPending, order.Status)
+	planCurrencyOrder := GetSubscriptionOrderByTradeNo("sub-plan-currency-mismatch")
+	require.NotNil(t, planCurrencyOrder)
+	assert.Equal(t, common.TopUpStatusPending, planCurrencyOrder.Status)
 	assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, 616))
 }
 

@@ -1020,10 +1020,14 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ? AND type <> ?", targetTimestamp, LogTypeManage).Count(&total).Error; err != nil {
+	if err := oldLogCleanupScope(LOG_DB.WithContext(ctx).Model(&Log{}), targetTimestamp).Count(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
+}
+
+func oldLogCleanupScope(tx *gorm.DB, targetTimestamp int64) *gorm.DB {
+	return tx.Where("created_at < ? AND (type <> ? OR type IS NULL)", targetTimestamp, LogTypeManage)
 }
 
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
@@ -1035,9 +1039,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 	}
 
 	ids := make([]int, 0, limit)
-	err := LOG_DB.WithContext(ctx).
-		Model(&Log{}).
-		Where("created_at < ? AND type <> ?", targetTimestamp, LogTypeManage).
+	err := oldLogCleanupScope(LOG_DB.WithContext(ctx).Model(&Log{}), targetTimestamp).
 		Order("created_at ASC, id ASC").
 		Limit(limit).
 		Pluck("id", &ids).Error
@@ -1057,7 +1059,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 
 	var rowsAffected int64
 	err = LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id IN ?", ids).Delete(&Log{})
+		result := oldLogCleanupScope(tx.Where("id IN ?", ids), targetTimestamp).Delete(&Log{})
 		if nil != result.Error {
 			return result.Error
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -33,7 +34,9 @@ func TestFetchCustomOAuthDiscoveryRejectsPrivateURLWhenSSRFProtectionEnabled(t *
 	fetchSetting.IpFilterMode = false
 	fetchSetting.DomainList = nil
 	fetchSetting.IpList = nil
-	fetchSetting.AllowedPorts = []string{"80", "443", "8080", "8443"}
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	fetchSetting.AllowedPorts = []string{"80", "443", "8080", "8443", serverURL.Port()}
 	fetchSetting.ApplyIPFilterForDomain = true
 
 	payload, err := common.Marshal(FetchCustomOAuthDiscoveryRequest{WellKnownURL: server.URL})
@@ -47,5 +50,6 @@ func TestFetchCustomOAuthDiscoveryRejectsPrivateURLWhenSSRFProtectionEnabled(t *
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"success":false`)
+	require.Contains(t, recorder.Body.String(), "private IP address not allowed")
 	require.False(t, serverHit)
 }

@@ -3,13 +3,15 @@ package controller
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
-func setupChannelUpdateControllerTestDB(t *testing.T) *model.Channel {
+func setupChannelUpdateControllerTestDB(t *testing.T) (*gorm.DB, *model.Channel) {
 	t.Helper()
 
 	db := openTokenControllerTestDB(t)
@@ -43,11 +45,11 @@ func setupChannelUpdateControllerTestDB(t *testing.T) *model.Channel {
 	}
 	require.NoError(t, db.Create(channel).Error)
 	require.NoError(t, channel.AddAbilities(nil))
-	return channel
+	return db, channel
 }
 
 func TestUpdateChannelIgnoresMassAssignedRuntimeFields(t *testing.T) {
-	channel := setupChannelUpdateControllerTestDB(t)
+	db, channel := setupChannelUpdateControllerTestDB(t)
 
 	priority := int64(30)
 	weight := uint(40)
@@ -76,7 +78,7 @@ func TestUpdateChannelIgnoresMassAssignedRuntimeFields(t *testing.T) {
 	require.True(t, response.Success, response.Message)
 
 	var stored model.Channel
-	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, "updated-channel", stored.Name)
 	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
 	require.EqualValues(t, priority, *stored.Priority)
@@ -93,7 +95,7 @@ func TestUpdateChannelIgnoresMassAssignedRuntimeFields(t *testing.T) {
 }
 
 func TestUpdateChannelPartialStatusDoesNotClearConfiguration(t *testing.T) {
-	channel := setupChannelUpdateControllerTestDB(t)
+	db, channel := setupChannelUpdateControllerTestDB(t)
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
 		"id":     channel.Id,
@@ -104,7 +106,7 @@ func TestUpdateChannelPartialStatusDoesNotClearConfiguration(t *testing.T) {
 	require.True(t, response.Success, response.Message)
 
 	var stored model.Channel
-	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
 	require.Equal(t, "origin-channel", stored.Name)
 	require.Equal(t, "origin-key", stored.Key)
@@ -115,7 +117,7 @@ func TestUpdateChannelPartialStatusDoesNotClearConfiguration(t *testing.T) {
 }
 
 func TestUpdateChannelRejectsUnknownStatus(t *testing.T) {
-	channel := setupChannelUpdateControllerTestDB(t)
+	db, channel := setupChannelUpdateControllerTestDB(t)
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
 		"id":     channel.Id,
@@ -124,8 +126,86 @@ func TestUpdateChannelRejectsUnknownStatus(t *testing.T) {
 	UpdateChannel(ctx)
 	response := decodeAPIResponse(t, recorder)
 	require.False(t, response.Success)
+	require.Contains(t, response.Message, "invalid channel status")
 
 	var stored model.Channel
-	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
+}
+
+func TestUpdateChannelAppendsMultiKeysAndUpdatesSize(t *testing.T) {
+	db, channel := setupChannelUpdateControllerTestDB(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
+		"id":       channel.Id,
+		"key":      "second-key\norigin-key",
+		"key_mode": "append",
+	}, 1)
+	UpdateChannel(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var stored model.Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, "origin-key\nsecond-key", stored.Key)
+	require.Equal(t, 2, stored.ChannelInfo.MultiKeySize)
+}
+
+func TestUpdateChannelReplacesMultiKeysAndUpdatesSize(t *testing.T) {
+	db, channel := setupChannelUpdateControllerTestDB(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
+		"id":       channel.Id,
+		"key":      "replacement-a\nreplacement-b",
+		"key_mode": "replace",
+	}, 1)
+	UpdateChannel(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var stored model.Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, "replacement-a\nreplacement-b", stored.Key)
+	require.Equal(t, 2, stored.ChannelInfo.MultiKeySize)
+}
+
+func TestUpdateChannelWaitsForChannelPollingLock(t *testing.T) {
+	_, channel := setupChannelUpdateControllerTestDB(t)
+
+	lock := model.GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			lock.Unlock()
+		}
+	})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
+		"id":     channel.Id,
+		"status": common.ChannelStatusEnabled,
+	}, 1)
+	done := make(chan struct{})
+	go func() {
+		UpdateChannel(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		lock.Unlock()
+		locked = false
+		t.Fatal("channel update completed while polling lock was held")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	lock.Unlock()
+	locked = false
+	select {
+	case <-done:
+		response := decodeAPIResponse(t, recorder)
+		require.True(t, response.Success, response.Message)
+	case <-time.After(2 * time.Second):
+		t.Fatal("channel update did not finish after polling lock was released")
+	}
 }

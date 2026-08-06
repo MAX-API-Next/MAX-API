@@ -300,7 +300,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string, v
 	}
 
 	if quotaToAdd > 0 {
-		RecordTopupLog(topUp.UserId, fmt.Sprintf("浣跨敤鍦ㄧ嚎鍏呭€兼垚鍔燂紝鍏呭€奸噾棰? %v锛屾敮浠橀噾棰濓細%f", logger.FormatQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderEpay)
+		RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值额度: %v，支付金额：%.2f", logger.FormatQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderEpay)
 	}
 
 	return nil

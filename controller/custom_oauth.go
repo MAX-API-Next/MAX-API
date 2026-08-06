@@ -12,7 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/oauth"
-	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -167,18 +167,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 		return
 	}
 
-	fetchSetting := system_setting.GetFetchSetting()
-	if err := common.ValidateURLWithFetchSetting(
-		targetURL,
-		fetchSetting.EnableSSRFProtection,
-		fetchSetting.AllowPrivateIp,
-		fetchSetting.DomainFilterMode,
-		fetchSetting.IpFilterMode,
-		fetchSetting.DomainList,
-		fetchSetting.IpList,
-		fetchSetting.AllowedPorts,
-		fetchSetting.ApplyIPFilterForDomain,
-	); err != nil {
+	if err := service.ValidateSSRFProtectedFetchURL(targetURL); err != nil {
 		common.ApiErrorMsg(c, "Discovery URL invalid: "+err.Error())
 		return
 	}
@@ -193,8 +182,7 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	httpReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Do(httpReq)
+	resp, err := service.GetSSRFProtectedHttpClient().Do(httpReq)
 	if err != nil {
 		common.ApiErrorMsg(c, "获取 Discovery 配置失败: "+err.Error())
 		return

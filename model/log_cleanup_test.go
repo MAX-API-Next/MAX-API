@@ -51,13 +51,60 @@ func TestDeleteOldLogBatchPreservesManagementAuditLogs(t *testing.T) {
 	}
 	require.NoError(t, LOG_DB.Create(&logs).Error)
 
-	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	ctx := context.Background()
+	remainingOld, err := CountOldLog(ctx, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, remainingOld)
+
+	rows, err := DeleteOldLogBatch(ctx, 100, 10)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, rows)
+
+	remainingOld, err = CountOldLog(ctx, 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, remainingOld)
 
 	var manageCount int64
 	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeManage).Count(&manageCount).Error)
 	assert.EqualValues(t, 1, manageCount)
+}
+
+func TestDeleteOldLogBatchDeletesLegacyNullTypeLogs(t *testing.T) {
+	truncateTables(t)
+
+	require.NoError(t, LOG_DB.Exec("INSERT INTO logs (user_id, created_at, type) VALUES (?, ?, NULL)", 1, 10).Error)
+	remainingOld, err := CountOldLog(context.Background(), 100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, remainingOld)
+
+	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rows)
+}
+
+func TestDeleteOldLogBatchRechecksManagementTypeBeforeDelete(t *testing.T) {
+	truncateTables(t)
+
+	logEntry := Log{UserId: 1, CreatedAt: 10, Type: LogTypeConsume}
+	require.NoError(t, LOG_DB.Create(&logEntry).Error)
+	callbackName := "test:promote_log_to_manage_before_cleanup_delete"
+	mutated := false
+	require.NoError(t, LOG_DB.Callback().Delete().Before("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		if mutated || tx.Statement == nil || tx.Statement.Table != "logs" {
+			return
+		}
+		mutated = true
+		require.NoError(t, tx.Session(&gorm.Session{NewDB: true}).Model(&Log{}).Where("id = ?", logEntry.Id).Update("type", LogTypeManage).Error)
+	}))
+	t.Cleanup(func() { _ = LOG_DB.Callback().Delete().Remove(callbackName) })
+
+	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	require.NoError(t, err)
+	assert.Zero(t, rows)
+
+	var stored Log
+	require.NoError(t, LOG_DB.First(&stored, logEntry.Id).Error)
+	assert.Equal(t, LogTypeManage, stored.Type)
 }
 
 func TestDeleteOldLogBatchStopsWhenContextCancelledAfterSelect(t *testing.T) {

@@ -76,6 +76,22 @@ func expectedCreemCurrencyForProduct(productId string) string {
 	return ""
 }
 
+func creemTopUpPaymentValidation(event *CreemWebhookEvent) (model.PaymentValidation, error) {
+	if event == nil {
+		return model.PaymentValidation{}, errors.New("Creem webhook event is nil")
+	}
+	expectedCurrency := expectedCreemCurrencyForProduct(event.Object.Product.Id)
+	if expectedCurrency == "" {
+		return model.PaymentValidation{}, fmt.Errorf("Creem product currency is not configured: %s", event.Object.Product.Id)
+	}
+	return model.PaymentValidationFromMinorUnits(
+		int64(event.Object.Order.AmountPaid),
+		event.Object.Order.Currency,
+		expectedCurrency,
+		false,
+	), nil
+}
+
 type CreemAdaptor struct {
 }
 
@@ -364,12 +380,13 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Creem 回调客户姓名为空 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 	}
 
-	topUpValidation := paymentValidation
-	topUpValidation.ExpectedCurrency = expectedCreemCurrencyForProduct(event.Object.Product.Id)
-	if topUpValidation.ExpectedCurrency == "" {
-		topUpValidation.ExpectedCurrency = event.Object.Product.Currency
+	topUpValidation, err := creemTopUpPaymentValidation(event)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值币种校验配置缺失 trade_no=%s creem_order_id=%s product_id=%s error=%q", referenceId, event.Object.Order.Id, event.Object.Product.Id, err.Error()))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
 	}
-	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP(), topUpValidation)
+	err = model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP(), topUpValidation)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值处理失败 trade_no=%s creem_order_id=%s client_ip=%s error=%q", referenceId, event.Object.Order.Id, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusInternalServerError)

@@ -192,7 +192,7 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 	RequestWaffoPancakePay(ctx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Contains(t, recorder.Body.String(), `"message":"error"`)
+	require.Contains(t, recorder.Body.String(), `"data":"拉起支付失败"`)
 
 	var topUps []model.TopUp
 	require.NoError(t, db.Find(&topUps).Error)

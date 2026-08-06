@@ -1056,6 +1056,15 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
+	pollingLock := model.GetChannelPollingLock(patch.Id)
+	pollingLock.Lock()
+	pollingLocked := true
+	defer func() {
+		if pollingLocked {
+			pollingLock.Unlock()
+		}
+	}()
+
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(patch.Id, true)
 	if err != nil {
@@ -1176,6 +1185,8 @@ func UpdateChannel(c *gin.Context) {
 		}
 	}
 	err = channel.UpdateFields(updateFields...)
+	pollingLock.Unlock()
+	pollingLocked = false
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -578,10 +578,20 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if channel.ChannelInfo.IsMultiKey {
+	fieldSet := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		fieldSet[field] = struct{}{}
+	}
+	_, keySelected := fieldSet["key"]
+	keySelected = keySelected && channel.Key != ""
+	_, channelInfoSelected := fieldSet["channel_info"]
+	multiKeyMetadataUpdated := false
+
+	// Keep multi-key metadata consistent when either the key list or its metadata is persisted.
+	if channel.ChannelInfo.IsMultiKey && (keySelected || channelInfoSelected) {
+		multiKeyMetadataUpdated = true
 		var keyStr string
-		if channel.Key != "" {
+		if keySelected || channel.Key != "" {
 			keyStr = channel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
@@ -617,16 +627,33 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 		}
 	}
 	updates := channel.editableUpdateMap(fields)
+	if multiKeyMetadataUpdated && keySelected {
+		updates["channel_info"] = channel.ChannelInfo
+	}
 	if len(updates) == 0 {
 		return nil
 	}
-	if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
-		return err
+	abilityFields := []string{"models", "group", "status", "priority", "weight", "tag"}
+	updateAbilities := false
+	for _, field := range abilityFields {
+		if _, ok := updates[field]; ok {
+			updateAbilities = true
+			break
+		}
 	}
-	if err := DB.Model(&Channel{}).First(channel, "id = ?", channel.Id).Error; err != nil {
-		return err
-	}
-	return channel.UpdateAbilities(nil)
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Channel{}).First(channel, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		if !updateAbilities {
+			return nil
+		}
+		return channel.UpdateAbilities(tx)
+	})
 }
 
 func (channel *Channel) editableUpdateMap(fields []string) map[string]any {
