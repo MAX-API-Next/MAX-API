@@ -38,13 +38,15 @@ func GetUserGroups(c *gin.Context) {
 			}
 		}
 	}
-	for _, route := range service.GetUserAutoRoutes(userGroup, true) {
+	autoRoutes := service.GetUserAutoRoutes(userGroup, true)
+	for _, route := range autoRoutes {
 		addAutoRouteUsableGroup(usableGroups, route)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    usableGroups,
+		"success":     true,
+		"message":     "",
+		"data":        usableGroups,
+		"auto_routes": autoRoutes,
 	})
 }
 

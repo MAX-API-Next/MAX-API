@@ -200,6 +200,53 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       cell: ({ row }) => {
         const apiKey = row.original
         const group = row.getValue('group') as string
+        const routing = apiKey.routing
+        if (routing?.mode === 'smart') {
+          const route = routing.route || group
+          return (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className='inline-flex items-center gap-1.5 text-xs' />
+                }
+              >
+                <GroupBadge group={route} />
+                {routing.retry_on_failure && (
+                  <StatusBadge
+                    label={t('Cross-group')}
+                    variant='info'
+                    copyable={false}
+                  />
+                )}
+              </TooltipTrigger>
+              <TooltipContent>
+                {t('System route: {{route}}', {
+                  route,
+                })}
+              </TooltipContent>
+            </Tooltip>
+          )
+        }
+        if (routing?.mode === 'manual') {
+          const groups = routing.groups || []
+          const preview = groups.slice(0, 3).join(' -> ')
+          return (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className='inline-block max-w-60 truncate text-xs' />
+                }
+              >
+                {t('Manual {{count}} groups: {{groups}}', {
+                  count: groups.length,
+                  groups: preview,
+                })}
+                {groups.length > 3 ? ' ...' : ''}
+              </TooltipTrigger>
+              <TooltipContent>{groups.join(' -> ')}</TooltipContent>
+            </Tooltip>
+          )
+        }
         const isAutoRoute = isAutoRouteKey(group)
         const ratio = group && !isAutoRoute ? groupRatios[group] : undefined
 

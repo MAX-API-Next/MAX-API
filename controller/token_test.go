@@ -16,6 +16,7 @@ import (
 	appi18n "github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting"
+	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -34,10 +35,14 @@ type tokenPageResponse struct {
 }
 
 type tokenResponseItem struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Key    string `json:"key"`
-	Status int    `json:"status"`
+	ID              int                       `json:"id"`
+	Name            string                    `json:"name"`
+	Key             string                    `json:"key"`
+	Status          int                       `json:"status"`
+	Group           string                    `json:"group"`
+	CrossGroupRetry bool                      `json:"cross_group_retry"`
+	Routing         *model.TokenRoutingPolicy `json:"routing"`
+	RoutingLegacy   bool                      `json:"routing_legacy"`
 }
 
 type tokenKeyResponse struct {
@@ -125,6 +130,7 @@ func setupHiddenAutoRouteForTokenTest(t *testing.T) {
 		t.Fatalf("failed to marshal user group snapshot: %v", err)
 	}
 	autoRoutesSnapshot := setting.AutoGroupRoutes2JsonString()
+	groupRatioSnapshot := ratio_setting.GroupRatio2JSONString()
 	t.Cleanup(func() {
 		if err := setting.UpdateUserUsableGroupsByJSONString(string(userGroupsBytes)); err != nil {
 			t.Fatalf("failed to restore user groups: %v", err)
@@ -132,10 +138,16 @@ func setupHiddenAutoRouteForTokenTest(t *testing.T) {
 		if err := setting.UpdateAutoGroupRoutesByJsonString(autoRoutesSnapshot); err != nil {
 			t.Fatalf("failed to restore auto routes: %v", err)
 		}
+		if err := ratio_setting.UpdateGroupRatioByJSONString(groupRatioSnapshot); err != nil {
+			t.Fatalf("failed to restore group ratios: %v", err)
+		}
 	})
 
 	if err := setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`); err != nil {
 		t.Fatalf("failed to set user usable groups: %v", err)
+	}
+	if err := ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2}`); err != nil {
+		t.Fatalf("failed to set group ratios: %v", err)
 	}
 	if err := setting.UpdateAutoGroupRoutesByJsonString(`{
 		"version": 1,
@@ -522,6 +534,60 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	}
 }
 
+func TestGetTokenSynthesizesLegacyRoutingForEditing(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	setupHiddenAutoRouteForTokenTest(t)
+
+	autoToken := seedToken(t, db, 1, "legacy-auto", "auto1234token5678")
+	if err := db.Model(autoToken).Updates(map[string]any{
+		"group":             "auto",
+		"cross_group_retry": true,
+	}).Error; err != nil {
+		t.Fatalf("failed to prepare legacy auto token: %v", err)
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/"+strconv.Itoa(autoToken.Id), nil, 1)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(autoToken.Id)}}
+	setAuthenticatedUserGroup(ctx, "default")
+	GetToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected legacy auto token response, got %q", response.Message)
+	}
+	var detail tokenResponseItem
+	if err := common.Unmarshal(response.Data, &detail); err != nil {
+		t.Fatalf("failed to decode legacy auto token response: %v", err)
+	}
+	if !detail.RoutingLegacy || detail.Routing == nil || detail.Routing.Mode != model.TokenRoutingModeSmart || detail.Routing.Route != "auto" {
+		t.Fatalf("expected synthesized legacy auto routing, got %#v", detail)
+	}
+
+	emptyToken := seedToken(t, db, 1, "legacy-empty", "empty1234token5678")
+	if err := db.Model(emptyToken).Update("group", "").Error; err != nil {
+		t.Fatalf("failed to prepare empty-group token: %v", err)
+	}
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/token/"+strconv.Itoa(emptyToken.Id), nil, 1)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(emptyToken.Id)}}
+	setAuthenticatedUserGroup(ctx, "vip")
+	GetToken(ctx)
+
+	response = decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected legacy empty-group token response, got %q", response.Message)
+	}
+	detail = tokenResponseItem{}
+	if err := common.Unmarshal(response.Data, &detail); err != nil {
+		t.Fatalf("failed to decode legacy empty-group token response: %v", err)
+	}
+	if !detail.RoutingLegacy || detail.Routing == nil || detail.Routing.Mode != model.TokenRoutingModeManual || len(detail.Routing.Groups) != 1 || detail.Routing.Groups[0] != "vip" {
+		t.Fatalf("expected empty legacy group to resolve to the authenticated user group, got %#v", detail)
+	}
+	if detail.Group != "" {
+		t.Fatalf("expected stored legacy group projection to remain empty, got %q", detail.Group)
+	}
+}
+
 func TestAddTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	setupHiddenAutoRouteForTokenTest(t)
@@ -556,6 +622,249 @@ func TestAddTokenAllowsRuntimeAutoRoute(t *testing.T) {
 	}
 	if stored.Group != "auto:internal" {
 		t.Fatalf("expected token group auto:internal, got %q", stored.Group)
+	}
+}
+
+func TestAddTokenRejectsNonSelectableExplicitSmartRoute(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	setupHiddenAutoRouteForTokenTest(t)
+
+	body := map[string]any{
+		"name":                 "hidden-explicit-route-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"routing": map[string]any{
+			"version":          1,
+			"mode":             "smart",
+			"route":            "auto:internal",
+			"strategy":         "balanced",
+			"retry_on_failure": true,
+		},
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if response.Success {
+		t.Fatal("expected non-selectable explicit smart route to be rejected")
+	}
+	var count int64
+	if err := db.Model(&model.Token{}).Count(&count).Error; err != nil {
+		t.Fatalf("failed to count tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no token to be created, got %d", count)
+	}
+}
+
+func TestAddTokenDefaultsToSmartRouting(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+
+	body := map[string]any{
+		"name":                 "smart-default-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected token creation to succeed, got %q", response.Message)
+	}
+
+	var stored model.Token
+	if err := db.First(&stored).Error; err != nil {
+		t.Fatalf("failed to load created token: %v", err)
+	}
+	policy, err := stored.GetStoredRoutingPolicy()
+	if err != nil {
+		t.Fatalf("failed to decode stored routing policy: %v", err)
+	}
+	if policy == nil || policy.Mode != model.TokenRoutingModeSmart || policy.Route != setting.GetDefaultAutoRouteKey() {
+		t.Fatalf("expected default smart routing policy, got %#v", policy)
+	}
+	if stored.Group != setting.GetDefaultAutoRouteKey() || !stored.CrossGroupRetry {
+		t.Fatalf("expected legacy projection to default auto route with retry, got group=%q retry=%v", stored.Group, stored.CrossGroupRetry)
+	}
+}
+
+func TestAddTokenPersistsManualRoutingOrder(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	setupHiddenAutoRouteForTokenTest(t)
+
+	body := map[string]any{
+		"name":                 "manual-route-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"routing": map[string]any{
+			"version":          1,
+			"mode":             "manual",
+			"groups":           []string{"vip", "default"},
+			"retry_on_failure": true,
+		},
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected manual token creation to succeed, got %q", response.Message)
+	}
+	var stored model.Token
+	if err := db.First(&stored).Error; err != nil {
+		t.Fatalf("failed to load created token: %v", err)
+	}
+	policy, err := stored.GetStoredRoutingPolicy()
+	if err != nil {
+		t.Fatalf("failed to decode stored routing policy: %v", err)
+	}
+	if policy == nil || len(policy.Groups) != 2 || policy.Groups[0] != "vip" || policy.Groups[1] != "default" {
+		t.Fatalf("expected ordered manual groups, got %#v", policy)
+	}
+	if stored.Group != "vip" || !stored.CrossGroupRetry {
+		t.Fatalf("expected legacy projection to first manual group, got group=%q retry=%v", stored.Group, stored.CrossGroupRetry)
+	}
+}
+
+func TestResolveTokenMutationRoutingPreservesStoredPolicyWhenRoutingIsOmitted(t *testing.T) {
+	current := &model.Token{}
+	storedPolicy := model.TokenRoutingPolicy{
+		Version:        model.TokenRoutingPolicyVersion,
+		Mode:           model.TokenRoutingModeManual,
+		Groups:         []string{"removed", "default"},
+		RetryOnFailure: true,
+	}
+	if err := current.SetRoutingPolicy(&storedPolicy); err != nil {
+		t.Fatalf("failed to store routing policy: %v", err)
+	}
+
+	resolved, err := resolveTokenMutationRouting(tokenMutationRequest{}, current, "default", false)
+	if err != nil {
+		t.Fatalf("expected omitted routing to preserve the stored policy: %v", err)
+	}
+	if len(resolved.Groups) != 2 || resolved.Groups[0] != "removed" || resolved.Groups[1] != "default" {
+		t.Fatalf("expected stored routing order to remain unchanged, got %#v", resolved.Groups)
+	}
+}
+
+func TestUpdateTokenChangesCrossGroupRetryWhenSubmittedWithoutGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "retry-only-token", "retryonly1234token5678")
+	if err := db.Model(token).Updates(map[string]any{
+		"group":             "default",
+		"cross_group_retry": true,
+	}).Error; err != nil {
+		t.Fatalf("failed to prepare token: %v", err)
+	}
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "retry-only-token-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"cross_group_retry":    false,
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected retry-only update to succeed, got %q", response.Message)
+	}
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if stored.CrossGroupRetry {
+		t.Fatal("expected explicit false cross-group retry to be persisted")
+	}
+}
+
+func TestUpdateTokenPreservesLegacyRoutingWhenRoutingFieldsAreOmitted(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "legacy-empty", "legacy1234empty5678")
+	if err := db.Model(token).Updates(map[string]any{
+		"group":             "",
+		"cross_group_retry": true,
+	}).Error; err != nil {
+		t.Fatalf("failed to prepare legacy token: %v", err)
+	}
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "legacy-empty-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"allow_ips":            "",
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "vip")
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected legacy token update to succeed, got %q", response.Message)
+	}
+	var stored model.Token
+	if err := db.First(&stored, token.Id).Error; err != nil {
+		t.Fatalf("failed to reload legacy token: %v", err)
+	}
+	if stored.Group != "" || !stored.CrossGroupRetry || stored.RoutingPolicyJSON != nil {
+		t.Fatalf("expected exact legacy routing storage to be preserved, got group=%q retry=%v policy=%v", stored.Group, stored.CrossGroupRetry, stored.RoutingPolicyJSON)
+	}
+}
+
+func TestAddTokenRejectsEmptyManualRouting(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	body := map[string]any{
+		"name":                 "empty-manual-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"routing": map[string]any{
+			"version":          1,
+			"mode":             "manual",
+			"groups":           []string{},
+			"retry_on_failure": true,
+		},
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	setAuthenticatedUserGroup(ctx, "default")
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if response.Success {
+		t.Fatal("expected empty manual routing to fail")
+	}
+	var count int64
+	if err := db.Model(&model.Token{}).Count(&count).Error; err != nil {
+		t.Fatalf("failed to count tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no token to be created, got %d", count)
 	}
 }
 

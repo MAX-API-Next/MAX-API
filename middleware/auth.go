@@ -14,7 +14,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
-	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-contrib/sessions"
@@ -466,18 +465,13 @@ func TokenAuth() func(c *gin.Context) {
 		userCache.WriteContext(c)
 
 		userGroup := userCache.Group
-		tokenGroup := token.Group
+		routingPolicy, legacyRouting, routingErr := service.ResolveTokenRoutingPolicy(token, userGroup)
+		if routingErr != nil {
+			abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, routingErr.Error()))
+			return
+		}
+		tokenGroup, crossGroupRetry := service.ProjectTokenRoutingPolicy(routingPolicy)
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if !service.CanUseTokenGroupRuntime(userGroup, tokenGroup) {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
-			}
-			// check group in common.GroupRatio
-			if !service.IsAutoRouteKey(tokenGroup) && !ratio_setting.ContainsGroupRatio(tokenGroup) {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
-				return
-			}
 			userGroup = tokenGroup
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
@@ -485,6 +479,11 @@ func TokenAuth() func(c *gin.Context) {
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {
 			return
+		}
+		common.SetContextKey(c, constant.ContextKeyTokenGroup, tokenGroup)
+		common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, crossGroupRetry)
+		if !legacyRouting {
+			common.SetContextKey(c, constant.ContextKeyTokenRoutingPolicy, routingPolicy)
 		}
 		c.Next()
 	}

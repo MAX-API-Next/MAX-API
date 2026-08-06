@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
@@ -24,8 +24,9 @@ import { ChevronDown, KeyRound, Settings2, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels, getUserGroups } from '@/lib/api'
-import { DEFAULT_AUTO_ROUTE_KEY, isAutoRouteKey } from '@/lib/auto-routes'
+import { DEFAULT_AUTO_ROUTE_KEY } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
@@ -70,16 +71,19 @@ import { createApiKey, updateApiKey, getApiKey } from '../api'
 import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
   getApiKeyFormSchema,
+  MAX_MANUAL_ROUTING_GROUPS,
+  shouldIncludeRoutingProjection,
   type ApiKeyFormValues,
   getApiKeyFormDefaultValues,
   transformFormDataToPayload,
   transformApiKeyToFormDefaults,
 } from '../lib'
 import { type ApiKey } from '../types'
+import { type ApiKeyGroupOption } from './api-key-group-combobox'
 import {
-  ApiKeyGroupCombobox,
-  type ApiKeyGroupOption,
-} from './api-key-group-combobox'
+  ApiKeyRoutingEditor,
+  type ApiKeyAutoRouteOption,
+} from './api-key-routing-editor'
 import { useApiKeys } from './api-keys-provider'
 
 type ApiKeyMutateDrawerProps = {
@@ -99,7 +103,12 @@ export function ApiKeysMutateDrawer({
   const { status } = useStatus()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const defaultUseAutoGroup = status?.default_use_auto_group === true
+  const [editingLegacyRouting, setEditingLegacyRouting] = useState(false)
+  const [preservedSmartRoute, setPreservedSmartRoute] = useState<string>()
+  const [preservedManualGroups, setPreservedManualGroups] = useState<string[]>(
+    []
+  )
+  const currentRowId = currentRow?.id
   const defaultAutoRoute =
     typeof status?.default_auto_route === 'string'
       ? status.default_auto_route
@@ -113,81 +122,198 @@ export function ApiKeysMutateDrawer({
   })
 
   // Fetch groups
-  const { data: groupsData } = useQuery({
+  const { data: groupsData, isLoading: groupsLoading } = useQuery({
     queryKey: ['user-groups'],
     queryFn: getUserGroups,
     staleTime: 5 * 60 * 1000,
   })
 
   const models = modelsData?.data || []
-  const groupsRaw = groupsData?.data || {}
-  const groups: ApiKeyGroupOption[] = Object.entries(groupsRaw).map(
-    ([key, info]) => ({
-      value: key,
-      label: key,
-      desc: info.desc || key,
-      ratio: info.ratio,
-    })
+  const groupsRaw = useMemo(() => groupsData?.data || {}, [groupsData?.data])
+  const {
+    realGroups,
+    autoRouteOptions,
+    effectiveAutoRoute,
+    defaultManualGroups,
+  } = useMemo(() => {
+    const entries = Object.entries(groupsRaw)
+    const real: ApiKeyGroupOption[] = entries
+      .filter(([, info]) => info.auto !== true)
+      .map(([key, info]) => ({
+        value: key,
+        label: key,
+        desc: info.desc || key,
+        ratio: info.ratio,
+      }))
+    const realGroupNames = new Set(real.map((option) => option.value))
+    const serverRoutes = groupsData?.auto_routes || []
+    const routes: ApiKeyAutoRouteOption[] = (
+      serverRoutes.length > 0
+        ? serverRoutes.map((route) => ({
+            value: route.key,
+            label: route.name || route.key,
+            groups: route.groups,
+          }))
+        : entries
+            .filter(([, info]) => info.auto === true)
+            .map(([key, info]) => ({
+              value: key,
+              label: info.desc || key,
+              groups: info.groups || [],
+            }))
+    )
+      .map((route) => ({
+        ...route,
+        groups: route.groups.filter((group) => realGroupNames.has(group)),
+      }))
+      .filter((route) => route.groups.length > 0)
+    const route = routes.some((option) => option.value === defaultAutoRoute)
+      ? defaultAutoRoute
+      : routes[0]?.value || ''
+    const routeGroups =
+      routes
+        .find((option) => option.value === route)
+        ?.groups.slice(0, MAX_MANUAL_ROUTING_GROUPS) || []
+    return {
+      realGroups: real,
+      autoRouteOptions: routes,
+      effectiveAutoRoute: route,
+      defaultManualGroups:
+        routeGroups.length > 0
+          ? routeGroups
+          : real.slice(0, 1).map((option) => option.value),
+    }
+  }, [defaultAutoRoute, groupsData?.auto_routes, groupsRaw])
+
+  const routingContextRef = useRef({
+    autoRouteOptions,
+    realGroups,
+    defaultManualGroups,
+    effectiveAutoRoute,
+  })
+  routingContextRef.current = {
+    autoRouteOptions,
+    realGroups,
+    defaultManualGroups,
+    effectiveAutoRoute,
+  }
+  const schema = useMemo(
+    () =>
+      getApiKeyFormSchema(t, {
+        smartRoutes: autoRouteOptions.map((route) => route.value),
+        manualGroups: realGroups.map((group) => group.value),
+        preservedSmartRoute,
+        preservedManualGroups,
+      }),
+    [
+      autoRouteOptions,
+      preservedManualGroups,
+      preservedSmartRoute,
+      realGroups,
+      t,
+    ]
   )
-  const backendHasDefaultAutoRoute = groups.some(
-    (g) => g.value === defaultAutoRoute
-  )
-  const schema = getApiKeyFormSchema(t)
 
   const form = useForm<ApiKeyFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: getApiKeyFormDefaultValues(
-      defaultUseAutoGroup,
-      defaultAutoRoute
-    ),
+    defaultValues: getApiKeyFormDefaultValues(defaultAutoRoute),
   })
 
   // Load existing data when updating
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
-      getApiKey(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformApiKeyToFormDefaults(result.data))
-        }
-      })
-    } else if (open && !isUpdate) {
+    if (!open || groupsLoading) return
+
+    let cancelled = false
+    const {
+      autoRouteOptions: availableAutoRoutes,
+      realGroups: availableRealGroups,
+      defaultManualGroups: availableDefaultManualGroups,
+      effectiveAutoRoute: availableAutoRoute,
+    } = routingContextRef.current
+
+    if (isUpdate && currentRowId != null) {
+      setEditingLegacyRouting(false)
+      setPreservedSmartRoute(undefined)
+      setPreservedManualGroups([])
+      getApiKey(currentRowId)
+        .then((result) => {
+          if (cancelled) return
+          if (!result.success || !result.data) {
+            toast.error(result.message || t(ERROR_MESSAGES.UNEXPECTED))
+            return
+          }
+
+          setEditingLegacyRouting(Boolean(result.data.routing_legacy))
+          const routing = result.data.routing
+          const routeKey = routing?.route || result.data.group
+          const selectableAutoRoutes = new Set(
+            availableAutoRoutes.map((route) => route.value)
+          )
+          const selectableManualGroups = new Set(
+            availableRealGroups.map((group) => group.value)
+          )
+          const unavailableSmartRoute =
+            routing?.mode === 'smart' &&
+            routeKey &&
+            !selectableAutoRoutes.has(routeKey)
+          const unavailableManualGroups =
+            routing?.mode === 'manual'
+              ? (routing.groups || []).filter(
+                  (group) => !selectableManualGroups.has(group)
+                )
+              : []
+          setPreservedSmartRoute(unavailableSmartRoute ? routeKey : undefined)
+          setPreservedManualGroups(unavailableManualGroups)
+          const routeManualGroups =
+            availableAutoRoutes.find((route) => route.value === routeKey)
+              ?.groups || availableDefaultManualGroups
+          form.reset(
+            transformApiKeyToFormDefaults(result.data, routeManualGroups)
+          )
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            handleServerError(error, {
+              fallback: t(ERROR_MESSAGES.UNEXPECTED),
+            })
+          }
+        })
+    } else if (!isUpdate) {
+      setEditingLegacyRouting(false)
+      setPreservedSmartRoute(undefined)
+      setPreservedManualGroups([])
       form.reset(
         getApiKeyFormDefaultValues(
-          defaultUseAutoGroup && backendHasDefaultAutoRoute,
-          defaultAutoRoute
+          availableAutoRoute,
+          availableDefaultManualGroups
         )
       )
     }
-  }, [
-    open,
-    isUpdate,
-    currentRow,
-    form,
-    defaultUseAutoGroup,
-    backendHasDefaultAutoRoute,
-    defaultAutoRoute,
-  ])
 
-  // Correct group after groups load: if the form value is not in available groups, fall back
-  useEffect(() => {
-    if (groups.length === 0) return
-    const currentGroup = form.getValues('group')
-    if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
-      const fallback =
-        groups.find((g) => g.value === 'default')?.value ??
-        groups[0]?.value ??
-        ''
-      form.setValue('group', fallback)
-      if (isAutoRouteKey(currentGroup)) {
-        form.setValue('cross_group_retry', false)
-      }
+    return () => {
+      cancelled = true
     }
-  }, [groups, form])
+  }, [open, isUpdate, currentRowId, form, groupsLoading, t])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
     try {
-      const basePayload = transformFormDataToPayload(data)
+      const dirtyFields = form.formState.dirtyFields
+      const routingChanged = Boolean(
+        dirtyFields.routing_mode ||
+        dirtyFields.routing_route ||
+        dirtyFields.manual_groups ||
+        dirtyFields.cross_group_retry
+      )
+      const basePayload = transformFormDataToPayload(data, {
+        includeRouting: shouldIncludeRoutingProjection(
+          isUpdate,
+          editingLegacyRouting ||
+            Boolean(preservedSmartRoute) ||
+            preservedManualGroups.length > 0,
+          routingChanged
+        ),
+      })
 
       if (isUpdate && currentRow) {
         const result = await updateApiKey({
@@ -264,8 +390,12 @@ export function ApiKeysMutateDrawer({
   const quotaPlaceholder = tokensOnly
     ? t('Enter quota in tokens')
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
-  const selectedGroup = form.watch('group')
+  const routingMode = form.watch('routing_mode')
+  const routingRoute = form.watch('routing_route')
+  const manualGroups = form.watch('manual_groups')
+  const crossGroupRetry = form.watch('cross_group_retry')
   const unlimitedQuota = form.watch('unlimited_quota')
+  const routingRouteError = form.formState.errors.routing_route?.message
 
   return (
     <Sheet
@@ -273,6 +403,9 @@ export function ApiKeysMutateDrawer({
       onOpenChange={(v) => {
         onOpenChange(v)
         if (!v) {
+          setEditingLegacyRouting(false)
+          setPreservedSmartRoute(undefined)
+          setPreservedManualGroups([])
           form.reset()
         }
       }}
@@ -318,49 +451,69 @@ export function ApiKeysMutateDrawer({
 
               <FormField
                 control={form.control}
-                name='group'
-                render={({ field }) => (
+                name='manual_groups'
+                render={() => (
                   <FormItem>
-                    <FormLabel>{t('Group')}</FormLabel>
                     <FormControl>
-                      <ApiKeyGroupCombobox
-                        options={groups}
-                        value={field.value}
-                        onValueChange={field.onChange}
-                        placeholder={t('Select a group')}
+                      <ApiKeyRoutingEditor
+                        mode={routingMode}
+                        route={routingRoute}
+                        manualGroups={manualGroups}
+                        retryOnFailure={!!crossGroupRetry}
+                        autoRouteOptions={autoRouteOptions}
+                        realGroupOptions={realGroups}
+                        defaultManualGroups={defaultManualGroups}
+                        preserveUnavailableRouting={
+                          Boolean(preservedSmartRoute) ||
+                          preservedManualGroups.length > 0
+                        }
+                        routesLoading={groupsLoading}
+                        disabled={isSubmitting || groupsLoading}
+                        onModeChange={(mode) =>
+                          form.setValue('routing_mode', mode, {
+                            shouldDirty: true,
+                            shouldValidate: true,
+                          })
+                        }
+                        onRouteChange={(route) => {
+                          form.setValue('routing_route', route, {
+                            shouldDirty: true,
+                            shouldValidate: true,
+                          })
+                          if (!form.getFieldState('manual_groups').isDirty) {
+                            const routeGroups =
+                              autoRouteOptions.find(
+                                (option) => option.value === route
+                              )?.groups || []
+                            form.setValue(
+                              'manual_groups',
+                              routeGroups.slice(0, MAX_MANUAL_ROUTING_GROUPS),
+                              { shouldValidate: true }
+                            )
+                          }
+                        }}
+                        onManualGroupsChange={(groups) =>
+                          form.setValue('manual_groups', groups, {
+                            shouldDirty: true,
+                            shouldValidate: true,
+                          })
+                        }
+                        onRetryOnFailureChange={(enabled) =>
+                          form.setValue('cross_group_retry', enabled, {
+                            shouldDirty: true,
+                          })
+                        }
                       />
                     </FormControl>
                     <FormMessage />
+                    {routingRouteError && (
+                      <p className='text-destructive text-sm' role='alert'>
+                        {String(routingRouteError)}
+                      </p>
+                    )}
                   </FormItem>
                 )}
               />
-
-              {isAutoRouteKey(selectedGroup) && (
-                <FormField
-                  control={form.control}
-                  name='cross_group_retry'
-                  render={({ field }) => (
-                    <FormItem className={sideDrawerSwitchItemClassName()}>
-                      <div className='flex flex-col gap-0.5'>
-                        <FormLabel className='text-sm'>
-                          {t('Cross-group retry')}
-                        </FormLabel>
-                        <FormDescription className='line-clamp-2 text-xs sm:line-clamp-none'>
-                          {t(
-                            'When enabled, if channels in the current group fail, it will try channels in the next group in order.'
-                          )}
-                        </FormDescription>
-                      </div>
-                      <FormControl>
-                        <Switch
-                          checked={!!field.value}
-                          onCheckedChange={field.onChange}
-                        />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-              )}
 
               <FormField
                 control={form.control}
@@ -606,7 +759,7 @@ export function ApiKeysMutateDrawer({
           <Button
             type='button'
             onClick={form.handleSubmit(onSubmit, onInvalid)}
-            disabled={isSubmitting}
+            disabled={isSubmitting || groupsLoading}
             className='w-full sm:w-auto'
           >
             {isSubmitting ? t('Saving...') : t('Save changes')}

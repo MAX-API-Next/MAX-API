@@ -99,6 +99,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	if routePlan, ok := GetTokenRoutePlan(param.Ctx); ok && !routePlan.Legacy {
+		return selectChannelFromTokenRoutePlan(param, routePlan)
+	}
 
 	if setting.IsAutoRouteKey(param.TokenGroup) {
 		autoGroups := GetUserAutoGroupByRoute(userGroup, param.TokenGroup)
@@ -176,4 +179,66 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func selectChannelFromTokenRoutePlan(param *RetryParam, plan *TokenRoutePlan) (*model.Channel, string, error) {
+	if plan == nil || len(plan.OrderedGroups) == 0 {
+		return nil, param.TokenGroup, errors.New("token route plan has no available groups")
+	}
+
+	startGroupIndex := 0
+	if raw, ok := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex); ok {
+		if index, valid := raw.(int); valid && index >= 0 && index < len(plan.OrderedGroups) {
+			startGroupIndex = index
+		}
+	}
+	groupStartRetry := param.GetRetry()
+	if raw, ok := common.GetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex); ok {
+		if retry, valid := raw.(int); valid && retry >= 0 && retry <= param.GetRetry() {
+			groupStartRetry = retry
+		}
+	}
+
+	selectGroup := plan.OrderedGroups[startGroupIndex]
+	for index := startGroupIndex; index < len(plan.OrderedGroups); index++ {
+		group := plan.OrderedGroups[index]
+		selectGroup = group
+		priorityRetry := param.GetRetry() - groupStartRetry
+		if index > startGroupIndex || priorityRetry < 0 {
+			priorityRetry = 0
+			groupStartRetry = param.GetRetry()
+		}
+
+		logger.LogDebug(param.Ctx, "Token route plan selecting group: %s, priorityRetry: %d", group, priorityRetry)
+		channel, err := model.GetRandomSatisfiedChannelExcluding(
+			group,
+			param.ModelName,
+			priorityRetry,
+			param.RequestPath,
+			param.excludedChannelIDs,
+		)
+		if err != nil {
+			return nil, group, err
+		}
+		if channel == nil {
+			if param.GetRetry() > 0 && !plan.RetryOnFailure {
+				return nil, group, nil
+			}
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, param.GetRetry())
+			continue
+		}
+
+		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+		if plan.RetryOnFailure && index < len(plan.OrderedGroups)-1 {
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, param.GetRetry()+1)
+		} else {
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index)
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, groupStartRetry)
+		}
+		return channel, group, nil
+	}
+
+	return nil, selectGroup, nil
 }

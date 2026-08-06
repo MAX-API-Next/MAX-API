@@ -186,14 +186,32 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 			return modelListGroups{}, err
 		}
 	}
-	return buildModelListGroups(userGroup, tokenGroup), nil
+	return buildModelListGroupsWithOwnerGroups(
+		userGroup,
+		tokenGroup,
+		service.GetContextTokenRouteGroups(c, userGroup, tokenGroup),
+	), nil
 }
 
 func getContextModelListGroups(c *gin.Context) modelListGroups {
-	return buildModelListGroups(
-		common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		common.GetContextKeyString(c, constant.ContextKeyTokenGroup),
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+	return buildModelListGroupsWithOwnerGroups(
+		userGroup,
+		tokenGroup,
+		service.GetContextTokenRouteGroups(c, userGroup, tokenGroup),
 	)
+}
+
+func buildModelListGroupsWithOwnerGroups(userGroup string, tokenGroup string, ownerGroups []string) modelListGroups {
+	if len(ownerGroups) > 0 {
+		return modelListGroups{
+			userGroup:   userGroup,
+			tokenGroup:  tokenGroup,
+			ownerGroups: ownerGroups,
+		}
+	}
+	return buildModelListGroups(userGroup, tokenGroup)
 }
 
 func buildModelListGroups(userGroup string, tokenGroup string) modelListGroups {
@@ -220,6 +238,21 @@ func buildModelListGroups(userGroup string, tokenGroup string) modelListGroups {
 		tokenGroup:  tokenGroup,
 		ownerGroups: []string{group},
 	}
+}
+
+func getEnabledModelsForGroups(ownerGroups []string) []string {
+	models := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, ownerGroup := range ownerGroups {
+		for _, groupModel := range model.GetGroupEnabledModels(ownerGroup) {
+			if _, exists := seen[groupModel]; exists {
+				continue
+			}
+			seen[groupModel] = struct{}{}
+			models = append(models, groupModel)
+		}
+	}
+	return models
 }
 
 func ListModels(c *gin.Context, modelType int) {
@@ -269,19 +302,7 @@ func ListModels(c *gin.Context, modelType int) {
 			userModelNames = append(userModelNames, allowModel)
 		}
 	} else {
-		var models []string
-		if setting.IsAutoRouteKey(groups.tokenGroup) {
-			for _, autoGroup := range ownerGroups {
-				groupModels := model.GetGroupEnabledModels(autoGroup)
-				for _, g := range groupModels {
-					if !common.StringsContains(models, g) {
-						models = append(models, g)
-					}
-				}
-			}
-		} else if len(ownerGroups) > 0 {
-			models = model.GetGroupEnabledModels(ownerGroups[0])
-		}
+		models := getEnabledModelsForGroups(ownerGroups)
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
 				if !helper.HasModelBillingConfig(modelName) {

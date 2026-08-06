@@ -83,6 +83,7 @@ func Distribute() func(c *gin.Context) {
 				}
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				playgroundGroupOverride := false
 				// check path is /pg/chat/completions
 				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
 					playgroundRequest := &dto.PlayGroundRequest{}
@@ -99,15 +100,41 @@ func Distribute() func(c *gin.Context) {
 						}
 						usingGroup = playgroundRequest.Group
 						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
+						playgroundGroupOverride = true
+					}
+				}
+				var routePlan *service.TokenRoutePlan
+				if !playgroundGroupOverride {
+					routePlan, err = service.BuildContextTokenRoutePlan(c)
+					if err != nil {
+						abortWithOpenAiMessage(c, http.StatusForbidden, err.Error())
+						return
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				affinityGroup := usingGroup
+				if routePlan != nil && !routePlan.Legacy && len(routePlan.OrderedGroups) > 0 {
+					affinityGroup = routePlan.OrderedGroups[0]
+				}
+				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, affinityGroup); found {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
-						if service.IsAutoRouteKey(usingGroup) {
+						if group, groupIndex, matched := findAffinityRouteGroup(routePlan, modelRequest.Model, preferred.Id, model.IsChannelEnabledForGroupModel); matched {
+							selectGroup = group
+							common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+							channel = preferred
+							affinityUsable = true
+							service.MarkChannelAffinityUsed(c, group, preferred.Id)
+							if routePlan.RetryOnFailure && groupIndex < len(routePlan.OrderedGroups)-1 {
+								common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, groupIndex+1)
+								common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 1)
+							} else {
+								common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, groupIndex)
+								common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 0)
+							}
+						} else if service.IsAutoRouteKey(usingGroup) {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroupByRoute(userGroup, usingGroup)
 							for _, g := range autoGroups {
@@ -174,6 +201,23 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool
 	return model.ChannelSupportsRequestPath(channel, requestPath)
 }
 
+func findAffinityRouteGroup(
+	plan *service.TokenRoutePlan,
+	modelName string,
+	channelID int,
+	isUsable func(group string, modelName string, channelID int) bool,
+) (string, int, bool) {
+	if plan == nil || plan.Legacy || isUsable == nil {
+		return "", 0, false
+	}
+	for index, group := range plan.OrderedGroups {
+		if isUsable(group, modelName, channelID) {
+			return group, index, true
+		}
+	}
+	return "", 0, false
+}
+
 // getModelFromRequest 从请求中读取模型信息
 // 根据 Content-Type 自动处理：
 // - application/json
@@ -218,7 +262,6 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 		return nil, seekErr
 	}
