@@ -468,6 +468,21 @@ func GetAffCode(c *gin.Context) {
 	return
 }
 
+func safeSelfUserSettingString(user *model.User) string {
+	if user == nil {
+		return "{}"
+	}
+	userSetting := user.GetSetting()
+	userSetting.WebhookSecret = ""
+	userSetting.GotifyToken = ""
+	settingBytes, err := common.Marshal(userSetting)
+	if err != nil {
+		common.SysLog("failed to marshal redacted user setting: " + err.Error())
+		return "{}"
+	}
+	return string(settingBytes)
+}
+
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	userRole := c.GetInt("role")
@@ -508,7 +523,7 @@ func GetSelf(c *gin.Context) {
 		"aff_history_quota": user.AffHistoryQuota,
 		"inviter_id":        user.InviterId,
 		"linux_do_id":       user.LinuxDOId,
-		"setting":           user.Setting,
+		"setting":           safeSelfUserSettingString(user),
 		"stripe_customer":   user.StripeCustomer,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,                // 新增权限字段
@@ -1427,8 +1442,17 @@ func UpdateUserSetting(c *gin.Context) {
 			return
 		}
 		if req.GotifyToken == "" {
-			common.ApiErrorI18n(c, i18n.MsgSettingGotifyTokenEmpty)
-			return
+			userId := c.GetInt("id")
+			user, err := model.GetUserById(userId, true)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			existingSettings := user.GetSetting()
+			if existingSettings.NotifyType != dto.NotifyTypeGotify || existingSettings.GotifyToken == "" {
+				common.ApiErrorI18n(c, i18n.MsgSettingGotifyTokenEmpty)
+				return
+			}
 		}
 		// 验证URL格式
 		if _, err := url.ParseRequestURI(req.GotifyUrl); err != nil {
@@ -1474,6 +1498,8 @@ func UpdateUserSetting(c *gin.Context) {
 		settings.WebhookUrl = req.WebhookUrl
 		if req.WebhookSecret != "" {
 			settings.WebhookSecret = req.WebhookSecret
+		} else if existingSettings.NotifyType == dto.NotifyTypeWebhook {
+			settings.WebhookSecret = existingSettings.WebhookSecret
 		}
 	}
 
@@ -1490,7 +1516,11 @@ func UpdateUserSetting(c *gin.Context) {
 	// 如果是Gotify类型，添加Gotify配置到设置中
 	if req.QuotaWarningType == dto.NotifyTypeGotify {
 		settings.GotifyUrl = req.GotifyUrl
-		settings.GotifyToken = req.GotifyToken
+		if req.GotifyToken != "" {
+			settings.GotifyToken = req.GotifyToken
+		} else if existingSettings.NotifyType == dto.NotifyTypeGotify {
+			settings.GotifyToken = existingSettings.GotifyToken
+		}
 		// Gotify优先级范围0-10，超出范围则使用默认值5
 		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
 			settings.GotifyPriority = 5

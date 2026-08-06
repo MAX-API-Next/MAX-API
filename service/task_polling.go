@@ -172,22 +172,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	ch, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("CacheGetChannel: %v", err))
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
-		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
-			}
-		}
-		err = model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if err != nil {
-			common.SysLog(fmt.Sprintf("UpdateSunoTask error: %v", err))
-		}
-		return err
+		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
 	adaptor := GetTaskAdaptorFunc(constant.TaskPlatformSuno)
 	if adaptor == nil {
@@ -330,21 +315,6 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	}
 	cacheGetChannel, err := model.CacheGetChannel(channelId)
 	if err != nil {
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
-		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
-			}
-		}
-		errUpdate := model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if errUpdate != nil {
-			common.SysLog(fmt.Sprintf("UpdateVideoTask error: %v", errUpdate))
-		}
 		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
 	adaptor := GetTaskAdaptorFunc(platform)

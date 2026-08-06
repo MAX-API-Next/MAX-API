@@ -333,6 +333,95 @@ func TestRechargeCreemRejectsZeroQuotaBeforeCompletingOrder(t *testing.T) {
 	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 610))
 }
 
+func TestRechargeRejectsPaidAmountMismatchBeforeCompletingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 613, 0)
+	topUp := &TopUp{
+		UserId:          613,
+		Amount:          10,
+		Money:           9.99,
+		TradeNo:         "stripe-amount-mismatch",
+		PaymentMethod:   PaymentMethodStripe,
+		PaymentProvider: PaymentProviderStripe,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := Recharge("stripe-amount-mismatch", "cus_test", "127.0.0.1",
+		PaymentValidationFromMinorUnits(998, "USD", "USD", false))
+	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "stripe-amount-mismatch"))
+	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 613))
+}
+
+func TestRechargeEpayCompletesOrderAndCreditsQuotaAtomically(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 614, 0)
+	topUp := &TopUp{
+		UserId:          614,
+		Amount:          3,
+		Money:           6.66,
+		TradeNo:         "epay-atomic-success",
+		PaymentMethod:   "alipay",
+		PaymentProvider: PaymentProviderEpay,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	require.NoError(t, RechargeEpay("epay-atomic-success", "wxpay", "127.0.0.1",
+		PaymentValidationFromMajorString("6.66", "", "", false)))
+
+	reloaded := GetTopUpByTradeNo("epay-atomic-success")
+	require.NotNil(t, reloaded)
+	assert.Equal(t, common.TopUpStatusSuccess, reloaded.Status)
+	assert.Equal(t, "wxpay", reloaded.PaymentMethod)
+	assert.EqualValues(t, int64(3*common.QuotaPerUnit), getUserQuotaForPaymentGuardTest(t, 614))
+}
+
+func TestRechargeEpayRejectsPaidAmountMismatchBeforeCompletingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 615, 0)
+	topUp := &TopUp{
+		UserId:          615,
+		Amount:          3,
+		Money:           6.66,
+		TradeNo:         "epay-amount-mismatch",
+		PaymentMethod:   "alipay",
+		PaymentProvider: PaymentProviderEpay,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := RechargeEpay("epay-amount-mismatch", "alipay", "127.0.0.1",
+		PaymentValidationFromMajorString("6.65", "", "", false))
+	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "epay-amount-mismatch"))
+	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 615))
+}
+
+func TestCompleteSubscriptionOrderRejectsPaidCurrencyMismatch(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 616, 0)
+	plan := insertSubscriptionPlanForPaymentGuardTest(t, 616)
+	insertSubscriptionOrderForPaymentGuardTest(t, "sub-currency-mismatch", 616, plan.Id, PaymentProviderStripe)
+
+	err := CompleteSubscriptionOrder("sub-currency-mismatch", `{"provider":"stripe"}`, PaymentProviderStripe, "card",
+		PaymentValidationFromMinorUnits(999, "EUR", "USD", false))
+	require.ErrorIs(t, err, ErrPaymentCurrencyMismatch)
+
+	order := GetSubscriptionOrderByTradeNo("sub-currency-mismatch")
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusPending, order.Status)
+	assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, 616))
+}
+
 func TestRechargeCreemSkipsDuplicateCustomerEmailBinding(t *testing.T) {
 	truncateTables(t)
 

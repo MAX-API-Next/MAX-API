@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -60,6 +59,23 @@ type CreemProduct struct {
 	Quota     int64   `json:"quota"`
 }
 
+func expectedCreemCurrencyForProduct(productId string) string {
+	if productId == "" {
+		return ""
+	}
+	var products []CreemProduct
+	if err := common.UnmarshalJsonStr(setting.CreemProducts, &products); err != nil {
+		common.SysLog("failed to parse Creem products for payment validation: " + err.Error())
+		return ""
+	}
+	for _, product := range products {
+		if product.ProductId == productId {
+			return product.Currency
+		}
+	}
+	return ""
+}
+
 type CreemAdaptor struct {
 }
 
@@ -76,7 +92,7 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 
 	// 解析产品列表
 	var products []CreemProduct
-	err := json.Unmarshal([]byte(setting.CreemProducts), &products)
+	err := common.UnmarshalJsonStr(setting.CreemProducts, &products)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 产品配置解析失败 user_id=%d error=%q", c.GetInt("id"), err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "产品配置错误"})
@@ -302,7 +318,8 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	// Try complete subscription order first
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err == nil {
+	paymentValidation := model.PaymentValidationFromMinorUnits(int64(event.Object.Order.AmountPaid), event.Object.Order.Currency, "", false)
+	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, "", paymentValidation); err == nil {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订阅订单处理成功 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 		c.Status(http.StatusOK)
 		return
@@ -347,7 +364,12 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Creem 回调客户姓名为空 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 	}
 
-	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP())
+	topUpValidation := paymentValidation
+	topUpValidation.ExpectedCurrency = expectedCreemCurrencyForProduct(event.Object.Product.Id)
+	if topUpValidation.ExpectedCurrency == "" {
+		topUpValidation.ExpectedCurrency = event.Object.Product.Currency
+	}
+	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP(), topUpValidation)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值处理失败 trade_no=%s creem_order_id=%s client_ip=%s error=%q", referenceId, event.Object.Order.Id, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -402,7 +424,7 @@ func genCreemLink(ctx context.Context, referenceId string, product *CreemProduct
 	}
 
 	// 序列化请求数据
-	jsonData, err := json.Marshal(requestData)
+	jsonData, err := common.Marshal(requestData)
 	if err != nil {
 		return "", fmt.Errorf("序列化请求数据失败: %v", err)
 	}
@@ -443,7 +465,7 @@ func genCreemLink(ctx context.Context, referenceId string, product *CreemProduct
 	}
 	// 解析响应
 	var checkoutResp CreemCheckoutResponse
-	err = json.Unmarshal(body, &checkoutResp)
+	err = common.Unmarshal(body, &checkoutResp)
 	if err != nil {
 		return "", fmt.Errorf("解析响应失败: %v", err)
 	}

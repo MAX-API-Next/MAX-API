@@ -12,6 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/oauth"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -163,6 +164,22 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 		common.ApiErrorMsg(c, "Discovery URL 无效，仅支持 http/https")
+		return
+	}
+
+	fetchSetting := system_setting.GetFetchSetting()
+	if err := common.ValidateURLWithFetchSetting(
+		targetURL,
+		fetchSetting.EnableSSRFProtection,
+		fetchSetting.AllowPrivateIp,
+		fetchSetting.DomainFilterMode,
+		fetchSetting.IpFilterMode,
+		fetchSetting.DomainList,
+		fetchSetting.IpList,
+		fetchSetting.AllowedPorts,
+		fetchSetting.ApplyIPFilterForDomain,
+	); err != nil {
+		common.ApiErrorMsg(c, "Discovery URL invalid: "+err.Error())
 		return
 	}
 

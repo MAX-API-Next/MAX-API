@@ -1020,7 +1020,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ? AND type <> ?", targetTimestamp, LogTypeManage).Count(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
@@ -1037,7 +1037,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 	ids := make([]int, 0, limit)
 	err := LOG_DB.WithContext(ctx).
 		Model(&Log{}).
-		Where("created_at < ?", targetTimestamp).
+		Where("created_at < ? AND type <> ?", targetTimestamp, LogTypeManage).
 		Order("created_at ASC, id ASC").
 		Limit(limit).
 		Pluck("id", &ids).Error

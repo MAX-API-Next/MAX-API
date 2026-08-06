@@ -109,8 +109,6 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅结账会话创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
-		order.Status = common.TopUpStatusFailed
-		_ = order.Update()
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}

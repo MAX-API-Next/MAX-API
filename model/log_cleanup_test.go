@@ -41,6 +41,25 @@ func TestDeleteOldLogBatchDeletesOnlyLimitedRows(t *testing.T) {
 	assert.EqualValues(t, 0, remainingOld)
 }
 
+func TestDeleteOldLogBatchPreservesManagementAuditLogs(t *testing.T) {
+	truncateTables(t)
+
+	logs := []Log{
+		{UserId: 1, CreatedAt: 10, Type: LogTypeConsume},
+		{UserId: 1, CreatedAt: 20, Type: LogTypeManage},
+		{UserId: 1, CreatedAt: 1000, Type: LogTypeConsume},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+
+	rows, err := DeleteOldLogBatch(context.Background(), 100, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rows)
+
+	var manageCount int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeManage).Count(&manageCount).Error)
+	assert.EqualValues(t, 1, manageCount)
+}
+
 func TestDeleteOldLogBatchStopsWhenContextCancelledAfterSelect(t *testing.T) {
 	truncateTables(t)
 
