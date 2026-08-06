@@ -108,12 +108,14 @@ func TestUpdateFieldsRollsBackChannelWhenAbilityRebuildFails(t *testing.T) {
 	expected.ChannelInfo.MultiKeyDisabledReason = maps.Clone(channel.ChannelInfo.MultiKeyDisabledReason)
 	expected.Keys = append([]string(nil), channel.Keys...)
 
-	require.Error(t, channel.UpdateFields("key", "status"))
+	require.Error(t, channel.UpdateFields("key", "status", "priority"))
 	require.Equal(t, expected, *channel)
 
 	var stored Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
+	require.NotNil(t, stored.Priority)
+	require.EqualValues(t, 10, *stored.Priority)
 	require.Equal(t, "first-key\nsecond-key\nthird-key", stored.Key)
 	require.Equal(t, 3, stored.ChannelInfo.MultiKeySize)
 	require.Equal(t, map[int]int{2: 2}, stored.ChannelInfo.MultiKeyStatusList)
