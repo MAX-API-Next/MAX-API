@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -574,10 +575,41 @@ func (channel *Channel) Update() error {
 	return channel.UpdateFields(channelEditableUpdateFields...)
 }
 
+func cloneChannelValue[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneChannelForUpdate(channel *Channel) *Channel {
+	cloned := *channel
+	cloned.OpenAIOrganization = cloneChannelValue(channel.OpenAIOrganization)
+	cloned.TestModel = cloneChannelValue(channel.TestModel)
+	cloned.Weight = cloneChannelValue(channel.Weight)
+	cloned.BaseURL = cloneChannelValue(channel.BaseURL)
+	cloned.ModelMapping = cloneChannelValue(channel.ModelMapping)
+	cloned.StatusCodeMapping = cloneChannelValue(channel.StatusCodeMapping)
+	cloned.Priority = cloneChannelValue(channel.Priority)
+	cloned.AutoBan = cloneChannelValue(channel.AutoBan)
+	cloned.Tag = cloneChannelValue(channel.Tag)
+	cloned.Setting = cloneChannelValue(channel.Setting)
+	cloned.ParamOverride = cloneChannelValue(channel.ParamOverride)
+	cloned.HeaderOverride = cloneChannelValue(channel.HeaderOverride)
+	cloned.Remark = cloneChannelValue(channel.Remark)
+	cloned.ChannelInfo.MultiKeyStatusList = maps.Clone(channel.ChannelInfo.MultiKeyStatusList)
+	cloned.ChannelInfo.MultiKeyDisabledReason = maps.Clone(channel.ChannelInfo.MultiKeyDisabledReason)
+	cloned.ChannelInfo.MultiKeyDisabledTime = maps.Clone(channel.ChannelInfo.MultiKeyDisabledTime)
+	cloned.Keys = append([]string(nil), channel.Keys...)
+	return &cloned
+}
+
 func (channel *Channel) UpdateFields(fields ...string) error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
+	workingChannel := cloneChannelForUpdate(channel)
 	fieldSet := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		fieldSet[field] = struct{}{}
@@ -587,14 +619,14 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 	multiKeyMetadataUpdated := false
 
 	// Keep multi-key metadata consistent when either the key list or its metadata is persisted.
-	if channel.ChannelInfo.IsMultiKey && (keySelected || channelInfoSelected) {
+	if workingChannel.ChannelInfo.IsMultiKey && (keySelected || channelInfoSelected) {
 		multiKeyMetadataUpdated = true
 		var keyStr string
-		if keySelected || channel.Key != "" {
-			keyStr = channel.Key
+		if keySelected || workingChannel.Key != "" {
+			keyStr = workingChannel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
+			if existing, err := GetChannelById(workingChannel.Id, true); err == nil {
 				keyStr = existing.Key
 			}
 		}
@@ -615,33 +647,33 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
 			}
 		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
+		workingChannel.ChannelInfo.MultiKeySize = len(keys)
 		// Clean up status data that exceeds the new key count to prevent index out of range
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+		if workingChannel.ChannelInfo.MultiKeyStatusList != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyStatusList {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyStatusList, idx)
 				}
 			}
 		}
-		if channel.ChannelInfo.MultiKeyDisabledTime != nil {
-			for idx := range channel.ChannelInfo.MultiKeyDisabledTime {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyDisabledTime, idx)
+		if workingChannel.ChannelInfo.MultiKeyDisabledTime != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyDisabledTime {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyDisabledTime, idx)
 				}
 			}
 		}
-		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
-			for idx := range channel.ChannelInfo.MultiKeyDisabledReason {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyDisabledReason, idx)
+		if workingChannel.ChannelInfo.MultiKeyDisabledReason != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyDisabledReason {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyDisabledReason, idx)
 				}
 			}
 		}
 	}
-	updates := channel.editableUpdateMap(fields)
+	updates := workingChannel.editableUpdateMap(fields)
 	if multiKeyMetadataUpdated && keySelected {
-		updates["channel_info"] = channel.ChannelInfo
+		updates["channel_info"] = workingChannel.ChannelInfo
 	}
 	if len(updates) == 0 {
 		return nil
@@ -655,18 +687,23 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 		}
 	}
 
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Channel{}).Where("id = ?", workingChannel.Id).Updates(updates).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&Channel{}).First(channel, "id = ?", channel.Id).Error; err != nil {
+		if err := tx.Model(&Channel{}).First(workingChannel, "id = ?", workingChannel.Id).Error; err != nil {
 			return err
 		}
 		if !updateAbilities {
 			return nil
 		}
-		return channel.UpdateAbilities(tx)
+		return workingChannel.UpdateAbilities(tx)
 	})
+	if err != nil {
+		return err
+	}
+	*channel = *workingChannel
+	return nil
 }
 
 func (channel *Channel) editableUpdateMap(fields []string) map[string]any {

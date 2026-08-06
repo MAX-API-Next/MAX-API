@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -95,12 +96,29 @@ func TestUpdateFieldsRollsBackChannelWhenAbilityRebuildFails(t *testing.T) {
 	db, channel := setupChannelUpdateFieldsTestDB(t)
 	installFailingAbilityDeleteTrigger(t, db)
 
+	channel.Key = "first-key\nsecond-key"
 	channel.Status = common.ChannelStatusManuallyDisabled
-	require.Error(t, channel.UpdateFields("status"))
+	priority := int64(99)
+	channel.Priority = &priority
+	expected := *channel
+	expectedPriority := *channel.Priority
+	expected.Priority = &expectedPriority
+	expected.ChannelInfo.MultiKeyStatusList = maps.Clone(channel.ChannelInfo.MultiKeyStatusList)
+	expected.ChannelInfo.MultiKeyDisabledTime = maps.Clone(channel.ChannelInfo.MultiKeyDisabledTime)
+	expected.ChannelInfo.MultiKeyDisabledReason = maps.Clone(channel.ChannelInfo.MultiKeyDisabledReason)
+	expected.Keys = append([]string(nil), channel.Keys...)
+
+	require.Error(t, channel.UpdateFields("key", "status"))
+	require.Equal(t, expected, *channel)
 
 	var stored Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
 	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
+	require.Equal(t, "first-key\nsecond-key\nthird-key", stored.Key)
+	require.Equal(t, 3, stored.ChannelInfo.MultiKeySize)
+	require.Equal(t, map[int]int{2: 2}, stored.ChannelInfo.MultiKeyStatusList)
+	require.Equal(t, map[int]int64{2: 123}, stored.ChannelInfo.MultiKeyDisabledTime)
+	require.Equal(t, map[int]string{2: "failed"}, stored.ChannelInfo.MultiKeyDisabledReason)
 }
 
 func TestUpdateFieldsPersistsMultiKeyInfoWhenOnlyKeyChanges(t *testing.T) {
@@ -108,6 +126,10 @@ func TestUpdateFieldsPersistsMultiKeyInfoWhenOnlyKeyChanges(t *testing.T) {
 
 	channel.Key = "first-key\nsecond-key"
 	require.NoError(t, channel.UpdateFields("key"))
+	require.Equal(t, 2, channel.ChannelInfo.MultiKeySize)
+	require.NotContains(t, channel.ChannelInfo.MultiKeyStatusList, 2)
+	require.NotContains(t, channel.ChannelInfo.MultiKeyDisabledTime, 2)
+	require.NotContains(t, channel.ChannelInfo.MultiKeyDisabledReason, 2)
 
 	var stored Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
@@ -126,6 +148,10 @@ func TestUpdateFieldsClearsFinalMultiKeyAndMetadata(t *testing.T) {
 
 	channel.Key = ""
 	require.NoError(t, channel.UpdateFields("key"))
+	require.Zero(t, channel.ChannelInfo.MultiKeySize)
+	require.Empty(t, channel.ChannelInfo.MultiKeyStatusList)
+	require.Empty(t, channel.ChannelInfo.MultiKeyDisabledTime)
+	require.Empty(t, channel.ChannelInfo.MultiKeyDisabledReason)
 
 	var stored Channel
 	require.NoError(t, db.First(&stored, channel.Id).Error)
