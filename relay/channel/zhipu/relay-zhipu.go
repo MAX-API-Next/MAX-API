@@ -161,16 +161,24 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	dataChan := make(chan string)
 	metaChan := make(chan string)
 	stopChan := make(chan struct{}, 1)
+	producerErrChan := make(chan error, 1)
 	done := make(chan struct{})
 	producerDone := make(chan struct{})
 	go func() {
+		var producerErr error
 		defer close(producerDone)
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				common.SysError(fmt.Sprintf("panic while reading Zhipu stream: %v", recovered))
+				producerErr = fmt.Errorf("panic while reading Zhipu stream: %v", recovered)
 			}
-		}()
-		defer func() {
+			if producerErr != nil {
+				common.SysError(producerErr.Error())
+				select {
+				case producerErrChan <- producerErr:
+				case <-done:
+				}
+				return
+			}
 			select {
 			case stopChan <- struct{}{}:
 			case <-done:
@@ -211,10 +219,11 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 				return
 			default:
 			}
-			common.SysLog("error reading stream: " + err.Error())
+			producerErr = fmt.Errorf("error reading Zhipu stream: %w", err)
 		}
 	}()
 	helper.SetEventStreamHeaders(c)
+	var producerErr error
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case data := <-dataChan:
@@ -245,6 +254,8 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		case <-stopChan:
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
 			return false
+		case producerErr = <-producerErrChan:
+			return false
 		case <-c.Request.Context().Done():
 			return false
 		}
@@ -252,6 +263,9 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	close(done)
 	service.CloseResponseBodyGracefully(resp)
 	<-producerDone
+	if producerErr != nil {
+		return nil, types.NewOpenAIError(producerErr, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+	}
 	return usage, nil
 }
 

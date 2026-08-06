@@ -14,11 +14,16 @@ type InMemoryRateLimiter struct {
 	stopOnce           sync.Once
 	stop               chan struct{}
 	done               chan struct{}
+	stopped            bool
 }
 
 func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
 	l.initOnce.Do(func() {
 		l.mutex.Lock()
+		defer l.mutex.Unlock()
+		if l.stopped {
+			return
+		}
 		l.store = make(map[string]*[]int64)
 		l.expirationDuration = expirationDuration
 		if expirationDuration > 0 {
@@ -26,7 +31,6 @@ func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
 			l.done = make(chan struct{})
 			go l.clearExpiredItems(expirationDuration, l.stop, l.done)
 		}
-		l.mutex.Unlock()
 	})
 }
 
@@ -55,6 +59,7 @@ func (l *InMemoryRateLimiter) clearExpiredItems(interval time.Duration, stop <-c
 
 func (l *InMemoryRateLimiter) Stop(ctx context.Context) error {
 	l.mutex.Lock()
+	l.stopped = true
 	stop := l.stop
 	done := l.done
 	l.mutex.Unlock()

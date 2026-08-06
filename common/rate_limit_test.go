@@ -35,3 +35,17 @@ func TestInMemoryRateLimiterConcurrentInitAndStop(t *testing.T) {
 	defer cancel()
 	require.NoError(t, limiter.Stop(ctx))
 }
+
+func TestInMemoryRateLimiterStopBeforeInitPreventsLifecycleStart(t *testing.T) {
+	var limiter InMemoryRateLimiter
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, limiter.Stop(ctx))
+
+	limiter.Init(10 * time.Millisecond)
+
+	require.Nil(t, limiter.store)
+	require.Nil(t, limiter.stop)
+	require.Nil(t, limiter.done)
+}
