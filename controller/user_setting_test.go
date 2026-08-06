@@ -273,6 +273,7 @@ func TestUpdateUserSettingPreservesStoredGotifyTokenWhenOmitted(t *testing.T) {
 	assert.Equal(t, "https://gotify.example.com/new", setting.GotifyUrl)
 	assert.Equal(t, "stored-gotify-token", setting.GotifyToken)
 	assert.Equal(t, 5, setting.GotifyPriority)
+	assert.Equal(t, 0.8, setting.QuotaWarningThreshold)
 }
 
 func TestUpdateUserSettingRejectsOmittedGotifyTokenFromDifferentStoredType(t *testing.T) {
@@ -317,9 +318,7 @@ func TestUpdateUserSettingRejectsOmittedGotifyTokenFromDifferentStoredType(t *te
 	require.Contains(t, recorder.Body.String(), `"success":false`)
 	var got model.User
 	require.NoError(t, db.First(&got, user.Id).Error)
-	setting := got.GetSetting()
-	assert.Equal(t, dto.NotifyTypeWebhook, setting.NotifyType)
-	assert.Equal(t, "stored-webhook-secret", setting.WebhookSecret)
+	assert.Equal(t, initialSettings, got.GetSetting())
 }
 
 func TestNormalizeNotificationEmailRejectsMalformedAddress(t *testing.T) {

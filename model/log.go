@@ -1090,6 +1090,13 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 		}
 		total += rowsAffected
 		if rowsAffected < int64(limit) {
+			remaining, err := CountOldLog(ctx, targetTimestamp)
+			if err != nil {
+				return total, err
+			}
+			if remaining > 0 {
+				continue
+			}
 			if _, err := DeleteOldBillingLogReceipts(ctx, targetTimestamp, limit); err != nil {
 				return total, err
 			}

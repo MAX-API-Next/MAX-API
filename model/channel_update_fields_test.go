@@ -58,9 +58,11 @@ func setupChannelUpdateFieldsTestDB(t *testing.T) (*gorm.DB, *Channel) {
 		Weight:   &weight,
 		Tag:      &tag,
 		ChannelInfo: ChannelInfo{
-			IsMultiKey:         true,
-			MultiKeySize:       3,
-			MultiKeyStatusList: map[int]int{2: 2},
+			IsMultiKey:             true,
+			MultiKeySize:           3,
+			MultiKeyStatusList:     map[int]int{2: 2},
+			MultiKeyDisabledTime:   map[int]int64{2: 123},
+			MultiKeyDisabledReason: map[int]string{2: "failed"},
 		},
 	}
 	require.NoError(t, db.Create(channel).Error)
@@ -113,4 +115,23 @@ func TestUpdateFieldsPersistsMultiKeyInfoWhenOnlyKeyChanges(t *testing.T) {
 	require.Equal(t, 2, stored.ChannelInfo.MultiKeySize)
 	_, exists := stored.ChannelInfo.MultiKeyStatusList[2]
 	require.False(t, exists)
+	_, exists = stored.ChannelInfo.MultiKeyDisabledTime[2]
+	require.False(t, exists)
+	_, exists = stored.ChannelInfo.MultiKeyDisabledReason[2]
+	require.False(t, exists)
+}
+
+func TestUpdateFieldsClearsFinalMultiKeyAndMetadata(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+
+	channel.Key = ""
+	require.NoError(t, channel.UpdateFields("key"))
+
+	var stored Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Empty(t, stored.Key)
+	require.Zero(t, stored.ChannelInfo.MultiKeySize)
+	require.Empty(t, stored.ChannelInfo.MultiKeyStatusList)
+	require.Empty(t, stored.ChannelInfo.MultiKeyDisabledTime)
+	require.Empty(t, stored.ChannelInfo.MultiKeyDisabledReason)
 }

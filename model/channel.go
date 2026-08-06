@@ -583,7 +583,6 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 		fieldSet[field] = struct{}{}
 	}
 	_, keySelected := fieldSet["key"]
-	keySelected = keySelected && channel.Key != ""
 	_, channelInfoSelected := fieldSet["channel_info"]
 	multiKeyMetadataUpdated := false
 
@@ -625,6 +624,20 @@ func (channel *Channel) UpdateFields(fields ...string) error {
 				}
 			}
 		}
+		if channel.ChannelInfo.MultiKeyDisabledTime != nil {
+			for idx := range channel.ChannelInfo.MultiKeyDisabledTime {
+				if idx >= channel.ChannelInfo.MultiKeySize {
+					delete(channel.ChannelInfo.MultiKeyDisabledTime, idx)
+				}
+			}
+		}
+		if channel.ChannelInfo.MultiKeyDisabledReason != nil {
+			for idx := range channel.ChannelInfo.MultiKeyDisabledReason {
+				if idx >= channel.ChannelInfo.MultiKeySize {
+					delete(channel.ChannelInfo.MultiKeyDisabledReason, idx)
+				}
+			}
+		}
 	}
 	updates := channel.editableUpdateMap(fields)
 	if multiKeyMetadataUpdated && keySelected {
@@ -663,9 +676,7 @@ func (channel *Channel) editableUpdateMap(fields []string) map[string]any {
 		case "type":
 			updates["type"] = channel.Type
 		case "key":
-			if channel.Key != "" {
-				updates["key"] = channel.Key
-			}
+			updates["key"] = channel.Key
 		case "openai_organization":
 			if channel.OpenAIOrganization != nil {
 				updates["openai_organization"] = channel.OpenAIOrganization

@@ -107,6 +107,37 @@ func TestDeleteOldLogBatchRechecksManagementTypeBeforeDelete(t *testing.T) {
 	assert.Equal(t, LogTypeManage, stored.Type)
 }
 
+func TestDeleteOldLogContinuesAfterPromotedCandidateShortensBatch(t *testing.T) {
+	truncateTables(t)
+
+	logs := []Log{
+		{UserId: 1, CreatedAt: 10, Type: LogTypeConsume},
+		{UserId: 1, CreatedAt: 20, Type: LogTypeConsume},
+	}
+	require.NoError(t, LOG_DB.Create(&logs).Error)
+	callbackName := "test:promote_first_log_before_full_cleanup_delete"
+	mutated := false
+	require.NoError(t, LOG_DB.Callback().Delete().Before("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		if mutated || tx.Statement == nil || tx.Statement.Table != "logs" {
+			return
+		}
+		mutated = true
+		require.NoError(t, tx.Session(&gorm.Session{NewDB: true}).Model(&Log{}).Where("id = ?", logs[0].Id).Update("type", LogTypeManage).Error)
+	}))
+	t.Cleanup(func() { _ = LOG_DB.Callback().Delete().Remove(callbackName) })
+
+	rows, err := DeleteOldLog(context.Background(), 100, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rows)
+
+	var promoted Log
+	require.NoError(t, LOG_DB.First(&promoted, logs[0].Id).Error)
+	assert.Equal(t, LogTypeManage, promoted.Type)
+	var laterCount int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("id = ?", logs[1].Id).Count(&laterCount).Error)
+	assert.Zero(t, laterCount)
+}
+
 func TestDeleteOldLogBatchStopsWhenContextCancelledAfterSelect(t *testing.T) {
 	truncateTables(t)
 
