@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -68,6 +69,52 @@ func TestRelayMidjourneyImageRejectsUnsignedAndWrongUserURLs(t *testing.T) {
 	router.ServeHTTP(wrongUser, httptest.NewRequest(http.MethodGet, wrongUserURL, nil))
 	require.Equal(t, http.StatusForbidden, wrongUser.Code)
 	require.Contains(t, wrongUser.Body.String(), "midjourney_image_authorization_failed")
+
+	require.NoError(t, db.Create(&model.Midjourney{
+		Id: 2, UserId: 42, MjId: "mj-private-task", ImageUrl: "https://example.com/duplicate.png",
+	}).Error)
+	ambiguousURL := "/mj/image/mj-private-task?uid=42&expires=" +
+		strconv.FormatInt(expiresAt, 10) + "&signature=" +
+		service.SignMidjourneyImageURL("mj-private-task", 42, expiresAt)
+	ambiguous := httptest.NewRecorder()
+	router.ServeHTTP(ambiguous, httptest.NewRequest(http.MethodGet, ambiguousURL, nil))
+	require.Equal(t, http.StatusForbidden, ambiguous.Code)
+	require.Contains(t, ambiguous.Body.String(), "midjourney_image_authorization_failed")
+}
+
+func TestRelayMidjourneyImageReturnsServerErrorForLookupFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldSecret := common.CryptoSecret
+	common.CryptoSecret = "midjourney-handler-test-secret"
+	db, err := gorm.Open(sqlite.Open("file:mjproxy_lookup_error?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:midjourney-lookup-error", func(tx *gorm.DB) {
+		if tx.Statement.Table == "midjourneys" {
+			tx.AddError(errors.New("database unavailable"))
+		}
+	}))
+	t.Cleanup(func() {
+		_ = db.Callback().Query().Remove("test:midjourney-lookup-error")
+		model.DB = oldDB
+		common.CryptoSecret = oldSecret
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	expiresAt := time.Now().Add(service.MidjourneyImageURLTTL).Unix()
+	requestURL := "/mj/image/mj-lookup-error?uid=42&expires=" +
+		strconv.FormatInt(expiresAt, 10) + "&signature=" +
+		service.SignMidjourneyImageURL("mj-lookup-error", 42, expiresAt)
+	recorder := httptest.NewRecorder()
+	router := gin.New()
+	router.GET("/mj/image/:id", RelayMidjourneyImage)
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "midjourney_task_lookup_failed")
 }
 
 func TestRelayMidjourneyTaskImageSeedUsesOriginChannelKey(t *testing.T) {

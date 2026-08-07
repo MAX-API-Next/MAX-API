@@ -410,7 +410,16 @@ func (midjourney *Midjourney) UpdateWithBillingTaskAndSettlement(fromStatus stri
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return fmt.Errorf("midjourney billing task did not advance: id=%d", billingTask.ID)
+			if result.RowsAffected != 0 {
+				return fmt.Errorf("midjourney billing task did not advance: id=%d", billingTask.ID)
+			}
+			var existing Task
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("status").First(&existing, billingTask.ID).Error; err != nil {
+				return err
+			}
+			if existing.Status != billingTask.Status {
+				return fmt.Errorf("midjourney billing task did not advance: id=%d", billingTask.ID)
+			}
 		}
 		return nil
 	})

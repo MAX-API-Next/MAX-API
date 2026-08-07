@@ -98,6 +98,13 @@ func RelayMidjourneyImage(c *gin.Context) {
 		return
 	}
 	midjourneyTask, lookupErr := model.GetUniqueMidjourneyByUserAndMJID(userID, taskId)
+	if lookupErr != nil && !errors.Is(lookupErr, model.ErrMidjourneyTaskAmbiguous) {
+		common.SysError("midjourney image task lookup failed: " + lookupErr.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "midjourney_task_lookup_failed",
+		})
+		return
+	}
 	if lookupErr != nil || midjourneyTask == nil {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": "midjourney_image_authorization_failed",

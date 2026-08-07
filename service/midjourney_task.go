@@ -68,7 +68,14 @@ func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourne
 		task.VideoUrls = string(videoURLs)
 	}
 
-	isFailure := task.Status == "FAILURE" || task.FailReason != ""
+	providerSucceeded := responseItem.Status == "SUCCESS" ||
+		(responseItem.Status == "" && responseItem.Progress == "100%" && responseItem.FailReason == "")
+	if providerSucceeded {
+		legacyNeedsUpdate = legacyNeedsUpdate || preStatus != "SUCCESS" || task.FailReason != ""
+		task.Status = "SUCCESS"
+		task.FailReason = ""
+	}
+	isFailure := !providerSucceeded && (task.Status == "FAILURE" || task.FailReason != "")
 	if isFailure {
 		task.Status = "FAILURE"
 		task.Progress = "100%"

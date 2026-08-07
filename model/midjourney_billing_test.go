@@ -119,6 +119,34 @@ func TestMidjourneyUpdateTreatsUnchangedMatchedRowAsCASWin(t *testing.T) {
 	require.True(t, won)
 }
 
+func TestMidjourneyUpdateTreatsAlreadyTerminalBillingTaskAsCASWin(t *testing.T) {
+	truncateTables(t)
+	midjourney := &Midjourney{
+		UserId: 501, ChannelId: 601, MjId: "provider-mj-terminal-billing-cas",
+		Status: "IN_PROGRESS", Progress: "50%", Code: 1,
+	}
+	require.NoError(t, DB.Create(midjourney).Error)
+	billingTask := &Task{
+		TaskID: "task_midjourney_terminal_billing_cas", Platform: constant.TaskPlatformMidjourney,
+		UserId: 501, ChannelId: 601, Status: TaskStatusSuccess, Progress: "100%",
+	}
+	insertTask(t, billingTask)
+	midjourney.Status = "SUCCESS"
+	midjourney.Progress = "100%"
+
+	callbackName := "test:force-midjourney-billing-task-zero-rows-affected"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "tasks" {
+			tx.RowsAffected = 0
+		}
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+	won, err := midjourney.UpdateWithBillingTaskAndSettlement("IN_PROGRESS", billingTask, nil)
+	require.NoError(t, err)
+	require.True(t, won)
+}
+
 func TestMidjourneyBillingClaimLookupUsesCurrentReadAcrossDialects(t *testing.T) {
 	tests := []struct {
 		name          string

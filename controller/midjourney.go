@@ -126,7 +126,7 @@ func applyMidjourneyTaskResponse(ctx context.Context, taskM map[string]*model.Mi
 		return nil
 	}
 	useTime := time.Now().UnixMilli() - task.SubmitTime
-	if useTime > 3600000 && task.Progress != "100%" && responseItem.Status != "SUCCESS" {
+	if useTime > 3600000 && task.Progress != "100%" && responseItem.Progress != "100%" && responseItem.Status != "SUCCESS" {
 		responseItem.FailReason = "上游任务超时（超过1小时）"
 		responseItem.Status = "FAILURE"
 	}
