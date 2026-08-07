@@ -107,15 +107,12 @@ function sanitizeChartCssValue(value: string | undefined): string | null {
   return normalized
 }
 
-const ChartStyle = ({
-  id,
-  config,
-}: {
+const ChartStyle = (props: {
   id: string
   config: ChartConfig
 }): React.JSX.Element | null => {
-  const safeId = sanitizeCssVariableName(id)
-  const colorConfig = Object.entries(config).filter(
+  const safeId = sanitizeCssVariableName(props.id)
+  const colorConfig = Object.entries(props.config).filter(
     ([, config]) => config.theme ?? config.color
   )
 
