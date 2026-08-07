@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,14 +117,14 @@ func TestUpdateMidjourneyTasksOnceScopesDuplicateProviderIDsByChannel(t *testing
 	assert.Equal(t, "https://example.com/b.png", storedB.ImageUrl)
 }
 
-func TestMidjourneyFailureRefundsWalletAndTokenThroughDurableSettlement(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+func setupMidjourneyBillingControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(
-		&model.User{}, &model.Token{}, &model.Task{}, &model.Midjourney{},
-		&model.MidjourneyBillingClaim{}, &model.BillingSettlement{},
-		&model.Log{}, &model.BillingLogReceipt{},
-	))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldSQLite, oldRedis := common.UsingSQLite, common.RedisEnabled
 	model.DB, model.LOG_DB = db, db
@@ -130,7 +132,19 @@ func TestMidjourneyFailureRefundsWalletAndTokenThroughDurableSettlement(t *testi
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = oldDB, oldLogDB
 		common.UsingSQLite, common.RedisEnabled = oldSQLite, oldRedis
+		_ = sqlDB.Close()
 	})
+
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.Token{}, &model.Task{}, &model.Midjourney{},
+		&model.MidjourneyBillingClaim{}, &model.BillingSettlement{},
+		&model.Log{}, &model.BillingLogReceipt{},
+	))
+	return db
+}
+
+func TestMidjourneyFailureRefundsWalletAndTokenThroughDurableSettlement(t *testing.T) {
+	db := setupMidjourneyBillingControllerTestDB(t)
 
 	user := model.User{Id: 801, Username: "midjourney-refund-user", AffCode: "mj-refund-user", Quota: 70, Status: common.UserStatusEnabled}
 	token := model.Token{
@@ -184,4 +198,63 @@ func TestMidjourneyFailureRefundsWalletAndTokenThroughDurableSettlement(t *testi
 	assert.Equal(t, "FAILURE", storedMJ.Status)
 	assert.EqualValues(t, 123000, storedMJ.SubmitTime)
 	assert.Equal(t, "https://example.com/original.png", storedMJ.ImageUrl)
+}
+
+func TestApplyMidjourneyTaskResponsePreservesLateSuccessWithoutRefund(t *testing.T) {
+	db := setupMidjourneyBillingControllerTestDB(t)
+
+	user := model.User{Id: 811, Username: "midjourney-late-success-user", AffCode: "mj-late-success-user", Quota: 70, Status: common.UserStatusEnabled}
+	token := model.Token{
+		Id: 812, UserId: user.Id, Key: "midjourney-late-success-token", Name: "midjourney-late-success-token",
+		Status: common.TokenStatusEnabled, RemainQuota: 70, UsedQuota: 30,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&token).Error)
+	billingTask := &model.Task{
+		TaskID: "task_midjourney_late_success", Platform: constant.TaskPlatformMidjourney,
+		UserId: user.Id, ChannelId: 813, Quota: 30, Action: constant.MjActionImagine,
+		Status: model.TaskStatusNotStart, Progress: "0%",
+		PrivateData: model.TaskPrivateData{
+			AwaitingUpstreamID: true, BillingSource: model.BillingSettlementSourceWallet,
+			BillingRequestId: "midjourney-late-success-request", TokenId: token.Id,
+		},
+	}
+	require.NoError(t, db.Create(billingTask).Error)
+	mj := &model.Midjourney{
+		UserId: user.Id, ChannelId: billingTask.ChannelId, MjId: "provider-midjourney-late-success",
+		Action: constant.MjActionImagine, Status: "", Progress: "50%", Quota: 30,
+		SubmitTime: time.Now().Add(-2 * time.Hour).UnixMilli(),
+	}
+	created, refundDuplicate, err := model.FinalizeMidjourneySubmission(mj, billingTask, &model.BillingSettlementInput{
+		OperationKey: "request:midjourney-late-success-request:finalize", Source: model.BillingSettlementSourceWallet,
+		UserID: user.Id, TokenID: token.Id,
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.False(t, refundDuplicate)
+
+	err = applyMidjourneyTaskResponse(context.Background(), map[string]*model.Midjourney{mj.MjId: mj}, dto.MidjourneyDto{
+		MjId: mj.MjId, Status: "SUCCESS", Progress: "100%", FinishTime: time.Now().UnixMilli(),
+		ImageUrl: "https://example.com/late-success.png",
+	})
+	require.NoError(t, err)
+
+	var storedMJ model.Midjourney
+	require.NoError(t, db.First(&storedMJ, mj.Id).Error)
+	assert.Equal(t, "SUCCESS", storedMJ.Status)
+	assert.Empty(t, storedMJ.FailReason)
+	var storedTask model.Task
+	require.NoError(t, db.First(&storedTask, billingTask.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, storedTask.Status)
+	assert.Equal(t, 30, storedTask.Quota)
+	var storedUser model.User
+	require.NoError(t, db.First(&storedUser, user.Id).Error)
+	assert.EqualValues(t, 70, storedUser.Quota)
+	var storedToken model.Token
+	require.NoError(t, db.First(&storedToken, token.Id).Error)
+	assert.EqualValues(t, 70, storedToken.RemainQuota)
+	assert.EqualValues(t, 30, storedToken.UsedQuota)
+	var refundCount int64
+	require.NoError(t, db.Model(&model.BillingSettlement{}).Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).Count(&refundCount).Error)
+	assert.Zero(t, refundCount)
 }

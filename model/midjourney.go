@@ -270,7 +270,7 @@ func FinalizeMidjourneySubmission(midjourney *Midjourney, billingTask *Task, set
 		}).Create(&claim).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("channel_id = ? AND mj_id = ?", midjourney.ChannelId, midjourney.MjId).First(&claim).Error; err != nil {
+		if err := midjourneyBillingClaimForUpdate(tx, midjourney.ChannelId, midjourney.MjId, &claim).Error; err != nil {
 			return err
 		}
 
@@ -334,6 +334,12 @@ func FinalizeMidjourneySubmission(midjourney *Midjourney, billingTask *Task, set
 	return created, refundDuplicate, err
 }
 
+func midjourneyBillingClaimForUpdate(tx *gorm.DB, channelID int, mjID string, claim *MidjourneyBillingClaim) *gorm.DB {
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("channel_id = ? AND mj_id = ?", channelID, mjID).
+		First(claim)
+}
+
 func GetMidjourneyBillingTask(userID, channelID int, mjID string) (*Task, error) {
 	if userID <= 0 || channelID <= 0 || mjID == "" {
 		return nil, nil
@@ -386,7 +392,13 @@ func (midjourney *Midjourney) UpdateWithBillingTaskAndSettlement(fromStatus stri
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			return errTaskStatusCASLost
+			var existing Midjourney
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("status").First(&existing, midjourney.Id).Error; err != nil {
+				return err
+			}
+			if existing.Status != fromStatus {
+				return errTaskStatusCASLost
+			}
 		}
 		if billingTask == nil {
 			return nil
@@ -409,7 +421,8 @@ func (midjourney *Midjourney) UpdateWithBillingTaskAndSettlement(fromStatus stri
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
-// Uses Model().Select("*").Updates() to avoid GORM Save()'s INSERT fallback.
+// It delegates to UpdateWithBillingTaskAndSettlement, which uses an explicit
+// update map to avoid GORM Save()'s INSERT fallback and zero-value skipping.
 func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) {
 	return midjourney.UpdateWithBillingTaskAndSettlement(fromStatus, nil, nil)
 }

@@ -263,6 +263,25 @@ func TestUpdateWithStatusAndSettlementCASLossLeavesNoIntent(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestMarkTaskSubmitFailedWithSettlementRejectsUnpersistedTask(t *testing.T) {
+	truncateTables(t)
+	operationKey := "request:unpersisted-midjourney:refund"
+	require.NoError(t, MarkTaskSubmitFailedWithSettlement(0, "submit rejected", nil))
+
+	err := MarkTaskSubmitFailedWithSettlement(0, "submit rejected", &BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       1,
+		FundingDelta: -10,
+		TokenDelta:   -10,
+	})
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
 func TestUpdateWithSettlementIntentCommitsTaskAndIntentTogether(t *testing.T) {
 	truncateTables(t)
 	task := &Task{

@@ -1,13 +1,19 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormmysql "gorm.io/driver/mysql"
+	gormpostgres "gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func newMidjourneyBillingTask(t *testing.T, suffix string, quota int) *Task {
@@ -65,7 +71,7 @@ func TestFinalizeMidjourneySubmissionClaimsUpstreamTaskOnce(t *testing.T) {
 			UserID: 501, TokenID: 701,
 		},
 		&BillingSettlementInput{
-			OperationKey: "request:mj-request-second:finalize", Source: BillingSettlementSourceWallet,
+			OperationKey: "request:mj-request-second:refund", Source: BillingSettlementSourceWallet,
 			UserID: 501, TokenID: 701, FundingDelta: -20, TokenDelta: -20,
 		},
 	)
@@ -87,8 +93,87 @@ func TestFinalizeMidjourneySubmissionClaimsUpstreamTaskOnce(t *testing.T) {
 	assert.Zero(t, reloadedSecond.Quota)
 
 	var refund BillingSettlement
-	require.NoError(t, DB.Where("operation_key = ?", "request:mj-request-second:finalize").First(&refund).Error)
+	require.NoError(t, DB.Where("operation_key = ?", "request:mj-request-second:refund").First(&refund).Error)
 	assert.Equal(t, BillingSettlementStatusPending, refund.Status)
+	assert.EqualValues(t, -20, refund.FundingDelta)
+}
+
+func TestMidjourneyUpdateTreatsUnchangedMatchedRowAsCASWin(t *testing.T) {
+	truncateTables(t)
+	midjourney := &Midjourney{
+		UserId: 501, ChannelId: 601, MjId: "provider-mj-unchanged-cas",
+		Status: "IN_PROGRESS", Progress: "50%", Code: 1,
+	}
+	require.NoError(t, DB.Create(midjourney).Error)
+
+	callbackName := "test:force-midjourney-zero-rows-affected"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "midjourneys" {
+			tx.RowsAffected = 0
+		}
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+	won, err := midjourney.UpdateWithStatus("IN_PROGRESS")
+	require.NoError(t, err)
+	require.True(t, won)
+}
+
+func TestMidjourneyBillingClaimLookupUsesCurrentReadAcrossDialects(t *testing.T) {
+	tests := []struct {
+		name          string
+		open          func(*testing.T) *gorm.DB
+		wantForUpdate bool
+	}{
+		{
+			name: "sqlite",
+			open: func(t *testing.T) *gorm.DB {
+				db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DryRun: true})
+				require.NoError(t, err)
+				return db
+			},
+		},
+		{
+			name: "mysql",
+			open: func(t *testing.T) *gorm.DB {
+				conn, err := sql.Open("mysql", "")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = conn.Close() })
+				db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: conn, SkipInitializeWithVersion: true}), &gorm.Config{
+					DryRun: true, DisableAutomaticPing: true,
+				})
+				require.NoError(t, err)
+				return db
+			},
+			wantForUpdate: true,
+		},
+		{
+			name: "postgres",
+			open: func(t *testing.T) *gorm.DB {
+				conn, err := sql.Open("pgx", "")
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = conn.Close() })
+				db, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: conn}), &gorm.Config{
+					DryRun: true, DisableAutomaticPing: true,
+				})
+				require.NoError(t, err)
+				return db
+			},
+			wantForUpdate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := tt.open(t)
+			statement := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+				var claim MidjourneyBillingClaim
+				return midjourneyBillingClaimForUpdate(tx, 601, "provider-mj-current-read", &claim)
+			})
+			hasForUpdate := strings.Contains(strings.ToUpper(statement), "FOR UPDATE")
+			assert.Equal(t, tt.wantForUpdate, hasForUpdate, statement)
+		})
+	}
 }
 
 func TestFinalizeMidjourneySubmissionDoesNotRefundSameRequestReplay(t *testing.T) {

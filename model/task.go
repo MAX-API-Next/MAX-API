@@ -635,13 +635,18 @@ func MarkTaskSubmitFailed(taskID int64, reason string) error {
 // already-recorded balance mutation.
 func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *BillingSettlementInput) error {
 	if taskID <= 0 {
+		if input != nil {
+			return fmt.Errorf("cannot record settlement intent for unpersisted task: id=%d", taskID)
+		}
 		return nil
+	}
+	if input != nil {
+		if err := validateBillingSettlementInput(*input); err != nil {
+			return err
+		}
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if input != nil {
-			if err := validateBillingSettlementInput(*input); err != nil {
-				return err
-			}
 			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
 				return err
 			}

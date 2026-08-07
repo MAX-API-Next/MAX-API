@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -212,12 +214,20 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 		req.Header.Set("mj-api-secret", auth)
 	}
 	defer cancel()
-	requestSent := true
+	var requestSent atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			// Any write attempt makes the provider outcome ambiguous. A partial
+			// write must not be treated as a definite rejection and auto-refunded.
+			requestSent.Store(true)
+		},
+	}))
 	resp, err := GetHttpClient().Do(req)
 	if err != nil {
 		common.SysLog("do request failed: " + err.Error())
-		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "do_request_failed", http.StatusInternalServerError), nullBytes, requestSent, err
+		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "do_request_failed", http.StatusInternalServerError), nullBytes, requestSent.Load(), err
 	}
+	requestSent.Store(true)
 	defer CloseResponseBodyGracefully(resp)
 	statusCode := resp.StatusCode
 	//if statusCode != 200  {
@@ -227,17 +237,17 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 	var midjourneyUploadsResponse dto.MidjourneyUploadResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "read_response_body_failed", statusCode), nullBytes, requestSent, err
+		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "read_response_body_failed", statusCode), nullBytes, requestSent.Load(), err
 	}
 	logger.LogDebug(c, "midjourney response body: %s", responseBody)
 	if len(responseBody) == 0 {
-		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "empty_response_body", statusCode), responseBody, requestSent, errors.New("midjourney upstream response body is empty")
+		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "empty_response_body", statusCode), responseBody, requestSent.Load(), errors.New("midjourney upstream response body is empty")
 	} else {
 		err = common.Unmarshal(responseBody, &midjResponse)
 		if err != nil {
 			err2 := common.Unmarshal(responseBody, &midjourneyUploadsResponse)
 			if err2 != nil {
-				return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "unmarshal_response_body_failed", statusCode), responseBody, requestSent, err
+				return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "unmarshal_response_body_failed", statusCode), responseBody, requestSent.Load(), err
 			}
 		}
 	}
@@ -247,5 +257,5 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 	return &dto.MidjourneyResponseWithStatusCode{
 		StatusCode: statusCode,
 		Response:   midjResponse,
-	}, responseBody, requestSent, nil
+	}, responseBody, requestSent.Load(), nil
 }

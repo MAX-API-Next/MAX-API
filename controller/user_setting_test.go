@@ -321,6 +321,90 @@ func TestUpdateUserSettingRejectsOmittedGotifyTokenFromDifferentStoredType(t *te
 	assert.Equal(t, initialSettings, got.GetSetting())
 }
 
+func TestUpdateUserSettingWebhookCredentialTransitions(t *testing.T) {
+	tests := []struct {
+		name              string
+		initial           dto.UserSetting
+		requestSecret     string
+		wantWebhookSecret string
+		wantGotifyCleared bool
+	}{
+		{
+			name: "preserves existing webhook secret when redacted value is empty",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeWebhook, WebhookUrl: "https://example.com/old-webhook", WebhookSecret: "stored-webhook-secret",
+			},
+			wantWebhookSecret: "stored-webhook-secret",
+		},
+		{
+			name: "accepts explicit webhook secret",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeWebhook, WebhookUrl: "https://example.com/old-webhook", WebhookSecret: "stored-webhook-secret",
+			},
+			requestSecret:     "replacement-webhook-secret",
+			wantWebhookSecret: "replacement-webhook-secret",
+		},
+		{
+			name: "switching from gotify clears stale gotify credentials",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeGotify, GotifyUrl: "https://gotify.example.com", GotifyToken: "stale-gotify-token", GotifyPriority: 7,
+			},
+			requestSecret:     "new-webhook-secret",
+			wantWebhookSecret: "new-webhook-secret",
+			wantGotifyCleared: true,
+		},
+		{
+			name: "redacted webhook secret never reuses a gotify token",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeGotify, GotifyUrl: "https://gotify.example.com", GotifyToken: "stale-gotify-token", GotifyPriority: 7,
+			},
+			wantGotifyCleared: true,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupUserSettingControllerTestDB(t)
+			initial := tt.initial
+			initial.QuotaWarningThreshold = 0.5
+			settingBytes, err := common.Marshal(initial)
+			require.NoError(t, err)
+			user := model.User{
+				Id: 1200 + i, Username: fmt.Sprintf("webhook-transition-%d", i), Password: "password",
+				Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Setting: string(settingBytes),
+			}
+			require.NoError(t, db.Create(&user).Error)
+
+			payloadBytes, err := common.Marshal(map[string]any{
+				"notify_type": dto.NotifyTypeWebhook, "quota_warning_threshold": 0.8,
+				"webhook_url": "https://example.com/new-webhook", "webhook_secret": tt.requestSecret,
+			})
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			ctx.Set("id", user.Id)
+
+			UpdateUserSetting(ctx)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Contains(t, recorder.Body.String(), `"success":true`)
+			var got model.User
+			require.NoError(t, db.First(&got, user.Id).Error)
+			setting := got.GetSetting()
+			assert.Equal(t, dto.NotifyTypeWebhook, setting.NotifyType)
+			assert.Equal(t, "https://example.com/new-webhook", setting.WebhookUrl)
+			assert.Equal(t, tt.wantWebhookSecret, setting.WebhookSecret)
+			if tt.wantGotifyCleared {
+				assert.Empty(t, setting.GotifyUrl)
+				assert.Empty(t, setting.GotifyToken)
+				assert.Zero(t, setting.GotifyPriority)
+			}
+		})
+	}
+}
+
 func TestNormalizeNotificationEmailRejectsMalformedAddress(t *testing.T) {
 	validEmail, ok := normalizeNotificationEmail("new@example.com")
 	require.True(t, ok)
