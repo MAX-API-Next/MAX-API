@@ -271,6 +271,8 @@ func TestApplyMidjourneyTaskResponsePreservesLateCompletionWithoutRefund(t *test
 			require.NoError(t, db.First(&storedMJ, mj.Id).Error)
 			assert.Equal(t, "SUCCESS", storedMJ.Status)
 			assert.Empty(t, storedMJ.FailReason)
+			assert.Equal(t, imageURL, storedMJ.ImageUrl)
+			assert.Equal(t, finishTime, storedMJ.FinishTime)
 			var storedTask model.Task
 			require.NoError(t, db.First(&storedTask, billingTask.ID).Error)
 			assert.EqualValues(t, model.TaskStatusSuccess, storedTask.Status)

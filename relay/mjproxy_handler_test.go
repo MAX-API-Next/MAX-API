@@ -86,23 +86,36 @@ func TestRelayMidjourneyImageReturnsServerErrorForLookupFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB
 	oldSecret := common.CryptoSecret
-	common.CryptoSecret = "midjourney-handler-test-secret"
-	db, err := gorm.Open(sqlite.Open("file:mjproxy_lookup_error?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	model.DB = db
-	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:midjourney-lookup-error", func(tx *gorm.DB) {
-		if tx.Statement.Table == "midjourneys" {
-			tx.AddError(errors.New("database unavailable"))
-		}
-	}))
+	var db *gorm.DB
+	callbackRegistered := false
+	const callbackName = "test:midjourney-lookup-error"
 	t.Cleanup(func() {
-		_ = db.Callback().Query().Remove("test:midjourney-lookup-error")
 		model.DB = oldDB
 		common.CryptoSecret = oldSecret
+		if db == nil {
+			return
+		}
+		if callbackRegistered {
+			_ = db.Callback().Query().Remove(callbackName)
+		}
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
 	})
+	common.CryptoSecret = "midjourney-handler-test-secret"
+	var err error
+	db, err = gorm.Open(sqlite.Open("file:mjproxy_lookup_error?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.Midjourney{}))
+	callbackHit := false
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Table == "midjourneys" {
+			callbackHit = true
+			tx.AddError(errors.New("database unavailable"))
+		}
+	}))
+	callbackRegistered = true
 
 	expiresAt := time.Now().Add(service.MidjourneyImageURLTTL).Unix()
 	requestURL := "/mj/image/mj-lookup-error?uid=42&expires=" +
@@ -115,6 +128,7 @@ func TestRelayMidjourneyImageReturnsServerErrorForLookupFailure(t *testing.T) {
 
 	require.Equal(t, http.StatusInternalServerError, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "midjourney_task_lookup_failed")
+	require.True(t, callbackHit, "lookup error callback was not invoked")
 }
 
 func TestRelayMidjourneyTaskImageSeedUsesOriginChannelKey(t *testing.T) {
