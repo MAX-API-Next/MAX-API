@@ -31,6 +31,13 @@ func writeMidjourneyStatusCode(c *gin.Context, upstreamStatusCode int) {
 	c.Writer.WriteHeader(service.MapStatusCode(upstreamStatusCode, c.GetString("status_code_mapping")))
 }
 
+func midjourneyTaskLookupErrorDescription(err error) string {
+	if errors.Is(err, model.ErrMidjourneyTaskAmbiguous) {
+		return "midjourney_task_ambiguous"
+	}
+	return "midjourney_task_lookup_failed"
+}
+
 func classifyMidjourneySubmission(statusCode int, response *dto.MidjourneyResponse) (accepted, ambiguous bool) {
 	if response == nil {
 		return false, statusCode >= http.StatusInternalServerError
@@ -90,8 +97,8 @@ func RelayMidjourneyImage(c *gin.Context) {
 		})
 		return
 	}
-	midjourneyTask := model.GetByMJId(userID, taskId)
-	if midjourneyTask == nil {
+	midjourneyTask, lookupErr := model.GetUniqueMidjourneyByUserAndMJID(userID, taskId)
+	if lookupErr != nil || midjourneyTask == nil {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": "midjourney_image_authorization_failed",
 		})
@@ -162,7 +169,13 @@ func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
 			Result:      "",
 		}
 	}
-	midjourneyTask := model.GetByOnlyMJId(midjRequest.MjId)
+	midjourneyTask, lookupErr := model.GetUniqueMidjourneyByMJID(midjRequest.MjId)
+	if lookupErr != nil {
+		return &dto.MidjourneyResponse{
+			Code:        constant.MjRequestError,
+			Description: midjourneyTaskLookupErrorDescription(lookupErr),
+		}
+	}
 	if midjourneyTask == nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
@@ -171,19 +184,7 @@ func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
 			Result:      "",
 		}
 	}
-	midjourneyTask.Progress = midjRequest.Progress
-	midjourneyTask.PromptEn = midjRequest.PromptEn
-	midjourneyTask.State = midjRequest.State
-	midjourneyTask.SubmitTime = midjRequest.SubmitTime
-	midjourneyTask.StartTime = midjRequest.StartTime
-	midjourneyTask.FinishTime = midjRequest.FinishTime
-	midjourneyTask.ImageUrl = midjRequest.ImageUrl
-	midjourneyTask.VideoUrl = midjRequest.VideoUrl
-	videoUrlsStr, _ := common.Marshal(midjRequest.VideoUrls)
-	midjourneyTask.VideoUrls = string(videoUrlsStr)
-	midjourneyTask.Status = midjRequest.Status
-	midjourneyTask.FailReason = midjRequest.FailReason
-	err = midjourneyTask.Update()
+	err = service.UpdateMidjourneyTaskFromResponse(c.Request.Context(), midjourneyTask, midjRequest)
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,
@@ -480,7 +481,10 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 func RelayMidjourneyTaskImageSeed(c *gin.Context) *dto.MidjourneyResponse {
 	taskId := c.Param("id")
 	userId := c.GetInt("id")
-	originTask := model.GetByMJId(userId, taskId)
+	originTask, lookupErr := model.GetUniqueMidjourneyByUserAndMJID(userId, taskId)
+	if lookupErr != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, midjourneyTaskLookupErrorDescription(lookupErr))
+	}
 	if originTask == nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_no_found")
 	}
@@ -518,7 +522,13 @@ func RelayMidjourneyTask(c *gin.Context, relayMode int) *dto.MidjourneyResponse 
 	switch relayMode {
 	case relayconstant.RelayModeMidjourneyTaskFetch:
 		taskId := c.Param("id")
-		originTask := model.GetByMJId(userId, taskId)
+		originTask, lookupErr := model.GetUniqueMidjourneyByUserAndMJID(userId, taskId)
+		if lookupErr != nil {
+			return &dto.MidjourneyResponse{
+				Code:        constant.MjRequestError,
+				Description: midjourneyTaskLookupErrorDescription(lookupErr),
+			}
+		}
 		if originTask == nil {
 			return &dto.MidjourneyResponse{
 				Code:        4,
@@ -650,7 +660,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			mjId = midjRequest.TaskId
 		}
 
-		originTask := model.GetByMJId(relayInfo.UserId, mjId)
+		originTask, lookupErr := model.GetUniqueMidjourneyByUserAndMJID(relayInfo.UserId, mjId)
+		if lookupErr != nil {
+			return service.MidjourneyErrorWrapper(constant.MjRequestError, midjourneyTaskLookupErrorDescription(lookupErr))
+		}
 		if originTask == nil {
 			return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_not_found")
 		} else { //原任务的Status=SUCCESS，则可以做放大UPSCALE、变换VARIATION等动作，此时必须使用原来的请求地址才能正确处理

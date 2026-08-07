@@ -48,6 +48,8 @@ type MidjourneyBillingClaim struct {
 	CreatedAt        int64  `gorm:"not null"`
 }
 
+var ErrMidjourneyTaskAmbiguous = errors.New("midjourney task identity is ambiguous across channels")
+
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
 type TaskQueryParams struct {
 	ChannelID      string
@@ -127,26 +129,6 @@ func GetAllUnFinishTasks() []*Midjourney {
 	return tasks
 }
 
-func GetByOnlyMJId(mjId string) *Midjourney {
-	var mj *Midjourney
-	var err error
-	err = DB.Where("mj_id = ?", mjId).First(&mj).Error
-	if err != nil {
-		return nil
-	}
-	return mj
-}
-
-func GetByMJId(userId int, mjId string) *Midjourney {
-	var mj *Midjourney
-	var err error
-	err = DB.Where("user_id = ? and mj_id = ?", userId, mjId).First(&mj).Error
-	if err != nil {
-		return nil
-	}
-	return mj
-}
-
 func GetByMJIds(userId int, mjIds []string) []*Midjourney {
 	var mj []*Midjourney
 	var err error
@@ -155,6 +137,35 @@ func GetByMJIds(userId int, mjIds []string) []*Midjourney {
 		return nil
 	}
 	return mj
+}
+
+func GetUniqueMidjourneyByMJID(mjID string) (*Midjourney, error) {
+	if mjID == "" {
+		return nil, nil
+	}
+	return findUniqueMidjourney(DB.Where("mj_id = ?", mjID))
+}
+
+func GetUniqueMidjourneyByUserAndMJID(userID int, mjID string) (*Midjourney, error) {
+	if userID <= 0 || mjID == "" {
+		return nil, nil
+	}
+	return findUniqueMidjourney(DB.Where("user_id = ? AND mj_id = ?", userID, mjID))
+}
+
+func findUniqueMidjourney(query *gorm.DB) (*Midjourney, error) {
+	var tasks []Midjourney
+	if err := query.Order("id").Limit(2).Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	switch len(tasks) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &tasks[0], nil
+	default:
+		return nil, ErrMidjourneyTaskAmbiguous
+	}
 }
 
 func GetMjByuId(id int) *Midjourney {
@@ -381,7 +392,7 @@ func (midjourney *Midjourney) UpdateWithBillingTaskAndSettlement(fromStatus stri
 			return nil
 		}
 		result = tx.Model(&Task{}).
-			Where("id = ? AND status NOT IN ?", billingTask.ID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Where("id = ? AND (status NOT IN ? OR status = ?)", billingTask.ID, []string{TaskStatusFailure, TaskStatusSuccess}, billingTask.Status).
 			Updates(midjourneyTaskUpdateValues(billingTask, false))
 		if result.Error != nil {
 			return result.Error

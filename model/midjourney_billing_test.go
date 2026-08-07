@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -181,4 +182,51 @@ func TestMidjourneyFailureCommitsRefundIntentWithTerminalState(t *testing.T) {
 	var storedTask Task
 	require.NoError(t, DB.First(&storedTask, loadedTask.ID).Error)
 	assert.EqualValues(t, TaskStatusFailure, storedTask.Status)
+}
+
+func TestUniqueMidjourneyLookupRejectsCrossChannelAmbiguity(t *testing.T) {
+	truncateTables(t)
+	sharedID := "provider-mj-shared-across-channels"
+	require.NoError(t, DB.Create(&Midjourney{
+		UserId: 501, ChannelId: 601, MjId: sharedID, Status: "SUCCESS", Progress: "100%",
+	}).Error)
+	require.NoError(t, DB.Create(&Midjourney{
+		UserId: 501, ChannelId: 602, MjId: sharedID, Status: "SUCCESS", Progress: "100%",
+	}).Error)
+
+	_, err := GetUniqueMidjourneyByUserAndMJID(501, sharedID)
+	require.ErrorIs(t, err, ErrMidjourneyTaskAmbiguous)
+	_, err = GetUniqueMidjourneyByMJID(sharedID)
+	require.True(t, errors.Is(err, ErrMidjourneyTaskAmbiguous))
+}
+
+func TestMidjourneyTerminalMetadataRefreshKeepsMatchingTaskTerminalState(t *testing.T) {
+	truncateTables(t)
+	billingTask := newMidjourneyBillingTask(t, "terminal-refresh", 20)
+	billingTask.Status = TaskStatusSuccess
+	billingTask.Progress = "100%"
+	billingTask.PrivateData.ResultURL = "https://example.com/old.png"
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", billingTask.ID).Updates(map[string]any{
+		"status": billingTask.Status, "progress": billingTask.Progress, "private_data": billingTask.PrivateData,
+	}).Error)
+	mj := Midjourney{
+		UserId: 501, ChannelId: 601, MjId: "provider-mj-terminal-refresh",
+		Status: "SUCCESS", Progress: "100%", ImageUrl: "https://example.com/old.png", Quota: 20,
+	}
+	require.NoError(t, DB.Create(&mj).Error)
+
+	mj.ImageUrl = "https://example.com/final.png"
+	billingTask.PrivateData.ResultURL = mj.ImageUrl
+	billingTask.SetData(map[string]any{"imageUrl": mj.ImageUrl})
+	won, err := mj.UpdateWithBillingTaskAndSettlement("SUCCESS", billingTask, nil)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	var storedTask Task
+	require.NoError(t, DB.First(&storedTask, billingTask.ID).Error)
+	require.EqualValues(t, TaskStatusSuccess, storedTask.Status)
+	require.Equal(t, mj.ImageUrl, storedTask.PrivateData.ResultURL)
+	var storedMJ Midjourney
+	require.NoError(t, DB.First(&storedMJ, mj.Id).Error)
+	require.Equal(t, mj.ImageUrl, storedMJ.ImageUrl)
 }
