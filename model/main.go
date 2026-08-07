@@ -338,6 +338,7 @@ func migrateDB() error {
 		&SubscriptionPreConsumeRecord{},
 		&BillingSettlement{},
 		&BillingPreConsumeSelection{},
+		&MidjourneyBillingClaim{},
 		&CacheInvalidationTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},

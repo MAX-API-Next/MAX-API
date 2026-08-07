@@ -52,6 +52,8 @@ func TestMain(m *testing.M) {
 		&SubscriptionPreConsumeRecord{},
 		&BillingSettlement{},
 		&BillingPreConsumeSelection{},
+		&Midjourney{},
+		&MidjourneyBillingClaim{},
 		&CacheInvalidationTask{},
 		&PerfMetric{},
 		&SystemTask{},
@@ -81,6 +83,8 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM subscription_pre_consume_records")
 		DB.Exec("DELETE FROM billing_settlements")
 		DB.Exec("DELETE FROM billing_pre_consume_selections")
+		DB.Exec("DELETE FROM midjourneys")
+		DB.Exec("DELETE FROM midjourney_billing_claims")
 		DB.Exec("DELETE FROM cache_invalidation_tasks")
 		DB.Exec("DELETE FROM perf_metrics")
 		DB.Exec("DELETE FROM system_tasks")

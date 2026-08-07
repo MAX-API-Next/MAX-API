@@ -498,27 +498,35 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	defer tx.Rollback()
 
 	var tokens []Token
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
-		tx.Rollback()
 		return 0, err
+	}
+	cacheTasks := make([]CacheInvalidationTask, 0, len(tokens))
+	for _, token := range tokens {
+		if token.Key == "" {
+			continue
+		}
+		task, err := stageTokenCacheInvalidationTx(tx, token.Key, true)
+		if err != nil {
+			return 0, err
+		}
+		cacheTasks = append(cacheTasks, task)
 	}
 
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
-		tx.Rollback()
 		return 0, err
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
 	}
-
-	if common.RedisEnabled {
-		for _, t := range tokens {
-			enqueueTokenCacheRetry(t.Key, true, nil)
-		}
-	}
+	dispatchStagedCacheInvalidations(cacheTasks)
 
 	return len(tokens), nil
 }

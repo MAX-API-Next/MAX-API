@@ -73,7 +73,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 		var settlement *model.BillingSettlementInput
 		if !isLegacy && !isUnconfirmedSubmit {
-			settlement = buildTaskRefundSettlementInput(task, reason)
+			settlement = BuildTaskRefundSettlementInput(task, reason)
 		}
 		var won bool
 		var err error
@@ -242,7 +242,7 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
-		settlement = buildTaskRefundSettlementInput(task, task.FailReason)
+		settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
 	}
 	var won bool
 	var err error
@@ -482,7 +482,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if shouldSettle {
 			settlement = prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
 		} else if shouldRefund {
-			settlement = buildTaskRefundSettlementInput(task, task.FailReason)
+			settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
 		}
 		var won bool
 		var err error

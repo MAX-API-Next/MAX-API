@@ -629,6 +629,43 @@ func MarkTaskSubmitFailed(taskID int64, reason string) error {
 		}).Error
 }
 
+// MarkTaskSubmitFailedWithSettlement commits a definite submit rejection and
+// its durable pre-consume refund intent atomically. The task is terminal with a
+// zero displayed quota while the settlement runner applies or retries the
+// already-recorded balance mutation.
+func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *BillingSettlementInput) error {
+	if taskID <= 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if input != nil {
+			if err := validateBillingSettlementInput(*input); err != nil {
+				return err
+			}
+			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Updates(map[string]interface{}{
+				"status":      TaskStatusFailure,
+				"progress":    "100%",
+				"finish_time": time.Now().Unix(),
+				"fail_reason": reason,
+				"quota":       0,
+				"updated_at":  time.Now().Unix(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return taskSubmitResultUpdateMissError(tx, taskID)
+		}
+		return nil
+	})
+}
+
 // MarkTaskSubmitNeedsReview preserves the pre-consumed quota and any upstream
 // identity after the provider accepted a task but local durable finalization
 // failed. Refunding this state would create an unbilled upstream task.
