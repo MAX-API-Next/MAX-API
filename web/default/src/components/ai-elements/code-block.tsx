@@ -76,7 +76,7 @@ export async function highlightCode(
   code: string,
   language: BundledLanguage,
   showLineNumbers = false
-) {
+): Promise<string> {
   const transformers: ShikiTransformer[] = showLineNumbers
     ? [lineNumberTransformer]
     : []
@@ -95,10 +95,14 @@ export async function renderHighlightedCode(
   code: string,
   language: BundledLanguage,
   showLineNumbers = false
-) {
-  return sanitizeHtmlContent(
+): Promise<string> {
+  return sanitizeHighlightedCode(
     await highlightCode(code, language, showLineNumbers)
   )
+}
+
+export function sanitizeHighlightedCode(html: string): string {
+  return sanitizeHtmlContent(html)
 }
 
 export const CodeBlock = ({

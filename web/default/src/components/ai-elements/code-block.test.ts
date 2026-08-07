@@ -19,7 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
-import { renderHighlightedCode } from './code-block'
+import { renderHighlightedCode, sanitizeHighlightedCode } from './code-block'
 
 const dom = new JSDOM('', { url: 'http://localhost/' })
 const previousWindowDescriptor = Object.getOwnPropertyDescriptor(
@@ -42,6 +42,20 @@ after(() => {
 })
 
 describe('renderHighlightedCode', () => {
+  test('sanitizes pre-rendered HTML independently of Shiki escaping', () => {
+    const html = sanitizeHighlightedCode(
+      '<pre><code>safe</code></pre><img src=x onerror=alert(1)><script>alert(2)</script>'
+    )
+    const fragment = JSDOM.fragment(html)
+
+    const image = fragment.querySelector('img')
+
+    assert.notEqual(image, null)
+    assert.equal(image?.hasAttribute('onerror'), false)
+    assert.equal(fragment.querySelector('script'), null)
+    assert.equal(fragment.textContent?.includes('safe'), true)
+  })
+
   test('sanitizes highlighted code before it reaches innerHTML', async () => {
     const payload =
       '</code></pre><img src=x onerror=alert(1)><script>alert(2)</script>'

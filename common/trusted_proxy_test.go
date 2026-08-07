@@ -23,7 +23,14 @@ func TestParseTrustedProxiesUsesLoopbackDefaults(t *testing.T) {
 }
 
 func TestParseTrustedProxiesRejectsUnrestrictedNetworks(t *testing.T) {
-	for _, value := range []string{"0.0.0.0/0", "::/0", "not-a-network"} {
+	for _, value := range []string{
+		"0.0.0.0/0",
+		"::/0",
+		"::ffff:0:0/96",
+		"0.0.0.0/1,128.0.0.0/1",
+		"::/1,8000::/1",
+		"not-a-network",
+	} {
 		if _, err := parseTrustedProxies(value); err == nil {
 			t.Fatalf("expected unrestricted proxy network %q to be rejected", value)
 		}
@@ -31,11 +38,11 @@ func TestParseTrustedProxiesRejectsUnrestrictedNetworks(t *testing.T) {
 }
 
 func TestParseTrustedProxiesAcceptsExplicitProxyNetworks(t *testing.T) {
-	proxies, err := parseTrustedProxies("127.0.0.1, 10.0.0.0/8")
+	proxies, err := parseTrustedProxies("127.0.0.1, 10.0.0.0/8, ::ffff:192.0.2.1/128")
 	if err != nil {
 		t.Fatalf("parseTrustedProxies rejected explicit proxy networks: %v", err)
 	}
-	if !slices.Equal(proxies, []string{"127.0.0.1", "10.0.0.0/8"}) {
+	if !slices.Equal(proxies, []string{"127.0.0.1", "10.0.0.0/8", "::ffff:192.0.2.1/128"}) {
 		t.Fatalf("unexpected explicit trusted proxies: %v", proxies)
 	}
 }

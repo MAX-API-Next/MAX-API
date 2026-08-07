@@ -40,4 +40,20 @@ describe('ChartStyle', () => {
     assert.equal(document.querySelector('script'), null)
     assert.doesNotMatch(style, /url\s*\(|body\s*\{/i)
   })
+
+  test('rejects escaped URL functions while retaining safe modern colors', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(ChartStyle, {
+        id: 'chart-test',
+        config: {
+          escapedUrl: { color: 'u\\72l(https://example.com/pixel)' },
+          safeColor: { color: 'oklch(0.7 0.1 120)' },
+        },
+      })
+    )
+    const style = new JSDOM(markup).window.document.querySelector('style')
+
+    assert.doesNotMatch(style?.textContent ?? '', /--color-escapedUrl/)
+    assert.match(style?.textContent ?? '', /--color-safeColor: oklch\(/)
+  })
 })

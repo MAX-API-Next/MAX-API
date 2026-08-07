@@ -97,7 +97,7 @@ function ChartContainer({
 }
 
 const unsafeChartCssValuePattern =
-  /[<>{};]|\/\*|\*\/|url\s*\(|expression\s*\(|@import/i
+  /[\\<>{};]|\/\*|\*\/|url\s*\(|expression\s*\(|@import/i
 
 function sanitizeChartCssValue(value: string | undefined): string | null {
   const normalized = value?.trim()
@@ -107,7 +107,13 @@ function sanitizeChartCssValue(value: string | undefined): string | null {
   return normalized
 }
 
-const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
+const ChartStyle = ({
+  id,
+  config,
+}: {
+  id: string
+  config: ChartConfig
+}): React.JSX.Element | null => {
   const safeId = sanitizeCssVariableName(id)
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme ?? config.color
