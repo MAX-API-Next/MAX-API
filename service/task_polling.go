@@ -279,6 +279,9 @@ func taskNeedsUpdate(oldTask *model.Task, newTask dto.SunoDataResponse) bool {
 	if string(oldTask.Status) != newTask.Status {
 		return true
 	}
+	if newTask.FailReason != "" && oldTask.Status != model.TaskStatusFailure {
+		return true
+	}
 	newFailReason := oldTask.FailReason
 	if newTask.FailReason != "" {
 		newFailReason = common.SanitizePersistedLogContent(newTask.FailReason)

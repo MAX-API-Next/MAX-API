@@ -90,12 +90,13 @@ func TestTaskNeedsUpdateComparesPersistedFailReasonNormalization(t *testing.T) {
 	t.Run("sanitized equivalent", func(t *testing.T) {
 		rawFailReason := "upstream\r\nfailed\x00" + strings.Repeat("界", common.PersistedLogContentLimit+1)
 		oldTask := &model.Task{
-			Status:     model.TaskStatusInProgress,
+			Status:     model.TaskStatusFailure,
+			Progress:   "100%",
 			FailReason: common.SanitizePersistedLogContent(rawFailReason),
 		}
 
 		require.False(t, taskNeedsUpdate(oldTask, dto.SunoDataResponse{
-			Status:     string(model.TaskStatusInProgress),
+			Status:     string(model.TaskStatusFailure),
 			FailReason: rawFailReason,
 		}))
 	})
