@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -170,12 +171,22 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	service.CopyUpstreamResponseHeaders(c, resp.Header)
+	copyVideoResponseHeaders(c, resp)
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, err = io.Copy(c.Writer, resp.Body); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to stream video content: %s", err.Error()))
+	}
+}
+
+func copyVideoResponseHeaders(c *gin.Context, resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	service.CopyUpstreamResponseHeaders(c, resp.Header)
+	if resp.ContentLength >= 0 {
+		c.Writer.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 }
 

@@ -200,7 +200,7 @@ func TestUserAuthRejectsNonEnabledStatus(t *testing.T) {
 	}
 	router.ServeHTTP(recorder, request)
 
-	require.NotEqual(t, http.StatusNoContent, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code)
 }
 
 func TestTokenOrUserAuthRejectsDisabledStaleSession(t *testing.T) {

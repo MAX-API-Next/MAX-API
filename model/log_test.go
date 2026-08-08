@@ -106,6 +106,12 @@ func newLogTestContext() *gin.Context {
 }
 
 func TestRecordConsumeLogSanitizesPersistedContent(t *testing.T) {
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+	})
+
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)

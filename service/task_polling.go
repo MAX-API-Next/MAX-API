@@ -204,7 +204,12 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	}
 	if !responseItems.IsSuccess() {
 		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, response_bytes=%d", channelId, len(taskIds), len(responseBody)))
-		return err
+		return fmt.Errorf(
+			"Suno task polling failed for channel #%d: code=%q, message=%q",
+			channelId,
+			responseItems.Code,
+			common.SanitizePersistedLogContent(responseItems.Message),
+		)
 	}
 
 	for _, responseItem := range responseItems.Data {

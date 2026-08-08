@@ -42,49 +42,67 @@ func ValidateCompletionRatioJSONString(jsonStr string) error {
 }
 
 func validatePricingMapJSONString(jsonStr string, opts pricingMapValidationOptions) error {
+	_, err := normalizePricingMapJSONString(jsonStr, opts)
+	return err
+}
+
+func normalizePricingMapJSONString(jsonStr string, opts pricingMapValidationOptions) (string, error) {
 	if opts.name == "" {
 		opts.name = "pricing configuration"
 	}
 	if len(jsonStr) > maxPricingMapJSONBytes {
-		return fmt.Errorf("%s is too large: %d bytes exceeds limit %d", opts.name, len(jsonStr), maxPricingMapJSONBytes)
+		return "", fmt.Errorf("%s is too large: %d bytes exceeds limit %d", opts.name, len(jsonStr), maxPricingMapJSONBytes)
 	}
 	var values map[string]*float64
 	if err := common.UnmarshalJsonStr(jsonStr, &values); err != nil {
-		return err
+		return "", err
 	}
 	if values == nil {
-		return fmt.Errorf("%s must be a JSON object", opts.name)
+		return "", fmt.Errorf("%s must be a JSON object", opts.name)
 	}
 	if len(values) > maxPricingMapEntries {
-		return fmt.Errorf("%s has too many entries: %d exceeds limit %d", opts.name, len(values), maxPricingMapEntries)
+		return "", fmt.Errorf("%s has too many entries: %d exceeds limit %d", opts.name, len(values), maxPricingMapEntries)
 	}
-	normalizedKeys := map[string]string{}
-	if opts.normalizeKey == nil {
-		normalizedKeys = nil
+	var normalizedValues map[string]float64
+	var normalizedKeys map[string]string
+	if opts.normalizeKey != nil {
+		normalizedValues = make(map[string]float64, len(values))
+		normalizedKeys = make(map[string]string, len(values))
 	}
 	for modelName, value := range values {
 		trimmedName := strings.TrimSpace(modelName)
 		if trimmedName == "" {
-			return fmt.Errorf("%s contains an empty model name", opts.name)
+			return "", fmt.Errorf("%s contains an empty model name", opts.name)
 		}
 		if utf8.RuneCountInString(modelName) > maxPricingMapKeyRunes {
-			return fmt.Errorf("%s model name %q exceeds %d characters", opts.name, modelName, maxPricingMapKeyRunes)
+			return "", fmt.Errorf("%s model name %q exceeds %d characters", opts.name, modelName, maxPricingMapKeyRunes)
 		}
-		if normalizedKeys != nil {
-			normalizedName := opts.normalizeKey(trimmedName)
+		normalizedName := trimmedName
+		if opts.normalizeKey != nil {
+			normalizedName = opts.normalizeKey(trimmedName)
 			if existing, ok := normalizedKeys[normalizedName]; ok && existing != modelName {
-				return fmt.Errorf("%s contains duplicate normalized model names %q and %q", opts.name, existing, modelName)
+				return "", fmt.Errorf("%s contains duplicate normalized model names %q and %q", opts.name, existing, modelName)
 			}
 			normalizedKeys[normalizedName] = modelName
 		}
 		if value == nil {
-			return fmt.Errorf("%s value for model %q must not be null", opts.name, modelName)
+			return "", fmt.Errorf("%s value for model %q must not be null", opts.name, modelName)
 		}
 		if *value < 0 || math.IsNaN(*value) || math.IsInf(*value, 0) {
-			return fmt.Errorf("%s value for model %q must be finite and non-negative", opts.name, modelName)
+			return "", fmt.Errorf("%s value for model %q must be finite and non-negative", opts.name, modelName)
+		}
+		if normalizedValues != nil {
+			normalizedValues[normalizedName] = *value
 		}
 	}
-	return nil
+	if normalizedValues == nil {
+		return jsonStr, nil
+	}
+	normalizedJSON, err := common.Marshal(normalizedValues)
+	if err != nil {
+		return "", err
+	}
+	return string(normalizedJSON), nil
 }
 
 func loadPricingMap(m *types.RWMap[string, float64], jsonStr string) error {
@@ -94,8 +112,9 @@ func loadPricingMap(m *types.RWMap[string, float64], jsonStr string) error {
 }
 
 func loadPricingMapWithOptions(m *types.RWMap[string, float64], jsonStr string, opts pricingMapValidationOptions) error {
-	if err := validatePricingMapJSONString(jsonStr, opts); err != nil {
+	normalizedJSON, err := normalizePricingMapJSONString(jsonStr, opts)
+	if err != nil {
 		return err
 	}
-	return types.LoadFromJsonStringWithCallback(m, jsonStr, InvalidateExposedDataCache)
+	return types.LoadFromJsonStringWithCallback(m, normalizedJSON, InvalidateExposedDataCache)
 }

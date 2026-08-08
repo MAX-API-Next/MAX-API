@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Token struct {
@@ -290,7 +291,7 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		cacheVersionValid = err == nil
 	}
 	var dbToken Token
-	err = DB.Where(&Token{Key: key}).First(&dbToken).Error
+	err = DB.Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: key}).First(&dbToken).Error
 	if err == nil {
 		token = &dbToken
 	}

@@ -55,3 +55,23 @@ func TestWriteVideoDataURLRejectsOversizedPayload(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Empty(t, recorder.Body.String())
 }
+
+func TestCopyVideoResponseHeadersPreservesKnownContentLength(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{
+		ContentLength: 1234,
+		Header: http.Header{
+			"Content-Type":   []string{"video/mp4"},
+			"Content-Length": []string{"9999"},
+			"Connection":     []string{"keep-alive"},
+		},
+	}
+
+	copyVideoResponseHeaders(c, resp)
+
+	require.Equal(t, "video/mp4", recorder.Header().Get("Content-Type"))
+	require.Equal(t, "1234", recorder.Header().Get("Content-Length"))
+	require.Empty(t, recorder.Header().Get("Connection"))
+}
