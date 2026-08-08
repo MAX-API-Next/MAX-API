@@ -61,11 +61,39 @@ func shouldCopyUpstreamHeader(k string, v []string) bool {
 	return true
 }
 
+func connectionScopedHeaderNames(header http.Header) map[string]struct{} {
+	var connectionScoped map[string]struct{}
+	for key, values := range header {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				name = strings.TrimSpace(name)
+				if name == "" || !isSafeResponseHeaderName(name) {
+					continue
+				}
+				if connectionScoped == nil {
+					connectionScoped = make(map[string]struct{})
+				}
+				connectionScoped[strings.ToLower(name)] = struct{}{}
+			}
+		}
+	}
+	return connectionScoped
+}
+
 func CopyUpstreamResponseHeaders(c *gin.Context, header http.Header) {
 	if c == nil || c.Writer == nil {
 		return
 	}
+	connectionScoped := connectionScopedHeaderNames(header)
 	for key, values := range header {
+		if connectionScoped != nil {
+			if _, blocked := connectionScoped[strings.ToLower(key)]; blocked {
+				continue
+			}
+		}
 		if len(values) > 0 && strings.EqualFold(key, common.RequestIdKey) && isSafeResponseHeaderName(key) && isSafeResponseHeaderValue(values[0]) {
 			c.Set(common.UpstreamRequestIdKey, values[0])
 		}

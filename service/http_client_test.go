@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -46,6 +47,25 @@ func TestShouldCopyUpstreamHeaderRejectsUnsafeResponseHeaders(t *testing.T) {
 	_, capturedRequestID := c.Get(common.UpstreamRequestIdKey)
 	require.False(t, capturedRequestID)
 	require.True(t, ShouldCopyUpstreamHeader(c, "X-Safe", []string{"safe"}))
+}
+
+func TestCopyUpstreamResponseHeadersRejectsConnectionNominatedHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	CopyUpstreamResponseHeaders(c, http.Header{
+		"Connection":        []string{"keep-alive, X-Transient", strings.ToLower(common.RequestIdKey)},
+		"X-Transient":       []string{"must-not-copy"},
+		"X-Safe":            []string{"safe"},
+		common.RequestIdKey: []string{"must-not-capture"},
+	})
+
+	require.Empty(t, recorder.Header().Get("Connection"))
+	require.Empty(t, recorder.Header().Get("X-Transient"))
+	require.Equal(t, "safe", recorder.Header().Get("X-Safe"))
+	_, capturedRequestID := c.Get(common.UpstreamRequestIdKey)
+	require.False(t, capturedRequestID)
 }
 
 func TestIOCopyBytesGracefullyCopiesOnlySafeUpstreamHeaders(t *testing.T) {
