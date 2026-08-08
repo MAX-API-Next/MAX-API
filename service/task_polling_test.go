@@ -5,9 +5,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/stretchr/testify/assert"
@@ -65,7 +68,7 @@ func TestUpdateSunoTasksReturnsErrorForUnsuccessfulResponse(t *testing.T) {
 	GetTaskAdaptorFunc = func(platform constant.TaskPlatform) TaskPollingAdaptor {
 		require.Equal(t, constant.TaskPlatformSuno, platform)
 		return &sunoPollingResponseAdaptor{
-			responseBody: `{"code":"failure","message":"upstream unavailable","data":[]}`,
+			responseBody: `{"code":"failure","message":"poll https://api.suno.example.com/v1/tasks?api_key=url-secret api_key:header-secret","data":[]}`,
 		}
 	}
 	t.Cleanup(func() {
@@ -75,5 +78,36 @@ func TestUpdateSunoTasksReturnsErrorForUnsuccessfulResponse(t *testing.T) {
 	err := updateSunoTasks(context.Background(), 7201, []string{"suno-task"}, map[string]*model.Task{})
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "upstream unavailable")
+	require.Contains(t, err.Error(), "https://***.com/")
+	require.Contains(t, err.Error(), "?api_key=***")
+	require.Contains(t, err.Error(), "api_key:***")
+	require.NotContains(t, err.Error(), "suno.example.com")
+	require.NotContains(t, err.Error(), "url-secret")
+	require.NotContains(t, err.Error(), "header-secret")
+}
+
+func TestTaskNeedsUpdateComparesPersistedFailReasonNormalization(t *testing.T) {
+	t.Run("sanitized equivalent", func(t *testing.T) {
+		rawFailReason := "upstream\r\nfailed\x00" + strings.Repeat("界", common.PersistedLogContentLimit+1)
+		oldTask := &model.Task{
+			Status:     model.TaskStatusInProgress,
+			FailReason: common.SanitizePersistedLogContent(rawFailReason),
+		}
+
+		require.False(t, taskNeedsUpdate(oldTask, dto.SunoDataResponse{
+			Status:     string(model.TaskStatusInProgress),
+			FailReason: rawFailReason,
+		}))
+	})
+
+	t.Run("empty incoming reason keeps persisted value", func(t *testing.T) {
+		oldTask := &model.Task{
+			Status:     model.TaskStatusInProgress,
+			FailReason: "persisted failure reason",
+		}
+
+		require.False(t, taskNeedsUpdate(oldTask, dto.SunoDataResponse{
+			Status: string(model.TaskStatusInProgress),
+		}))
+	})
 }

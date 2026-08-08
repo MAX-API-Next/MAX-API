@@ -208,7 +208,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 			"Suno task polling failed for channel #%d: code=%q, message=%q",
 			channelId,
 			responseItems.Code,
-			common.SanitizePersistedLogContent(responseItems.Message),
+			common.SanitizePersistedLogContent(common.MaskSensitiveInfo(responseItems.Message)),
 		)
 	}
 
@@ -279,7 +279,11 @@ func taskNeedsUpdate(oldTask *model.Task, newTask dto.SunoDataResponse) bool {
 	if string(oldTask.Status) != newTask.Status {
 		return true
 	}
-	if oldTask.FailReason != newTask.FailReason {
+	newFailReason := oldTask.FailReason
+	if newTask.FailReason != "" {
+		newFailReason = common.SanitizePersistedLogContent(newTask.FailReason)
+	}
+	if oldTask.FailReason != newFailReason {
 		return true
 	}
 

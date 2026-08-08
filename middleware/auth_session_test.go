@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	appi18n "github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -201,6 +202,13 @@ func TestUserAuthRejectsNonEnabledStatus(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	require.Equal(t, appi18n.MsgAuthUserBanned, response.Message)
 }
 
 func TestTokenOrUserAuthRejectsDisabledStaleSession(t *testing.T) {

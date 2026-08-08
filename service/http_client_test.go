@@ -32,21 +32,15 @@ func TestNewBaseTransportKeepsEnvironmentProxySupport(t *testing.T) {
 }
 
 func TestShouldCopyUpstreamHeaderRejectsUnsafeResponseHeaders(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-
-	require.False(t, ShouldCopyUpstreamHeader(c, "Content-Length", []string{"10"}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "Connection", []string{"keep-alive"}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "Set-Cookie", []string{"session=upstream"}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "Bad Header", []string{"value"}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "X-Bad", []string{"ok\r\nX-Injected: yes"}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "X-Del", []string{"bad" + string(rune(0x7f))}))
-	require.False(t, ShouldCopyUpstreamHeader(c, "X-Empty", nil))
-
-	require.False(t, ShouldCopyUpstreamHeader(c, common.RequestIdKey, []string{"upstream-request"}))
-	require.Equal(t, "upstream-request", c.GetString(common.UpstreamRequestIdKey))
-	require.True(t, ShouldCopyUpstreamHeader(c, "X-Safe", []string{"safe"}))
+	require.False(t, ShouldCopyUpstreamHeader("Content-Length", []string{"10"}))
+	require.False(t, ShouldCopyUpstreamHeader("Connection", []string{"keep-alive"}))
+	require.False(t, ShouldCopyUpstreamHeader("Set-Cookie", []string{"session=upstream"}))
+	require.False(t, ShouldCopyUpstreamHeader("Bad Header", []string{"value"}))
+	require.False(t, ShouldCopyUpstreamHeader("X-Bad", []string{"ok\r\nX-Injected: yes"}))
+	require.False(t, ShouldCopyUpstreamHeader("X-Del", []string{"bad" + string(rune(0x7f))}))
+	require.False(t, ShouldCopyUpstreamHeader("X-Empty", nil))
+	require.False(t, ShouldCopyUpstreamHeader(common.RequestIdKey, []string{"upstream-request"}))
+	require.True(t, ShouldCopyUpstreamHeader("X-Safe", []string{"safe"}))
 }
 
 func TestIOCopyBytesGracefullyCopiesOnlySafeUpstreamHeaders(t *testing.T) {

@@ -133,7 +133,7 @@ func TestRecordConsumeLogSanitizesPersistedContent(t *testing.T) {
 	require.NotContains(t, log.Content, "\x00")
 	require.Contains(t, log.Content, "line1  line2 line3")
 	require.True(t, strings.HasSuffix(log.Content, "... [truncated]"))
-	require.Equal(t, common.PersistedLogContentLimit+utf8.RuneCountInString("... [truncated]"), utf8.RuneCountInString(log.Content))
+	require.LessOrEqual(t, utf8.RuneCountInString(log.Content), common.PersistedLogContentLimit)
 }
 
 func TestBillingSettlementEffectPayloadSanitizesContent(t *testing.T) {

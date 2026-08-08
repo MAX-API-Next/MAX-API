@@ -40,7 +40,7 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 // be copied to the client response. Hop-by-hop headers and Set-Cookie stay
 // under MAX API control, and malformed names/values are dropped before they
 // reach net/http's writer.
-func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
+func ShouldCopyUpstreamHeader(k string, v []string) bool {
 	if len(v) == 0 {
 		return false
 	}
@@ -49,9 +49,6 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 		return false
 	}
 	if strings.EqualFold(headerName, common.RequestIdKey) {
-		if c != nil && len(v) > 0 {
-			c.Set(common.UpstreamRequestIdKey, v[0])
-		}
 		return false
 	}
 	if _, blocked := blockedUpstreamResponseHeaders[strings.ToLower(headerName)]; blocked {
@@ -65,7 +62,10 @@ func CopyUpstreamResponseHeaders(c *gin.Context, header http.Header) {
 		return
 	}
 	for key, values := range header {
-		if !ShouldCopyUpstreamHeader(c, key, values) {
+		if len(values) > 0 && strings.EqualFold(key, common.RequestIdKey) && isSafeResponseHeaderName(key) && isSafeResponseHeaderValue(values[0]) {
+			c.Set(common.UpstreamRequestIdKey, values[0])
+		}
+		if !ShouldCopyUpstreamHeader(key, values) {
 			continue
 		}
 		copied := false

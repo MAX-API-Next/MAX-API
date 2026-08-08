@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -57,6 +58,11 @@ func SanitizePersistedLogContent(content string) string {
 	}
 	sanitized := strings.TrimSpace(builder.String())
 	if truncated {
+		retainedRuneLimit := max(0, PersistedLogContentLimit-utf8.RuneCountInString(persistedLogContentTruncatedSuffix))
+		sanitizedRunes := []rune(sanitized)
+		if len(sanitizedRunes) > retainedRuneLimit {
+			sanitized = strings.TrimSpace(string(sanitizedRunes[:retainedRuneLimit]))
+		}
 		sanitized += persistedLogContentTruncatedSuffix
 	}
 	return sanitized

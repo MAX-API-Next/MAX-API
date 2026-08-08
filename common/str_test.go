@@ -26,6 +26,17 @@ func TestSanitizePersistedLogContentTruncatesByRune(t *testing.T) {
 
 	got := SanitizePersistedLogContent(input)
 
-	require.Equal(t, PersistedLogContentLimit+utf8.RuneCountInString(persistedLogContentTruncatedSuffix), utf8.RuneCountInString(got))
+	suffixRuneCount := utf8.RuneCountInString(persistedLogContentTruncatedSuffix)
+	require.Equal(t, strings.Repeat("x", PersistedLogContentLimit-suffixRuneCount)+persistedLogContentTruncatedSuffix, got)
+	require.LessOrEqual(t, utf8.RuneCountInString(got), PersistedLogContentLimit)
 	require.True(t, strings.HasSuffix(got, persistedLogContentTruncatedSuffix))
+}
+
+func TestSanitizePersistedLogContentKeepsContentWithinLimit(t *testing.T) {
+	input := strings.Repeat("界", PersistedLogContentLimit)
+
+	got := SanitizePersistedLogContent(input)
+
+	require.Equal(t, input, got)
+	require.False(t, strings.HasSuffix(got, persistedLogContentTruncatedSuffix))
 }

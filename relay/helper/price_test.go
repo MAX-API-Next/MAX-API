@@ -12,6 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -95,10 +96,17 @@ func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
 func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 1000
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	quotaSetting := operation_setting.GetQuotaSetting()
+	originalEnableFreeModelPreConsume := quotaSetting.EnableFreeModelPreConsume
 	t.Cleanup(func() {
 		common.QuotaPerUnit = originalQuotaPerUnit
+		quotaSetting.EnableFreeModelPreConsume = originalEnableFreeModelPreConsume
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
 	})
+	common.QuotaPerUnit = 1000
+	quotaSetting.EnableFreeModelPreConsume = true
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
@@ -112,5 +120,7 @@ func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, priceData.UsePrice)
+	require.Equal(t, float64(1), priceData.GroupRatioInfo.GroupRatio)
+	require.Equal(t, 0.1, priceData.ModelPrice)
 	require.Equal(t, 100, priceData.Quota)
 }
