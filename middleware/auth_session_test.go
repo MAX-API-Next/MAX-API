@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 	}
 	model.DB = db
 	model.LOG_DB = db
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err := db.AutoMigrate(&model.User{}, &model.Token{}); err != nil {
 		panic("failed to migrate middleware test db: " + err.Error())
 	}
 
@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 func seedMiddlewareUser(t *testing.T, id int, role int, status int, group string) {
 	t.Helper()
 
+	require.NoError(t, model.DB.Unscoped().Where("user_id = ?", id).Delete(&model.Token{}).Error)
 	require.NoError(t, model.DB.Unscoped().Where("id = ?", id).Delete(&model.User{}).Error)
 	user := &model.User{
 		Id:          id,
@@ -50,6 +51,26 @@ func seedMiddlewareUser(t *testing.T, id int, role int, status int, group string
 		Group:       group,
 	}
 	require.NoError(t, model.DB.Create(user).Error)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", id).UpdateColumn("status", status).Error)
+}
+
+func seedMiddlewareToken(t *testing.T, userID int, key string) *model.Token {
+	t.Helper()
+
+	token := &model.Token{
+		UserId:         userID,
+		Name:           "test-token",
+		Key:            key,
+		Status:         common.TokenStatusEnabled,
+		CreatedTime:    1,
+		AccessedTime:   1,
+		ExpiredTime:    -1,
+		RemainQuota:    100,
+		UnlimitedQuota: true,
+		Group:          "default",
+	}
+	require.NoError(t, model.DB.Create(token).Error)
+	return token
 }
 
 func loginMiddlewareSession(t *testing.T, router *gin.Engine, user *model.User) []*http.Cookie {
@@ -156,6 +177,32 @@ func TestUserAuthAllowsSessionWithStaleUserHeader(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, recorder.Code)
 }
 
+func TestUserAuthRejectsNonEnabledStatus(t *testing.T) {
+	seedMiddlewareUser(t, 1, common.RoleCommonUser, 0, "default")
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("user-session-non-enabled-test"))))
+	cookies := loginMiddlewareSession(t, router, &model.User{
+		Id:       1,
+		Username: "tester",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	})
+	router.GET("/self", UserAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/self", nil)
+	for _, cookie := range cookies {
+		request.AddCookie(cookie)
+	}
+	router.ServeHTTP(recorder, request)
+
+	require.NotEqual(t, http.StatusNoContent, recorder.Code)
+}
+
 func TestTokenOrUserAuthRejectsDisabledStaleSession(t *testing.T) {
 	seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusEnabled, "default")
 
@@ -182,4 +229,39 @@ func TestTokenOrUserAuthRejectsDisabledStaleSession(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestTokenAuthRejectsDisabledTokenOwner(t *testing.T) {
+	seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusDisabled, "default")
+	token := seedMiddlewareToken(t, 1, "disabledownertoken")
+
+	router := gin.New()
+	router.GET("/v1/chat/completions", TokenAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	request.Header.Set("Authorization", "Bearer sk-"+token.Key)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestTokenAuthRejectsDeletedTokenOwner(t *testing.T) {
+	seedMiddlewareUser(t, 1, common.RoleCommonUser, common.UserStatusEnabled, "default")
+	token := seedMiddlewareToken(t, 1, "deletedownertoken")
+	require.NoError(t, model.DB.Delete(&model.User{}, 1).Error)
+
+	router := gin.New()
+	router.GET("/v1/chat/completions", TokenAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
+	request.Header.Set("Authorization", "Bearer sk-"+token.Key)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
 }

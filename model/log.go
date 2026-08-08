@@ -73,6 +73,7 @@ type BillingLogReceipt struct {
 
 func (log *Log) BeforeSave(*gorm.DB) error {
 	log.syncRetryMarker()
+	log.Content = common.SanitizePersistedLogContent(log.Content)
 	return nil
 }
 
@@ -394,6 +395,7 @@ func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
 		UserId:    userId,
@@ -413,6 +415,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
 		UserId:    userId,
@@ -443,6 +446,7 @@ func buildOpField(action string, params map[string]interface{}) map[string]inter
 }
 
 func RecordLoginLog(userId int, username string, content string, ip string, action string, params map[string]interface{}, extra map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	other := map[string]interface{}{}
 	for k, v := range extra {
 		other[k] = v
@@ -463,6 +467,7 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 }
 
 func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(logUserId, false)
 	other := map[string]interface{}{
 		"op": buildOpField(action, params),
@@ -488,6 +493,7 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 }
 
 func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
@@ -517,6 +523,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -580,6 +587,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
+	params.Content = common.SanitizePersistedLogContent(params.Content)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -672,6 +680,7 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 	if LOG_DB == nil {
 		return errors.New("log database is not initialized")
 	}
+	params.Content = common.SanitizePersistedLogContent(params.Content)
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
 	if params.TokenId > 0 {

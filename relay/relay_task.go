@@ -324,12 +324,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
-		if resp.Body != nil {
-			defer resp.Body.Close()
-		}
-		responseBody, _ := io.ReadAll(resp.Body)
-		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
-		return nil, mapUpstreamTaskError(c, taskErr)
+		return nil, mapUpstreamTaskError(c, service.TaskErrorFromUpstreamResponse(c, resp, "fail_to_fetch_task"))
 	}
 	if resp == nil {
 		return nil, service.TaskErrorWrapperLocal(errors.New("task upstream response is nil"), "empty_upstream_response", http.StatusBadGateway)

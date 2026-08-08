@@ -179,6 +179,49 @@ func TestGetSelfRedactsNotificationSecrets(t *testing.T) {
 	assert.Equal(t, 7, returned.GotifyPriority)
 }
 
+func TestGetSelfIgnoresQueryUserID(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	authenticatedUser := model.User{
+		Id:       1201,
+		Username: "self-authenticated",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		AffCode:  "self-authenticated",
+	}
+	otherUser := model.User{
+		Id:       1202,
+		Username: "self-other",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		AffCode:  "self-other",
+	}
+	require.NoError(t, db.Create(&authenticatedUser).Error)
+	require.NoError(t, db.Create(&otherUser).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/self?id=1202", nil)
+	ctx.Set("id", authenticatedUser.Id)
+	ctx.Set("role", authenticatedUser.Role)
+
+	GetSelf(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data struct {
+			ID       int    `json:"id"`
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, authenticatedUser.Id, response.Data.ID)
+	assert.Equal(t, authenticatedUser.Username, response.Data.Username)
+	assert.NotEqual(t, otherUser.Id, response.Data.ID)
+}
+
 func TestUpdateUserSettingPreservesStoredSecretsWhenRedactedFieldsAreOmitted(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
 

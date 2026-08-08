@@ -72,6 +72,13 @@ type Task struct {
 	includePrivateDataInUpdate bool `gorm:"-"`
 }
 
+func (t *Task) BeforeSave(*gorm.DB) error {
+	if t != nil {
+		t.FailReason = common.SanitizePersistedLogContent(t.FailReason)
+	}
+	return nil
+}
+
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
@@ -481,7 +488,7 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"progress":    t.Progress,
 		"start_time":  t.StartTime,
 		"finish_time": t.FinishTime,
-		"fail_reason": t.FailReason,
+		"fail_reason": common.SanitizePersistedLogContent(t.FailReason),
 		"updated_at":  updatedAt,
 	}
 	if t.Data != nil || t.includeDataInUpdate {
@@ -617,6 +624,7 @@ func MarkTaskSubmitFailed(taskID int64, reason string) error {
 	if taskID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	return DB.Model(&Task{}).
 		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
 		Updates(map[string]interface{}{
@@ -640,6 +648,7 @@ func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *Bill
 		}
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	if input != nil {
 		if err := validateBillingSettlementInput(*input); err != nil {
 			return err
@@ -678,6 +687,7 @@ func MarkTaskSubmitNeedsReview(task *Task, reason string) error {
 	if task == nil || task.ID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	task.PrivateData.AwaitingUpstreamID = false
 	return DB.Model(&Task{}).
 		Where("id = ? AND status <> ?", task.ID, TaskStatusSuccess).
@@ -697,6 +707,7 @@ func MarkTaskSubmitAmbiguous(taskID int64, reason string) error {
 	if taskID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	return DB.Model(&Task{}).
 		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
 		Updates(map[string]interface{}{
@@ -714,6 +725,7 @@ func TaskBulkUpdate(taskIds []string, params map[string]any) error {
 	if len(taskIds) == 0 {
 		return nil
 	}
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Task{}).
 		Where("task_id in (?)", taskIds).
 		Updates(params).Error
@@ -728,6 +740,7 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Task{}).
 		Where("id in (?)", ids).
 		Updates(params).Error

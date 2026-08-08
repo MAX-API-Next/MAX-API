@@ -199,11 +199,11 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	var responseItems dto.TaskResponse[[]dto.SunoDataResponse]
 	err = common.Unmarshal(responseBody, &responseItems)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Get Suno Task parse body error2: %v, body: %s", err, string(responseBody)))
+		logger.LogError(ctx, fmt.Sprintf("Get Suno Task parse body error2: %v, body_bytes=%d", err, len(responseBody)))
 		return err
 	}
 	if !responseItems.IsSuccess() {
-		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, 成功获取到任务数: %s", channelId, len(taskIds), string(responseBody)))
+		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, response_bytes=%d", channelId, len(taskIds), len(responseBody)))
 		return err
 	}
 
@@ -225,7 +225,7 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 
 	previousStatus := task.Status
 	task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
-	task.FailReason = lo.If(responseItem.FailReason != "", responseItem.FailReason).Else(task.FailReason)
+	task.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(task.FailReason)
 	task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
 	task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
 	task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
@@ -373,7 +373,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
+	logger.LogDebug(ctx, "updateVideoSingleTask response bytes: %d", len(responseBody))
 
 	snap := task.Snapshot()
 
@@ -418,7 +418,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				taskResult = relaycommon.FailTaskInfo("upstream returned error")
 			} else {
 				// unknown error format, log original response
-				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, response: %s", taskId, string(responseBody)))
+				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, body_bytes=%d", taskId, len(responseBody)))
 				taskResult = relaycommon.FailTaskInfo("upstream returned unrecognized message")
 			}
 		}
@@ -462,7 +462,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		task.FailReason = taskResult.Reason
+		task.FailReason = common.SanitizePersistedLogContent(taskResult.Reason)
 		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 		taskResult.Progress = taskcommon.ProgressComplete
 		if quota != 0 {

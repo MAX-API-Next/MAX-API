@@ -289,7 +289,11 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		cacheVersion, err = common.RedisGetCacheVersion(getTokenCacheVersionKey(key))
 		cacheVersionValid = err == nil
 	}
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+	var dbToken Token
+	err = DB.Where(&Token{Key: key}).First(&dbToken).Error
+	if err == nil {
+		token = &dbToken
+	}
 	if err == nil && token != nil && cacheVersionValid {
 		tokenSnapshot := *token
 		gopool.Go(func() {

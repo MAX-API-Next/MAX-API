@@ -149,6 +149,7 @@ func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.Bill
 	if task == nil || task.Quota == 0 || task.ID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	source := model.BillingSettlementSourceWallet
 	if taskIsSubscription(task) {
 		source = model.BillingSettlementSourceSubscription
@@ -182,6 +183,7 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 	if task == nil || task.ID <= 0 || actualQuota <= 0 || actualQuota == task.Quota {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	quotaDelta := actualQuota - task.Quota
 	source := model.BillingSettlementSourceWallet
 	if taskIsSubscription(task) {

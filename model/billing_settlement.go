@@ -509,7 +509,9 @@ func billingSettlementEffectPayload(effect *BillingSettlementEffect) (string, er
 	if effect == nil {
 		return "", nil
 	}
-	data, err := common.Marshal(effect)
+	safeEffect := *effect
+	safeEffect.Content = common.SanitizePersistedLogContent(safeEffect.Content)
+	data, err := common.Marshal(&safeEffect)
 	if err != nil {
 		return "", err
 	}

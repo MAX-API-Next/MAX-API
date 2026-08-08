@@ -192,7 +192,7 @@ func freshAuthHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
-	if status == common.UserStatusDisabled {
+	if status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
@@ -334,6 +334,14 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
+				})
+				c.Abort()
+				return
+			}
 			common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"success": false,
@@ -451,6 +459,10 @@ func TokenAuth() func(c *gin.Context) {
 
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgAuthUserBanned))
+				return
+			}
 			common.SysLog(fmt.Sprintf("TokenAuth GetUserCache error for user %d: %v", token.UserId, err))
 			abortWithOpenAiMessage(c, http.StatusInternalServerError,
 				common.TranslateMessage(c, i18n.MsgDatabaseError))

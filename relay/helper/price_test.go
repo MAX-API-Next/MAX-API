@@ -6,10 +6,12 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -59,4 +61,56 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+}
+
+func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalSelfUseMode := operation_setting.SelfUseModeEnabled
+	operation_setting.SelfUseModeEnabled = true
+	t.Cleanup(func() {
+		operation_setting.SelfUseModeEnabled = originalSelfUseMode
+	})
+
+	for _, modelName := range []string{"mj_unmapped_action", "suno_unmapped_action"} {
+		t.Run(modelName, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{
+				OriginModelName: modelName,
+				UserGroup:       "default",
+				UsingGroup:      "default",
+				ChannelMeta:     &relaycommon.ChannelMeta{},
+				UserSetting: dto.UserSetting{
+					AcceptUnsetRatioModel: true,
+				},
+			}
+
+			_, err := ModelPriceHelperPerCall(ctx, info)
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "not been priced")
+		})
+	}
+}
+
+func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 1000
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "suno_music",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+	require.NoError(t, err)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 100, priceData.Quota)
 }

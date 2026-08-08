@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/gin-gonic/gin"
@@ -101,6 +103,72 @@ func newLogTestContext() *gin.Context {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	return c
+}
+
+func TestRecordConsumeLogSanitizesPersistedContent(t *testing.T) {
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	content := "line1\r\nline2\tline3\x00" + strings.Repeat("x", common.PersistedLogContentLimit+1)
+	RecordConsumeLog(newLogTestContext(), 7, RecordConsumeLogParams{
+		ModelName: "gpt-test",
+		Quota:     1,
+		Content:   content,
+	})
+
+	var log Log
+	require.NoError(t, LOG_DB.Last(&log).Error)
+	require.True(t, utf8.ValidString(log.Content))
+	require.NotContains(t, log.Content, "\r")
+	require.NotContains(t, log.Content, "\n")
+	require.NotContains(t, log.Content, "\t")
+	require.NotContains(t, log.Content, "\x00")
+	require.Contains(t, log.Content, "line1  line2 line3")
+	require.True(t, strings.HasSuffix(log.Content, "... [truncated]"))
+	require.Equal(t, common.PersistedLogContentLimit+utf8.RuneCountInString("... [truncated]"), utf8.RuneCountInString(log.Content))
+}
+
+func TestBillingSettlementEffectPayloadSanitizesContent(t *testing.T) {
+	payload, err := billingSettlementEffectPayload(&BillingSettlementEffect{
+		LogType: LogTypeConsume,
+		Content: "effect\r\ncontent\x00" + strings.Repeat("x", common.PersistedLogContentLimit+1),
+	})
+	require.NoError(t, err)
+
+	effect, err := decodeBillingSettlementEffect(payload)
+	require.NoError(t, err)
+	require.NotNil(t, effect)
+	require.NotContains(t, effect.Content, "\r")
+	require.NotContains(t, effect.Content, "\n")
+	require.NotContains(t, effect.Content, "\x00")
+	require.True(t, strings.HasSuffix(effect.Content, "... [truncated]"))
+}
+
+func TestMarkTaskSubmitFailedSanitizesFailReason(t *testing.T) {
+	require.NoError(t, DB.Where("1 = 1").Delete(&Task{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&Task{}).Error)
+	})
+
+	task := &Task{
+		TaskID:     "sanitize-fail-reason",
+		Status:     TaskStatusSubmitted,
+		SubmitTime: time.Now().Unix(),
+	}
+	require.NoError(t, DB.Create(task).Error)
+
+	reason := "upstream\r\nfailed\x00" + strings.Repeat("x", common.PersistedLogContentLimit+1)
+	require.NoError(t, MarkTaskSubmitFailed(task.ID, reason))
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	require.EqualValues(t, TaskStatusFailure, reloaded.Status)
+	require.NotContains(t, reloaded.FailReason, "\r")
+	require.NotContains(t, reloaded.FailReason, "\n")
+	require.NotContains(t, reloaded.FailReason, "\x00")
+	require.True(t, strings.HasSuffix(reloaded.FailReason, "... [truncated]"))
 }
 
 func TestLogQuotaFilterIndexes(t *testing.T) {

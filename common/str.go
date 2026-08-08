@@ -19,6 +19,8 @@ var (
 )
 
 const LocalLogContentLimit = 2048
+const PersistedLogContentLimit = 4096
+const persistedLogContentTruncatedSuffix = "... [truncated]"
 
 // LocalLogPreview limits log-only content unless debug logging is enabled.
 func LocalLogPreview(content string) string {
@@ -26,6 +28,38 @@ func LocalLogPreview(content string) string {
 		return content
 	}
 	return fmt.Sprintf("%s... [truncated, original_length=%d, limit=%d]", content[:LocalLogContentLimit], len(content), LocalLogContentLimit)
+}
+
+func SanitizePersistedLogContent(content string) string {
+	if content == "" {
+		return ""
+	}
+	content = strings.ToValidUTF8(content, "")
+	var builder strings.Builder
+	builder.Grow(min(len(content), PersistedLogContentLimit))
+	count := 0
+	truncated := false
+	for _, r := range content {
+		switch r {
+		case '\r', '\n', '\t':
+			r = ' '
+		default:
+			if r < 0x20 || r == 0x7f {
+				continue
+			}
+		}
+		if count >= PersistedLogContentLimit {
+			truncated = true
+			break
+		}
+		builder.WriteRune(r)
+		count++
+	}
+	sanitized := strings.TrimSpace(builder.String())
+	if truncated {
+		sanitized += persistedLogContentTruncatedSuffix
+	}
+	return sanitized
 }
 
 func GetStringIfEmpty(str string, defaultValue string) string {

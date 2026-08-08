@@ -197,6 +197,47 @@ func TestRelayErrorHandlerLimitsUpstreamErrorBodyRead(t *testing.T) {
 	require.Contains(t, maxAPIError.Error(), "truncated after")
 }
 
+func TestTaskErrorFromUpstreamResponseKeepsStructuredSafeMessage(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"upstream failed\r\ntry later","type":"server_error","code":"server_error"}}`)),
+	}
+
+	taskErr := TaskErrorFromUpstreamResponse(context.Background(), resp, "fail_to_fetch_task")
+
+	require.NotNil(t, taskErr)
+	require.Equal(t, "fail_to_fetch_task", taskErr.Code)
+	require.Equal(t, http.StatusBadGateway, taskErr.StatusCode)
+	require.Equal(t, "upstream failed  try later", taskErr.Message)
+	require.NotContains(t, taskErr.Message, "\r")
+	require.NotContains(t, taskErr.Message, "\n")
+}
+
+func TestTaskErrorFromUpstreamResponseDoesNotExposeRawInvalidBody(t *testing.T) {
+	rawBody := `{"internal_prompt":"` + strings.Repeat("secret", 100) + `"}`
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(rawBody)),
+	}
+
+	taskErr := TaskErrorFromUpstreamResponse(context.Background(), resp, "fail_to_fetch_task")
+
+	require.NotNil(t, taskErr)
+	require.Equal(t, "bad upstream response status code 500", taskErr.Message)
+	require.NotContains(t, taskErr.Message, "secret")
+}
+
+func TestTaskErrorFromUpstreamResponseHandlesNilBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+	}
+
+	taskErr := TaskErrorFromUpstreamResponse(context.Background(), resp, "fail_to_fetch_task")
+
+	require.NotNil(t, taskErr)
+	require.Equal(t, "bad upstream response status code 502", taskErr.Message)
+}
+
 type countingReadCloser struct {
 	io.Reader
 	read int

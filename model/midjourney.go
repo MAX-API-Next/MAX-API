@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -33,6 +34,13 @@ type Midjourney struct {
 	Quota       int    `json:"quota"`
 	Buttons     string `json:"buttons"`
 	Properties  string `json:"properties"`
+}
+
+func (midjourney *Midjourney) BeforeSave(*gorm.DB) error {
+	if midjourney != nil {
+		midjourney.FailReason = common.SanitizePersistedLogContent(midjourney.FailReason)
+	}
+	return nil
 }
 
 // MidjourneyBillingClaim binds one provider task identity to the single local
@@ -203,7 +211,7 @@ func midjourneyUpdateValues(midjourney *Midjourney) map[string]interface{} {
 		"finish_time": midjourney.FinishTime, "image_url": midjourney.ImageUrl,
 		"video_url": midjourney.VideoUrl, "video_urls": midjourney.VideoUrls,
 		"status": midjourney.Status, "progress": midjourney.Progress,
-		"fail_reason": midjourney.FailReason, "channel_id": midjourney.ChannelId,
+		"fail_reason": common.SanitizePersistedLogContent(midjourney.FailReason), "channel_id": midjourney.ChannelId,
 		"quota": midjourney.Quota, "buttons": midjourney.Buttons,
 		"properties": midjourney.Properties,
 	}
@@ -437,15 +445,26 @@ func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) 
 }
 
 func MjBulkUpdate(mjIds []string, params map[string]any) error {
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Midjourney{}).
 		Where("mj_id in (?)", mjIds).
 		Updates(params).Error
 }
 
 func MjBulkUpdateByTaskIds(taskIDs []int, params map[string]any) error {
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Midjourney{}).
 		Where("id in (?)", taskIDs).
 		Updates(params).Error
+}
+
+func sanitizeFailReasonUpdateParam(params map[string]any) {
+	if params == nil {
+		return
+	}
+	if reason, ok := params["fail_reason"].(string); ok {
+		params["fail_reason"] = common.SanitizePersistedLogContent(reason)
+	}
 }
 
 // CountAllTasks returns total midjourney tasks for admin query

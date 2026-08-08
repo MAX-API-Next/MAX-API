@@ -20,6 +20,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var maxVideoDataURLDecodedBytes = 100 * 1024 * 1024
+
+var allowedVideoDataURLMimeTypes = map[string]struct{}{
+	"video/mp4":        {},
+	"video/webm":       {},
+	"video/quicktime":  {},
+	"video/x-matroska": {},
+}
+
 // videoProxyError returns a standardized OpenAI-style error response.
 func videoProxyError(c *gin.Context, status int, errType, message string) {
 	c.JSON(status, gin.H{
@@ -161,11 +170,7 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Writer.Header().Add(key, value)
-		}
-	}
+	service.CopyUpstreamResponseHeaders(c, resp.Header)
 
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -182,14 +187,13 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 
 	header := parts[0]
 	payload := parts[1]
-	if !strings.HasPrefix(header, "data:") || !strings.Contains(header, ";base64") {
-		return fmt.Errorf("unsupported data url")
+	mimeType, err := parseVideoDataURLHeader(header)
+	if err != nil {
+		return err
 	}
-
-	mimeType := strings.TrimPrefix(header, "data:")
-	mimeType = strings.TrimSuffix(mimeType, ";base64")
-	if mimeType == "" {
-		mimeType = "video/mp4"
+	if len(payload) > base64.StdEncoding.EncodedLen(maxVideoDataURLDecodedBytes) ||
+		base64.StdEncoding.DecodedLen(len(payload)) > maxVideoDataURLDecodedBytes {
+		return fmt.Errorf("video data url exceeds size limit")
 	}
 
 	videoBytes, err := base64.StdEncoding.DecodeString(payload)
@@ -199,10 +203,39 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 			return err
 		}
 	}
+	if len(videoBytes) > maxVideoDataURLDecodedBytes {
+		return fmt.Errorf("video data url exceeds size limit")
+	}
 
 	c.Writer.Header().Set("Content-Type", mimeType)
 	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
 	c.Writer.WriteHeader(http.StatusOK)
 	_, err = c.Writer.Write(videoBytes)
 	return err
+}
+
+func parseVideoDataURLHeader(header string) (string, error) {
+	if !strings.HasPrefix(strings.ToLower(header), "data:") {
+		return "", fmt.Errorf("unsupported data url")
+	}
+	metadata := header[len("data:"):]
+	parts := strings.Split(metadata, ";")
+	mimeType := strings.ToLower(strings.TrimSpace(parts[0]))
+	if mimeType == "" {
+		mimeType = "video/mp4"
+	}
+	hasBase64 := false
+	for _, part := range parts[1:] {
+		if strings.EqualFold(strings.TrimSpace(part), "base64") {
+			hasBase64 = true
+			break
+		}
+	}
+	if !hasBase64 {
+		return "", fmt.Errorf("unsupported data url")
+	}
+	if _, ok := allowedVideoDataURLMimeTypes[mimeType]; !ok {
+		return "", fmt.Errorf("unsupported video data url mime type")
+	}
+	return mimeType, nil
 }

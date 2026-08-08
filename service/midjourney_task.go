@@ -44,7 +44,7 @@ func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourne
 		task.Status = responseItem.Status
 	}
 	if responseItem.FailReason != "" {
-		task.FailReason = responseItem.FailReason
+		task.FailReason = common.SanitizePersistedLogContent(responseItem.FailReason)
 	}
 	if responseItem.Properties != nil {
 		properties, err := common.Marshal(responseItem.Properties)
