@@ -784,12 +784,16 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
 	}
+	randomPart, err := common.GenerateRandomCharsKey(6)
+	if err != nil {
+		return fmt.Errorf("generate subscription order number: %w", err)
+	}
 
 	var logPlanTitle string
 	var logMoney float64
 	var chargedQuota int
 	var upgradeGroup string
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)
 		if err != nil {
 			return err
@@ -832,7 +836,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		}
 
 		now := common.GetTimestamp()
-		tradeNo := fmt.Sprintf("SUBBALUSR%dNO%s%d", userId, common.GetRandomString(6), time.Now().UnixNano())
+		tradeNo := fmt.Sprintf("SUBBALUSR%dNO%s%d", userId, randomPart, time.Now().UnixNano())
 		order := &SubscriptionOrder{
 			UserId:          userId,
 			PlanId:          plan.Id,

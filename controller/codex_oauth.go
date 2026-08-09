@@ -164,8 +164,13 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 	}
 
 	session := sessions.Default(c)
-	expectedState, _ := session.Get(codexOAuthSessionKey(channelID, "state")).(string)
-	verifier, _ := session.Get(codexOAuthSessionKey(channelID, "verifier")).(string)
+	expectedState, stateOK := session.Get(codexOAuthSessionKey(channelID, "state")).(string)
+	verifier, verifierOK := session.Get(codexOAuthSessionKey(channelID, "verifier")).(string)
+	if !stateOK || !verifierOK {
+		common.SysError(fmt.Sprintf("invalid Codex OAuth session value types (channel_id=%d)", channelID))
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "oauth flow not started or session expired"})
+		return
+	}
 	if strings.TrimSpace(expectedState) == "" || strings.TrimSpace(verifier) == "" {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "oauth flow not started or session expired"})
 		return

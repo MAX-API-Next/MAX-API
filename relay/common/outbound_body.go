@@ -4,6 +4,7 @@ import (
 	"io"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 )
 
 // NewOutboundJSONBody wraps the already-marshaled upstream request body into a
@@ -18,14 +19,25 @@ import (
 // The caller MUST invoke closer.Close() once the upstream call has finished
 // (typically via defer) to release the disk file / memory accounting.
 //
-// The returned reader is wrapped with common.ReaderOnly to prevent the HTTP
-// transport from prematurely closing the underlying BodyStorage. The returned
-// size is meant to be propagated to http.Request.ContentLength because the
-// type-erased io.Reader prevents net/http from auto-detecting it.
+// The returned replayable reader hides storage ownership from net/http while
+// exposing independent readers for transport-level retries.
 func NewOutboundJSONBody(data []byte) (body io.Reader, size int64, closer io.Closer, err error) {
 	storage, err := common.CreateBodyStorage(data)
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	return common.ReaderOnly(storage), storage.Size(), storage, nil
+	return common.NewReplayableBodyReader(storage), storage.Size(), storage, nil
+}
+
+// PreparePassThroughJSONBody preserves raw pass-through semantics while still
+// enforcing channel permissions for fields that can change cost or privacy.
+func PreparePassThroughJSONBody(storage common.BodyStorage, settings dto.ChannelOtherSettings) (body io.Reader, size int64, closer io.Closer, err error) {
+	filtered, err := newPassThroughFilteredBody(storage, settings)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	if filtered == nil {
+		return common.NewReplayableBodyReader(storage), storage.Size(), nil, nil
+	}
+	return filtered, filtered.Size(), filtered, nil
 }

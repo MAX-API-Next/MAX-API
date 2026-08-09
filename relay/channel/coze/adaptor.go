@@ -1,13 +1,13 @@
 package coze
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	common2 "github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/common"
@@ -79,7 +79,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(respBody, &cozeResponse)
+	err = common2.Unmarshal(respBody, &cozeResponse)
 	if cozeResponse.Code != 0 {
 		return nil, errors.New(cozeResponse.Msg)
 	}

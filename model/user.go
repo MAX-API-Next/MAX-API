@@ -864,6 +864,10 @@ func BindEmailToUser(user *User, email string) error {
 }
 
 func (user *User) Insert(inviterId int) error {
+	affCode, err := common.GenerateRandomCharsKey(4)
+	if err != nil {
+		return fmt.Errorf("generate affiliate code: %w", err)
+	}
 	rewardPlan := buildInvitationRewardPlan(inviterId)
 	var inviterCacheTask CacheInvalidationTask
 	if err := WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
@@ -871,7 +875,7 @@ func (user *User) Insert(inviterId int) error {
 			return err
 		}
 		user.Quota = int64(common.QuotaForNewUser) + rewardPlan.inviteeQuota
-		user.AffCode = common.GetRandomString(4)
+		user.AffCode = affCode
 
 		// 初始化用户设置，包括默认的边栏配置
 		if user.Setting == "" {
@@ -922,13 +926,17 @@ func (user *User) Insert(inviterId int) error {
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
+	affCode, err := common.GenerateRandomCharsKey(4)
+	if err != nil {
+		return fmt.Errorf("generate affiliate code: %w", err)
+	}
 	rewardPlan := buildInvitationRewardPlan(inviterId)
 	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
 		user.Quota = int64(common.QuotaForNewUser) + rewardPlan.inviteeQuota
-		user.AffCode = common.GetRandomString(4)
+		user.AffCode = affCode
 
 		// 初始化用户设置
 		if user.Setting == "" {

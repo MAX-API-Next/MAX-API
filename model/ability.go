@@ -94,7 +94,10 @@ func GetChannelExcluding(group string, model string, retry int, requestPath stri
 		return nil, nil
 	}
 
-	channelId, ok := selectChannelIdFromAbilities(abilities, retry, excludedChannelIDs)
+	channelId, ok, err := selectChannelIdFromAbilities(abilities, retry, excludedChannelIDs)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -166,9 +169,9 @@ func abilityCol(name string) string {
 	return "`abilities`.`" + name + "`"
 }
 
-func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChannelIDs map[int]struct{}) (int, bool) {
+func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChannelIDs map[int]struct{}) (int, bool, error) {
 	if len(abilities) == 0 {
-		return 0, false
+		return 0, false, nil
 	}
 	priorities := make([]int64, 0, len(abilities))
 	seenPriorities := make(map[int64]struct{}, len(abilities))
@@ -187,7 +190,7 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChanne
 		return priorities[i] > priorities[j]
 	})
 	if len(priorities) == 0 {
-		return 0, false
+		return 0, false, nil
 	}
 	if retry >= len(priorities) {
 		retry = len(priorities) - 1
@@ -201,21 +204,25 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChanne
 		}
 	}
 	if len(targetAbilities) == 0 {
-		return 0, false
+		return 0, false, nil
 	}
 
 	weightSum := uint(0)
 	for _, ability_ := range targetAbilities {
 		weightSum += ability_.Weight + 10
 	}
-	weight := common.GetRandomInt(int(weightSum))
-	for _, ability_ := range targetAbilities {
-		weight -= int(ability_.Weight) + 10
-		if weight <= 0 {
-			return ability_.ChannelId, true
-		}
+	weight, err := common.SecureRandomInt(int(weightSum))
+	if err != nil {
+		return 0, false, fmt.Errorf("select channel by weight: %w", err)
 	}
-	return 0, false
+	for _, ability_ := range targetAbilities {
+		candidateWeight := int(ability_.Weight) + 10
+		if weight < candidateWeight {
+			return ability_.ChannelId, true, nil
+		}
+		weight -= candidateWeight
+	}
+	return 0, false, nil
 }
 
 func abilityPriority(ability Ability) int64 {

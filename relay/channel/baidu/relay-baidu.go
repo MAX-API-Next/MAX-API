@@ -1,7 +1,6 @@
 package baidu
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,13 +25,11 @@ var baiduTokenStore sync.Map
 
 func requestOpenAI2Baidu(request dto.GeneralOpenAIRequest) *BaiduChatRequest {
 	baiduRequest := BaiduChatRequest{
-		Temperature:    request.Temperature,
-		TopP:           request.TopP,
-		PenaltyScore:   request.FrequencyPenalty,
-		Stream:         request.Stream,
-		DisableSearch:  false,
-		EnableCitation: false,
-		UserId:         request.User,
+		Temperature:  request.Temperature,
+		TopP:         request.TopP,
+		PenaltyScore: request.FrequencyPenalty,
+		Stream:       request.Stream,
+		UserId:       request.User,
 	}
 	if request.GetMaxTokens() != 0 {
 		maxTokens := int(request.GetMaxTokens())
@@ -143,7 +140,7 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
-	err = json.Unmarshal(responseBody, &baiduResponse)
+	err = common.Unmarshal(responseBody, &baiduResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
@@ -151,7 +148,7 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 		return types.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), types.ErrorCodeBadResponseBody), nil
 	}
 	fullTextResponse := responseBaidu2OpenAI(&baiduResponse)
-	jsonResponse, err := json.Marshal(fullTextResponse)
+	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
@@ -171,7 +168,7 @@ func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
 	service.CloseResponseBodyGracefully(resp)
-	err = json.Unmarshal(responseBody, &baiduResponse)
+	err = common.Unmarshal(responseBody, &baiduResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
@@ -179,7 +176,7 @@ func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 		return types.NewError(fmt.Errorf("%s", baiduResponse.ErrorMsg), types.ErrorCodeBadResponseBody), nil
 	}
 	fullTextResponse := embeddingResponseBaidu2OpenAI(&baiduResponse)
-	jsonResponse, err := json.Marshal(fullTextResponse)
+	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}

@@ -27,19 +27,20 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// applyUpstreamContentLength populates req.ContentLength when the upstream
-// body is wrapped in a BodyStorage (see relay/common/outbound_body.go).
-//
-// net/http.NewRequest only auto-detects ContentLength for *bytes.Reader,
-// *bytes.Buffer and *strings.Reader. When the body is a type-erased io.Reader
-// (which is the case for ReaderOnly(BodyStorage)), the Content-Length header
-// would otherwise be omitted, forcing chunked transfer encoding and breaking
-// some upstreams that require an explicit Content-Length.
-func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
-	if info == nil {
+// applyUpstreamBodyMetadata restores metadata hidden when http.NewRequest
+// wraps an arbitrary reader in req.Body.
+func applyUpstreamBodyMetadata(req *http.Request, body io.Reader, info *common.RelayInfo) {
+	if replayable, ok := body.(common2.ReplayableBody); ok {
+		if _, rawStorage := body.(common2.BodyStorage); rawStorage {
+			req.Body = io.NopCloser(body)
+		}
+		req.ContentLength = replayable.Size()
+		if req.GetBody == nil {
+			req.GetBody = replayable.NewReader
+		}
 		return
 	}
-	if info.UpstreamRequestBodySize > 0 && req.ContentLength <= 0 {
+	if info != nil && info.UpstreamRequestBodySize > 0 && req.ContentLength <= 0 {
 		req.ContentLength = info.UpstreamRequestBodySize
 	}
 }
@@ -322,7 +323,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	applyUpstreamBodyMetadata(req, requestBody, info)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -352,7 +353,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	applyUpstreamBodyMetadata(req, requestBody, info)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
@@ -559,42 +560,8 @@ func newTaskHTTPRequest(method string, fullRequestURL string, requestBody io.Rea
 	if err != nil {
 		return nil, err
 	}
-	applyUpstreamContentLength(req, info)
-	if req.GetBody == nil {
-		attachSeekableGetBody(req, requestBody)
-	}
+	applyUpstreamBodyMetadata(req, requestBody, info)
 	return req, nil
-}
-
-func attachSeekableGetBody(req *http.Request, reader io.Reader) {
-	if req == nil {
-		return
-	}
-	seeker, ok := reader.(io.ReadSeeker)
-	if !ok {
-		return
-	}
-	start, err := seeker.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return
-	}
-	end, err := seeker.Seek(0, io.SeekEnd)
-	if err != nil {
-		_, _ = seeker.Seek(start, io.SeekStart)
-		return
-	}
-	if _, err := seeker.Seek(start, io.SeekStart); err != nil {
-		return
-	}
-	if req.ContentLength <= 0 && end >= start {
-		req.ContentLength = end - start
-	}
-	req.GetBody = func() (io.ReadCloser, error) {
-		if _, err := seeker.Seek(start, io.SeekStart); err != nil {
-			return nil, err
-		}
-		return io.NopCloser(seeker), nil
-	}
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

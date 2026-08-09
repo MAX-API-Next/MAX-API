@@ -1998,7 +1998,7 @@ func TestGetEffectiveHeaderOverrideUsesRuntimeOverrideAsFinalResult(t *testing.T
 	}
 }
 
-func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
+func TestRemoveDisabledFieldsFiltersWhenChannelPassThroughEnabled(t *testing.T) {
 	input := `{
 		"service_tier":"flex",
 		"safety_identifier":"user-123",
@@ -2011,10 +2011,10 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
-	assertJSONEqual(t, input, string(out))
+	assertJSONEqual(t, `{"store":true}`, string(out))
 }
 
-func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
+func TestRemoveDisabledFieldsFiltersWhenGlobalPassThroughEnabled(t *testing.T) {
 	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
 	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
 	t.Cleanup(func() {
@@ -2032,7 +2032,21 @@ func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
-	assertJSONEqual(t, input, string(out))
+	assertJSONEqual(t, `{}`, string(out))
+}
+
+func TestRemoveDisabledFieldsPassThroughHonorsExplicitCostFieldOptIn(t *testing.T) {
+	input := `{"service_tier":"flex","speed":"fast","inference_geo":"eu"}`
+	settings := dto.ChannelOtherSettings{
+		AllowServiceTier: true,
+		AllowSpeed:       true,
+	}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, true)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"service_tier":"flex","speed":"fast"}`, string(out))
 }
 
 func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {

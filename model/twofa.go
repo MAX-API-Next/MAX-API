@@ -179,7 +179,7 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 
 	// 查找未使用的备用码
 	var backupCodes []TwoFABackupCode
-	if err := DB.Where("user_id = ? AND is_used = false", userId).Find(&backupCodes).Error; err != nil {
+	if err := DB.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
 		return false, err
 	}
 
@@ -205,7 +205,7 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 // GetUnusedBackupCodeCount 获取未使用的备用码数量
 func GetUnusedBackupCodeCount(userId int) (int, error) {
 	var count int64
-	err := DB.Model(&TwoFABackupCode{}).Where("user_id = ? AND is_used = false", userId).Count(&count).Error
+	err := DB.Model(&TwoFABackupCode{}).Where("user_id = ? AND is_used = ?", userId, false).Count(&count).Error
 	return int(count), err
 }
 
@@ -304,7 +304,7 @@ func GetTwoFAStats() (map[string]interface{}, error) {
 	}
 
 	// 启用2FA的用户数
-	if err := DB.Model(&TwoFA{}).Where("is_enabled = true").Count(&enabledUsers).Error; err != nil {
+	if err := DB.Model(&TwoFA{}).Where("is_enabled = ?", true).Count(&enabledUsers).Error; err != nil {
 		return nil, err
 	}
 

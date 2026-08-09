@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -218,7 +219,13 @@ func RequestEpay(c *gin.Context) {
 	callBackAddress := service.GetCallbackAddress()
 	returnUrl, _ := url.Parse(paymentReturnPath("/console/log"))
 	notifyUrl, _ := url.Parse(callBackAddress + "/api/user/epay/notify")
-	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
+	randomPart, err := common.GenerateRandomCharsKey(6)
+	if err != nil {
+		logger.LogError(c.Request.Context(), "生成易支付订单号失败: "+err.Error())
+		common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
+		return
+	}
+	tradeNo := fmt.Sprintf("%s%d", randomPart, time.Now().Unix())
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)
 	client := GetEpayClient()
 	if client == nil {

@@ -26,11 +26,11 @@ type AliInput struct {
 }
 
 type AliParameters struct {
-	TopP              float64 `json:"top_p,omitempty"`
-	TopK              int     `json:"top_k,omitempty"`
-	Seed              uint64  `json:"seed,omitempty"`
-	EnableSearch      bool    `json:"enable_search,omitempty"`
-	IncrementalOutput bool    `json:"incremental_output,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
+	TopK              *int     `json:"top_k,omitempty"`
+	Seed              *uint64  `json:"seed,omitempty"`
+	EnableSearch      *bool    `json:"enable_search,omitempty"`
+	IncrementalOutput *bool    `json:"incremental_output,omitempty"`
 }
 
 type AliChatRequest struct {
@@ -167,21 +167,21 @@ type AliImageRequest struct {
 	Model          string             `json:"model"`
 	Input          any                `json:"input"`
 	Parameters     AliImageParameters `json:"parameters,omitempty"`
-	ResponseFormat string             `json:"response_format,omitempty"`
+	ResponseFormat *string            `json:"response_format,omitempty"`
 }
 
 type AliImageParameters struct {
-	Size             string `json:"size,omitempty"`
-	N                int    `json:"n,omitempty"`
-	Steps            string `json:"steps,omitempty"`
-	Scale            string `json:"scale,omitempty"`
-	Watermark        *bool  `json:"watermark,omitempty"`
-	PromptExtend     *bool  `json:"prompt_extend,omitempty"`
-	ThinkingMode     *bool  `json:"thinking_mode,omitempty"`
-	EnableSequential *bool  `json:"enable_sequential,omitempty"`
-	BboxList         any    `json:"bbox_list,omitempty"`
-	ColorPalette     any    `json:"color_palette,omitempty"`
-	Seed             *int   `json:"seed,omitempty"`
+	Size             *string `json:"size,omitempty"`
+	N                *int    `json:"n,omitempty"`
+	Steps            *string `json:"steps,omitempty"`
+	Scale            *string `json:"scale,omitempty"`
+	Watermark        *bool   `json:"watermark,omitempty"`
+	PromptExtend     *bool   `json:"prompt_extend,omitempty"`
+	ThinkingMode     *bool   `json:"thinking_mode,omitempty"`
+	EnableSequential *bool   `json:"enable_sequential,omitempty"`
+	BboxList         any     `json:"bbox_list,omitempty"`
+	ColorPalette     any     `json:"color_palette,omitempty"`
+	Seed             *int    `json:"seed,omitempty"`
 }
 
 func (p *AliImageParameters) PromptExtendValue() bool {
@@ -189,6 +189,13 @@ func (p *AliImageParameters) PromptExtendValue() bool {
 		return *p.PromptExtend
 	}
 	return false
+}
+
+func (p *AliImageParameters) NValue() int {
+	if p == nil || p.N == nil {
+		return 0
+	}
+	return *p.N
 }
 
 type AliImageInput struct {

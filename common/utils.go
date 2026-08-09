@@ -240,7 +240,7 @@ func GenerateRandomCharsKey(length int) (string, error) {
 
 func GenerateRandomKey(length int) (string, error) {
 	bytes := make([]byte, length*3/4) // 对于48位的输出，这里应该是36
-	if _, err := crand.Read(bytes); err != nil {
+	if _, err := io.ReadFull(crand.Reader, bytes); err != nil {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(bytes), nil
@@ -254,7 +254,8 @@ func GenerateKey() (string, error) {
 func GetRandomInt(max int) int {
 	n, err := SecureRandomInt(max)
 	if err != nil {
-		panic(err)
+		SysError("failed to generate secure random integer: " + err.Error())
+		return 0
 	}
 	return n
 }

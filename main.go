@@ -128,6 +128,7 @@ func main() {
 
 	// Persistent system maintenance task runner
 	service.StartSystemTaskRunner()
+	service.StartAuthFlowCleanup()
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
@@ -193,13 +194,7 @@ func main() {
 		common.FatalLog(err.Error())
 	}
 	store := cookie.NewStore([]byte(common.SessionSecret))
-	store.Options(sessions.Options{
-		Path:     "/",
-		MaxAge:   2592000, // 30 days
-		HttpOnly: true,
-		Secure:   common.SessionCookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	store.Options(sessionCookieOptions())
 	server.Use(sessions.Sessions("session", store))
 
 	InjectUmamiAnalytics()
@@ -275,6 +270,17 @@ func main() {
 		}
 	}
 	common.SysLog("server exited")
+}
+
+func sessionCookieOptions() sessions.Options {
+	return sessions.Options{
+		Path:     "/",
+		MaxAge:   2592000, // 30 days
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		// OAuth providers return through a cross-site top-level GET redirect.
+		SameSite: http.SameSiteLaxMode,
+	}
 }
 
 func configureSessionCookieSecure(serverAddress string) error {

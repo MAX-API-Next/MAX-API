@@ -867,14 +867,44 @@
       }
     },
     "/api/oauth/state": {
-      "get": {
-        "summary": "生成OAuth State",
+      "post": {
+        "summary": "创建一次性 OAuth State",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "登录无需鉴权；绑定流程需要有效用户会话",
         "tags": [
           "OAuth"
         ],
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider",
+                  "intent"
+                ],
+                "properties": {
+                  "provider": {
+                    "type": "string"
+                  },
+                  "intent": {
+                    "type": "string",
+                    "enum": [
+                      "login",
+                      "bind"
+                    ]
+                  },
+                  "aff": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "成功",

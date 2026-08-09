@@ -342,6 +342,7 @@ func migrateDB() error {
 		&CacheInvalidationTask{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
+		&AuthFlow{},
 		&PerfMetric{},
 		&SystemTask{},
 		&SystemInstance{},

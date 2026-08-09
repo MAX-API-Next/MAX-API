@@ -388,7 +388,12 @@ func GenerateAccessToken(c *gin.Context) {
 		return
 	}
 	// get rand int 28-32
-	randI := common.GetRandomInt(4)
+	randI, err := common.SecureRandomInt(4)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
+		common.SysLog("failed to generate access token length: " + err.Error())
+		return
+	}
 	key, err := common.GenerateRandomKey(29 + randI)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
@@ -451,7 +456,13 @@ func GetAffCode(c *gin.Context) {
 		return
 	}
 	if user.AffCode == "" {
-		user.AffCode = common.GetRandomString(4)
+		affCode, err := common.GenerateRandomCharsKey(4)
+		if err != nil {
+			common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
+			common.SysLog("failed to generate affiliate code: " + err.Error())
+			return
+		}
+		user.AffCode = affCode
 		if err := user.UpdateFields(false, model.UserUpdateFieldAffCode); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

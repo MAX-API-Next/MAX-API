@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -97,7 +98,12 @@ func StartSystemTaskRunner() {
 			return
 		}
 
-		runnerID := fmt.Sprintf("%s-%s", common.NodeName, common.GetRandomString(8))
+		randomPart, err := common.GenerateRandomCharsKey(8)
+		if err != nil {
+			logger.LogError(context.Background(), "failed to generate system task runner ID: "+err.Error())
+			randomPart = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+		}
+		runnerID := fmt.Sprintf("%s-%s", common.NodeName, randomPart)
 		gopool.Go(func() {
 			logger.LogInfo(context.Background(), fmt.Sprintf("system task runner started: runner=%s idle_interval=%s", runnerID, systemTaskRunnerIdleInterval))
 

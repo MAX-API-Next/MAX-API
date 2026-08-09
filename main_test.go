@@ -127,3 +127,11 @@ func TestConfigureSessionCookieSecureRejectsInvalidValue(t *testing.T) {
 
 	require.Error(t, configureSessionCookieSecure("https://example.com"))
 }
+
+func TestSessionCookieOptionsAllowOAuthTopLevelCallback(t *testing.T) {
+	options := sessionCookieOptions()
+
+	assert.Equal(t, http.SameSiteLaxMode, options.SameSite)
+	assert.True(t, options.HttpOnly)
+	assert.Equal(t, "/", options.Path)
+}

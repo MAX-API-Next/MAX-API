@@ -129,7 +129,7 @@ func TestNewTaskHTTPRequestDoesNotPreReadRequestBody(t *testing.T) {
 	require.Equal(t, 1, body.reads)
 }
 
-func TestNewTaskHTTPRequestUsesSeekableGetBodyWithoutBuffering(t *testing.T) {
+func TestNewTaskHTTPRequestDoesNotInventReplayForUnknownSeeker(t *testing.T) {
 	t.Parallel()
 
 	body := &customReadSeeker{reader: strings.NewReader("abcdef")}
@@ -139,14 +139,39 @@ func TestNewTaskHTTPRequestUsesSeekableGetBodyWithoutBuffering(t *testing.T) {
 	req, err := newTaskHTTPRequest(http.MethodPost, "https://example.com/tasks", body, &relaycommon.RelayInfo{})
 
 	require.NoError(t, err)
-	require.Equal(t, int64(4), req.ContentLength)
+	require.Zero(t, req.ContentLength)
+	require.Nil(t, req.GetBody)
+}
+
+func TestApplyUpstreamBodyMetadataUsesIndependentReplayReaders(t *testing.T) {
+	payload := []byte(`{"model":"test","input":"abcdef"}`)
+	storage, err := common2.CreateBodyStorage(payload)
+	require.NoError(t, err)
+	defer storage.Close()
+	body := common2.NewReplayableBodyReader(storage)
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", body)
+	require.NoError(t, err)
+	applyUpstreamBodyMetadata(req, body, nil)
+	require.Equal(t, int64(len(payload)), req.ContentLength)
 	require.NotNil(t, req.GetBody)
 
-	replay, err := req.GetBody()
+	first, err := req.GetBody()
 	require.NoError(t, err)
-	replayed, err := io.ReadAll(replay)
+	defer first.Close()
+	second, err := req.GetBody()
 	require.NoError(t, err)
-	require.Equal(t, "cdef", string(replayed))
+	defer second.Close()
+
+	prefix := make([]byte, 5)
+	_, err = io.ReadFull(first, prefix)
+	require.NoError(t, err)
+	secondBody, err := io.ReadAll(second)
+	require.NoError(t, err)
+	require.Equal(t, payload, secondBody)
+	firstRest, err := io.ReadAll(first)
+	require.NoError(t, err)
+	require.Equal(t, payload[5:], firstRest)
 }
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {

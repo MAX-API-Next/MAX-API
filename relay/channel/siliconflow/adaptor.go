@@ -15,7 +15,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 )
 
 type Adaptor struct {
@@ -50,13 +49,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	sfRequest.Model = request.Model
 	sfRequest.Prompt = request.Prompt
 	// 优先使用image_size/batch_size，否则使用OpenAI标准的size/n
-	if sfRequest.ImageSize == "" {
-		sfRequest.ImageSize = request.Size
+	if sfRequest.ImageSize == nil && request.Size != "" {
+		sfRequest.ImageSize = &request.Size
 	}
-	if sfRequest.BatchSize == 0 {
-		if request.N != nil {
-			sfRequest.BatchSize = lo.FromPtr(request.N)
-		}
+	if sfRequest.BatchSize == nil && request.N != nil {
+		sfRequest.BatchSize = request.N
 	}
 
 	return sfRequest, nil

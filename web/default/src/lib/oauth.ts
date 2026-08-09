@@ -44,7 +44,10 @@ function markOAuthBindingState(provider: string, state: string): void {
   }
 }
 
-export function isOAuthBindingState(provider?: string, state?: string): boolean {
+export function isOAuthBindingState(
+  provider?: string,
+  state?: string
+): boolean {
   if (!provider || !state) return false
   try {
     const key = getOAuthBindingStateKey(provider, state)
@@ -145,14 +148,12 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
  * Get OAuth state token
  * Includes affiliate code from localStorage if available
  */
-export async function getOAuthState(): Promise<string | null> {
+export async function getOAuthState(provider: string): Promise<string | null> {
   try {
-    let path = '/api/oauth/state'
-    const affCode = localStorage.getItem('aff')
-    if (affCode && affCode.length > 0) {
-      path += `?aff=${affCode}`
-    }
-    const res = await api.get(path)
+    const res = await api.post('/api/oauth/state', {
+      provider: normalizeOAuthProvider(provider),
+      intent: 'bind',
+    })
     if (res.data.success) {
       return res.data.data
     }
@@ -168,7 +169,7 @@ export async function getOAuthState(): Promise<string | null> {
  * Handle GitHub OAuth binding/login
  */
 export async function handleGitHubOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
+  const state = await getOAuthState('github')
   if (!state) return
 
   const url = buildGitHubOAuthUrl(clientId, state)
@@ -179,7 +180,7 @@ export async function handleGitHubOAuth(clientId: string): Promise<void> {
  * Handle Discord OAuth binding/login
  */
 export async function handleDiscordOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
+  const state = await getOAuthState('discord')
   if (!state) return
 
   const url = buildDiscordOAuthUrl(clientId, state)
@@ -193,7 +194,7 @@ export async function handleOIDCOAuth(
   authUrl: string,
   clientId: string
 ): Promise<void> {
-  const state = await getOAuthState()
+  const state = await getOAuthState('oidc')
   if (!state) return
 
   const url = buildOIDCOAuthUrl(authUrl, clientId, state)
@@ -204,7 +205,7 @@ export async function handleOIDCOAuth(
  * Handle LinuxDO OAuth binding/login
  */
 export async function handleLinuxDOOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
+  const state = await getOAuthState('linuxdo')
   if (!state) return
 
   const url = buildLinuxDOOAuthUrl(clientId, state)

@@ -19,9 +19,9 @@ type CozeChatRequest struct {
 	BotId              string             `json:"bot_id"`
 	UserId             json.RawMessage    `json:"user_id"`
 	AdditionalMessages []CozeEnterMessage `json:"additional_messages,omitempty"`
-	Stream             bool               `json:"stream,omitempty"`
+	Stream             *bool              `json:"stream,omitempty"`
 	CustomVariables    json.RawMessage    `json:"custom_variables,omitempty"`
-	AutoSaveHistory    bool               `json:"auto_save_history,omitempty"`
+	AutoSaveHistory    *bool              `json:"auto_save_history,omitempty"`
 	MetaData           json.RawMessage    `json:"meta_data,omitempty"`
 	ExtraParams        json.RawMessage    `json:"extra_params,omitempty"`
 	ShortcutCommand    json.RawMessage    `json:"shortcut_command,omitempty"`

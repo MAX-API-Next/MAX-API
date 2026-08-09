@@ -9,6 +9,7 @@ import (
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
@@ -75,7 +76,13 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 
-	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
+	randomPart, err := common.GenerateRandomCharsKey(6)
+	if err != nil {
+		common.SysError("failed to generate Epay subscription order number: " + err.Error())
+		common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
+		return
+	}
+	tradeNo := fmt.Sprintf("%s%d", randomPart, time.Now().Unix())
 	tradeNo = fmt.Sprintf("SUBUSR%dNO%s", userId, tradeNo)
 
 	client := GetEpayClient()

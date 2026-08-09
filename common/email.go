@@ -21,7 +21,11 @@ func generateMessageID() (string, error) {
 		return "", fmt.Errorf("invalid SMTP account")
 	}
 	domain := strings.Split(SMTPFrom, "@")[1]
-	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), GetRandomString(12), domain), nil
+	randomPart, err := GenerateRandomCharsKey(12)
+	if err != nil {
+		return "", fmt.Errorf("generate message ID: %w", err)
+	}
+	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), randomPart, domain), nil
 }
 
 func shouldUseSMTPLoginAuth() bool {

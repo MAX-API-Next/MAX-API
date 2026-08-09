@@ -81,7 +81,8 @@ func GetRandomString(length int) string {
 	}
 	value, err := GenerateRandomCharsKey(length)
 	if err != nil {
-		panic(err)
+		SysError("failed to generate secure random string: " + err.Error())
+		return ""
 	}
 	return value
 }

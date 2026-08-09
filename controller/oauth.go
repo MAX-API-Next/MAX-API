@@ -1,10 +1,13 @@
 package controller
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/i18n"
@@ -14,6 +17,37 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+const (
+	oauthAuthFlowTTL     = 10 * time.Minute
+	oauthStateSessionKey = "oauth_state"
+)
+
+type oauthStateRequest struct {
+	Provider string `json:"provider"`
+	Intent   string `json:"intent"`
+	Aff      string `json:"aff,omitempty"`
+}
+
+type oauthFlowPayload struct {
+	AffiliateCode string `json:"affiliate_code,omitempty"`
+}
+
+func oauthSessionStateMatches(c *gin.Context, state string) bool {
+	if state == "" {
+		return false
+	}
+	expected, ok := sessions.Default(c).Get(oauthStateSessionKey).(string)
+	return ok && len(expected) == len(state) && subtle.ConstantTimeCompare([]byte(expected), []byte(state)) == 1
+}
+
+func clearOAuthSessionState(c *gin.Context) {
+	session := sessions.Default(c)
+	session.Delete(oauthStateSessionKey)
+	if err := session.Save(); err != nil {
+		common.SysError("failed to clear OAuth state from session: " + err.Error())
+	}
+}
 
 // providerParams returns map with Provider key for i18n templates
 func providerParams(name string) map[string]any {
@@ -78,19 +112,58 @@ func handleOAuthIdentityLookupError(c *gin.Context, provider string, err error) 
 
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
-	session := sessions.Default(c)
-	state, err := common.GenerateRandomCharsKey(12)
+	var request oauthStateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.Intent = strings.TrimSpace(request.Intent)
+	request.Aff = strings.TrimSpace(request.Aff)
+	if oauth.GetProvider(request.Provider) == nil ||
+		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentBind) ||
+		len(request.Aff) > 32 ||
+		(request.Intent == model.AuthFlowIntentBind && request.Aff != "") {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	userID := 0
+	if request.Intent == model.AuthFlowIntentBind {
+		userID = c.GetInt("id")
+		if userID <= 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
+			return
+		}
+	}
+	payload, err := common.Marshal(oauthFlowPayload{AffiliateCode: request.Aff})
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	affCode := c.Query("aff")
-	if affCode != "" {
-		session.Set("aff", affCode)
-	}
-	session.Set("oauth_state", state)
-	err = session.Save()
+	expiresAt := time.Now().Add(oauthAuthFlowTTL)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeOAuth,
+		Provider:  request.Provider,
+		Intent:    request.Intent,
+		UserId:    userID,
+		Payload:   string(payload),
+		ExpiresAt: expiresAt,
+	})
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	session := sessions.Default(c)
+	session.Set(oauthStateSessionKey, state)
+	if err := session.Save(); err != nil {
+		if _, consumeErr := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
+			Purpose:  model.AuthFlowPurposeOAuth,
+			Provider: request.Provider,
+			Intent:   request.Intent,
+			UserId:   userID,
+		}); consumeErr != nil {
+			common.SysError("failed to invalidate OAuth flow after session save failure: " + consumeErr.Error())
+		}
 		common.ApiError(c, err)
 		return
 	}
@@ -113,11 +186,20 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
-	session := sessions.Default(c)
-
 	// 1. Validate state (CSRF protection)
 	state := c.Query("state")
-	if state == "" || session.Get("oauth_state") == nil || state != session.Get("oauth_state").(string) {
+	if !oauthSessionStateMatches(c, state) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
+		})
+		return
+	}
+	pendingFlow, err := model.GetAuthFlow(state, model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeOAuth,
+		Provider: providerName,
+	})
+	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
@@ -125,10 +207,20 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
-	// 2. Check if user is already logged in (bind flow)
-	username := session.Get("username")
-	if username != nil {
-		handleOAuthBind(c, provider)
+	consumeMatch := model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeOAuth,
+		Provider: providerName,
+		Intent:   pendingFlow.Intent,
+	}
+	if pendingFlow.Intent == model.AuthFlowIntentBind {
+		userID := c.GetInt("id")
+		if userID <= 0 || userID != pendingFlow.UserId {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+			return
+		}
+		consumeMatch.UserId = userID
+	} else if pendingFlow.Intent != model.AuthFlowIntentLogin {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 
@@ -141,11 +233,23 @@ func HandleOAuth(c *gin.Context) {
 	// 4. Handle error from provider
 	errorCode := c.Query("error")
 	if errorCode != "" {
+		if _, err := model.ConsumeAuthFlow(state, consumeMatch); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+			return
+		}
+		clearOAuthSessionState(c)
 		errorDescription := c.Query("error_description")
+		if errorDescription == "" {
+			errorDescription = errorCode
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": errorDescription,
 		})
+		return
+	}
+	if pendingFlow.Intent == model.AuthFlowIntentBind {
+		handleOAuthBind(c, provider, pendingFlow, state)
 		return
 	}
 
@@ -163,9 +267,20 @@ func HandleOAuth(c *gin.Context) {
 		handleOAuthError(c, err)
 		return
 	}
+	flow, err := model.ConsumeAuthFlow(state, consumeMatch)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	clearOAuthSessionState(c)
 
 	// 7. Find or create user
-	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
+	var payload oauthFlowPayload
+	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	user, err := findOrCreateOAuthUser(c, provider, oauthUser, payload.AffiliateCode)
 	if err != nil {
 		var lookupErr *oauthIdentityLookupError
 		if errors.As(err, &lookupErr) {
@@ -196,12 +311,7 @@ func HandleOAuth(c *gin.Context) {
 }
 
 // handleOAuthBind handles binding OAuth account to existing user
-func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
-	if !provider.IsEnabled() {
-		common.ApiErrorI18n(c, i18n.MsgOAuthNotEnabled, providerParams(provider.GetName()))
-		return
-	}
-
+func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model.AuthFlow, flowToken string) {
 	// Exchange code for token
 	code := c.Query("code")
 	token, err := provider.ExchangeToken(c.Request.Context(), code, c)
@@ -238,14 +348,17 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 		}
 	}
 
-	// Get current user from session
-	session := sessions.Default(c)
-	id, ok := sessionUserID(session.Get("id"))
-	if !ok {
-		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
+	if _, err := model.ConsumeAuthFlow(flowToken, model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeOAuth,
+		Provider: pendingFlow.Provider,
+		Intent:   model.AuthFlowIntentBind,
+		UserId:   pendingFlow.UserId,
+	}); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 		return
 	}
-	user := model.User{Id: id}
+	clearOAuthSessionState(c)
+	user := model.User{Id: pendingFlow.UserId}
 	err = user.FillUserById()
 	if err != nil {
 		common.ApiError(c, err)
@@ -281,7 +394,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 }
 
 // findOrCreateOAuthUser finds existing user or creates new user
-func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, session sessions.Session) (*model.User, error) {
+func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, affiliateCode string) (*model.User, error) {
 	user := &model.User{}
 
 	// Check if user already exists with new ID
@@ -368,10 +481,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	user.Status = common.UserStatusEnabled
 
 	// Handle affiliate code
-	affCode := session.Get("aff")
 	inviterId := 0
-	if affCode != nil {
-		inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
+	if affiliateCode != "" {
+		inviterId, _ = model.GetUserIdByAffCode(affiliateCode)
 	}
 
 	// Use transaction to ensure user creation and OAuth binding are atomic
