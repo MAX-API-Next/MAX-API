@@ -164,6 +164,65 @@ function buildChatSample(lang: Lang, ctx: SampleContext): string {
   ].join('\n')
 }
 
+function buildAlphaSearchSample(lang: Lang, ctx: SampleContext): string {
+  const url = `${ctx.baseUrl}${ctx.endpointPath}`
+  const query = 'latest artificial intelligence news'
+  const bodyJson = JSON.stringify(
+    {
+      model: ctx.modelName,
+      input: [{ role: 'user', content: `Search for ${query}.` }],
+      commands: { search_query: [{ q: query }] },
+    },
+    null,
+    2
+  )
+
+  if (lang === 'curl') {
+    return [
+      `curl ${url} \\`,
+      `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '${bodyJson.replace(/\n/g, '\n     ')}'`,
+    ].join('\n')
+  }
+
+  if (lang === 'python') {
+    return [
+      'import json',
+      'import os',
+      'import urllib.request',
+      '',
+      `payload = ${bodyJson}`,
+      `request = urllib.request.Request(`,
+      `    "${url}",`,
+      `    data=json.dumps(payload).encode("utf-8"),`,
+      `    headers={`,
+      `        "Authorization": f"Bearer {os.environ['${ctx.apiKeyEnv}']}",`,
+      `        "Content-Type": "application/json",`,
+      `    },`,
+      `    method="POST",`,
+      `)`,
+      '',
+      'with urllib.request.urlopen(request) as response:',
+      '    print(json.load(response))',
+    ].join('\n')
+  }
+
+  return [
+    `const response = await fetch('${url}', {`,
+    `  method: 'POST',`,
+    `  headers: {`,
+    `    Authorization: \`Bearer \${process.env.${ctx.apiKeyEnv}}\`,`,
+    `    'Content-Type': 'application/json',`,
+    `  },`,
+    `  body: JSON.stringify(${bodyJson}),`,
+    `})`,
+    '',
+    `const data = await response.json()`,
+    `console.log(data)`,
+  ].join('\n')
+}
+
 function buildAnthropicSample(lang: Lang, ctx: SampleContext): string {
   const url = `${ctx.baseUrl}${ctx.endpointPath}`
   const userMessage = 'Explain quantum entanglement in one paragraph.'
@@ -434,6 +493,8 @@ function buildSample(
   endpointType: string,
   ctx: SampleContext
 ): string {
+  if (endpointType === 'openai-alpha-search')
+    return buildAlphaSearchSample(lang, ctx)
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
   if (endpointType === 'gemini') return buildGeminiSample(lang, ctx)
   if (endpointType === 'embeddings' || endpointType === 'jina-rerank')

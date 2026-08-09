@@ -134,6 +134,10 @@ const endpointTypeOptions: Array<{ value: string; label: string }> = [
     value: 'openai-response-compact',
     label: 'OpenAI Response Compaction (/v1/responses/compact)',
   },
+  {
+    value: 'openai-alpha-search',
+    label: 'OpenAI Alpha Search (/v1/alpha/search)',
+  },
   { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
   {
     value: 'gemini',
@@ -152,6 +156,7 @@ const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
   'image-generation',
   'jina-rerank',
   'openai-response-compact',
+  'openai-alpha-search',
 ])
 
 const MODEL_PRICE_ERROR_CODE = 'model_price_error'

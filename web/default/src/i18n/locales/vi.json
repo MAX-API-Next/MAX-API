@@ -3237,6 +3237,8 @@
     "OpenAI Rerank": "OpenAI Rerank",
     "OpenAI Responses": "OpenAI Responses",
     "OpenAI Responses Compact": "OpenAI Responses Compact",
+    "OpenAI Alpha Search": "Tìm kiếm Alpha OpenAI",
+    "OpenAI Alpha Search (/v1/alpha/search)": "Tìm kiếm Alpha OpenAI (/v1/alpha/search)",
     "OpenAI, Anthropic, etc.": "OpenAI, Anthropic, v.v.",
     "OpenAI, Anthropic, Google, etc.": "OpenAI, Anthropic, Google, v.v.",
     "OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, domestic models, image, audio, video, embedding, rerank, and compatible API ecosystems stay replaceable.": "OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, mô hình nội địa, hình ảnh, âm thanh, video, embedding, rerank và hệ sinh thái API tương thích vẫn có thể thay thế.",

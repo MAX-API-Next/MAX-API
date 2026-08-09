@@ -3237,6 +3237,8 @@
     "OpenAI Rerank": "OpenAI 再ランク付け",
     "OpenAI Responses": "OpenAI レスポンス",
     "OpenAI Responses Compact": "OpenAI レスポンス圧縮",
+    "OpenAI Alpha Search": "OpenAI Alpha 検索",
+    "OpenAI Alpha Search (/v1/alpha/search)": "OpenAI Alpha 検索 (/v1/alpha/search)",
     "OpenAI, Anthropic, etc.": "OpenAI、Anthropicなど",
     "OpenAI, Anthropic, Google, etc.": "OpenAI、Anthropic、Googleなど",
     "OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, domestic models, image, audio, video, embedding, rerank, and compatible API ecosystems stay replaceable.": "OpenAI、Claude、Gemini、Azure、AWS、Vertex、Ollama、国内モデル、画像、音声、動画、Embedding、Rerank、互換 API エコシステムを差し替え可能なままにします。",

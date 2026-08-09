@@ -8,6 +8,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 )
@@ -147,6 +148,22 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	if snap == nil {
 		return nil
 	}
+	targetQuota, quotaErr := AlphaSearchPreConsumeQuota(
+		snap.EstimatedQuotaAfterGroup,
+		relayInfo,
+		relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+	)
+	if quotaErr != nil {
+		return types.NewErrorWithStatusCode(
+			quotaErr,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if relayInfo.RelayMode == relayconstant.RelayModeAlphaSearch {
+		relayInfo.PriceData.QuotaToPreConsume = targetQuota
+	}
 	if snap.GroupRatio == 0 {
 		return nil
 	}
@@ -162,9 +179,9 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 				types.ErrOptionWithSkipRetry(),
 			)
 		}
-		return PreConsumeBilling(c, snap.EstimatedQuotaAfterGroup, relayInfo)
+		return PreConsumeBilling(c, targetQuota, relayInfo)
 	}
-	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
+	if err := relayInfo.Billing.Reserve(targetQuota); err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()

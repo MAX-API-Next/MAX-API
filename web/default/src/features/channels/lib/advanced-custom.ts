@@ -93,6 +93,10 @@ export const ADVANCED_CUSTOM_INCOMING_PATH_OPTIONS: AdvancedCustomIncomingPathOp
       label: 'OpenAI Responses Compact',
     },
     {
+      value: '/v1/alpha/search',
+      label: 'OpenAI Alpha Search',
+    },
+    {
       value: '/v1/embeddings',
       label: 'OpenAI Embeddings',
     },
