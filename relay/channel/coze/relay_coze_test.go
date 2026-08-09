@@ -21,3 +21,8 @@ func TestConvertCozeChatRequestPreservesExplicitFalseStream(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"bot_id":"","user_id":"user","stream":false,"auto_save_history":false}`, string(data))
 }
+
+func TestDecodeCozeCreateResponseRejectsMalformedJSON(t *testing.T) {
+	_, err := decodeCozeCreateResponse([]byte(`{"code":`))
+	require.ErrorContains(t, err, "decode Coze create-message response")
+}

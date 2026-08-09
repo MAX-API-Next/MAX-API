@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime/pprof"
@@ -11,15 +12,39 @@ import (
 
 var cpuPercent = cpu.Percent
 
+const cpuMonitorInterval = 30 * time.Second
+
 // Monitor 定时监控cpu使用率，超过阈值输出pprof文件
 func Monitor() {
+	MonitorContext(context.Background())
+}
+
+func MonitorContext(ctx context.Context) {
 	for {
-		captureHighCPUProfile()
-		time.Sleep(30 * time.Second)
+		if ctx.Err() != nil {
+			return
+		}
+		captureHighCPUProfileContext(ctx)
+		timer := time.NewTimer(cpuMonitorInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-timer.C:
+		}
 	}
 }
 
 func captureHighCPUProfile() {
+	captureHighCPUProfileContext(context.Background())
+}
+
+func captureHighCPUProfileContext(ctx context.Context) {
 	percent, err := cpuPercent(time.Second, false)
 	if err != nil {
 		SysLog("获取CPU使用率失败 " + err.Error())
@@ -44,7 +69,17 @@ func captureHighCPUProfile() {
 		SysLog("启动pprof失败 " + err.Error())
 		return
 	}
-	time.Sleep(10 * time.Second)
+	timer := time.NewTimer(10 * time.Second)
+	select {
+	case <-ctx.Done():
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	case <-timer.C:
+	}
 	pprof.StopCPUProfile()
 	_ = f.Close()
 }

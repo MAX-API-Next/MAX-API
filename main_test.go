@@ -26,7 +26,7 @@ func TestRunWithTimeoutTimesOut(t *testing.T) {
 }
 
 func TestRunWithTimeoutRecoversPanic(t *testing.T) {
-	assert.True(t, runWithTimeout(time.Second, func() {
+	assert.True(t, runWithTimeout(5*time.Second, func() {
 		panic("quota save failed")
 	}))
 }

@@ -96,3 +96,24 @@ func TestGenericOAuthDebugLogsDoNotContainResponseSecrets(t *testing.T) {
 		require.False(t, strings.Contains(output, secret), "debug log leaked %q", secret)
 	}
 }
+
+func TestOIDCGetUserInfoAllowsSubjectWithoutEmail(t *testing.T) {
+	configureOAuthFetchTest(t, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sub":"subject-only-user","preferred_username":"tester"}`))
+	}))
+	defer server.Close()
+
+	settings := system_setting.GetOIDCSettings()
+	original := *settings
+	settings.UserInfoEndpoint = server.URL
+	t.Cleanup(func() { *settings = original })
+
+	user, err := (&OIDCProvider{}).GetUserInfo(context.Background(), &OAuthToken{AccessToken: "access-token"})
+
+	require.NoError(t, err)
+	require.Equal(t, "subject-only-user", user.ProviderUserID)
+	require.Equal(t, "tester", user.Username)
+	require.Empty(t, user.Email)
+}

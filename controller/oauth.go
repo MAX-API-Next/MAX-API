@@ -131,7 +131,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	if request.Intent == model.AuthFlowIntentBind {
 		userID = c.GetInt("id")
 		if userID <= 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
+			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": i18n.T(c, i18n.MsgUnauthorized)})
 			return
 		}
 	}

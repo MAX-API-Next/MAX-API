@@ -20,7 +20,7 @@ func (failingAuthFlowReader) Read([]byte) (int, error) {
 func setupAuthFlowTestDB(t *testing.T) {
 	t.Helper()
 	originalDB := DB
-	db, err := gorm.Open(sqlite.Open("file:auth_flow_test?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:auth_flow_test?mode=memory&cache=shared&_pragma=busy_timeout(5000)"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&AuthFlow{}))
 	DB = db

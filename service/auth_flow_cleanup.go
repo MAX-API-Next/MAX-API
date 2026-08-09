@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -10,17 +11,37 @@ import (
 const authFlowCleanupInterval = time.Hour
 
 func StartAuthFlowCleanup() {
+	StartAuthFlowCleanupWithContext(context.Background())
+}
+
+func StartAuthFlowCleanupWithContext(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	if !common.IsMasterNode {
-		return
+		close(done)
+		return done
 	}
 	go func() {
-		cleanupAuthFlows()
-		ticker := time.NewTicker(authFlowCleanupInterval)
-		defer ticker.Stop()
-		for range ticker.C {
-			cleanupAuthFlows()
-		}
+		defer close(done)
+		runAuthFlowCleanup(ctx, authFlowCleanupInterval, cleanupAuthFlows)
 	}()
+	return done
+}
+
+func runAuthFlowCleanup(ctx context.Context, interval time.Duration, cleanup func()) {
+	if ctx.Err() != nil {
+		return
+	}
+	cleanup()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cleanup()
+		}
+	}
 }
 
 func cleanupAuthFlows() {

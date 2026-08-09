@@ -27,22 +27,14 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 	if request.ResponseFormat != "" {
 		imageRequest.ResponseFormat = &request.ResponseFormat
 	}
+	defaultN := int(lo.FromPtrOr(request.N, uint(1)))
+	hasCustomParameters := false
 	if request.Extra != nil {
 		if val, ok := request.Extra["parameters"]; ok {
+			hasCustomParameters = true
 			err := common.Unmarshal(val, &imageRequest.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("invalid parameters field: %w", err)
-			}
-		} else {
-			// 兼容没有parameters字段的情况，从openai标准字段中提取参数
-			n := int(lo.FromPtrOr(request.N, uint(1)))
-			imageRequest.Parameters = AliImageParameters{
-				N:         &n,
-				Watermark: request.Watermark,
-			}
-			if request.Size != "" {
-				size := strings.Replace(request.Size, "x", "*", -1)
-				imageRequest.Parameters.Size = &size
 			}
 		}
 		if val, ok := request.Extra["input"]; ok {
@@ -51,6 +43,16 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 				return nil, fmt.Errorf("invalid input field: %w", err)
 			}
 		}
+	}
+	if !hasCustomParameters {
+		imageRequest.Parameters.Watermark = request.Watermark
+		if request.Size != "" {
+			size := strings.Replace(request.Size, "x", "*", -1)
+			imageRequest.Parameters.Size = &size
+		}
+	}
+	if imageRequest.Parameters.N == nil {
+		imageRequest.Parameters.N = &defaultN
 	}
 
 	if strings.Contains(request.Model, "z-image") {

@@ -28,8 +28,10 @@ type jsonByteRange struct {
 }
 
 type passThroughJSONScanner struct {
-	reader *bufio.Reader
-	offset int64
+	reader    *bufio.Reader
+	offset    int64
+	peeked    byte
+	hasPeeked bool
 }
 
 func newPassThroughFilteredBody(storage basecommon.BodyStorage, settings dto.ChannelOtherSettings) (*filteredReplayableBody, error) {
@@ -416,14 +418,24 @@ func (s *passThroughJSONScanner) expectByte(expected byte) error {
 }
 
 func (s *passThroughJSONScanner) peekByte() (byte, error) {
-	data, err := s.reader.Peek(1)
+	if s.hasPeeked {
+		return s.peeked, nil
+	}
+	value, err := s.reader.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	return data[0], nil
+	s.peeked = value
+	s.hasPeeked = true
+	return value, nil
 }
 
 func (s *passThroughJSONScanner) readByte() (byte, error) {
+	if s.hasPeeked {
+		s.hasPeeked = false
+		s.offset++
+		return s.peeked, nil
+	}
 	value, err := s.reader.ReadByte()
 	if err == nil {
 		s.offset++

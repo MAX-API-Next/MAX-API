@@ -82,3 +82,51 @@ func TestOAIImageToAliOmitsAbsentSize(t *testing.T) {
 	assert.NoError(t, common.Unmarshal(payload, &parameters))
 	assert.NotContains(t, parameters, "size")
 }
+
+func TestOAIImageToAliUsesStandardParametersWhenExtraIsNil(t *testing.T) {
+	n := uint(3)
+	watermark := false
+	info := &relaycommon.RelayInfo{}
+
+	converted, err := oaiImage2AliImageRequest(info, dto.ImageRequest{
+		Model:     "wanx-v1",
+		Prompt:    "draw",
+		N:         &n,
+		Size:      "1024x1024",
+		Watermark: &watermark,
+	}, false)
+
+	assert.NoError(t, err)
+	if assert.NotNil(t, converted) {
+		assert.Equal(t, 3, converted.Parameters.NValue())
+		if assert.NotNil(t, converted.Parameters.Size) {
+			assert.Equal(t, "1024*1024", *converted.Parameters.Size)
+		}
+		if assert.NotNil(t, converted.Parameters.Watermark) {
+			assert.False(t, *converted.Parameters.Watermark)
+		}
+	}
+	assert.Equal(t, float64(3), info.PriceData.OtherRatios["n"])
+}
+
+func TestOAIImageToAliFallsBackToStandardNWithCustomParameters(t *testing.T) {
+	n := uint(3)
+	info := &relaycommon.RelayInfo{}
+
+	converted, err := oaiImage2AliImageRequest(info, dto.ImageRequest{
+		Model:  "wanx-v1",
+		Prompt: "draw",
+		N:      &n,
+		Extra: map[string]json.RawMessage{
+			"parameters": json.RawMessage(`{"steps":"4"}`),
+		},
+	}, false)
+
+	assert.NoError(t, err)
+	if assert.NotNil(t, converted) {
+		assert.Equal(t, 3, converted.Parameters.NValue())
+		assert.NotNil(t, converted.Parameters.Steps)
+		assert.Equal(t, "4", *converted.Parameters.Steps)
+	}
+	assert.Equal(t, float64(3), info.PriceData.OtherRatios["n"])
+}

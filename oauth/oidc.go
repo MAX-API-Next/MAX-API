@@ -140,8 +140,8 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 		return nil, err
 	}
 
-	if oidcUser.OpenID == "" || oidcUser.Email == "" {
-		logger.LogError(ctx, "[OAuth-OIDC] GetUserInfo failed: required identity fields are empty")
+	if oidcUser.OpenID == "" {
+		logger.LogError(ctx, "[OAuth-OIDC] GetUserInfo failed: subject identifier is empty")
 		return nil, NewOAuthError(i18n.MsgOAuthUserInfoEmpty, map[string]any{"Provider": "OIDC"})
 	}
 

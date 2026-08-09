@@ -117,13 +117,22 @@ func TestHandleOAuthRejectsStateFromDifferentBrowserSession(t *testing.T) {
 }
 
 func TestGenerateOAuthCodeRejectsAnonymousBind(t *testing.T) {
+	require.NoError(t, appi18n.Init())
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"github","intent":"bind"}`))
+	c.Request.Header.Set("Accept-Language", "en")
 
 	GenerateOAuthCode(c)
 
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	require.Equal(t, "Unauthorized", response.Message)
 }
 
 func TestHandleOAuthRejectsConsumedStateBeforeProviderExchange(t *testing.T) {

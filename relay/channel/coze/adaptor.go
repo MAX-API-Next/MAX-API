@@ -73,13 +73,19 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	if err != nil {
 		return nil, err
 	}
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("Coze create-message response body is nil")
+	}
 	// 解析 resp
-	var cozeResponse CozeChatResponse
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read Coze create-message response: %w", readErr)
+	}
+	cozeResponse, err := decodeCozeCreateResponse(respBody)
 	if err != nil {
 		return nil, err
 	}
-	err = common2.Unmarshal(respBody, &cozeResponse)
 	if cozeResponse.Code != 0 {
 		return nil, errors.New(cozeResponse.Msg)
 	}
@@ -99,6 +105,14 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	}
 	// 发送获取消息请求
 	return getChatDetail(a, c, info)
+}
+
+func decodeCozeCreateResponse(body []byte) (CozeChatResponse, error) {
+	var response CozeChatResponse
+	if err := common2.Unmarshal(body, &response); err != nil {
+		return response, fmt.Errorf("decode Coze create-message response: %w", err)
+	}
+	return response, nil
 }
 
 // DoResponse implements channel.Adaptor.
