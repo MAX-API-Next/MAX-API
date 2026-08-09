@@ -395,7 +395,10 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {
-	return loadPricingMap(modelRatioMap, jsonStr)
+	return loadPricingMapWithOptions(modelRatioMap, jsonStr, pricingMapValidationOptions{
+		name:         "model ratio configuration",
+		normalizeKey: FormatMatchingModelName,
+	})
 }
 
 // 处理带有思考预算的模型名称，方便统一定价
@@ -443,7 +446,10 @@ func CompletionRatio2JSONString() string {
 }
 
 func UpdateCompletionRatioByJSONString(jsonStr string) error {
-	return loadPricingMap(completionRatioMap, jsonStr)
+	return loadPricingMapWithOptions(completionRatioMap, jsonStr, pricingMapValidationOptions{
+		name:         "completion ratio configuration",
+		normalizeKey: FormatMatchingModelName,
+	})
 }
 
 func GetCompletionRatio(name string) float64 {

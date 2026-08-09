@@ -52,6 +52,8 @@ func TestMain(m *testing.M) {
 		&SubscriptionPreConsumeRecord{},
 		&BillingSettlement{},
 		&BillingPreConsumeSelection{},
+		&Midjourney{},
+		&MidjourneyBillingClaim{},
 		&CacheInvalidationTask{},
 		&PerfMetric{},
 		&SystemTask{},
@@ -81,6 +83,8 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM subscription_pre_consume_records")
 		DB.Exec("DELETE FROM billing_settlements")
 		DB.Exec("DELETE FROM billing_pre_consume_selections")
+		DB.Exec("DELETE FROM midjourneys")
+		DB.Exec("DELETE FROM midjourney_billing_claims")
 		DB.Exec("DELETE FROM cache_invalidation_tasks")
 		DB.Exec("DELETE FROM perf_metrics")
 		DB.Exec("DELETE FROM system_tasks")
@@ -253,6 +257,25 @@ func TestUpdateWithStatusAndSettlementCASLossLeavesNoIntent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, won)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestMarkTaskSubmitFailedWithSettlementRejectsUnpersistedTask(t *testing.T) {
+	truncateTables(t)
+	operationKey := "request:unpersisted-midjourney:refund"
+	require.NoError(t, MarkTaskSubmitFailedWithSettlement(0, "submit rejected", nil))
+
+	err := MarkTaskSubmitFailedWithSettlement(0, "submit rejected", &BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       1,
+		FundingDelta: -10,
+		TokenDelta:   -10,
+	})
+	require.Error(t, err)
 
 	var count int64
 	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)

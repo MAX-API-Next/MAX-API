@@ -24,19 +24,17 @@ import (
 func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequest, isSync bool) (*AliImageRequest, error) {
 	var imageRequest AliImageRequest
 	imageRequest.Model = request.Model
-	imageRequest.ResponseFormat = request.ResponseFormat
+	if request.ResponseFormat != "" {
+		imageRequest.ResponseFormat = &request.ResponseFormat
+	}
+	defaultN := int(lo.FromPtrOr(request.N, uint(1)))
+	hasCustomParameters := false
 	if request.Extra != nil {
 		if val, ok := request.Extra["parameters"]; ok {
+			hasCustomParameters = true
 			err := common.Unmarshal(val, &imageRequest.Parameters)
 			if err != nil {
 				return nil, fmt.Errorf("invalid parameters field: %w", err)
-			}
-		} else {
-			// 兼容没有parameters字段的情况，从openai标准字段中提取参数
-			imageRequest.Parameters = AliImageParameters{
-				Size:      strings.Replace(request.Size, "x", "*", -1),
-				N:         int(lo.FromPtrOr(request.N, uint(1))),
-				Watermark: request.Watermark,
 			}
 		}
 		if val, ok := request.Extra["input"]; ok {
@@ -46,6 +44,16 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 			}
 		}
 	}
+	if !hasCustomParameters {
+		imageRequest.Parameters.Watermark = request.Watermark
+		if request.Size != "" {
+			size := strings.Replace(request.Size, "x", "*", -1)
+			imageRequest.Parameters.Size = &size
+		}
+	}
+	if imageRequest.Parameters.N == nil {
+		imageRequest.Parameters.N = &defaultN
+	}
 
 	if strings.Contains(request.Model, "z-image") {
 		// z-image 开启prompt_extend后，按2倍计费
@@ -54,11 +62,12 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 		}
 	}
 
-	if err := dto.ValidateImageN("parameters.n", imageRequest.Parameters.N); err != nil {
+	n := imageRequest.Parameters.NValue()
+	if err := dto.ValidateImageN("parameters.n", n); err != nil {
 		return nil, err
 	}
-	if imageRequest.Parameters.N != 0 {
-		info.PriceData.AddOtherRatio("n", float64(imageRequest.Parameters.N))
+	if n != 0 {
+		info.PriceData.AddOtherRatio("n", float64(n))
 	}
 
 	// 同步图片模型和异步图片模型请求格式不一样
@@ -158,7 +167,9 @@ func getImageBase64sFromForm(c *gin.Context, fieldName string) ([]string, error)
 func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (*AliImageRequest, error) {
 	var imageRequest AliImageRequest
 	imageRequest.Model = request.Model
-	imageRequest.ResponseFormat = request.ResponseFormat
+	if request.ResponseFormat != "" {
+		imageRequest.ResponseFormat = &request.ResponseFormat
+	}
 
 	imageBase64s, err := getImageBase64sFromForm(c, "image")
 	if err != nil {
@@ -182,8 +193,9 @@ func oaiFormEdit2AliImageEdit(c *gin.Context, info *relaycommon.RelayInfo, reque
 			},
 		},
 	}
+	n := int(lo.FromPtrOr(request.N, uint(1)))
 	imageRequest.Parameters = AliImageParameters{
-		N:         int(lo.FromPtrOr(request.N, uint(1))),
+		N:         &n,
 		Watermark: request.Watermark,
 	}
 	return &imageRequest, nil

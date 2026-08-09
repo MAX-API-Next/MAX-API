@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -204,6 +206,27 @@ func TestValidateOptionUpdateRejectsUnsafePricingValues(t *testing.T) {
 			require.NoError(t, validateOptionUpdate(key, `{"free-model":0}`))
 		})
 	}
+}
+
+func TestValidateOptionUpdateRejectsOversizedPricingMaps(t *testing.T) {
+	const entryCount = 20001
+	values := make(map[string]float64, entryCount)
+	for i := 0; i < entryCount; i++ {
+		values[fmt.Sprintf("model-%d", i)] = 1
+	}
+	data, err := common.Marshal(values)
+	require.NoError(t, err)
+
+	require.Error(t, validateOptionUpdate("ModelRatio", string(data)))
+}
+
+func TestValidateOptionUpdateRejectsUnsafePricingKeys(t *testing.T) {
+	longModelName := strings.Repeat("a", 257)
+
+	require.Error(t, validateOptionUpdate("CompletionRatio", fmt.Sprintf(`{"%s":1}`, longModelName)))
+	require.Error(t, validateOptionUpdate("CompletionRatio", `{" ":1}`))
+	require.Error(t, validateOptionUpdate("ModelRatio", `{"gemini-2.5-flash-thinking-a":1,"gemini-2.5-flash-thinking-b":2}`))
+	require.Error(t, validateOptionUpdate("CompletionRatio", `{"gemini-2.5-pro-thinking-a":1,"gemini-2.5-pro-thinking-b":2}`))
 }
 
 func TestValidateOptionUpdateRejectsNullRWMapConfigs(t *testing.T) {

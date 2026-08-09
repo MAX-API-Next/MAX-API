@@ -92,8 +92,6 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: code=%s...", p.config.Slug, code[:min(len(code), 10)])
-
 	redirectUri := fmt.Sprintf("%s/oauth/%s", system_setting.ServerAddress, p.config.Slug)
 	values := url.Values{}
 	values.Set("grant_type", "authorization_code")
@@ -128,11 +126,11 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 		req.Header.Set("Authorization", "Basic "+credentials)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: token_endpoint=%s, redirect_uri=%s, auth_style=%d",
-		p.config.Slug, p.config.TokenEndpoint, redirectUri, authStyle)
+	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: auth_style=%d", p.config.Slug, authStyle)
 
-	client := http.Client{
-		Timeout: 20 * time.Second,
+	client, err := newOAuthHTTPClient(p.config.TokenEndpoint, 20*time.Second)
+	if err != nil {
+		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": p.config.Name}, err.Error())
 	}
 	res, err := client.Do(req)
 	if err != nil {
@@ -150,7 +148,6 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 	}
 
 	bodyStr := string(body)
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken response body: %s", p.config.Slug, bodyStr[:min(len(bodyStr), 500)])
 
 	// Try to parse as JSON first
 	var tokenResponse struct {
@@ -200,7 +197,7 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 }
 
 func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo: fetching user info from %s", p.config.Slug, p.config.UserInfoEndpoint)
+	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo started", p.config.Slug)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", p.config.UserInfoEndpoint, nil)
 	if err != nil {
@@ -212,8 +209,9 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 	req.Header.Set("Authorization", fmt.Sprintf("%s %s", tokenType, token.AccessToken))
 	req.Header.Set("Accept", "application/json")
 
-	client := http.Client{
-		Timeout: 20 * time.Second,
+	client, err := newOAuthHTTPClient(p.config.UserInfoEndpoint, 20*time.Second)
+	if err != nil {
+		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": p.config.Name}, err.Error())
 	}
 	res, err := client.Do(req)
 	if err != nil {
@@ -236,7 +234,6 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 	}
 
 	bodyStr := string(body)
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo response body: %s", p.config.Slug, bodyStr[:min(len(bodyStr), 500)])
 
 	// Extract fields using gjson (supports JSONPath-like syntax)
 	userId := gjson.Get(bodyStr, p.config.UserIdField).String()
@@ -260,8 +257,8 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 		return nil, NewOAuthError(i18n.MsgOAuthUserInfoEmpty, map[string]any{"Provider": p.config.Name})
 	}
 
-	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo success: id=%s, username=%s, name=%s, email=%s",
-		p.config.Slug, userId, username, displayName, email)
+	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo success: username_present=%t name_present=%t email_present=%t",
+		p.config.Slug, username != "", displayName != "", email != "")
 
 	policyRaw := strings.TrimSpace(p.config.AccessPolicy)
 	if policyRaw != "" {

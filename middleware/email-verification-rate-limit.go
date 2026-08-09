@@ -55,6 +55,7 @@ func redisEmailVerificationRateLimiter(c *gin.Context) {
 }
 
 func memoryEmailVerificationRateLimiter(c *gin.Context) {
+	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 	key := EmailVerificationRateLimitMark + ":" + c.ClientIP()
 
 	if !inMemoryRateLimiter.Request(key, EmailVerificationMaxRequests, EmailVerificationDuration) {
@@ -74,7 +75,6 @@ func EmailVerificationRateLimit() gin.HandlerFunc {
 		if common.RedisEnabled {
 			redisEmailVerificationRateLimiter(c)
 		} else {
-			inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 			memoryEmailVerificationRateLimiter(c)
 		}
 	}

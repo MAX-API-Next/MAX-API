@@ -93,7 +93,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
 
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState('github')
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         if (githubTimeoutRef.current) {
@@ -124,7 +124,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState('discord')
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -145,7 +145,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState('oidc')
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -170,7 +170,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState('linuxdo')
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -195,7 +195,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(provider.slug)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return

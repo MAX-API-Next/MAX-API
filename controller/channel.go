@@ -920,29 +920,162 @@ func DeleteChannelBatch(c *gin.Context) {
 }
 
 type PatchChannel struct {
-	model.Channel
-	MultiKeyMode *string `json:"multi_key_mode"`
-	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	Id                 int     `json:"id"`
+	Type               *int    `json:"type"`
+	Key                *string `json:"key"`
+	OpenAIOrganization *string `json:"openai_organization"`
+	TestModel          *string `json:"test_model"`
+	Status             *int    `json:"status"`
+	Name               *string `json:"name"`
+	Weight             *uint   `json:"weight"`
+	BaseURL            *string `json:"base_url"`
+	Other              *string `json:"other"`
+	Models             *string `json:"models"`
+	Group              *string `json:"group"`
+	ModelMapping       *string `json:"model_mapping"`
+	StatusCodeMapping  *string `json:"status_code_mapping"`
+	Priority           *int64  `json:"priority"`
+	AutoBan            *int    `json:"auto_ban"`
+	Tag                *string `json:"tag"`
+	Setting            *string `json:"setting"`
+	ParamOverride      *string `json:"param_override"`
+	HeaderOverride     *string `json:"header_override"`
+	Remark             *string `json:"remark"`
+	OtherSettings      *string `json:"settings"`
+	MultiKeyMode       *string `json:"multi_key_mode"`
+	KeyMode            *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+}
+
+func (patch *PatchChannel) applyTo(origin *model.Channel) (model.Channel, []string, error) {
+	channel := *origin
+	fields := make([]string, 0, 24)
+	if patch.Type != nil {
+		channel.Type = *patch.Type
+		fields = append(fields, "type")
+	}
+	if patch.Key != nil && strings.TrimSpace(*patch.Key) != "" {
+		channel.Key = *patch.Key
+		fields = append(fields, "key")
+	}
+	if patch.OpenAIOrganization != nil {
+		channel.OpenAIOrganization = patch.OpenAIOrganization
+		fields = append(fields, "openai_organization")
+	}
+	if patch.TestModel != nil {
+		channel.TestModel = patch.TestModel
+		fields = append(fields, "test_model")
+	}
+	if patch.Status != nil {
+		if !isEditableChannelStatus(*patch.Status) {
+			return channel, nil, fmt.Errorf("invalid channel status")
+		}
+		channel.Status = *patch.Status
+		fields = append(fields, "status")
+	}
+	if patch.Name != nil {
+		channel.Name = *patch.Name
+		fields = append(fields, "name")
+	}
+	if patch.Weight != nil {
+		channel.Weight = patch.Weight
+		fields = append(fields, "weight")
+	}
+	if patch.BaseURL != nil {
+		channel.BaseURL = patch.BaseURL
+		fields = append(fields, "base_url")
+	}
+	if patch.Other != nil {
+		channel.Other = *patch.Other
+		fields = append(fields, "other")
+	}
+	if patch.Models != nil {
+		channel.Models = *patch.Models
+		fields = append(fields, "models")
+	}
+	if patch.Group != nil {
+		channel.Group = *patch.Group
+		fields = append(fields, "group")
+	}
+	if patch.ModelMapping != nil {
+		channel.ModelMapping = patch.ModelMapping
+		fields = append(fields, "model_mapping")
+	}
+	if patch.StatusCodeMapping != nil {
+		channel.StatusCodeMapping = patch.StatusCodeMapping
+		fields = append(fields, "status_code_mapping")
+	}
+	if patch.Priority != nil {
+		channel.Priority = patch.Priority
+		fields = append(fields, "priority")
+	}
+	if patch.AutoBan != nil {
+		channel.AutoBan = patch.AutoBan
+		fields = append(fields, "auto_ban")
+	}
+	if patch.Tag != nil {
+		channel.Tag = patch.Tag
+		fields = append(fields, "tag")
+	}
+	if patch.Setting != nil {
+		channel.Setting = patch.Setting
+		fields = append(fields, "setting")
+	}
+	if patch.ParamOverride != nil {
+		channel.ParamOverride = patch.ParamOverride
+		fields = append(fields, "param_override")
+	}
+	if patch.HeaderOverride != nil {
+		channel.HeaderOverride = patch.HeaderOverride
+		fields = append(fields, "header_override")
+	}
+	if patch.Remark != nil {
+		channel.Remark = patch.Remark
+		fields = append(fields, "remark")
+	}
+	if patch.OtherSettings != nil {
+		channel.OtherSettings = *patch.OtherSettings
+		fields = append(fields, "settings")
+	}
+	return channel, fields, nil
+}
+
+func isEditableChannelStatus(status int) bool {
+	switch status {
+	case common.ChannelStatusEnabled, common.ChannelStatusManuallyDisabled, common.ChannelStatusAutoDisabled:
+		return true
+	default:
+		return false
+	}
 }
 
 func UpdateChannel(c *gin.Context) {
-	channel := PatchChannel{}
-	err := c.ShouldBindJSON(&channel)
+	patch := PatchChannel{}
+	err := c.ShouldBindJSON(&patch)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
+	pollingLock := model.GetChannelPollingLock(patch.Id)
+	pollingLock.Lock()
+	pollingLocked := true
+	defer func() {
+		if pollingLocked {
+			pollingLock.Unlock()
+		}
+	}()
+
+	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
+	originChannel, err := model.GetChannelById(patch.Id, true)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
 		})
 		return
 	}
-	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
-	originChannel, err := model.GetChannelById(channel.Id, true)
+
+	channel, updateFields, err := patch.applyTo(originChannel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -955,13 +1088,23 @@ func UpdateChannel(c *gin.Context) {
 	channel.ChannelInfo = originChannel.ChannelInfo
 
 	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
-	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
-		channel.ChannelInfo.MultiKeyMode = constant.MultiKeyMode(*channel.MultiKeyMode)
+	if patch.MultiKeyMode != nil && *patch.MultiKeyMode != "" {
+		channel.ChannelInfo.MultiKeyMode = constant.MultiKeyMode(*patch.MultiKeyMode)
+		updateFields = append(updateFields, "channel_info")
+	}
+
+	// 使用统一的校验函数
+	if err := validateChannel(&channel, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 
 	// 处理多key模式下的密钥追加/覆盖逻辑
-	if channel.KeyMode != nil && channel.ChannelInfo.IsMultiKey {
-		switch *channel.KeyMode {
+	if patch.KeyMode != nil && channel.ChannelInfo.IsMultiKey && patch.Key != nil && strings.TrimSpace(*patch.Key) != "" {
+		switch *patch.KeyMode {
 		case "append":
 			// 追加模式：将新密钥添加到现有密钥列表
 			if originChannel.Key != "" {
@@ -986,8 +1129,8 @@ func UpdateChannel(c *gin.Context) {
 				// 处理 Vertex AI 的特殊情况
 				if channel.Type == constant.ChannelTypeVertexAi && channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
 					// 尝试解析新密钥为JSON数组
-					if strings.HasPrefix(strings.TrimSpace(channel.Key), "[") {
-						array, err := getVertexArrayKeys(channel.Key)
+					if strings.HasPrefix(strings.TrimSpace(*patch.Key), "[") {
+						array, err := getVertexArrayKeys(*patch.Key)
 						if err != nil {
 							c.JSON(http.StatusOK, gin.H{
 								"success": false,
@@ -998,11 +1141,11 @@ func UpdateChannel(c *gin.Context) {
 						newKeys = array
 					} else {
 						// 单个JSON密钥
-						newKeys = []string{channel.Key}
+						newKeys = []string{*patch.Key}
 					}
 				} else {
 					// 普通渠道的处理
-					inputKeys := strings.Split(channel.Key, "\n")
+					inputKeys := strings.Split(*patch.Key, "\n")
 					for _, key := range inputKeys {
 						key = strings.TrimSpace(key)
 						if key != "" {
@@ -1034,12 +1177,16 @@ func UpdateChannel(c *gin.Context) {
 
 				allKeys := append(existingKeys, dedupedNewKeys...)
 				channel.Key = strings.Join(allKeys, "\n")
+				updateFields = append(updateFields, "key", "channel_info")
 			}
 		case "replace":
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
+			updateFields = append(updateFields, "channel_info")
 		}
 	}
-	err = channel.Update()
+	err = channel.UpdateFields(updateFields...)
+	pollingLock.Unlock()
+	pollingLocked = false
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1071,7 +1218,7 @@ func UpdateChannel(c *gin.Context) {
 		"changed_fields": changedFields,
 	})
 	channel.Key = ""
-	clearChannelInfo(&channel.Channel)
+	clearChannelInfo(&channel)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1571,7 +1718,7 @@ func ManageMultiKeys(c *gin.Context) {
 
 		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = 2 // disabled
 
-		err = channel.Update()
+		err = channel.UpdateFields("channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1614,7 +1761,7 @@ func ManageMultiKeys(c *gin.Context) {
 			delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
 		}
 
-		err = channel.Update()
+		err = channel.UpdateFields("channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1639,7 +1786,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
 		channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
 
-		err = channel.Update()
+		err = channel.UpdateFields("channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1687,7 +1834,7 @@ func ManageMultiKeys(c *gin.Context) {
 			return
 		}
 
-		err = channel.Update()
+		err = channel.UpdateFields("channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1768,7 +1915,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateFields("key", "channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -1837,7 +1984,7 @@ func ManageMultiKeys(c *gin.Context) {
 		channel.ChannelInfo.MultiKeyDisabledTime = newDisabledTime
 		channel.ChannelInfo.MultiKeyDisabledReason = newDisabledReason
 
-		err = channel.Update()
+		err = channel.UpdateFields("key", "channel_info")
 		if err != nil {
 			common.ApiError(c, err)
 			return

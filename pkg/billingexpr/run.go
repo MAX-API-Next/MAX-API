@@ -112,6 +112,9 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	if !ok {
 		return 0, trace, fmt.Errorf("expr result is %T, want float64", out)
 	}
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, trace, fmt.Errorf("expr result must be finite, got %v", f)
+	}
 	return f, trace, nil
 }
 

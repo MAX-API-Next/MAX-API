@@ -19,8 +19,8 @@ type BaiduChatRequest struct {
 	PenaltyScore    *float64        `json:"penalty_score,omitempty"`
 	Stream          *bool           `json:"stream,omitempty"`
 	System          string          `json:"system,omitempty"`
-	DisableSearch   bool            `json:"disable_search,omitempty"`
-	EnableCitation  bool            `json:"enable_citation,omitempty"`
+	DisableSearch   *bool           `json:"disable_search,omitempty"`
+	EnableCitation  *bool           `json:"enable_citation,omitempty"`
 	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
 	UserId          json.RawMessage `json:"user_id,omitempty"`
 }

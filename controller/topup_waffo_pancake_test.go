@@ -1,13 +1,70 @@
 package controller
 
 import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func setupWaffoPancakeControllerTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLOGDB := model.LOG_DB
+	oldSQLDSN := os.Getenv("SQL_DSN")
+	oldSQLitePath := common.SQLitePath
+	oldRedisEnabled := common.RedisEnabled
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+
+	common.RedisEnabled = false
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	common.SQLitePath = dsn
+	require.NoError(t, os.Setenv("SQL_DSN", "local"))
+	require.NoError(t, model.InitDB())
+	require.NoError(t, model.InitLogDB())
+	db := model.DB
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLOGDB
+		common.SQLitePath = oldSQLitePath
+		if oldSQLDSN == "" {
+			_ = os.Unsetenv("SQL_DSN")
+		} else {
+			_ = os.Setenv("SQL_DSN", oldSQLDSN)
+		}
+		common.RedisEnabled = oldRedisEnabled
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+	})
+
+	return db
+}
 
 func TestFormatWaffoPancakeAmount_UsesDisplayPriceString(t *testing.T) {
 	testCases := []struct {
@@ -88,4 +145,57 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 			require.InDelta(t, tc.expected, actual, 0.000001)
 		})
 	}
+}
+
+func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testing.T) {
+	db := setupWaffoPancakeControllerTestDB(t)
+	confirmPaymentComplianceForTest(t)
+
+	originalMerchantID := setting.WaffoPancakeMerchantID
+	originalPrivateKey := setting.WaffoPancakePrivateKey
+	originalProductID := setting.WaffoPancakeProductID
+	originalUnitPrice := setting.WaffoPancakeUnitPrice
+	originalMinTopUp := setting.WaffoPancakeMinTopUp
+	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	t.Cleanup(func() {
+		setting.WaffoPancakeMerchantID = originalMerchantID
+		setting.WaffoPancakePrivateKey = originalPrivateKey
+		setting.WaffoPancakeProductID = originalProductID
+		setting.WaffoPancakeUnitPrice = originalUnitPrice
+		setting.WaffoPancakeMinTopUp = originalMinTopUp
+		operation_setting.GetGeneralSetting().QuotaDisplayType = originalQuotaDisplayType
+	})
+
+	setting.WaffoPancakeMerchantID = "MER_1234567890123456789012"
+	setting.WaffoPancakePrivateKey = "not-a-private-key"
+	setting.WaffoPancakeProductID = "PROD_1234567890123456789012"
+	setting.WaffoPancakeUnitPrice = 1
+	setting.WaffoPancakeMinTopUp = 1
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+
+	user := &model.User{
+		Id:       1201,
+		Username: "pancake-pending-user",
+		Group:    "default",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(user).Error)
+
+	payload, err := common.Marshal(WaffoPancakePayRequest{Amount: 10})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/waffo-pancake/pay", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	RequestWaffoPancakePay(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"data":"拉起支付失败"`)
+
+	var topUps []model.TopUp
+	require.NoError(t, db.Find(&topUps).Error)
+	require.Len(t, topUps, 1)
+	require.Equal(t, common.TopUpStatusPending, topUps[0].Status)
 }

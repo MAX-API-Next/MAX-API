@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Token struct {
@@ -289,7 +290,11 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		cacheVersion, err = common.RedisGetCacheVersion(getTokenCacheVersionKey(key))
 		cacheVersionValid = err == nil
 	}
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+	var dbToken Token
+	err = DB.Where(clause.Eq{Column: clause.Column{Name: "key"}, Value: key}).First(&dbToken).Error
+	if err == nil {
+		token = &dbToken
+	}
 	if err == nil && token != nil && cacheVersionValid {
 		tokenSnapshot := *token
 		gopool.Go(func() {
@@ -498,27 +503,35 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	defer tx.Rollback()
 
 	var tokens []Token
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
-		tx.Rollback()
 		return 0, err
+	}
+	cacheTasks := make([]CacheInvalidationTask, 0, len(tokens))
+	for _, token := range tokens {
+		if token.Key == "" {
+			continue
+		}
+		task, err := stageTokenCacheInvalidationTx(tx, token.Key, true)
+		if err != nil {
+			return 0, err
+		}
+		cacheTasks = append(cacheTasks, task)
 	}
 
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
-		tx.Rollback()
 		return 0, err
 	}
 
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
 	}
-
-	if common.RedisEnabled {
-		for _, t := range tokens {
-			enqueueTokenCacheRetry(t.Key, true, nil)
-		}
-	}
+	dispatchStagedCacheInvalidations(cacheTasks)
 
 	return len(tokens), nil
 }

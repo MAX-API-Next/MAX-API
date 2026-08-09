@@ -7,7 +7,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -148,9 +147,7 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		auditInfo["params"] = routeParams
 	}
 
-	gopool.Go(func() {
-		model.RecordOperationAuditLog(operatorID, content, ip, action, opParams, adminInfo, auditInfo)
-	})
+	model.RecordOperationAuditLog(operatorID, content, ip, action, opParams, adminInfo, auditInfo)
 }
 
 func auditAuthMethod(c *gin.Context) string {

@@ -145,10 +145,11 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
-func buildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {
+func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {
 	if task == nil || task.Quota == 0 || task.ID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	source := model.BillingSettlementSourceWallet
 	if taskIsSubscription(task) {
 		source = model.BillingSettlementSourceSubscription
@@ -182,6 +183,7 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 	if task == nil || task.ID <= 0 || actualQuota <= 0 || actualQuota == task.Quota {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	quotaDelta := actualQuota - task.Quota
 	source := model.BillingSettlementSourceWallet
 	if taskIsSubscription(task) {
@@ -257,7 +259,11 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		return false
 	}
 
-	return applyTaskBillingSettlement(ctx, task, buildTaskRefundSettlementInput(task, reason))
+	return applyTaskBillingSettlement(ctx, task, BuildTaskRefundSettlementInput(task, reason))
+}
+
+func ApplyTaskBillingSettlement(ctx context.Context, task *model.Task, input *model.BillingSettlementInput) bool {
+	return applyTaskBillingSettlement(ctx, task, input)
 }
 
 // RecalculateTaskQuota 通用的异步差额结算。

@@ -73,7 +73,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 		var settlement *model.BillingSettlementInput
 		if !isLegacy && !isUnconfirmedSubmit {
-			settlement = buildTaskRefundSettlementInput(task, reason)
+			settlement = BuildTaskRefundSettlementInput(task, reason)
 		}
 		var won bool
 		var err error
@@ -172,22 +172,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	ch, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("CacheGetChannel: %v", err))
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
-		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
-			}
-		}
-		err = model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if err != nil {
-			common.SysLog(fmt.Sprintf("UpdateSunoTask error: %v", err))
-		}
-		return err
+		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
 	adaptor := GetTaskAdaptorFunc(constant.TaskPlatformSuno)
 	if adaptor == nil {
@@ -214,12 +199,17 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	var responseItems dto.TaskResponse[[]dto.SunoDataResponse]
 	err = common.Unmarshal(responseBody, &responseItems)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("Get Suno Task parse body error2: %v, body: %s", err, string(responseBody)))
+		logger.LogError(ctx, fmt.Sprintf("Get Suno Task parse body error2: %v, body_bytes=%d", err, len(responseBody)))
 		return err
 	}
 	if !responseItems.IsSuccess() {
-		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, 成功获取到任务数: %s", channelId, len(taskIds), string(responseBody)))
-		return err
+		common.SysLog(fmt.Sprintf("渠道 #%d 未完成的任务有: %d, response_bytes=%d", channelId, len(taskIds), len(responseBody)))
+		return fmt.Errorf(
+			"Suno task polling failed for channel #%d: code=%q, message=%q",
+			channelId,
+			responseItems.Code,
+			common.SanitizePersistedLogContent(common.MaskSensitiveInfo(responseItems.Message)),
+		)
 	}
 
 	for _, responseItem := range responseItems.Data {
@@ -240,7 +230,7 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 
 	previousStatus := task.Status
 	task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
-	task.FailReason = lo.If(responseItem.FailReason != "", responseItem.FailReason).Else(task.FailReason)
+	task.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(task.FailReason)
 	task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
 	task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
 	task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
@@ -257,7 +247,7 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
-		settlement = buildTaskRefundSettlementInput(task, task.FailReason)
+		settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
 	}
 	var won bool
 	var err error
@@ -289,7 +279,14 @@ func taskNeedsUpdate(oldTask *model.Task, newTask dto.SunoDataResponse) bool {
 	if string(oldTask.Status) != newTask.Status {
 		return true
 	}
-	if oldTask.FailReason != newTask.FailReason {
+	if newTask.FailReason != "" && oldTask.Status != model.TaskStatusFailure {
+		return true
+	}
+	newFailReason := oldTask.FailReason
+	if newTask.FailReason != "" {
+		newFailReason = common.SanitizePersistedLogContent(newTask.FailReason)
+	}
+	if oldTask.FailReason != newFailReason {
 		return true
 	}
 
@@ -330,21 +327,6 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	}
 	cacheGetChannel, err := model.CacheGetChannel(channelId)
 	if err != nil {
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
-		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
-			}
-		}
-		errUpdate := model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if errUpdate != nil {
-			common.SysLog(fmt.Sprintf("UpdateVideoTask error: %v", errUpdate))
-		}
 		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
 	adaptor := GetTaskAdaptorFunc(platform)
@@ -403,7 +385,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
+	logger.LogDebug(ctx, "updateVideoSingleTask response bytes: %d", len(responseBody))
 
 	snap := task.Snapshot()
 
@@ -448,7 +430,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				taskResult = relaycommon.FailTaskInfo("upstream returned error")
 			} else {
 				// unknown error format, log original response
-				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, response: %s", taskId, string(responseBody)))
+				logger.LogError(ctx, fmt.Sprintf("Task %s returned empty status with unrecognized error format, body_bytes=%d", taskId, len(responseBody)))
 				taskResult = relaycommon.FailTaskInfo("upstream returned unrecognized message")
 			}
 		}
@@ -492,7 +474,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		task.FailReason = taskResult.Reason
+		task.FailReason = common.SanitizePersistedLogContent(taskResult.Reason)
 		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 		taskResult.Progress = taskcommon.ProgressComplete
 		if quota != 0 {
@@ -512,7 +494,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if shouldSettle {
 			settlement = prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
 		} else if shouldRefund {
-			settlement = buildTaskRefundSettlementInput(task, task.FailReason)
+			settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
 		}
 		var won bool
 		var err error

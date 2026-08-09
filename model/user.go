@@ -702,10 +702,14 @@ func HardDeleteUserById(id int) error {
 }
 
 func inviteUser(inviterId int) (err error) {
-	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
+	return inviteUserTx(DB, inviterId, int64(common.QuotaForInviter))
+}
+
+func inviteUserTx(tx *gorm.DB, inviterId int, quota int64) error {
+	result := tx.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
 		"aff_count":   gorm.Expr("aff_count + 1"),
-		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
-		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+		"aff_quota":   gorm.Expr("aff_quota + ?", quota),
+		"aff_history": gorm.Expr("aff_history + ?", quota),
 	})
 	if result.Error != nil {
 		return result.Error
@@ -714,6 +718,44 @@ func inviteUser(inviterId int) (err error) {
 		return fmt.Errorf("%w: id=%d", ErrUserNotFound, inviterId)
 	}
 	return nil
+}
+
+type invitationRewardPlan struct {
+	inviteeQuota int64
+	inviterQuota int64
+}
+
+func buildInvitationRewardPlan(inviterId int) invitationRewardPlan {
+	if inviterId == 0 || !operation_setting.IsPaymentComplianceConfirmed() {
+		return invitationRewardPlan{}
+	}
+	plan := invitationRewardPlan{}
+	if common.QuotaForInvitee > 0 {
+		plan.inviteeQuota = int64(common.QuotaForInvitee)
+	}
+	if common.QuotaForInviter > 0 {
+		plan.inviterQuota = int64(common.QuotaForInviter)
+	}
+	return plan
+}
+
+func applyInviterRewardTx(tx *gorm.DB, inviterId int, plan invitationRewardPlan) (CacheInvalidationTask, error) {
+	if inviterId == 0 || plan.inviterQuota <= 0 {
+		return CacheInvalidationTask{}, nil
+	}
+	if err := inviteUserTx(tx, inviterId, plan.inviterQuota); err != nil {
+		return CacheInvalidationTask{}, err
+	}
+	return stageUserCacheInvalidationTx(tx, inviterId, false)
+}
+
+func recordInvitationRewardLogs(inviteeId, inviterId int, plan invitationRewardPlan) {
+	if plan.inviteeQuota > 0 {
+		RecordLog(inviteeId, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(int(plan.inviteeQuota))))
+	}
+	if plan.inviterQuota > 0 {
+		RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(int(plan.inviterQuota))))
+	}
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int64) error {
@@ -822,12 +864,18 @@ func BindEmailToUser(user *User, email string) error {
 }
 
 func (user *User) Insert(inviterId int) error {
+	affCode, err := common.GenerateRandomCharsKey(4)
+	if err != nil {
+		return fmt.Errorf("generate affiliate code: %w", err)
+	}
+	rewardPlan := buildInvitationRewardPlan(inviterId)
+	var inviterCacheTask CacheInvalidationTask
 	if err := WithNormalizedEmailWriteTx(user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = int64(common.QuotaForNewUser)
-		user.AffCode = common.GetRandomString(4)
+		user.Quota = int64(common.QuotaForNewUser) + rewardPlan.inviteeQuota
+		user.AffCode = affCode
 
 		// 初始化用户设置，包括默认的边栏配置
 		if user.Setting == "" {
@@ -836,10 +884,16 @@ func (user *User) Insert(inviterId int) error {
 			user.SetSetting(defaultSetting)
 		}
 
-		return tx.Create(user).Error
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
+		var err error
+		inviterCacheTask, err = applyInviterRewardTx(tx, inviterId, rewardPlan)
+		return err
 	}); err != nil {
 		return err
 	}
+	dispatchStagedCacheInvalidation(inviterCacheTask)
 
 	// 用户创建成功后，根据角色初始化边栏配置
 	// 需要重新获取用户以确保有正确的ID和Role
@@ -851,25 +905,18 @@ func (user *User) Insert(inviterId int) error {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.UpdateFields(false, UserUpdateFieldSetting)
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			if err := createdUser.UpdateFields(false, UserUpdateFieldSetting); err != nil {
+				common.SysLog(fmt.Sprintf("初始化新用户 %s 边栏配置失败: %s", createdUser.Username, err.Error()))
+			} else {
+				common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			}
 		}
 	}
 
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
-	}
+	recordInvitationRewardLogs(user.Id, inviterId, rewardPlan)
 	return nil
 }
 
@@ -879,12 +926,17 @@ func (user *User) Insert(inviterId int) error {
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
+	affCode, err := common.GenerateRandomCharsKey(4)
+	if err != nil {
+		return fmt.Errorf("generate affiliate code: %w", err)
+	}
+	rewardPlan := buildInvitationRewardPlan(inviterId)
 	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = int64(common.QuotaForNewUser)
-		user.AffCode = common.GetRandomString(4)
+		user.Quota = int64(common.QuotaForNewUser) + rewardPlan.inviteeQuota
+		user.AffCode = affCode
 
 		// 初始化用户设置
 		if user.Setting == "" {
@@ -892,13 +944,18 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 			user.SetSetting(defaultSetting)
 		}
 
-		return tx.Create(user).Error
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
+		_, err := applyInviterRewardTx(tx, inviterId, rewardPlan)
+		return err
 	})
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
 // This should be called after the transaction commits successfully.
 func (user *User) FinalizeOAuthUserCreation(inviterId int) {
+	rewardPlan := buildInvitationRewardPlan(inviterId)
 	// 用户创建成功后，根据角色初始化边栏配置
 	var createdUser User
 	if err := DB.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
@@ -907,24 +964,18 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.UpdateFields(false, UserUpdateFieldSetting)
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			if err := createdUser.UpdateFields(false, UserUpdateFieldSetting); err != nil {
+				common.SysLog(fmt.Sprintf("初始化新用户 %s 边栏配置失败: %s", createdUser.Username, err.Error()))
+			} else {
+				common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			}
 		}
 	}
 
 	if common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
-	}
+	recordInvitationRewardLogs(user.Id, inviterId, rewardPlan)
 }
 
 func (user *User) Update(updatePassword bool) error {
@@ -1633,6 +1684,30 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 
 type quotaDeltaInteger interface {
 	~int | ~int64
+}
+
+func OverrideUserQuota(id int, quota int64) error {
+	if id <= 0 {
+		return ErrUserNotFound
+	}
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&User{}).Where("id = ?", id).Update("quota", quota)
+		if err := ensureUserUpdateMatchedTx(tx, result, id, ErrUserNotFound); err != nil {
+			return err
+		}
+		var err error
+		cacheTask, err = stageUserCacheInvalidationTx(tx, id, false)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return nil
 }
 
 // The final boolean is retained for caller compatibility. Accounting mutations

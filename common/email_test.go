@@ -220,6 +220,53 @@ func TestSendEmailSkipsAuthWhenServerDoesNotAdvertiseAuth(t *testing.T) {
 	}
 }
 
+func TestNewSMTPClientUsesOperationDeadline(t *testing.T) {
+	restore := preserveSMTPGlobals()
+	defer restore()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	SMTPServer = "localhost"
+	SMTPPort = mustPort(t, listener.Addr().String())
+	SMTPSSLEnabled = false
+	SMTPStartTLSEnabled = false
+
+	oldTimeout := smtpOperationTimeout
+	smtpOperationTimeout = 50 * time.Millisecond
+	defer func() { smtpOperationTimeout = oldTimeout }()
+
+	done := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			done <- acceptErr
+			return
+		}
+		defer conn.Close()
+		time.Sleep(200 * time.Millisecond)
+		done <- nil
+	}()
+
+	started := time.Now()
+	client, err := newSMTPClient(listener.Addr().String())
+	if client != nil {
+		_ = client.Close()
+	}
+	if err == nil {
+		t.Fatal("expected SMTP greeting timeout")
+	}
+	if time.Since(started) >= time.Second {
+		t.Fatalf("SMTP timeout took too long: %s", time.Since(started))
+	}
+	if err := waitSMTPServer(done); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func preserveSMTPGlobals() func() {
 	old := struct {
 		server             string

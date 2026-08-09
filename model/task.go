@@ -72,6 +72,13 @@ type Task struct {
 	includePrivateDataInUpdate bool `gorm:"-"`
 }
 
+func (t *Task) BeforeSave(*gorm.DB) error {
+	if t != nil {
+		t.FailReason = common.SanitizePersistedLogContent(t.FailReason)
+	}
+	return nil
+}
+
 func (t *Task) SetData(data any) {
 	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
@@ -481,7 +488,7 @@ func (t *Task) statusUpdateValues() map[string]interface{} {
 		"progress":    t.Progress,
 		"start_time":  t.StartTime,
 		"finish_time": t.FinishTime,
-		"fail_reason": t.FailReason,
+		"fail_reason": common.SanitizePersistedLogContent(t.FailReason),
 		"updated_at":  updatedAt,
 	}
 	if t.Data != nil || t.includeDataInUpdate {
@@ -617,6 +624,7 @@ func MarkTaskSubmitFailed(taskID int64, reason string) error {
 	if taskID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	return DB.Model(&Task{}).
 		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
 		Updates(map[string]interface{}{
@@ -629,6 +637,49 @@ func MarkTaskSubmitFailed(taskID int64, reason string) error {
 		}).Error
 }
 
+// MarkTaskSubmitFailedWithSettlement commits a definite submit rejection and
+// its durable pre-consume refund intent atomically. The task is terminal with a
+// zero displayed quota while the settlement runner applies or retries the
+// already-recorded balance mutation.
+func MarkTaskSubmitFailedWithSettlement(taskID int64, reason string, input *BillingSettlementInput) error {
+	if taskID <= 0 {
+		if input != nil {
+			return fmt.Errorf("cannot record settlement intent for unpersisted task: id=%d", taskID)
+		}
+		return nil
+	}
+	reason = common.SanitizePersistedLogContent(reason)
+	if input != nil {
+		if err := validateBillingSettlementInput(*input); err != nil {
+			return err
+		}
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if input != nil {
+			if _, _, err := ensureBillingSettlementRecordDB(tx, *input); err != nil {
+				return err
+			}
+		}
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
+			Updates(map[string]interface{}{
+				"status":      TaskStatusFailure,
+				"progress":    "100%",
+				"finish_time": time.Now().Unix(),
+				"fail_reason": reason,
+				"quota":       0,
+				"updated_at":  time.Now().Unix(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return taskSubmitResultUpdateMissError(tx, taskID)
+		}
+		return nil
+	})
+}
+
 // MarkTaskSubmitNeedsReview preserves the pre-consumed quota and any upstream
 // identity after the provider accepted a task but local durable finalization
 // failed. Refunding this state would create an unbilled upstream task.
@@ -636,6 +687,7 @@ func MarkTaskSubmitNeedsReview(task *Task, reason string) error {
 	if task == nil || task.ID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	task.PrivateData.AwaitingUpstreamID = false
 	return DB.Model(&Task{}).
 		Where("id = ? AND status <> ?", task.ID, TaskStatusSuccess).
@@ -655,6 +707,7 @@ func MarkTaskSubmitAmbiguous(taskID int64, reason string) error {
 	if taskID <= 0 {
 		return nil
 	}
+	reason = common.SanitizePersistedLogContent(reason)
 	return DB.Model(&Task{}).
 		Where("id = ? AND status NOT IN ?", taskID, []string{TaskStatusFailure, TaskStatusSuccess}).
 		Updates(map[string]interface{}{
@@ -672,6 +725,7 @@ func TaskBulkUpdate(taskIds []string, params map[string]any) error {
 	if len(taskIds) == 0 {
 		return nil
 	}
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Task{}).
 		Where("task_id in (?)", taskIds).
 		Updates(params).Error
@@ -686,6 +740,7 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	sanitizeFailReasonUpdateParam(params)
 	return DB.Model(&Task{}).
 		Where("id in (?)", ids).
 		Updates(params).Error

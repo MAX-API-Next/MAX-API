@@ -33,6 +33,7 @@ import {
   codeToHtml,
   type ShikiTransformer,
 } from 'shiki/bundle/web'
+import { sanitizeHtmlContent } from '@/lib/html-sanitizer'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -75,7 +76,7 @@ export async function highlightCode(
   code: string,
   language: BundledLanguage,
   showLineNumbers = false
-) {
+): Promise<string> {
   const transformers: ShikiTransformer[] = showLineNumbers
     ? [lineNumberTransformer]
     : []
@@ -90,6 +91,20 @@ export async function highlightCode(
   })
 }
 
+export async function renderHighlightedCode(
+  code: string,
+  language: BundledLanguage,
+  showLineNumbers = false
+): Promise<string> {
+  return sanitizeHighlightedCode(
+    await highlightCode(code, language, showLineNumbers)
+  )
+}
+
+export function sanitizeHighlightedCode(html: string): string {
+  return sanitizeHtmlContent(html)
+}
+
 export const CodeBlock = ({
   code,
   language,
@@ -102,7 +117,7 @@ export const CodeBlock = ({
 
   useEffect(() => {
     let cancelled = false
-    highlightCode(code, language, showLineNumbers).then((next) => {
+    renderHighlightedCode(code, language, showLineNumbers).then((next) => {
       if (!cancelled) {
         setHtml(next)
       }

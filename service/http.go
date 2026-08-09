@@ -13,6 +13,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var blockedUpstreamResponseHeaders = map[string]struct{}{
+	"connection":          {},
+	"content-length":      {},
+	"keep-alive":          {},
+	"proxy-authenticate":  {},
+	"proxy-authorization": {},
+	"set-cookie":          {},
+	"te":                  {},
+	"trailer":             {},
+	"transfer-encoding":   {},
+	"upgrade":             {},
+}
+
 func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	if httpResponse == nil || httpResponse.Body == nil {
 		return
@@ -23,20 +36,121 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	}
 }
 
-// ShouldCopyUpstreamHeader checks whether a given upstream response header
-// should be copied to the client response. It returns false for Content-Length
-// (managed separately) and X-Oneapi-Request-Id (to preserve the local instance
-// ID). When the upstream header is X-Oneapi-Request-Id, the value is captured
-// into the Gin context for later logging.
-func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
-	if strings.EqualFold(k, "Content-Length") {
+// ShouldCopyUpstreamHeader checks whether a given upstream response header can
+// be copied to the client response. Hop-by-hop headers and Set-Cookie stay
+// under MAX API control, and malformed names/values are dropped before they
+// reach net/http's writer.
+func ShouldCopyUpstreamHeader(_ *gin.Context, k string, v []string) bool {
+	return shouldCopyUpstreamHeader(k, v)
+}
+
+func shouldCopyUpstreamHeader(k string, v []string) bool {
+	if len(v) == 0 {
 		return false
 	}
-	if strings.EqualFold(k, common.RequestIdKey) {
-		if c != nil && len(v) > 0 {
-			c.Set(common.UpstreamRequestIdKey, v[0])
-		}
+	headerName := strings.TrimSpace(k)
+	if headerName == "" || headerName != k || !isSafeResponseHeaderName(headerName) || !isSafeResponseHeaderValue(v[0]) {
 		return false
+	}
+	if strings.EqualFold(headerName, common.RequestIdKey) {
+		return false
+	}
+	if _, blocked := blockedUpstreamResponseHeaders[strings.ToLower(headerName)]; blocked {
+		return false
+	}
+	return true
+}
+
+func connectionScopedHeaderNames(header http.Header) map[string]struct{} {
+	var connectionScoped map[string]struct{}
+	for key, values := range header {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				name = strings.TrimSpace(name)
+				if name == "" || !isSafeResponseHeaderName(name) {
+					continue
+				}
+				if connectionScoped == nil {
+					connectionScoped = make(map[string]struct{})
+				}
+				connectionScoped[strings.ToLower(name)] = struct{}{}
+			}
+		}
+	}
+	return connectionScoped
+}
+
+func CopyUpstreamResponseHeaders(c *gin.Context, header http.Header) {
+	if c == nil || c.Writer == nil {
+		return
+	}
+	connectionScoped := connectionScopedHeaderNames(header)
+	for key, values := range header {
+		if connectionScoped != nil {
+			if _, blocked := connectionScoped[strings.ToLower(key)]; blocked {
+				continue
+			}
+		}
+		if len(values) > 0 && strings.EqualFold(key, common.RequestIdKey) && isSafeResponseHeaderName(key) && isSafeResponseHeaderValue(values[0]) {
+			c.Set(common.UpstreamRequestIdKey, values[0])
+		}
+		if !shouldCopyUpstreamHeader(key, values) {
+			continue
+		}
+		copied := false
+		for _, value := range values {
+			if !isSafeResponseHeaderValue(value) {
+				continue
+			}
+			if copied {
+				c.Writer.Header().Add(key, value)
+			} else {
+				c.Writer.Header().Set(key, value)
+				copied = true
+			}
+		}
+	}
+}
+
+func isSafeResponseHeaderName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if !isHTTPTokenChar(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHTTPTokenChar(c byte) bool {
+	if c >= 'a' && c <= 'z' {
+		return true
+	}
+	if c >= 'A' && c <= 'Z' {
+		return true
+	}
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	switch c {
+	case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeResponseHeaderValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\r', '\n', 0, 0x7f:
+			return false
+		}
+		if value[i] < 0x20 && value[i] != '\t' {
+			return false
+		}
 	}
 	return true
 }
@@ -53,12 +167,7 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	// So the httpClient will be confused by the response.
 	// For example, Postman will report error, and we cannot check the response at all.
 	if src != nil {
-		for k, v := range src.Header {
-			if !ShouldCopyUpstreamHeader(c, k, v) {
-				continue
-			}
-			c.Writer.Header().Set(k, v[0])
-		}
+		CopyUpstreamResponseHeaders(c, src.Header)
 	}
 
 	// set Content-Length header manually BEFORE calling WriteHeader

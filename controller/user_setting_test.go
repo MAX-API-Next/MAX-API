@@ -129,6 +129,325 @@ func TestUpdateUserSettingPreservesUnrelatedSettings(t *testing.T) {
 	assert.Zero(t, setting.GotifyPriority)
 }
 
+func TestGetSelfRedactsNotificationSecrets(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	initialSettings := dto.UserSetting{
+		NotifyType:     dto.NotifyTypeWebhook,
+		WebhookUrl:     "https://example.com/webhook",
+		WebhookSecret:  "stored-webhook-secret",
+		GotifyUrl:      "https://gotify.example.com",
+		GotifyToken:    "stored-gotify-token",
+		GotifyPriority: 7,
+		Language:       "zh",
+	}
+	initialSettingBytes, err := common.Marshal(initialSettings)
+	require.NoError(t, err)
+	user := model.User{
+		Id:       1101,
+		Username: "self-redaction-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Setting:  string(initialSettingBytes),
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	ctx.Set("id", user.Id)
+
+	GetSelf(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "stored-webhook-secret")
+	require.NotContains(t, recorder.Body.String(), "stored-gotify-token")
+
+	var response struct {
+		Data struct {
+			Setting string `json:"setting"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	var returned dto.UserSetting
+	require.NoError(t, common.UnmarshalJsonStr(response.Data.Setting, &returned))
+	assert.Equal(t, "https://example.com/webhook", returned.WebhookUrl)
+	assert.Empty(t, returned.WebhookSecret)
+	assert.Equal(t, "https://gotify.example.com", returned.GotifyUrl)
+	assert.Empty(t, returned.GotifyToken)
+	assert.Equal(t, 7, returned.GotifyPriority)
+}
+
+func TestGetSelfIgnoresQueryUserID(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	authenticatedUser := model.User{
+		Id:       1201,
+		Username: "self-authenticated",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		AffCode:  "self-authenticated",
+	}
+	otherUser := model.User{
+		Id:       1202,
+		Username: "self-other",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		AffCode:  "self-other",
+	}
+	require.NoError(t, db.Create(&authenticatedUser).Error)
+	require.NoError(t, db.Create(&otherUser).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/self?id=1202", nil)
+	ctx.Set("id", authenticatedUser.Id)
+	ctx.Set("role", authenticatedUser.Role)
+
+	GetSelf(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data struct {
+			ID       int    `json:"id"`
+			Username string `json:"username"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, authenticatedUser.Id, response.Data.ID)
+	assert.Equal(t, authenticatedUser.Username, response.Data.Username)
+	assert.NotEqual(t, otherUser.Id, response.Data.ID)
+}
+
+func TestUpdateUserSettingPreservesStoredSecretsWhenRedactedFieldsAreOmitted(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	initialSettings := dto.UserSetting{
+		NotifyType:            dto.NotifyTypeWebhook,
+		QuotaWarningThreshold: 0.5,
+		WebhookUrl:            "https://example.com/webhook",
+		WebhookSecret:         "stored-webhook-secret",
+	}
+	initialSettingBytes, err := common.Marshal(initialSettings)
+	require.NoError(t, err)
+	user := model.User{
+		Id:       1102,
+		Username: "setting-secret-preserve-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Setting:  string(initialSettingBytes),
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	payload := map[string]any{
+		"notify_type":             dto.NotifyTypeWebhook,
+		"quota_warning_threshold": 0.8,
+		"webhook_url":             "https://example.com/new-webhook",
+		"webhook_secret":          "",
+	}
+	payloadBytes, err := common.Marshal(payload)
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	UpdateUserSetting(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var got model.User
+	require.NoError(t, db.First(&got, user.Id).Error)
+	setting := got.GetSetting()
+	assert.Equal(t, dto.NotifyTypeWebhook, setting.NotifyType)
+	assert.Equal(t, "https://example.com/new-webhook", setting.WebhookUrl)
+	assert.Equal(t, "stored-webhook-secret", setting.WebhookSecret)
+	assert.Equal(t, 0.8, setting.QuotaWarningThreshold)
+}
+
+func TestUpdateUserSettingPreservesStoredGotifyTokenWhenOmitted(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	initialSettings := dto.UserSetting{
+		NotifyType:            dto.NotifyTypeGotify,
+		QuotaWarningThreshold: 0.5,
+		GotifyUrl:             "https://gotify.example.com",
+		GotifyToken:           "stored-gotify-token",
+		GotifyPriority:        3,
+	}
+	initialSettingBytes, err := common.Marshal(initialSettings)
+	require.NoError(t, err)
+	user := model.User{
+		Id:       1103,
+		Username: "setting-gotify-preserve-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Setting:  string(initialSettingBytes),
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	payloadBytes, err := common.Marshal(map[string]any{
+		"notify_type":             dto.NotifyTypeGotify,
+		"quota_warning_threshold": 0.8,
+		"gotify_url":              "https://gotify.example.com/new",
+		"gotify_token":            "",
+		"gotify_priority":         5,
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	UpdateUserSetting(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+	var got model.User
+	require.NoError(t, db.First(&got, user.Id).Error)
+	setting := got.GetSetting()
+	assert.Equal(t, dto.NotifyTypeGotify, setting.NotifyType)
+	assert.Equal(t, "https://gotify.example.com/new", setting.GotifyUrl)
+	assert.Equal(t, "stored-gotify-token", setting.GotifyToken)
+	assert.Equal(t, 5, setting.GotifyPriority)
+	assert.Equal(t, 0.8, setting.QuotaWarningThreshold)
+}
+
+func TestUpdateUserSettingRejectsOmittedGotifyTokenFromDifferentStoredType(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+
+	initialSettings := dto.UserSetting{
+		NotifyType:            dto.NotifyTypeWebhook,
+		QuotaWarningThreshold: 0.5,
+		WebhookUrl:            "https://example.com/webhook",
+		WebhookSecret:         "stored-webhook-secret",
+		GotifyToken:           "stale-gotify-token",
+	}
+	initialSettingBytes, err := common.Marshal(initialSettings)
+	require.NoError(t, err)
+	user := model.User{
+		Id:       1104,
+		Username: "setting-gotify-reject-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Setting:  string(initialSettingBytes),
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	payloadBytes, err := common.Marshal(map[string]any{
+		"notify_type":             dto.NotifyTypeGotify,
+		"quota_warning_threshold": 0.8,
+		"gotify_url":              "https://gotify.example.com/new",
+		"gotify_token":            "",
+		"gotify_priority":         5,
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	UpdateUserSetting(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":false`)
+	var got model.User
+	require.NoError(t, db.First(&got, user.Id).Error)
+	assert.Equal(t, initialSettings, got.GetSetting())
+}
+
+func TestUpdateUserSettingWebhookCredentialTransitions(t *testing.T) {
+	tests := []struct {
+		name              string
+		initial           dto.UserSetting
+		requestSecret     string
+		wantWebhookSecret string
+		wantGotifyCleared bool
+	}{
+		{
+			name: "preserves existing webhook secret when redacted value is empty",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeWebhook, WebhookUrl: "https://example.com/old-webhook", WebhookSecret: "stored-webhook-secret",
+			},
+			wantWebhookSecret: "stored-webhook-secret",
+		},
+		{
+			name: "accepts explicit webhook secret",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeWebhook, WebhookUrl: "https://example.com/old-webhook", WebhookSecret: "stored-webhook-secret",
+			},
+			requestSecret:     "replacement-webhook-secret",
+			wantWebhookSecret: "replacement-webhook-secret",
+		},
+		{
+			name: "switching from gotify clears stale gotify credentials",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeGotify, GotifyUrl: "https://gotify.example.com", GotifyToken: "stale-gotify-token", GotifyPriority: 7,
+			},
+			requestSecret:     "new-webhook-secret",
+			wantWebhookSecret: "new-webhook-secret",
+			wantGotifyCleared: true,
+		},
+		{
+			name: "redacted webhook secret never reuses a gotify token",
+			initial: dto.UserSetting{
+				NotifyType: dto.NotifyTypeGotify, GotifyUrl: "https://gotify.example.com", GotifyToken: "stale-gotify-token", GotifyPriority: 7,
+			},
+			wantGotifyCleared: true,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupUserSettingControllerTestDB(t)
+			initial := tt.initial
+			initial.QuotaWarningThreshold = 0.5
+			settingBytes, err := common.Marshal(initial)
+			require.NoError(t, err)
+			user := model.User{
+				Id: 1200 + i, Username: fmt.Sprintf("webhook-transition-%d", i), Password: "password",
+				Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Setting: string(settingBytes),
+			}
+			require.NoError(t, db.Create(&user).Error)
+
+			payloadBytes, err := common.Marshal(map[string]any{
+				"notify_type": dto.NotifyTypeWebhook, "quota_warning_threshold": 0.8,
+				"webhook_url": "https://example.com/new-webhook", "webhook_secret": tt.requestSecret,
+			})
+			require.NoError(t, err)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/api/user/setting", bytes.NewReader(payloadBytes))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			ctx.Set("id", user.Id)
+
+			UpdateUserSetting(ctx)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Contains(t, recorder.Body.String(), `"success":true`)
+			var got model.User
+			require.NoError(t, db.First(&got, user.Id).Error)
+			setting := got.GetSetting()
+			assert.Equal(t, dto.NotifyTypeWebhook, setting.NotifyType)
+			assert.Equal(t, "https://example.com/new-webhook", setting.WebhookUrl)
+			assert.Equal(t, tt.wantWebhookSecret, setting.WebhookSecret)
+			if tt.wantGotifyCleared {
+				assert.Empty(t, setting.GotifyUrl)
+				assert.Empty(t, setting.GotifyToken)
+				assert.Zero(t, setting.GotifyPriority)
+			}
+		})
+	}
+}
+
 func TestNormalizeNotificationEmailRejectsMalformedAddress(t *testing.T) {
 	validEmail, ok := normalizeNotificationEmail("new@example.com")
 	require.True(t, ok)

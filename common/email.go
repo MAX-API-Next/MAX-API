@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/smtp"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 var ErrSMTPStartTLSUnsupported = errors.New("smtp server does not support STARTTLS")
+var smtpOperationTimeout = 30 * time.Second
 
 func generateMessageID() (string, error) {
 	split := strings.Split(SMTPFrom, "@")
@@ -19,7 +21,11 @@ func generateMessageID() (string, error) {
 		return "", fmt.Errorf("invalid SMTP account")
 	}
 	domain := strings.Split(SMTPFrom, "@")[1]
-	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), GetRandomString(12), domain), nil
+	randomPart, err := GenerateRandomCharsKey(12)
+	if err != nil {
+		return "", fmt.Errorf("generate message ID: %w", err)
+	}
+	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), randomPart, domain), nil
 }
 
 func shouldUseSMTPLoginAuth() bool {
@@ -59,9 +65,15 @@ func smtpTLSConfig() *tls.Config {
 }
 
 func newSMTPClient(addr string) (*smtp.Client, error) {
+	dialer := &net.Dialer{Timeout: smtpOperationTimeout}
+	deadline := time.Now().Add(smtpOperationTimeout)
 	if SMTPSSLEnabled || SMTPPort == 465 {
-		conn, err := tls.Dial("tcp", addr, smtpTLSConfig())
+		conn, err := tls.DialWithDialer(dialer, "tcp", addr, smtpTLSConfig())
 		if err != nil {
+			return nil, err
+		}
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
 			return nil, err
 		}
 		client, err := smtp.NewClient(conn, SMTPServer)
@@ -72,8 +84,17 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 		return client, nil
 	}
 
-	client, err := smtp.Dial(addr)
+	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	client, err := smtp.NewClient(conn, SMTPServer)
+	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 

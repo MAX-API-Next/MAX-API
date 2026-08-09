@@ -563,6 +563,38 @@ func TestProcessSunoTaskResponsePersistsRefundIntentBeforeApplying(t *testing.T)
 	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
 }
 
+func TestProcessSunoTaskResponseRefundsWhenFailureReasonSanitizesEmpty(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 7, 7, 7
+	const pendingRefund, userQuota, tokenRemain = 250, 1000, 2000
+	seedUser(t, userID, userQuota)
+	seedToken(t, tokenID, userID, "sk-suno-empty-sanitized-reason", tokenRemain)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, pendingRefund, tokenID, BillingSourceWallet, 0)
+	persistTask(t, task)
+
+	processSunoTaskResponse(ctx, task, dto.SunoDataResponse{
+		TaskID:     task.TaskID,
+		Status:     string(model.TaskStatusInProgress),
+		FailReason: "\x00\t",
+		Data:       task.Data,
+	})
+
+	assert.EqualValues(t, userQuota+pendingRefund, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+pendingRefund, getTokenRemainQuota(t, tokenID))
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Equal(t, "100%", reloaded.Progress)
+	assert.Empty(t, reloaded.FailReason)
+	assert.Zero(t, reloaded.Quota)
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+}
+
 // ===========================================================================
 // RecalculateTaskQuota tests
 // ===========================================================================

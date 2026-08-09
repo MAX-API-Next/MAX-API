@@ -17,6 +17,10 @@ import (
 
 var inMemoryRateLimiter common.InMemoryRateLimiter
 
+func StopInMemoryRateLimiter(ctx context.Context) error {
+	return inMemoryRateLimiter.Stop(ctx)
+}
+
 var timeFormat = "2006-01-02T15:04:05.000Z"
 
 const rateLimitRedisTimeout = 500 * time.Millisecond

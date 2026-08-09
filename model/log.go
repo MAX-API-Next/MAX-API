@@ -73,6 +73,7 @@ type BillingLogReceipt struct {
 
 func (log *Log) BeforeSave(*gorm.DB) error {
 	log.syncRetryMarker()
+	log.Content = common.SanitizePersistedLogContent(log.Content)
 	return nil
 }
 
@@ -394,6 +395,7 @@ func RecordLog(userId int, logType int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
 		UserId:    userId,
@@ -413,6 +415,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	log := &Log{
 		UserId:    userId,
@@ -443,6 +446,7 @@ func buildOpField(action string, params map[string]interface{}) map[string]inter
 }
 
 func RecordLoginLog(userId int, username string, content string, ip string, action string, params map[string]interface{}, extra map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	other := map[string]interface{}{}
 	for k, v := range extra {
 		other[k] = v
@@ -463,6 +467,7 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 }
 
 func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(logUserId, false)
 	other := map[string]interface{}{
 		"op": buildOpField(action, params),
@@ -488,6 +493,7 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 }
 
 func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+	content = common.SanitizePersistedLogContent(content)
 	username, _ := GetUsernameById(userId, false)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
@@ -517,6 +523,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
+	content = common.SanitizePersistedLogContent(content)
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -580,6 +587,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
+	params.Content = common.SanitizePersistedLogContent(params.Content)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
@@ -672,6 +680,7 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 	if LOG_DB == nil {
 		return errors.New("log database is not initialized")
 	}
+	params.Content = common.SanitizePersistedLogContent(params.Content)
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
 	if params.TokenId > 0 {
@@ -1020,10 +1029,14 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 
 func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 	var total int64
-	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+	if err := oldLogCleanupScope(LOG_DB.WithContext(ctx).Model(&Log{}), targetTimestamp).Count(&total).Error; err != nil {
 		return 0, err
 	}
 	return total, nil
+}
+
+func oldLogCleanupScope(tx *gorm.DB, targetTimestamp int64) *gorm.DB {
+	return tx.Where("created_at < ? AND (type <> ? OR type IS NULL)", targetTimestamp, LogTypeManage)
 }
 
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
@@ -1035,9 +1048,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 	}
 
 	ids := make([]int, 0, limit)
-	err := LOG_DB.WithContext(ctx).
-		Model(&Log{}).
-		Where("created_at < ?", targetTimestamp).
+	err := oldLogCleanupScope(LOG_DB.WithContext(ctx).Model(&Log{}), targetTimestamp).
 		Order("created_at ASC, id ASC").
 		Limit(limit).
 		Pluck("id", &ids).Error
@@ -1057,7 +1068,7 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 
 	var rowsAffected int64
 	err = LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id IN ?", ids).Delete(&Log{})
+		result := oldLogCleanupScope(tx.Where("id IN ?", ids), targetTimestamp).Delete(&Log{})
 		if nil != result.Error {
 			return result.Error
 		}
@@ -1088,6 +1099,13 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 		}
 		total += rowsAffected
 		if rowsAffected < int64(limit) {
+			remaining, err := CountOldLog(ctx, targetTimestamp)
+			if err != nil {
+				return total, err
+			}
+			if remaining > 0 {
+				continue
+			}
 			if _, err := DeleteOldBillingLogReceipts(ctx, targetTimestamp, limit); err != nil {
 				return total, err
 			}

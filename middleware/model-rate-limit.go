@@ -130,7 +130,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 
 // 内存限流处理器
 func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
+	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))

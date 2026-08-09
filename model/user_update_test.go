@@ -16,6 +16,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
@@ -143,6 +144,75 @@ func TestInviteUserUpdatesOnlyAffiliateCounters(t *testing.T) {
 	assert.EqualValues(t, 20+common.QuotaForInviter, got.AffHistoryQuota)
 	assert.EqualValues(t, 100, got.Quota)
 	assert.Equal(t, common.UserStatusEnabled, got.Status)
+}
+
+func TestUserInsertAppliesInvitationRewardsAtomically(t *testing.T) {
+	setupUserUpdateTestState(t)
+	oldNewUserQuota := common.QuotaForNewUser
+	oldInviteeQuota := common.QuotaForInvitee
+	oldInviterQuota := common.QuotaForInviter
+	oldPaymentSetting := *operation_setting.GetPaymentSetting()
+	common.QuotaForNewUser = 100
+	common.QuotaForInvitee = 20
+	common.QuotaForInviter = 30
+	paymentSetting := operation_setting.GetPaymentSetting()
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		common.QuotaForNewUser = oldNewUserQuota
+		common.QuotaForInvitee = oldInviteeQuota
+		common.QuotaForInviter = oldInviterQuota
+		*operation_setting.GetPaymentSetting() = oldPaymentSetting
+	})
+
+	inviter := User{Id: 410, Username: "atomic-inviter", AffCode: "atomic-inviter", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := User{Username: "atomic-invitee", AffCode: "", Status: common.UserStatusEnabled}
+	require.NoError(t, invitee.Insert(inviter.Id))
+
+	var storedInvitee User
+	require.NoError(t, DB.First(&storedInvitee, invitee.Id).Error)
+	assert.EqualValues(t, 120, storedInvitee.Quota)
+	var storedInviter User
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Equal(t, 1, storedInviter.AffCount)
+	assert.EqualValues(t, 30, storedInviter.AffQuota)
+	assert.EqualValues(t, 30, storedInviter.AffHistoryQuota)
+}
+
+func TestUserInsertRollsBackWhenInvitationRewardOutboxCannotPersist(t *testing.T) {
+	setupUserUpdateTestState(t)
+	oldInviteeQuota := common.QuotaForInvitee
+	oldInviterQuota := common.QuotaForInviter
+	oldPaymentSetting := *operation_setting.GetPaymentSetting()
+	common.QuotaForInvitee = 20
+	common.QuotaForInviter = 30
+	paymentSetting := operation_setting.GetPaymentSetting()
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		common.QuotaForInvitee = oldInviteeQuota
+		common.QuotaForInviter = oldInviterQuota
+		*operation_setting.GetPaymentSetting() = oldPaymentSetting
+	})
+
+	inviter := User{Id: 411, Username: "rollback-inviter", AffCode: "rollback-inviter", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&inviter).Error)
+	useFailingUserUpdateRedis(t)
+	failCacheOutboxInserts(t)
+
+	invitee := User{Username: "rollback-invitee", Status: common.UserStatusEnabled}
+	err := invitee.Insert(inviter.Id)
+	require.Error(t, err)
+
+	var inviteeCount int64
+	require.NoError(t, DB.Model(&User{}).Where("username = ?", invitee.Username).Count(&inviteeCount).Error)
+	assert.Zero(t, inviteeCount)
+	var storedInviter User
+	require.NoError(t, DB.First(&storedInviter, inviter.Id).Error)
+	assert.Zero(t, storedInviter.AffCount)
+	assert.Zero(t, storedInviter.AffQuota)
+	assert.Zero(t, storedInviter.AffHistoryQuota)
 }
 
 func TestFillUserMethodsReturnDatabaseErrors(t *testing.T) {
@@ -463,6 +533,21 @@ func TestUserQuotaMutationsRetryCacheInvalidation(t *testing.T) {
 	}
 }
 
+func TestOverrideUserQuotaRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 399, Username: "quota-override-outbox-rollback", Quota: 100, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	useFailingUserUpdateRedis(t)
+	failCacheOutboxInserts(t)
+
+	err := OverrideUserQuota(user.Id, 25)
+
+	require.Error(t, err)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.EqualValues(t, 100, stored.Quota)
+}
+
 func TestUserAuthFieldMutationsRetryCacheInvalidation(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 82, Username: "auth-cache-retry-user", Quota: 10, Status: common.UserStatusEnabled, Role: common.RoleCommonUser}
@@ -747,7 +832,24 @@ func TestBatchTokenDeleteRetriesCacheDeletion(t *testing.T) {
 	deleted, err := BatchDeleteTokens([]int{token.Id}, token.UserId)
 	require.NoError(t, err)
 	require.Equal(t, 1, deleted)
+	processCacheInvalidationTasks()
 	requireCacheKeyDeletedEventually(t, client, getTokenCacheKey(token.Key))
+}
+
+func TestBatchTokenDeleteRollsBackWhenCacheOutboxCannotPersist(t *testing.T) {
+	setupUserUpdateTestState(t)
+	token := Token{Id: 397, UserId: 398, Key: "batch-token-delete-outbox-rollback", RemainQuota: 10, Status: common.TokenStatusEnabled}
+	require.NoError(t, DB.Create(&token).Error)
+	useFailingUserUpdateRedis(t)
+	failCacheOutboxInserts(t)
+
+	deleted, err := BatchDeleteTokens([]int{token.Id}, token.UserId)
+
+	require.Error(t, err)
+	require.Zero(t, deleted)
+	var count int64
+	require.NoError(t, DB.Model(&Token{}).Where("id = ?", token.Id).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
 }
 
 func newBlockingCacheFillHook() *blockingCacheFillHook {

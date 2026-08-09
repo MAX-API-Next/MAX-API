@@ -135,7 +135,77 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	return
 }
 
+func TaskErrorFromUpstreamResponse(ctx context.Context, resp *http.Response, code string) *dto.TaskError {
+	if resp == nil {
+		return TaskErrorWrapperLocal(errors.New("task upstream response is nil"), code, http.StatusBadGateway)
+	}
+	responseBody, truncated, err := readUpstreamErrorBody(resp.Body)
+	CloseResponseBodyGracefully(resp)
+	if err != nil {
+		return TaskErrorWrapper(err, code, resp.StatusCode)
+	}
+
+	message := safeUpstreamTaskErrorMessage(responseBody)
+	if message == "" {
+		logger.LogError(ctx, fmt.Sprintf("task upstream bad response status code %d, body_bytes=%d, truncated=%t", resp.StatusCode, len(responseBody), truncated))
+		message = fmt.Sprintf("bad upstream response status code %d", resp.StatusCode)
+	} else if truncated {
+		message += fmt.Sprintf("...[truncated after %d bytes]", maxUpstreamErrorBodyBytes)
+	}
+	message = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(message))
+	if message == "" {
+		message = fmt.Sprintf("bad upstream response status code %d", resp.StatusCode)
+	}
+	return &dto.TaskError{
+		Code:       code,
+		Message:    message,
+		StatusCode: resp.StatusCode,
+		Error:      errors.New(message),
+	}
+}
+
+func safeUpstreamTaskErrorMessage(responseBody []byte) string {
+	var errResponse dto.GeneralErrorResponse
+	if err := common.Unmarshal(responseBody, &errResponse); err != nil {
+		return ""
+	}
+	if openAIError := errResponse.TryToOpenAIError(); openAIError != nil {
+		return openAIError.Message
+	}
+	if errResponse.Message != "" {
+		return errResponse.Message
+	}
+	if errResponse.Msg != "" {
+		return errResponse.Msg
+	}
+	if errResponse.Err != "" {
+		return errResponse.Err
+	}
+	if errResponse.ErrorMsg != "" {
+		return errResponse.ErrorMsg
+	}
+	if errResponse.Detail != "" {
+		return errResponse.Detail
+	}
+	if errResponse.Header.Message != "" {
+		return errResponse.Header.Message
+	}
+	if errResponse.Response.Error.Message != "" {
+		return errResponse.Response.Error.Message
+	}
+	if len(errResponse.Error) > 0 && common.GetJsonType(errResponse.Error) == "string" {
+		var message string
+		if err := common.Unmarshal(errResponse.Error, &message); err == nil {
+			return message
+		}
+	}
+	return ""
+}
+
 func readUpstreamErrorBody(body io.Reader) ([]byte, bool, error) {
+	if body == nil {
+		return nil, false, nil
+	}
 	responseBody, err := io.ReadAll(io.LimitReader(body, maxUpstreamErrorBodyBytes+1))
 	if err != nil {
 		return nil, false, err

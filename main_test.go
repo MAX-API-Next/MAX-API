@@ -26,7 +26,7 @@ func TestRunWithTimeoutTimesOut(t *testing.T) {
 }
 
 func TestRunWithTimeoutRecoversPanic(t *testing.T) {
-	assert.True(t, runWithTimeout(time.Second, func() {
+	assert.True(t, runWithTimeout(5*time.Second, func() {
 		panic("quota save failed")
 	}))
 }
@@ -126,4 +126,12 @@ func TestConfigureSessionCookieSecureRejectsInvalidValue(t *testing.T) {
 	t.Setenv("SESSION_COOKIE_SECURE", "sometimes")
 
 	require.Error(t, configureSessionCookieSecure("https://example.com"))
+}
+
+func TestSessionCookieOptionsAllowOAuthTopLevelCallback(t *testing.T) {
+	options := sessionCookieOptions()
+
+	assert.Equal(t, http.SameSiteLaxMode, options.SameSite)
+	assert.True(t, options.HttpOnly)
+	assert.Equal(t, "/", options.Path)
 }

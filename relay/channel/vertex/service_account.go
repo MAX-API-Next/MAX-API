@@ -3,13 +3,13 @@ package vertex
 import (
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
 
@@ -46,7 +46,10 @@ func getAccessToken(a *Adaptor, info *relaycommon.RelayInfo) (string, error) {
 	}
 	val, err := Cache.Get(cacheKey)
 	if err == nil {
-		return val.(string), nil
+		if token, ok := val.(string); ok && token != "" {
+			return token, nil
+		}
+		Cache.DeleteIf(func(key string) bool { return key == cacheKey })
 	}
 
 	signedJWT, err := createSignedJWT(a.AccountCredentials.ClientEmail, a.AccountCredentials.PrivateKey)
@@ -129,7 +132,7 @@ func exchangeJwtForAccessToken(signedJWT string, info *relaycommon.RelayInfo) (s
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := common.DecodeJson(resp.Body, &result); err != nil {
 		return "", err
 	}
 
@@ -172,7 +175,7 @@ func exchangeJwtForAccessTokenWithProxy(signedJWT string, proxy string) (string,
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := common.DecodeJson(resp.Body, &result); err != nil {
 		return "", err
 	}
 

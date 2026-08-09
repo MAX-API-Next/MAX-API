@@ -223,6 +223,30 @@ func sessionAsyncPaymentSucceeded(ctx context.Context, event stripe.Event, calle
 	return fulfillOrder(ctx, event, referenceId, customerId, callerIp)
 }
 
+func stripePaymentValidationFromEvent(event stripe.Event, allowDiscount bool) (model.PaymentValidation, error) {
+	amountTotal := strings.TrimSpace(event.GetObjectValue("amount_total"))
+	if amountTotal == "" {
+		return model.PaymentValidation{}, fmt.Errorf("stripe event missing amount_total")
+	}
+	amountMinor, err := strconv.ParseInt(amountTotal, 10, 64)
+	if err != nil {
+		return model.PaymentValidation{}, fmt.Errorf("parse stripe amount_total: %w", err)
+	}
+	return model.PaymentValidationFromMinorUnits(amountMinor, event.GetObjectValue("currency"), "", allowDiscount), nil
+}
+
+func isStripeOrderAlreadyCompleted(referenceId string) bool {
+	if order := model.GetSubscriptionOrderByTradeNo(referenceId); order != nil &&
+		order.PaymentProvider == model.PaymentProviderStripe &&
+		order.Status == common.TopUpStatusSuccess {
+		return true
+	}
+	topUp, err := model.GetTopUpByTradeNoWithError(referenceId)
+	return err == nil &&
+		topUp.PaymentProvider == model.PaymentProviderStripe &&
+		topUp.Status == common.TopUpStatusSuccess
+}
+
 // sessionAsyncPaymentFailed marks orders as failed when delayed payment methods
 // ultimately fail (e.g. bank transfer not received, SEPA rejected).
 func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp string) {
@@ -271,13 +295,23 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+	validation, err := stripePaymentValidationFromEvent(event, setting.StripePromotionCodesEnabled)
+	if err != nil {
+		if isStripeOrderAlreadyCompleted(referenceId) {
+			logger.LogInfo(ctx, fmt.Sprintf("Stripe 订单已完成，确认缺少金额字段的重放事件 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
+			return nil
+		}
+		return err
+	}
 	payload := map[string]any{
 		"customer":     customerId,
 		"amount_total": event.GetObjectValue("amount_total"),
 		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
 		"event_type":   string(event.Type),
 	}
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
+	subscriptionValidation := validation
+	subscriptionValidation.AllowDiscount = false
+	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, "", subscriptionValidation); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单处理成功 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
 		return nil
 	} else if !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
@@ -309,7 +343,9 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return nil
 	}
 
-	if err := model.Recharge(referenceId, customerId, callerIp); err != nil {
+	topUpValidation := validation
+	topUpValidation.ExpectedCurrency = "USD"
+	if err := model.Recharge(referenceId, customerId, callerIp, topUpValidation); err != nil {
 		latest, latestErr := model.GetTopUpByTradeNoWithError(referenceId)
 		if latestErr == nil && latest.Status == common.TopUpStatusSuccess {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值订单已由并发回调完成 trade_no=%s client_ip=%s", referenceId, callerIp))

@@ -6,16 +6,17 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
 // Claude-style: fixed tiers, input > 200K changes both input & output price
 // ---------------------------------------------------------------------------
 
-const claudeExpr = `p <= 200000 ? tier("standard", p * 1.5 + c * 7.5) : tier("long_context", p * 3.0 + c * 11.25)`
+const claudeExpr = `len <= 200000 ? tier("standard", p * 1.5 + c * 7.5) : tier("long_context", p * 3.0 + c * 11.25)`
 
 func TestClaude_StandardTier(t *testing.T) {
-	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 100000, C: 5000})
+	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 100000, C: 5000, Len: 100000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +30,7 @@ func TestClaude_StandardTier(t *testing.T) {
 }
 
 func TestClaude_LongContextTier(t *testing.T) {
-	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 300000, C: 10000})
+	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 300000, C: 10000, Len: 300000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestClaude_LongContextTier(t *testing.T) {
 }
 
 func TestClaude_BoundaryExact(t *testing.T) {
-	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 200000, C: 1000})
+	cost, trace, err := billingexpr.RunExpr(claudeExpr, billingexpr.TokenParams{P: 200000, C: 1000, Len: 200000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +324,7 @@ func TestComputeTieredQuota_Basic(t *testing.T) {
 		QuotaPerUnit:              500_000,
 	}
 
-	result, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 300000, C: 10000})
+	result, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 300000, C: 10000, Len: 300000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +355,7 @@ func TestComputeTieredQuota_SameTier(t *testing.T) {
 		QuotaPerUnit:              500_000,
 	}
 
-	result, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 80000, C: 2000})
+	result, err := billingexpr.ComputeTieredQuota(snap, billingexpr.TokenParams{P: 80000, C: 2000, Len: 80000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,10 +429,10 @@ func TestExprHashString_Deterministic(t *testing.T) {
 // Cache variables: present
 // ---------------------------------------------------------------------------
 
-const claudeWithCacheExpr = `p <= 200000 ? tier("standard", p * 1.5 + c * 7.5 + cr * 0.15 + cc * 1.875) : tier("long_context", p * 3.0 + c * 11.25 + cr * 0.3 + cc * 3.75)`
+const claudeWithCacheExpr = `len <= 200000 ? tier("standard", p * 1.5 + c * 7.5 + cr * 0.15 + cc * 1.875) : tier("long_context", p * 3.0 + c * 11.25 + cr * 0.3 + cc * 3.75)`
 
 func TestCachePresent_StandardTier(t *testing.T) {
-	params := billingexpr.TokenParams{P: 100000, C: 5000, CR: 50000, CC: 10000}
+	params := billingexpr.TokenParams{P: 100000, C: 5000, Len: 160000, CR: 50000, CC: 10000}
 	cost, trace, err := billingexpr.RunExpr(claudeWithCacheExpr, params)
 	if err != nil {
 		t.Fatal(err)
@@ -446,7 +447,7 @@ func TestCachePresent_StandardTier(t *testing.T) {
 }
 
 func TestCachePresent_LongContextTier(t *testing.T) {
-	params := billingexpr.TokenParams{P: 300000, C: 10000, CR: 100000, CC: 20000}
+	params := billingexpr.TokenParams{P: 300000, C: 10000, Len: 420000, CR: 100000, CC: 20000}
 	cost, trace, err := billingexpr.RunExpr(claudeWithCacheExpr, params)
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +466,7 @@ func TestCachePresent_LongContextTier(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCacheAbsent_ZeroCacheTokens(t *testing.T) {
-	params := billingexpr.TokenParams{P: 100000, C: 5000}
+	params := billingexpr.TokenParams{P: 100000, C: 5000, Len: 100000}
 	cost, trace, err := billingexpr.RunExpr(claudeWithCacheExpr, params)
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +515,7 @@ func TestMixedCacheFields_AllCacheZero(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBackwardCompat_OldExprWithTokenParams(t *testing.T) {
-	params := billingexpr.TokenParams{P: 100000, C: 5000, CR: 99999, CC: 88888}
+	params := billingexpr.TokenParams{P: 100000, C: 5000, Len: 100000, CR: 99999, CC: 88888}
 	cost, trace, err := billingexpr.RunExpr(claudeExpr, params)
 	if err != nil {
 		t.Fatal(err)
@@ -546,7 +547,7 @@ func TestComputeTieredQuota_WithCache(t *testing.T) {
 		QuotaPerUnit:              500_000,
 	}
 
-	params := billingexpr.TokenParams{P: 100000, C: 5000, CR: 50000, CC: 10000}
+	params := billingexpr.TokenParams{P: 100000, C: 5000, Len: 160000, CR: 50000, CC: 10000}
 	result, err := billingexpr.ComputeTieredQuota(snap, params)
 	if err != nil {
 		t.Fatal(err)
@@ -578,7 +579,7 @@ func TestComputeTieredQuota_WithCacheCrossTier(t *testing.T) {
 		QuotaPerUnit:              500_000,
 	}
 
-	params := billingexpr.TokenParams{P: 300000, C: 10000, CR: 50000, CC: 10000}
+	params := billingexpr.TokenParams{P: 300000, C: 10000, Len: 360000, CR: 50000, CC: 10000}
 	result, err := billingexpr.ComputeTieredQuota(snap, params)
 	if err != nil {
 		t.Fatal(err)
@@ -644,12 +645,14 @@ func TestFuzz_SettlementConsistency(t *testing.T) {
 			CR: math.Round(rng.Float64() * 100000),
 			CC: math.Round(rng.Float64() * 30000),
 		}
+		estParams.Len = estParams.P + estParams.CR + estParams.CC
 		actParams := billingexpr.TokenParams{
 			P:  math.Round(rng.Float64() * 500000),
 			C:  math.Round(rng.Float64() * 100000),
 			CR: math.Round(rng.Float64() * 100000),
 			CC: math.Round(rng.Float64() * 30000),
 		}
+		actParams.Len = actParams.P + actParams.CR + actParams.CC
 		groupRatio := 0.5 + rng.Float64()*2.0
 
 		estCost, estTrace, _ := billingexpr.RunExpr(claudeWithCacheExpr, estParams)
@@ -679,6 +682,24 @@ func TestFuzz_SettlementConsistency(t *testing.T) {
 		if result.ActualQuotaAfterGroup != directQuota {
 			t.Errorf("iter %d: settlement %d != direct %d", i, result.ActualQuotaAfterGroup, directQuota)
 		}
+	}
+}
+
+func TestRunExprRejectsNonFiniteResults(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+	}{
+		{name: "infinity", expr: "p / c"},
+		{name: "nan", expr: "(p - p) / c"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := billingexpr.RunExpr(tt.expr, billingexpr.TokenParams{P: 1, C: 0})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "finite")
+		})
 	}
 }
 

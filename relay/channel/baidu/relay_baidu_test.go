@@ -40,8 +40,10 @@ func TestRequestOpenAI2BaiduPreservesExplicitZeroValues(t *testing.T) {
 		FrequencyPenalty: &zero,
 		Stream:           &stream,
 	})
+	request.DisableSearch = &stream
+	request.EnableCitation = &stream
 
 	payload, err := common.Marshal(request)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"messages":null,"top_p":0,"penalty_score":0,"stream":false}`, string(payload))
+	require.JSONEq(t, `{"messages":null,"top_p":0,"penalty_score":0,"stream":false,"disable_search":false,"enable_citation":false}`, string(payload))
 }

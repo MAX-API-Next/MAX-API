@@ -19,7 +19,7 @@ import (
 )
 
 func modelPriceNotConfiguredError(modelName string, userId int) error {
-	if model.IsAdmin(userId) {
+	if userId > 0 && model.IsAdmin(userId) {
 		return fmt.Errorf(
 			"模型 %s 的价格未配置。请前往「系统设置 → 运营设置」开启自用模式，或在「系统设置 → 分组与模型定价设置」中为该模型配置价格；"+
 				"Model %s price not configured. Go to System Settings → Operation Settings to enable self-use mode, or configure the model price in System Settings → Group & Model Pricing.",
@@ -31,6 +31,11 @@ func modelPriceNotConfiguredError(modelName string, userId int) error {
 			"Model %s has not been priced by the administrator yet. Please contact the site administrator to enable this model.",
 		modelName, modelName,
 	)
+}
+
+func taskModelRequiresConfiguredPrice(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return modelName == "swap_face" || strings.HasPrefix(modelName, "mj_") || strings.HasPrefix(modelName, "suno_")
 }
 
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
@@ -174,12 +179,19 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+	if info == nil {
+		return types.PriceData{}, fmt.Errorf("relay info is nil")
+	}
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
 	var modelRatio float64
-	rateCardPriced := task_billing_setting.HasRateCard(info.OriginModelName, info.UpstreamModelName)
+	upstreamModelName := ""
+	if info.ChannelMeta != nil {
+		upstreamModelName = info.UpstreamModelName
+	}
+	rateCardPriced := task_billing_setting.HasRateCard(info.OriginModelName, upstreamModelName)
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
@@ -189,6 +201,8 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		} else if rateCardPriced {
 			modelPrice = 0
 			usePrice = true
+		} else if taskModelRequiresConfiguredPrice(info.OriginModelName) {
+			return types.PriceData{}, modelPriceNotConfiguredError(info.OriginModelName, info.UserId)
 		} else {
 			var ratioSuccess bool
 			var matchName string

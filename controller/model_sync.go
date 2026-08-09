@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"strings"
@@ -25,6 +24,14 @@ const (
 	upstreamModelsURL  = "https://basellm.github.io/llm-metadata/api/newapi/models.json"
 	upstreamVendorsURL = "https://basellm.github.io/llm-metadata/api/newapi/vendors.json"
 )
+
+func modelSyncJitter(maxMillis int) time.Duration {
+	jitter, err := common.SecureRandomInt(maxMillis)
+	if err != nil {
+		return 0
+	}
+	return time.Duration(jitter) * time.Millisecond
+}
 
 func normalizeLocale(locale string) (string, bool) {
 	l := strings.ToLower(strings.TrimSpace(locale))
@@ -156,7 +163,7 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 			lastErr = err
 			// backoff with jitter
 			sleep := baseDelay * time.Duration(1<<attempt)
-			jitter := time.Duration(rand.Intn(150)) * time.Millisecond
+			jitter := modelSyncJitter(150)
 			time.Sleep(sleep + jitter)
 			continue
 		}
@@ -228,7 +235,7 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 			return nil
 		}
 		sleep := baseDelay * time.Duration(1<<attempt)
-		jitter := time.Duration(rand.Intn(150)) * time.Millisecond
+		jitter := modelSyncJitter(150)
 		time.Sleep(sleep + jitter)
 	}
 	return lastErr

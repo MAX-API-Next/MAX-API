@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
+	"maps"
 	"strings"
 	"sync"
 
@@ -258,7 +258,11 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.MaxAPIError) {
 	switch channel.ChannelInfo.MultiKeyMode {
 	case constant.MultiKeyModeRandom:
 		// Randomly pick one enabled key
-		selectedIdx := enabledIdx[rand.Intn(len(enabledIdx))]
+		randomIndex, err := common.SecureRandomInt(len(enabledIdx))
+		if err != nil {
+			return "", 0, types.NewError(err, types.ErrorCodeChannelNoAvailableKey)
+		}
+		selectedIdx := enabledIdx[randomIndex]
 		return keys[selectedIdx], selectedIdx, nil
 	case constant.MultiKeyModePolling:
 		// Use channel-specific lock to ensure thread-safe polling
@@ -335,7 +339,7 @@ func (channel *Channel) GetOtherInfo() map[string]interface{} {
 }
 
 func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
-	otherInfoBytes, err := json.Marshal(otherInfo)
+	otherInfoBytes, err := common.Marshal(otherInfo)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal other info: channel_id=%d, tag=%s, name=%s, error=%v", channel.Id, channel.GetTag(), channel.Name, err))
 		return
@@ -542,15 +546,87 @@ func (channel *Channel) Insert() error {
 	return err
 }
 
+var channelEditableUpdateFields = []string{
+	"type",
+	"key",
+	"openai_organization",
+	"test_model",
+	"status",
+	"name",
+	"weight",
+	"base_url",
+	"other",
+	"models",
+	"group",
+	"model_mapping",
+	"status_code_mapping",
+	"priority",
+	"auto_ban",
+	"tag",
+	"setting",
+	"param_override",
+	"header_override",
+	"remark",
+	"channel_info",
+	"settings",
+}
+
 func (channel *Channel) Update() error {
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if channel.ChannelInfo.IsMultiKey {
+	return channel.UpdateFields(channelEditableUpdateFields...)
+}
+
+func cloneChannelValue[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneChannelForUpdate(channel *Channel) *Channel {
+	cloned := *channel
+	cloned.OpenAIOrganization = cloneChannelValue(channel.OpenAIOrganization)
+	cloned.TestModel = cloneChannelValue(channel.TestModel)
+	cloned.Weight = cloneChannelValue(channel.Weight)
+	cloned.BaseURL = cloneChannelValue(channel.BaseURL)
+	cloned.ModelMapping = cloneChannelValue(channel.ModelMapping)
+	cloned.StatusCodeMapping = cloneChannelValue(channel.StatusCodeMapping)
+	cloned.Priority = cloneChannelValue(channel.Priority)
+	cloned.AutoBan = cloneChannelValue(channel.AutoBan)
+	cloned.Tag = cloneChannelValue(channel.Tag)
+	cloned.Setting = cloneChannelValue(channel.Setting)
+	cloned.ParamOverride = cloneChannelValue(channel.ParamOverride)
+	cloned.HeaderOverride = cloneChannelValue(channel.HeaderOverride)
+	cloned.Remark = cloneChannelValue(channel.Remark)
+	cloned.ChannelInfo.MultiKeyStatusList = maps.Clone(channel.ChannelInfo.MultiKeyStatusList)
+	cloned.ChannelInfo.MultiKeyDisabledReason = maps.Clone(channel.ChannelInfo.MultiKeyDisabledReason)
+	cloned.ChannelInfo.MultiKeyDisabledTime = maps.Clone(channel.ChannelInfo.MultiKeyDisabledTime)
+	cloned.Keys = append([]string(nil), channel.Keys...)
+	return &cloned
+}
+
+func (channel *Channel) UpdateFields(fields ...string) error {
+	if channel.Id == 0 {
+		return errors.New("channel ID is 0")
+	}
+	workingChannel := cloneChannelForUpdate(channel)
+	fieldSet := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		fieldSet[field] = struct{}{}
+	}
+	_, keySelected := fieldSet["key"]
+	_, channelInfoSelected := fieldSet["channel_info"]
+	multiKeyMetadataUpdated := false
+
+	// Keep multi-key metadata consistent when either the key list or its metadata is persisted.
+	if workingChannel.ChannelInfo.IsMultiKey && (keySelected || channelInfoSelected) {
+		multiKeyMetadataUpdated = true
 		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
+		if keySelected || workingChannel.Key != "" {
+			keyStr = workingChannel.Key
 		} else {
 			// If key is not provided, read the existing key from the database
-			if existing, err := GetChannelById(channel.Id, true); err == nil {
+			if existing, err := GetChannelById(workingChannel.Id, true); err == nil {
 				keyStr = existing.Key
 			}
 		}
@@ -571,24 +647,145 @@ func (channel *Channel) Update() error {
 				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
 			}
 		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
+		workingChannel.ChannelInfo.MultiKeySize = len(keys)
 		// Clean up status data that exceeds the new key count to prevent index out of range
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+		if workingChannel.ChannelInfo.MultiKeyStatusList != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyStatusList {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyStatusList, idx)
+				}
+			}
+		}
+		if workingChannel.ChannelInfo.MultiKeyDisabledTime != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyDisabledTime {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyDisabledTime, idx)
+				}
+			}
+		}
+		if workingChannel.ChannelInfo.MultiKeyDisabledReason != nil {
+			for idx := range workingChannel.ChannelInfo.MultiKeyDisabledReason {
+				if idx >= workingChannel.ChannelInfo.MultiKeySize {
+					delete(workingChannel.ChannelInfo.MultiKeyDisabledReason, idx)
 				}
 			}
 		}
 	}
-	var err error
-	err = DB.Model(channel).Updates(channel).Error
+	updates := workingChannel.editableUpdateMap(fields)
+	if multiKeyMetadataUpdated && keySelected {
+		updates["channel_info"] = workingChannel.ChannelInfo
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	abilityFields := []string{"models", "group", "status", "priority", "weight", "tag"}
+	updateAbilities := false
+	for _, field := range abilityFields {
+		if _, ok := updates[field]; ok {
+			updateAbilities = true
+			break
+		}
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Channel{}).Where("id = ?", workingChannel.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Channel{}).First(workingChannel, "id = ?", workingChannel.Id).Error; err != nil {
+			return err
+		}
+		if keySelected {
+			workingChannel.Keys = nil
+		}
+		if !updateAbilities {
+			return nil
+		}
+		return workingChannel.UpdateAbilities(tx)
+	})
 	if err != nil {
 		return err
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	err = channel.UpdateAbilities(nil)
-	return err
+	*channel = *workingChannel
+	return nil
+}
+
+func (channel *Channel) editableUpdateMap(fields []string) map[string]any {
+	updates := make(map[string]any, len(fields))
+	for _, field := range fields {
+		switch field {
+		case "type":
+			updates["type"] = channel.Type
+		case "key":
+			updates["key"] = channel.Key
+		case "openai_organization":
+			if channel.OpenAIOrganization != nil {
+				updates["openai_organization"] = channel.OpenAIOrganization
+			}
+		case "test_model":
+			if channel.TestModel != nil {
+				updates["test_model"] = channel.TestModel
+			}
+		case "status":
+			updates["status"] = channel.Status
+		case "name":
+			updates["name"] = channel.Name
+		case "weight":
+			if channel.Weight != nil {
+				updates["weight"] = channel.Weight
+			}
+		case "base_url":
+			if channel.BaseURL != nil {
+				updates["base_url"] = channel.BaseURL
+			}
+		case "other":
+			updates["other"] = channel.Other
+		case "models":
+			updates["models"] = channel.Models
+		case "group":
+			updates["group"] = channel.Group
+		case "model_mapping":
+			if channel.ModelMapping != nil {
+				updates["model_mapping"] = channel.ModelMapping
+			}
+		case "status_code_mapping":
+			if channel.StatusCodeMapping != nil {
+				updates["status_code_mapping"] = channel.StatusCodeMapping
+			}
+		case "priority":
+			if channel.Priority != nil {
+				updates["priority"] = channel.Priority
+			}
+		case "auto_ban":
+			if channel.AutoBan != nil {
+				updates["auto_ban"] = channel.AutoBan
+			}
+		case "tag":
+			if channel.Tag != nil {
+				updates["tag"] = channel.Tag
+			}
+		case "setting":
+			if channel.Setting != nil {
+				updates["setting"] = channel.Setting
+			}
+		case "param_override":
+			if channel.ParamOverride != nil {
+				updates["param_override"] = channel.ParamOverride
+			}
+		case "header_override":
+			if channel.HeaderOverride != nil {
+				updates["header_override"] = channel.HeaderOverride
+			}
+		case "remark":
+			if channel.Remark != nil {
+				updates["remark"] = channel.Remark
+			}
+		case "channel_info":
+			updates["channel_info"] = channel.ChannelInfo
+		case "settings":
+			updates["settings"] = channel.OtherSettings
+		}
+	}
+	return updates
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {

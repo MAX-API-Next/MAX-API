@@ -48,6 +48,12 @@ type SettlementPreparer interface {
 
 var _ SettlementPreparer = (*BillingSession)(nil)
 
+type RefundSettlementPreparer interface {
+	PrepareRefundSettlement() (*model.BillingSettlementInput, error)
+}
+
+var _ RefundSettlementPreparer = (*BillingSession)(nil)
+
 type billingSettleIntent struct {
 	input model.BillingSettlementInput
 }
@@ -306,43 +312,61 @@ func (s *BillingSession) prepareRefundIntent() (*billingRefundIntent, bool) {
 	if s.settled || s.refunded || s.refundInFlight || s.settleInFlight || !s.needsRefundLocked() {
 		return nil, false
 	}
+	input, err := s.refundSettlementInputLocked()
+	if err != nil {
+		common.SysLog(err.Error())
+		return nil, false
+	}
+
+	s.refundInFlight = true
+	return &billingRefundIntent{
+		input:         *input,
+		userID:        s.relayInfo.UserId,
+		requestID:     s.relayInfo.RequestId,
+		tokenConsumed: s.tokenConsumed,
+		fundingSource: s.funding.Source(),
+	}, true
+}
+
+func (s *BillingSession) refundSettlementInputLocked() (*model.BillingSettlementInput, error) {
 	refundFunding := s.refundFundingAmountLocked()
 	refundToken := int64(s.tokenConsumed)
 	if s.relayInfo.IsPlayground {
 		refundToken = 0
 	}
 	requestID := s.relayInfo.RequestId
-	funding := s.funding
 	if requestID == "" || refundFunding <= 0 {
-		common.SysLog(fmt.Sprintf("billing refund requires manual review (userId=%d, requestId=%q, funding=%d)", s.relayInfo.UserId, requestID, refundFunding))
-		return nil, false
+		return nil, fmt.Errorf("billing refund requires manual review (userId=%d, requestId=%q, funding=%d)", s.relayInfo.UserId, requestID, refundFunding)
 	}
-	source, userID, subscriptionID, ok := durableFundingIdentity(funding)
+	source, userID, subscriptionID, ok := durableFundingIdentity(s.funding)
 	if !ok {
-		common.SysLog(fmt.Sprintf("billing refund skipped for non-durable funding source (userId=%d, requestId=%s)", s.relayInfo.UserId, requestID))
-		return nil, false
+		return nil, fmt.Errorf("billing refund skipped for non-durable funding source (userId=%d, requestId=%s)", s.relayInfo.UserId, requestID)
 	}
+	return &model.BillingSettlementInput{
+		OperationKey:                    "request:" + requestID + ":finalize",
+		Source:                          source,
+		UserID:                          userID,
+		SubscriptionID:                  subscriptionID,
+		TokenID:                         s.relayInfo.TokenId,
+		TokenKey:                        s.relayInfo.TokenKey,
+		FundingDelta:                    -refundFunding,
+		TokenDelta:                      -refundToken,
+		SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(s.funding),
+		FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription,
+		AllowMissingToken:               true,
+	}, nil
+}
 
-	s.refundInFlight = true
-	return &billingRefundIntent{
-		input: model.BillingSettlementInput{
-			OperationKey:                    "request:" + requestID + ":finalize",
-			Source:                          source,
-			UserID:                          userID,
-			SubscriptionID:                  subscriptionID,
-			TokenID:                         s.relayInfo.TokenId,
-			TokenKey:                        s.relayInfo.TokenKey,
-			FundingDelta:                    -refundFunding,
-			TokenDelta:                      -refundToken,
-			SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(funding),
-			FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription,
-			AllowMissingToken:               true,
-		},
-		userID:        s.relayInfo.UserId,
-		requestID:     requestID,
-		tokenConsumed: s.tokenConsumed,
-		fundingSource: funding.Source(),
-	}, true
+// PrepareRefundSettlement returns the exact durable refund intent without
+// applying it. Async submission paths use it to commit a failed task state and
+// the refund operation atomically before attempting the balance mutation.
+func (s *BillingSession) PrepareRefundSettlement() (*model.BillingSettlementInput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.settled || s.refunded || s.refundInFlight || s.settleInFlight || !s.needsRefundLocked() {
+		return nil, nil
+	}
+	return s.refundSettlementInputLocked()
 }
 
 func (s *BillingSession) finishRefundIntent(applied bool) {

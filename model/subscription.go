@@ -542,6 +542,11 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		return nil, errors.New("invalid user id")
 	}
 	if plan.MaxPurchasePerUser > 0 {
+		var lockedUser User
+		if err := withRowLock(tx).Select("id").Where("id = ?", userId).First(&lockedUser).Error; err != nil {
+			return nil, err
+		}
+
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
 			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
@@ -604,7 +609,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
 // expectedPaymentProvider guards against cross-gateway callback attacks (empty skips the check).
 // actualPaymentMethod updates the order's PaymentMethod to reflect the real payment type used (empty skips update).
-func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string) error {
+func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string, validations ...PaymentValidation) error {
 	if tradeNo == "" {
 		return errors.New("tradeNo is empty")
 	}
@@ -640,6 +645,9 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		}
 		if !plan.Enabled {
 			// still allow completion for already purchased orders
+		}
+		if err := validatePaymentAgainstSubscriptionOrder(&order, plan, validations); err != nil {
+			return err
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
 		claimed, err := completePendingSubscriptionOrderTx(tx, &order, providerPayload, actualPaymentMethod)
@@ -776,12 +784,16 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
 	}
+	randomPart, err := common.GenerateRandomCharsKey(6)
+	if err != nil {
+		return fmt.Errorf("generate subscription order number: %w", err)
+	}
 
 	var logPlanTitle string
 	var logMoney float64
 	var chargedQuota int
 	var upgradeGroup string
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)
 		if err != nil {
 			return err
@@ -824,7 +836,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		}
 
 		now := common.GetTimestamp()
-		tradeNo := fmt.Sprintf("SUBBALUSR%dNO%s%d", userId, common.GetRandomString(6), time.Now().UnixNano())
+		tradeNo := fmt.Sprintf("SUBBALUSR%dNO%s%d", userId, randomPart, time.Now().UnixNano())
 		order := &SubscriptionOrder{
 			UserId:          userId,
 			PlanId:          plan.Id,

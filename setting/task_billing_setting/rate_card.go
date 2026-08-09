@@ -42,6 +42,9 @@ func init() {
 }
 
 func GetRateCardsCopy() map[string]RateCard {
+	if taskBillingSetting.RateCards == nil {
+		return map[string]RateCard{}
+	}
 	return cloneRateCards(taskBillingSetting.RateCards.ReadAll())
 }
 
@@ -137,6 +140,9 @@ func validQuantity(value float64) bool {
 }
 
 func findRateCard(models ...string) (*RateCard, string) {
+	if taskBillingSetting.RateCards == nil {
+		return nil, ""
+	}
 	rateCards := taskBillingSetting.RateCards.ReadAll()
 	for _, model := range models {
 		model = strings.TrimSpace(model)

@@ -19,7 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import * as React from 'react'
 import * as RechartsPrimitive from 'recharts'
 import type { TooltipValueType } from 'recharts'
-import { cn } from '@/lib/utils'
+import { cn, sanitizeCssVariableName } from '@/lib/utils'
 
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: '', dark: '.dark' } as const
@@ -72,7 +72,7 @@ function ChartContainer({
   }
 }) {
   const uniqueId = React.useId()
-  const chartId = `chart-${id ?? uniqueId.replace(/:/g, '')}`
+  const chartId = `chart-${sanitizeCssVariableName(id ?? uniqueId)}`
 
   return (
     <ChartContext.Provider value={{ config }}>
@@ -96,37 +96,50 @@ function ChartContainer({
   )
 }
 
-const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
-  const colorConfig = Object.entries(config).filter(
+const unsafeChartCssValuePattern =
+  /[\\<>{};]|\/\*|\*\/|url\s*\(|expression\s*\(|@import/i
+
+function sanitizeChartCssValue(value: string | undefined): string | null {
+  const normalized = value?.trim()
+  if (!normalized || unsafeChartCssValuePattern.test(normalized)) {
+    return null
+  }
+  return normalized
+}
+
+const ChartStyle = (props: {
+  id: string
+  config: ChartConfig
+}): React.JSX.Element | null => {
+  const safeId = sanitizeCssVariableName(props.id)
+  const colorConfig = Object.entries(props.config).filter(
     ([, config]) => config.theme ?? config.color
   )
 
-  if (!colorConfig.length) {
+  if (!safeId || !colorConfig.length) {
     return null
   }
 
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+  const style = Object.entries(THEMES)
+    .map(
+      ([theme, prefix]) => `
+${prefix} [data-chart=${safeId}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color =
       itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ??
       itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
+    const safeKey = sanitizeCssVariableName(key)
+    const safeColor = sanitizeChartCssValue(color)
+    return safeKey && safeColor ? `  --color-${safeKey}: ${safeColor};` : null
   })
   .join('\n')}
 }
 `
-          )
-          .join('\n'),
-      }}
-    />
-  )
+    )
+    .join('\n')
+
+  return <style>{style}</style>
 }
 
 const ChartTooltip = RechartsPrimitive.Tooltip

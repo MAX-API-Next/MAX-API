@@ -5,6 +5,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func seedReadOnlyToken(t *testing.T, name string, rawKey string) *Token {
@@ -48,4 +49,14 @@ func TestValidateUserTokenForReadOnlyStatusSemantics(t *testing.T) {
 	require.NoError(t, expired.Update())
 	_, err = ValidateUserTokenForReadOnly(expired.Key)
 	require.ErrorIs(t, err, ErrTokenInvalid)
+}
+
+func TestGetTokenByKeyEmptyKeyDoesNotMatchAnotherToken(t *testing.T) {
+	truncateTables(t)
+	seedReadOnlyToken(t, "non-empty-token", "non-empty-key")
+
+	token, err := GetTokenByKey("", true)
+
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	require.Nil(t, token)
 }

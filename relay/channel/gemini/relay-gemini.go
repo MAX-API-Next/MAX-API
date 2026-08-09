@@ -1779,6 +1779,13 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	if len(geminiResponse.Predictions) == 0 {
 		return nil, types.NewOpenAIError(errors.New("no images generated"), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if len(geminiResponse.Predictions) > dto.MaxImageN {
+		return nil, types.NewOpenAIError(
+			fmt.Errorf("too many image predictions: got %d, maximum %d", len(geminiResponse.Predictions), dto.MaxImageN),
+			types.ErrorCodeBadResponseBody,
+			http.StatusBadGateway,
+		)
+	}
 
 	// convert to openai format response
 	openAIResponse := dto.ImageResponse{

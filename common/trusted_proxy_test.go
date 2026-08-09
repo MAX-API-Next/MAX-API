@@ -6,9 +6,43 @@ import (
 )
 
 func TestDefaultTrustedProxiesOnlyTrustLoopback(t *testing.T) {
-	for _, proxy := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
-		if slices.Contains(DefaultTrustedProxies, proxy) {
-			t.Fatalf("default trusted proxies must not include broad private range %s", proxy)
+	expected := []string{"127.0.0.0/8", "::1/128"}
+	if !slices.Equal(DefaultTrustedProxies, expected) {
+		t.Fatalf("default trusted proxies must only include loopback networks: %v", DefaultTrustedProxies)
+	}
+}
+
+func TestParseTrustedProxiesUsesLoopbackDefaults(t *testing.T) {
+	proxies, err := parseTrustedProxies("")
+	if err != nil {
+		t.Fatalf("parseTrustedProxies returned error: %v", err)
+	}
+	if !slices.Equal(proxies, DefaultTrustedProxies) {
+		t.Fatalf("unexpected default trusted proxies: %v", proxies)
+	}
+}
+
+func TestParseTrustedProxiesRejectsUnrestrictedNetworks(t *testing.T) {
+	for _, value := range []string{
+		"0.0.0.0/0",
+		"::/0",
+		"::ffff:0:0/96",
+		"0.0.0.0/1,128.0.0.0/1",
+		"::/1,8000::/1",
+		"not-a-network",
+	} {
+		if _, err := parseTrustedProxies(value); err == nil {
+			t.Fatalf("expected unrestricted proxy network %q to be rejected", value)
 		}
+	}
+}
+
+func TestParseTrustedProxiesAcceptsExplicitProxyNetworks(t *testing.T) {
+	proxies, err := parseTrustedProxies("127.0.0.1, 10.0.0.0/8, ::ffff:192.0.2.1/128")
+	if err != nil {
+		t.Fatalf("parseTrustedProxies rejected explicit proxy networks: %v", err)
+	}
+	if !slices.Equal(proxies, []string{"127.0.0.1", "10.0.0.0/8", "::ffff:192.0.2.1/128"}) {
+		t.Fatalf("unexpected explicit trusted proxies: %v", proxies)
 	}
 }

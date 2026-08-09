@@ -70,6 +70,8 @@ func main() {
 			common.FatalLog("failed to close database: " + err.Error())
 		}
 	}()
+	backgroundCtx, stopBackground := context.WithCancel(context.Background())
+	defer stopBackground()
 
 	// Recover durable balance settlements after process restarts or transient DB failures.
 	model.StartBillingSettlementTaskRunner()
@@ -128,6 +130,7 @@ func main() {
 
 	// Persistent system maintenance task runner
 	service.StartSystemTaskRunner()
+	authFlowCleanupDone := service.StartAuthFlowCleanupWithContext(backgroundCtx)
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
@@ -155,11 +158,17 @@ func main() {
 		model.InitBatchUpdater()
 	}
 
+	var cpuMonitorDone <-chan struct{}
 	if os.Getenv("ENABLE_PPROF") == "true" {
 		gopool.Go(func() {
 			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
 		})
-		go common.Monitor()
+		done := make(chan struct{})
+		cpuMonitorDone = done
+		go func() {
+			defer close(done)
+			common.MonitorContext(backgroundCtx)
+		}()
 		common.SysLog("pprof enabled")
 	}
 
@@ -193,13 +202,7 @@ func main() {
 		common.FatalLog(err.Error())
 	}
 	store := cookie.NewStore([]byte(common.SessionSecret))
-	store.Options(sessions.Options{
-		Path:     "/",
-		MaxAge:   2592000, // 30 days
-		HttpOnly: true,
-		Secure:   common.SessionCookieSecure,
-		SameSite: http.SameSiteStrictMode,
-	})
+	store.Options(sessionCookieOptions())
 	server.Use(sessions.Sessions("session", store))
 
 	InjectUmamiAnalytics()
@@ -241,17 +244,24 @@ func main() {
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	stopBackground()
 	shutdownHTTPServer(ctx, srv)
-	stopBackgroundRunnerCtx, stopBackgroundRunnerCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	if err := model.StopBillingSettlementTaskRunner(stopBackgroundRunnerCtx); err != nil {
+	waitForBackgroundRunner(ctx, "auth flow cleanup", authFlowCleanupDone)
+	waitForBackgroundRunner(ctx, "CPU profile monitor", cpuMonitorDone)
+	if err := common.StopSystemMonitor(ctx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping system monitor: %v", err))
+	}
+	if err := middleware.StopInMemoryRateLimiter(ctx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping in-memory rate limiter: %v", err))
+	}
+	if err := model.StopBillingSettlementTaskRunner(ctx); err != nil {
 		common.SysError(fmt.Sprintf("timed out stopping billing settlement runner: %v", err))
 	}
 	if common.RedisEnabled {
-		if err := model.StopCacheInvalidationTaskRunner(stopBackgroundRunnerCtx); err != nil {
+		if err := model.StopCacheInvalidationTaskRunner(ctx); err != nil {
 			common.SysError(fmt.Sprintf("timed out stopping cache invalidation runner: %v", err))
 		}
 	}
-	stopBackgroundRunnerCancel()
 	if common.DataExportEnabled {
 		saveTimeout := time.Duration(common.GetEnvOrDefault("QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS", 30)) * time.Second
 		if !runWithTimeout(saveTimeout, model.WaitPendingLogQuotaData) {
@@ -269,6 +279,17 @@ func main() {
 		}
 	}
 	common.SysLog("server exited")
+}
+
+func sessionCookieOptions() sessions.Options {
+	return sessions.Options{
+		Path:     "/",
+		MaxAge:   2592000, // 30 days
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		// OAuth providers return through a cross-site top-level GET redirect.
+		SameSite: http.SameSiteLaxMode,
+	}
 }
 
 func configureSessionCookieSecure(serverAddress string) error {
@@ -296,6 +317,22 @@ func shutdownHTTPServer(ctx context.Context, srv *http.Server) {
 		if closeErr := srv.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
 			common.SysError(fmt.Sprintf("server close after forced shutdown failed: %v", closeErr))
 		}
+	}
+}
+
+func waitForBackgroundRunner(ctx context.Context, name string, done <-chan struct{}) {
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+		return
+	default:
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		common.SysError(fmt.Sprintf("timed out stopping %s: %v", name, ctx.Err()))
 	}
 }
 

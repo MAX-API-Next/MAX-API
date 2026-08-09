@@ -1,12 +1,22 @@
 package middleware
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestGetTurnstileTokenPrefersHeaderWithQueryFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -33,4 +43,25 @@ func TestGetTurnstileTokenPrefersHeaderWithQueryFallback(t *testing.T) {
 			assert.Equal(t, tt.want, getTurnstileToken(ctx))
 		})
 	}
+}
+
+func TestVerifyTurnstileUsesBoundedClientTimeout(t *testing.T) {
+	oldClient := turnstileHTTPClient
+	oldTimeout := turnstileVerificationTimeout
+	turnstileVerificationTimeout = 50 * time.Millisecond
+	turnstileHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		}),
+	}
+	t.Cleanup(func() {
+		turnstileHTTPClient = oldClient
+		turnstileVerificationTimeout = oldTimeout
+	})
+
+	started := time.Now()
+	_, err := verifyTurnstile(context.Background(), "token", "127.0.0.1")
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
 }

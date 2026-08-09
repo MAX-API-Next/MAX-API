@@ -332,3 +332,25 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	_, exists = info.RuntimeHeadersOverride["x-codex-turn-metadata"]
 	require.False(t, exists)
 }
+
+func TestChannelAffinityRegexCacheEvictsLeastRecentlyUsedPattern(t *testing.T) {
+	cache := newChannelAffinityRegexCache(2)
+
+	_, err := loadChannelAffinityRegex(cache, "^first$")
+	require.NoError(t, err)
+	_, err = loadChannelAffinityRegex(cache, "^second$")
+	require.NoError(t, err)
+	_, found, err := cache.Get("^first$")
+	require.NoError(t, err)
+	require.True(t, found)
+	_, err = loadChannelAffinityRegex(cache, "^third$")
+	require.NoError(t, err)
+
+	_, found, err = cache.Get("^second$")
+	require.NoError(t, err)
+	require.False(t, found)
+	_, found, err = cache.Get("^first$")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, cache.Keys(), 2)
+}
