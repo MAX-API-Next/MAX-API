@@ -121,6 +121,7 @@ export function buildAlphaSearchSample(
     `  body: JSON.stringify(${bodyJson}),`,
     `})`,
     '',
+    `if (!response.ok) throw new Error(\`HTTP \${response.status}\`)`,
     `const data = await response.json()`,
     `console.log(data)`,
   ].join('\n')

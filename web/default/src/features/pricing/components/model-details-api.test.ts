@@ -52,6 +52,11 @@ describe('model details API samples', () => {
         assert.match(sample, /os\.environ\['MAX_API_KEY'\]/)
       } else {
         assert.match(sample, /process\.env\.MAX_API_KEY/)
+        const statusGuardIndex = sample.indexOf('if (!response.ok)')
+        const responseParseIndex = sample.indexOf('response.json()')
+        assert.notEqual(statusGuardIndex, -1)
+        assert.ok(statusGuardIndex < responseParseIndex)
+        assert.match(sample, /throw new Error\(`HTTP \$\{response\.status\}`\)/)
       }
     })
   }
