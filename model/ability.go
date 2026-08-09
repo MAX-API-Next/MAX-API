@@ -253,21 +253,17 @@ func filterAbilityRowsByRequestPath(abilityRows []AbilityWithChannel, requestPat
 		seen[row.ChannelId] = struct{}{}
 		channelIds = append(channelIds, row.ChannelId)
 	}
-	if len(channelIds) == 0 {
-		return abilities, nil
-	}
-
 	var channels []*Channel
-	if err := DB.Select("id", "type", "settings").
-		Where("id IN ? AND type = ?", channelIds, constant.ChannelTypeAdvancedCustom).
-		Find(&channels).Error; err != nil {
-		return nil, err
+	if len(channelIds) > 0 {
+		if err := DB.Select("id", "type", "settings").
+			Where("id IN ? AND type = ?", channelIds, constant.ChannelTypeAdvancedCustom).
+			Find(&channels).Error; err != nil {
+			return nil, err
+		}
 	}
 
-	advancedChannelIds := make(map[int]struct{}, len(channels))
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
 	for _, channel := range channels {
-		advancedChannelIds[channel.Id] = struct{}{}
 		config, err := validatedAdvancedCustomConfigFromChannel(channel)
 		if err == nil && config != nil {
 			advancedConfigs[channel.Id] = config
@@ -279,14 +275,16 @@ func filterAbilityRowsByRequestPath(abilityRows []AbilityWithChannel, requestPat
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
-		_, isAdvancedCustom := advancedChannelIds[ability.ChannelId]
-		if !isAdvancedCustom {
-			filtered = append(filtered, ability)
+	for _, row := range abilityRows {
+		if !channelTypeSupportsRequestPath(row.ChannelType, requestPath) {
 			continue
 		}
-		if config := advancedConfigs[ability.ChannelId]; config != nil && config.SupportsPath(requestPath) {
-			filtered = append(filtered, ability)
+		if row.ChannelType != constant.ChannelTypeAdvancedCustom {
+			filtered = append(filtered, row.Ability)
+			continue
+		}
+		if config := advancedConfigs[row.ChannelId]; config != nil && config.SupportsPath(requestPath) {
+			filtered = append(filtered, row.Ability)
 		}
 	}
 	return filtered, nil

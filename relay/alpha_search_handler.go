@@ -55,7 +55,7 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError
 		}
 	}
 
-	logger.LogDebug(c, "requestBody: %s", jsonData)
+	logger.LogDebug(c, "alpha search request prepared: model=%s, bytes=%d", info.UpstreamModelName, len(jsonData))
 	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -86,6 +86,9 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError
 		return maxAPIError
 	}
 
+	recordAlphaSearchUsage(info)
+	service.PostTextConsumeQuota(c, info, &dto.Usage{}, nil)
+
 	if contentType := httpResp.Header.Get("Content-Type"); contentType != "" {
 		c.Writer.Header().Set("Content-Type", contentType)
 	}
@@ -94,6 +97,10 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError
 		return types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
+	return nil
+}
+
+func recordAlphaSearchUsage(info *relaycommon.RelayInfo) {
 	if info.ResponsesUsageInfo == nil {
 		info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: make(map[string]*relaycommon.BuildInToolInfo),
@@ -106,9 +113,6 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError
 		ToolName:  dto.BuildInToolWebSearchPreview,
 		CallCount: 1,
 	}
-
-	service.PostTextConsumeQuota(c, info, &dto.Usage{}, nil)
-	return nil
 }
 
 func buildAlphaSearchRequestBody(rawBody []byte, originModel, upstreamModel string) ([]byte, error) {

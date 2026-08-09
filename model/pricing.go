@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
@@ -128,6 +128,74 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	return make([]constant.EndpointType, 0)
 }
 
+func loadPricingAdvancedCustomConfigs(abilities []AbilityWithChannel) map[int]*dto.AdvancedCustomConfig {
+	channelIDs := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, ability := range abilities {
+		if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
+			continue
+		}
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	if len(channelIDs) == 0 {
+		return nil
+	}
+
+	var channels []*Channel
+	if err := DB.Select("id", "type", "settings").
+		Where("id IN ? AND type = ?", channelIDs, constant.ChannelTypeAdvancedCustom).
+		Find(&channels).Error; err != nil {
+		common.SysError(fmt.Sprintf("failed to load advanced custom pricing configs: %v", err))
+		return nil
+	}
+
+	configs := make(map[int]*dto.AdvancedCustomConfig, len(channels))
+	for _, channel := range channels {
+		config, err := validatedAdvancedCustomConfigFromChannel(channel)
+		if err != nil {
+			common.SysError(fmt.Sprintf("failed to parse advanced custom pricing config: channel_id=%d, error=%v", channel.Id, err))
+			continue
+		}
+		if config != nil {
+			configs[channel.Id] = config
+		}
+	}
+	return configs
+}
+
+func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedConfigs map[int]*dto.AdvancedCustomConfig) []constant.EndpointType {
+	if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
+		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
+	}
+
+	config := advancedConfigs[ability.ChannelId]
+	if config == nil {
+		return nil
+	}
+	endpointTypes := make([]constant.EndpointType, 0, len(config.Routes))
+	for _, route := range config.Routes {
+		endpointType, ok := common.GetDefaultEndpointTypeByPath(strings.TrimSpace(route.IncomingPath))
+		if !ok {
+			continue
+		}
+		duplicate := false
+		for _, existing := range endpointTypes {
+			if existing == endpointType {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			endpointTypes = append(endpointTypes, endpointType)
+		}
+	}
+	return endpointTypes
+}
+
 func updatePricing() {
 	//modelRatios := common.GetModelRatios()
 	enableAbilities, err := GetAllEnableAbilityWithChannels()
@@ -222,11 +290,12 @@ func updatePricing() {
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
+	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(enableAbilities)
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		channelTypes := common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
+		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs)
 		for _, channelType := range channelTypes {
 			if !common.StringsContains(endpoints, string(channelType)) {
 				endpoints = append(endpoints, string(channelType))
@@ -241,7 +310,7 @@ func updatePricing() {
 			continue
 		}
 		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
+		if err := common.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
 			endpoints := make([]string, 0, len(raw))
 			for k, v := range raw {
 				switch v.(type) {
@@ -285,7 +354,7 @@ func updatePricing() {
 			continue
 		}
 		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
+		if err := common.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
 			for k, v := range raw {
 				switch val := v.(type) {
 				case string:

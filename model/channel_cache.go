@@ -246,7 +246,12 @@ func filterChannelsByRequestPath(channels []int, requestPath string) ([]int, err
 	for _, channelId := range channels {
 		channel, ok := channelsIDM[channelId]
 		if !ok {
-			filtered = append(filtered, channelId)
+			if requestPath != "/v1/alpha/search" {
+				filtered = append(filtered, channelId)
+			}
+			continue
+		}
+		if !channelTypeSupportsRequestPath(channel.Type, requestPath) {
 			continue
 		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
@@ -263,8 +268,18 @@ func filterChannelsByRequestPath(channels []int, requestPath string) ([]int, err
 	return filtered, nil
 }
 
+func channelTypeSupportsRequestPath(channelType int, requestPath string) bool {
+	if requestPath != "/v1/alpha/search" {
+		return true
+	}
+	return channelType == constant.ChannelTypeCodex || channelType == constant.ChannelTypeAdvancedCustom
+}
+
 func ChannelSupportsRequestPath(channel *Channel, requestPath string) bool {
 	if channel == nil {
+		return false
+	}
+	if !channelTypeSupportsRequestPath(channel.Type, requestPath) {
 		return false
 	}
 	if channel.Type != constant.ChannelTypeAdvancedCustom {

@@ -33,3 +33,13 @@ func GetDefaultEndpointInfo(et constant.EndpointType) (EndpointInfo, bool) {
 	info, ok := defaultEndpointInfoMap[et]
 	return info, ok
 }
+
+// GetDefaultEndpointTypeByPath returns the built-in endpoint type for an exact path.
+func GetDefaultEndpointTypeByPath(path string) (constant.EndpointType, bool) {
+	for endpointType, info := range defaultEndpointInfoMap {
+		if info.Path == path {
+			return endpointType, true
+		}
+	}
+	return "", false
+}

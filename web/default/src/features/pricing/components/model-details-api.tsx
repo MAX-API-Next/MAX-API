@@ -54,6 +54,7 @@ import {
 import { replaceModelInPath } from '../lib/model-helpers'
 import { inferApiInfo } from '../lib/model-metadata'
 import type { PricingModel } from '../types'
+import { buildResponsesCompactSample } from './model-details-api-samples'
 
 // ---------------------------------------------------------------------------
 // Code-sample registry
@@ -493,6 +494,8 @@ function buildSample(
   endpointType: string,
   ctx: SampleContext
 ): string {
+  if (endpointType === 'openai-response-compact')
+    return buildResponsesCompactSample(lang, ctx)
   if (endpointType === 'openai-alpha-search')
     return buildAlphaSearchSample(lang, ctx)
   if (endpointType === 'anthropic') return buildAnthropicSample(lang, ctx)
