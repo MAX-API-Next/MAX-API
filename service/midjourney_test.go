@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +82,40 @@ func TestDoMidjourneyHttpRequestTreatsReceivedResponseAsSent(t *testing.T) {
 	_, _, requestSent, err := DoMidjourneyHttpRequest(ctx, time.Second, "https://midjourney.invalid/submit")
 	require.Error(t, err)
 	require.True(t, requestSent)
+}
+
+func TestCoverPlusActionToNormalActionRejectsMalformedCustomID(t *testing.T) {
+	tests := []string{
+		"plain",
+		"MJ",
+		"MJ::JOB",
+		"MJ::JOB::upsample",
+		"MJ::JOB::variation",
+	}
+
+	for _, customID := range tests {
+		t.Run(customID, func(t *testing.T) {
+			req := &dto.MidjourneyRequest{CustomId: customID}
+
+			var resp *dto.MidjourneyResponse
+			require.NotPanics(t, func() {
+				resp = CoverPlusActionToNormalAction(req)
+			})
+
+			require.NotNil(t, resp)
+			require.Equal(t, constant.MjRequestError, resp.Code)
+		})
+	}
+}
+
+func TestCoverPlusActionToNormalActionAcceptsJobUpsampleCustomID(t *testing.T) {
+	req := &dto.MidjourneyRequest{CustomId: "MJ::JOB::upsample::2::task-id"}
+
+	resp := CoverPlusActionToNormalAction(req)
+
+	require.Nil(t, resp)
+	require.Equal(t, constant.MjActionUpscale, req.Action)
+	require.Equal(t, 2, req.Index)
 }
 
 type midjourneyFailingReader struct{}
