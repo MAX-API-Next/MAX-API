@@ -21,9 +21,19 @@ func billingQuotaDisplayAmount(quota int64) (float64, error) {
 		return 0, fmt.Errorf("invalid QuotaPerUnit: %g", common.QuotaPerUnit)
 	}
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeCNY {
+		if operation_setting.USDExchangeRate <= 0 || math.IsNaN(operation_setting.USDExchangeRate) || math.IsInf(operation_setting.USDExchangeRate, 0) {
+			return 0, fmt.Errorf("invalid USDExchangeRate: %g", operation_setting.USDExchangeRate)
+		}
 		return amount / common.QuotaPerUnit * operation_setting.USDExchangeRate, nil
 	}
 	return amount / common.QuotaPerUnit, nil
+}
+
+func billingSubscriptionDisplayAmount(quota int64, unlimitedToken bool) (float64, error) {
+	if unlimitedToken {
+		return 100000000, nil
+	}
+	return billingQuotaDisplayAmount(quota)
 }
 
 func writeBillingOpenAIError(c *gin.Context, status int, message string, errorType string) {
@@ -68,14 +78,11 @@ func GetSubscription(c *gin.Context) {
 		expiredTime = 0
 	}
 	quota := remainQuota + usedQuota
-	amount, err := billingQuotaDisplayAmount(quota)
+	amount, err := billingSubscriptionDisplayAmount(quota, token != nil && token.UnlimitedQuota)
 	if err != nil {
 		common.SysError("billing subscription quota display failed: " + err.Error())
 		writeBillingOpenAIError(c, http.StatusInternalServerError, err.Error(), "max_api_error")
 		return
-	}
-	if token != nil && token.UnlimitedQuota {
-		amount = 100000000
 	}
 	subscription := OpenAISubscriptionResponse{
 		Object:             "billing_subscription",

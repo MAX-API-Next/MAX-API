@@ -45,3 +45,74 @@ func TestBillingQuotaDisplayAmountAllowsTokenDisplayWithInvalidQuotaPerUnit(t *t
 	require.NoError(t, err)
 	require.Equal(t, 1000.0, amount)
 }
+
+func TestBillingQuotaDisplayAmountRejectsInvalidUSDExchangeRate(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldUSDExchangeRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		operation_setting.USDExchangeRate = oldUSDExchangeRate
+	})
+
+	common.QuotaPerUnit = 500
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+
+	tests := []struct {
+		name            string
+		usdExchangeRate float64
+	}{
+		{name: "zero", usdExchangeRate: 0},
+		{name: "negative", usdExchangeRate: -1},
+		{name: "nan", usdExchangeRate: math.NaN()},
+		{name: "infinite", usdExchangeRate: math.Inf(1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operation_setting.USDExchangeRate = tt.usdExchangeRate
+
+			_, err := billingQuotaDisplayAmount(1000)
+
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestBillingQuotaDisplayAmountAllowsValidUSDExchangeRate(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldUSDExchangeRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		operation_setting.USDExchangeRate = oldUSDExchangeRate
+	})
+
+	common.QuotaPerUnit = 500
+	operation_setting.USDExchangeRate = 7.2
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+
+	amount, err := billingQuotaDisplayAmount(1000)
+
+	require.NoError(t, err)
+	require.Equal(t, 14.4, amount)
+}
+
+func TestBillingSubscriptionDisplayAmountAllowsUnlimitedTokenWithInvalidQuotaPerUnit(t *testing.T) {
+	oldQuotaPerUnit := common.QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	t.Cleanup(func() {
+		common.QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+	})
+
+	common.QuotaPerUnit = 0
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+
+	amount, err := billingSubscriptionDisplayAmount(0, true)
+
+	require.NoError(t, err)
+	require.Equal(t, 100000000.0, amount)
+}

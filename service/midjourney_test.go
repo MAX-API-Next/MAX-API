@@ -91,6 +91,7 @@ func TestCoverPlusActionToNormalActionRejectsMalformedCustomID(t *testing.T) {
 		"MJ::JOB",
 		"MJ::JOB::upsample",
 		"MJ::JOB::variation",
+		"MJ::JOB::unsupported_variation::1",
 	}
 
 	for _, customID := range tests {
@@ -110,6 +111,16 @@ func TestCoverPlusActionToNormalActionRejectsMalformedCustomID(t *testing.T) {
 
 func TestCoverPlusActionToNormalActionAcceptsJobUpsampleCustomID(t *testing.T) {
 	req := &dto.MidjourneyRequest{CustomId: "MJ::JOB::upsample::2::task-id"}
+
+	resp := CoverPlusActionToNormalAction(req)
+
+	require.Nil(t, resp)
+	require.Equal(t, constant.MjActionUpscale, req.Action)
+	require.Equal(t, 2, req.Index)
+}
+
+func TestCoverPlusActionToNormalActionAcceptsLegacyNonJobUpsampleCustomID(t *testing.T) {
+	req := &dto.MidjourneyRequest{CustomId: "MJ::upsample::legacy-field::2::task-id"}
 
 	resp := CoverPlusActionToNormalAction(req)
 

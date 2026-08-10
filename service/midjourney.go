@@ -101,7 +101,7 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 	if action == "" {
 		return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
 	}
-	indexPosition := actionIndex + 1
+	indexPosition := 3
 	parseIndex := func() (int, *dto.MidjourneyResponse) {
 		if len(splits) <= indexPosition {
 			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
@@ -132,6 +132,8 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 			midjRequest.Action = constant.MjActionLowVariation
 		} else if action == "high_variation" {
 			midjRequest.Action = constant.MjActionHighVariation
+		} else {
+			return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
 		}
 	} else if strings.Contains(action, "pan") {
 		midjRequest.Action = constant.MjActionPan
