@@ -90,6 +90,8 @@ func TestCoverPlusActionToNormalActionRejectsMalformedCustomID(t *testing.T) {
 		"MJ",
 		"MJ::JOB",
 		"MJ::JOB::upsample",
+		"MJ::JOB::upsample::0::task-id",
+		"MJ::JOB::upsample::-1::task-id",
 		"MJ::JOB::variation",
 		"MJ::JOB::unsupported_variation::1",
 	}

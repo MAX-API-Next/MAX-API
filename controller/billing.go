@@ -12,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const billingLookupErrorMessage = "billing information unavailable"
+
 func billingQuotaDisplayAmount(quota int64) (float64, error) {
 	amount := float64(quota)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
@@ -55,7 +57,8 @@ func GetSubscription(c *gin.Context) {
 		tokenId := c.GetInt("token_id")
 		token, err = model.GetTokenById(tokenId)
 		if err != nil {
-			writeBillingOpenAIError(c, http.StatusOK, err.Error(), "upstream_error")
+			common.SysError(fmt.Sprintf("billing subscription token lookup failed: token_id=%d: %v", tokenId, err))
+			writeBillingOpenAIError(c, http.StatusOK, billingLookupErrorMessage, "upstream_error")
 			return
 		}
 		expiredTime = token.ExpiredTime
@@ -65,12 +68,14 @@ func GetSubscription(c *gin.Context) {
 		userId := c.GetInt("id")
 		remainQuota, err = model.GetUserQuota(userId, false)
 		if err != nil {
-			writeBillingOpenAIError(c, http.StatusOK, err.Error(), "upstream_error")
+			common.SysError(fmt.Sprintf("billing subscription quota lookup failed: user_id=%d: %v", userId, err))
+			writeBillingOpenAIError(c, http.StatusOK, billingLookupErrorMessage, "upstream_error")
 			return
 		}
 		usedQuota, err = model.GetUserUsedQuota(userId)
 		if err != nil {
-			writeBillingOpenAIError(c, http.StatusOK, err.Error(), "upstream_error")
+			common.SysError(fmt.Sprintf("billing subscription used-quota lookup failed: user_id=%d: %v", userId, err))
+			writeBillingOpenAIError(c, http.StatusOK, billingLookupErrorMessage, "upstream_error")
 			return
 		}
 	}
@@ -104,7 +109,8 @@ func GetUsage(c *gin.Context) {
 		tokenId := c.GetInt("token_id")
 		token, err = model.GetTokenById(tokenId)
 		if err != nil {
-			writeBillingOpenAIError(c, http.StatusOK, err.Error(), "max_api_error")
+			common.SysError(fmt.Sprintf("billing usage token lookup failed: token_id=%d: %v", tokenId, err))
+			writeBillingOpenAIError(c, http.StatusOK, billingLookupErrorMessage, "max_api_error")
 			return
 		}
 		quota = int64(token.UsedQuota)
@@ -112,7 +118,8 @@ func GetUsage(c *gin.Context) {
 		userId := c.GetInt("id")
 		quota, err = model.GetUserUsedQuota(userId)
 		if err != nil {
-			writeBillingOpenAIError(c, http.StatusOK, err.Error(), "max_api_error")
+			common.SysError(fmt.Sprintf("billing usage quota lookup failed: user_id=%d: %v", userId, err))
+			writeBillingOpenAIError(c, http.StatusOK, billingLookupErrorMessage, "max_api_error")
 			return
 		}
 	}

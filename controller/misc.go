@@ -40,6 +40,41 @@ func TestStatus(c *gin.Context) {
 	return
 }
 
+func writeHealthResponse(c *gin.Context, status int, healthStatus string, err error) {
+	response := gin.H{
+		"success": true,
+		"status":  healthStatus,
+	}
+	if err != nil {
+		response["success"] = false
+		response["status"] = "unhealthy"
+		response["message"] = "database connection failed"
+		c.JSON(status, response)
+		return
+	}
+	c.JSON(status, response)
+}
+
+var healthReadyPingDB = model.PingDB
+
+func GetHealth(c *gin.Context) {
+	writeHealthResponse(c, http.StatusOK, "ok", nil)
+}
+
+func GetHealthLive(c *gin.Context) {
+	writeHealthResponse(c, http.StatusOK, "ok", nil)
+}
+
+func GetHealthReady(c *gin.Context) {
+	err := healthReadyPingDB()
+	if err != nil {
+		common.SysError("health ready check failed: " + err.Error())
+		writeHealthResponse(c, http.StatusServiceUnavailable, "unhealthy", err)
+		return
+	}
+	writeHealthResponse(c, http.StatusOK, "ready", nil)
+}
+
 func GetStatus(c *gin.Context) {
 
 	cs := console_setting.GetConsoleSetting()

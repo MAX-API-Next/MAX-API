@@ -1303,27 +1303,56 @@ func (user *User) deleteWithCacheInvalidation(hardDelete bool) error {
 		return errors.New("id 为空！")
 	}
 	var tasks []CacheInvalidationTask
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := user.ensureCanDeleteTx(tx); err != nil {
-			return err
-		}
-		userTask, err := stageUserCacheInvalidationTx(tx, user.Id, true)
-		if err != nil {
-			return err
-		}
-		tokenTasks, err := stageUserTokenCacheInvalidationsTx(tx, user.Id, hardDelete)
-		if err != nil {
-			return err
-		}
-		tasks = append(tasks, userTask)
-		tasks = append(tasks, tokenTasks...)
-		if hardDelete {
-			if err := tx.Unscoped().Where("user_id = ?", user.Id).Delete(&Token{}).Error; err != nil {
+	err := withUserOAuthIdentityMutationLock(DB, func(conn *gorm.DB) error {
+		return conn.Transaction(func(tx *gorm.DB) error {
+			if err := user.ensureCanDeleteTx(tx); err != nil {
 				return err
 			}
-			return tx.Unscoped().Where("id = ?", user.Id).Delete(&User{}).Error
-		}
-		return tx.Delete(user).Error
+			if err := tx.Where("user_id = ?", user.Id).Delete(&UserOAuthBinding{}).Error; err != nil {
+				return err
+			}
+			now := common.GetTimestamp()
+			if err := tx.Model(&UserSubscription{}).
+				Where("user_id = ? AND status = ?", user.Id, "active").
+				Updates(map[string]interface{}{
+					"status":     "cancelled",
+					"end_time":   now,
+					"updated_at": now,
+				}).Error; err != nil {
+				return err
+			}
+			if !hardDelete {
+				if err := tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+					"access_token": nil,
+				}).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&Token{}).
+					Where("user_id = ? AND status = ?", user.Id, common.TokenStatusEnabled).
+					Updates(map[string]interface{}{
+						"status": common.TokenStatusDisabled,
+					}).Error; err != nil {
+					return err
+				}
+			}
+			userTask, err := stageUserCacheInvalidationTx(tx, user.Id, true)
+			if err != nil {
+				return err
+			}
+			tokenTasks, err := stageUserTokenCacheInvalidationsTx(tx, user.Id, hardDelete)
+			if err != nil {
+				return err
+			}
+			tasks = append(tasks, userTask)
+			tasks = append(tasks, tokenTasks...)
+			if hardDelete {
+				if err := tx.Unscoped().Where("user_id = ?", user.Id).Delete(&Token{}).Error; err != nil {
+					return err
+				}
+				return tx.Unscoped().Where("id = ?", user.Id).Delete(&User{}).Error
+			}
+			return tx.Delete(user).Error
+		})
 	})
 	if err != nil {
 		return err

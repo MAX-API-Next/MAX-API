@@ -115,6 +115,30 @@ func TestVerificationMethodsRouteIsRegistered(t *testing.T) {
 	t.Fatal("expected GET /api/verify/methods route to be registered")
 }
 
+func TestHealthRoutesAreRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	expected := map[string]bool{
+		"/health":       false,
+		"/health/live":  false,
+		"/health/ready": false,
+	}
+	for _, route := range engine.Routes() {
+		if route.Method != http.MethodGet {
+			continue
+		}
+		if _, ok := expected[route.Path]; ok {
+			expected[route.Path] = true
+		}
+	}
+	for path, registered := range expected {
+		require.Truef(t, registered, "expected GET %s route to be registered", path)
+	}
+}
+
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)

@@ -110,6 +110,9 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 		if err != nil {
 			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
 		}
+		if index < 1 {
+			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+		}
 		return index, nil
 	}
 	if strings.Contains(action, "upsample") {

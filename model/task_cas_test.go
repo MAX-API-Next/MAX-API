@@ -55,6 +55,7 @@ func TestMain(m *testing.M) {
 		&Midjourney{},
 		&MidjourneyBillingClaim{},
 		&CacheInvalidationTask{},
+		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemTask{},
 		&SystemInstance{},
@@ -86,6 +87,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM midjourneys")
 		DB.Exec("DELETE FROM midjourney_billing_claims")
 		DB.Exec("DELETE FROM cache_invalidation_tasks")
+		DB.Exec("DELETE FROM user_oauth_bindings")
 		DB.Exec("DELETE FROM perf_metrics")
 		DB.Exec("DELETE FROM system_tasks")
 		DB.Exec("DELETE FROM system_instances")
