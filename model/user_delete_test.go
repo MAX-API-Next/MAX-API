@@ -63,7 +63,9 @@ func TestUserSoftDeleteInvalidatesCredentialsAndCancelsActiveSubscriptions(t *te
 	}
 	require.NoError(t, DB.Create(&subscription).Error)
 
+	deleteStartedAt := common.GetTimestamp()
 	require.NoError(t, (&User{Id: user.Id}).Delete())
+	deleteFinishedAt := common.GetTimestamp()
 
 	var storedUser User
 	require.NoError(t, DB.Unscoped().First(&storedUser, user.Id).Error)
@@ -82,7 +84,8 @@ func TestUserSoftDeleteInvalidatesCredentialsAndCancelsActiveSubscriptions(t *te
 	var storedSubscription UserSubscription
 	require.NoError(t, DB.First(&storedSubscription, subscription.Id).Error)
 	assert.Equal(t, "cancelled", storedSubscription.Status)
-	assert.GreaterOrEqual(t, storedSubscription.EndTime, now)
+	assert.GreaterOrEqual(t, storedSubscription.EndTime, deleteStartedAt)
+	assert.LessOrEqual(t, storedSubscription.EndTime, deleteFinishedAt)
 }
 
 func TestUserHardDeleteRemovesCredentialsAndCancelsActiveSubscriptions(t *testing.T) {
@@ -114,7 +117,9 @@ func TestUserHardDeleteRemovesCredentialsAndCancelsActiveSubscriptions(t *testin
 	}
 	require.NoError(t, DB.Create(&subscription).Error)
 
+	deleteStartedAt := common.GetTimestamp()
 	require.NoError(t, HardDeleteUserById(user.Id))
+	deleteFinishedAt := common.GetTimestamp()
 
 	var userCount int64
 	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&userCount).Error)
@@ -131,5 +136,6 @@ func TestUserHardDeleteRemovesCredentialsAndCancelsActiveSubscriptions(t *testin
 	var storedSubscription UserSubscription
 	require.NoError(t, DB.First(&storedSubscription, subscription.Id).Error)
 	assert.Equal(t, "cancelled", storedSubscription.Status)
-	assert.GreaterOrEqual(t, storedSubscription.EndTime, now)
+	assert.GreaterOrEqual(t, storedSubscription.EndTime, deleteStartedAt)
+	assert.LessOrEqual(t, storedSubscription.EndTime, deleteFinishedAt)
 }

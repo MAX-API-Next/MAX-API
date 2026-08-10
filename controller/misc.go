@@ -55,7 +55,7 @@ func writeHealthResponse(c *gin.Context, status int, healthStatus string, err er
 	c.JSON(status, response)
 }
 
-var healthReadyPingDB = model.PingDB
+var healthReadyProbeDB = model.PingDBUncached
 
 func GetHealth(c *gin.Context) {
 	writeHealthResponse(c, http.StatusOK, "ok", nil)
@@ -66,7 +66,7 @@ func GetHealthLive(c *gin.Context) {
 }
 
 func GetHealthReady(c *gin.Context) {
-	err := healthReadyPingDB()
+	err := healthReadyProbeDB()
 	if err != nil {
 		common.SysError("health ready check failed: " + err.Error())
 		writeHealthResponse(c, http.StatusServiceUnavailable, "unhealthy", err)

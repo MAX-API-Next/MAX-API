@@ -1130,6 +1130,16 @@ func PingDB() error {
 		return nil
 	}
 
+	if err := PingDBUncached(); err != nil {
+		return err
+	}
+
+	lastPingTime = time.Now()
+	common.SysLog("Database pinged successfully")
+	return nil
+}
+
+func PingDBUncached() error {
 	sqlDB, err := DB.DB()
 	if err != nil {
 		log.Printf("Error getting sql.DB from GORM: %v", err)
@@ -1142,7 +1152,5 @@ func PingDB() error {
 		return err
 	}
 
-	lastPingTime = time.Now()
-	common.SysLog("Database pinged successfully")
 	return nil
 }

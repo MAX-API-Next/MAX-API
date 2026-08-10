@@ -60,12 +60,12 @@ func TestHealthEndpointsReturnLivenessStatus(t *testing.T) {
 func TestHealthReadyReturnsServiceUnavailableWhenDatabasePingFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	originalPingDB := healthReadyPingDB
-	healthReadyPingDB = func() error {
+	originalProbeDB := healthReadyProbeDB
+	healthReadyProbeDB = func() error {
 		return errors.New("driver-specific database failure")
 	}
 	t.Cleanup(func() {
-		healthReadyPingDB = originalPingDB
+		healthReadyProbeDB = originalProbeDB
 	})
 
 	recorder, response := performHealthRequest(t, GetHealthReady, "/health/ready")
@@ -75,4 +75,34 @@ func TestHealthReadyReturnsServiceUnavailableWhenDatabasePingFails(t *testing.T)
 	assert.Equal(t, "unhealthy", response.Status)
 	assert.Equal(t, "database connection failed", response.Message)
 	assert.NotContains(t, recorder.Body.String(), "driver-specific database failure")
+}
+
+func TestHealthReadyUsesUncachedDatabaseProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalProbeDB := healthReadyProbeDB
+	probeCalls := 0
+	healthReadyProbeDB = func() error {
+		defer func() {
+			probeCalls++
+		}()
+		if probeCalls == 0 {
+			return nil
+		}
+		return errors.New("database failed after cached success")
+	}
+	t.Cleanup(func() {
+		healthReadyProbeDB = originalProbeDB
+	})
+
+	firstRecorder, firstResponse := performHealthRequest(t, GetHealthReady, "/health/ready")
+	secondRecorder, secondResponse := performHealthRequest(t, GetHealthReady, "/health/ready")
+
+	require.Equal(t, http.StatusOK, firstRecorder.Code)
+	assert.True(t, firstResponse.Success)
+	assert.Equal(t, "ready", firstResponse.Status)
+	require.Equal(t, http.StatusServiceUnavailable, secondRecorder.Code)
+	assert.Equal(t, 2, probeCalls)
+	assert.False(t, secondResponse.Success)
+	assert.Equal(t, "unhealthy", secondResponse.Status)
 }

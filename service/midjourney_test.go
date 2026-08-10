@@ -92,7 +92,10 @@ func TestCoverPlusActionToNormalActionRejectsMalformedCustomID(t *testing.T) {
 		"MJ::JOB::upsample",
 		"MJ::JOB::upsample::0::task-id",
 		"MJ::JOB::upsample::-1::task-id",
+		"MJ::JOB::upsample::5::task-id",
+		"MJ::JOB::unsupported_upsample::1",
 		"MJ::JOB::variation",
+		"MJ::JOB::variation::5::task-id",
 		"MJ::JOB::unsupported_variation::1",
 	}
 
@@ -121,8 +124,58 @@ func TestCoverPlusActionToNormalActionAcceptsJobUpsampleCustomID(t *testing.T) {
 	require.Equal(t, 2, req.Index)
 }
 
+func TestConvertSimpleChangeParamsRejectsMalformedActions(t *testing.T) {
+	tests := []string{
+		"task-id ",
+		"task-id u",
+		"task-id v",
+		"task-id u10",
+		"task-id x1",
+	}
+
+	for _, content := range tests {
+		t.Run(content, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				require.Nil(t, ConvertSimpleChangeParams(content))
+			})
+		})
+	}
+}
+
+func TestConvertSimpleChangeParamsAcceptsValidActions(t *testing.T) {
+	tests := []struct {
+		content string
+		action  string
+		index   int
+	}{
+		{content: "task-id u2", action: "UPSCALE", index: 2},
+		{content: "task-id v3", action: "VARIATION", index: 3},
+		{content: "task-id r", action: "REROLL", index: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.content, func(t *testing.T) {
+			got := ConvertSimpleChangeParams(tt.content)
+			require.NotNil(t, got)
+			require.Equal(t, "task-id", got.TaskId)
+			require.Equal(t, tt.action, got.Action)
+			require.Equal(t, tt.index, got.Index)
+		})
+	}
+}
+
 func TestCoverPlusActionToNormalActionAcceptsLegacyNonJobUpsampleCustomID(t *testing.T) {
 	req := &dto.MidjourneyRequest{CustomId: "MJ::upsample::legacy-field::2::task-id"}
+
+	resp := CoverPlusActionToNormalAction(req)
+
+	require.Nil(t, resp)
+	require.Equal(t, constant.MjActionUpscale, req.Action)
+	require.Equal(t, 2, req.Index)
+}
+
+func TestCoverPlusActionToNormalActionAcceptsCompactLegacyNonJobUpsampleCustomID(t *testing.T) {
+	req := &dto.MidjourneyRequest{CustomId: "MJ::upsample::2::task-id"}
 
 	resp := CoverPlusActionToNormalAction(req)
 

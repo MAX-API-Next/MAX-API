@@ -101,21 +101,29 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 	if action == "" {
 		return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
 	}
-	indexPosition := 3
-	parseIndex := func() (int, *dto.MidjourneyResponse) {
-		if len(splits) <= indexPosition {
-			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+	indexPosition := actionIndex + 1
+	parseIndexAt := func(position int) (int, bool, *dto.MidjourneyResponse) {
+		if len(splits) <= position {
+			return 0, false, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
 		}
-		index, err := strconv.Atoi(splits[indexPosition])
+		index, err := strconv.Atoi(splits[position])
 		if err != nil {
-			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+			return 0, false, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
 		}
-		if index < 1 {
-			return 0, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+		if index < 1 || index > 4 {
+			return 0, true, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
 		}
-		return index, nil
+		return index, true, nil
 	}
-	if strings.Contains(action, "upsample") {
+	parseIndex := func() (int, *dto.MidjourneyResponse) {
+		index, numeric, resp := parseIndexAt(indexPosition)
+		if resp == nil || numeric || actionIndex != 1 || len(splits) <= indexPosition+2 {
+			return index, resp
+		}
+		index, _, resp = parseIndexAt(indexPosition + 1)
+		return index, resp
+	}
+	if action == "upsample" {
 		index, resp := parseIndex()
 		if resp != nil {
 			return resp
@@ -160,7 +168,7 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 }
 
 func ConvertSimpleChangeParams(content string) *dto.MidjourneyRequest {
-	split := strings.Split(content, " ")
+	split := strings.Fields(content)
 	if len(split) != 2 {
 		return nil
 	}
@@ -169,13 +177,17 @@ func ConvertSimpleChangeParams(content string) *dto.MidjourneyRequest {
 	changeParams := &dto.MidjourneyRequest{}
 	changeParams.TaskId = split[0]
 
+	if action == "r" {
+		changeParams.Action = "REROLL"
+		return changeParams
+	}
+	if len(action) != 2 {
+		return nil
+	}
 	if action[0] == 'u' {
 		changeParams.Action = "UPSCALE"
 	} else if action[0] == 'v' {
 		changeParams.Action = "VARIATION"
-	} else if action == "r" {
-		changeParams.Action = "REROLL"
-		return changeParams
 	} else {
 		return nil
 	}
