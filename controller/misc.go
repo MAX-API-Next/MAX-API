@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -55,7 +57,10 @@ func writeHealthResponse(c *gin.Context, status int, healthStatus string, err er
 	c.JSON(status, response)
 }
 
-var healthReadyProbeDB = model.PingDBUncached
+var (
+	healthReadyProbeDB      = model.PingDBContext
+	healthReadyProbeTimeout = 2 * time.Second
+)
 
 func GetHealth(c *gin.Context) {
 	writeHealthResponse(c, http.StatusOK, "ok", nil)
@@ -66,7 +71,10 @@ func GetHealthLive(c *gin.Context) {
 }
 
 func GetHealthReady(c *gin.Context) {
-	err := healthReadyProbeDB()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), healthReadyProbeTimeout)
+	defer cancel()
+
+	err := healthReadyProbeDB(ctx)
 	if err != nil {
 		common.SysError("health ready check failed: " + err.Error())
 		writeHealthResponse(c, http.StatusServiceUnavailable, "unhealthy", err)

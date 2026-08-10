@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/gin-gonic/gin"
@@ -61,7 +63,7 @@ func TestHealthReadyReturnsServiceUnavailableWhenDatabasePingFails(t *testing.T)
 	gin.SetMode(gin.TestMode)
 
 	originalProbeDB := healthReadyProbeDB
-	healthReadyProbeDB = func() error {
+	healthReadyProbeDB = func(context.Context) error {
 		return errors.New("driver-specific database failure")
 	}
 	t.Cleanup(func() {
@@ -82,7 +84,7 @@ func TestHealthReadyUsesUncachedDatabaseProbe(t *testing.T) {
 
 	originalProbeDB := healthReadyProbeDB
 	probeCalls := 0
-	healthReadyProbeDB = func() error {
+	healthReadyProbeDB = func(context.Context) error {
 		defer func() {
 			probeCalls++
 		}()
@@ -105,4 +107,27 @@ func TestHealthReadyUsesUncachedDatabaseProbe(t *testing.T) {
 	assert.Equal(t, 2, probeCalls)
 	assert.False(t, secondResponse.Success)
 	assert.Equal(t, "unhealthy", secondResponse.Status)
+}
+
+func TestHealthReadyTimesOutStalledDatabaseProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	originalProbeDB := healthReadyProbeDB
+	originalTimeout := healthReadyProbeTimeout
+	healthReadyProbeTimeout = time.Millisecond
+	healthReadyProbeDB = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	t.Cleanup(func() {
+		healthReadyProbeDB = originalProbeDB
+		healthReadyProbeTimeout = originalTimeout
+	})
+
+	recorder, response := performHealthRequest(t, GetHealthReady, "/health/ready")
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	assert.False(t, response.Success)
+	assert.Equal(t, "unhealthy", response.Status)
+	assert.Equal(t, "database connection failed", response.Message)
 }

@@ -165,13 +165,22 @@ func TestConvertSimpleChangeParamsAcceptsValidActions(t *testing.T) {
 }
 
 func TestCoverPlusActionToNormalActionAcceptsLegacyNonJobUpsampleCustomID(t *testing.T) {
-	req := &dto.MidjourneyRequest{CustomId: "MJ::upsample::legacy-field::2::task-id"}
+	tests := []string{
+		"MJ::upsample::legacy-field::2::task-id",
+		"MJ::upsample::legacy-field::2",
+	}
 
-	resp := CoverPlusActionToNormalAction(req)
+	for _, customID := range tests {
+		t.Run(customID, func(t *testing.T) {
+			req := &dto.MidjourneyRequest{CustomId: customID}
 
-	require.Nil(t, resp)
-	require.Equal(t, constant.MjActionUpscale, req.Action)
-	require.Equal(t, 2, req.Index)
+			resp := CoverPlusActionToNormalAction(req)
+
+			require.Nil(t, resp)
+			require.Equal(t, constant.MjActionUpscale, req.Action)
+			require.Equal(t, 2, req.Index)
+		})
+	}
 }
 
 func TestCoverPlusActionToNormalActionAcceptsCompactLegacyNonJobUpsampleCustomID(t *testing.T) {

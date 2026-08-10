@@ -117,7 +117,7 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 	}
 	parseIndex := func() (int, *dto.MidjourneyResponse) {
 		index, numeric, resp := parseIndexAt(indexPosition)
-		if resp == nil || numeric || actionIndex != 1 || len(splits) <= indexPosition+2 {
+		if resp == nil || numeric || actionIndex != 1 {
 			return index, resp
 		}
 		index, _, resp = parseIndexAt(indexPosition + 1)
