@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -38,6 +40,47 @@ func TestStatus(c *gin.Context) {
 		"http_stats": httpStats,
 	})
 	return
+}
+
+func writeHealthResponse(c *gin.Context, status int, healthStatus string, err error) {
+	response := gin.H{
+		"success": true,
+		"status":  healthStatus,
+	}
+	if err != nil {
+		response["success"] = false
+		response["status"] = "unhealthy"
+		response["message"] = "database connection failed"
+		c.JSON(status, response)
+		return
+	}
+	c.JSON(status, response)
+}
+
+var (
+	healthReadyProbeDB      = model.PingDBContext
+	healthReadyProbeTimeout = 2 * time.Second
+)
+
+func GetHealth(c *gin.Context) {
+	writeHealthResponse(c, http.StatusOK, "ok", nil)
+}
+
+func GetHealthLive(c *gin.Context) {
+	writeHealthResponse(c, http.StatusOK, "ok", nil)
+}
+
+func GetHealthReady(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), healthReadyProbeTimeout)
+	defer cancel()
+
+	err := healthReadyProbeDB(ctx)
+	if err != nil {
+		common.SysError("health ready check failed: " + err.Error())
+		writeHealthResponse(c, http.StatusServiceUnavailable, "unhealthy", err)
+		return
+	}
+	writeHealthResponse(c, http.StatusOK, "ready", nil)
 }
 
 func GetStatus(c *gin.Context) {

@@ -3237,6 +3237,8 @@
     "OpenAI Rerank": "Реранжирование OpenAI",
     "OpenAI Responses": "Ответы OpenAI",
     "OpenAI Responses Compact": "Компактные ответы OpenAI",
+    "OpenAI Alpha Search": "Alpha-поиск OpenAI",
+    "OpenAI Alpha Search (/v1/alpha/search)": "Alpha-поиск OpenAI (/v1/alpha/search)",
     "OpenAI, Anthropic, etc.": "OpenAI, Anthropic и т.д.",
     "OpenAI, Anthropic, Google, etc.": "OpenAI, Anthropic, Google и т.д.",
     "OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, domestic models, image, audio, video, embedding, rerank, and compatible API ecosystems stay replaceable.": "OpenAI, Claude, Gemini, Azure, AWS, Vertex, Ollama, локальные модели, изображения, аудио, видео, embeddings, rerank и совместимые API-экосистемы остаются заменяемыми.",

@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	perfmetrics "github.com/MAX-API-Next/MAX-API/pkg/perf_metrics"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -55,6 +56,16 @@ type textQuotaSummary struct {
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
 	ToolCallSurchargeQuota   decimal.Decimal
+}
+
+func (s *textQuotaSummary) hasBillableUsage(relayInfo *relaycommon.RelayInfo) bool {
+	if s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() {
+		return true
+	}
+	return relayInfo != nil &&
+		relayInfo.RelayMode == relayconstant.RelayModeAlphaSearch &&
+		relayInfo.PriceData.UsePrice &&
+		relayInfo.PriceData.ModelPrice > 0
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -162,6 +173,12 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 			noteQuotaClamp(relayInfo, clamp)
 			return quota
 		}
+	}
+	if relayInfo != nil &&
+		relayInfo.RelayMode == relayconstant.RelayModeAlphaSearch &&
+		relayInfo.FinalPreConsumedQuota > 0 &&
+		tieredQuota == relayInfo.FinalPreConsumedQuota {
+		return tieredQuota
 	}
 
 	quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota))
@@ -292,7 +309,6 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
 		quotaCalculateDecimal := promptQuota.Add(completionQuota).Mul(ratio)
-		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 
 		if len(relayInfo.PriceData.OtherRatios) > 0 {
@@ -300,6 +316,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 				quotaCalculateDecimal = quotaCalculateDecimal.Mul(decimal.NewFromFloat(otherRatio))
 			}
 		}
+		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 
 		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
@@ -309,19 +326,19 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		noteQuotaClamp(relayInfo, clamp)
 	} else {
 		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
-		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		if len(relayInfo.PriceData.OtherRatios) > 0 {
 			for _, otherRatio := range relayInfo.PriceData.OtherRatios {
 				quotaCalculateDecimal = quotaCalculateDecimal.Mul(decimal.NewFromFloat(otherRatio))
 			}
 		}
+		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
 		summary.Quota = quota
 		noteQuotaClamp(relayInfo, clamp)
 	}
 
-	if summary.TotalTokens == 0 {
+	if !summary.hasBillableUsage(relayInfo) {
 		summary.Quota = 0
 	} else if !ratio.IsZero() && summary.Quota == 0 {
 		summary.Quota = 1
@@ -411,8 +428,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
 
-	shouldUpdateUsageStats := summary.TotalTokens != 0
-	if summary.TotalTokens == 0 {
+	shouldUpdateUsageStats := summary.hasBillableUsage(relayInfo)
+	if !summary.hasBillableUsage(relayInfo) {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	}

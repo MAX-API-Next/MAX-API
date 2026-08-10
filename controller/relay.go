@@ -49,6 +49,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.MaxAPIErro
 		err = relay.EmbeddingHelper(c, info)
 	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		err = relay.ResponsesHelper(c, info)
+	case relayconstant.RelayModeAlphaSearch:
+		err = relay.AlphaSearchHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}
@@ -155,6 +157,20 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
 	}
+	basePreConsumedQuota := priceData.QuotaToPreConsume
+	priceData.QuotaToPreConsume, err = service.AlphaSearchPreConsumeQuota(
+		basePreConsumedQuota,
+		relayInfo,
+		priceData.GroupRatioInfo.GroupRatio,
+	)
+	if err != nil {
+		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+		return
+	}
+	if priceData.QuotaToPreConsume > basePreConsumedQuota {
+		priceData.FreeModel = false
+	}
+	relayInfo.PriceData = priceData
 
 	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
 

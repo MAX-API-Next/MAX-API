@@ -84,28 +84,58 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 	}
 	splits := strings.Split(customId, "::")
 	var action string
-	if splits[1] == "JOB" {
-		action = splits[2]
+	actionIndex := 1
+	if len(splits) <= actionIndex {
+		return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
+	}
+	if splits[actionIndex] == "JOB" {
+		actionIndex++
+		if len(splits) <= actionIndex {
+			return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
+		}
+		action = splits[actionIndex]
 	} else {
-		action = splits[1]
+		action = splits[actionIndex]
 	}
 
 	if action == "" {
 		return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
 	}
-	if strings.Contains(action, "upsample") {
-		index, err := strconv.Atoi(splits[3])
+	indexPosition := actionIndex + 1
+	parseIndexAt := func(position int) (int, bool, *dto.MidjourneyResponse) {
+		if len(splits) <= position {
+			return 0, false, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+		}
+		index, err := strconv.Atoi(splits[position])
 		if err != nil {
-			return MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+			return 0, false, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+		}
+		if index < 1 || index > 4 {
+			return 0, true, MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+		}
+		return index, true, nil
+	}
+	parseIndex := func() (int, *dto.MidjourneyResponse) {
+		index, numeric, resp := parseIndexAt(indexPosition)
+		if resp == nil || numeric || actionIndex != 1 {
+			return index, resp
+		}
+		index, _, resp = parseIndexAt(indexPosition + 1)
+		return index, resp
+	}
+	if action == "upsample" {
+		index, resp := parseIndex()
+		if resp != nil {
+			return resp
 		}
 		midjRequest.Index = index
 		midjRequest.Action = constant.MjActionUpscale
 	} else if strings.Contains(action, "variation") {
 		midjRequest.Index = 1
 		if action == "variation" {
-			index, err := strconv.Atoi(splits[3])
-			if err != nil {
-				return MidjourneyErrorWrapper(constant.MjRequestError, "index_parse_failed")
+			index, resp := parseIndex()
+			if resp != nil {
+				return resp
 			}
 			midjRequest.Index = index
 			midjRequest.Action = constant.MjActionVariation
@@ -113,6 +143,8 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 			midjRequest.Action = constant.MjActionLowVariation
 		} else if action == "high_variation" {
 			midjRequest.Action = constant.MjActionHighVariation
+		} else {
+			return MidjourneyErrorWrapper(constant.MjRequestError, "unknown_action")
 		}
 	} else if strings.Contains(action, "pan") {
 		midjRequest.Action = constant.MjActionPan
@@ -136,7 +168,7 @@ func CoverPlusActionToNormalAction(midjRequest *dto.MidjourneyRequest) *dto.Midj
 }
 
 func ConvertSimpleChangeParams(content string) *dto.MidjourneyRequest {
-	split := strings.Split(content, " ")
+	split := strings.Fields(content)
 	if len(split) != 2 {
 		return nil
 	}
@@ -145,13 +177,17 @@ func ConvertSimpleChangeParams(content string) *dto.MidjourneyRequest {
 	changeParams := &dto.MidjourneyRequest{}
 	changeParams.TaskId = split[0]
 
+	if action == "r" {
+		changeParams.Action = "REROLL"
+		return changeParams
+	}
+	if len(action) != 2 {
+		return nil
+	}
 	if action[0] == 'u' {
 		changeParams.Action = "UPSCALE"
 	} else if action[0] == 'v' {
 		changeParams.Action = "VARIATION"
-	} else if action == "r" {
-		changeParams.Action = "REROLL"
-		return changeParams
 	} else {
 		return nil
 	}

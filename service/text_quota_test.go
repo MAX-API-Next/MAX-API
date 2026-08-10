@@ -6,12 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -763,6 +767,102 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 	require.Equal(t, 14000, quota)
 }
 
+func TestCalculateTextQuotaSummaryZeroTokensStillBillsToolSurcharge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "o1",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {
+					CallCount: 1,
+				},
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+
+	require.Equal(t, 0, summary.TotalTokens)
+	require.False(t, summary.ToolCallSurchargeQuota.IsZero())
+	require.Greater(t, summary.Quota, 0)
+	require.Equal(t, common.QuotaFromDecimal(summary.ToolCallSurchargeQuota), summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryAlphaSearchKeepsFixedPriceWhenToolPriceIsZero(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	originalPrices := make(map[string]float64, len(toolPrices.Prices))
+	for key, value := range toolPrices.Prices {
+		originalPrices[key] = value
+	}
+	toolPrices.Prices = map[string]float64{"web_search_preview": 0}
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() {
+		toolPrices.Prices = originalPrices
+		operation_setting.RebuildToolPriceIndex()
+	})
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeAlphaSearch,
+		OriginModelName: "fixed-price-alpha-search",
+		PriceData: types.PriceData{
+			UsePrice:       true,
+			ModelPrice:     0.02,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+
+	require.True(t, summary.ToolCallSurchargeQuota.IsZero())
+	require.Equal(t, common.QuotaFromFloat(0.02*common.QuotaPerUnit), summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryDoesNotApplyRequestMultipliersToToolSurcharge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "o1",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {
+					CallCount: 1,
+				},
+			},
+		},
+		StartTime: time.Now(),
+	}
+	relayInfo.PriceData.AddOtherRatio("n", 3)
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	expected := decimal.NewFromFloat(10.0 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+
+	require.True(t, expected.Equal(summary.ToolCallSurchargeQuota))
+	require.Equal(t, common.QuotaFromDecimal(expected), summary.Quota)
+}
+
 func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -834,6 +934,34 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 
 	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 14500, quota)
+}
+
+func TestComposeTieredTextQuotaAlphaSearchErrorFallbackDoesNotDuplicateReservedSurcharge(t *testing.T) {
+	summary := textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(12_500),
+	}
+	relayInfo := &relaycommon.RelayInfo{
+		RelayMode:             relayconstant.RelayModeAlphaSearch,
+		FinalPreConsumedQuota: 14_500,
+	}
+
+	quota := composeTieredTextQuota(relayInfo, summary, 14_500, nil)
+
+	require.Equal(t, 14_500, quota)
+}
+
+func TestComposeTieredTextQuotaTrustedAlphaSearchFallbackAddsUnreservedSurcharge(t *testing.T) {
+	summary := textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(12_500),
+	}
+	relayInfo := &relaycommon.RelayInfo{
+		RelayMode:             relayconstant.RelayModeAlphaSearch,
+		FinalPreConsumedQuota: 0,
+	}
+
+	quota := composeTieredTextQuota(relayInfo, summary, 2_000, nil)
+
+	require.Equal(t, 14_500, quota)
 }
 
 func TestComposeTieredTextQuotaFallbackSaturatesFinalQuota(t *testing.T) {

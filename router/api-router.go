@@ -12,6 +12,10 @@ import (
 )
 
 func SetApiRouter(router *gin.Engine) {
+	router.GET("/health", middleware.PublicStatusRateLimit(), controller.GetHealth)
+	router.GET("/health/live", middleware.PublicStatusRateLimit(), controller.GetHealthLive)
+	router.GET("/health/ready", middleware.PublicStatusRateLimit(), controller.GetHealthReady)
+
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))

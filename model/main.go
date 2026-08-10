@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1130,19 +1131,35 @@ func PingDB() error {
 		return nil
 	}
 
+	if err := PingDBUncached(); err != nil {
+		return err
+	}
+
+	lastPingTime = time.Now()
+	common.SysLog("Database pinged successfully")
+	return nil
+}
+
+func PingDBUncached() error {
+	return PingDBContext(context.Background())
+}
+
+func PingDBContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	sqlDB, err := DB.DB()
 	if err != nil {
 		log.Printf("Error getting sql.DB from GORM: %v", err)
 		return err
 	}
 
-	err = sqlDB.Ping()
+	err = sqlDB.PingContext(ctx)
 	if err != nil {
 		log.Printf("Error pinging DB: %v", err)
 		return err
 	}
 
-	lastPingTime = time.Now()
-	common.SysLog("Database pinged successfully")
 	return nil
 }

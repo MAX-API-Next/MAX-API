@@ -159,6 +159,69 @@ func TestMemoryCacheSelectionSkipsInvalidAdvancedCustomConfig(t *testing.T) {
 	assert.Equal(t, 2, channel.Id)
 }
 
+func TestAlphaSearchSelectionUsesOnlySupportedChannelTypes(t *testing.T) {
+	clearPreferredOwnerTables(t)
+	t.Cleanup(func() {
+		clearPreferredOwnerTables(t)
+		channelSyncLock.Lock()
+		group2model2channels = nil
+		channelsIDM = nil
+		channel2advancedCustomConfig = nil
+		channel2advancedCustomConfigError = nil
+		channelSyncLock.Unlock()
+	})
+
+	const (
+		groupName         = "default"
+		modelName         = "gpt-alpha-selection"
+		advancedModelName = "gpt-alpha-advanced-selection"
+	)
+	insertChannelSelectionCandidate(t, 1, constant.ChannelTypeOpenAI, "", modelName, groupName, 10)
+	insertChannelSelectionCandidate(t, 2, constant.ChannelTypeCodex, "", modelName, groupName, 1)
+	advancedSettings := advancedCustomSettingsForSelectionTest(t, []dto.AdvancedCustomRoute{
+		{
+			IncomingPath: "/v1/alpha/search",
+			UpstreamPath: "/v1/alpha/search",
+			Converter:    dto.AdvancedCustomConverterNone,
+		},
+	})
+	insertChannelSelectionCandidate(t, 3, constant.ChannelTypeOpenAI, "", advancedModelName, groupName, 10)
+	insertChannelSelectionCandidate(t, 4, constant.ChannelTypeAdvancedCustom, advancedSettings, advancedModelName, groupName, 1)
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+	})
+
+	common.MemoryCacheEnabled = false
+	channel, err := GetChannel(groupName, modelName, 0, "/v1/alpha/search")
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+	assert.False(t, ChannelSupportsRequestPath(&Channel{Type: constant.ChannelTypeOpenAI}, "/v1/alpha/search"))
+	assert.True(t, ChannelSupportsRequestPath(&Channel{Type: constant.ChannelTypeCodex}, "/v1/alpha/search"))
+	channel, err = GetChannel(groupName, advancedModelName, 0, "/v1/alpha/search")
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 4, channel.Id)
+	assert.True(t, ChannelSupportsRequestPath(&Channel{
+		Id:            4,
+		Type:          constant.ChannelTypeAdvancedCustom,
+		OtherSettings: advancedSettings,
+	}, "/v1/alpha/search"))
+
+	common.MemoryCacheEnabled = true
+	InitChannelCache()
+	channel, err = GetRandomSatisfiedChannel(groupName, modelName, 0, "/v1/alpha/search")
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+	channel, err = GetRandomSatisfiedChannel(groupName, advancedModelName, 0, "/v1/alpha/search")
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 4, channel.Id)
+}
+
 func TestChannelSelectionExcludesPreviouslyTriedChannel(t *testing.T) {
 	clearPreferredOwnerTables(t)
 	t.Cleanup(func() {

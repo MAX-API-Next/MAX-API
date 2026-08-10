@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -79,4 +81,18 @@ func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, userID)
+}
+
+func TestBuildTestRequestAlphaSearch(t *testing.T) {
+	request := buildTestRequest(
+		"gpt-5.1",
+		string(constant.EndpointTypeOpenAIAlphaSearch),
+		&model.Channel{Type: constant.ChannelTypeCodex},
+		false,
+	)
+
+	alphaRequest, ok := request.(*dto.AlphaSearchRequest)
+	require.True(t, ok)
+	require.Equal(t, "gpt-5.1", alphaRequest.Model)
+	require.Contains(t, string(alphaRequest.RawBody), `"search_query"`)
 }
