@@ -719,7 +719,7 @@ func (channel *Channel) editableUpdateMap(fields []string) map[string]any {
 			updates["key"] = channel.Key
 		case "openai_organization":
 			if channel.OpenAIOrganization != nil {
-				updates["openai_organization"] = channel.OpenAIOrganization
+				updates["open_ai_organization"] = channel.OpenAIOrganization
 			}
 		case "test_model":
 			if channel.TestModel != nil {
