@@ -116,6 +116,24 @@ func TestUpdateChannelPartialStatusDoesNotClearConfiguration(t *testing.T) {
 	require.Equal(t, "https://origin.example.com", *stored.BaseURL)
 }
 
+func TestUpdateChannelPersistsOpenAIOrganization(t *testing.T) {
+	db, channel := setupChannelUpdateControllerTestDB(t)
+
+	organization := "org-controller-update"
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/channel/", map[string]any{
+		"id":                  channel.Id,
+		"openai_organization": organization,
+	}, 1)
+	UpdateChannel(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var stored model.Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.NotNil(t, stored.OpenAIOrganization)
+	require.Equal(t, organization, *stored.OpenAIOrganization)
+}
+
 func TestUpdateChannelRejectsUnknownStatus(t *testing.T) {
 	db, channel := setupChannelUpdateControllerTestDB(t)
 

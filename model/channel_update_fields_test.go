@@ -92,6 +92,20 @@ func TestUpdateFieldsSkipsAbilityRebuildForChannelInfoOnly(t *testing.T) {
 	require.EqualValues(t, 1, abilityCount)
 }
 
+func TestUpdateFieldsPersistsOpenAIOrganizationUsingSchemaColumn(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+
+	organization := "org-update-fields"
+	channel.OpenAIOrganization = &organization
+
+	require.NoError(t, channel.UpdateFields("openai_organization"))
+
+	var stored Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.NotNil(t, stored.OpenAIOrganization)
+	require.Equal(t, organization, *stored.OpenAIOrganization)
+}
+
 func TestUpdateFieldsRollsBackChannelWhenAbilityRebuildFails(t *testing.T) {
 	db, channel := setupChannelUpdateFieldsTestDB(t)
 	installFailingAbilityDeleteTrigger(t, db)
