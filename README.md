@@ -243,6 +243,10 @@ docker compose up -d
 
 MAX API 采用分层架构：应用、SDK 或 Agent 请求经统一入口进入，依次经过路由、中间件、控制器和业务服务层，最终由中继层适配到对应上游供应商；数据层和缓存层为模型治理、Agent 令牌治理、计费、日志、审计和任务状态提供持久化与加速能力。
 
+![MAX API 系统架构图](./docs/images/MAX-API架构图.png)
+
+以下简图展示核心请求链路：
+
 ```mermaid
 flowchart LR
   Client[客户端 / SDK / Agent] --> Router[Router<br/>路由]
