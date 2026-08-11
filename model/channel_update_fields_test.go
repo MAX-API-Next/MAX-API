@@ -77,6 +77,63 @@ func installFailingAbilityDeleteTrigger(t *testing.T, db *gorm.DB) {
 	t.Cleanup(func() { _ = db.Exec("DROP TRIGGER IF EXISTS fail_ability_delete").Error })
 }
 
+func populatedChannelForEditableUpdateMap() *Channel {
+	stringPtr := func(value string) *string { return &value }
+	priority := int64(1)
+	weight := uint(2)
+	autoBan := 1
+	return &Channel{
+		Type:               3,
+		Key:                "key",
+		OpenAIOrganization: stringPtr("org"),
+		TestModel:          stringPtr("gpt-test"),
+		Status:             common.ChannelStatusEnabled,
+		Name:               "schema-check-channel",
+		Weight:             &weight,
+		BaseURL:            stringPtr("https://example.com"),
+		Other:              "{}",
+		Models:             "gpt-test",
+		Group:              "default",
+		ModelMapping:       stringPtr("{}"),
+		StatusCodeMapping:  stringPtr("{}"),
+		Priority:           &priority,
+		AutoBan:            &autoBan,
+		Tag:                stringPtr("tag"),
+		Setting:            stringPtr("{}"),
+		ParamOverride:      stringPtr("{}"),
+		HeaderOverride:     stringPtr("{}"),
+		Remark:             stringPtr("remark"),
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:           true,
+			MultiKeySize:         1,
+			MultiKeyPollingIndex: 0,
+		},
+		OtherSettings: "{}",
+	}
+}
+
+func TestEditableUpdateMapUsesOnlyChannelSchemaColumns(t *testing.T) {
+	db, _ := setupChannelUpdateFieldsTestDB(t)
+
+	stmt := &gorm.Statement{DB: db}
+	require.NoError(t, stmt.Parse(&Channel{}))
+
+	schemaColumns := make(map[string]struct{}, len(stmt.Schema.DBNames))
+	for _, column := range stmt.Schema.DBNames {
+		schemaColumns[column] = struct{}{}
+	}
+
+	channel := populatedChannelForEditableUpdateMap()
+	for _, field := range channelEditableUpdateFields {
+		updates := channel.editableUpdateMap([]string{field})
+		require.NotEmpty(t, updates, "editable field %q is not handled by editableUpdateMap or the test fixture lacks its value", field)
+		for column := range updates {
+			require.Contains(t, schemaColumns, column, "editable field %q maps to unknown channel schema column %q", field, column)
+			require.True(t, db.Migrator().HasColumn(&Channel{}, column), "editable field %q maps to missing database column %q", field, column)
+		}
+	}
+}
+
 func TestUpdateFieldsSkipsAbilityRebuildForChannelInfoOnly(t *testing.T) {
 	db, channel := setupChannelUpdateFieldsTestDB(t)
 	installFailingAbilityDeleteTrigger(t, db)
