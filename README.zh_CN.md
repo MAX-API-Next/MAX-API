@@ -74,6 +74,11 @@ MAX API 当前版本发布分为正式版和 Preview 预览版。Preview 预览�
 
 生产环境建议优先使用正式版；需要提前验证新功能、修复或兼容性变化时，可在测试环境或灰度环境使用 Preview 预览版，并在升级前做好数据库备份和回滚预案。
 
+### 💬 社区访问
+
+- 🌐 GitHub 地址：[https://github.com/MAX-API-Next](https://github.com/MAX-API-Next)
+- 👥 社群交流：QQ(950126533) | 微信群(搜索MAX-API)
+
 ---
 
 ## 🎯 项目定位
