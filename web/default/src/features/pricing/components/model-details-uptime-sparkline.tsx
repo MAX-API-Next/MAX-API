@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/tooltip'
 import { formatUptimePct } from '@/features/performance-metrics/lib/format'
 import { aggregateUptime, type UptimeDayPoint } from '../lib/mock-stats'
+import { downsampleUptimeSeries } from './model-details-chart-utils'
 
 // ---------------------------------------------------------------------------
 // Uptime sparkline
@@ -46,6 +47,7 @@ type UptimeSparklineProps = {
   series: UptimeDayPoint[]
   size?: SparklineSize
   showOverall?: boolean
+  overallPct?: number
   emptyLabel?: string
   className?: string
 }
@@ -83,8 +85,15 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
     )
   }
 
-  const overall =
+  const calculatedOverall =
     props.series.reduce((s, p) => s + p.uptime_pct, 0) / props.series.length
+  const overall = Number.isFinite(props.overallPct)
+    ? (props.overallPct as number)
+    : calculatedOverall
+  const displaySeries = downsampleUptimeSeries(
+    props.series,
+    size === 'sm' ? 32 : 48
+  )
 
   const containerHeight = size === 'sm' ? 'h-3.5' : 'h-5'
   const barWidth = size === 'sm' ? 'w-[3px]' : 'w-1'
@@ -99,7 +108,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
           percent: overall.toFixed(2),
         })}
       >
-        {props.series.map((day) => (
+        {displaySeries.map((day) => (
           <Tooltip key={day.date}>
             <TooltipTrigger
               render={
@@ -202,7 +211,11 @@ export function UptimeStatusRow(props: {
         <span className='text-sm font-medium'>{t('Last 30 days uptime')}</span>
       </div>
 
-      <UptimeSparkline series={props.series} className='ml-auto' />
+      <UptimeSparkline
+        series={props.series}
+        overallPct={summary.uptime_pct}
+        className='ml-auto'
+      />
 
       <div className='flex items-center gap-3 text-xs'>
         <span className={cn('font-medium', statusColour)}>{statusLabel}</span>

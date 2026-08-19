@@ -72,6 +72,7 @@ func TestTokenRoutePlanAdvancesGroupsWithoutResettingRetryBudget(t *testing.T) {
 	require.NotNil(t, first)
 	require.Equal(t, "base", firstGroup)
 	require.Equal(t, 0, param.GetRetry())
+	require.Equal(t, "base", common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
 
 	param.ExcludeChannel(first.Id)
 	param.SetRetry(1)
@@ -80,6 +81,7 @@ func TestTokenRoutePlanAdvancesGroupsWithoutResettingRetryBudget(t *testing.T) {
 	require.NotNil(t, second)
 	require.Equal(t, "deluxe", secondGroup)
 	require.Equal(t, 1, param.GetRetry())
+	require.Equal(t, "deluxe", common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
 }
 
 func TestTokenRoutePlanDoesNotAdvanceAfterFailureWhenRetryDisabled(t *testing.T) {

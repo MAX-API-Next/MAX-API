@@ -150,6 +150,12 @@ export function SidebarModulesSection({
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
       },
+      smart_ops: {
+        title: t('Smart Operations'),
+        description: t(
+          'Inspect read-only production performance and operational evidence.'
+        ),
+      },
     },
   }
   const formDefaults = useMemo(() => config, [config])

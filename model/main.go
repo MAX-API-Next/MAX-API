@@ -84,9 +84,12 @@ func initCol() {
 		case common.DatabaseTypePostgreSQL:
 			logGroupCol = `"group"`
 			logKeyCol = `"key"`
+		case common.DatabaseTypeMySQL, common.DatabaseTypeSQLite:
+			logGroupCol = "`group`"
+			logKeyCol = "`key`"
 		default:
-			logGroupCol = commonGroupCol
-			logKeyCol = commonKeyCol
+			logGroupCol = "`group`"
+			logKeyCol = "`key`"
 		}
 	} else {
 		// LOG_SQL_DSN 为空时，日志数据库与主数据库相同
@@ -345,6 +348,7 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&AuthFlow{},
 		&PerfMetric{},
+		&PerfMetricFlushReceipt{},
 		&SystemTask{},
 		&SystemInstance{},
 	)

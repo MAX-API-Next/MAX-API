@@ -20,11 +20,7 @@ func GetPerfMetricsSummary(c *gin.Context) {
 		}
 	}
 
-	activeGroups := lo.Keys(ratio_setting.GetGroupRatioCopy())
-	for _, route := range setting.GetAutoRoutes() {
-		activeGroups = append(activeGroups, route.Key)
-	}
-	result, err := perfmetrics.QuerySummaryAll(hours, activeGroups)
+	result, err := perfmetrics.QuerySummaryAll(hours, activePerformanceGroups())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -57,9 +53,10 @@ func GetPerfMetrics(c *gin.Context) {
 	}
 
 	result, err := perfmetrics.Query(perfmetrics.QueryParams{
-		Model: modelName,
-		Group: c.Query("group"),
-		Hours: hours,
+		Model:         modelName,
+		Group:         c.Query("group"),
+		Hours:         hours,
+		AllowedGroups: activePerformanceGroups(),
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -75,6 +72,14 @@ func GetPerfMetrics(c *gin.Context) {
 		"success": true,
 		"data":    result,
 	})
+}
+
+func activePerformanceGroups() []string {
+	groups := lo.Keys(ratio_setting.GetGroupRatioCopy())
+	for _, route := range setting.GetAutoRoutes() {
+		groups = append(groups, route.Key)
+	}
+	return groups
 }
 
 func filterActiveGroups(groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {

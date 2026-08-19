@@ -62,6 +62,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     user: true,
     setting: true,
     subscription: true,
+    smart_ops: true,
   },
 }
 
@@ -113,9 +114,26 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/users': { section: 'admin', module: 'user' },
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
+  '/smart-ops': { section: 'admin', module: 'smart_ops' },
+  '/smart-ops/production-performance': {
+    section: 'admin',
+    module: 'smart_ops',
+  },
+  '/smart-ops/channel-performance': {
+    section: 'admin',
+    module: 'smart_ops',
+  },
+  '/smart-ops/model-performance': {
+    section: 'admin',
+    module: 'smart_ops',
+  },
+  '/smart-ops/system-info': {
+    section: 'admin',
+    module: 'smart_ops',
+  },
   '/system-settings': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
-  '/system-info': { section: 'admin', module: 'setting' },
+  '/system-info': { section: 'admin', module: 'smart_ops' },
 }
 
 /**
