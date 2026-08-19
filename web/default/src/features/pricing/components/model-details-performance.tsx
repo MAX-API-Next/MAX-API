@@ -39,6 +39,7 @@ import {
 import type {
   PerformanceAggregate,
   PerformanceGroup,
+  PerformanceSeriesPoint,
 } from '@/features/performance-metrics/types'
 import { type UptimeDayPoint } from '../lib/mock-stats'
 import type { PricingModel } from '../types'
@@ -97,20 +98,11 @@ function toLatencySeriesFromAggregate(summary?: PerformanceAggregate) {
     }))
 }
 
-function toUptimeSeriesFromAggregate(
-  summary?: PerformanceAggregate
+function toUptimeSeries(
+  series: PerformanceSeriesPoint[] | undefined
 ): UptimeDayPoint[] {
-  if (!summary) return []
-  return summary.series.map((point) => ({
-    date: new Date(point.ts * 1000).toISOString(),
-    uptime_pct: Math.round(point.success_rate * 100) / 100,
-    incidents: point.success_rate < 100 ? 1 : 0,
-    outage_minutes: 0,
-  }))
-}
-
-function toGroupUptimeSeries(group: PerformanceGroup): UptimeDayPoint[] {
-  return group.series.map((point) => ({
+  if (!series) return []
+  return series.map((point) => ({
     date: new Date(point.ts * 1000).toISOString(),
     uptime_pct: Math.round(point.success_rate * 100) / 100,
     incidents: point.success_rate < 100 ? 1 : 0,
@@ -174,13 +166,13 @@ export function ModelPerformanceDetailsContent(props: {
     [aggregate]
   )
   const uptimeSeries = useMemo(
-    () => (aggregate ? toUptimeSeriesFromAggregate(aggregate) : []),
+    () => toUptimeSeries(aggregate?.series),
     [aggregate]
   )
   const uptimeByGroup = useMemo<Record<string, UptimeDayPoint[]>>(() => {
     const map: Record<string, UptimeDayPoint[]> = {}
     for (const group of groups) {
-      map[group.group] = toGroupUptimeSeries(group)
+      map[group.group] = toUptimeSeries(group.series)
     }
     return map
   }, [groups])
