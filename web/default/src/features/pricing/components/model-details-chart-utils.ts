@@ -18,7 +18,27 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { LatencyTimePoint, UptimeDayPoint } from '../lib/mock-stats'
 
-export function buildLatencyChartData(series: LatencyTimePoint[]) {
+export type LatencyChartDatum = {
+  time: string
+  group: string
+  ttft: number
+}
+
+export type UptimeChartDatum = {
+  date: string
+  uptime: number
+  incidents: number
+  outage: number
+}
+
+export type UptimeAxisDomain = {
+  min: number
+  max: number
+}
+
+export function buildLatencyChartData(
+  series: LatencyTimePoint[]
+): LatencyChartDatum[] {
   return series.map((point) => ({
     time: point.timestamp,
     group: point.group,
@@ -26,7 +46,9 @@ export function buildLatencyChartData(series: LatencyTimePoint[]) {
   }))
 }
 
-export function buildUptimeChartData(series: UptimeDayPoint[]) {
+export function buildUptimeChartData(
+  series: UptimeDayPoint[]
+): UptimeChartDatum[] {
   return series.map((point) => ({
     date: point.date,
     uptime: point.uptime_pct,
@@ -57,19 +79,19 @@ export function downsampleUptimeSeries(
   })
 }
 
-export function formatChartAxisTime(iso: string): string {
+export function formatChartAxisTime(iso: string, locale?: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleTimeString(undefined, {
+  return date.toLocaleTimeString(locale, {
     hour: '2-digit',
     minute: '2-digit',
   })
 }
 
-export function formatChartTooltipTime(iso: string): string {
+export function formatChartTooltipTime(iso: string, locale?: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString(locale, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -77,7 +99,9 @@ export function formatChartTooltipTime(iso: string): string {
   })
 }
 
-export function getUptimeAxisDomain(series: UptimeDayPoint[]) {
+export function getUptimeAxisDomain(
+  series: UptimeDayPoint[]
+): UptimeAxisDomain {
   const values = series
     .map((point) => point.uptime_pct)
     .filter((value) => Number.isFinite(value))

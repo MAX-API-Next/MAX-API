@@ -193,15 +193,27 @@ export function ModelPerformanceDetailsContent(props: {
     )
   }
 
+  const aggregateAvailable = aggregate != null
   const avgTps = aggregate?.avg_tps ?? Number.NaN
   const avgLatency = aggregate?.avg_latency_ms ?? Number.NaN
   const successRate = aggregate?.success_rate ?? Number.NaN
   const incidentCount = uptimeSeries.reduce((s, p) => s + p.incidents, 0)
-  let intent: 'default' | 'warning' | 'success' = 'warning'
-  if (successRate >= 99.9) {
-    intent = 'success'
-  } else if (successRate >= 99) {
-    intent = 'default'
+  let intent: 'default' | 'warning' | 'success' = 'default'
+  if (aggregateAvailable) {
+    if (successRate >= 99.9) {
+      intent = 'success'
+    } else if (successRate < 99) {
+      intent = 'warning'
+    }
+  }
+  let successRateHint = t('N/A')
+  if (aggregateAvailable) {
+    successRateHint =
+      incidentCount > 0
+        ? t('{{count}} incidents in the last 24 hours', {
+            count: incidentCount,
+          })
+        : t('No incidents in the last 24 hours')
   }
 
   const headerCellClass =
@@ -225,13 +237,7 @@ export function ModelPerformanceDetailsContent(props: {
           icon={HeartPulse}
           label={t('Success rate')}
           value={formatUptimePct(successRate)}
-          hint={
-            incidentCount > 0
-              ? t('{{count}} incidents in the last 24 hours', {
-                  count: incidentCount,
-                })
-              : t('No incidents in the last 24 hours')
-          }
+          hint={successRateHint}
           intent={intent}
         />
       </div>

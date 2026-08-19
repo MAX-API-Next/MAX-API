@@ -27,6 +27,7 @@ export type FilterDraft = {
 
 export const DEFAULT_PERFORMANCE_HOURS = 1
 export const MAX_PERFORMANCE_HOURS = 168
+export const MAX_PERFORMANCE_LIMIT = 200
 
 export const DEFAULT_FILTERS: FilterDraft = {
   hours: String(DEFAULT_PERFORMANCE_HOURS),
@@ -52,7 +53,7 @@ export function normalizeFilters<T extends { hours: string }>(filters: T): T {
 }
 
 export function toQuery(filters: FilterDraft): ChannelPerformanceQuery {
-  const channelId = Number.parseInt(filters.channelId, 10)
+  const channelId = Number(filters.channelId)
   return {
     hours: normalizePerformanceHours(filters.hours),
     channelId:

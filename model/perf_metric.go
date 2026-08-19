@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,8 +114,12 @@ func CommitPerfMetricBucket(receiptKey string, metric *PerfMetric) (bool, error)
 }
 
 func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) ([]PerfMetric, error) {
+	return GetPerfMetricsContext(context.Background(), modelName, group, startTs, endTs)
+}
+
+func GetPerfMetricsContext(ctx context.Context, modelName string, group string, startTs int64, endTs int64) ([]PerfMetric, error) {
 	var metrics []PerfMetric
-	query := DB.Model(&PerfMetric{}).
+	query := DB.WithContext(ctx).Model(&PerfMetric{}).
 		Where("model_name = ? AND bucket_ts >= ? AND bucket_ts <= ?", modelName, startTs, endTs)
 	if group != "" {
 		query = query.Where(map[string]interface{}{"group": group})
@@ -135,8 +140,12 @@ type PerfMetricSummary struct {
 }
 
 func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]PerfMetricSummary, error) {
+	return GetPerfMetricsSummaryAllContext(context.Background(), startTs, endTs, groups)
+}
+
+func GetPerfMetricsSummaryAllContext(ctx context.Context, startTs int64, endTs int64, groups []string) ([]PerfMetricSummary, error) {
 	var summaries []PerfMetricSummary
-	query := DB.Model(&PerfMetric{}).
+	query := DB.WithContext(ctx).Model(&PerfMetric{}).
 		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms, MIN(bucket_ts) as min_bucket_ts, MAX(bucket_ts) as max_bucket_ts").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
@@ -167,16 +176,27 @@ func DeletePerfMetricFlushReceiptsBefore(cutoffTs int64) error {
 }
 
 func GetPerfMetricFlushReceiptKeys(receiptKeys []string) (map[string]struct{}, error) {
+	return GetPerfMetricFlushReceiptKeysContext(context.Background(), receiptKeys)
+}
+
+func GetPerfMetricFlushReceiptKeysContext(ctx context.Context, receiptKeys []string) (map[string]struct{}, error) {
 	result := make(map[string]struct{}, len(receiptKeys))
 	if len(receiptKeys) == 0 {
 		return result, nil
 	}
-	var receipts []PerfMetricFlushReceipt
-	if err := DB.Select("receipt_key").Where("receipt_key IN ?", receiptKeys).Find(&receipts).Error; err != nil {
-		return nil, err
-	}
-	for _, receipt := range receipts {
-		result[receipt.ReceiptKey] = struct{}{}
+	const batchSize = 200
+	for start := 0; start < len(receiptKeys); start += batchSize {
+		end := min(start+batchSize, len(receiptKeys))
+		var receipts []PerfMetricFlushReceipt
+		if err := DB.WithContext(ctx).
+			Select("receipt_key").
+			Where("receipt_key IN ?", receiptKeys[start:end]).
+			Find(&receipts).Error; err != nil {
+			return nil, err
+		}
+		for _, receipt := range receipts {
+			result[receipt.ReceiptKey] = struct{}{}
+		}
 	}
 	return result, nil
 }

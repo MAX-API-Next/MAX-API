@@ -45,7 +45,6 @@ export type ChannelPerformanceItem = {
   latency_sample_count: number
   observed_success_rate: number | null
   avg_logged_latency_ms: number | null
-  avg_tps: number | null
   last_observed_at: number
   probe_latency_ms: number | null
   probe_test_time: number | null
@@ -130,7 +129,7 @@ export type ModelPerformanceData = {
     avg_logged_latency_ms: number | null
     last_observed_at: number
   }
-  throughput?: {
+  throughput: {
     collection_state: PerformanceCollectionState
     coverage: PerformanceCoverage
   }

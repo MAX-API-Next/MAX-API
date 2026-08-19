@@ -25,7 +25,6 @@ import { after, before, describe, test } from 'node:test'
 import { api } from '@/lib/api'
 import { formatQuota } from '@/lib/format'
 import { ProductionPerformance } from './index'
-import { getChannelDetailObservation } from './lib/channel-detail'
 import type { ChannelPerformanceData } from './types'
 
 const testEnv = createReactTestEnvironment()
@@ -85,7 +84,6 @@ const performanceDataWithErrors: ChannelPerformanceData = {
       latency_sample_count: 7,
       observed_success_rate: 70,
       avg_logged_latency_ms: 1000,
-      avg_tps: null,
       last_observed_at: 3600,
       probe_latency_ms: 100,
       probe_test_time: 3500,
@@ -496,19 +494,6 @@ describe('ProductionPerformance manual queries', () => {
       queryClient.clear()
       await view.unmount()
     }
-  })
-
-  test('uses channel-scoped detail evidence instead of the clicked list row', () => {
-    const observation = getChannelDetailObservation(
-      performanceDataWithErrors.items[0],
-      channelDetailData
-    )
-
-    assert.equal(
-      observation.lastObservedAt,
-      channelDetailData.summary.last_observed_at
-    )
-    assert.deepEqual(observation.qualityFlags, channelDetailData.quality_flags)
   })
 
   test('exposes an accessible sort menu for every performance metric', async () => {

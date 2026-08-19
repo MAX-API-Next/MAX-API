@@ -9,6 +9,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	perfmetrics "github.com/MAX-API-Next/MAX-API/pkg/perf_metrics"
 )
@@ -100,7 +101,7 @@ func (legacyModelPerformanceReader) Summary(ctx context.Context, query ModelPerf
 	if truncated {
 		rows = rows[:query.Limit]
 	}
-	throughput := queryModelPerformanceThroughput(query)
+	throughput := queryModelPerformanceThroughput(ctx, query)
 
 	return buildLegacyModelPerformanceSummary(
 		query,
@@ -237,15 +238,16 @@ func buildLegacyModelPerformanceSummary(
 	}
 }
 
-var queryModelPerformanceSummaryRange = perfmetrics.QuerySummaryAllRangeDetailed
+var queryModelPerformanceSummaryRange = perfmetrics.QuerySummaryAllRangeDetailedContext
 
-func queryModelPerformanceThroughput(query ModelPerformanceQuery) modelPerformanceThroughputSnapshot {
+func queryModelPerformanceThroughput(ctx context.Context, query ModelPerformanceQuery) modelPerformanceThroughputSnapshot {
 	groups := []string(nil)
 	if query.Group != "" {
 		groups = []string{query.Group}
 	}
-	result, err := queryModelPerformanceSummaryRange(query.StartAt, query.EndAt, groups)
+	result, err := queryModelPerformanceSummaryRange(ctx, query.StartAt, query.EndAt, groups)
 	if err != nil {
+		logger.LogError(ctx, "failed to query model performance throughput: "+err.Error())
 		return modelPerformanceThroughputSnapshot{State: perfmetrics.CollectionStateQueryFailed}
 	}
 	byModel := make(map[string]float64, len(result.Models))
@@ -265,48 +267,31 @@ func GetModelPerformance(ctx context.Context, query ModelPerformanceQuery) (Mode
 	return defaultModelPerformanceReader.Summary(ctx, query)
 }
 
-func GetModelPerformanceDetail(_ context.Context, modelName string) (perfmetrics.DetailedQueryResult, error) {
+func GetModelPerformanceDetail(ctx context.Context, modelName string) (perfmetrics.DetailedQueryResult, error) {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
 		return perfmetrics.DetailedQueryResult{}, fmt.Errorf("%w: model is required", ErrInvalidModelPerformanceQuery)
 	}
-	return perfmetrics.QueryDetailed(perfmetrics.QueryParams{
+	return perfmetrics.QueryDetailedContext(ctx, perfmetrics.QueryParams{
 		Model: modelName,
 		Hours: modelPerformanceDetailHours,
 	})
 }
 
 func normalizeModelPerformanceQuery(query ModelPerformanceQuery) (ModelPerformanceQuery, bool, error) {
-	now := time.Now().Unix()
-	rangeWasClamped := false
-	if query.EndAt <= 0 {
-		query.EndAt = now
+	normalized, rangeWasClamped, err := normalizePerformanceQuery(
+		query.StartAt,
+		query.EndAt,
+		query.Hours,
+		query.Limit,
+		ErrInvalidModelPerformanceQuery,
+	)
+	if err != nil {
+		return query, false, err
 	}
-	if query.StartAt <= 0 {
-		hours := query.Hours
-		if hours <= 0 {
-			hours = defaultChannelPerformanceHours
-		}
-		if hours > maxChannelPerformanceHours {
-			hours = maxChannelPerformanceHours
-			rangeWasClamped = true
-		}
-		query.Hours = hours
-		query.StartAt = query.EndAt - int64(hours)*int64(time.Hour/time.Second)
-	}
-	if query.EndAt <= query.StartAt {
-		return query, false, fmt.Errorf("%w: end must be greater than start", ErrInvalidModelPerformanceQuery)
-	}
-	if query.Limit <= 0 {
-		query.Limit = defaultChannelPerformanceLimit
-	}
-	if query.Limit > maxChannelPerformanceLimit {
-		query.Limit = maxChannelPerformanceLimit
-	}
-	maxWindow := int64(maxChannelPerformanceHours) * int64(time.Hour/time.Second)
-	if query.EndAt-query.StartAt > maxWindow {
-		query.StartAt = query.EndAt - maxWindow
-		rangeWasClamped = true
-	}
+	query.StartAt = normalized.StartAt
+	query.EndAt = normalized.EndAt
+	query.Hours = normalized.Hours
+	query.Limit = normalized.Limit
 	return query, rangeWasClamped, nil
 }

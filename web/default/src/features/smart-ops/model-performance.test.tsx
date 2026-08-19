@@ -37,15 +37,21 @@ import {
 } from '@/features/pricing/components/model-details-chart-utils'
 import { ModelPerformanceDetailsContent } from '@/features/pricing/components/model-details-performance'
 import { UptimeSparkline } from '@/features/pricing/components/model-details-uptime-sparkline'
-import {
-  ModelPerformance,
-  ModelPerformanceDetailGrid,
-} from './model-performance'
 import type { ModelPerformanceData } from './types'
 
 const testEnv = createReactTestEnvironment()
+let ModelPerformance: typeof import('./model-performance').ModelPerformance
+let ModelPerformanceCollectionStateAlert: typeof import('./model-performance').ModelPerformanceCollectionStateAlert
+let ModelPerformanceDetailGrid: typeof import('./model-performance').ModelPerformanceDetailGrid
 
-before(() => testEnv.setup())
+before(async () => {
+  await testEnv.setup()
+  const module = await import('./model-performance')
+  ModelPerformance = module.ModelPerformance
+  ModelPerformanceCollectionStateAlert =
+    module.ModelPerformanceCollectionStateAlert
+  ModelPerformanceDetailGrid = module.ModelPerformanceDetailGrid
+})
 
 after(() => testEnv.teardown())
 
@@ -318,6 +324,11 @@ describe('ModelPerformance manual queries', () => {
         flag: 'throughput_query_failed',
         title: 'Throughput query failed',
       },
+      {
+        state: 'partial' as const,
+        flag: 'throughput_partial',
+        title: 'Throughput data is partial',
+      },
     ]
 
     try {
@@ -406,7 +417,7 @@ describe('ModelPerformance manual queries', () => {
             data: {
               model_name: 'alpha',
               series_schema: 'test',
-              collection_state: 'available',
+              collection_state: 'query_failed',
               coverage: {
                 requested_start_at: 1,
                 requested_end_at: 3601,
@@ -482,6 +493,20 @@ describe('ModelPerformance manual queries', () => {
     } finally {
       api.get = originalGet
       queryClient.clear()
+      await view.unmount()
+    }
+  })
+
+  test('renders an explicit query-failed notice for model detail throughput', async () => {
+    const view = await testEnv.render(
+      <ModelPerformanceCollectionStateAlert collectionState='query_failed' />
+    )
+
+    try {
+      const text = view.container.textContent ?? ''
+      assert.ok(text.includes('Throughput query failed'))
+      assert.ok(text.includes('check the application database'))
+    } finally {
       await view.unmount()
     }
   })
@@ -598,6 +623,40 @@ describe('ModelPerformance manual queries', () => {
       assert.ok(detailText.includes('99.00%'))
       assert.ok(detailText.includes(formatThroughput(91.743)))
       assert.ok(!detailText.includes('50.00%'))
+    } finally {
+      await view.unmount()
+    }
+  })
+
+  test('keeps multi-group aggregate cards unavailable when summary is missing', async () => {
+    const groups: PerformanceGroup[] = [
+      {
+        group: 'small',
+        avg_ttft_ms: 1000,
+        avg_latency_ms: 1000,
+        success_rate: 0,
+        avg_tps: 10,
+        series: [],
+      },
+      {
+        group: 'large',
+        avg_ttft_ms: 50,
+        avg_latency_ms: 100,
+        success_rate: 100,
+        avg_tps: 100,
+        series: [],
+      },
+    ]
+    const view = await testEnv.render(
+      <ModelPerformanceDetailsContent groups={groups} />
+    )
+
+    try {
+      const detailText = view.container.textContent ?? ''
+      assert.ok(detailText.includes('N/A'))
+      assert.ok(!detailText.includes('No incidents in the last 24 hours'))
+      assert.ok(detailText.includes('small'))
+      assert.ok(detailText.includes('large'))
     } finally {
       await view.unmount()
     }

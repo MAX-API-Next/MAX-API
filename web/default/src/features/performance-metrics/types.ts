@@ -54,7 +54,7 @@ export type PerformanceCoverage = {
   bucket_start_at: number
   bucket_end_at: number
   bucket_seconds: number
-  granularity_state?: 'known' | 'unknown' | 'mixed'
+  granularity_state: 'known' | 'unknown' | 'mixed'
   approximate: boolean
 }
 

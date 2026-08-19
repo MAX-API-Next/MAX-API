@@ -18,10 +18,16 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { ChannelPerformanceData, ChannelPerformanceItem } from '../types'
 
+export type ChannelDetailObservation = {
+  lastObservedAt: number | null
+  qualityFlags: string[]
+  probeLatencyMs: number | null
+}
+
 export function getChannelDetailObservation(
   selected: ChannelPerformanceItem,
   detail: ChannelPerformanceData | undefined
-) {
+): ChannelDetailObservation {
   return {
     lastObservedAt: detail?.summary.last_observed_at ?? null,
     qualityFlags: detail?.quality_flags ?? [],

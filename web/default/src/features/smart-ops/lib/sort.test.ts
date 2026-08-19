@@ -48,7 +48,6 @@ function performanceItem(
     probe_test_time: null,
     quality_flags: [],
     ...values,
-    avg_tps: values.avg_tps ?? null,
   }
 }
 

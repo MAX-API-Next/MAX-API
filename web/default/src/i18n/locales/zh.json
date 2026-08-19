@@ -5361,7 +5361,7 @@
     "Production performance is not loaded automatically": "生产性能不会自动加载",
     "Select Apply filters or Refresh to query the current time range.": "请选择“应用筛选”或“刷新”，查询当前时间范围的数据。",
     "Read only": "只读",
-    "Legacy log": "日志回退",
+    "Legacy log": "旧版日志",
     "Log fallback mode": "日志回退模式",
     "This legacy view estimates outcomes from eligible Consume and Error logs. Known billing adjustments and channel probes are excluded, but it is not a complete Relay Attempt trace. Logged latency uses only non-retry samples and remains accurate only to whole seconds.": "此日志回退视图根据符合条件的 Consume 与 Error 日志估算调用结果。已排除明确的账务调整和渠道探测，但它并非完整的 Relay Attempt 链路；日志延迟仅使用非重试样本，且精度仍仅到整秒。",
     "Retry and latency data are temporarily unavailable": "重试和延迟数据暂不可用",

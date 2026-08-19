@@ -1,12 +1,10 @@
 package controller
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 )
@@ -27,20 +25,7 @@ func GetChannelPerformance(c *gin.Context) {
 
 	result, err := service.GetChannelPerformance(c.Request.Context(), query)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidChannelPerformanceQuery) {
-			status = http.StatusBadRequest
-		} else {
-			logger.LogError(c.Request.Context(), "failed to query channel performance: "+err.Error())
-		}
-		message := err.Error()
-		if status == http.StatusInternalServerError {
-			message = "failed to query channel performance"
-		}
-		c.JSON(status, gin.H{
-			"success": false,
-			"message": message,
-		})
+		respondPerformanceError(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance")
 		return
 	}
 
@@ -58,20 +43,7 @@ func GetChannelPerformanceDetail(c *gin.Context) {
 		parseIntQuery(c, "channel_id"),
 	)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidChannelPerformanceQuery) {
-			status = http.StatusBadRequest
-		} else {
-			logger.LogError(c.Request.Context(), "failed to query channel performance detail: "+err.Error())
-		}
-		message := err.Error()
-		if status == http.StatusInternalServerError {
-			message = "failed to query channel performance detail"
-		}
-		c.JSON(status, gin.H{
-			"success": false,
-			"message": message,
-		})
+		respondPerformanceError(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance detail")
 		return
 	}
 

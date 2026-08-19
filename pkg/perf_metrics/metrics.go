@@ -16,6 +16,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/perf_metrics_setting"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
 var hotBuckets sync.Map
@@ -33,6 +34,11 @@ var committedBuckets sync.Map
 var projectionGapBuckets sync.Map
 var projectionGapCount atomic.Int64
 var projectionDegradedUntil atomic.Int64
+var restoredProjectionDegraded atomic.Bool
+var projectionNodeClaimConflict atomic.Bool
+var projectionNodeClaimToken = uuid.NewString()
+
+var getPerfMetricFlushReceiptKeys = model.GetPerfMetricFlushReceiptKeysContext
 
 const (
 	redisActiveBucketIndex     = "perf:v2:active"
@@ -40,6 +46,7 @@ const (
 	redisBucketTTL             = 48 * time.Hour
 	projectionHealthInterval   = 5 * time.Second
 	projectionHealthyTTL       = 30 * time.Second
+	projectionNodeClaimTTL     = 30 * time.Second
 )
 
 var redisBucketSnapshotScript = redis.NewScript(`
@@ -67,21 +74,40 @@ redis.call('EXPIRE', KEYS[4], tonumber(ARGV[15]))
 return 1
 `)
 
+var redisNodeClaimScript = redis.NewScript(`
+local owner = redis.call('GET', KEYS[1])
+if not owner then
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2], 'NX')
+  owner = redis.call('GET', KEYS[1])
+end
+if owner == ARGV[1] then
+  redis.call('EXPIRE', KEYS[1], ARGV[2])
+  return 1
+end
+return 0
+`)
+
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
 const seriesSchema = "dbcd0a3c01b55203"
 
 func Init() {
-	if common.RedisEnabled && common.RDB != nil && currentNodeName() == "unnamed" {
-		common.SysError("performance metrics Redis recovery requires a unique stable NODE_NAME per running instance")
+	if common.RedisEnabled && common.RDB != nil {
+		if currentNodeName() == "unnamed" {
+			common.SysError("performance metrics Redis recovery requires a unique stable NODE_NAME per running instance")
+		}
+		maintainProjectionNodeClaim()
+	}
+	if err := restoreProjectionHealth(); err != nil {
+		common.SysError("failed to restore performance projection health: " + err.Error())
 	}
 	if recovered, err := recoverRedisBucketsForNode(); err != nil {
 		common.SysError("failed to recover active performance metric buckets from Redis: " + err.Error())
 	} else if recovered > 0 {
 		common.SysLog(fmt.Sprintf("recovered %d active performance metric buckets from Redis", recovered))
 	}
-	if err := restoreProjectionHealth(); err != nil {
-		common.SysError("failed to restore performance projection health: " + err.Error())
+	if err := publishProjectionHealth(); err != nil && common.RedisEnabled {
+		common.SysError("failed to publish initial performance projection health: " + err.Error())
 	}
 	go flushLoop()
 	go projectionHealthLoop()
@@ -163,7 +189,11 @@ func Record(sample Sample) {
 }
 
 func Query(params QueryParams) (QueryResult, error) {
-	result, err := QueryDetailed(params)
+	return QueryContext(context.Background(), params)
+}
+
+func QueryContext(ctx context.Context, params QueryParams) (QueryResult, error) {
+	result, err := QueryDetailedContext(ctx, params)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -171,6 +201,10 @@ func Query(params QueryParams) (QueryResult, error) {
 }
 
 func QueryDetailed(params QueryParams) (DetailedQueryResult, error) {
+	return QueryDetailedContext(context.Background(), params)
+}
+
+func QueryDetailedContext(ctx context.Context, params QueryParams) (DetailedQueryResult, error) {
 	setting := perf_metrics_setting.GetSetting()
 	bucketSeconds := perf_metrics_setting.GetBucketSeconds()
 	if params.Hours <= 0 {
@@ -184,7 +218,7 @@ func QueryDetailed(params QueryParams) (DetailedQueryResult, error) {
 
 	merged := map[bucketKey]counters{}
 	metricStartTs := bucketStartFor(startTs, bucketSeconds)
-	rows, err := model.GetPerfMetrics(params.Model, params.Group, metricStartTs, endTs)
+	rows, err := model.GetPerfMetricsContext(ctx, params.Model, params.Group, metricStartTs, endTs)
 	if err != nil {
 		return DetailedQueryResult{}, err
 	}
@@ -208,7 +242,7 @@ func QueryDetailed(params QueryParams) (DetailedQueryResult, error) {
 		})
 	}
 
-	activeState := mergeActiveBuckets(merged, activeBucketFilter{
+	activeState := mergeActiveBuckets(ctx, merged, activeBucketFilter{
 		model:         params.Model,
 		group:         params.Group,
 		allowedGroups: allowedGroupSet(params.AllowedGroups),
@@ -241,7 +275,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 // an operational client also needs the requested range, selected bucket
 // coverage, bucket size, and collection state.
 func QuerySummaryAllRange(startTs int64, endTs int64, groups []string) (SummaryAllResult, error) {
-	result, err := QuerySummaryAllRangeDetailed(startTs, endTs, groups)
+	result, err := QuerySummaryAllRangeDetailedContext(context.Background(), startTs, endTs, groups)
 	if err != nil {
 		return SummaryAllResult{}, err
 	}
@@ -249,6 +283,10 @@ func QuerySummaryAllRange(startTs int64, endTs int64, groups []string) (SummaryA
 }
 
 func QuerySummaryAllRangeDetailed(startTs int64, endTs int64, groups []string) (DetailedSummaryAllResult, error) {
+	return QuerySummaryAllRangeDetailedContext(context.Background(), startTs, endTs, groups)
+}
+
+func QuerySummaryAllRangeDetailedContext(ctx context.Context, startTs int64, endTs int64, groups []string) (DetailedSummaryAllResult, error) {
 	setting := perf_metrics_setting.GetSetting()
 	bucketSeconds := perf_metrics_setting.GetBucketSeconds()
 	if endTs <= startTs {
@@ -265,7 +303,7 @@ func QuerySummaryAllRangeDetailed(startTs int64, endTs int64, groups []string) (
 	allowedGroups := allowedGroupSet(groups)
 
 	metricStartTs := bucketStartFor(startTs, bucketSeconds)
-	rows, err := model.GetPerfMetricsSummaryAll(metricStartTs, endTs, groups)
+	rows, err := model.GetPerfMetricsSummaryAllContext(ctx, metricStartTs, endTs, groups)
 	if err != nil {
 		return DetailedSummaryAllResult{}, err
 	}
@@ -285,7 +323,7 @@ func QuerySummaryAllRangeDetailed(startTs int64, endTs int64, groups []string) (
 	}
 
 	active := map[bucketKey]counters{}
-	activeState := mergeActiveBuckets(active, activeBucketFilter{
+	activeState := mergeActiveBuckets(ctx, active, activeBucketFilter{
 		allowedGroups: allowedGroups,
 		startTs:       metricStartTs,
 		endTs:         endTs,
@@ -620,13 +658,13 @@ type activeBucketFilter struct {
 	endTs         int64
 }
 
-func mergeActiveBuckets(merged map[bucketKey]counters, filter activeBucketFilter) activeCollectionHealth {
+func mergeActiveBuckets(ctx context.Context, merged map[bucketKey]counters, filter activeBucketFilter) activeCollectionHealth {
 	if !common.RedisEnabled || common.RDB == nil {
 		mergeMemoryBuckets(merged, &hotBuckets, filter, false)
 		return activeCollectionHealthy
 	}
 
-	redisBuckets, err := loadRedisActiveBuckets(filter)
+	redisBuckets, err := loadRedisActiveBuckets(ctx, filter)
 	if err != nil {
 		mergeMemoryBuckets(merged, &hotBuckets, filter, false)
 		return activeCollectionFailed
@@ -641,7 +679,7 @@ func mergeActiveBuckets(merged map[bucketKey]counters, filter activeBucketFilter
 	if localProjectionDegraded() {
 		return activeCollectionFailed
 	}
-	degraded, err := loadProjectionHealth()
+	degraded, err := loadProjectionHealth(ctx)
 	if err != nil || degraded {
 		return activeCollectionFailed
 	}
@@ -732,8 +770,8 @@ func recordRedis(key bucketKey, value counters) bool {
 	return true
 }
 
-func loadRedisActiveBuckets(filter activeBucketFilter) (map[bucketKey]counters, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+func loadRedisActiveBuckets(parent context.Context, filter activeBucketFilter) (map[bucketKey]counters, error) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	index := redisActiveBucketIndex
 	if filter.model != "" {
@@ -748,11 +786,13 @@ func loadRedisActiveBuckets(filter activeBucketFilter) (map[bucketKey]counters, 
 		return nil, err
 	}
 	type decodedBucket struct {
-		key   bucketKey
-		value counters
+		key        bucketKey
+		value      counters
+		receiptKey string
 	}
 	decoded := make([]decodedBucket, 0, len(values))
 	receiptKeys := make([]string, 0, len(values))
+	now := time.Now().Unix()
 	for _, fields := range values {
 		key, value, ok := decodeRedisBucket(fields)
 		if !ok || !matchesActiveBucket(key, filter) {
@@ -761,17 +801,27 @@ func loadRedisActiveBuckets(filter activeBucketFilter) (map[bucketKey]counters, 
 		if _, suppressed := committedBuckets.Load(key); suppressed {
 			continue
 		}
-		decoded = append(decoded, decodedBucket{key: key, value: value})
-		receiptKeys = append(receiptKeys, perfMetricReceiptKey(key))
+		bucket := decodedBucket{key: key, value: value}
+		if key.bucketSeconds > 0 && key.bucketTs+key.bucketSeconds <= now {
+			bucket.receiptKey = perfMetricReceiptKey(key)
+			receiptKeys = append(receiptKeys, bucket.receiptKey)
+		}
+		decoded = append(decoded, bucket)
 	}
-	receipts, err := model.GetPerfMetricFlushReceiptKeys(receiptKeys)
-	if err != nil {
-		return nil, err
+	receipts := map[string]struct{}{}
+	if len(receiptKeys) > 0 {
+		var err error
+		receipts, err = getPerfMetricFlushReceiptKeys(ctx, receiptKeys)
+		if err != nil {
+			return nil, err
+		}
 	}
 	merged := make(map[bucketKey]counters, len(decoded))
 	for _, bucket := range decoded {
-		if _, committed := receipts[perfMetricReceiptKey(bucket.key)]; committed {
-			continue
+		if bucket.receiptKey != "" {
+			if _, committed := receipts[bucket.receiptKey]; committed {
+				continue
+			}
 		}
 		mergeCounters(merged, bucket.key, bucket.value)
 	}
@@ -804,6 +854,11 @@ func redisProjectionHealthKey(node string) string {
 	return fmt.Sprintf("perf:v2:health:%x", identity[:12])
 }
 
+func redisProjectionNodeClaimKey(node string) string {
+	identity := sha256.Sum256([]byte(node))
+	return fmt.Sprintf("perf:v2:node-claim:%x", identity[:12])
+}
+
 func setProjectionGap(key bucketKey, incomplete bool) {
 	if incomplete {
 		if _, loaded := projectionGapBuckets.LoadOrStore(key, struct{}{}); !loaded {
@@ -834,13 +889,56 @@ func localProjectionDegraded() bool {
 }
 
 func projectionHealthLoop() {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
 	ticker := time.NewTicker(projectionHealthInterval)
 	defer ticker.Stop()
 	for range ticker.C {
+		maintainProjectionNodeClaim()
 		if err := publishProjectionHealth(); err != nil && common.RedisEnabled {
 			common.SysError("failed to publish performance projection health: " + err.Error())
 		}
 	}
+}
+
+func maintainProjectionNodeClaim() {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	owned, err := claimProjectionNode(ctx, currentNodeName(), projectionNodeClaimToken)
+	if err != nil {
+		common.SysError("failed to refresh performance metrics NODE_NAME claim: " + err.Error())
+		return
+	}
+	if !owned {
+		if projectionNodeClaimConflict.CompareAndSwap(false, true) {
+			common.SysError(fmt.Sprintf("duplicate NODE_NAME %q detected for performance metrics; use a unique stable NODE_NAME per running instance", currentNodeName()))
+		}
+		return
+	}
+	if projectionNodeClaimConflict.CompareAndSwap(true, false) {
+		common.SysLog(fmt.Sprintf("performance metrics NODE_NAME claim recovered for %q", currentNodeName()))
+	}
+}
+
+func claimProjectionNode(ctx context.Context, node string, token string) (bool, error) {
+	if node == "" || token == "" {
+		return false, fmt.Errorf("node name and claim token are required")
+	}
+	result, err := redisNodeClaimScript.Run(
+		ctx,
+		common.RDB,
+		[]string{redisProjectionNodeClaimKey(node)},
+		token,
+		int64(projectionNodeClaimTTL/time.Second),
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func publishProjectionHealth() error {
@@ -883,6 +981,7 @@ func restoreProjectionHealth() error {
 	degradedUntil := parseRedisInt(fields["degraded_until"])
 	if fields["degraded"] == "1" && degradedUntil > time.Now().Unix() {
 		projectionDegradedUntil.Store(degradedUntil)
+		restoredProjectionDegraded.Store(true)
 	}
 	return nil
 }
@@ -891,13 +990,15 @@ func resetProjectionHealthForTest() {
 	projectionGapBuckets = sync.Map{}
 	projectionGapCount.Store(0)
 	projectionDegradedUntil.Store(0)
+	restoredProjectionDegraded.Store(false)
+	projectionNodeClaimConflict.Store(false)
 }
 
-func loadProjectionHealth() (bool, error) {
+func loadProjectionHealth(parent context.Context) (bool, error) {
 	if !common.RedisEnabled || common.RDB == nil {
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	keys, err := activeRedisKeys(ctx, redisProjectionHealthIndex)
 	if err != nil {
@@ -907,8 +1008,9 @@ func loadProjectionHealth() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	now := time.Now().Unix()
 	for _, fields := range values {
-		if fields["degraded"] == "1" {
+		if fields["degraded"] == "1" && parseRedisInt(fields["degraded_until"]) > now {
 			return true, nil
 		}
 	}
@@ -1006,6 +1108,7 @@ func recoverRedisBucketsForNode() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	restoreGapOwnership := restoredProjectionDegraded.Swap(false)
 	recovered := 0
 	for _, candidate := range candidates {
 		if _, committed := receipts[perfMetricReceiptKey(candidate.key)]; committed {
@@ -1015,9 +1118,18 @@ func recoverRedisBucketsForNode() (int, error) {
 			continue
 		}
 		bucket := &atomicBucket{}
-		bucket.addCounters(candidate.value)
+		if !bucket.addCounters(candidate.value) {
+			common.SysError(fmt.Sprintf("failed to restore performance metric bucket model=%s group=%s bucket=%d", candidate.key.model, candidate.key.group, candidate.key.bucketTs))
+			continue
+		}
 		hotBuckets.Store(candidate.key, bucket)
+		if restoreGapOwnership {
+			setProjectionGap(candidate.key, true)
+		}
 		recovered++
+	}
+	if restoreGapOwnership && recovered == 0 {
+		projectionDegradedUntil.Store(0)
 	}
 	return recovered, nil
 }

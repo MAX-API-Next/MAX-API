@@ -29,8 +29,8 @@ func TestNormalizeChannelPerformanceQueryBoundsWindowAndLimit(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, clamped)
-	require.Equal(t, maxChannelPerformanceLimit, query.Limit)
-	require.EqualValues(t, maxChannelPerformanceHours, (query.EndAt-query.StartAt)/int64(time.Hour/time.Second))
+	require.Equal(t, maxPerformanceLimit, query.Limit)
+	require.EqualValues(t, maxPerformanceHours, (query.EndAt-query.StartAt)/int64(time.Hour/time.Second))
 }
 
 func TestNormalizeChannelPerformanceQueryUsesServerOwnedHourWindow(t *testing.T) {
@@ -52,7 +52,7 @@ func TestNormalizeChannelPerformanceQueryUsesServerOwnedHourWindow(t *testing.T)
 	query, clamped, err = normalizeChannelPerformanceQuery(ChannelPerformanceQuery{Hours: 999})
 	require.NoError(t, err)
 	require.True(t, clamped)
-	require.EqualValues(t, maxChannelPerformanceHours*time.Hour/time.Second, query.EndAt-query.StartAt)
+	require.EqualValues(t, maxPerformanceHours*time.Hour/time.Second, query.EndAt-query.StartAt)
 }
 
 func TestNormalizeChannelPerformanceQueryRejectsReversedRange(t *testing.T) {
@@ -76,7 +76,7 @@ func TestGetChannelPerformanceDetailUsesFixedChannelWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 17, reader.query.ChannelID)
 	require.Equal(t, channelPerformanceDetailHours, reader.query.Hours)
-	require.Equal(t, maxChannelPerformanceLimit, reader.query.Limit)
+	require.Equal(t, maxPerformanceLimit, reader.query.Limit)
 	require.Equal(t, channelPerformanceDetailHours, result.TimeRange.Hours)
 }
 

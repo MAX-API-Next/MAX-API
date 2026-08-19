@@ -1,11 +1,9 @@
 package controller
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
-	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 )
@@ -25,20 +23,7 @@ func GetModelPerformance(c *gin.Context) {
 
 	result, err := service.GetModelPerformance(c.Request.Context(), query)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidModelPerformanceQuery) {
-			status = http.StatusBadRequest
-		} else {
-			logger.LogError(c.Request.Context(), "failed to query model performance: "+err.Error())
-		}
-		message := err.Error()
-		if status == http.StatusInternalServerError {
-			message = "failed to query model performance"
-		}
-		c.JSON(status, gin.H{
-			"success": false,
-			"message": message,
-		})
+		respondPerformanceError(c, err, service.ErrInvalidModelPerformanceQuery, "failed to query model performance")
 		return
 	}
 
@@ -57,20 +42,7 @@ func GetModelPerformanceDetail(c *gin.Context) {
 		strings.TrimSpace(c.Query("model")),
 	)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidModelPerformanceQuery) {
-			status = http.StatusBadRequest
-		} else {
-			logger.LogError(c.Request.Context(), "failed to query model performance detail: "+err.Error())
-		}
-		message := err.Error()
-		if status == http.StatusInternalServerError {
-			message = "failed to query model performance detail"
-		}
-		c.JSON(status, gin.H{
-			"success": false,
-			"message": message,
-		})
+		respondPerformanceError(c, err, service.ErrInvalidModelPerformanceQuery, "failed to query model performance detail")
 		return
 	}
 

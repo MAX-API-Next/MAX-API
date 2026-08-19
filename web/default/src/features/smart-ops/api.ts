@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { api } from '@/lib/api'
+import { MAX_PERFORMANCE_LIMIT } from './lib/filters'
 import type {
   ChannelPerformanceData,
   ChannelPerformanceQuery,
@@ -36,7 +37,7 @@ export async function getChannelPerformance(
     {
       params: {
         hours: query.hours,
-        limit: 200,
+        limit: MAX_PERFORMANCE_LIMIT,
         channel_id: query.channelId,
         model: query.model || undefined,
         group: query.group || undefined,
@@ -78,7 +79,7 @@ export async function getModelPerformance(
     {
       params: {
         hours: query.hours,
-        limit: 200,
+        limit: MAX_PERFORMANCE_LIMIT,
         model: query.model || undefined,
         group: query.group || undefined,
       },

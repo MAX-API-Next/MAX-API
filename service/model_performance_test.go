@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestNormalizeModelPerformanceQueryUsesOneHourDefaultAndClampsWindow(t *test
 	query, clamped, err = normalizeModelPerformanceQuery(ModelPerformanceQuery{Hours: 999})
 	require.NoError(t, err)
 	require.True(t, clamped)
-	require.EqualValues(t, maxChannelPerformanceHours*time.Hour/time.Second, query.EndAt-query.StartAt)
+	require.EqualValues(t, maxPerformanceHours*time.Hour/time.Second, query.EndAt-query.StartAt)
 }
 
 func TestNormalizeModelPerformanceQueryRejectsReversedRange(t *testing.T) {
@@ -162,14 +163,14 @@ func TestBuildLegacyModelPerformanceSummaryDistinguishesThroughputStates(t *test
 
 func TestQueryModelPerformanceThroughputMarksQueryFailure(t *testing.T) {
 	originalQuery := queryModelPerformanceSummaryRange
-	queryModelPerformanceSummaryRange = func(int64, int64, []string) (perfmetrics.DetailedSummaryAllResult, error) {
+	queryModelPerformanceSummaryRange = func(context.Context, int64, int64, []string) (perfmetrics.DetailedSummaryAllResult, error) {
 		return perfmetrics.DetailedSummaryAllResult{}, errors.New("database unavailable")
 	}
 	t.Cleanup(func() {
 		queryModelPerformanceSummaryRange = originalQuery
 	})
 
-	snapshot := queryModelPerformanceThroughput(ModelPerformanceQuery{StartAt: 1, EndAt: 3_601})
+	snapshot := queryModelPerformanceThroughput(context.Background(), ModelPerformanceQuery{StartAt: 1, EndAt: 3_601})
 
 	require.Equal(t, perfmetrics.CollectionStateQueryFailed, snapshot.State)
 	require.Empty(t, snapshot.ByModel)

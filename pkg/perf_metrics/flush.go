@@ -138,7 +138,7 @@ func deleteRedisBucket(key bucketKey) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	redisKey := redisBucketKey(key)
-	if err := common.RDB.HSet(ctx, redisKey, "flushed", 1).Err(); err != nil {
+	if err := markRedisBucketFlushed(ctx, redisKey); err != nil {
 		return err
 	}
 	pipe := common.RDB.TxPipeline()
@@ -146,6 +146,14 @@ func deleteRedisBucket(key bucketKey) error {
 	pipe.ZRem(ctx, redisNodeBucketIndex(key.node), redisKey)
 	pipe.ZRem(ctx, redisModelBucketIndex(key.model), redisKey)
 	pipe.Del(ctx, redisKey)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func markRedisBucketFlushed(ctx context.Context, redisKey string) error {
+	pipe := common.RDB.TxPipeline()
+	pipe.HSet(ctx, redisKey, "flushed", 1)
+	pipe.Expire(ctx, redisKey, redisBucketTTL)
 	_, err := pipe.Exec(ctx)
 	return err
 }

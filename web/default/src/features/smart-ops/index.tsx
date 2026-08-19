@@ -142,6 +142,14 @@ export function ProductionPerformance() {
     () => new Intl.NumberFormat(i18n.language),
     [i18n.language]
   )
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+      }),
+    [i18n.language]
+  )
 
   const performanceQuery = useMutation({
     mutationKey: ['smart-ops', 'channel-performance'],
@@ -178,10 +186,7 @@ export function ProductionPerformance() {
 
   const formatTimestamp = (timestamp: number | null | undefined) => {
     if (!timestamp) return '—'
-    return new Intl.DateTimeFormat(i18n.language, {
-      dateStyle: 'medium',
-      timeStyle: 'medium',
-    }).format(new Date(timestamp * 1000))
+    return dateFormatter.format(new Date(timestamp * 1000))
   }
 
   const qualityLabel = (flag: string) => {
@@ -205,6 +210,33 @@ export function ProductionPerformance() {
     }
     return labels[flag] ?? flag
   }
+
+  let summarySuccessRate = '—'
+  if (data) {
+    summarySuccessRate =
+      data.summary.observed_success_rate == null
+        ? t('N/A')
+        : formatUptimePct(data.summary.observed_success_rate)
+  }
+  const showPerformanceError =
+    !performanceQuery.isPending && performanceQuery.isError
+  const showPerformanceIdle =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    performanceQuery.isIdle
+  const showPerformanceEmpty =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    !performanceQuery.isIdle &&
+    !data?.items.length
+  const showPerformanceTable =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    !performanceQuery.isIdle &&
+    Boolean(data?.items.length)
+  const showDetailError = !detailQuery.isPending && detailQuery.isError
+  const showDetailData =
+    !detailQuery.isPending && !detailQuery.isError && detailQuery.data != null
 
   return (
     <SectionPageLayout>
@@ -399,13 +431,7 @@ export function ProductionPerformance() {
             <MetricCard
               icon={HeartPulse}
               label={t('Estimated success rate')}
-              value={
-                data
-                  ? data.summary.observed_success_rate == null
-                    ? t('N/A')
-                    : formatUptimePct(data.summary.observed_success_rate)
-                  : '—'
-              }
+              value={summarySuccessRate}
               loading={performanceQuery.isPending}
             />
             <MetricCard
@@ -416,9 +442,8 @@ export function ProductionPerformance() {
             />
           </div>
 
-          {performanceQuery.isPending ? (
-            <PerformanceTableSkeleton />
-          ) : performanceQuery.isError ? (
+          {performanceQuery.isPending && <PerformanceTableSkeleton />}
+          {showPerformanceError && (
             <ErrorState
               title={t('Unable to load channel performance')}
               description={t(
@@ -426,7 +451,8 @@ export function ProductionPerformance() {
               )}
               onRetry={() => performanceQuery.mutate(queryParams)}
             />
-          ) : performanceQuery.isIdle ? (
+          )}
+          {showPerformanceIdle && (
             <Empty className='min-h-72 border'>
               <EmptyHeader>
                 <EmptyMedia variant='icon'>
@@ -442,7 +468,8 @@ export function ProductionPerformance() {
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-          ) : !data?.items.length ? (
+          )}
+          {showPerformanceEmpty && (
             <Empty className='min-h-72 border'>
               <EmptyHeader>
                 <EmptyMedia variant='icon'>
@@ -456,7 +483,8 @@ export function ProductionPerformance() {
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-          ) : (
+          )}
+          {showPerformanceTable && data && (
             <div className='bg-card overflow-hidden rounded-xl border'>
               <div className='flex flex-wrap items-center gap-2 border-b px-3 py-2.5'>
                 <span className='text-sm font-semibold'>
@@ -529,8 +557,6 @@ export function ProductionPerformance() {
                   {sortedItems.map((item) => (
                     <TableRow
                       key={`${item.channel_id}:${item.model_name}:${item.effective_group}`}
-                      className='cursor-pointer'
-                      onClick={() => openDetails(item)}
                     >
                       <TableCell>
                         <div className='flex min-w-48 items-center gap-2'>
@@ -586,10 +612,7 @@ export function ProductionPerformance() {
                           variant='ghost'
                           size='xs'
                           aria-label={`${t('View details')}: ${item.channel_name} · ${item.model_name}`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            openDetails(item)
-                          }}
+                          onClick={() => openDetails(item)}
                         >
                           {t('Details')}
                         </Button>
@@ -685,9 +708,10 @@ export function ProductionPerformance() {
                       )}
                     </AlertDescription>
                   </Alert>
-                  {detailQuery.isPending ? (
+                  {detailQuery.isPending && (
                     <ChannelPerformanceDetailSkeleton />
-                  ) : detailQuery.isError ? (
+                  )}
+                  {showDetailError && (
                     <ErrorState
                       className='min-h-64 border'
                       title={t('Unable to load channel performance details')}
@@ -696,13 +720,14 @@ export function ProductionPerformance() {
                       )}
                       onRetry={() => detailQuery.mutate(selected.channel_id)}
                     />
-                  ) : detailQuery.data ? (
+                  )}
+                  {showDetailData && detailQuery.data && (
                     <ChannelPerformanceDetail
                       data={detailQuery.data}
                       numberFormatter={numberFormatter}
                       formatTimestamp={formatTimestamp}
                     />
-                  ) : null}
+                  )}
                 </div>
               )}
             </SheetContent>
@@ -711,6 +736,28 @@ export function ProductionPerformance() {
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
+}
+
+type SortDirection = 'asc' | 'desc' | null
+
+function getAriaSort(
+  direction: SortDirection
+): 'ascending' | 'descending' | 'none' {
+  if (direction === 'asc') return 'ascending'
+  if (direction === 'desc') return 'descending'
+  return 'none'
+}
+
+function SortDirectionIcon(props: {
+  direction: SortDirection
+}): React.ReactElement {
+  if (props.direction === 'desc') {
+    return <ArrowDown data-icon='inline-end' aria-hidden='true' />
+  }
+  if (props.direction === 'asc') {
+    return <ArrowUp data-icon='inline-end' aria-hidden='true' />
+  }
+  return <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
 }
 
 function SortablePerformanceHead({
@@ -726,12 +773,7 @@ function SortablePerformanceHead({
 }) {
   const { t } = useTranslation()
   const direction = sortState?.key === sortKey ? sortState.direction : null
-  const ariaSort =
-    direction === 'asc'
-      ? 'ascending'
-      : direction === 'desc'
-        ? 'descending'
-        : 'none'
+  const ariaSort = getAriaSort(direction)
 
   return (
     <TableHead className='text-right' aria-sort={ariaSort}>
@@ -747,13 +789,7 @@ function SortablePerformanceHead({
             }
           >
             <span>{title}</span>
-            {direction === 'desc' ? (
-              <ArrowDown data-icon='inline-end' aria-hidden='true' />
-            ) : direction === 'asc' ? (
-              <ArrowUp data-icon='inline-end' aria-hidden='true' />
-            ) : (
-              <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
-            )}
+            <SortDirectionIcon direction={direction} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align='end'>
             <DropdownMenuGroup>

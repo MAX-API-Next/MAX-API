@@ -57,4 +57,31 @@ describe('production performance filters', () => {
       String(MAX_PERFORMANCE_HOURS)
     )
   })
+
+  test('accepts only positive whole channel IDs', () => {
+    for (const channelId of ['', '0', '-3', '12abc']) {
+      assert.equal(
+        toQuery({ ...DEFAULT_FILTERS, channelId }).channelId,
+        undefined
+      )
+    }
+    assert.equal(toQuery({ ...DEFAULT_FILTERS, channelId: '12' }).channelId, 12)
+  })
+
+  test('trims optional text filters and drops whitespace-only values', () => {
+    assert.deepEqual(
+      toQuery({
+        ...DEFAULT_FILTERS,
+        model: '  alpha  ',
+        group: '  prod  ',
+      }),
+      {
+        hours: DEFAULT_PERFORMANCE_HOURS,
+        channelId: undefined,
+        model: 'alpha',
+        group: 'prod',
+      }
+    )
+    assert.equal(toQuery({ ...DEFAULT_FILTERS, model: '   ' }).model, undefined)
+  })
 })

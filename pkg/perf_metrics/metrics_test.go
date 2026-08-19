@@ -19,12 +19,18 @@ import (
 
 func TestQuerySummaryAllRangeReportsBucketCoverageAndGroupFilter(t *testing.T) {
 	previousDB := model.DB
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
+	common.RDB = nil
+	common.RedisEnabled = false
 	hotBuckets = sync.Map{}
 	t.Cleanup(func() {
 		model.DB = previousDB
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
 		hotBuckets = sync.Map{}
 	})
 	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricFlushReceipt{}))
@@ -334,12 +340,18 @@ func TestQueryDetailedMarksRedisFailureAsQueryFailedWithoutSamples(t *testing.T)
 
 func TestQuerySummaryAllRangeDetailedMarksEmptyWindowAsNoSamples(t *testing.T) {
 	previousDB := model.DB
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
+	common.RDB = nil
+	common.RedisEnabled = false
 	hotBuckets = sync.Map{}
 	t.Cleanup(func() {
 		model.DB = previousDB
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
 		hotBuckets = sync.Map{}
 	})
 	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricFlushReceipt{}))
@@ -652,7 +664,7 @@ func TestModelQueryUsesModelScopedRedisIndex(t *testing.T) {
 	require.True(t, recordRedis(betaKey, counters{requestCount: 1, successCount: 1}))
 	require.NoError(t, redisClient.Del(context.Background(), redisActiveBucketIndex).Err())
 
-	values, err := loadRedisActiveBuckets(activeBucketFilter{
+	values, err := loadRedisActiveBuckets(context.Background(), activeBucketFilter{
 		model:   "alpha",
 		startTs: alphaKey.bucketTs,
 		endTs:   now,
@@ -660,6 +672,184 @@ func TestModelQueryUsesModelScopedRedisIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 	require.Contains(t, values, alphaKey)
+}
+
+func TestLoadRedisActiveBucketsSkipsReceiptLookupForOpenBuckets(t *testing.T) {
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousLookup := getPerfMetricFlushReceiptKeys
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	lookupCalls := 0
+	getPerfMetricFlushReceiptKeys = func(context.Context, []string) (map[string]struct{}, error) {
+		lookupCalls++
+		return map[string]struct{}{}, nil
+	}
+	t.Cleanup(func() {
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		getPerfMetricFlushReceiptKeys = previousLookup
+		_ = redisClient.Close()
+	})
+
+	now := time.Now().Unix()
+	key := bucketKey{
+		model:         "alpha",
+		group:         "prod",
+		node:          "node-a",
+		bucketTs:      bucketStartFor(now, 3_600),
+		bucketSeconds: 3_600,
+	}
+	require.True(t, recordRedis(key, counters{requestCount: 1, successCount: 1}))
+
+	values, err := loadRedisActiveBuckets(context.Background(), activeBucketFilter{
+		model:   "alpha",
+		startTs: key.bucketTs,
+		endTs:   now,
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, values, key)
+	require.Zero(t, lookupCalls)
+}
+
+func TestClaimProjectionNodeDetectsDuplicateOwnerAndRefreshesTTL(t *testing.T) {
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		_ = redisClient.Close()
+	})
+
+	ctx := context.Background()
+	owned, err := claimProjectionNode(ctx, "shared-node", "process-a")
+	require.NoError(t, err)
+	require.True(t, owned)
+	owned, err = claimProjectionNode(ctx, "shared-node", "process-b")
+	require.NoError(t, err)
+	require.False(t, owned)
+	owned, err = claimProjectionNode(ctx, "shared-node", "process-a")
+	require.NoError(t, err)
+	require.True(t, owned)
+	require.Greater(t, redisClient.TTL(ctx, redisProjectionNodeClaimKey("shared-node")).Val(), time.Duration(0))
+}
+
+func TestMarkRedisBucketFlushedPreservesExpiryWhenHashIsMissing(t *testing.T) {
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		_ = redisClient.Close()
+	})
+
+	ctx := context.Background()
+	require.NoError(t, markRedisBucketFlushed(ctx, "perf:v2:bucket:missing"))
+	require.Equal(t, "1", redisClient.HGet(ctx, "perf:v2:bucket:missing", "flushed").Val())
+	require.Greater(t, redisClient.TTL(ctx, "perf:v2:bucket:missing").Val(), time.Duration(0))
+}
+
+func TestRecoveredProjectionHealthClearsWhenNoBucketCanOwnTheGap(t *testing.T) {
+	previousDB := model.DB
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousNodeName := common.NodeName
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricFlushReceipt{}))
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	model.DB = db
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	common.NodeName = "restored-health-node"
+	resetProjectionHealthForTest()
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		common.NodeName = previousNodeName
+		resetProjectionHealthForTest()
+		_ = redisClient.Close()
+	})
+
+	ctx := context.Background()
+	require.NoError(t, redisClient.HSet(ctx, redisProjectionHealthKey(common.NodeName), map[string]interface{}{
+		"degraded":       1,
+		"degraded_until": time.Now().Add(time.Hour).Unix(),
+	}).Err())
+	require.NoError(t, restoreProjectionHealth())
+	require.True(t, localProjectionDegraded())
+
+	recovered, err := recoverRedisBucketsForNode()
+
+	require.NoError(t, err)
+	require.Zero(t, recovered)
+	require.False(t, localProjectionDegraded())
+}
+
+func TestLoadProjectionHealthIgnoresExpiredDegradedMarker(t *testing.T) {
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		_ = redisClient.Close()
+	})
+
+	ctx := context.Background()
+	healthKey := redisProjectionHealthKey("stale-node")
+	require.NoError(t, redisClient.HSet(ctx, healthKey, map[string]interface{}{
+		"degraded":       1,
+		"degraded_until": time.Now().Add(-time.Minute).Unix(),
+	}).Err())
+	require.NoError(t, redisClient.ZAdd(ctx, redisProjectionHealthIndex, &redis.Z{
+		Score:  float64(time.Now().Add(time.Hour).Unix()),
+		Member: healthKey,
+	}).Err())
+
+	degraded, err := loadProjectionHealth(ctx)
+
+	require.NoError(t, err)
+	require.False(t, degraded)
+}
+
+func TestQueryDetailedContextHonorsRequestCancellation(t *testing.T) {
+	previousDB := model.DB
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricFlushReceipt{}))
+	model.DB = db
+	common.RDB = nil
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = QueryDetailedContext(ctx, QueryParams{Model: "alpha", Hours: 1})
+
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestBuildCoverageClampsKnownBucketEndToRequestedEnd(t *testing.T) {

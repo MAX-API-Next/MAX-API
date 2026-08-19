@@ -54,7 +54,7 @@ export function LatencyTrendChart(props: {
   series: LatencyTimePoint[]
   className?: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
   const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
 
@@ -80,7 +80,8 @@ export function LatencyTrendChart(props: {
       tooltip: {
         mark: {
           title: {
-            value: (d: { time: string }) => formatChartTooltipTime(d.time),
+            value: (d: { time: string }) =>
+              formatChartTooltipTime(d.time, i18n.language),
           },
           content: [
             {
@@ -95,7 +96,7 @@ export function LatencyTrendChart(props: {
           orient: 'bottom',
           label: {
             formatMethod: (val: number | string) =>
-              formatChartAxisTime(String(val)),
+              formatChartAxisTime(String(val), i18n.language),
             style: { fill: textColor, fontSize: 10 },
           },
           tick: { visible: false },
@@ -113,7 +114,7 @@ export function LatencyTrendChart(props: {
         },
       ],
     }
-  }, [gridColor, props.series, t, textColor])
+  }, [gridColor, i18n.language, props.series, t, textColor])
 
   if (props.series.length === 0) {
     return (
@@ -153,7 +154,7 @@ export function UptimeTrendChart(props: {
   series: UptimeDayPoint[]
   className?: string
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
   const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
 
@@ -188,7 +189,8 @@ export function UptimeTrendChart(props: {
       tooltip: {
         mark: {
           title: {
-            value: (d: { date: string }) => formatChartTooltipTime(d.date),
+            value: (d: { date: string }) =>
+              formatChartTooltipTime(d.date, i18n.language),
           },
           content: [
             {
@@ -211,7 +213,7 @@ export function UptimeTrendChart(props: {
           orient: 'bottom',
           label: {
             formatMethod: (val: number | string) =>
-              formatChartAxisTime(String(val)),
+              formatChartAxisTime(String(val), i18n.language),
             style: { fill: textColor, fontSize: 10 },
             autoLimit: true,
           },
@@ -232,7 +234,7 @@ export function UptimeTrendChart(props: {
         },
       ],
     }
-  }, [gridColor, props.series, t, textColor])
+  }, [gridColor, i18n.language, props.series, t, textColor])
 
   if (props.series.length === 0) {
     return (

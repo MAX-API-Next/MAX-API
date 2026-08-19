@@ -35,7 +35,7 @@ export type ChannelPerformanceSortState = {
 function sortableMetric(
   item: ChannelPerformanceItem,
   key: ChannelPerformanceSortKey
-) {
+): number | null {
   const value = item[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -43,7 +43,7 @@ function sortableMetric(
 export function sortChannelPerformanceItems(
   items: readonly ChannelPerformanceItem[],
   sortState: ChannelPerformanceSortState
-) {
+): readonly ChannelPerformanceItem[] {
   if (!sortState) return items
 
   return items

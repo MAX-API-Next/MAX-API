@@ -77,6 +77,26 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
   const size = props.size ?? 'md'
   const showOverall = props.showOverall ?? true
 
+  const calculatedOverall = useMemo(
+    () =>
+      props.series.length > 0
+        ? props.series.reduce((sum, point) => sum + point.uptime_pct, 0) /
+          props.series.length
+        : 0,
+    [props.series]
+  )
+  const overall = useMemo(
+    () =>
+      typeof props.overallPct === 'number' && Number.isFinite(props.overallPct)
+        ? props.overallPct
+        : calculatedOverall,
+    [calculatedOverall, props.overallPct]
+  )
+  const displaySeries = useMemo(
+    () => downsampleUptimeSeries(props.series, size === 'sm' ? 32 : 48),
+    [props.series, size]
+  )
+
   if (props.series.length === 0) {
     return (
       <span className={cn('text-muted-foreground text-xs', props.className)}>
@@ -84,16 +104,6 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
       </span>
     )
   }
-
-  const calculatedOverall =
-    props.series.reduce((s, p) => s + p.uptime_pct, 0) / props.series.length
-  const overall = Number.isFinite(props.overallPct)
-    ? (props.overallPct as number)
-    : calculatedOverall
-  const displaySeries = downsampleUptimeSeries(
-    props.series,
-    size === 'sm' ? 32 : 48
-  )
 
   const containerHeight = size === 'sm' ? 'h-3.5' : 'h-5'
   const barWidth = size === 'sm' ? 'w-[3px]' : 'w-1'

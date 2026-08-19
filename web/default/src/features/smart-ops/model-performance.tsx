@@ -82,7 +82,10 @@ import {
   formatThroughput,
   formatUptimePct,
 } from '@/features/performance-metrics/lib/format'
-import type { PerformanceCoverage } from '@/features/performance-metrics/types'
+import type {
+  PerformanceCollectionState,
+  PerformanceCoverage,
+} from '@/features/performance-metrics/types'
 import { ModelPerformanceDetailsContent } from '@/features/pricing/components/model-details-performance'
 import { getModelPerformance, getModelPerformanceDetail } from './api'
 import {
@@ -107,6 +110,7 @@ const priorityQualityFlags = [
   'retry_metrics_unavailable',
   'throughput_collection_disabled',
   'throughput_no_samples',
+  'throughput_partial',
   'throughput_query_failed',
   'throughput_window_approximate',
   'time_range_clamped',
@@ -126,6 +130,72 @@ function getVisibleQualityFlags(flags: string[]) {
   ]
 }
 
+export function ModelPerformanceCollectionStateAlert({
+  collectionState,
+}: {
+  collectionState: PerformanceCollectionState | undefined
+}) {
+  const { t } = useTranslation()
+
+  if (collectionState === 'collection_disabled') {
+    return (
+      <Alert className='border-warning/40 bg-warning/5'>
+        <AlertTriangle className='text-warning' aria-hidden='true' />
+        <AlertTitle>
+          {t('Performance metrics collection is disabled')}
+        </AlertTitle>
+        <AlertDescription>
+          {t(
+            'New performance samples are not being collected. Existing performance data may be incomplete.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (collectionState === 'no_samples') {
+    return (
+      <Alert className='border-warning/40 bg-warning/5'>
+        <AlertTriangle className='text-warning' aria-hidden='true' />
+        <AlertTitle>{t('No throughput samples')}</AlertTitle>
+        <AlertDescription>
+          {t('No performance samples were recorded for this time range.')}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (collectionState === 'partial') {
+    return (
+      <Alert className='border-warning/40 bg-warning/5'>
+        <AlertTriangle className='text-warning' aria-hidden='true' />
+        <AlertTitle>{t('Throughput data is partial')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (collectionState === 'query_failed') {
+    return (
+      <Alert className='border-destructive/40 bg-destructive/5'>
+        <AlertTriangle className='text-destructive' aria-hidden='true' />
+        <AlertTitle>{t('Throughput query failed')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Performance metrics could not be queried. Log-based model results remain available; check the application database.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  return null
+}
+
 export function ModelPerformance() {
   const { t, i18n } = useTranslation()
   const [draft, setDraft] = useState<ModelFilterDraft>(DEFAULT_MODEL_FILTERS)
@@ -137,6 +207,14 @@ export function ModelPerformance() {
   const queryParams = useMemo(() => toModelQuery(filters), [filters])
   const numberFormatter = useMemo(
     () => new Intl.NumberFormat(i18n.language),
+    [i18n.language]
+  )
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(i18n.language, {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+      }),
     [i18n.language]
   )
 
@@ -183,10 +261,7 @@ export function ModelPerformance() {
 
   const formatTimestamp = (timestamp: number | null | undefined) => {
     if (!timestamp) return '—'
-    return new Intl.DateTimeFormat(i18n.language, {
-      dateStyle: 'medium',
-      timeStyle: 'medium',
-    }).format(new Date(timestamp * 1000))
+    return dateFormatter.format(new Date(timestamp * 1000))
   }
 
   const qualityLabel = (flag: string) => {
@@ -208,11 +283,39 @@ export function ModelPerformance() {
         'Performance metrics collection is disabled'
       ),
       throughput_no_samples: t('No throughput samples'),
+      throughput_partial: t('Throughput data is partial'),
       throughput_query_failed: t('Throughput query failed'),
       throughput_window_approximate: t('Bucket-level estimate'),
     }
     return labels[flag] ?? flag
   }
+
+  let summarySuccessRate = '—'
+  if (data) {
+    summarySuccessRate =
+      data.summary.observed_success_rate == null
+        ? t('N/A')
+        : formatUptimePct(data.summary.observed_success_rate)
+  }
+  const showPerformanceError =
+    !performanceQuery.isPending && performanceQuery.isError
+  const showPerformanceIdle =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    performanceQuery.isIdle
+  const showPerformanceEmpty =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    !performanceQuery.isIdle &&
+    !data?.items.length
+  const showPerformanceTable =
+    !performanceQuery.isPending &&
+    !performanceQuery.isError &&
+    !performanceQuery.isIdle &&
+    Boolean(data?.items.length)
+  const showDetailError = !detailQuery.isPending && detailQuery.isError
+  const showDetailData =
+    !detailQuery.isPending && !detailQuery.isError && detailQuery.data != null
 
   return (
     <SectionPageLayout>
@@ -456,13 +559,7 @@ export function ModelPerformance() {
             <MetricCard
               icon={HeartPulse}
               label={t('Estimated success rate')}
-              value={
-                data
-                  ? data.summary.observed_success_rate == null
-                    ? t('N/A')
-                    : formatUptimePct(data.summary.observed_success_rate)
-                  : '—'
-              }
+              value={summarySuccessRate}
               loading={performanceQuery.isPending}
             />
             <MetricCard
@@ -473,9 +570,8 @@ export function ModelPerformance() {
             />
           </div>
 
-          {performanceQuery.isPending ? (
-            <PerformanceTableSkeleton />
-          ) : performanceQuery.isError ? (
+          {performanceQuery.isPending && <PerformanceTableSkeleton />}
+          {showPerformanceError && (
             <ErrorState
               title={t('Unable to load model performance')}
               description={t(
@@ -483,7 +579,8 @@ export function ModelPerformance() {
               )}
               onRetry={() => performanceQuery.mutate(queryParams)}
             />
-          ) : performanceQuery.isIdle ? (
+          )}
+          {showPerformanceIdle && (
             <Empty className='min-h-72 border'>
               <EmptyHeader>
                 <EmptyMedia variant='icon'>
@@ -499,7 +596,8 @@ export function ModelPerformance() {
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-          ) : !data?.items.length ? (
+          )}
+          {showPerformanceEmpty && (
             <Empty className='min-h-72 border'>
               <EmptyHeader>
                 <EmptyMedia variant='icon'>
@@ -513,7 +611,8 @@ export function ModelPerformance() {
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-          ) : (
+          )}
+          {showPerformanceTable && data && (
             <div className='bg-card overflow-hidden rounded-xl border'>
               <div className='flex flex-wrap items-center gap-2 border-b px-3 py-2.5'>
                 <span className='text-sm font-semibold'>
@@ -593,11 +692,7 @@ export function ModelPerformance() {
                 </TableHeader>
                 <TableBody>
                   {sortedItems.map((item) => (
-                    <TableRow
-                      key={item.model_name}
-                      className='cursor-pointer'
-                      onClick={() => openDetails(item)}
-                    >
+                    <TableRow key={item.model_name}>
                       <TableCell className='max-w-72 truncate font-mono text-xs'>
                         {item.model_name}
                       </TableCell>
@@ -637,10 +732,7 @@ export function ModelPerformance() {
                           variant='ghost'
                           size='xs'
                           aria-label={`${t('View details')}: ${item.model_name}`}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            openDetails(item)
-                          }}
+                          onClick={() => openDetails(item)}
                         >
                           {t('Details')}
                         </Button>
@@ -759,9 +851,8 @@ export function ModelPerformance() {
                       )}
                     </AlertDescription>
                   </Alert>
-                  {detailQuery.isPending ? (
-                    <ModelPerformanceDetailSkeleton />
-                  ) : detailQuery.isError ? (
+                  {detailQuery.isPending && <ModelPerformanceDetailSkeleton />}
+                  {showDetailError && (
                     <ErrorState
                       className='min-h-64 border'
                       title={t('Unable to load model performance details')}
@@ -770,55 +861,12 @@ export function ModelPerformance() {
                       )}
                       onRetry={() => detailQuery.mutate(selected.model_name)}
                     />
-                  ) : detailQuery.data ? (
+                  )}
+                  {showDetailData && detailQuery.data && (
                     <>
-                      {detailQuery.data.collection_state ===
-                        'collection_disabled' && (
-                        <Alert className='border-warning/40 bg-warning/5'>
-                          <AlertTriangle
-                            className='text-warning'
-                            aria-hidden='true'
-                          />
-                          <AlertTitle>
-                            {t('Performance metrics collection is disabled')}
-                          </AlertTitle>
-                          <AlertDescription>
-                            {t(
-                              'New performance samples are not being collected. Existing performance data may be incomplete.'
-                            )}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      {detailQuery.data.collection_state === 'no_samples' && (
-                        <Alert className='border-warning/40 bg-warning/5'>
-                          <AlertTriangle
-                            className='text-warning'
-                            aria-hidden='true'
-                          />
-                          <AlertTitle>{t('No throughput samples')}</AlertTitle>
-                          <AlertDescription>
-                            {t(
-                              'No performance samples were recorded for this time range.'
-                            )}
-                          </AlertDescription>
-                        </Alert>
-                      )}
-                      {detailQuery.data.collection_state === 'partial' && (
-                        <Alert className='border-warning/40 bg-warning/5'>
-                          <AlertTriangle
-                            className='text-warning'
-                            aria-hidden='true'
-                          />
-                          <AlertTitle>
-                            {t('Throughput data is partial')}
-                          </AlertTitle>
-                          <AlertDescription>
-                            {t(
-                              'Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.'
-                            )}
-                          </AlertDescription>
-                        </Alert>
-                      )}
+                      <ModelPerformanceCollectionStateAlert
+                        collectionState={detailQuery.data.collection_state}
+                      />
                       {detailQuery.data.coverage?.approximate && (
                         <Alert>
                           <Clock3 aria-hidden='true' />
@@ -837,7 +885,7 @@ export function ModelPerformance() {
                         summary={detailQuery.data.summary}
                       />
                     </>
-                  ) : null}
+                  )}
                 </div>
               )}
             </SheetContent>
@@ -846,6 +894,28 @@ export function ModelPerformance() {
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
+}
+
+type SortDirection = 'asc' | 'desc' | null
+
+function getAriaSort(
+  direction: SortDirection
+): 'ascending' | 'descending' | 'none' {
+  if (direction === 'asc') return 'ascending'
+  if (direction === 'desc') return 'descending'
+  return 'none'
+}
+
+function SortDirectionIcon(props: {
+  direction: SortDirection
+}): React.ReactElement {
+  if (props.direction === 'desc') {
+    return <ArrowDown data-icon='inline-end' aria-hidden='true' />
+  }
+  if (props.direction === 'asc') {
+    return <ArrowUp data-icon='inline-end' aria-hidden='true' />
+  }
+  return <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
 }
 
 function SortableModelPerformanceHead({
@@ -861,12 +931,7 @@ function SortableModelPerformanceHead({
 }) {
   const { t } = useTranslation()
   const direction = sortState?.key === sortKey ? sortState.direction : null
-  const ariaSort =
-    direction === 'asc'
-      ? 'ascending'
-      : direction === 'desc'
-        ? 'descending'
-        : 'none'
+  const ariaSort = getAriaSort(direction)
 
   return (
     <TableHead
@@ -885,13 +950,7 @@ function SortableModelPerformanceHead({
             }
           >
             <span>{title}</span>
-            {direction === 'desc' ? (
-              <ArrowDown data-icon='inline-end' aria-hidden='true' />
-            ) : direction === 'asc' ? (
-              <ArrowUp data-icon='inline-end' aria-hidden='true' />
-            ) : (
-              <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
-            )}
+            <SortDirectionIcon direction={direction} />
           </DropdownMenuTrigger>
           <DropdownMenuContent align='end'>
             <DropdownMenuGroup>

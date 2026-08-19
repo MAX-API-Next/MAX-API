@@ -14,11 +14,7 @@ import (
 var ErrInvalidChannelPerformanceQuery = errors.New("invalid channel performance query")
 
 const (
-	defaultChannelPerformanceHours = 1
-	channelPerformanceDetailHours  = 24
-	maxChannelPerformanceHours     = 168
-	defaultChannelPerformanceLimit = 100
-	maxChannelPerformanceLimit     = 200
+	channelPerformanceDetailHours = 24
 )
 
 type ChannelPerformanceQuery = model.ChannelPerformanceQuery
@@ -266,42 +262,25 @@ func GetChannelPerformanceDetail(ctx context.Context, channelID int) (ChannelPer
 	return defaultChannelPerformanceReader.Summary(ctx, ChannelPerformanceQuery{
 		ChannelID: channelID,
 		Hours:     channelPerformanceDetailHours,
-		Limit:     maxChannelPerformanceLimit,
+		Limit:     maxPerformanceLimit,
 	})
 }
 
 func normalizeChannelPerformanceQuery(query ChannelPerformanceQuery) (ChannelPerformanceQuery, bool, error) {
-	now := time.Now().Unix()
-	rangeWasClamped := false
-	if query.EndAt <= 0 {
-		query.EndAt = now
+	normalized, rangeWasClamped, err := normalizePerformanceQuery(
+		query.StartAt,
+		query.EndAt,
+		query.Hours,
+		query.Limit,
+		ErrInvalidChannelPerformanceQuery,
+	)
+	if err != nil {
+		return query, false, err
 	}
-	if query.StartAt <= 0 {
-		hours := query.Hours
-		if hours <= 0 {
-			hours = defaultChannelPerformanceHours
-		}
-		if hours > maxChannelPerformanceHours {
-			hours = maxChannelPerformanceHours
-			rangeWasClamped = true
-		}
-		query.Hours = hours
-		query.StartAt = query.EndAt - int64(hours)*int64(time.Hour/time.Second)
-	}
-	if query.EndAt <= query.StartAt {
-		return query, false, fmt.Errorf("%w: end must be greater than start", ErrInvalidChannelPerformanceQuery)
-	}
-	if query.Limit <= 0 {
-		query.Limit = defaultChannelPerformanceLimit
-	}
-	if query.Limit > maxChannelPerformanceLimit {
-		query.Limit = maxChannelPerformanceLimit
-	}
-	maxWindow := int64(maxChannelPerformanceHours) * int64(time.Hour/time.Second)
-	if query.EndAt-query.StartAt > maxWindow {
-		query.StartAt = query.EndAt - maxWindow
-		rangeWasClamped = true
-	}
+	query.StartAt = normalized.StartAt
+	query.EndAt = normalized.EndAt
+	query.Hours = normalized.Hours
+	query.Limit = normalized.Limit
 	return query, rangeWasClamped, nil
 }
 

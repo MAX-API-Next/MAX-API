@@ -29,7 +29,7 @@ export function sortModelPerformanceItems(
   items: readonly ModelPerformanceItem[],
   sortState: ModelPerformanceSortState,
   locale?: string
-) {
+): readonly ModelPerformanceItem[] {
   if (!sortState) return items
 
   return items
