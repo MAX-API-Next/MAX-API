@@ -16,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 	waffo "github.com/waffo-com/waffo-go"
 	"github.com/waffo-com/waffo-go/config"
@@ -101,6 +102,25 @@ func getWaffoPayMoney(amount float64, group string) float64 {
 		}
 	}
 	return amount * setting.WaffoUnitPrice * topupGroupRatio * discount
+}
+
+func normalizeWaffoTopUpAmount(amount int64) int64 {
+	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
+		return amount
+	}
+
+	normalized := decimal.NewFromInt(amount).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		IntPart()
+	if normalized < 1 {
+		return 1
+	}
+	return normalized
+}
+
+func waffoCreditedQuota(amount int64) decimal.Decimal {
+	return decimal.NewFromInt(normalizeWaffoTopUpAmount(amount)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 }
 
 type WaffoPayRequest struct {
@@ -196,7 +216,14 @@ func RequestWaffoPay(c *gin.Context) {
 	}
 	// resolvedPayMethodType/Name 为空时，Waffo 自动选择支付方式
 
-	group, _ := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(id, true)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+	if rejectInvalidTopUpQuota(c, id, waffoCreditedQuota(req.Amount)) {
+		return
+	}
 	payMoney := getWaffoPayMoney(float64(req.Amount), group)
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
@@ -208,13 +235,7 @@ func RequestWaffoPay(c *gin.Context) {
 	paymentRequestId := merchantOrderId
 
 	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
-	amount := req.Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = int64(float64(req.Amount) / common.QuotaPerUnit)
-		if amount < 1 {
-			amount = 1
-		}
-	}
+	amount := normalizeWaffoTopUpAmount(req.Amount)
 
 	// 创建本地订单
 	topUp := &model.TopUp{

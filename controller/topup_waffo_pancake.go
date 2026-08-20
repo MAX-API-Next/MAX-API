@@ -40,6 +40,11 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
+	creditedQuota := decimal.NewFromInt(normalizeWaffoPancakeTopUpAmount(req.Amount)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	if rejectInvalidTopUpQuota(c, id, creditedQuota) {
+		return
+	}
 
 	payMoney := getWaffoPancakePayMoney(req.Amount, group)
 	if payMoney <= 0.01 {
@@ -371,6 +376,11 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	group, err := model.GetUserGroup(id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+	creditedQuota := decimal.NewFromInt(normalizeWaffoPancakeTopUpAmount(req.Amount)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	if rejectInvalidTopUpQuota(c, id, creditedQuota) {
 		return
 	}
 

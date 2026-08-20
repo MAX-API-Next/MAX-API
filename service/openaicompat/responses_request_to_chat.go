@@ -65,6 +65,14 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		EnableThinking:       req.EnableThinking,
 		ThinkingBudget:       req.ThinkingBudget,
 	}
+	out.FrequencyPenalty, err = responsesRawFloat(req.FrequencyPenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid frequency_penalty: %w", err)
+	}
+	out.PresencePenalty, err = responsesRawFloat(req.PresencePenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
+	}
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}
@@ -472,6 +480,17 @@ func responsesJSONString(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+func responsesRawFloat(raw json.RawMessage) (*float64, error) {
+	if !rawJSONPresent(raw) {
+		return nil, nil
+	}
+	var value float64
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 func rawJSONPresent(raw json.RawMessage) bool {

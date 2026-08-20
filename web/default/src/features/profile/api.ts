@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
+import { selfCustomOAuthUnbindPath, type CustomOAuthBinding } from '@/lib/oauth'
 import { getTurnstileHeaders } from '@/features/auth/lib/turnstile-request'
 import type {
   ApiResponse,
@@ -144,12 +145,6 @@ export async function bindWeChat(code: string): Promise<ApiResponse> {
 // Custom OAuth Binding APIs
 // ============================================================================
 
-export interface CustomOAuthBinding {
-  provider_id: string
-  provider_name: string
-  external_id?: string
-}
-
 /**
  * Get current user's custom OAuth bindings
  */
@@ -164,9 +159,9 @@ export async function getSelfOAuthBindings(): Promise<
  * Unbind a custom OAuth provider for current user
  */
 export async function unbindCustomOAuth(
-  providerId: string
+  providerId: number
 ): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/oauth/bindings/${providerId}`)
+  const res = await api.delete(selfCustomOAuthUnbindPath(providerId))
   return res.data
 }
 

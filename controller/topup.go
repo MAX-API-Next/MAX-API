@@ -187,6 +187,30 @@ func getMinTopup() int64 {
 	return int64(minTopup)
 }
 
+func topUpCreditedQuota(amount int64) decimal.Decimal {
+	quota := decimal.NewFromInt(amount)
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		return decimal.NewFromInt(quota.Div(quotaPerUnit).IntPart()).Mul(quotaPerUnit)
+	}
+	return quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+}
+
+func rejectInvalidTopUpQuota(c *gin.Context, userId int, quota decimal.Decimal) bool {
+	credited, err := common.QuotaFromDecimalStrict(quota)
+	if err == nil && credited <= 0 {
+		err = model.ErrInvalidTopUpQuota
+	}
+	if err == nil {
+		err = model.ValidateTopUpQuotaCapacity(userId, int64(credited))
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		return true
+	}
+	return false
+}
+
 func RequestEpay(c *gin.Context) {
 	var req EpayRequest
 	err := c.ShouldBindJSON(&req)
@@ -203,6 +227,9 @@ func RequestEpay(c *gin.Context) {
 	group, err := model.GetUserGroup(id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+	if rejectInvalidTopUpQuota(c, id, topUpCreditedQuota(req.Amount)) {
 		return
 	}
 	payMoney := getPayMoney(req.Amount, group)

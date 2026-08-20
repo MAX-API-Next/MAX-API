@@ -428,6 +428,51 @@ func TestRequestOpenAI2ClaudeMessage_ReturnsErrorForMalformedToolArguments(t *te
 	require.Contains(t, err.Error(), "tool call function arguments is not valid JSON object")
 }
 
+func TestRequestOpenAI2ClaudeMessageNormalizesParameterlessToolsAndOmitsEmptyTools(t *testing.T) {
+	parameterless, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Tools: []dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "ping"}}},
+	})
+	require.NoError(t, err)
+	parameterlessTools := parameterless.GetTools()
+	require.Len(t, parameterlessTools, 1)
+	tool, ok := parameterlessTools[0].(*dto.Tool)
+	require.True(t, ok)
+	require.Equal(t, "object", tool.InputSchema["type"])
+	require.Equal(t, map[string]any{}, tool.InputSchema["properties"])
+
+	customSchema := map[string]any{"type": 123, "properties": map[string]any{"value": map[string]any{"type": "string"}}, "additionalProperties": false}
+	converted, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Tools: []dto.ToolCallRequest{{Type: "function", Function: dto.FunctionRequest{Name: "custom", Parameters: customSchema}}},
+	})
+	require.NoError(t, err)
+	convertedTools := converted.GetTools()
+	require.Len(t, convertedTools, 1)
+	customTool := convertedTools[0].(*dto.Tool)
+	require.Equal(t, 123, customTool.InputSchema["type"])
+	require.Equal(t, false, customTool.InputSchema["additionalProperties"])
+
+	unsupported, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Tools: []dto.ToolCallRequest{{
+			Type: "custom",
+			Function: dto.FunctionRequest{
+				Name:       "must-not-be-converted",
+				Parameters: map[string]any{"type": "object"},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.Empty(t, unsupported.GetTools())
+
+	empty, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{Model: "claude-3-5-sonnet"})
+	require.NoError(t, err)
+	payload, err := common.Marshal(empty)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), `"tools"`)
+}
+
 func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",

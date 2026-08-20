@@ -16,15 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-// Re-export all library functions
-export * from './channel-actions'
-export * from './advanced-custom'
-export * from './channel-capabilities'
-export * from './channel-config-rules'
-export * from './channel-config-validation'
-export * from './channel-editor-state'
-export * from './channel-form'
-export * from './channel-type-config'
-export * from './channel-utils'
-export * from './multi-key-utils'
-export * from './model-mapping-validation'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { fetchDialogExistingModels } from './channel-editor-state'
+
+describe('channel fetch-model dialog state', () => {
+  test('uses the current unsaved form models in edit mode', () => {
+    const currentModels = ['saved-model', 'unsaved-model']
+    const existingModels = fetchDialogExistingModels(currentModels)
+
+    assert.deepEqual(existingModels, currentModels)
+    assert.notEqual(existingModels, currentModels)
+  })
+})

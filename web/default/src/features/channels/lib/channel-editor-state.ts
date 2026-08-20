@@ -16,15 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-// Re-export all library functions
-export * from './channel-actions'
-export * from './advanced-custom'
-export * from './channel-capabilities'
-export * from './channel-config-rules'
-export * from './channel-config-validation'
-export * from './channel-editor-state'
-export * from './channel-form'
-export * from './channel-type-config'
-export * from './channel-utils'
-export * from './multi-key-utils'
-export * from './model-mapping-validation'
+
+export function fetchDialogExistingModels(
+  currentModels: readonly string[]
+): string[] {
+  return [...currentModels]
+}

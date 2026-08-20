@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,6 +333,164 @@ func TestRechargeCreemRejectsZeroQuotaBeforeCompletingOrder(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "creem-zero-quota"))
 	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 610))
+}
+
+func TestRechargeCreemRejectsQuotaAboveWalletLimitWithoutCompletingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 617, common.MaxQuota-2)
+	topUp := &TopUp{
+		UserId:          617,
+		Amount:          2,
+		Money:           9.99,
+		TradeNo:         "creem-wallet-limit",
+		PaymentMethod:   PaymentProviderCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := RechargeCreem("creem-wallet-limit", "", "", "127.0.0.1")
+	require.Error(t, err)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "creem-wallet-limit"))
+	assert.EqualValues(t, common.MaxQuota-2, getUserQuotaForPaymentGuardTest(t, 617))
+}
+
+func TestRechargeCreemAllowsExactWalletBoundary(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 618, common.MaxQuota-2)
+	topUp := &TopUp{
+		UserId:          618,
+		Amount:          1,
+		Money:           9.99,
+		TradeNo:         "creem-wallet-boundary",
+		PaymentMethod:   PaymentProviderCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	require.NoError(t, RechargeCreem("creem-wallet-boundary", "", "", "127.0.0.1"))
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-wallet-boundary"))
+	assert.EqualValues(t, common.MaxQuota-1, getUserQuotaForPaymentGuardTest(t, 618))
+}
+
+func TestCreditTopUpQuotaRejectsInvalidQuotaAndMissingUser(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 619, 10)
+
+	for _, creditedQuota := range []int64{0, -1, int64(common.MaxQuota)} {
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			return creditTopUpQuota(tx, 619, creditedQuota, nil, nil)
+		})
+		require.ErrorIs(t, err, ErrInvalidTopUpQuota)
+	}
+	require.EqualValues(t, 10, getUserQuotaForPaymentGuardTest(t, 619))
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return creditTopUpQuota(tx, 999999, 1, nil, nil)
+	})
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestRechargeCreemDuplicateCallbackCreditsExactlyOnce(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 620, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-duplicate", 620, PaymentProviderCreem)
+
+	require.NoError(t, RechargeCreem("creem-duplicate", "", "", "127.0.0.1"))
+	require.Error(t, RechargeCreem("creem-duplicate", "", "", "127.0.0.1"))
+
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-duplicate"))
+	assert.EqualValues(t, 2, getUserQuotaForPaymentGuardTest(t, 620))
+}
+
+func TestConcurrentDistinctTopUpsCannotExceedWalletLimit(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 621, common.MaxQuota-3)
+	insertTopUpForPaymentGuardTest(t, "creem-concurrent-a", 621, PaymentProviderCreem)
+	insertTopUpForPaymentGuardTest(t, "creem-concurrent-b", 621, PaymentProviderCreem)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, tradeNo := range []string{"creem-concurrent-a", "creem-concurrent-b"} {
+		wg.Add(1)
+		go func(tradeNo string) {
+			defer wg.Done()
+			errs <- RechargeCreem(tradeNo, "", "", "127.0.0.1")
+		}(tradeNo)
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, failures)
+	assert.EqualValues(t, common.MaxQuota-1, getUserQuotaForPaymentGuardTest(t, 621))
+
+	statuses := []string{
+		getTopUpStatusForPaymentGuardTest(t, "creem-concurrent-a"),
+		getTopUpStatusForPaymentGuardTest(t, "creem-concurrent-b"),
+	}
+	assert.ElementsMatch(t, []string{common.TopUpStatusSuccess, common.TopUpStatusPending}, statuses)
+}
+
+func TestRechargeCreemPersistsCacheInvalidationAfterCommittedCredit(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 622, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-cache-outbox", 622, PaymentProviderCreem)
+
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheUserForRetryTest(t, client, User{
+		Id: 622, Username: "payment_guard_user", Group: "default", Quota: 0, Status: common.UserStatusEnabled,
+	})
+
+	require.NoError(t, RechargeCreem("creem-cache-outbox", "", "", "127.0.0.1"))
+	var pending int64
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "622").
+		Count(&pending).Error)
+	require.EqualValues(t, 1, pending)
+
+	processCacheInvalidationTasks()
+	requireCacheKeyDeletedEventually(t, client, getUserCacheKey(622))
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "622").
+		Count(&pending).Error)
+	assert.Zero(t, pending)
+}
+
+func TestRejectedTopUpDoesNotStageCacheInvalidation(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 623, common.MaxQuota-2)
+	insertTopUpForPaymentGuardTest(t, "creem-no-cache-task", 623, PaymentProviderCreem)
+
+	client, _ := useFailingCacheMutationRedis(t, 100)
+	cacheUserForRetryTest(t, client, User{
+		Id: 623, Username: "payment_guard_user", Group: "default", Quota: common.MaxQuota - 2, Status: common.UserStatusEnabled,
+	})
+
+	require.Error(t, RechargeCreem("creem-no-cache-task", "", "", "127.0.0.1"))
+	var pending int64
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "623").
+		Count(&pending).Error)
+	assert.Zero(t, pending)
+	exists, err := client.Exists(context.Background(), getUserCacheKey(623)).Result()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, exists)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "creem-no-cache-task"))
 }
 
 func TestRechargeRejectsPaidAmountMismatchBeforeCompletingOrder(t *testing.T) {
