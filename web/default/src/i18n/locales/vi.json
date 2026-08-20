@@ -5402,7 +5402,7 @@
     "Known non-attempt logs excluded": "Đã loại trừ nhật ký không phải lần thử đã biết",
     "Time range was limited": "Khoảng thời gian đã bị giới hạn",
     "Results truncated": "Kết quả bị cắt bớt",
-    "Retry marker backfill pending": "Đang điền bù dấu thử lại",
+    "Retry marker backfill pending": "Đang chờ điền bù dấu thử lại",
     "Retry metrics unavailable": "Chỉ số thử lại không khả dụng",
     "Consumption logs disabled": "Nhật ký tiêu thụ đã tắt",
     "Error logs disabled": "Nhật ký lỗi đã tắt",
@@ -5411,7 +5411,7 @@
     "Recorded error logs": "Nhật ký lỗi đã ghi nhận",
     "The displayed error count includes only recorded logs and may be incomplete. Estimated success rate is unavailable while error log collection is disabled.": "Số lỗi hiển thị chỉ bao gồm các nhật ký đã ghi nhận và có thể chưa đầy đủ. Tỷ lệ thành công ước tính không khả dụng khi tính năng thu thập nhật ký lỗi đang tắt.",
     "Channel metadata missing": "Thiếu siêu dữ liệu kênh",
-    "Probe unavailable": "Không có dữ liệu kiểm tra",
+    "Probe unavailable": "Tính năng thăm dò không khả dụng",
     "Channel performance": "Hiệu năng kênh",
     "Channel performance details": "Chi tiết hiệu năng kênh",
     "Channel performance is not loaded automatically": "Hiệu năng kênh không được tải tự động",
@@ -5420,7 +5420,7 @@
     "Model performance": "Hiệu năng mô hình",
     "Observed model log events": "Sự kiện nhật ký mô hình được quan sát",
     "Unable to load model performance": "Không thể tải hiệu năng mô hình",
-    "Model performance is not loaded automatically": "Hiệu năng mô hình không tự động tải",
+    "Model performance is not loaded automatically": "Hiệu năng mô hình không được tải tự động",
     "No recorded model logs": "Không có nhật ký mô hình đã ghi",
     "Model performance details": "Chi tiết hiệu năng mô hình",
     "This legacy view aggregates estimated model outcomes from eligible Consume and Error logs. It is not a complete Relay Attempt trace, and logged latency remains accurate only to whole seconds.": "Chế độ xem cũ này tổng hợp kết quả mô hình ước tính từ các nhật ký Consume và Error hợp lệ. Đây không phải là dấu vết Relay Attempt đầy đủ và độ trễ trong nhật ký chỉ chính xác đến giây.",
@@ -5446,6 +5446,6 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "Không có nhật ký sản xuất hợp lệ nào được ghi cho kênh này trong 24 giờ qua.",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "Bảng chi tiết bị giới hạn ở {{count}} dòng. Phần tóm tắt vẫn bao phủ tất cả nhật ký hợp lệ phù hợp.",
     "Throughput data is partial": "Dữ liệu thông lượng không đầy đủ",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Các mẫu hiệu suất đã lưu và cục bộ được hiển thị, nhưng không thể đọc các bucket hoạt động dùng chung. Thông lượng đa nút gần đây có thể không đầy đủ."
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Các mẫu hiệu năng đã lưu và cục bộ được hiển thị, nhưng không thể đọc các bucket hoạt động dùng chung. Thông lượng đa nút gần đây có thể không đầy đủ."
   }
 }

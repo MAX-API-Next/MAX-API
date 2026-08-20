@@ -5402,7 +5402,7 @@
     "Known non-attempt logs excluded": "Journaux connus hors tentative exclus",
     "Time range was limited": "Période limitée",
     "Results truncated": "Résultats tronqués",
-    "Retry marker backfill pending": "Remplissage des marqueurs de nouvelle tentative en cours",
+    "Retry marker backfill pending": "Remplissage des marqueurs de nouvelle tentative en attente",
     "Retry metrics unavailable": "Métriques de nouvelle tentative indisponibles",
     "Consumption logs disabled": "Journaux de consommation désactivés",
     "Error logs disabled": "Journaux d'erreur désactivés",

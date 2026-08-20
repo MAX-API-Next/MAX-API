@@ -109,6 +109,9 @@ func TestStripeSessionCompletedReturnsRetryableErrorWhenOrderLookupFails(t *test
 
 func TestStripeSessionCompletedAcknowledgesPaidOrderNeedingReconciliation(t *testing.T) {
 	db := setupStripeWebhookTestDB(t)
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
 	user := model.User{
 		Id:       8104,
 		Username: "stripe-reconciliation-user",

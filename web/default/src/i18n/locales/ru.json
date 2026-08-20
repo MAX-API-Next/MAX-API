@@ -5402,7 +5402,7 @@
     "Known non-attempt logs excluded": "Известные записи, не являющиеся попытками, исключены",
     "Time range was limited": "Период ограничен",
     "Results truncated": "Результаты усечены",
-    "Retry marker backfill pending": "Идет обратное заполнение маркеров повторов",
+    "Retry marker backfill pending": "Ожидается обратное заполнение маркеров повторов",
     "Retry metrics unavailable": "Метрики повторов недоступны",
     "Consumption logs disabled": "Журналы потребления отключены",
     "Error logs disabled": "Журналы ошибок отключены",
