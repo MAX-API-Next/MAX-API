@@ -57,6 +57,7 @@ import {
   getStatusConfig,
   getPaymentMethodName,
   formatTimestamp,
+  isCompletableTopupStatus,
 } from '../../lib/billing'
 
 interface BillingHistoryDialogProps {
@@ -221,7 +222,7 @@ export function BillingHistoryDialog({
                             </div>
                           </div>
                           <StatusBadge
-                            label={statusConfig.label}
+                            label={t(statusConfig.label)}
                             variant={statusConfig.variant}
                             showDot
                             copyable={false}
@@ -261,7 +262,7 @@ export function BillingHistoryDialog({
                         </div>
 
                         {/* Admin Actions */}
-                        {isAdmin && record.status === 'pending' && (
+                        {isAdmin && isCompletableTopupStatus(record.status) && (
                           <div className='mt-4 flex justify-end'>
                             <Button
                               size='sm'

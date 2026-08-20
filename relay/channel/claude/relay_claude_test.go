@@ -473,6 +473,28 @@ func TestRequestOpenAI2ClaudeMessageNormalizesParameterlessToolsAndOmitsEmptyToo
 	require.NotContains(t, string(payload), `"tools"`)
 }
 
+func TestRequestOpenAI2ClaudeMessageOmitsForcedToolChoiceWhenAllToolsAreUnsupported(t *testing.T) {
+	converted, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model: "claude-3-5-sonnet",
+		Tools: []dto.ToolCallRequest{{
+			Type: "custom",
+			Function: dto.FunctionRequest{
+				Name:       "unsupported-tool",
+				Parameters: map[string]any{"type": "object"},
+			},
+		}},
+		ToolChoice: "required",
+	})
+	require.NoError(t, err)
+	require.Empty(t, converted.GetTools())
+	require.Nil(t, converted.ToolChoice)
+
+	payload, err := common.Marshal(converted)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), `"tools"`)
+	require.NotContains(t, string(payload), `"tool_choice"`)
+}
+
 func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
 		Model:       "claude-opus-4-8-high",

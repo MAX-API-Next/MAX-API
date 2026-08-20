@@ -242,7 +242,7 @@ func stripePaymentValidationFromEvent(event stripe.Event, allowDiscount bool) (m
 	return model.PaymentValidationFromMinorUnits(amountMinor, event.GetObjectValue("currency"), "", allowDiscount), nil
 }
 
-func isStripeOrderAlreadyCompleted(referenceId string) bool {
+func isStripeOrderTerminallyHandled(referenceId string) bool {
 	if order := model.GetSubscriptionOrderByTradeNo(referenceId); order != nil &&
 		order.PaymentProvider == model.PaymentProviderStripe &&
 		order.Status == common.TopUpStatusSuccess {
@@ -251,7 +251,7 @@ func isStripeOrderAlreadyCompleted(referenceId string) bool {
 	topUp, err := model.GetTopUpByTradeNoWithError(referenceId)
 	return err == nil &&
 		topUp.PaymentProvider == model.PaymentProviderStripe &&
-		topUp.Status == common.TopUpStatusSuccess
+		(topUp.Status == common.TopUpStatusSuccess || topUp.Status == common.TopUpStatusPaidReconciliation)
 }
 
 // sessionAsyncPaymentFailed marks orders as failed when delayed payment methods
@@ -304,7 +304,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	defer UnlockOrder(referenceId)
 	validation, err := stripePaymentValidationFromEvent(event, setting.StripePromotionCodesEnabled)
 	if err != nil {
-		if isStripeOrderAlreadyCompleted(referenceId) {
+		if isStripeOrderTerminallyHandled(referenceId) {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 订单已完成，确认缺少金额字段的重放事件 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
 			return nil
 		}
@@ -353,6 +353,10 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	topUpValidation := validation
 	topUpValidation.ExpectedCurrency = "USD"
 	if err := model.Recharge(referenceId, customerId, callerIp, topUpValidation); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(ctx, fmt.Sprintf("Stripe 已付款充值订单等待人工对账 trade_no=%s client_ip=%s", referenceId, callerIp))
+			return nil
+		}
 		latest, latestErr := model.GetTopUpByTradeNoWithError(referenceId)
 		if latestErr == nil && latest.Status == common.TopUpStatusSuccess {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值订单已由并发回调完成 trade_no=%s client_ip=%s", referenceId, callerIp))

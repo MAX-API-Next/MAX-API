@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -205,7 +206,15 @@ func rejectInvalidTopUpQuota(c *gin.Context, userId int, quota decimal.Decimal) 
 		err = model.ValidateTopUpQuotaCapacity(userId, int64(credited))
 	}
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		logger.LogError(c.Request.Context(), fmt.Sprintf("充值额度校验失败 user_id=%d error=%q", userId, err.Error()))
+		message := "充值额度校验失败，请稍后重试"
+		switch {
+		case errors.Is(err, model.ErrInvalidTopUpQuota):
+			message = "充值额度无效"
+		case errors.Is(err, model.ErrTopUpQuotaLimitExceeded):
+			message = "充值后额度将超过账户上限"
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": message})
 		return true
 	}
 	return false
@@ -409,6 +418,11 @@ func EpayNotify(c *gin.Context) {
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
 	if err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(),
 		model.PaymentValidationFromMajorString(verifyInfo.Money, "", "", false)); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 已付款充值订单等待人工对账 trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
+			_, _ = c.Writer.Write([]byte("success"))
+			return
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 充值处理失败 trade_no=%s callback_type=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), err.Error()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return

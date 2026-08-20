@@ -57,6 +57,8 @@ func completedStripeEvent(tradeNo string) stripe.Event {
 			"customer":            "cus_test",
 			"status":              "complete",
 			"payment_status":      "paid",
+			"amount_total":        "100",
+			"currency":            "usd",
 		}},
 	}
 }
@@ -103,4 +105,35 @@ func TestStripeSessionCompletedReturnsRetryableErrorWhenOrderLookupFails(t *test
 
 	err = sessionCompleted(context.Background(), completedStripeEvent("stripe-database-unavailable"), "127.0.0.1")
 	require.Error(t, err)
+}
+
+func TestStripeSessionCompletedAcknowledgesPaidOrderNeedingReconciliation(t *testing.T) {
+	db := setupStripeWebhookTestDB(t)
+	user := model.User{
+		Id:       8104,
+		Username: "stripe-reconciliation-user",
+		Status:   common.UserStatusEnabled,
+		Quota:    int64(common.MaxQuota - 2),
+	}
+	require.NoError(t, db.Create(&user).Error)
+	topUp := model.TopUp{
+		Id:              8104,
+		UserId:          user.Id,
+		Money:           1,
+		TradeNo:         "stripe-paid-reconciliation",
+		PaymentMethod:   model.PaymentMethodStripe,
+		PaymentProvider: model.PaymentProviderStripe,
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, db.Create(&topUp).Error)
+
+	require.NoError(t, sessionCompleted(context.Background(), completedStripeEvent(topUp.TradeNo), "127.0.0.1"))
+	require.NoError(t, sessionCompleted(context.Background(), completedStripeEvent(topUp.TradeNo), "127.0.0.1"))
+
+	var stored model.TopUp
+	require.NoError(t, db.First(&stored, topUp.Id).Error)
+	require.Equal(t, common.TopUpStatusPaidReconciliation, stored.Status)
+	var storedUser model.User
+	require.NoError(t, db.First(&storedUser, user.Id).Error)
+	require.EqualValues(t, common.MaxQuota-2, storedUser.Quota)
 }

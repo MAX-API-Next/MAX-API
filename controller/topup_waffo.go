@@ -430,6 +430,11 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 
 	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP(),
 		model.PaymentValidationFromMajorString(getWaffoPaidAmount(result), result.OrderCurrency, getWaffoCurrency(), false)); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 已付款充值订单等待人工对账 trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
+			sendWaffoWebhookResponse(c, wh, true, "")
+			return
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 充值处理失败 trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return

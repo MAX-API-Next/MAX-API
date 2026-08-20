@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -540,6 +541,11 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	if err := model.RechargeWaffoPancake(tradeNo,
 		model.PaymentValidationFromMajorString(event.Data.Amount, event.Data.Currency, "USD", false)); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 已付款充值订单等待人工对账 trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
+			c.String(http.StatusOK, "OK")
+			return
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值处理失败 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 		c.String(http.StatusInternalServerError, "retry")
 		return
