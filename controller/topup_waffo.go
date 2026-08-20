@@ -83,25 +83,34 @@ func formatWaffoAmount(amount float64, currency string) string {
 	return fmt.Sprintf("%.2f", amount)
 }
 
-// getWaffoPayMoney converts the user-facing amount to USD for Waffo payment.
-// Waffo only accepts USD, so this function handles the conversion from different
-// display types (USD/CNY/TOKENS) to the actual USD amount to charge.
-func getWaffoPayMoney(amount float64, group string) float64 {
-	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
-	}
+type waffoTopUpQuote struct {
+	amount        int64
+	creditedQuota decimal.Decimal
+	payMoney      float64
+}
+
+// buildWaffoTopUpQuote derives the persisted amount, credited quota, and
+// payment price from one normalized value so settlement cannot credit more
+// than the external order was priced for.
+func buildWaffoTopUpQuote(requestedAmount int64, group string) waffoTopUpQuote {
+	amount := normalizeWaffoTopUpAmount(requestedAmount)
+	creditedQuota := decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
+	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(requestedAmount)]; ok {
 		if ds > 0 {
 			discount = ds
 		}
 	}
-	return amount * setting.WaffoUnitPrice * topupGroupRatio * discount
+	payMoney := decimal.NewFromInt(amount).
+		Mul(decimal.NewFromFloat(setting.WaffoUnitPrice)).
+		Mul(decimal.NewFromFloat(topupGroupRatio)).
+		Mul(decimal.NewFromFloat(discount)).
+		InexactFloat64()
+	return waffoTopUpQuote{amount: amount, creditedQuota: creditedQuota, payMoney: payMoney}
 }
 
 func normalizeWaffoTopUpAmount(amount int64) int64 {
@@ -116,11 +125,6 @@ func normalizeWaffoTopUpAmount(amount int64) int64 {
 		return 1
 	}
 	return normalized
-}
-
-func waffoCreditedQuota(amount int64) decimal.Decimal {
-	return decimal.NewFromInt(normalizeWaffoTopUpAmount(amount)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 }
 
 type WaffoPayRequest struct {
@@ -150,7 +154,8 @@ func RequestWaffoAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	quote := buildWaffoTopUpQuote(req.Amount, group)
+	payMoney := quote.payMoney
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -221,10 +226,11 @@ func RequestWaffoPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	if rejectInvalidTopUpQuota(c, id, waffoCreditedQuota(req.Amount)) {
+	quote := buildWaffoTopUpQuote(req.Amount, group)
+	if rejectInvalidTopUpQuota(c, id, quote.creditedQuota) {
 		return
 	}
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	payMoney := quote.payMoney
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -235,7 +241,7 @@ func RequestWaffoPay(c *gin.Context) {
 	paymentRequestId := merchantOrderId
 
 	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
-	amount := normalizeWaffoTopUpAmount(req.Amount)
+	amount := quote.amount
 
 	// 创建本地订单
 	topUp := &model.TopUp{

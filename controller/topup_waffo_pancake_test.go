@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -84,7 +85,7 @@ func TestFormatWaffoPancakeAmount_UsesDisplayPriceString(t *testing.T) {
 	}
 }
 
-func TestGetWaffoPancakePayMoney(t *testing.T) {
+func TestBuildWaffoPancakeTopUpQuote(t *testing.T) {
 	originalUnitPrice := setting.WaffoPancakeUnitPrice
 	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
 	originalDiscounts := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
@@ -113,38 +114,94 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 		amount           int64
 		group            string
 		quotaDisplayType string
-		expected         float64
+		expectedAmount   int64
+		expectedQuota    string
+		expectedMoney    float64
 	}{
 		{
 			name:             "currency display applies unit price group ratio and discount",
 			amount:           10,
 			group:            "vip",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeUSD,
-			expected:         24,
+			expectedAmount:   10,
+			expectedQuota:    decimal.NewFromFloat(common.QuotaPerUnit).Mul(decimal.NewFromInt(10)).String(),
+			expectedMoney:    24,
 		},
 		{
 			name:             "tokens display converts quota to display units before pricing",
 			amount:           int64(common.QuotaPerUnit * 3),
 			group:            "vip",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeTokens,
-			expected:         4.5,
+			expectedAmount:   3,
+			expectedQuota:    decimal.NewFromFloat(common.QuotaPerUnit).Mul(decimal.NewFromInt(3)).String(),
+			expectedMoney:    4.5,
 		},
 		{
 			name:             "non-positive discount falls back to no discount",
 			amount:           20,
 			group:            "default",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeUSD,
-			expected:         50,
+			expectedAmount:   20,
+			expectedQuota:    decimal.NewFromFloat(common.QuotaPerUnit).Mul(decimal.NewFromInt(20)).String(),
+			expectedMoney:    50,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			operation_setting.GetGeneralSetting().QuotaDisplayType = tc.quotaDisplayType
-			actual := getWaffoPancakePayMoney(tc.amount, tc.group)
-			require.InDelta(t, tc.expected, actual, 0.000001)
+			quote := buildWaffoPancakeTopUpQuote(tc.amount, tc.group)
+			require.Equal(t, tc.expectedAmount, quote.amount)
+			require.Equal(t, tc.expectedQuota, quote.creditedQuota.String())
+			require.InDelta(t, tc.expectedMoney, quote.payMoney, 0.000001)
 		})
 	}
+}
+
+func TestRequestWaffoPancakeAmountPricesSubUnitTokenFromCreditedQuota(t *testing.T) {
+	db := setupWaffoPancakeControllerTestDB(t)
+	originalUnitPrice := setting.WaffoPancakeUnitPrice
+	originalMinTopUp := setting.WaffoPancakeMinTopUp
+	originalDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalDiscounts := operation_setting.GetPaymentSetting().AmountDiscount
+	originalTopupGroupRatio := common.TopupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		setting.WaffoPancakeUnitPrice = originalUnitPrice
+		setting.WaffoPancakeMinTopUp = originalMinTopUp
+		operation_setting.GetGeneralSetting().QuotaDisplayType = originalDisplayType
+		common.QuotaPerUnit = originalQuotaPerUnit
+		operation_setting.GetPaymentSetting().AmountDiscount = originalDiscounts
+		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(originalTopupGroupRatio))
+	})
+
+	setting.WaffoPancakeUnitPrice = 1
+	setting.WaffoPancakeMinTopUp = 1
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	common.QuotaPerUnit = 500000
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"default":1}`))
+
+	user := &model.User{Id: 1202, Username: "pancake-token-user", Group: "default", Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(user).Error)
+	payload, err := common.Marshal(WaffoPancakePayRequest{Amount: 1})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/waffo-pancake/amount", bytes.NewReader(payload))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", user.Id)
+
+	RequestWaffoPancakeAmount(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Message string `json:"message"`
+		Data    string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "success", response.Message)
+	require.Equal(t, "1.00", response.Data)
 }
 
 func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testing.T) {
@@ -157,6 +214,9 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 	originalUnitPrice := setting.WaffoPancakeUnitPrice
 	originalMinTopUp := setting.WaffoPancakeMinTopUp
 	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalDiscounts := operation_setting.GetPaymentSetting().AmountDiscount
+	originalTopupGroupRatio := common.TopupGroupRatio2JSONString()
 	t.Cleanup(func() {
 		setting.WaffoPancakeMerchantID = originalMerchantID
 		setting.WaffoPancakePrivateKey = originalPrivateKey
@@ -164,6 +224,9 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 		setting.WaffoPancakeUnitPrice = originalUnitPrice
 		setting.WaffoPancakeMinTopUp = originalMinTopUp
 		operation_setting.GetGeneralSetting().QuotaDisplayType = originalQuotaDisplayType
+		common.QuotaPerUnit = originalQuotaPerUnit
+		operation_setting.GetPaymentSetting().AmountDiscount = originalDiscounts
+		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(originalTopupGroupRatio))
 	})
 
 	setting.WaffoPancakeMerchantID = "MER_1234567890123456789012"
@@ -171,7 +234,10 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 	setting.WaffoPancakeProductID = "PROD_1234567890123456789012"
 	setting.WaffoPancakeUnitPrice = 1
 	setting.WaffoPancakeMinTopUp = 1
-	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	common.QuotaPerUnit = 500000
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"default":1}`))
 
 	user := &model.User{
 		Id:       1201,
@@ -181,7 +247,7 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 	}
 	require.NoError(t, db.Create(user).Error)
 
-	payload, err := common.Marshal(WaffoPancakePayRequest{Amount: 10})
+	payload, err := common.Marshal(WaffoPancakePayRequest{Amount: 1})
 	require.NoError(t, err)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -197,5 +263,7 @@ func TestRequestWaffoPancakePayLeavesOrderPendingWhenSessionCreateFails(t *testi
 	var topUps []model.TopUp
 	require.NoError(t, db.Find(&topUps).Error)
 	require.Len(t, topUps, 1)
+	require.Equal(t, int64(1), topUps[0].Amount)
+	require.InDelta(t, 1, topUps[0].Money, 0.000001)
 	require.Equal(t, common.TopUpStatusPending, topUps[0].Status)
 }

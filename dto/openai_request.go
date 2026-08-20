@@ -875,10 +875,10 @@ type OpenAIResponsesRequest struct {
 	ParallelToolCalls json.RawMessage `json:"parallel_tool_calls,omitempty"`
 	// Accepted by some OpenAI-compatible Responses providers even though the
 	// official OpenAI Responses API does not currently document these fields.
-	FrequencyPenalty   json.RawMessage `json:"frequency_penalty,omitempty"`
-	PresencePenalty    json.RawMessage `json:"presence_penalty,omitempty"`
-	PreviousResponseID string          `json:"previous_response_id,omitempty"`
-	Reasoning          *Reasoning      `json:"reasoning,omitempty"`
+	FrequencyPenalty   *float64   `json:"frequency_penalty,omitempty"`
+	PresencePenalty    *float64   `json:"presence_penalty,omitempty"`
+	PreviousResponseID string     `json:"previous_response_id,omitempty"`
+	Reasoning          *Reasoning `json:"reasoning,omitempty"`
 	// ServiceTier specifies upstream service level and may affect billing.
 	// This field is filtered by default and can be enabled via channel setting allow_service_tier.
 	ServiceTier string `json:"service_tier,omitempty"`

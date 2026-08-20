@@ -481,6 +481,10 @@ export function ChannelMutateDrawer({
     () => parseModelsString(currentModels),
     [currentModels]
   )
+  const fetchDialogModelOverride = useMemo(
+    () => fetchDialogExistingModels(currentModelsArray),
+    [currentModelsArray]
+  )
 
   const currentTypeLabel = useMemo(
     () =>
@@ -3942,7 +3946,7 @@ export function ChannelMutateDrawer({
         redirectSourceModels={redirectModelKeyList}
         customFetcher={!isEditing ? createModeFetcher : undefined}
         channelName={!isEditing ? currentName?.trim() : undefined}
-        existingModelsOverride={fetchDialogExistingModels(currentModelsArray)}
+        existingModelsOverride={fetchDialogModelOverride}
       />
 
       <SecureVerificationDialog

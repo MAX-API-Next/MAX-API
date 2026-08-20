@@ -32,8 +32,8 @@ func parseJSONArray(jsonStr string, typeName string) ([]map[string]interface{}, 
 	return list, nil
 }
 
-func exceedsMaxCharacters(s string, max int) bool {
-	return len(utf16.Encode([]rune(s))) > max
+func exceedsMaxCharacters(s string, maxCharacters int) bool {
+	return len(utf16.Encode([]rune(s))) > maxCharacters
 }
 
 func validateURL(urlStr string, index int, itemType string) error {

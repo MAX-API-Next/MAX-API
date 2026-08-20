@@ -24,7 +24,16 @@ export function getTurnstileHeaders(token?: string): Record<string, string> {
   return value ? { [TURNSTILE_TOKEN_HEADER]: value } : {}
 }
 
-export function consumeTurnstileToken(token: string, enabled: boolean) {
+export type ConsumeTurnstileTokenResult = {
+  submittedToken: string
+  nextToken: string
+  shouldRefreshWidget: boolean
+}
+
+export function consumeTurnstileToken(
+  token: string,
+  enabled: boolean
+): ConsumeTurnstileTokenResult {
   return {
     submittedToken: token,
     nextToken: enabled ? '' : token,

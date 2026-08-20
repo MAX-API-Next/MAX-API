@@ -40,13 +40,12 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	creditedQuota := decimal.NewFromInt(normalizeWaffoPancakeTopUpAmount(req.Amount)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
-	if rejectInvalidTopUpQuota(c, id, creditedQuota) {
+	quote := buildWaffoPancakeTopUpQuote(req.Amount, group)
+	if rejectInvalidTopUpQuota(c, id, quote.creditedQuota) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoney := quote.payMoney
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -55,11 +54,15 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": fmt.Sprintf("%.2f", payMoney)})
 }
 
-func getWaffoPancakePayMoney(amount int64, group string) float64 {
-	dAmount := decimal.NewFromInt(amount)
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
-	}
+type waffoPancakeTopUpQuote struct {
+	amount        int64
+	creditedQuota decimal.Decimal
+	payMoney      float64
+}
+
+func buildWaffoPancakeTopUpQuote(requestedAmount int64, group string) waffoPancakeTopUpQuote {
+	amount := normalizeWaffoPancakeTopUpAmount(requestedAmount)
+	creditedQuota := decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
@@ -67,16 +70,17 @@ func getWaffoPancakePayMoney(amount int64, group string) float64 {
 	}
 
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && ds > 0 {
+	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(requestedAmount)]; ok && ds > 0 {
 		discount = ds
 	}
 
-	payMoney := dAmount.
+	payMoney := decimal.NewFromInt(amount).
 		Mul(decimal.NewFromFloat(setting.WaffoPancakeUnitPrice)).
 		Mul(decimal.NewFromFloat(topupGroupRatio)).
-		Mul(decimal.NewFromFloat(discount))
+		Mul(decimal.NewFromFloat(discount)).
+		InexactFloat64()
 
-	return payMoney.InexactFloat64()
+	return waffoPancakeTopUpQuote{amount: amount, creditedQuota: creditedQuota, payMoney: payMoney}
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
@@ -378,13 +382,12 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	creditedQuota := decimal.NewFromInt(normalizeWaffoPancakeTopUpAmount(req.Amount)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
-	if rejectInvalidTopUpQuota(c, id, creditedQuota) {
+	quote := buildWaffoPancakeTopUpQuote(req.Amount, group)
+	if rejectInvalidTopUpQuota(c, id, quote.creditedQuota) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoney := quote.payMoney
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -393,7 +396,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
+		Amount:          quote.amount,
 		Money:           payMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,

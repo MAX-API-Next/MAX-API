@@ -94,25 +94,19 @@ func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *
 }
 
 func TestResponsesRequestToChatCompletionsRequestPreservesPenalties(t *testing.T) {
+	frequencyPenalty := 0.0
+	presencePenalty := 1.5
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model:            "gpt-test",
 		Input:            mustCompatRawMessage(t, "hello"),
-		FrequencyPenalty: mustCompatRawMessage(t, 0.0),
-		PresencePenalty:  mustCompatRawMessage(t, 1.5),
+		FrequencyPenalty: &frequencyPenalty,
+		PresencePenalty:  &presencePenalty,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, got.FrequencyPenalty)
 	require.NotNil(t, got.PresencePenalty)
 	assert.Equal(t, 0.0, *got.FrequencyPenalty)
 	assert.Equal(t, 1.5, *got.PresencePenalty)
-
-	_, err = ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
-		Model:            "gpt-test",
-		Input:            mustCompatRawMessage(t, "hello"),
-		FrequencyPenalty: mustCompatRawMessage(t, "not-a-number"),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "frequency_penalty")
 }
 
 func TestResponsesRequestToChatCompletionsRequestFunctionCallConversation(t *testing.T) {
