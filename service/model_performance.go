@@ -252,12 +252,38 @@ func queryModelPerformanceThroughput(ctx context.Context, query ModelPerformance
 	}
 	byModel := make(map[string]float64, len(result.Models))
 	for _, summary := range result.Models {
+		if query.ModelName != "" && summary.ModelName != query.ModelName {
+			continue
+		}
 		byModel[summary.ModelName] = summary.AvgTps
 	}
 	return modelPerformanceThroughputSnapshot{
-		State:    result.CollectionState,
+		State:    collectionStateForModelFilter(result.CollectionState, query.ModelName, byModel),
 		Coverage: result.Coverage,
 		ByModel:  byModel,
+	}
+}
+
+func collectionStateForModelFilter(
+	state perfmetrics.CollectionState,
+	modelName string,
+	byModel map[string]float64,
+) perfmetrics.CollectionState {
+	if modelName == "" {
+		return state
+	}
+	if _, hasSamples := byModel[modelName]; hasSamples {
+		return state
+	}
+	switch state {
+	case perfmetrics.CollectionStateDisabled:
+		return perfmetrics.CollectionStateDisabled
+	case perfmetrics.CollectionStatePartial:
+		return perfmetrics.CollectionStatePartial
+	case perfmetrics.CollectionStateQueryFailed:
+		return perfmetrics.CollectionStateQueryFailed
+	default:
+		return perfmetrics.CollectionStateNoSamples
 	}
 }
 

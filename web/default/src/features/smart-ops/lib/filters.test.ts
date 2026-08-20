@@ -59,7 +59,7 @@ describe('production performance filters', () => {
   })
 
   test('accepts only positive whole channel IDs', () => {
-    for (const channelId of ['', '0', '-3', '12abc']) {
+    for (const channelId of ['', '0', '-3', '12abc', '12.5', '1e2']) {
       assert.equal(
         toQuery({ ...DEFAULT_FILTERS, channelId }).channelId,
         undefined

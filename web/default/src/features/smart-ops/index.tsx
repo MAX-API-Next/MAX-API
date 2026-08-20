@@ -345,6 +345,7 @@ export function ProductionPerformance() {
                   id='smart-ops-channel-id'
                   inputMode='numeric'
                   min={1}
+                  step={1}
                   type='number'
                   value={draft.channelId}
                   placeholder={t('All channels')}

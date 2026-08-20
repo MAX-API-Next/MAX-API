@@ -19,9 +19,13 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react'
 import type { SortDirection } from './sort-direction'
 
-export function SortDirectionIcon(props: {
+type SortDirectionIconProps = {
   direction: SortDirection
-}): React.ReactElement {
+}
+
+export function SortDirectionIcon(
+  props: SortDirectionIconProps
+): React.ReactElement {
   if (props.direction === 'desc') {
     return <ArrowDown data-icon='inline-end' aria-hidden='true' />
   }

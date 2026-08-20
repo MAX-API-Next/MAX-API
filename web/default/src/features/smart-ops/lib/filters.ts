@@ -53,14 +53,21 @@ export function normalizeFilters<T extends { hours: string }>(filters: T): T {
 }
 
 export function toQuery(filters: FilterDraft): ChannelPerformanceQuery {
-  const channelId = Number(filters.channelId)
+  const channelId = parsePositiveChannelId(filters.channelId)
   return {
     hours: normalizePerformanceHours(filters.hours),
-    channelId:
-      Number.isFinite(channelId) && channelId > 0 ? channelId : undefined,
+    channelId,
     model: filters.model.trim() || undefined,
     group: filters.group.trim() || undefined,
   }
+}
+
+function parsePositiveChannelId(value: string): number | undefined {
+  const normalized = value.trim()
+  if (!/^\+?\d+$/.test(normalized)) return undefined
+  const channelId = Number(normalized)
+  if (!Number.isSafeInteger(channelId) || channelId <= 0) return undefined
+  return channelId
 }
 
 export type ModelFilterDraft = {

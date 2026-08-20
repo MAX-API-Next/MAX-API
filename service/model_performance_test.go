@@ -175,3 +175,38 @@ func TestQueryModelPerformanceThroughputMarksQueryFailure(t *testing.T) {
 	require.Equal(t, perfmetrics.CollectionStateQueryFailed, snapshot.State)
 	require.Empty(t, snapshot.ByModel)
 }
+
+func TestQueryModelPerformanceThroughputScopesCollectionStateToModelFilter(t *testing.T) {
+	originalQuery := queryModelPerformanceSummaryRange
+	queryModelPerformanceSummaryRange = func(context.Context, int64, int64, []string) (perfmetrics.DetailedSummaryAllResult, error) {
+		return perfmetrics.DetailedSummaryAllResult{
+			Models:          []perfmetrics.ModelSummary{{ModelName: "beta", AvgTps: 12.5}},
+			CollectionState: perfmetrics.CollectionStateAvailable,
+		}, nil
+	}
+	t.Cleanup(func() {
+		queryModelPerformanceSummaryRange = originalQuery
+	})
+
+	snapshot := queryModelPerformanceThroughput(context.Background(), ModelPerformanceQuery{
+		StartAt:   1,
+		EndAt:     3_601,
+		ModelName: "alpha",
+	})
+
+	require.Equal(t, perfmetrics.CollectionStateNoSamples, snapshot.State)
+	require.Empty(t, snapshot.ByModel)
+
+	queryModelPerformanceSummaryRange = func(context.Context, int64, int64, []string) (perfmetrics.DetailedSummaryAllResult, error) {
+		return perfmetrics.DetailedSummaryAllResult{
+			Models:          []perfmetrics.ModelSummary{{ModelName: "beta", AvgTps: 12.5}},
+			CollectionState: perfmetrics.CollectionStatePartial,
+		}, nil
+	}
+	snapshot = queryModelPerformanceThroughput(context.Background(), ModelPerformanceQuery{
+		StartAt:   1,
+		EndAt:     3_601,
+		ModelName: "alpha",
+	})
+	require.Equal(t, perfmetrics.CollectionStatePartial, snapshot.State)
+}
