@@ -454,6 +454,50 @@ func TestRecoverRedisBucketsForNodeRestoresFlushStateAfterRestart(t *testing.T) 
 	require.EqualValues(t, 1, requestCount)
 }
 
+func TestRecoverRedisBucketsForNodeUsesContextAwareReceiptLookup(t *testing.T) {
+	previousDB := model.DB
+	previousRDB := common.RDB
+	previousRedisEnabled := common.RedisEnabled
+	previousNodeName := common.NodeName
+	previousLookup := getPerfMetricFlushReceiptKeys
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetricFlushReceipt{}))
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	model.DB = db
+	common.RDB = redisClient
+	common.RedisEnabled = true
+	common.NodeName = "stable-perf-node"
+	hotBuckets = sync.Map{}
+	lookupCalls := 0
+	lookupHadDeadline := false
+	getPerfMetricFlushReceiptKeys = func(ctx context.Context, _ []string) (map[string]struct{}, error) {
+		lookupCalls++
+		_, lookupHadDeadline = ctx.Deadline()
+		return map[string]struct{}{}, nil
+	}
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.RDB = previousRDB
+		common.RedisEnabled = previousRedisEnabled
+		common.NodeName = previousNodeName
+		getPerfMetricFlushReceiptKeys = previousLookup
+		hotBuckets = sync.Map{}
+		_ = redisClient.Close()
+	})
+
+	Record(Sample{Model: "alpha", Group: "prod", LatencyMs: 125, Success: true})
+	hotBuckets = sync.Map{}
+
+	recovered, err := recoverRedisBucketsForNode()
+
+	require.NoError(t, err)
+	require.Equal(t, 1, recovered)
+	require.Equal(t, 1, lookupCalls)
+	require.True(t, lookupHadDeadline)
+}
+
 func TestRecoveredCompletedRedisBucketFlushesToDatabaseAndCleansActiveState(t *testing.T) {
 	previousDB := model.DB
 	previousRDB := common.RDB

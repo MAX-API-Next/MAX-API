@@ -1104,7 +1104,7 @@ func recoverRedisBucketsForNode() (int, error) {
 		candidates = append(candidates, recoveredBucket{key: key, value: value})
 		receiptKeys = append(receiptKeys, perfMetricReceiptKey(key))
 	}
-	receipts, err := model.GetPerfMetricFlushReceiptKeys(receiptKeys)
+	receipts, err := getPerfMetricFlushReceiptKeys(ctx, receiptKeys)
 	if err != nil {
 		return 0, err
 	}

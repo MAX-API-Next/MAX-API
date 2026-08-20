@@ -2,7 +2,6 @@ package controller
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -13,12 +12,22 @@ import (
 // the administrator Smart Operations Center. It never probes, reroutes,
 // disables or mutates a channel.
 func GetChannelPerformance(c *gin.Context) {
+	numericQuery, err := parsePerformanceNumericQuery(c)
+	if err != nil {
+		respondInvalidPerformanceQuery(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance")
+		return
+	}
+	channelID, err := parseIntQuery(c, "channel_id")
+	if err != nil {
+		respondInvalidPerformanceQuery(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance")
+		return
+	}
 	query := service.ChannelPerformanceQuery{
-		StartAt:   parseInt64Query(c, "start"),
-		EndAt:     parseInt64Query(c, "end"),
-		Hours:     parseIntQuery(c, "hours"),
-		Limit:     parseIntQuery(c, "limit"),
-		ChannelID: parseIntQuery(c, "channel_id"),
+		StartAt:   numericQuery.StartAt,
+		EndAt:     numericQuery.EndAt,
+		Hours:     numericQuery.Hours,
+		Limit:     numericQuery.Limit,
+		ChannelID: channelID,
 		ModelName: strings.TrimSpace(c.Query("model")),
 		Group:     strings.TrimSpace(c.Query("group")),
 	}
@@ -38,9 +47,14 @@ func GetChannelPerformance(c *gin.Context) {
 // GetChannelPerformanceDetail exposes a channel-scoped 24-hour projection.
 // It is queried only when an administrator opens the channel detail sheet.
 func GetChannelPerformanceDetail(c *gin.Context) {
+	channelID, err := parseIntQuery(c, "channel_id")
+	if err != nil {
+		respondInvalidPerformanceQuery(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance detail")
+		return
+	}
 	result, err := service.GetChannelPerformanceDetail(
 		c.Request.Context(),
-		parseIntQuery(c, "channel_id"),
+		channelID,
 	)
 	if err != nil {
 		respondPerformanceError(c, err, service.ErrInvalidChannelPerformanceQuery, "failed to query channel performance detail")
@@ -51,20 +65,4 @@ func GetChannelPerformanceDetail(c *gin.Context) {
 		"success": true,
 		"data":    result,
 	})
-}
-
-func parseIntQuery(c *gin.Context, key string) int {
-	value, err := strconv.Atoi(c.Query(key))
-	if err != nil {
-		return 0
-	}
-	return value
-}
-
-func parseInt64Query(c *gin.Context, key string) int64 {
-	value, err := strconv.ParseInt(c.Query(key), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return value
 }

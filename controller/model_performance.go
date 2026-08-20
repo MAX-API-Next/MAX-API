@@ -12,11 +12,16 @@ import (
 // administrator Smart Operations Center. It aggregates eligible production
 // logs by model and never mutates, probes or reroutes a channel.
 func GetModelPerformance(c *gin.Context) {
+	numericQuery, err := parsePerformanceNumericQuery(c)
+	if err != nil {
+		respondInvalidPerformanceQuery(c, err, service.ErrInvalidModelPerformanceQuery, "failed to query model performance")
+		return
+	}
 	query := service.ModelPerformanceQuery{
-		StartAt:   parseInt64Query(c, "start"),
-		EndAt:     parseInt64Query(c, "end"),
-		Hours:     parseIntQuery(c, "hours"),
-		Limit:     parseIntQuery(c, "limit"),
+		StartAt:   numericQuery.StartAt,
+		EndAt:     numericQuery.EndAt,
+		Hours:     numericQuery.Hours,
+		Limit:     numericQuery.Limit,
 		ModelName: strings.TrimSpace(c.Query("model")),
 		Group:     strings.TrimSpace(c.Query("group")),
 	}

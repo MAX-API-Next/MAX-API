@@ -24,7 +24,6 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
-  ChevronsUpDown,
   Clock3,
   DatabaseZap,
   HeartPulse,
@@ -101,6 +100,8 @@ import {
   type ModelPerformanceSortKey,
   type ModelPerformanceSortState,
 } from './lib/model-sort'
+import { getAriaSort } from './lib/sort-direction'
+import { SortDirectionIcon } from './lib/sort-direction-icon'
 import type { ModelPerformanceItem } from './types'
 
 const priorityQualityFlags = [
@@ -242,14 +243,6 @@ export function ModelPerformance() {
     data?.quality_flags.includes('retry_metrics_unavailable') ?? false
   const errorLogsDisabled =
     data?.quality_flags.includes('error_logs_disabled') ?? false
-  const throughputCollectionDisabled =
-    data?.quality_flags.includes('throughput_collection_disabled') ?? false
-  const throughputNoSamples =
-    data?.quality_flags.includes('throughput_no_samples') ?? false
-  const throughputQueryFailed =
-    data?.quality_flags.includes('throughput_query_failed') ?? false
-  const throughputPartial =
-    data?.quality_flags.includes('throughput_partial') ?? false
   const throughputWindowApproximate =
     data?.quality_flags.includes('throughput_window_approximate') ?? false
 
@@ -383,53 +376,9 @@ export function ModelPerformance() {
             </Alert>
           )}
 
-          {throughputCollectionDisabled && (
-            <Alert className='border-warning/40 bg-warning/5'>
-              <AlertTriangle className='text-warning' aria-hidden='true' />
-              <AlertTitle>
-                {t('Performance metrics collection is disabled')}
-              </AlertTitle>
-              <AlertDescription>
-                {t(
-                  'New performance samples are not being collected. Existing performance data may be incomplete.'
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {throughputNoSamples && (
-            <Alert className='border-warning/40 bg-warning/5'>
-              <AlertTriangle className='text-warning' aria-hidden='true' />
-              <AlertTitle>{t('No throughput samples')}</AlertTitle>
-              <AlertDescription>
-                {t('No performance samples were recorded for this time range.')}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {throughputQueryFailed && (
-            <Alert className='border-destructive/40 bg-destructive/5'>
-              <AlertTriangle className='text-destructive' aria-hidden='true' />
-              <AlertTitle>{t('Throughput query failed')}</AlertTitle>
-              <AlertDescription>
-                {t(
-                  'Performance metrics could not be queried. Log-based model results remain available; check the application database.'
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {throughputPartial && (
-            <Alert className='border-warning/40 bg-warning/5'>
-              <AlertTriangle className='text-warning' aria-hidden='true' />
-              <AlertTitle>{t('Throughput data is partial')}</AlertTitle>
-              <AlertDescription>
-                {t(
-                  'Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.'
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
+          <ModelPerformanceCollectionStateAlert
+            collectionState={data?.throughput.collection_state}
+          />
 
           {throughputWindowApproximate && data?.throughput?.coverage && (
             <Alert>
@@ -894,28 +843,6 @@ export function ModelPerformance() {
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
-}
-
-type SortDirection = 'asc' | 'desc' | null
-
-function getAriaSort(
-  direction: SortDirection
-): 'ascending' | 'descending' | 'none' {
-  if (direction === 'asc') return 'ascending'
-  if (direction === 'desc') return 'descending'
-  return 'none'
-}
-
-function SortDirectionIcon(props: {
-  direction: SortDirection
-}): React.ReactElement {
-  if (props.direction === 'desc') {
-    return <ArrowDown data-icon='inline-end' aria-hidden='true' />
-  }
-  if (props.direction === 'asc') {
-    return <ArrowUp data-icon='inline-end' aria-hidden='true' />
-  }
-  return <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
 }
 
 function SortableModelPerformanceHead({

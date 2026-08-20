@@ -23,7 +23,6 @@ import {
   ArrowDown,
   ArrowUp,
   Clock3,
-  ChevronsUpDown,
   DatabaseZap,
   HeartPulse,
   RefreshCw,
@@ -94,6 +93,8 @@ import {
   type ChannelPerformanceSortKey,
   type ChannelPerformanceSortState,
 } from './lib/sort'
+import { getAriaSort } from './lib/sort-direction'
+import { SortDirectionIcon } from './lib/sort-direction-icon'
 import type { ChannelPerformanceData, ChannelPerformanceItem } from './types'
 
 const priorityQualityFlags = [
@@ -736,28 +737,6 @@ export function ProductionPerformance() {
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )
-}
-
-type SortDirection = 'asc' | 'desc' | null
-
-function getAriaSort(
-  direction: SortDirection
-): 'ascending' | 'descending' | 'none' {
-  if (direction === 'asc') return 'ascending'
-  if (direction === 'desc') return 'descending'
-  return 'none'
-}
-
-function SortDirectionIcon(props: {
-  direction: SortDirection
-}): React.ReactElement {
-  if (props.direction === 'desc') {
-    return <ArrowDown data-icon='inline-end' aria-hidden='true' />
-  }
-  if (props.direction === 'asc') {
-    return <ArrowUp data-icon='inline-end' aria-hidden='true' />
-  }
-  return <ChevronsUpDown data-icon='inline-end' aria-hidden='true' />
 }
 
 function SortablePerformanceHead({
