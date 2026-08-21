@@ -23,6 +23,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   applyTestShard,
+  buildTestCommand,
   discoverTestFiles,
   extractShardArgument,
   selectTestFiles,
@@ -160,12 +161,43 @@ test('applies Bun shards across the complete selected file list', () => {
   )
 })
 
+test('keeps the child test process serial when callers set concurrency', () => {
+  const files = ['src/example.test.ts']
+  const command = buildTestCommand(files, [
+    '--coverage',
+    '--max-concurrency',
+    '8',
+    '--timeout',
+    '5000',
+    '--max-concurrency=4',
+  ])
+
+  assert.deepEqual(command, [
+    process.execPath,
+    'test',
+    '--coverage',
+    '--timeout',
+    '5000',
+    '--max-concurrency=1',
+    ...files,
+  ])
+  assert.equal(
+    command.filter((argument) => argument.startsWith('--max-concurrency')).length,
+    1
+  )
+  assert.ok(command.indexOf('--max-concurrency=1') < command.indexOf(files[0]))
+})
+
 test('isolates tests that mutate browser globals even when they are plain TypeScript', () => {
   assert.equal(
     usesIsolatedEnvironment(
       'src/example.test.ts',
       "Object.defineProperty(\n  globalThis,\n  'window',\n  { value: {} }\n)"
     ),
+    true
+  )
+  assert.equal(
+    usesIsolatedEnvironment('src/example.test.ts', 'delete globalThis.window'),
     true
   )
   assert.equal(

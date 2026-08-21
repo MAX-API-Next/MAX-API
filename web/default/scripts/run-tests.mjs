@@ -59,7 +59,7 @@ const optionalValueFlags = new Map([
 const textDecoder = new TextDecoder()
 const shardValuePattern = /^(\d+)\/(\d+)$/
 const globalMutationPattern =
-  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\s*\(\s*globalThis\b|globalThis\.[A-Za-z_$][\w$]*\s*=/
+  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis\.[A-Za-z_$][\w$]*\s*=/
 
 function normalizePath(file) {
   return file.replaceAll('\\', '/')
@@ -209,18 +209,33 @@ function writeChildOutput(result) {
   if (result.stderr.length > 0) process.stderr.write(result.stderr)
 }
 
+export function buildTestCommand(files, bunArguments) {
+  const forwardedArguments = []
+  for (let index = 0; index < bunArguments.length; index += 1) {
+    const argument = bunArguments[index]
+    if (argument === '--max-concurrency') {
+      index += 1
+      continue
+    }
+    if (argument.startsWith('--max-concurrency=')) continue
+    forwardedArguments.push(argument)
+  }
+
+  return [
+    process.execPath,
+    'test',
+    ...forwardedArguments,
+    '--max-concurrency=1',
+    ...files,
+  ]
+}
+
 function runTestFiles(files, label, bunArguments) {
   if (files.length === 0) return 'skipped'
 
   console.log(`\n==> ${label} (${files.length} file${files.length === 1 ? '' : 's'})`)
   const result = Bun.spawnSync({
-    cmd: [
-      process.execPath,
-      'test',
-      '--max-concurrency=1',
-      ...bunArguments,
-      ...files,
-    ],
+    cmd: buildTestCommand(files, bunArguments),
     cwd: projectRoot,
     env: process.env,
     stdout: 'pipe',
