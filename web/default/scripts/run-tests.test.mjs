@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -40,6 +40,8 @@ test('discovers every supported test extension outside only generated directorie
       'src/component.spec.jsx',
       'src/legacy_spec.mts',
       'tests/example.test.js',
+      '.git/hooks/internal.test.js',
+      'coverage/report.test.js',
       'node_modules/dependency.test.js',
       'dist/generated.spec.mjs',
     ]
@@ -49,13 +51,21 @@ test('discovers every supported test extension outside only generated directorie
       await writeFile(absolutePath, '')
     }
 
-    assert.deepEqual(await discoverTestFiles(root), [
+    const visitedDirectories = []
+    const trackingReadDirectory = async (...args) => {
+      const relativeDirectory = path.relative(root, args[0]).replaceAll('\\', '/')
+      visitedDirectories.push(relativeDirectory || '.')
+      return readdir(...args)
+    }
+
+    assert.deepEqual(await discoverTestFiles(root, trackingReadDirectory), [
       'scripts/legacy_test.cts',
       'scripts/runner.test.mjs',
       'src/component.spec.jsx',
       'src/legacy_spec.mts',
       'tests/example.test.js',
     ])
+    assert.deepEqual(visitedDirectories.sort(), ['.', 'scripts', 'src', 'tests'])
   } finally {
     await rm(root, { force: true, recursive: true })
   }
@@ -217,6 +227,29 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
     ),
     true
   )
+  for (const source of [
+    'globalThis.count += 1',
+    'globalThis.count -= 1',
+    'globalThis.count *= 1',
+    'globalThis.count /= 1',
+    'globalThis.count %= 1',
+    'globalThis.count **= 1',
+    'globalThis.count <<= 1',
+    'globalThis.count >>= 1',
+    'globalThis.count >>>= 1',
+    'globalThis.count &= 1',
+    'globalThis.count ^= 1',
+    'globalThis.count |= 1',
+    'globalThis.count &&= 1',
+    'globalThis.count ||= 1',
+    "globalThis['count'] ??= 1",
+    'globalThis.count++',
+    '++globalThis.count',
+    'globalThis.count--',
+    '--globalThis.count',
+  ]) {
+    assert.equal(usesIsolatedEnvironment('src/example.test.ts', source), true)
+  }
   assert.equal(
     usesIsolatedEnvironment('src/example.test.ts', 'delete globalThis.window'),
     true
@@ -243,6 +276,13 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
     usesIsolatedEnvironment(
       'src/example.test.ts',
       "globalThis['window'] === existingWindow"
+    ),
+    false
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
+      'globalThis.count\n++otherCount'
     ),
     false
   )

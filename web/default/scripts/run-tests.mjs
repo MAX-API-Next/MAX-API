@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import path from 'node:path'
+import { readdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -59,25 +60,50 @@ const optionalValueFlags = new Map([
 const textDecoder = new TextDecoder()
 const shardValuePattern = /^(\d+)\/(\d+)$/
 const maxConcurrencyValuePattern = /^\d+$/
-const globalMutationPattern =
-  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\]]*\])\s*=(?!=)/
+const globalPropertyPattern =
+  String.raw`globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\]]*\])`
+const globalMutationPattern = new RegExp(
+  [
+    String.raw`(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b`,
+    String.raw`delete\b\s*(?:\(\s*)?globalThis\b`,
+    String.raw`${globalPropertyPattern}\s*(?:\*\*=|>>>=|<<=|>>=|&&=|\|\|=|\?\?=|[+\-*/%&^|]=|=(?!=))`,
+    String.raw`${globalPropertyPattern}[^\S\r\n]*(?:\+\+|--)`,
+    String.raw`(?:\+\+|--)\s*${globalPropertyPattern}`,
+  ].join('|')
+)
 
 function normalizePath(file) {
   return file.replaceAll('\\', '/')
 }
 
-function isIgnoredTestPath(file) {
-  return normalizePath(file)
-    .split('/')
-    .some((segment) => ignoredDirectories.has(segment))
+async function collectTestFiles(
+  root,
+  relativeDirectory,
+  readDirectory,
+  testFiles
+) {
+  const directory = path.join(root, relativeDirectory)
+  const entries = await readDirectory(directory, { withFileTypes: true })
+
+  for (const entry of entries) {
+    const relativePath = relativeDirectory
+      ? `${normalizePath(relativeDirectory)}/${entry.name}`
+      : entry.name
+    if (entry.isDirectory()) {
+      if (!ignoredDirectories.has(entry.name)) {
+        await collectTestFiles(root, relativePath, readDirectory, testFiles)
+      }
+      continue
+    }
+    if (entry.isFile() && testGlob.match(relativePath)) {
+      testFiles.push(relativePath)
+    }
+  }
 }
 
-export async function discoverTestFiles(root = projectRoot) {
+export async function discoverTestFiles(root = projectRoot, readDirectory = readdir) {
   const testFiles = []
-  for await (const file of testGlob.scan({ cwd: root, onlyFiles: true })) {
-    const normalizedFile = normalizePath(file)
-    if (!isIgnoredTestPath(normalizedFile)) testFiles.push(normalizedFile)
-  }
+  await collectTestFiles(root, '', readDirectory, testFiles)
   return [...new Set(testFiles)].sort()
 }
 
