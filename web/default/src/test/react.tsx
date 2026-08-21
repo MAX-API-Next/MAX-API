@@ -53,7 +53,9 @@ type TestWindow = typeof globalThis.window
 
 const animationFrameHandles = new Map<AnimationFrameTimer, TestWindow>()
 
-function createTestAnimationFrameScheduler(window: TestWindow) {
+function createTestAnimationFrameScheduler(
+  window: TestWindow
+): (callback: FrameRequestCallback) => number {
   return (callback: FrameRequestCallback): number => {
     if (globalThis.window !== window) return 0
     const handle = setTimeout(() => {
