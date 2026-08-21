@@ -32,9 +32,12 @@ const ignoredDirectories = new Set([
 ])
 const flagsWithSeparateValues = new Set([
   '-t',
+  '--conditions',
   '--coverage-dir',
   '--coverage-reporter',
+  '--define',
   '--env-file',
+  '--loader',
   '--max-concurrency',
   '--parallel-delay',
   '--path-ignore-patterns',
@@ -46,6 +49,7 @@ const flagsWithSeparateValues = new Set([
   '--seed',
   '--test-name-pattern',
   '--timeout',
+  '--tsconfig-override',
 ])
 const optionalValueFlags = new Map([
   ['--bail', (value) => /^\d+$/.test(value)],

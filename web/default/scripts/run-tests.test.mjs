@@ -105,6 +105,32 @@ test('separates Bun flags from file filters without dropping flag values', () =>
     bunArguments: ['--changed', 'origin/main'],
     fileFilters: [],
   })
+  assert.deepEqual(
+    splitTestArguments([
+      '--conditions',
+      'development',
+      '--define',
+      'MAX_API_TEST_VALUE=1',
+      '--loader',
+      '.txt:text',
+      '--tsconfig-override',
+      './tsconfig.test.json',
+      'src/example.test.ts',
+    ]),
+    {
+      bunArguments: [
+        '--conditions',
+        'development',
+        '--define',
+        'MAX_API_TEST_VALUE=1',
+        '--loader',
+        '.txt:text',
+        '--tsconfig-override',
+        './tsconfig.test.json',
+      ],
+      fileFilters: ['src/example.test.ts'],
+    }
+  )
 })
 
 test('applies plain and glob file filters to the discovered test list', () => {
