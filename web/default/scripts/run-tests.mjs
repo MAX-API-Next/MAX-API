@@ -64,7 +64,7 @@ const globalPropertyPattern =
   String.raw`globalThis(?:\s*\.\s*[A-Za-z_$][\w$]*|\s*\[[^\]]*\])+`
 const globalMutationPattern = new RegExp(
   [
-    String.raw`(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b`,
+    String.raw`(?:Object\.(?:assign|defineProperties|defineProperty)|Reflect\.(?:defineProperty|deleteProperty|set))\s*\(\s*globalThis\b`,
     String.raw`delete\b\s*(?:\(\s*)?globalThis\b`,
     String.raw`${globalPropertyPattern}\s*(?:\*\*=|>>>=|<<=|>>=|&&=|\|\|=|\?\?=|[+\-*/%&^|]=|=(?!=))`,
     String.raw`${globalPropertyPattern}[^\S\r\n]*(?:\+\+|--)`,

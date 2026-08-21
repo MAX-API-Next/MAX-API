@@ -228,6 +228,10 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
     true
   )
   for (const source of [
+    "Reflect.set(globalThis, 'TEST_FLAG', '1')",
+    "Object.assign(globalThis, { TEST_FLAG: '1' })",
+    "Object.defineProperties(globalThis, { TEST_FLAG: { value: '1' } })",
+    "Reflect.defineProperty(globalThis, 'TEST_FLAG', { value: '1' })",
     'globalThis.count += 1',
     'globalThis.count -= 1',
     'globalThis.count *= 1',
