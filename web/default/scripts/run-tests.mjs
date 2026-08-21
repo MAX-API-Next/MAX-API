@@ -58,8 +58,9 @@ const optionalValueFlags = new Map([
 ])
 const textDecoder = new TextDecoder()
 const shardValuePattern = /^(\d+)\/(\d+)$/
+const maxConcurrencyValuePattern = /^\d+$/
 const globalMutationPattern =
-  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis\.[A-Za-z_$][\w$]*\s*=/
+  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\r\n]*?\])\s*=(?!=)/
 
 function normalizePath(file) {
   return file.replaceAll('\\', '/')
@@ -209,15 +210,28 @@ function writeChildOutput(result) {
   if (result.stderr.length > 0) process.stderr.write(result.stderr)
 }
 
+function validateMaxConcurrencyValue(value) {
+  if (value === undefined) {
+    throw new Error('--max-concurrency requires a numeric value')
+  }
+  if (!maxConcurrencyValuePattern.test(value)) {
+    throw new Error(`Invalid --max-concurrency value: ${value}`)
+  }
+}
+
 export function buildTestCommand(files, bunArguments) {
   const forwardedArguments = []
   for (let index = 0; index < bunArguments.length; index += 1) {
     const argument = bunArguments[index]
     if (argument === '--max-concurrency') {
+      validateMaxConcurrencyValue(bunArguments[index + 1])
       index += 1
       continue
     }
-    if (argument.startsWith('--max-concurrency=')) continue
+    if (argument.startsWith('--max-concurrency=')) {
+      validateMaxConcurrencyValue(argument.slice('--max-concurrency='.length))
+      continue
+    }
     forwardedArguments.push(argument)
   }
 

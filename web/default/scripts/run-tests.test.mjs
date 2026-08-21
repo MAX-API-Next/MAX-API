@@ -188,6 +188,27 @@ test('keeps the child test process serial when callers set concurrency', () => {
   assert.ok(command.indexOf('--max-concurrency=1') < command.indexOf(files[0]))
 })
 
+test('rejects malformed caller concurrency values', () => {
+  const files = ['src/example.test.ts']
+
+  assert.throws(
+    () => buildTestCommand(files, ['--max-concurrency']),
+    /--max-concurrency requires a numeric value/
+  )
+  assert.throws(
+    () => buildTestCommand(files, ['--max-concurrency', 'many']),
+    /Invalid --max-concurrency value: many/
+  )
+  assert.throws(
+    () => buildTestCommand(files, ['--max-concurrency=']),
+    /Invalid --max-concurrency value:/
+  )
+  assert.throws(
+    () => buildTestCommand(files, ['--max-concurrency=many']),
+    /Invalid --max-concurrency value: many/
+  )
+})
+
 test('isolates tests that mutate browser globals even when they are plain TypeScript', () => {
   assert.equal(
     usesIsolatedEnvironment(
@@ -199,6 +220,24 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
   assert.equal(
     usesIsolatedEnvironment('src/example.test.ts', 'delete globalThis.window'),
     true
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
+      "globalThis['window'] = {}"
+    ),
+    true
+  )
+  assert.equal(
+    usesIsolatedEnvironment('src/example.test.ts', 'globalThis[propertyName] = {}'),
+    true
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
+      "globalThis['window'] === existingWindow"
+    ),
+    false
   )
   assert.equal(
     usesIsolatedEnvironment('src/example.test.ts', 'assert.equal(1, 1)'),
