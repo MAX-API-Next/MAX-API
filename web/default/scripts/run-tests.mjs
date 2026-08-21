@@ -60,7 +60,7 @@ const textDecoder = new TextDecoder()
 const shardValuePattern = /^(\d+)\/(\d+)$/
 const maxConcurrencyValuePattern = /^\d+$/
 const globalMutationPattern =
-  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\r\n]*?\])\s*=(?!=)/
+  /(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b|delete\b\s*(?:\(\s*)?globalThis\b|globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\]]*\])\s*=(?!=)/
 
 function normalizePath(file) {
   return file.replaceAll('\\', '/')

@@ -235,7 +235,21 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
   assert.equal(
     usesIsolatedEnvironment(
       'src/example.test.ts',
+      "globalThis[\n  'window'\n] = {}"
+    ),
+    true
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
       "globalThis['window'] === existingWindow"
+    ),
+    false
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
+      "globalThis['window'] === existingWindow\nvalues[index] = nextValue"
     ),
     false
   )
