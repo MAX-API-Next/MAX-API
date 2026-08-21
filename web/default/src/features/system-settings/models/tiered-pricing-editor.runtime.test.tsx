@@ -195,6 +195,66 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
+  test('removes a newly added fallback tier', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              modelName={modelA.name}
+              billingExpr={modelA.billingExpr || ''}
+              requestRuleExpr=''
+              onBillingExprChange={() => undefined}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+
+      const initialRemoveButton = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Remove tier"]'
+      )
+      assert.ok(initialRemoveButton, 'missing initial Remove tier button')
+      assert.equal(initialRemoveButton.disabled, true)
+
+      const addTierButton = Array.from(
+        container.querySelectorAll('button')
+      ).find((button) => button.textContent?.trim() === 'Add tier')
+      assert.ok(addTierButton, 'missing Add tier button')
+
+      await act(async () =>
+        addTierButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      )
+      assert.match(container.textContent || '', /Tier 2 \/ 2/)
+
+      const removeTierButtons = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          'button[aria-label="Remove tier"]'
+        )
+      )
+      assert.equal(removeTierButtons.length, 2)
+
+      const newTierRemoveButton = removeTierButtons[1]
+      assert.equal(newTierRemoveButton.disabled, false)
+      await act(async () =>
+        newTierRemoveButton.dispatchEvent(
+          new MouseEvent('click', { bubbles: true })
+        )
+      )
+
+      const text = container.textContent || ''
+      assert.match(text, /Tier 1 \/ 1/)
+      assert.doesNotMatch(text, /Tier 2 \/ 2/)
+      assert.match(text, /Fallback tier/)
+      assert.match(text, /Always matches \(default tier\)\./)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
   test('never emits model A billing through model B callbacks', async () => {
     const container = createContainer()
     const root = createRoot(container)

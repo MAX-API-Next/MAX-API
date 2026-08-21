@@ -42,6 +42,34 @@ describe('evalExprLocally', () => {
     assert.deepEqual(result, { cost: 230, matchedTier: 'small', error: null })
   })
 
+  test('evaluates time-based pricing expressions with backend time functions', () => {
+    const result = evalExprLocally(
+      'hour("Asia/Shanghai") < 9 || (hour("Asia/Shanghai") >= 12 && hour("Asia/Shanghai") < 14) || hour("Asia/Shanghai") >= 18 ? tier("平常时段 0-9/12-14/18-24", p * 4.5 + c * 13.5 + cr * 0.15) : tier("高峰期 9-12/14-18", p * 9 + c * 27 + cr * 0.3)',
+      100,
+      10,
+      emptyExtraTokens
+    )
+
+    assert.equal(result.error, null)
+    assert.ok([585, 1170].includes(result.cost))
+    assert.ok(
+      ['平常时段 0-9/12-14/18-24', '高峰期 9-12/14-18'].includes(
+        result.matchedTier
+      )
+    )
+  })
+
+  test('keeps time helpers in backend ranges and falls back to UTC', () => {
+    const result = evalExprLocally(
+      'hour("Invalid/Zone") >= 0 && hour("Invalid/Zone") <= 23 && minute("") >= 0 && minute("") <= 59 && weekday("UTC") >= 0 && weekday("UTC") <= 6 && month("UTC") >= 1 && month("UTC") <= 12 && day("UTC") >= 1 && day("UTC") <= 31 ? tier("valid", p) : tier("invalid", 999)',
+      42,
+      0,
+      emptyExtraTokens
+    )
+
+    assert.deepEqual(result, { cost: 42, matchedTier: 'valid', error: null })
+  })
+
   test('does not expose browser globals or member access', () => {
     const result = evalExprLocally(
       'globalThis.document ? 999 : 1',

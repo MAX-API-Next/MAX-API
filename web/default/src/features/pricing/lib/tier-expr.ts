@@ -277,6 +277,80 @@ const estimatorParser = new Parser({
   },
 })
 
+type EstimatorTimeParts = {
+  hour: number
+  minute: number
+  weekday: number
+  month: number
+  day: number
+}
+
+const ESTIMATOR_WEEKDAYS: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+}
+
+function createEstimatorTimeFunctions() {
+  const now = new Date()
+  const timePartsCache = new Map<string, EstimatorTimeParts>()
+
+  const getUtcTimeParts = (): EstimatorTimeParts => ({
+    hour: now.getUTCHours(),
+    minute: now.getUTCMinutes(),
+    weekday: now.getUTCDay(),
+    month: now.getUTCMonth() + 1,
+    day: now.getUTCDate(),
+  })
+
+  const getTimeParts = (timezone: string): EstimatorTimeParts => {
+    const normalizedTimezone = timezone.trim() || 'UTC'
+    const cached = timePartsCache.get(normalizedTimezone)
+    if (cached) return cached
+
+    try {
+      const parts = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+        timeZone: normalizedTimezone,
+        hourCycle: 'h23',
+        hour: '2-digit',
+        minute: '2-digit',
+        weekday: 'short',
+        month: 'numeric',
+        day: 'numeric',
+      }).formatToParts(now)
+      const partValues = Object.fromEntries(
+        parts.map((part) => [part.type, part.value])
+      )
+      const result = {
+        hour: Number(partValues.hour),
+        minute: Number(partValues.minute),
+        weekday: ESTIMATOR_WEEKDAYS[partValues.weekday] ?? 0,
+        month: Number(partValues.month),
+        day: Number(partValues.day),
+      }
+      timePartsCache.set(normalizedTimezone, result)
+      return result
+    } catch {
+      const fallback = timePartsCache.get('UTC') ?? getUtcTimeParts()
+      timePartsCache.set('UTC', fallback)
+      timePartsCache.set(normalizedTimezone, fallback)
+      return fallback
+    }
+  }
+
+  return {
+    hour: (timezone: string) => getTimeParts(timezone).hour,
+    minute: (timezone: string) => getTimeParts(timezone).minute,
+    weekday: (timezone: string) => getTimeParts(timezone).weekday,
+    month: (timezone: string) => getTimeParts(timezone).month,
+    day: (timezone: string) => getTimeParts(timezone).day,
+  }
+}
+
 function normalizeEstimatorExpression(exprStr: string): string {
   const body = exprStr.trim().replace(/^v\d+:/, '')
   let quote = ''
@@ -340,6 +414,7 @@ export function evalExprLocally(
     const cacheCreate1hTokens = extraTokenValues.cacheCreate1hTokens || 0
     const len =
       promptTokens + cacheReadTokens + cacheCreateTokens + cacheCreate1hTokens
+    const timeFunctions = createEstimatorTimeFunctions()
     const env: Record<string, unknown> = {
       p: promptTokens,
       c: completionTokens,
@@ -350,6 +425,7 @@ export function evalExprLocally(
       abs: Math.abs,
       ceil: Math.ceil,
       floor: Math.floor,
+      ...timeFunctions,
     }
     for (const field of ESTIMATOR_VARS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0

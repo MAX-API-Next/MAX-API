@@ -312,7 +312,7 @@ function VisualTierCard({
           variant='ghost'
           size='icon'
           onClick={onRemove}
-          disabled={total <= 1 || isFallbackTier}
+          disabled={total <= 1}
           aria-label={t('Remove tier')}
         >
           <Trash2 className='text-destructive h-4 w-4' />
@@ -492,9 +492,14 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
   }
 
   const handleRemoveTier = (index: number) => {
-    if (index === config.tiers.length - 1) return
+    if (config.tiers.length <= 1) return
     const tiers = config.tiers.filter((_, i) => i !== index)
-    onChange({ ...config, tiers: tiers.length > 0 ? tiers : config.tiers })
+    const lastIndex = tiers.length - 1
+    tiers[lastIndex] = normalizeVisualTier({
+      ...tiers[lastIndex],
+      conditions: [],
+    })
+    onChange({ ...config, tiers })
   }
 
   const handleAddCondition = (index: number) => {
