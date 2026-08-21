@@ -53,16 +53,17 @@ type TestWindow = typeof globalThis.window
 
 const animationFrameHandles = new Map<AnimationFrameTimer, TestWindow>()
 
-function requestTestAnimationFrame(callback: FrameRequestCallback): number {
-  if (typeof globalThis.window === 'undefined') return 0
-  const scheduledWindow = globalThis.window
-  const handle = setTimeout(() => {
-    animationFrameHandles.delete(handle)
-    if (globalThis.window !== scheduledWindow) return
-    callback(Date.now())
-  }, 0)
-  animationFrameHandles.set(handle, scheduledWindow)
-  return handle as unknown as number
+function createTestAnimationFrameScheduler(window: TestWindow) {
+  return (callback: FrameRequestCallback): number => {
+    if (globalThis.window !== window) return 0
+    const handle = setTimeout(() => {
+      animationFrameHandles.delete(handle)
+      if (globalThis.window !== window) return
+      callback(Date.now())
+    }, 0)
+    animationFrameHandles.set(handle, window)
+    return handle as unknown as number
+  }
 }
 
 function cancelTestAnimationFrame(handle: number) {
@@ -160,7 +161,10 @@ export function createReactTestEnvironment(options?: {
       setGlobal('KeyboardEvent', window.KeyboardEvent)
       setGlobal('MutationObserver', window.MutationObserver)
       setGlobal('getComputedStyle', window.getComputedStyle.bind(window))
-      setGlobal('requestAnimationFrame', requestTestAnimationFrame)
+      setGlobal(
+        'requestAnimationFrame',
+        createTestAnimationFrameScheduler(installedWindow)
+      )
       setGlobal('cancelAnimationFrame', cancelTestAnimationFrame)
       setGlobal('ResizeObserver', ResizeObserverStub)
       setGlobal('IS_REACT_ACT_ENVIRONMENT', true)

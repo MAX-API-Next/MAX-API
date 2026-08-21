@@ -46,13 +46,15 @@ test('a captured animation frame scheduler cannot leak across test environments'
   await secondEnv.setup()
   let callbackRan = false
 
-  capturedRequestAnimationFrame(() => {
-    callbackRan = true
-    void window.document
-  })
+  try {
+    capturedRequestAnimationFrame(() => {
+      callbackRan = true
+      void window.document
+    })
 
-  secondEnv.teardown()
-  await new Promise((resolve) => setTimeout(resolve, 10))
-
-  assert.equal(callbackRan, false)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(callbackRan, false)
+  } finally {
+    secondEnv.teardown()
+  }
 })
