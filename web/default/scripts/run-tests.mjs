@@ -61,7 +61,7 @@ const textDecoder = new TextDecoder()
 const shardValuePattern = /^(\d+)\/(\d+)$/
 const maxConcurrencyValuePattern = /^\d+$/
 const globalPropertyPattern =
-  String.raw`globalThis(?:\.[A-Za-z_$][\w$]*|\s*\[[^\]]*\])`
+  String.raw`globalThis(?:\s*\.\s*[A-Za-z_$][\w$]*|\s*\[[^\]]*\])+`
 const globalMutationPattern = new RegExp(
   [
     String.raw`(?:Object\.defineProperty|Reflect\.deleteProperty)\s*\(\s*globalThis\b`,

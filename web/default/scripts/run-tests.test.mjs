@@ -247,6 +247,9 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
     '++globalThis.count',
     'globalThis.count--',
     '--globalThis.count',
+    "globalThis.process.env.TEST_FLAG = '1'",
+    "globalThis['process'].env['TEST_FLAG'] ||= '1'",
+    "globalThis.process['env'].TEST_FLAG++",
   ]) {
     assert.equal(usesIsolatedEnvironment('src/example.test.ts', source), true)
   }
@@ -290,6 +293,13 @@ test('isolates tests that mutate browser globals even when they are plain TypeSc
     usesIsolatedEnvironment(
       'src/example.test.ts',
       "globalThis['window'] === existingWindow\nvalues[index] = nextValue"
+    ),
+    false
+  )
+  assert.equal(
+    usesIsolatedEnvironment(
+      'src/example.test.ts',
+      "globalThis.process.env.TEST_FLAG === '1'\nvalues[index] = nextValue"
     ),
     false
   )
