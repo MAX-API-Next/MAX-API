@@ -7,7 +7,7 @@
     "dev": "rsbuild dev",
     "build": "rsbuild build && node scripts/verify-tailwind-build.mjs",
     "build:check": "tsc -b && rsbuild build && node scripts/verify-tailwind-build.mjs",
-    "test": "bun test",
+    "test": "bun test --max-concurrency=1",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "rsbuild preview",
