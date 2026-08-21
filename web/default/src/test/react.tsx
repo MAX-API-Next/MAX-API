@@ -68,10 +68,15 @@ function createTestAnimationFrameScheduler(
   }
 }
 
-function cancelTestAnimationFrame(handle: number) {
-  const timerHandle = handle as unknown as AnimationFrameTimer
-  clearTimeout(timerHandle)
-  animationFrameHandles.delete(timerHandle)
+function createTestAnimationFrameCanceller(
+  window: TestWindow
+): (handle: number) => void {
+  return (handle: number): void => {
+    const timerHandle = handle as unknown as AnimationFrameTimer
+    if (animationFrameHandles.get(timerHandle) !== window) return
+    clearTimeout(timerHandle)
+    animationFrameHandles.delete(timerHandle)
+  }
 }
 
 function cancelPendingAnimationFrames(window: TestWindow) {
@@ -167,7 +172,10 @@ export function createReactTestEnvironment(options?: {
         'requestAnimationFrame',
         createTestAnimationFrameScheduler(installedWindow)
       )
-      setGlobal('cancelAnimationFrame', cancelTestAnimationFrame)
+      setGlobal(
+        'cancelAnimationFrame',
+        createTestAnimationFrameCanceller(installedWindow)
+      )
       setGlobal('ResizeObserver', ResizeObserverStub)
       setGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     },

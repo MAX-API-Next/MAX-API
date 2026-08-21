@@ -36,6 +36,24 @@ test('teardown cancels pending animation frames before removing browser globals'
   assert.equal(callbackRan, false)
 })
 
+test('cancelAnimationFrame cancels a frame owned by the current environment', async () => {
+  const testEnv = createReactTestEnvironment()
+  await testEnv.setup()
+  let callbackRan = false
+
+  try {
+    const handle = requestAnimationFrame(() => {
+      callbackRan = true
+    })
+    cancelAnimationFrame(handle)
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(callbackRan, false)
+  } finally {
+    testEnv.teardown()
+  }
+})
+
 test('a captured animation frame scheduler cannot leak across test environments', async () => {
   const firstEnv = createReactTestEnvironment()
   await firstEnv.setup()
@@ -54,6 +72,29 @@ test('a captured animation frame scheduler cannot leak across test environments'
 
     await new Promise((resolve) => setTimeout(resolve, 10))
     assert.equal(callbackRan, false)
+  } finally {
+    secondEnv.teardown()
+  }
+})
+
+test('a captured animation frame canceller cannot cancel a later environment', async () => {
+  const firstEnv = createReactTestEnvironment()
+  await firstEnv.setup()
+  const capturedCancelAnimationFrame = cancelAnimationFrame
+  firstEnv.teardown()
+
+  const secondEnv = createReactTestEnvironment()
+  await secondEnv.setup()
+  let callbackRan = false
+
+  try {
+    const handle = requestAnimationFrame(() => {
+      callbackRan = true
+    })
+    capturedCancelAnimationFrame(handle)
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(callbackRan, true)
   } finally {
     secondEnv.teardown()
   }
