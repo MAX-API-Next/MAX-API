@@ -20,7 +20,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createReactTestEnvironment } from './react'
 
-test('teardown cancels pending animation frames before removing browser globals', async () => {
+test('teardown cancels pending animation frames before removing browser globals', async (): Promise<void> => {
   const testEnv = createReactTestEnvironment()
   await testEnv.setup()
   let callbackRan = false
@@ -36,7 +36,7 @@ test('teardown cancels pending animation frames before removing browser globals'
   assert.equal(callbackRan, false)
 })
 
-test('cancelAnimationFrame cancels a frame owned by the current environment', async () => {
+test('cancelAnimationFrame cancels a frame owned by the current environment', async (): Promise<void> => {
   const testEnv = createReactTestEnvironment()
   await testEnv.setup()
   let callbackRan = false
@@ -54,7 +54,7 @@ test('cancelAnimationFrame cancels a frame owned by the current environment', as
   }
 })
 
-test('a captured animation frame scheduler cannot leak across test environments', async () => {
+test('a captured animation frame scheduler cannot leak across test environments', async (): Promise<void> => {
   const firstEnv = createReactTestEnvironment()
   await firstEnv.setup()
   const capturedRequestAnimationFrame = requestAnimationFrame
@@ -77,7 +77,7 @@ test('a captured animation frame scheduler cannot leak across test environments'
   }
 })
 
-test('a captured animation frame canceller cannot cancel a later environment', async () => {
+test('a captured animation frame canceller cannot cancel a later environment', async (): Promise<void> => {
   const firstEnv = createReactTestEnvironment()
   await firstEnv.setup()
   const capturedCancelAnimationFrame = cancelAnimationFrame

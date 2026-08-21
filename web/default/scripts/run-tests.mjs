@@ -21,7 +21,9 @@ import { fileURLToPath } from 'node:url'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(scriptDirectory, '..')
-const testGlob = new Bun.Glob('**/*.{test,spec}.{ts,tsx,js,jsx,mjs,cjs}')
+const testGlob = new Bun.Glob(
+  '**/*{.test,_test,.spec,_spec}.{ts,tsx,js,jsx,mjs,cjs,mts,cts}'
+)
 const ignoredDirectories = new Set([
   '.git',
   'coverage',
@@ -32,9 +34,11 @@ const flagsWithSeparateValues = new Set([
   '-t',
   '--coverage-dir',
   '--coverage-reporter',
+  '--env-file',
   '--max-concurrency',
   '--parallel-delay',
   '--path-ignore-patterns',
+  '--preload',
   '--reporter',
   '--reporter-outfile',
   '--rerun-each',

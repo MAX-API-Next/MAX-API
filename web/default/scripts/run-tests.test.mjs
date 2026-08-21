@@ -35,7 +35,9 @@ test('discovers every supported test extension outside only generated directorie
   try {
     const files = [
       'scripts/runner.test.mjs',
+      'scripts/legacy_test.cts',
       'src/component.spec.jsx',
+      'src/legacy_spec.mts',
       'tests/example.test.js',
       'node_modules/dependency.test.js',
       'dist/generated.spec.mjs',
@@ -47,8 +49,10 @@ test('discovers every supported test extension outside only generated directorie
     }
 
     assert.deepEqual(await discoverTestFiles(root), [
+      'scripts/legacy_test.cts',
       'scripts/runner.test.mjs',
       'src/component.spec.jsx',
+      'src/legacy_spec.mts',
       'tests/example.test.js',
     ])
   } finally {
@@ -64,6 +68,10 @@ test('separates Bun flags from file filters without dropping flag values', () =>
       '--coverage',
       '--parallel',
       '1',
+      '--preload',
+      './test/setup.ts',
+      '--env-file',
+      '.env.test',
       'src/features/example.test.ts',
     ]),
     {
@@ -73,6 +81,10 @@ test('separates Bun flags from file filters without dropping flag values', () =>
         '--coverage',
         '--parallel',
         '1',
+        '--preload',
+        './test/setup.ts',
+        '--env-file',
+        '.env.test',
       ],
       fileFilters: ['src/features/example.test.ts'],
     }
