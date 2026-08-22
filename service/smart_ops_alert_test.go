@@ -218,3 +218,60 @@ func TestDeliverSmartOpsAlertRetriesRecipientLookup(t *testing.T) {
 	require.Equal(t, 2, loadAttempts)
 	require.Equal(t, 1, sent)
 }
+
+func TestSmartOpsAlertNotificationPoolRunsIndependentIncidentsConcurrentlyAndPreservesOrder(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	independentDelivered := make(chan struct{}, 1)
+	incidentOrder := make(chan string, 2)
+
+	pool := newSmartOpsAlertNotificationPool(2, 4, func(alert SmartOpsAlert) error {
+		if alert.Key == "system_cpu" && alert.Node == "node-a" {
+			if alert.Status == smartOpsAlertStatusFiring {
+				close(firstStarted)
+				<-releaseFirst
+			}
+			incidentOrder <- alert.Status
+			return nil
+		}
+		independentDelivered <- struct{}{}
+		return nil
+	})
+	t.Cleanup(pool.close)
+
+	firing := SmartOpsAlert{Key: "system_cpu", Node: "node-a", Status: smartOpsAlertStatusFiring}
+	resolved := firing
+	resolved.Status = smartOpsAlertStatusResolved
+	require.Equal(t, pool.workerIndex(firing), pool.workerIndex(resolved), "one incident must stay on one ordered worker")
+
+	independent := SmartOpsAlert{Key: "system_memory", Node: "node-b", Status: smartOpsAlertStatusFiring}
+	if pool.workerIndex(independent) == pool.workerIndex(firing) {
+		independent = SmartOpsAlert{Key: "system_disk", Node: "node-c", Status: smartOpsAlertStatusFiring}
+	}
+	require.NotEqual(t, pool.workerIndex(firing), pool.workerIndex(independent), "the regression fixture must use another worker")
+
+	require.True(t, pool.enqueue(firing))
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("the first incident did not start delivery")
+	}
+
+	require.True(t, pool.enqueue(resolved))
+	require.True(t, pool.enqueue(independent))
+	select {
+	case <-independentDelivered:
+	case <-time.After(time.Second):
+		t.Fatal("an unrelated alert was blocked behind a slow incident")
+	}
+
+	close(releaseFirst)
+	for _, expected := range []string{smartOpsAlertStatusFiring, smartOpsAlertStatusResolved} {
+		select {
+		case actual := <-incidentOrder:
+			require.Equal(t, expected, actual)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s delivery", expected)
+		}
+	}
+}

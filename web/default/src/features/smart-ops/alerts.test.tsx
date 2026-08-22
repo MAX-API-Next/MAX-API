@@ -18,19 +18,29 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
-import { waitFor } from '@testing-library/react'
+import { waitFor, within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import { api } from '@/lib/api'
 import { ActiveAlerts } from './alerts'
 
-const testEnv = createReactTestEnvironment()
+const LOAD_ERROR_KEY = 'We could not load active alerts.'
+const testEnv = createReactTestEnvironment({
+  resources: {
+    en: { translation: { [LOAD_ERROR_KEY]: LOAD_ERROR_KEY } },
+    fr: {
+      translation: {
+        [LOAD_ERROR_KEY]: 'Impossible de charger les alertes actives.',
+      },
+    },
+  },
+})
 
 before(() => testEnv.setup())
 
 after(() => testEnv.teardown())
 
-function createQueryClient() {
+function createQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -89,6 +99,47 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('formats percentages with the active locale', async () => {
+    const originalGet = api.get
+    await testEnv.i18n.changeLanguage('fr')
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: [
+          {
+            key: 'system_memory',
+            status: 'firing',
+            severity: 'warning',
+            component: 'system',
+            node: 'node-fr',
+            current_value: 95.25,
+            threshold: 90,
+            observed_at: '2026-08-22T08:00:00Z',
+            message: 'Memory usage exceeded the threshold',
+          },
+        ],
+      },
+    })) as typeof api.get
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      await waitFor(() => {
+        assert.ok((view.container.textContent ?? '').includes('95,3%'))
+      })
+    } finally {
+      api.get = originalGet
+      queryClient.clear()
+      await view.unmount()
+      await testEnv.i18n.changeLanguage('en')
+    }
+  })
+
   test('shows a healthy empty state when no incident is active', async () => {
     const originalGet = api.get
     api.get = (async () => ({
@@ -115,11 +166,12 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('shows a retryable error state when the alert endpoint fails', async () => {
+  test('shows a localized fallback for an unsuccessful response', async () => {
     const originalGet = api.get
-    api.get = (async () => {
-      throw new Error('temporary alert endpoint failure')
-    }) as typeof api.get
+    await testEnv.i18n.changeLanguage('fr')
+    api.get = (async () => ({
+      data: { success: false, data: [] },
+    })) as typeof api.get
 
     const queryClient = createQueryClient()
     const view = await testEnv.render(
@@ -131,14 +183,46 @@ describe('SmartOps active alerts', () => {
     try {
       await waitFor(() => {
         const text = view.container.textContent ?? ''
+        assert.ok(text.includes('Impossible de charger les alertes actives.'))
+        assert.ok(!text.includes(LOAD_ERROR_KEY))
+      })
+    } finally {
+      api.get = originalGet
+      queryClient.clear()
+      await view.unmount()
+      await testEnv.i18n.changeLanguage('en')
+    }
+  })
+
+  test('shows a retryable error state when the alert endpoint fails', async () => {
+    const originalGet = api.get
+    let requestCount = 0
+    api.get = (async () => {
+      requestCount += 1
+      throw new Error('temporary alert endpoint failure')
+    }) as typeof api.get
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      let retryButton: HTMLElement | undefined
+      await waitFor(() => {
+        const text = view.container.textContent ?? ''
         assert.ok(text.includes('We could not load active alerts.'))
         assert.ok(text.includes('temporary alert endpoint failure'))
-        assert.ok(
-          Array.from(view.container.querySelectorAll('button')).some(
-            (button) => button.textContent?.trim() === 'Retry'
-          )
-        )
+        retryButton = within(view.container).getByRole('button', {
+          name: 'Retry',
+        })
       })
+      assert.ok(retryButton)
+      const requestsBeforeRetry = requestCount
+      await view.click(retryButton)
+      await waitFor(() => assert.ok(requestCount > requestsBeforeRetry))
     } finally {
       api.get = originalGet
       queryClient.clear()

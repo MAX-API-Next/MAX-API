@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactElement } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -52,16 +53,23 @@ const RESOURCE_LABEL: Record<string, string> = {
   system_disk: 'Disk usage',
 }
 
-function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`
+function formatPercent(value: number, locale: string): string {
+  return `${new Intl.NumberFormat(locale, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value)}%`
 }
 
-function getObservedAtMilliseconds(alert: SmartOpsAlert) {
+function getObservedAtMilliseconds(alert: SmartOpsAlert): number | undefined {
   const timestamp = Date.parse(alert.observed_at)
   return Number.isNaN(timestamp) ? undefined : timestamp
 }
 
-function ActiveAlertsTable({ alerts }: { alerts: SmartOpsAlert[] }) {
+interface ActiveAlertsTableProps {
+  alerts: SmartOpsAlert[]
+}
+
+function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
   const { t, i18n } = useTranslation()
 
   return (
@@ -84,7 +92,7 @@ function ActiveAlertsTable({ alerts }: { alerts: SmartOpsAlert[] }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {alerts.map((alert) => {
+          {props.alerts.map((alert) => {
             const observedAt = getObservedAtMilliseconds(alert)
             return (
               <TableRow key={`${alert.node ?? 'unknown'}:${alert.key}`}>
@@ -105,10 +113,10 @@ function ActiveAlertsTable({ alerts }: { alerts: SmartOpsAlert[] }) {
                   {alert.node || t('Unknown')}
                 </TableCell>
                 <TableCell className='py-3 text-right font-mono text-sm tabular-nums'>
-                  {formatPercent(alert.current_value)}
+                  {formatPercent(alert.current_value, i18n.language)}
                 </TableCell>
                 <TableCell className='py-3 text-right font-mono text-sm tabular-nums'>
-                  {formatPercent(alert.threshold)}
+                  {formatPercent(alert.threshold, i18n.language)}
                 </TableCell>
                 <TableCell
                   className='text-muted-foreground py-3 pr-4 text-right text-xs whitespace-nowrap'
@@ -129,14 +137,15 @@ function ActiveAlertsTable({ alerts }: { alerts: SmartOpsAlert[] }) {
   )
 }
 
-export function ActiveAlerts() {
+export function ActiveAlerts(): ReactElement {
   const { t } = useTranslation()
+  const loadErrorMessage = t('We could not load active alerts.')
   const alertsQuery = useQuery({
-    queryKey: ['smart-ops', 'active-alerts'],
-    queryFn: async () => {
+    queryKey: ['smart-ops', 'active-alerts', loadErrorMessage],
+    queryFn: async (): Promise<SmartOpsAlert[]> => {
       const response = await getSmartOpsAlerts()
       if (!response.success || !Array.isArray(response.data)) {
-        throw new Error(response.message || 'We could not load active alerts.')
+        throw new Error(response.message || loadErrorMessage)
       }
       return response.data
     },
@@ -207,7 +216,7 @@ export function ActiveAlerts() {
             </div>
           ) : alertsQuery.isError ? (
             <ErrorState
-              title={t('We could not load active alerts.')}
+              title={loadErrorMessage}
               description={
                 alertsQuery.error instanceof Error
                   ? alertsQuery.error.message

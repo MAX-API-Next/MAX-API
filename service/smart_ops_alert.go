@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ const (
 	smartOpsAlertSampleInterval  = 5 * time.Second
 	smartOpsAlertRequiredSamples = 2
 	smartOpsAlertQueueSize       = 24
+	smartOpsAlertWorkerCount     = 3
 )
 
 var smartOpsAlertRetryDelays = []time.Duration{
@@ -315,9 +317,78 @@ type smartOpsAlertRecipient struct {
 	Setting dto.UserSetting
 }
 
+type smartOpsAlertNotificationPool struct {
+	queues    []chan SmartOpsAlert
+	deliver   func(SmartOpsAlert) error
+	closeOnce sync.Once
+	waitGroup sync.WaitGroup
+}
+
+func newSmartOpsAlertNotificationPool(workerCount, queueSize int, deliver func(SmartOpsAlert) error) *smartOpsAlertNotificationPool {
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	if queueSize < workerCount {
+		queueSize = workerCount
+	}
+
+	pool := &smartOpsAlertNotificationPool{
+		queues:  make([]chan SmartOpsAlert, workerCount),
+		deliver: deliver,
+	}
+	baseCapacity := queueSize / workerCount
+	extraCapacity := queueSize % workerCount
+	for worker := range workerCount {
+		capacity := baseCapacity
+		if worker < extraCapacity {
+			capacity++
+		}
+		pool.queues[worker] = make(chan SmartOpsAlert, capacity)
+		pool.waitGroup.Add(1)
+		go pool.runWorker(pool.queues[worker])
+	}
+	return pool
+}
+
+func (pool *smartOpsAlertNotificationPool) runWorker(queue <-chan SmartOpsAlert) {
+	defer pool.waitGroup.Done()
+	for alert := range queue {
+		if err := pool.deliver(alert); err != nil {
+			common.SysLog(fmt.Sprintf("failed to deliver smart ops alert notification: %s", err.Error()))
+		}
+	}
+}
+
+func (pool *smartOpsAlertNotificationPool) workerIndex(alert SmartOpsAlert) int {
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(alert.Node))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(alert.Key))
+	return int(hasher.Sum32() % uint32(len(pool.queues)))
+}
+
+func (pool *smartOpsAlertNotificationPool) enqueue(alert SmartOpsAlert) bool {
+	queue := pool.queues[pool.workerIndex(alert)]
+	select {
+	case queue <- alert:
+		return true
+	default:
+		return false
+	}
+}
+
+func (pool *smartOpsAlertNotificationPool) close() {
+	pool.closeOnce.Do(func() {
+		for _, queue := range pool.queues {
+			close(queue)
+		}
+		pool.waitGroup.Wait()
+	})
+}
+
 var smartOpsAlertNotificationQueue struct {
 	sync.Once
-	channel chan SmartOpsAlert
+	pool *smartOpsAlertNotificationPool
 }
 
 var smartOpsAlertLoadRecipients = loadSmartOpsAlertRecipients
@@ -328,19 +399,14 @@ var smartOpsAlertSendToRecipient = func(recipient smartOpsAlertRecipient, data d
 
 func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
 	smartOpsAlertNotificationQueue.Do(func() {
-		smartOpsAlertNotificationQueue.channel = make(chan SmartOpsAlert, smartOpsAlertQueueSize)
-		go func() {
-			for queuedAlert := range smartOpsAlertNotificationQueue.channel {
-				if err := deliverSmartOpsAlertNotification(queuedAlert); err != nil {
-					common.SysLog(fmt.Sprintf("failed to deliver smart ops alert notification: %s", err.Error()))
-				}
-			}
-		}()
+		smartOpsAlertNotificationQueue.pool = newSmartOpsAlertNotificationPool(
+			smartOpsAlertWorkerCount,
+			smartOpsAlertQueueSize,
+			deliverSmartOpsAlertNotification,
+		)
 	})
 
-	select {
-	case smartOpsAlertNotificationQueue.channel <- alert:
-	default:
+	if !smartOpsAlertNotificationQueue.pool.enqueue(alert) {
 		common.SysLog(fmt.Sprintf("smart ops alert notification queue is full, dropping %s for node %s", alert.Key, alert.Node))
 	}
 }
