@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { fireEvent, within } from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
@@ -214,42 +215,28 @@ describe('TieredPricingEditor runtime behavior', () => {
         )
       })
 
-      const initialRemoveButton = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Remove tier"]'
-      )
-      assert.ok(initialRemoveButton, 'missing initial Remove tier button')
+      const editor = within(container)
+      const initialRemoveButton = editor.getByRole('button', {
+        name: 'Remove tier',
+      }) as HTMLButtonElement
       assert.equal(initialRemoveButton.disabled, true)
 
-      const addTierButton = Array.from(
-        container.querySelectorAll('button')
-      ).find((button) => button.textContent?.trim() === 'Add tier')
-      assert.ok(addTierButton, 'missing Add tier button')
+      fireEvent.click(editor.getByRole('button', { name: 'Add tier' }))
+      editor.getByText('Tier 2 / 2')
 
-      await act(async () =>
-        addTierButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-      )
-      assert.match(container.textContent || '', /Tier 2 \/ 2/)
-
-      const removeTierButtons = Array.from(
-        container.querySelectorAll<HTMLButtonElement>(
-          'button[aria-label="Remove tier"]'
-        )
-      )
+      const removeTierButtons = editor.getAllByRole('button', {
+        name: 'Remove tier',
+      }) as HTMLButtonElement[]
       assert.equal(removeTierButtons.length, 2)
 
       const newTierRemoveButton = removeTierButtons[1]
       assert.equal(newTierRemoveButton.disabled, false)
-      await act(async () =>
-        newTierRemoveButton.dispatchEvent(
-          new MouseEvent('click', { bubbles: true })
-        )
-      )
+      fireEvent.click(newTierRemoveButton)
 
-      const text = container.textContent || ''
-      assert.match(text, /Tier 1 \/ 1/)
-      assert.doesNotMatch(text, /Tier 2 \/ 2/)
-      assert.match(text, /Fallback tier/)
-      assert.match(text, /Always matches \(default tier\)\./)
+      editor.getByText('Tier 1 / 1')
+      assert.equal(editor.queryByText('Tier 2 / 2'), null)
+      editor.getByText('Fallback tier')
+      editor.getByText('Always matches (default tier).')
     } finally {
       await unmount(root, container)
     }

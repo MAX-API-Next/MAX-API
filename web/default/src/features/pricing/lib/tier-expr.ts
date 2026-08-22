@@ -285,6 +285,14 @@ type EstimatorTimeParts = {
   day: number
 }
 
+type EstimatorTimeFunctions = {
+  hour: (timezone: string) => number
+  minute: (timezone: string) => number
+  weekday: (timezone: string) => number
+  month: (timezone: string) => number
+  day: (timezone: string) => number
+}
+
 const ESTIMATOR_WEEKDAYS: Record<string, number> = {
   Sun: 0,
   Mon: 1,
@@ -295,7 +303,7 @@ const ESTIMATOR_WEEKDAYS: Record<string, number> = {
   Sat: 6,
 }
 
-function createEstimatorTimeFunctions() {
+function createEstimatorTimeFunctions(): EstimatorTimeFunctions {
   const now = new Date()
   const timePartsCache = new Map<string, EstimatorTimeParts>()
 

@@ -51,17 +51,40 @@ describe('evalExprLocally', () => {
     )
 
     assert.equal(result.error, null)
-    assert.ok([585, 1170].includes(result.cost))
     assert.ok(
-      ['平常时段 0-9/12-14/18-24', '高峰期 9-12/14-18'].includes(
-        result.matchedTier
+      [
+        {
+          cost: 585,
+          matchedTier: '平常时段 0-9/12-14/18-24',
+        },
+        {
+          cost: 1170,
+          matchedTier: '高峰期 9-12/14-18',
+        },
+      ].some(
+        (expected) =>
+          expected.cost === result.cost &&
+          expected.matchedTier === result.matchedTier
       )
     )
   })
 
   test('keeps time helpers in backend ranges and falls back to UTC', () => {
+    const utcFallbackChecks = ['hour', 'minute', 'weekday', 'month', 'day']
+      .flatMap((helper) => [
+        `${helper}("Invalid/Zone") == ${helper}("UTC")`,
+        `${helper}("") == ${helper}("UTC")`,
+      ])
+      .join(' && ')
+    const utcRangeChecks = [
+      'hour("UTC") >= 0 && hour("UTC") <= 23',
+      'minute("UTC") >= 0 && minute("UTC") <= 59',
+      'weekday("UTC") >= 0 && weekday("UTC") <= 6',
+      'month("UTC") >= 1 && month("UTC") <= 12',
+      'day("UTC") >= 1 && day("UTC") <= 31',
+    ].join(' && ')
     const result = evalExprLocally(
-      'hour("Invalid/Zone") >= 0 && hour("Invalid/Zone") <= 23 && minute("") >= 0 && minute("") <= 59 && weekday("UTC") >= 0 && weekday("UTC") <= 6 && month("UTC") >= 1 && month("UTC") <= 12 && day("UTC") >= 1 && day("UTC") <= 31 ? tier("valid", p) : tier("invalid", 999)',
+      `${utcFallbackChecks} && ${utcRangeChecks} ? tier("valid", p) : tier("invalid", 999)`,
       42,
       0,
       emptyExtraTokens
