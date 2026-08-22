@@ -5446,6 +5446,19 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "No eligible production logs were recorded for this channel in the last 24 hours.",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.",
     "Throughput data is partial": "Throughput data is partial",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete."
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.",
+    "Active Alerts": "Active Alerts",
+    "Alerts requiring administrator attention": "Alerts requiring administrator attention",
+    "SmartOps reports sustained host pressure here for manual investigation and repair.": "SmartOps reports sustained host pressure here for manual investigation and repair.",
+    "Resource": "Resource",
+    "Threshold": "Threshold",
+    "Observed": "Observed",
+    "CPU usage": "CPU usage",
+    "Memory usage": "Memory usage",
+    "Disk usage": "Disk usage",
+    "Firing": "Firing",
+    "We could not load active alerts.": "We could not load active alerts.",
+    "No active alerts.": "No active alerts.",
+    "This process is not currently reporting a sustained CPU, memory, or disk alert.": "This process is not currently reporting a sustained CPU, memory, or disk alert."
   }
 }

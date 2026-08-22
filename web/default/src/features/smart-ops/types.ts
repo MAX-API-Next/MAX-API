@@ -23,6 +23,24 @@ import type {
   PerformanceGroup,
 } from '@/features/performance-metrics/types'
 
+export type SmartOpsAlert = {
+  key: string
+  status: 'firing'
+  severity: 'warning'
+  component: string
+  node?: string
+  current_value: number
+  threshold: number
+  observed_at: string
+  message: string
+}
+
+export type SmartOpsAlertsResponse = {
+  success: boolean
+  message?: string
+  data: SmartOpsAlert[]
+}
+
 export type ChannelPerformanceQuery = {
   hours: number
   channelId?: number

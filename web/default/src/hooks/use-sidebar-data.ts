@@ -144,7 +144,7 @@ export function useSidebarData(): SidebarData {
           },
           {
             title: t('Smart Operations'),
-            url: '/smart-ops/channel-performance',
+            url: '/smart-ops/alerts',
             activeUrls: ['/smart-ops'],
             icon: HeartPulse,
           },

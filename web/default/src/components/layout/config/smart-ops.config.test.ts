@@ -30,7 +30,7 @@ describe('Smart Operations navigation', () => {
 
     assert.deepEqual(
       group.items.map((item) => item.title),
-      ['Channel performance', 'Model performance']
+      ['Active Alerts', 'Channel performance', 'Model performance']
     )
   })
 
@@ -39,7 +39,12 @@ describe('Smart Operations navigation', () => {
 
     assert.deepEqual(
       group.items.map((item) => item.title),
-      ['Channel performance', 'Model performance', 'System Info']
+      [
+        'Active Alerts',
+        'Channel performance',
+        'Model performance',
+        'System Info',
+      ]
     )
   })
 })

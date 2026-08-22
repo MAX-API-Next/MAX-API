@@ -5446,6 +5446,19 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "Không có nhật ký sản xuất hợp lệ nào được ghi cho kênh này trong 24 giờ qua.",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "Bảng chi tiết bị giới hạn ở {{count}} dòng. Phần tóm tắt vẫn bao phủ tất cả nhật ký hợp lệ phù hợp.",
     "Throughput data is partial": "Dữ liệu thông lượng không đầy đủ",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Các mẫu hiệu năng đã lưu và cục bộ được hiển thị, nhưng không thể đọc các bucket hoạt động dùng chung. Thông lượng đa nút gần đây có thể không đầy đủ."
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Các mẫu hiệu năng đã lưu và cục bộ được hiển thị, nhưng không thể đọc các bucket hoạt động dùng chung. Thông lượng đa nút gần đây có thể không đầy đủ.",
+    "Active Alerts": "Cảnh báo đang hoạt động",
+    "Alerts requiring administrator attention": "Cảnh báo cần quản trị viên chú ý",
+    "SmartOps reports sustained host pressure here for manual investigation and repair.": "SmartOps báo cáo tại đây tình trạng áp lực máy chủ kéo dài để quản trị viên kiểm tra và khắc phục thủ công.",
+    "Resource": "Tài nguyên",
+    "Threshold": "Ngưỡng",
+    "Observed": "Thời điểm quan sát",
+    "CPU usage": "Mức sử dụng CPU",
+    "Memory usage": "Mức sử dụng bộ nhớ",
+    "Disk usage": "Mức sử dụng đĩa",
+    "Firing": "Đang cảnh báo",
+    "We could not load active alerts.": "Không thể tải cảnh báo đang hoạt động.",
+    "No active alerts.": "Không có cảnh báo đang hoạt động.",
+    "This process is not currently reporting a sustained CPU, memory, or disk alert.": "Tiến trình này hiện không báo cáo cảnh báo CPU, bộ nhớ hoặc đĩa kéo dài."
   }
 }

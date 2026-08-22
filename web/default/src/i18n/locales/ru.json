@@ -5446,6 +5446,19 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "За последние 24 часа для этого канала не записано подходящих производственных журналов.",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "Таблица подробностей ограничена {{count}} строками. Сводка по-прежнему охватывает все подходящие журналы.",
     "Throughput data is partial": "Данные о пропускной способности неполны",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Показаны сохранённые и локальные образцы производительности, но общие активные сегменты не удалось прочитать. Последняя многонодовая пропускная способность может быть неполной."
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Показаны сохранённые и локальные образцы производительности, но общие активные сегменты не удалось прочитать. Последняя многонодовая пропускная способность может быть неполной.",
+    "Active Alerts": "Активные оповещения",
+    "Alerts requiring administrator attention": "Оповещения, требующие внимания администратора",
+    "SmartOps reports sustained host pressure here for manual investigation and repair.": "SmartOps сообщает здесь о длительной нагрузке на узел для ручной диагностики и устранения.",
+    "Resource": "Ресурс",
+    "Threshold": "Порог",
+    "Observed": "Время наблюдения",
+    "CPU usage": "Использование CPU",
+    "Memory usage": "Использование памяти",
+    "Disk usage": "Использование диска",
+    "Firing": "Активно",
+    "We could not load active alerts.": "Не удалось загрузить активные оповещения.",
+    "No active alerts.": "Активных оповещений нет.",
+    "This process is not currently reporting a sustained CPU, memory, or disk alert.": "Этот процесс сейчас не сообщает о длительном оповещении по CPU, памяти или диску."
   }
 }

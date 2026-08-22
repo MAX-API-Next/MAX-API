@@ -18,7 +18,14 @@ const (
 	smartOpsAlertSeverityWarning = "warning"
 	smartOpsAlertSampleInterval  = 5 * time.Second
 	smartOpsAlertRequiredSamples = 2
+	smartOpsAlertQueueSize       = 24
 )
+
+var smartOpsAlertRetryDelays = []time.Duration{
+	5 * time.Second,
+	15 * time.Second,
+	45 * time.Second,
+}
 
 // SmartOpsAlert is the read-only incident projection exposed to administrators.
 // It intentionally contains only resource metadata and never includes secrets,
@@ -50,14 +57,20 @@ type smartOpsAlertState struct {
 	lastObserved time.Time
 }
 
+func (state *smartOpsAlertState) suppress(observedAt time.Time) {
+	state.active = false
+	state.consecutive = 0
+	state.lastValue = 0
+	state.lastObserved = observedAt
+}
+
 func (state *smartOpsAlertState) observe(key string, value, threshold float64, observedAt time.Time, requiredSamples int) *smartOpsAlertEvent {
 	if threshold <= 0 {
-		state.consecutive = 0
-		if !state.active {
-			return nil
-		}
-		state.active = false
-		return &smartOpsAlertEvent{Key: key, Status: smartOpsAlertStatusResolved, CurrentValue: value, Threshold: threshold, ObservedAt: observedAt}
+		state.suppress(observedAt)
+		return nil
+	}
+	if observedAt.IsZero() || !observedAt.After(state.lastObserved) {
+		return nil
 	}
 
 	state.lastValue = value
@@ -84,6 +97,7 @@ type smartOpsAlertDefinition struct {
 	component string
 	label     string
 	value     func(common.SystemStatus) float64
+	valid     func(common.SystemStatus) bool
 	threshold func(common.PerformanceMonitorConfig) float64
 }
 
@@ -93,6 +107,7 @@ var smartOpsAlertDefinitions = []smartOpsAlertDefinition{
 		component: "system",
 		label:     "CPU 使用率",
 		value:     func(status common.SystemStatus) float64 { return status.CPUUsage },
+		valid:     func(status common.SystemStatus) bool { return status.CPUValid },
 		threshold: func(config common.PerformanceMonitorConfig) float64 { return float64(config.CPUThreshold) },
 	},
 	{
@@ -100,6 +115,7 @@ var smartOpsAlertDefinitions = []smartOpsAlertDefinition{
 		component: "system",
 		label:     "内存使用率",
 		value:     func(status common.SystemStatus) float64 { return status.MemoryUsage },
+		valid:     func(status common.SystemStatus) bool { return status.MemoryValid },
 		threshold: func(config common.PerformanceMonitorConfig) float64 { return float64(config.MemoryThreshold) },
 	},
 	{
@@ -107,6 +123,7 @@ var smartOpsAlertDefinitions = []smartOpsAlertDefinition{
 		component: "system",
 		label:     "磁盘使用率",
 		value:     func(status common.SystemStatus) float64 { return status.DiskUsage },
+		valid:     func(status common.SystemStatus) bool { return status.DiskValid },
 		threshold: func(config common.PerformanceMonitorConfig) float64 { return float64(config.DiskThreshold) },
 	},
 }
@@ -119,9 +136,7 @@ var smartOpsAlertMonitor struct {
 	active map[string]SmartOpsAlert
 }
 
-var smartOpsAlertNotificationSender = func(alert SmartOpsAlert) {
-	go sendSmartOpsAlertNotification(alert)
-}
+var smartOpsAlertNotificationSender = enqueueSmartOpsAlertNotification
 
 // StartSmartOpsAlertMonitor starts the in-process detector. It is deliberately
 // separate from the resource sampler so the existing sampler remains cheap and
@@ -183,12 +198,11 @@ func StopSmartOpsAlertMonitor(ctx context.Context) error {
 	}
 }
 
-func evaluateSmartOpsSystemAlerts(status common.SystemStatus, config common.PerformanceMonitorConfig, now time.Time) {
+func evaluateSmartOpsSystemAlerts(status common.SystemStatus, config common.PerformanceMonitorConfig, _ time.Time) {
 	if !config.Enabled {
 		smartOpsAlertMonitor.Lock()
 		for _, state := range smartOpsAlertMonitor.states {
-			state.active = false
-			state.consecutive = 0
+			state.suppress(status.ObservedAt)
 		}
 		clear(smartOpsAlertMonitor.active)
 		smartOpsAlertMonitor.Unlock()
@@ -209,19 +223,29 @@ func evaluateSmartOpsSystemAlerts(status common.SystemStatus, config common.Perf
 			state = &smartOpsAlertState{}
 			smartOpsAlertMonitor.states[definition.key] = state
 		}
+		threshold := definition.threshold(config)
+		if threshold <= 0 {
+			state.suppress(status.ObservedAt)
+			delete(smartOpsAlertMonitor.active, definition.key)
+			continue
+		}
+		if !definition.valid(status) || status.ObservedAt.IsZero() || !status.ObservedAt.After(state.lastObserved) {
+			continue
+		}
+		value := definition.value(status)
 		event := state.observe(
 			definition.key,
-			definition.value(status),
-			definition.threshold(config),
-			now,
+			value,
+			threshold,
+			status.ObservedAt,
 			smartOpsAlertRequiredSamples,
 		)
 		if event == nil {
 			if state.active {
 				alert := smartOpsAlertMonitor.active[definition.key]
-				alert.CurrentValue = definition.value(status)
-				alert.Threshold = definition.threshold(config)
-				alert.ObservedAt = now
+				alert.CurrentValue = value
+				alert.Threshold = threshold
+				alert.ObservedAt = status.ObservedAt
 				alert.Message = formatSmartOpsAlertMessage(definition.label, &smartOpsAlertEvent{
 					Status:       smartOpsAlertStatusFiring,
 					CurrentValue: alert.CurrentValue,
@@ -285,24 +309,123 @@ func GetSmartOpsAlerts() []SmartOpsAlert {
 	return alerts
 }
 
-func sendSmartOpsAlertNotification(alert SmartOpsAlert) {
+type smartOpsAlertRecipient struct {
+	ID      int
+	Email   string
+	Setting dto.UserSetting
+}
+
+var smartOpsAlertNotificationQueue struct {
+	sync.Once
+	channel chan SmartOpsAlert
+}
+
+var smartOpsAlertLoadRecipients = loadSmartOpsAlertRecipients
+var smartOpsAlertCheckNotificationLimit = CheckNotificationLimit
+var smartOpsAlertSendToRecipient = func(recipient smartOpsAlertRecipient, data dto.Notify) error {
+	return sendUserNotification(recipient.ID, recipient.Email, recipient.Setting, data)
+}
+
+func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
+	smartOpsAlertNotificationQueue.Do(func() {
+		smartOpsAlertNotificationQueue.channel = make(chan SmartOpsAlert, smartOpsAlertQueueSize)
+		go func() {
+			for queuedAlert := range smartOpsAlertNotificationQueue.channel {
+				if err := deliverSmartOpsAlertNotification(queuedAlert); err != nil {
+					common.SysLog(fmt.Sprintf("failed to deliver smart ops alert notification: %s", err.Error()))
+				}
+			}
+		}()
+	})
+
+	select {
+	case smartOpsAlertNotificationQueue.channel <- alert:
+	default:
+		common.SysLog(fmt.Sprintf("smart ops alert notification queue is full, dropping %s for node %s", alert.Key, alert.Node))
+	}
+}
+
+func smartOpsAlertNotification(alert SmartOpsAlert) dto.Notify {
 	statusText := "异常"
 	if alert.Status == smartOpsAlertStatusResolved {
 		statusText = "恢复"
 	}
 	subject := fmt.Sprintf("智能运维告警：%s", statusText)
-	content := fmt.Sprintf("节点：%s\n组件：%s\n%s\n时间：%s\n查看：/smart-ops/channel-performance\n当前告警接口：/api/smart-ops/alerts", alert.Node, alert.Component, alert.Message, alert.ObservedAt.Format(time.RFC3339))
-	notifyType := fmt.Sprintf("%s:%s", dto.NotifyTypeSmartOpsAlert, alert.Key)
-	if err := NotifyAdminUsers(dto.NewNotify(notifyType, subject, content, nil)); err != nil {
-		common.SysLog(fmt.Sprintf("failed to send smart ops alert notification: %s", err.Error()))
-	}
+	content := fmt.Sprintf("节点：%s\n组件：%s\n%s\n时间：%s\n查看：/smart-ops/alerts\n当前告警接口：/api/smart-ops/alerts", alert.Node, alert.Component, alert.Message, alert.ObservedAt.Format(time.RFC3339))
+	return dto.NewNotify(smartOpsAlertNotifyType(alert), subject, content, nil)
 }
 
-// NotifyAdminUsers broadcasts an operational alert to enabled administrators
-// using each administrator's existing notification method configuration.
-func NotifyAdminUsers(data dto.Notify) error {
+func smartOpsAlertNotifyType(alert SmartOpsAlert) string {
+	return fmt.Sprintf("%s:%s:%s:%s", dto.NotifyTypeSmartOpsAlert, alert.Node, alert.Key, alert.Status)
+}
+
+func deliverSmartOpsAlertNotification(alert SmartOpsAlert) error {
+	var recipients []smartOpsAlertRecipient
+	if err := retrySmartOpsAlertOperation(func() error {
+		var err error
+		recipients, err = smartOpsAlertLoadRecipients()
+		return err
+	}); err != nil {
+		return fmt.Errorf("failed to load administrator recipients: %w", err)
+	}
+
+	notification := smartOpsAlertNotification(alert)
+	var firstErr error
+	for _, recipient := range recipients {
+		allowed, err := checkSmartOpsAlertNotificationLimit(recipient.ID, notification.Type)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			common.SysLog(fmt.Sprintf("failed to reserve notification slot for admin user %d: %s", recipient.ID, err.Error()))
+			continue
+		}
+		if !allowed {
+			err = fmt.Errorf("notification limit exceeded for admin user %d", recipient.ID)
+			if firstErr == nil {
+				firstErr = err
+			}
+			common.SysLog(err.Error())
+			continue
+		}
+		if err := retrySmartOpsAlertOperation(func() error {
+			return smartOpsAlertSendToRecipient(recipient, notification)
+		}); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			common.SysLog(fmt.Sprintf("failed to notify admin user %d for smart ops alert after retries: %s", recipient.ID, err.Error()))
+		}
+	}
+	return firstErr
+}
+
+func retrySmartOpsAlertOperation(operation func() error) error {
+	var err error
+	for attempt := 0; attempt <= len(smartOpsAlertRetryDelays); attempt++ {
+		if err = operation(); err == nil {
+			return nil
+		}
+		if attempt < len(smartOpsAlertRetryDelays) {
+			time.Sleep(smartOpsAlertRetryDelays[attempt])
+		}
+	}
+	return err
+}
+
+func checkSmartOpsAlertNotificationLimit(userID int, notifyType string) (bool, error) {
+	var allowed bool
+	err := retrySmartOpsAlertOperation(func() error {
+		var err error
+		allowed, err = smartOpsAlertCheckNotificationLimit(userID, notifyType)
+		return err
+	})
+	return allowed, err
+}
+
+func loadSmartOpsAlertRecipients() ([]smartOpsAlertRecipient, error) {
 	if model.DB == nil {
-		return fmt.Errorf("database is not initialized")
+		return nil, fmt.Errorf("database is not initialized")
 	}
 
 	var users []model.User
@@ -310,16 +433,35 @@ func NotifyAdminUsers(data dto.Notify) error {
 		Select("id", "email", "role", "status", "setting").
 		Where("status = ? AND role >= ?", common.UserStatusEnabled, common.RoleAdminUser).
 		Find(&users).Error; err != nil {
-		return fmt.Errorf("failed to query smart ops notification users: %w", err)
+		return nil, fmt.Errorf("failed to query smart ops notification users: %w", err)
+	}
+
+	recipients := make([]smartOpsAlertRecipient, 0, len(users))
+	for _, user := range users {
+		recipients = append(recipients, smartOpsAlertRecipient{
+			ID:      user.Id,
+			Email:   user.Email,
+			Setting: user.GetSetting(),
+		})
+	}
+	return recipients, nil
+}
+
+// NotifyAdminUsers broadcasts an operational alert to enabled administrators
+// using each administrator's existing notification method configuration.
+func NotifyAdminUsers(data dto.Notify) error {
+	recipients, err := loadSmartOpsAlertRecipients()
+	if err != nil {
+		return err
 	}
 
 	var firstErr error
-	for _, user := range users {
-		if err := NotifyUser(user.Id, user.Email, user.GetSetting(), data); err != nil {
+	for _, recipient := range recipients {
+		if err := NotifyUser(recipient.ID, recipient.Email, recipient.Setting, data); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
-			common.SysLog(fmt.Sprintf("failed to notify admin user %d for smart ops alert: %s", user.Id, err.Error()))
+			common.SysLog(fmt.Sprintf("failed to notify admin user %d for smart ops alert: %s", recipient.ID, err.Error()))
 		}
 	}
 	return firstErr

@@ -63,6 +63,17 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 	if !canSend {
 		return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, notifyType)
 	}
+	return sendUserNotification(userId, userEmail, userSetting, data)
+}
+
+// sendUserNotification performs one delivery after the caller has obtained a
+// notification-limit permit. Keeping delivery separate lets SmartOps retry a
+// transient transport failure without consuming another logical alert slot.
+func sendUserNotification(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
+	notifyType := userSetting.NotifyType
+	if notifyType == "" {
+		notifyType = dto.NotifyTypeEmail
+	}
 
 	switch notifyType {
 	case dto.NotifyTypeEmail:

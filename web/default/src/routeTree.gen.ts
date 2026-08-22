@@ -54,6 +54,7 @@ import { Route as AuthenticatedSmartOpsSystemInfoRouteImport } from './routes/_a
 import { Route as AuthenticatedSmartOpsProductionPerformanceRouteImport } from './routes/_authenticated/smart-ops/production-performance'
 import { Route as AuthenticatedSmartOpsModelPerformanceRouteImport } from './routes/_authenticated/smart-ops/model-performance'
 import { Route as AuthenticatedSmartOpsChannelPerformanceRouteImport } from './routes/_authenticated/smart-ops/channel-performance'
+import { Route as AuthenticatedSmartOpsAlertsRouteImport } from './routes/_authenticated/smart-ops/alerts'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedDashboardSectionRouteImport } from './routes/_authenticated/dashboard/$section'
@@ -314,6 +315,12 @@ const AuthenticatedSmartOpsChannelPerformanceRoute =
     path: '/smart-ops/channel-performance',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedSmartOpsAlertsRoute =
+  AuthenticatedSmartOpsAlertsRouteImport.update({
+    id: '/smart-ops/alerts',
+    path: '/smart-ops/alerts',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedModelsSectionRoute =
   AuthenticatedModelsSectionRouteImport.update({
     id: '/models/$section',
@@ -457,6 +464,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
   '/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -520,6 +528,7 @@ export interface FileRoutesByTo {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
   '/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -587,6 +596,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/_authenticated/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
   '/_authenticated/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/_authenticated/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/_authenticated/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -653,6 +663,7 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/smart-ops/alerts'
     | '/smart-ops/channel-performance'
     | '/smart-ops/model-performance'
     | '/smart-ops/production-performance'
@@ -716,6 +727,7 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/smart-ops/alerts'
     | '/smart-ops/channel-performance'
     | '/smart-ops/model-performance'
     | '/smart-ops/production-performance'
@@ -782,6 +794,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard/$section'
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
+    | '/_authenticated/smart-ops/alerts'
     | '/_authenticated/smart-ops/channel-performance'
     | '/_authenticated/smart-ops/model-performance'
     | '/_authenticated/smart-ops/production-performance'
@@ -1155,6 +1168,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSmartOpsChannelPerformanceRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/smart-ops/alerts': {
+      id: '/_authenticated/smart-ops/alerts'
+      path: '/smart-ops/alerts'
+      fullPath: '/smart-ops/alerts'
+      preLoaderRoute: typeof AuthenticatedSmartOpsAlertsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/models/$section': {
       id: '/_authenticated/models/$section'
       path: '/models/$section'
@@ -1381,6 +1401,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardSectionRoute: typeof AuthenticatedDashboardSectionRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
+  AuthenticatedSmartOpsAlertsRoute: typeof AuthenticatedSmartOpsAlertsRoute
   AuthenticatedSmartOpsChannelPerformanceRoute: typeof AuthenticatedSmartOpsChannelPerformanceRoute
   AuthenticatedSmartOpsModelPerformanceRoute: typeof AuthenticatedSmartOpsModelPerformanceRoute
   AuthenticatedSmartOpsProductionPerformanceRoute: typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -1408,6 +1429,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardSectionRoute: AuthenticatedDashboardSectionRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
+  AuthenticatedSmartOpsAlertsRoute: AuthenticatedSmartOpsAlertsRoute,
   AuthenticatedSmartOpsChannelPerformanceRoute:
     AuthenticatedSmartOpsChannelPerformanceRoute,
   AuthenticatedSmartOpsModelPerformanceRoute:

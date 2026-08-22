@@ -5446,6 +5446,19 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "最近 24 小时未记录该渠道的符合条件生产日志。",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "详情表已截断为 {{count}} 行，但摘要仍覆盖所有符合条件的匹配日志。",
     "Throughput data is partial": "吞吐量数据不完整",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "当前显示已存储和本地性能样本，但无法读取共享活动桶；最近的多节点吞吐量可能不完整。"
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "当前显示已存储和本地性能样本，但无法读取共享活动桶；最近的多节点吞吐量可能不完整。",
+    "Active Alerts": "活动告警",
+    "Alerts requiring administrator attention": "需要管理员关注的告警",
+    "SmartOps reports sustained host pressure here for manual investigation and repair.": "SmartOps 会在此报告持续的主机资源压力，供管理员人工排查和修复。",
+    "Resource": "资源",
+    "Threshold": "阈值",
+    "Observed": "观测时间",
+    "CPU usage": "CPU 使用率",
+    "Memory usage": "内存使用率",
+    "Disk usage": "磁盘使用率",
+    "Firing": "告警中",
+    "We could not load active alerts.": "无法加载活动告警。",
+    "No active alerts.": "当前没有活动告警。",
+    "This process is not currently reporting a sustained CPU, memory, or disk alert.": "当前进程暂未报告持续的 CPU、内存或磁盘告警。"
   }
 }

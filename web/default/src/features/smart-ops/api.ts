@@ -27,7 +27,15 @@ import type {
   ModelPerformanceDetailResponse,
   ModelPerformanceQuery,
   ModelPerformanceResponse,
+  SmartOpsAlertsResponse,
 } from './types'
+
+export async function getSmartOpsAlerts(): Promise<SmartOpsAlertsResponse> {
+  const response = await api.get<SmartOpsAlertsResponse>(
+    '/api/smart-ops/alerts'
+  )
+  return response.data
+}
 
 export async function getChannelPerformance(
   query: ChannelPerformanceQuery

@@ -115,6 +115,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/smart-ops': { section: 'admin', module: 'smart_ops' },
+  '/smart-ops/alerts': { section: 'admin', module: 'smart_ops' },
   '/smart-ops/production-performance': {
     section: 'admin',
     module: 'smart_ops',

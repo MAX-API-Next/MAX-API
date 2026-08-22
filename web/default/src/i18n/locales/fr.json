@@ -5446,6 +5446,19 @@
     "No eligible production logs were recorded for this channel in the last 24 hours.": "Aucun journal de production éligible n'a été enregistré pour ce canal au cours des dernières 24 heures.",
     "The detail table was truncated to {{count}} rows. The summary still covers all matching eligible logs.": "Le tableau détaillé a été limité à {{count}} lignes. Le résumé couvre toujours tous les journaux éligibles correspondants.",
     "Throughput data is partial": "Données de débit partielles",
-    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Les échantillons stockés et locaux sont affichés, mais les compartiments actifs partagés sont illisibles. Le débit multi-nœuds récent peut être incomplet."
+    "Stored and local performance samples are shown, but shared active buckets could not be read. Recent multi-node throughput may be incomplete.": "Les échantillons stockés et locaux sont affichés, mais les compartiments actifs partagés sont illisibles. Le débit multi-nœuds récent peut être incomplet.",
+    "Active Alerts": "Alertes actives",
+    "Alerts requiring administrator attention": "Alertes nécessitant l’attention d’un administrateur",
+    "SmartOps reports sustained host pressure here for manual investigation and repair.": "SmartOps signale ici les pressions persistantes sur l’hôte afin qu’elles soient examinées et corrigées manuellement.",
+    "Resource": "Ressource",
+    "Threshold": "Seuil",
+    "Observed": "Observé",
+    "CPU usage": "Utilisation du processeur",
+    "Memory usage": "Utilisation de la mémoire",
+    "Disk usage": "Utilisation du disque",
+    "Firing": "En cours",
+    "We could not load active alerts.": "Impossible de charger les alertes actives.",
+    "No active alerts.": "Aucune alerte active.",
+    "This process is not currently reporting a sustained CPU, memory, or disk alert.": "Ce processus ne signale actuellement aucune alerte persistante concernant le processeur, la mémoire ou le disque."
   }
 }
