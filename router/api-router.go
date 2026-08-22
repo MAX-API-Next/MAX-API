@@ -230,6 +230,7 @@ func SetApiRouter(router *gin.Engine) {
 		smartOpsRoute := apiRouter.Group("/smart-ops")
 		smartOpsRoute.Use(middleware.AdminAuth())
 		{
+			smartOpsRoute.GET("/alerts", controller.GetSmartOpsAlerts)
 			smartOpsRoute.GET("/channel-performance", controller.GetChannelPerformance)
 			smartOpsRoute.GET("/channel-performance/detail", controller.GetChannelPerformanceDetail)
 			smartOpsRoute.GET("/model-performance", controller.GetModelPerformance)
