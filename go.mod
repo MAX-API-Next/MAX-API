@@ -1,6 +1,6 @@
 module github.com/MAX-API-Next/MAX-API
 
-// +heroku goVersion go1.18
+// +heroku goVersion go1.25
 go 1.25.1
 
 require (
