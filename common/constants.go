@@ -226,15 +226,15 @@ var (
 	GlobalWebRateLimitDuration int64
 
 	CriticalRateLimitEnable        bool
-	CriticalRateLimitNum                 = 20
+	CriticalRateLimitNum                 = 200
 	CriticalRateLimitDuration      int64 = 20 * 60
-	CriticalRouteRateLimitNum            = 20
+	CriticalRouteRateLimitNum            = 200
 	CriticalRouteRateLimitDuration int64 = 20 * 60
 
 	// Password login is limited by account as well as the shared API bucket.
 	// This prevents a shared NAT address from making unrelated users unable to log in.
 	LoginRateLimitEnable   bool
-	LoginRateLimitNum            = 10
+	LoginRateLimitNum            = 100
 	LoginRateLimitDuration int64 = 15 * 60
 
 	UploadRateLimitNum            = 10
@@ -245,7 +245,7 @@ var (
 
 	// Per-user search rate limit (applies after authentication, keyed by user ID)
 	SearchRateLimitEnable         = true
-	SearchRateLimitNum            = 10
+	SearchRateLimitNum            = 100
 	SearchRateLimitDuration int64 = 60
 )
 
