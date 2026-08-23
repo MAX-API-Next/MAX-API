@@ -27,6 +27,8 @@ import {
   handleOIDCOAuth,
   handleDiscordOAuth,
   handleLinuxDOOAuth,
+  indexCustomOAuthBindings,
+  type CustomOAuthBinding,
 } from '@/lib/oauth'
 import { useDialogs } from '@/hooks/use-dialog'
 import { useStatus } from '@/hooks/use-status'
@@ -35,11 +37,7 @@ import { Separator } from '@/components/ui/separator'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
-import {
-  getSelfOAuthBindings,
-  unbindCustomOAuth,
-  type CustomOAuthBinding,
-} from '../../api'
+import { getSelfOAuthBindings, unbindCustomOAuth } from '../../api'
 import type { UserProfile, BindingItem } from '../../types'
 import { EmailBindDialog } from '../dialogs/email-bind-dialog'
 import { TelegramBindDialog } from '../dialogs/telegram-bind-dialog'
@@ -67,10 +65,14 @@ export function AccountBindingsTab({
   const [unbindTarget, setUnbindTarget] = useState<CustomOAuthBinding | null>(
     null
   )
+  const customBindingIndex = useMemo(
+    () => indexCustomOAuthBindings(customBindings),
+    [customBindings]
+  )
   const [unbinding, setUnbinding] = useState(false)
 
   const customProviders = status?.custom_oauth_providers as
-    | Array<{ id: string; name: string }>
+    | Array<{ id: number; name: string }>
     | undefined
 
   const fetchCustomBindings = useCallback(async () => {
@@ -113,7 +115,7 @@ export function AccountBindingsTab({
     }
   }
 
-  const handleBindCustomOAuth = (provider: { id: string; name: string }) => {
+  const handleBindCustomOAuth = (provider: { id: number; name: string }) => {
     const redirectUrl = `${window.location.origin}/oauth/${provider.id}?bind=true`
     window.location.href = `/api/oauth/${provider.id}?redirect=${encodeURIComponent(redirectUrl)}`
   }
@@ -315,9 +317,7 @@ export function AccountBindingsTab({
           </p>
           <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
             {customProviders.map((provider) => {
-              const binding = customBindings.find(
-                (b) => b.provider_id === provider.id
-              )
+              const binding = customBindingIndex.get(provider.id)
               const isBound = !!binding
               return (
                 <div
@@ -341,7 +341,7 @@ export function AccountBindingsTab({
                       </div>
                       <p className='text-muted-foreground truncate text-xs'>
                         {isBound
-                          ? binding?.external_id || t('Bound')
+                          ? binding?.provider_user_id || t('Bound')
                           : t('Not bound')}
                       </p>
                     </div>

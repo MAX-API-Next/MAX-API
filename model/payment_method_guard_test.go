@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) {
@@ -333,6 +336,212 @@ func TestRechargeCreemRejectsZeroQuotaBeforeCompletingOrder(t *testing.T) {
 	assert.EqualValues(t, 0, getUserQuotaForPaymentGuardTest(t, 610))
 }
 
+func TestRechargeCreemRejectsQuotaAboveWalletLimitWithoutCompletingOrder(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 617, common.MaxQuota-2)
+	topUp := &TopUp{
+		UserId:          617,
+		Amount:          2,
+		Money:           9.99,
+		TradeNo:         "creem-wallet-limit",
+		PaymentMethod:   PaymentProviderCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := RechargeCreem("creem-wallet-limit", "", "", "127.0.0.1")
+	require.ErrorIs(t, err, ErrTopUpNeedsReconciliation)
+	require.ErrorIs(t, RechargeCreem("creem-wallet-limit", "", "", "127.0.0.1"), ErrTopUpNeedsReconciliation)
+	assert.Equal(t, common.TopUpStatusPaidReconciliation, getTopUpStatusForPaymentGuardTest(t, "creem-wallet-limit"))
+	assert.EqualValues(t, common.MaxQuota-2, getUserQuotaForPaymentGuardTest(t, 617))
+}
+
+func TestRechargeCreemAllowsExactWalletBoundary(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 618, common.MaxQuota-2)
+	topUp := &TopUp{
+		UserId:          618,
+		Amount:          1,
+		Money:           9.99,
+		TradeNo:         "creem-wallet-boundary",
+		PaymentMethod:   PaymentProviderCreem,
+		PaymentProvider: PaymentProviderCreem,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	require.NoError(t, RechargeCreem("creem-wallet-boundary", "", "", "127.0.0.1"))
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-wallet-boundary"))
+	assert.EqualValues(t, common.MaxQuota-1, getUserQuotaForPaymentGuardTest(t, 618))
+}
+
+func TestCreditTopUpQuotaRejectsInvalidQuotaAndMissingUser(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 619, 10)
+
+	for _, creditedQuota := range []int64{0, -1, int64(common.MaxQuota)} {
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			return creditTopUpQuota(tx, 619, creditedQuota, nil, nil)
+		})
+		require.ErrorIs(t, err, ErrInvalidTopUpQuota)
+	}
+	require.EqualValues(t, 10, getUserQuotaForPaymentGuardTest(t, 619))
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return creditTopUpQuota(tx, 999999, 1, nil, nil)
+	})
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestRechargeCreemDuplicateCallbackCreditsExactlyOnce(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 620, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-duplicate", 620, PaymentProviderCreem)
+
+	require.NoError(t, RechargeCreem("creem-duplicate", "", "", "127.0.0.1"))
+	require.NoError(t, RechargeCreem("creem-duplicate", "", "", "127.0.0.1"))
+
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-duplicate"))
+	assert.EqualValues(t, 2, getUserQuotaForPaymentGuardTest(t, 620))
+}
+
+func TestConcurrentDistinctTopUpsCannotExceedWalletLimit(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 621, common.MaxQuota-3)
+	insertTopUpForPaymentGuardTest(t, "creem-concurrent-a", 621, PaymentProviderCreem)
+	insertTopUpForPaymentGuardTest(t, "creem-concurrent-b", 621, PaymentProviderCreem)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, tradeNo := range []string{"creem-concurrent-a", "creem-concurrent-b"} {
+		wg.Add(1)
+		go func(tradeNo string) {
+			defer wg.Done()
+			errs <- RechargeCreem(tradeNo, "", "", "127.0.0.1")
+		}(tradeNo)
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, failures)
+	assert.EqualValues(t, common.MaxQuota-1, getUserQuotaForPaymentGuardTest(t, 621))
+
+	statuses := []string{
+		getTopUpStatusForPaymentGuardTest(t, "creem-concurrent-a"),
+		getTopUpStatusForPaymentGuardTest(t, "creem-concurrent-b"),
+	}
+	assert.ElementsMatch(t, []string{common.TopUpStatusSuccess, common.TopUpStatusPaidReconciliation}, statuses)
+}
+
+func TestManualCompleteTopUpRecoversPaidReconciliationOrder(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 624, common.MaxQuota-2)
+	insertTopUpForPaymentGuardTest(t, "creem-manual-reconciliation", 624, PaymentProviderCreem)
+
+	require.ErrorIs(t, RechargeCreem("creem-manual-reconciliation", "", "", "127.0.0.1"), ErrTopUpNeedsReconciliation)
+	assert.Equal(t, common.TopUpStatusPaidReconciliation, getTopUpStatusForPaymentGuardTest(t, "creem-manual-reconciliation"))
+	assert.EqualValues(t, common.MaxQuota-2, getUserQuotaForPaymentGuardTest(t, 624))
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 624).Update("quota", common.MaxQuota-4).Error)
+	require.NoError(t, ManualCompleteTopUp("creem-manual-reconciliation", "127.0.0.1"))
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-manual-reconciliation"))
+	assert.EqualValues(t, common.MaxQuota-2, getUserQuotaForPaymentGuardTest(t, 624))
+
+	require.NoError(t, ManualCompleteTopUp("creem-manual-reconciliation", "127.0.0.1"))
+	assert.EqualValues(t, common.MaxQuota-2, getUserQuotaForPaymentGuardTest(t, 624))
+}
+
+func TestRechargeCreemPersistsCacheInvalidationAfterCommittedCredit(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 622, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-cache-outbox", 622, PaymentProviderCreem)
+
+	client, _ := useFailingCacheMutationRedis(t, 1)
+	cacheUserForRetryTest(t, client, User{
+		Id: 622, Username: "payment_guard_user", Group: "default", Quota: 0, Status: common.UserStatusEnabled,
+	})
+
+	require.NoError(t, RechargeCreem("creem-cache-outbox", "", "", "127.0.0.1"))
+	var pending int64
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "622").
+		Count(&pending).Error)
+	require.EqualValues(t, 1, pending)
+
+	processCacheInvalidationTasks()
+	requireCacheKeyDeletedEventually(t, client, getUserCacheKey(622))
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "622").
+		Count(&pending).Error)
+	assert.Zero(t, pending)
+}
+
+func TestRejectedTopUpDoesNotStageCacheInvalidation(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 623, common.MaxQuota-2)
+	insertTopUpForPaymentGuardTest(t, "creem-no-cache-task", 623, PaymentProviderCreem)
+
+	client, _ := useFailingCacheMutationRedis(t, 100)
+	cacheUserForRetryTest(t, client, User{
+		Id: 623, Username: "payment_guard_user", Group: "default", Quota: common.MaxQuota - 2, Status: common.UserStatusEnabled,
+	})
+
+	require.Error(t, RechargeCreem("creem-no-cache-task", "", "", "127.0.0.1"))
+	var pending int64
+	require.NoError(t, DB.Model(&CacheInvalidationTask{}).
+		Where("kind = ? AND entity_key = ?", cacheInvalidationKindUser, "623").
+		Count(&pending).Error)
+	assert.Zero(t, pending)
+	exists, err := client.Exists(context.Background(), getUserCacheKey(623)).Result()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, exists)
+	assert.Equal(t, common.TopUpStatusPaidReconciliation, getTopUpStatusForPaymentGuardTest(t, "creem-no-cache-task"))
+}
+
+func TestTopUpUpdateMapColumnsExistInSchema(t *testing.T) {
+	testCases := []struct {
+		name    string
+		model   interface{}
+		columns []string
+	}{
+		{
+			name:    "top-up settlement",
+			model:   &TopUp{},
+			columns: []string{"status", "complete_time", "payment_method"},
+		},
+		{
+			name:    "user credit and email claim",
+			model:   &User{},
+			columns: []string{"quota", "stripe_customer", "email", "normalized_email"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := schema.Parse(tc.model, &sync.Map{}, schema.NamingStrategy{})
+			require.NoError(t, err)
+			for _, column := range tc.columns {
+				require.Contains(t, parsed.DBNames, column)
+			}
+		})
+	}
+}
+
 func TestRechargeRejectsPaidAmountMismatchBeforeCompletingOrder(t *testing.T) {
 	truncateTables(t)
 
@@ -463,6 +672,79 @@ func TestRechargeCreemSkipsDuplicateCustomerEmailBinding(t *testing.T) {
 	count, err := CountUsersByEmail("taken@example.com")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestRechargeCreemDoesNotOverwriteEmailChangedAtClaimTime(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 625, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-email-write-race", 625, PaymentProviderCreem)
+
+	callbackName := "test:creem-email-write-race"
+	simulatedConcurrentWrite := false
+	var callbackErr error
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if simulatedConcurrentWrite {
+			return
+		}
+		fields, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok {
+			return
+		}
+		if _, updatesEmail := fields["email"]; !updatesEmail {
+			return
+		}
+		simulatedConcurrentWrite = true
+		callbackErr = tx.Exec(
+			"UPDATE users SET email = ?, normalized_email = ? WHERE id = ?",
+			"newer@example.com",
+			"newer@example.com",
+			625,
+		).Error
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Update().Remove(callbackName))
+	})
+
+	require.NoError(t, RechargeCreem("creem-email-write-race", "creem@example.com", "", "127.0.0.1"))
+	require.True(t, simulatedConcurrentWrite)
+	require.NoError(t, callbackErr)
+
+	var got User
+	require.NoError(t, DB.First(&got, 625).Error)
+	assert.Equal(t, "newer@example.com", got.Email)
+	assert.Equal(t, "newer@example.com", got.NormalizedEmail)
+	assert.EqualValues(t, 2, got.Quota)
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-email-write-race"))
+}
+
+func TestRechargeCreemEmailClaimFailureDoesNotRollbackQuotaSettlement(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 626, 0)
+	insertTopUpForPaymentGuardTest(t, "creem-email-claim-failure", 626, PaymentProviderCreem)
+
+	callbackName := "test:creem-email-claim-failure"
+	emailClaimErr := errors.New("forced email claim failure")
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		fields, ok := tx.Statement.Dest.(map[string]interface{})
+		if !ok {
+			return
+		}
+		if _, updatesEmail := fields["email"]; updatesEmail {
+			tx.AddError(emailClaimErr)
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Callback().Update().Remove(callbackName))
+	})
+
+	require.NoError(t, RechargeCreem("creem-email-claim-failure", "claim@example.com", "", "127.0.0.1"))
+
+	var got User
+	require.NoError(t, DB.First(&got, 626).Error)
+	assert.Empty(t, got.Email)
+	assert.Empty(t, got.NormalizedEmail)
+	assert.EqualValues(t, 2, got.Quota)
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "creem-email-claim-failure"))
 }
 
 func TestRefundSubscriptionPreConsume_IdempotentDoesNotDoubleRefund(t *testing.T) {

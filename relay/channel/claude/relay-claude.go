@@ -49,25 +49,24 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
-		if params, ok := tool.Function.Parameters.(map[string]any); ok {
-			claudeTool := dto.Tool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-			}
-			claudeTool.InputSchema = make(map[string]interface{})
-			if params["type"] != nil {
-				claudeTool.InputSchema["type"] = params["type"].(string)
-			}
-			claudeTool.InputSchema["properties"] = params["properties"]
-			claudeTool.InputSchema["required"] = params["required"]
-			for s, a := range params {
-				if s == "type" || s == "properties" || s == "required" {
-					continue
-				}
-				claudeTool.InputSchema[s] = a
-			}
-			claudeTools = append(claudeTools, &claudeTool)
+		if tool.Type != "" && tool.Type != "function" {
+			continue
 		}
+		params, parametersAreObject := tool.Function.Parameters.(map[string]any)
+		if tool.Type == "" && !parametersAreObject {
+			continue
+		}
+		schema := make(map[string]any, len(params)+2)
+		for key, value := range params {
+			schema[key] = value
+		}
+		if schema["type"] == nil {
+			schema["type"] = "object"
+		}
+		if schema["properties"] == nil {
+			schema["properties"] = map[string]any{}
+		}
+		claudeTools = append(claudeTools, &dto.Tool{Name: tool.Function.Name, Description: tool.Function.Description, InputSchema: schema})
 	}
 
 	// Web search tool
@@ -126,7 +125,9 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
-		Tools:         claudeTools,
+	}
+	if len(claudeTools) > 0 {
+		claudeRequest.Tools = claudeTools
 	}
 	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
 		claudeRequest.MaxTokens = common.GetPointer(maxTokens)
@@ -142,7 +143,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	}
 
 	// 处理 tool_choice 和 parallel_tool_calls
-	if textRequest.ToolChoice != nil || textRequest.ParallelTooCalls != nil {
+	if len(claudeTools) > 0 && (textRequest.ToolChoice != nil || textRequest.ParallelTooCalls != nil) {
 		claudeToolChoice := mapToolChoice(textRequest.ToolChoice, textRequest.ParallelTooCalls)
 		if claudeToolChoice != nil {
 			claudeRequest.ToolChoice = claudeToolChoice

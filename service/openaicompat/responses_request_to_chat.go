@@ -65,6 +65,8 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		EnableThinking:       req.EnableThinking,
 		ThinkingBudget:       req.ThinkingBudget,
 	}
+	out.FrequencyPenalty = req.FrequencyPenalty
+	out.PresencePenalty = req.PresencePenalty
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}

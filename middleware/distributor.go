@@ -123,7 +123,7 @@ func Distribute() func(c *gin.Context) {
 						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
 						if group, groupIndex, matched := findAffinityRouteGroup(routePlan, modelRequest.Model, preferred.Id, model.IsChannelEnabledForGroupModel); matched {
 							selectGroup = group
-							common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+							service.SetSelectedRoutingGroup(c, group)
 							channel = preferred
 							affinityUsable = true
 							service.MarkChannelAffinityUsed(c, group, preferred.Id)
@@ -140,7 +140,7 @@ func Distribute() func(c *gin.Context) {
 							for _, g := range autoGroups {
 								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
 									selectGroup = g
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+									service.SetSelectedRoutingGroup(c, g)
 									channel = preferred
 									affinityUsable = true
 									service.MarkChannelAffinityUsed(c, g, preferred.Id)

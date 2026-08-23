@@ -72,7 +72,7 @@ interface BindingItem {
   icon: React.ReactNode
   value: string
   type: 'builtin' | 'custom'
-  providerId?: string
+  providerId?: number
   isBound: boolean
   isEnabled: boolean
 }
@@ -85,7 +85,7 @@ interface StatusInfo {
   telegram_oauth?: boolean
   linuxdo_oauth?: boolean
   custom_oauth_providers?: Array<{
-    id: string
+    id: number
     name: string
     icon?: string
   }>
@@ -241,7 +241,7 @@ export function UserBindingDialog(props: Props) {
     }
 
     const oauthBindingMap = new Map(
-      oauthBindings.map((b) => [String(b.provider_id), b])
+      oauthBindings.map((b) => [b.provider_id, b])
     )
 
     const customProviders = statusInfo.custom_oauth_providers || []
@@ -249,14 +249,14 @@ export function UserBindingDialog(props: Props) {
 
     for (const provider of customProviders) {
       seenProviderIds.add(String(provider.id))
-      const binding = oauthBindingMap.get(String(provider.id))
+      const binding = oauthBindingMap.get(provider.id)
       items.push({
         key: `oauth_${provider.id}`,
-        label: provider.name || provider.id,
+        label: provider.name || String(provider.id),
         icon: <CustomProviderIcon iconUrl={provider.icon} />,
-        value: binding?.external_id || '',
+        value: binding?.provider_user_id || '',
         type: 'custom',
-        providerId: String(provider.id),
+        providerId: provider.id,
         isBound: !!binding,
         isEnabled: true,
       })
@@ -266,11 +266,11 @@ export function UserBindingDialog(props: Props) {
       if (!seenProviderIds.has(String(binding.provider_id))) {
         items.push({
           key: `oauth_${binding.provider_id}`,
-          label: binding.provider_name || binding.provider_id,
+          label: binding.provider_name || String(binding.provider_id),
           icon: <Link2 className='h-4 w-4' />,
-          value: binding.external_id || '-',
+          value: binding.provider_user_id || '-',
           type: 'custom',
-          providerId: String(binding.provider_id),
+          providerId: binding.provider_id,
           isBound: true,
           isEnabled: false,
         })

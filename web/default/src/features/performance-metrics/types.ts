@@ -33,12 +33,38 @@ export type PerformanceGroup = {
   series: PerformanceSeriesPoint[]
 }
 
+export type PerformanceAggregate = {
+  avg_ttft_ms: number
+  avg_latency_ms: number
+  success_rate: number
+  avg_tps: number
+  series: PerformanceSeriesPoint[]
+}
+
+export type PerformanceCollectionState =
+  | 'available'
+  | 'partial'
+  | 'collection_disabled'
+  | 'no_samples'
+  | 'query_failed'
+
+export type PerformanceCoverage = {
+  requested_start_at: number
+  requested_end_at: number
+  bucket_start_at: number
+  bucket_end_at: number
+  bucket_seconds: number
+  granularity_state: 'known' | 'unknown' | 'mixed'
+  approximate: boolean
+}
+
 export type PerformanceMetricsData = {
   success: boolean
   message?: string
   data: {
     model_name: string
     series_schema?: string
+    summary?: PerformanceAggregate
     groups: PerformanceGroup[]
   }
 }

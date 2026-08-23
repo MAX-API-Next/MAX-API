@@ -19,7 +19,6 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
-import { SystemInfo } from '@/features/system-info'
 
 export const Route = createFileRoute('/_authenticated/system-info/')({
   beforeLoad: () => {
@@ -30,6 +29,7 @@ export const Route = createFileRoute('/_authenticated/system-info/')({
         to: '/403',
       })
     }
+
+    throw redirect({ to: '/smart-ops/system-info' })
   },
-  component: SystemInfo,
 })

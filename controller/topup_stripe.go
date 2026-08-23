@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/checkout/session"
 	"github.com/stripe/stripe-go/v81/webhook"
@@ -74,7 +75,6 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "充值数量不能大于 10000", "data": 10})
 		return
 	}
-
 	if req.SuccessURL != "" && common.ValidateRedirectURL(req.SuccessURL) != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "支付成功重定向URL不在可信任域名列表中", "data": ""})
 		return
@@ -86,8 +86,15 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
+	user, err := model.GetUserById(id, false)
+	if err != nil || user == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
+		return
+	}
 	chargedMoney := GetChargedAmount(float64(req.Amount), *user)
+	if rejectInvalidTopUpQuota(c, id, decimal.NewFromFloat(chargedMoney).Mul(decimal.NewFromFloat(common.QuotaPerUnit))) {
+		return
+	}
 
 	reference := fmt.Sprintf("max-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
@@ -235,7 +242,7 @@ func stripePaymentValidationFromEvent(event stripe.Event, allowDiscount bool) (m
 	return model.PaymentValidationFromMinorUnits(amountMinor, event.GetObjectValue("currency"), "", allowDiscount), nil
 }
 
-func isStripeOrderAlreadyCompleted(referenceId string) bool {
+func isStripeOrderTerminallyHandled(referenceId string) bool {
 	if order := model.GetSubscriptionOrderByTradeNo(referenceId); order != nil &&
 		order.PaymentProvider == model.PaymentProviderStripe &&
 		order.Status == common.TopUpStatusSuccess {
@@ -244,7 +251,7 @@ func isStripeOrderAlreadyCompleted(referenceId string) bool {
 	topUp, err := model.GetTopUpByTradeNoWithError(referenceId)
 	return err == nil &&
 		topUp.PaymentProvider == model.PaymentProviderStripe &&
-		topUp.Status == common.TopUpStatusSuccess
+		(topUp.Status == common.TopUpStatusSuccess || topUp.Status == common.TopUpStatusPaidReconciliation)
 }
 
 // sessionAsyncPaymentFailed marks orders as failed when delayed payment methods
@@ -297,7 +304,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	defer UnlockOrder(referenceId)
 	validation, err := stripePaymentValidationFromEvent(event, setting.StripePromotionCodesEnabled)
 	if err != nil {
-		if isStripeOrderAlreadyCompleted(referenceId) {
+		if isStripeOrderTerminallyHandled(referenceId) {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 订单已完成，确认缺少金额字段的重放事件 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
 			return nil
 		}
@@ -346,6 +353,10 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	topUpValidation := validation
 	topUpValidation.ExpectedCurrency = "USD"
 	if err := model.Recharge(referenceId, customerId, callerIp, topUpValidation); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(ctx, fmt.Sprintf("Stripe 已付款充值订单等待人工对账 trade_no=%s client_ip=%s", referenceId, callerIp))
+			return nil
+		}
 		latest, latestErr := model.GetTopUpByTradeNoWithError(referenceId)
 		if latestErr == nil && latest.Status == common.TopUpStatusSuccess {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 充值订单已由并发回调完成 trade_no=%s client_ip=%s", referenceId, callerIp))

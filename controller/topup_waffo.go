@@ -16,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 	waffo "github.com/waffo-com/waffo-go"
 	"github.com/waffo-com/waffo-go/config"
@@ -82,25 +83,48 @@ func formatWaffoAmount(amount float64, currency string) string {
 	return fmt.Sprintf("%.2f", amount)
 }
 
-// getWaffoPayMoney converts the user-facing amount to USD for Waffo payment.
-// Waffo only accepts USD, so this function handles the conversion from different
-// display types (USD/CNY/TOKENS) to the actual USD amount to charge.
-func getWaffoPayMoney(amount float64, group string) float64 {
-	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
-	}
+type waffoTopUpQuote struct {
+	amount        int64
+	creditedQuota decimal.Decimal
+	payMoney      float64
+}
+
+// buildWaffoTopUpQuote derives the persisted amount, credited quota, and
+// payment price from one normalized value so settlement cannot credit more
+// than the external order was priced for.
+func buildWaffoTopUpQuote(requestedAmount int64, group string) waffoTopUpQuote {
+	amount := normalizeWaffoTopUpAmount(requestedAmount)
+	creditedQuota := decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
+	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(requestedAmount)]; ok {
 		if ds > 0 {
 			discount = ds
 		}
 	}
-	return amount * setting.WaffoUnitPrice * topupGroupRatio * discount
+	payMoney := decimal.NewFromInt(amount).
+		Mul(decimal.NewFromFloat(setting.WaffoUnitPrice)).
+		Mul(decimal.NewFromFloat(topupGroupRatio)).
+		Mul(decimal.NewFromFloat(discount)).
+		InexactFloat64()
+	return waffoTopUpQuote{amount: amount, creditedQuota: creditedQuota, payMoney: payMoney}
+}
+
+func normalizeWaffoTopUpAmount(amount int64) int64 {
+	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
+		return amount
+	}
+
+	normalized := decimal.NewFromInt(amount).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		IntPart()
+	if normalized < 1 {
+		return 1
+	}
+	return normalized
 }
 
 type WaffoPayRequest struct {
@@ -130,7 +154,8 @@ func RequestWaffoAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	quote := buildWaffoTopUpQuote(req.Amount, group)
+	payMoney := quote.payMoney
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -196,8 +221,16 @@ func RequestWaffoPay(c *gin.Context) {
 	}
 	// resolvedPayMethodType/Name 为空时，Waffo 自动选择支付方式
 
-	group, _ := model.GetUserGroup(id, true)
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	group, err := model.GetUserGroup(id, true)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+	quote := buildWaffoTopUpQuote(req.Amount, group)
+	if rejectInvalidTopUpQuota(c, id, quote.creditedQuota) {
+		return
+	}
+	payMoney := quote.payMoney
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -208,13 +241,7 @@ func RequestWaffoPay(c *gin.Context) {
 	paymentRequestId := merchantOrderId
 
 	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
-	amount := req.Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = int64(float64(req.Amount) / common.QuotaPerUnit)
-		if amount < 1 {
-			amount = 1
-		}
-	}
+	amount := quote.amount
 
 	// 创建本地订单
 	topUp := &model.TopUp{
@@ -403,6 +430,11 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 
 	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP(),
 		model.PaymentValidationFromMajorString(getWaffoPaidAmount(result), result.OrderCurrency, getWaffoCurrency(), false)); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 已付款充值订单等待人工对账 trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
+			sendWaffoWebhookResponse(c, wh, true, "")
+			return
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 充值处理失败 trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return

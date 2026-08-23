@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  consumeTurnstileToken,
   getTurnstileHeaders,
   TURNSTILE_TOKEN_HEADER,
 } from './turnstile-request'
@@ -32,5 +33,19 @@ describe('getTurnstileHeaders', () => {
 
   test('omits an empty token', () => {
     assert.deepEqual(getTurnstileHeaders(''), {})
+  })
+})
+
+describe('consumeTurnstileToken', () => {
+  test('uses each token once and requires a refreshed token for retry', () => {
+    const first = consumeTurnstileToken('first-token', true)
+    assert.deepEqual(first, {
+      submittedToken: 'first-token',
+      nextToken: '',
+      shouldRefreshWidget: true,
+    })
+    const second = consumeTurnstileToken('second-token', true)
+    assert.equal(second.submittedToken, 'second-token')
+    assert.equal(second.shouldRefreshWidget, true)
   })
 })

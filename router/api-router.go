@@ -227,6 +227,15 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
 		}
+		smartOpsRoute := apiRouter.Group("/smart-ops")
+		smartOpsRoute.Use(middleware.AdminAuth())
+		{
+			smartOpsRoute.GET("/alerts", controller.GetSmartOpsAlerts)
+			smartOpsRoute.GET("/channel-performance", controller.GetChannelPerformance)
+			smartOpsRoute.GET("/channel-performance/detail", controller.GetChannelPerformanceDetail)
+			smartOpsRoute.GET("/model-performance", controller.GetModelPerformance)
+			smartOpsRoute.GET("/model-performance/detail", controller.GetModelPerformanceDetail)
+		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())
 		{

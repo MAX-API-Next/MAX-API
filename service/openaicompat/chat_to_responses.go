@@ -371,6 +371,13 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	if req.TopP != nil {
 		topP = common.GetPointer(lo.FromPtr(req.TopP))
 	}
+	var promptCacheKeyRaw json.RawMessage
+	if req.PromptCacheKey != "" {
+		promptCacheKeyRaw, err = common.Marshal(req.PromptCacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("marshal prompt_cache_key: %w", err)
+		}
+	}
 
 	out := &dto.OpenAIResponsesRequest{
 		Model:             req.Model,
@@ -382,10 +389,13 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		ToolChoice:        toolChoiceRaw,
 		Tools:             toolsRaw,
 		TopP:              topP,
+		FrequencyPenalty:  req.FrequencyPenalty,
+		PresencePenalty:   req.PresencePenalty,
 		User:              req.User,
 		ParallelToolCalls: parallelToolCallsRaw,
 		Store:             req.Store,
 		Metadata:          req.Metadata,
+		PromptCacheKey:    promptCacheKeyRaw,
 		EnableThinking:    req.EnableThinking,
 		ThinkingBudget:    req.ThinkingBudget,
 	}

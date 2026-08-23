@@ -57,6 +57,29 @@ func TestChatCompletionsRequestToResponsesRequestPreservesQwenThinkingBudget(t *
 	assert.Equal(t, "0", string(got.ThinkingBudget))
 }
 
+func TestChatCompletionsRequestToResponsesPreservesCacheKeyAndExplicitZeroPenalties(t *testing.T) {
+	zero := 0.0
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:            "gpt-test",
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+		PromptCacheKey:   "cache-key",
+		FrequencyPenalty: &zero,
+		PresencePenalty:  &zero,
+	})
+	require.NoError(t, err)
+	payload, err := common.Marshal(got)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-test","input":[{"content":"hello","role":"user"}],"prompt_cache_key":"cache-key","frequency_penalty":0,"presence_penalty":0}`, string(payload))
+
+	without, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{Model: "gpt-test"})
+	require.NoError(t, err)
+	payload, err = common.Marshal(without)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), "frequency_penalty")
+	require.NotContains(t, string(payload), "presence_penalty")
+	require.NotContains(t, string(payload), "prompt_cache_key")
+}
+
 func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model:          "qwen-plus",
@@ -68,6 +91,22 @@ func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *
 
 	assert.Equal(t, "true", string(got.EnableThinking))
 	assert.Equal(t, "0", string(got.ThinkingBudget))
+}
+
+func TestResponsesRequestToChatCompletionsRequestPreservesPenalties(t *testing.T) {
+	frequencyPenalty := 0.0
+	presencePenalty := 1.5
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:            "gpt-test",
+		Input:            mustCompatRawMessage(t, "hello"),
+		FrequencyPenalty: &frequencyPenalty,
+		PresencePenalty:  &presencePenalty,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got.FrequencyPenalty)
+	require.NotNil(t, got.PresencePenalty)
+	assert.Equal(t, 0.0, *got.FrequencyPenalty)
+	assert.Equal(t, 1.5, *got.PresencePenalty)
 }
 
 func TestResponsesRequestToChatCompletionsRequestFunctionCallConversation(t *testing.T) {

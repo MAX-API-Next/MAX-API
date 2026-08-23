@@ -128,6 +128,9 @@ func main() {
 	// System instance heartbeat for multi-node operations visibility
 	service.StartSystemInstanceReporter()
 
+	// Proactively detect sustained system resource pressure and notify admins.
+	service.StartSmartOpsAlertMonitor()
+
 	// Persistent system maintenance task runner
 	service.StartSystemTaskRunner()
 	authFlowCleanupDone := service.StartAuthFlowCleanupWithContext(backgroundCtx)
@@ -250,6 +253,9 @@ func main() {
 	waitForBackgroundRunner(ctx, "CPU profile monitor", cpuMonitorDone)
 	if err := common.StopSystemMonitor(ctx); err != nil {
 		common.SysError(fmt.Sprintf("timed out stopping system monitor: %v", err))
+	}
+	if err := service.StopSmartOpsAlertMonitor(ctx); err != nil {
+		common.SysError(fmt.Sprintf("timed out stopping smart ops alert monitor: %v", err))
 	}
 	if err := middleware.StopInMemoryRateLimiter(ctx); err != nil {
 		common.SysError(fmt.Sprintf("timed out stopping in-memory rate limiter: %v", err))

@@ -83,6 +83,9 @@ export const STATIC_I18N_KEYS = [
   'User',
   'Guest',
 
+  // Billing statuses
+  'Paid - Needs Reconciliation',
+
   // API Keys
   'Enabled',
   'Disabled',

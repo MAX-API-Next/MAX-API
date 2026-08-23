@@ -135,6 +135,7 @@ import {
   VIDEO_TASK_CHANNEL_TYPES,
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   getAdvancedCustomStats,
+  fetchDialogExistingModels,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -479,6 +480,10 @@ export function ChannelMutateDrawer({
   const currentModelsArray = useMemo(
     () => parseModelsString(currentModels),
     [currentModels]
+  )
+  const fetchDialogModelOverride = useMemo(
+    () => fetchDialogExistingModels(currentModelsArray),
+    [currentModelsArray]
   )
 
   const currentTypeLabel = useMemo(
@@ -3941,11 +3946,7 @@ export function ChannelMutateDrawer({
         redirectSourceModels={redirectModelKeyList}
         customFetcher={!isEditing ? createModeFetcher : undefined}
         channelName={!isEditing ? currentName?.trim() : undefined}
-        existingModelsOverride={
-          !isEditing
-            ? parseModelsString(form.getValues('models') || '')
-            : undefined
-        }
+        existingModelsOverride={fetchDialogModelOverride}
       />
 
       <SecureVerificationDialog

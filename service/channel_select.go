@@ -21,6 +21,18 @@ type RetryParam struct {
 	excludedChannelIDs map[int]struct{}
 }
 
+// SetSelectedRoutingGroup keeps the configured route and the actual group in
+// separate context keys. ContextKeyUsingGroup is the effective group used by
+// logging/billing; ContextKeyTokenGroup and the route plan retain the token's
+// configured routing policy.
+func SetSelectedRoutingGroup(c *gin.Context, group string) {
+	if c == nil || group == "" {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
+}
+
 func (p *RetryParam) GetRetry() int {
 	if p.Retry == nil {
 		return 0
@@ -148,7 +160,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				param.SetRetry(0)
 				continue
 			}
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, autoGroup)
+			SetSelectedRoutingGroup(param.Ctx, autoGroup)
 			selectGroup = autoGroup
 			logger.LogDebug(param.Ctx, "Auto selected group: %s", autoGroup)
 
@@ -229,7 +241,7 @@ func selectChannelFromTokenRoutePlan(param *RetryParam, plan *TokenRoutePlan) (*
 			continue
 		}
 
-		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
+		SetSelectedRoutingGroup(param.Ctx, group)
 		if plan.RetryOnFailure && index < len(plan.OrderedGroups)-1 {
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, index+1)
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, param.GetRetry()+1)

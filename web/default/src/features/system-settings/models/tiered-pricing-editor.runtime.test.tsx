@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { fireEvent, within } from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
@@ -190,6 +191,52 @@ describe('TieredPricingEditor runtime behavior', () => {
       })
 
       assert.match(container.textContent || '', /Tier 1 \/ 1/)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('removes a newly added fallback tier', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              modelName={modelA.name}
+              billingExpr={modelA.billingExpr || ''}
+              requestRuleExpr=''
+              onBillingExprChange={() => undefined}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+
+      const editor = within(container)
+      const initialRemoveButton = editor.getByRole('button', {
+        name: 'Remove tier',
+      }) as HTMLButtonElement
+      assert.equal(initialRemoveButton.disabled, true)
+
+      fireEvent.click(editor.getByRole('button', { name: 'Add tier' }))
+      editor.getByText('Tier 2 / 2')
+
+      const removeTierButtons = editor.getAllByRole('button', {
+        name: 'Remove tier',
+      }) as HTMLButtonElement[]
+      assert.equal(removeTierButtons.length, 2)
+
+      const newTierRemoveButton = removeTierButtons[1]
+      assert.equal(newTierRemoveButton.disabled, false)
+      fireEvent.click(newTierRemoveButton)
+
+      editor.getByText('Tier 1 / 1')
+      assert.equal(editor.queryByText('Tier 2 / 2'), null)
+      editor.getByText('Fallback tier')
+      editor.getByText('Always matches (default tier).')
     } finally {
       await unmount(root, container)
     }

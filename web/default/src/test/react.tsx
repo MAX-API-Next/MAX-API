@@ -48,6 +48,45 @@ class ResizeObserverStub {
   disconnect() {}
 }
 
+type AnimationFrameTimer = ReturnType<typeof setTimeout>
+type TestWindow = typeof globalThis.window
+
+const animationFrameHandles = new Map<AnimationFrameTimer, TestWindow>()
+
+function createTestAnimationFrameScheduler(
+  window: TestWindow
+): (callback: FrameRequestCallback) => number {
+  return (callback: FrameRequestCallback): number => {
+    if (globalThis.window !== window) return 0
+    const handle = setTimeout(() => {
+      animationFrameHandles.delete(handle)
+      if (globalThis.window !== window) return
+      callback(Date.now())
+    }, 0)
+    animationFrameHandles.set(handle, window)
+    return handle as unknown as number
+  }
+}
+
+function createTestAnimationFrameCanceller(
+  window: TestWindow
+): (handle: number) => void {
+  return (handle: number): void => {
+    const timerHandle = handle as unknown as AnimationFrameTimer
+    if (animationFrameHandles.get(timerHandle) !== window) return
+    clearTimeout(timerHandle)
+    animationFrameHandles.delete(timerHandle)
+  }
+}
+
+function cancelPendingAnimationFrames(window: TestWindow) {
+  for (const [handle, scheduledWindow] of animationFrameHandles) {
+    if (scheduledWindow !== window) continue
+    clearTimeout(handle)
+    animationFrameHandles.delete(handle)
+  }
+}
+
 export function createReactTestEnvironment(options?: {
   lng?: string
   fallbackLng?: string
@@ -64,6 +103,7 @@ export function createReactTestEnvironment(options?: {
     GlobalKey,
     PropertyDescriptor | undefined
   >()
+  let installedWindow: TestWindow | undefined
 
   function setGlobal(key: GlobalKey, value: unknown) {
     previousDescriptors.set(
@@ -102,6 +142,7 @@ export function createReactTestEnvironment(options?: {
       })
 
       const window = dom.window
+      installedWindow = window as unknown as TestWindow
       Object.defineProperty(window, 'matchMedia', {
         configurable: true,
         value: () => ({
@@ -127,16 +168,21 @@ export function createReactTestEnvironment(options?: {
       setGlobal('KeyboardEvent', window.KeyboardEvent)
       setGlobal('MutationObserver', window.MutationObserver)
       setGlobal('getComputedStyle', window.getComputedStyle.bind(window))
-      setGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
-        setTimeout(() => callback(Date.now()), 0)
+      setGlobal(
+        'requestAnimationFrame',
+        createTestAnimationFrameScheduler(installedWindow)
       )
-      setGlobal('cancelAnimationFrame', (handle: number) =>
-        clearTimeout(handle)
+      setGlobal(
+        'cancelAnimationFrame',
+        createTestAnimationFrameCanceller(installedWindow)
       )
       setGlobal('ResizeObserver', ResizeObserverStub)
       setGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     },
     teardown() {
+      if (installedWindow) {
+        cancelPendingAnimationFrames(installedWindow)
+      }
       restoreGlobals()
       dom.window.close()
     },

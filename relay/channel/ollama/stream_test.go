@@ -131,6 +131,42 @@ func TestOllamaRequestConvertersOmitUnsetStream(t *testing.T) {
 	require.JSONEq(t, `{"model":"llama-test"}`, string(generatePayload))
 }
 
+func TestOllamaChatConverterPreservesReasoningAndToolContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	reasoning := "internal plan"
+	rawCalls, err := common.Marshal([]dto.ToolCallRequest{{
+		ID: "call_weather", Type: "function", Function: dto.FunctionRequest{Name: "weather", Arguments: `{"city":"Paris"}`},
+	}})
+	require.NoError(t, err)
+	request := &dto.GeneralOpenAIRequest{
+		Model:           "llama-test",
+		ReasoningEffort: "high",
+		Messages: []dto.Message{
+			{Role: "assistant", ReasoningContent: &reasoning, ToolCalls: rawCalls},
+			{Role: "tool", ToolCallId: "call_weather", Content: "sunny"},
+		},
+	}
+	converted, err := openAIChatToOllamaChat(c, request)
+	require.NoError(t, err)
+	require.JSONEq(t, `"high"`, string(converted.Think))
+	require.Len(t, converted.Messages, 2)
+	require.JSONEq(t, `"internal plan"`, string(converted.Messages[0].Thinking))
+	require.Equal(t, "call_weather", converted.Messages[0].ToolCalls[0].ID)
+	require.Equal(t, "call_weather", converted.Messages[1].ToolCallID)
+	require.Equal(t, "weather", converted.Messages[1].ToolName)
+}
+
+func TestOllamaConvertersRejectMalformedJSONSchema(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	request := &dto.GeneralOpenAIRequest{Model: "llama-test", ResponseFormat: &dto.ResponseFormat{Type: "json_schema", JsonSchema: []byte(`{`)}}
+	_, err := openAIChatToOllamaChat(c, request)
+	require.ErrorContains(t, err, "invalid ollama response format")
+	_, err = openAIToGenerate(c, request)
+	require.ErrorContains(t, err, "invalid ollama response format")
+}
+
 func TestOllamaStreamHandlerToolCalls(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -187,6 +188,38 @@ func getMinTopup() int64 {
 	return int64(minTopup)
 }
 
+func topUpCreditedQuota(amount int64) decimal.Decimal {
+	quota := decimal.NewFromInt(amount)
+	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		return decimal.NewFromInt(quota.Div(quotaPerUnit).IntPart()).Mul(quotaPerUnit)
+	}
+	return quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+}
+
+func rejectInvalidTopUpQuota(c *gin.Context, userId int, quota decimal.Decimal) bool {
+	credited, err := common.QuotaFromDecimalStrict(quota)
+	if err == nil && credited <= 0 {
+		err = model.ErrInvalidTopUpQuota
+	}
+	if err == nil {
+		err = model.ValidateTopUpQuotaCapacity(userId, int64(credited))
+	}
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("充值额度校验失败 user_id=%d error=%q", userId, err.Error()))
+		message := "充值额度校验失败，请稍后重试"
+		switch {
+		case errors.Is(err, model.ErrInvalidTopUpQuota):
+			message = "充值额度无效"
+		case errors.Is(err, model.ErrTopUpQuotaLimitExceeded):
+			message = "充值后额度将超过账户上限"
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": message})
+		return true
+	}
+	return false
+}
+
 func RequestEpay(c *gin.Context) {
 	var req EpayRequest
 	err := c.ShouldBindJSON(&req)
@@ -203,6 +236,9 @@ func RequestEpay(c *gin.Context) {
 	group, err := model.GetUserGroup(id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
+	if rejectInvalidTopUpQuota(c, id, topUpCreditedQuota(req.Amount)) {
 		return
 	}
 	payMoney := getPayMoney(req.Amount, group)
@@ -382,6 +418,11 @@ func EpayNotify(c *gin.Context) {
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
 	if err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(),
 		model.PaymentValidationFromMajorString(verifyInfo.Money, "", "", false)); err != nil {
+		if errors.Is(err, model.ErrTopUpNeedsReconciliation) {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 已付款充值订单等待人工对账 trade_no=%s callback_type=%s client_ip=%s", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP()))
+			_, _ = c.Writer.Write([]byte("success"))
+			return
+		}
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 充值处理失败 trade_no=%s callback_type=%s client_ip=%s error=%q", verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP(), err.Error()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return

@@ -2210,6 +2210,29 @@ func TestApplyParamOverrideWithRelayInfoRecordsOnlyKeyOperationsWhenDebugDisable
 	}
 }
 
+func TestApplyParamOverrideWithRelayInfoSynchronizesReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name       string
+		format     types.RelayFormat
+		before     string
+		override   map[string]interface{}
+		wantEffort string
+	}{
+		{name: "chat set none", format: types.RelayFormatOpenAI, before: `{"model":"gpt"}`, override: map[string]interface{}{"reasoning_effort": "none"}, wantEffort: "none"},
+		{name: "chat change", format: types.RelayFormatOpenAI, before: `{"model":"gpt","reasoning_effort":"low"}`, override: map[string]interface{}{"reasoning_effort": "high"}, wantEffort: "high"},
+		{name: "chat delete", format: types.RelayFormatOpenAI, before: `{"model":"gpt","reasoning_effort":"low"}`, override: map[string]interface{}{"operations": []interface{}{map[string]interface{}{"path": "reasoning_effort", "mode": "delete"}}}, wantEffort: ""},
+		{name: "responses change", format: types.RelayFormatOpenAIResponses, before: `{"model":"gpt","reasoning":{"effort":"medium"}}`, override: map[string]interface{}{"operations": []interface{}{map[string]interface{}{"path": "reasoning.effort", "mode": "set", "value": "max"}}}, wantEffort: "max"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &RelayInfo{RelayFormat: tc.format, ReasoningEffort: "stale", ChannelMeta: &ChannelMeta{ParamOverride: tc.override}}
+			_, err := ApplyParamOverrideWithRelayInfo([]byte(tc.before), info)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantEffort, info.ReasoningEffort)
+		})
+	}
+}
+
 func TestApplyParamOverrideWithRelayInfoRecordsConversationBodyOperationsWhenDebugDisabled(t *testing.T) {
 	originalDebugEnabled := common2.DebugEnabled
 	common2.DebugEnabled = false

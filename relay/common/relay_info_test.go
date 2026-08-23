@@ -4,9 +4,29 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReasoningEffortFromRequest(t *testing.T) {
+	chatReasoning, err := common.Marshal(map[string]any{"effort": " high "})
+	require.NoError(t, err)
+	tests := []struct {
+		name    string
+		request dto.Request
+		want    string
+	}{
+		{name: "chat scalar", request: &dto.GeneralOpenAIRequest{ReasoningEffort: " low "}, want: "low"},
+		{name: "chat object", request: &dto.GeneralOpenAIRequest{Reasoning: chatReasoning}, want: "high"},
+		{name: "responses", request: &dto.OpenAIResponsesRequest{Reasoning: &dto.Reasoning{Effort: "medium"}}, want: "medium"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, reasoningEffortFromRequest(tc.request))
+		})
+	}
+}
 
 func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
 	info := &RelayInfo{

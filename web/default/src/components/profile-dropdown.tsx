@@ -47,7 +47,9 @@ export function ProfileDropdown() {
   const { displayName, roleLabel } = useUserDisplay(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
-  const isSystemInfoVisible = useIsSidebarModuleVisible('/system-info')
+  const isSystemInfoVisible = useIsSidebarModuleVisible(
+    '/smart-ops/system-info'
+  )
   const avatarName = user?.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
   const avatarFallbackStyle = useMemo(
@@ -116,7 +118,7 @@ export function ProfileDropdown() {
 
           {isSuperAdmin && isSystemInfoVisible && (
             <DropdownMenuItem
-              onClick={() => navigate({ to: '/system-info' })}
+              onClick={() => navigate({ to: '/smart-ops/system-info' })}
             >
               <Settings className='size-4' />
               {t('System Info')}

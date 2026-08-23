@@ -18,6 +18,31 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { api } from './api'
 
+export interface CustomOAuthBinding {
+  provider_id: number
+  provider_name: string
+  provider_slug: string
+  provider_icon: string
+  provider_user_id: string
+}
+
+export function indexCustomOAuthBindings(
+  bindings: CustomOAuthBinding[]
+): Map<number, CustomOAuthBinding> {
+  return new Map(bindings.map((binding) => [binding.provider_id, binding]))
+}
+
+export function selfCustomOAuthUnbindPath(providerId: number): string {
+  return `/api/user/oauth/bindings/${providerId}`
+}
+
+export function adminCustomOAuthUnbindPath(
+  userId: number,
+  providerId: number
+): string {
+  return `/api/user/${userId}/oauth/bindings/${providerId}`
+}
+
 const oauthBindingStatePrefix = 'oauth:binding:state:'
 const oauthBindingStateTtlMs = 10 * 60 * 1000
 

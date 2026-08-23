@@ -41,9 +41,17 @@ export const STATUS_CONFIG: Record<TopupStatus, StatusConfig> = {
     variant: 'warning',
     label: 'Pending',
   },
+  failed: {
+    variant: 'danger',
+    label: 'Failed',
+  },
   expired: {
     variant: 'danger',
     label: 'Expired',
+  },
+  paid_reconciliation: {
+    variant: 'warning',
+    label: 'Paid - Needs Reconciliation',
   },
 }
 
@@ -52,6 +60,10 @@ export const STATUS_CONFIG: Record<TopupStatus, StatusConfig> = {
  */
 export function getStatusConfig(status: TopupStatus): StatusConfig {
   return STATUS_CONFIG[status] || STATUS_CONFIG.pending
+}
+
+export function isCompletableTopupStatus(status: TopupStatus): boolean {
+  return status === 'pending' || status === 'paid_reconciliation'
 }
 
 /**
