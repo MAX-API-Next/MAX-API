@@ -451,10 +451,9 @@ func RelayMidjourney(c *gin.Context) {
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
 	if mjErr != nil {
-		statusCode := http.StatusBadRequest
+		statusCode := midjourneyRelayErrorStatusCode(mjErr)
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
-			statusCode = http.StatusTooManyRequests
 		}
 		c.JSON(statusCode, gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
@@ -464,6 +463,19 @@ func RelayMidjourney(c *gin.Context) {
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
+}
+
+func midjourneyRelayErrorStatusCode(mjErr *dto.MidjourneyResponse) int {
+	if mjErr == nil {
+		return http.StatusBadRequest
+	}
+	if mjErr.Code == 30 {
+		return http.StatusTooManyRequests
+	}
+	if mjErr.Description == constant.MjBillingSettlementPending {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
 }
 
 func RelayNotImplemented(c *gin.Context) {
@@ -524,11 +536,12 @@ func RelayTask(c *gin.Context) {
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
 	var settlementEffectOperationKey string
+	var settlementIntentPersisted bool
 	defer func() {
 		if taskErr != nil {
 			upstreamAmbiguous := relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown
 			upstreamPersisted := result != nil && result.Task != nil
-			if relayInfo.Billing != nil && !upstreamAmbiguous {
+			if relayInfo.Billing != nil && !upstreamAmbiguous && !settlementIntentPersisted {
 				relayInfo.Billing.Refund(c)
 			}
 			if relayInfo.PersistedTaskID > 0 {
@@ -652,23 +665,15 @@ func RelayTask(c *gin.Context) {
 				}
 				if err = result.Task.UpdateWithSettlementIntent(settlementIntent); err != nil {
 					taskErr = relay.TaskPersistenceError(err, "persist_task_result_failed", "failed to persist task result")
+				} else {
+					settlementIntentPersisted = settlementIntent != nil
 				}
 			}
 		}
 		if taskErr == nil {
-			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-				common.SysError("settle task billing remains pending/manual: " + settleErr.Error())
-			}
-			if settlementEffectOperationKey != "" {
-				if effectErr := model.ProcessBillingSettlementEffect(settlementEffectOperationKey); effectErr != nil {
-					common.SysError("task billing effect remains pending/manual: " + effectErr.Error())
-				}
-			} else {
-				service.LogTaskConsumption(c, relayInfo)
-			}
-			if writeErr := result.WriteResponse(c); writeErr != nil {
-				common.SysError("write task response error: " + writeErr.Error())
-			}
+			taskErr = finalizeTaskSubmission(c, relayInfo, result, settlementEffectOperationKey, func() error {
+				return result.WriteResponse(c)
+			})
 		}
 	}
 
@@ -677,7 +682,41 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
-// respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
+// finalizeTaskSubmission releases a task success response only after its
+// billing settlement succeeds. The upstream task may already exist when this
+// fails, so callers persist it for reconciliation and return a local no-retry
+// error instead of pretending the request completed normally.
+func finalizeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo, result *relay.TaskSubmitResult, settlementEffectOperationKey string, writeResponse func() error) *dto.TaskError {
+	if result == nil || result.Task == nil {
+		return service.TaskErrorWrapperLocal(errors.New("task submit result is incomplete"), "persist_task_failed", http.StatusInternalServerError)
+	}
+	if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+		common.SysError("settle task billing requires reconciliation: " + settleErr.Error())
+		return &dto.TaskError{
+			Code:       "billing_settlement_pending",
+			Message:    "任务已被上游接受，但计费结算未完成；请勿重复提交，可使用 task_id 查询任务或联系管理员处理",
+			Data:       map[string]string{"task_id": result.Task.TaskID},
+			StatusCode: http.StatusConflict,
+			LocalError: true,
+			Error:      settleErr,
+		}
+	}
+	if settlementEffectOperationKey != "" {
+		if effectErr := model.ProcessBillingSettlementEffect(settlementEffectOperationKey); effectErr != nil {
+			common.SysError("task billing effect remains pending/manual: " + effectErr.Error())
+		}
+	} else {
+		service.LogTaskConsumption(c, relayInfo)
+	}
+	if writeResponse != nil {
+		if writeErr := writeResponse(); writeErr != nil {
+			common.SysError("write task response error: " + writeErr.Error())
+		}
+	}
+	return nil
+}
+
+// respondTaskError writes the task error response and normalizes the 429 message.
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"

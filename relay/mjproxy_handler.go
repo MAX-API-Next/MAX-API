@@ -353,6 +353,35 @@ func markMidjourneySubmissionResponseAmbiguous(info *relaycommon.RelayInfo, task
 	}
 }
 
+type midjourneyBillingSettlementPendingError struct {
+	taskID string
+	err    error
+}
+
+func (e *midjourneyBillingSettlementPendingError) Error() string {
+	return fmt.Sprintf("midjourney billing settlement requires reconciliation: %v", e.err)
+}
+
+func (e *midjourneyBillingSettlementPendingError) Unwrap() error {
+	return e.err
+}
+
+func midjourneyBillingSettlementPendingResponse(taskID string) *dto.MidjourneyResponse {
+	return &dto.MidjourneyResponse{
+		Code:        constant.MjRequestError,
+		Description: constant.MjBillingSettlementPending,
+		Result:      taskID,
+	}
+}
+
+func midjourneySubmissionErrorResponse(err error) *dto.MidjourneyResponse {
+	var settlementErr *midjourneyBillingSettlementPendingError
+	if errors.As(err, &settlementErr) {
+		return midjourneyBillingSettlementPendingResponse(settlementErr.taskID)
+	}
+	return service.MidjourneyErrorWrapper(constant.MjRequestError, "persist_midjourney_task_failed")
+}
+
 func finalizeMidjourneySubmission(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, midjourneyTask *model.Midjourney) (bool, error) {
 	if task == nil || midjourneyTask == nil {
 		return false, errors.New("midjourney submission result is incomplete")
@@ -392,7 +421,11 @@ func finalizeMidjourneySubmission(c *gin.Context, info *relaycommon.RelayInfo, t
 	}
 	if info != nil && info.Billing != nil {
 		if err := service.SettleBilling(c, info, midjourneyTask.Quota); err != nil {
-			common.SysError("midjourney billing settlement remains pending/manual: " + err.Error())
+			common.SysError("midjourney billing settlement requires reconciliation: " + err.Error())
+			if markErr := model.MarkTaskSubmitNeedsReview(task, "Midjourney 任务已被上游接受，但计费结算未完成；请勿重复提交，使用任务 ID 查询或联系管理员处理"); markErr != nil {
+				common.SysError("mark midjourney billing settlement for manual review error: " + markErr.Error())
+			}
+			return false, &midjourneyBillingSettlementPendingError{taskID: midjourneyTask.MjId, err: err}
 		}
 		if settlementOperationKey != "" {
 			if err := model.ProcessBillingSettlementEffect(settlementOperationKey); err != nil {
@@ -470,7 +503,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		failMidjourneySubmission(c, info, billingTask, midjResponse.Description)
 	} else {
 		if _, err := finalizeMidjourneySubmission(c, info, billingTask, midjourneyTask); err != nil {
-			return service.MidjourneyErrorWrapper(constant.MjRequestError, "persist_midjourney_task_failed")
+			return midjourneySubmissionErrorResponse(err)
 		}
 	}
 	writeMidjourneyStatusCode(c, mjResp.StatusCode)
@@ -820,7 +853,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	if !accepted {
 		failMidjourneySubmission(c, relayInfo, billingTask, midjResponse.Description)
 	} else if _, err := finalizeMidjourneySubmission(c, relayInfo, billingTask, midjourneyTask); err != nil {
-		return service.MidjourneyErrorWrapper(constant.MjRequestError, "persist_midjourney_task_failed")
+		return midjourneySubmissionErrorResponse(err)
 	}
 	//resp.Body = io.NopCloser(bytes.NewBuffer(responseBody))
 	bodyReader := io.NopCloser(bytes.NewBuffer(responseBody))

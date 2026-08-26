@@ -61,17 +61,17 @@ type BillingSettlement struct {
 	ID                              int64  `gorm:"primaryKey"`
 	OperationKey                    string `gorm:"type:varchar(191);uniqueIndex;not null"`
 	Source                          string `gorm:"type:varchar(32);not null"`
-	UserID                          int    `gorm:"not null;default:0"`
+	UserID                          int    `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:1"`
 	SubscriptionID                  int    `gorm:"not null;default:0"`
 	TokenID                         int    `gorm:"not null;default:0"`
-	FundingDelta                    int64  `gorm:"not null;default:0"`
+	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3"`
 	AppliedFundingDelta             int64  `gorm:"not null;default:0"`
 	TokenDelta                      int64  `gorm:"not null;default:0"`
 	AppliedTokenDelta               int64  `gorm:"not null;default:0"`
 	TaskID                          int64  `gorm:"not null;default:0"`
 	TaskQuota                       int64  `gorm:"not null;default:0"`
 	TaskQuotaTarget                 int64  `gorm:"not null;default:0"`
-	Status                          string `gorm:"type:varchar(16);index;not null;default:'applied'"`
+	Status                          string `gorm:"type:varchar(16);index;index:idx_billing_settlement_admission,priority:2;not null;default:'applied'"`
 	Attempts                        int    `gorm:"not null;default:0"`
 	LastError                       string `gorm:"type:text"`
 	NextAttempt                     int64  `gorm:"index;not null;default:0"`
@@ -201,6 +201,34 @@ func StopBillingSettlementTaskRunner(ctx context.Context) error {
 
 func ProcessPendingBillingSettlementsOnce() {
 	processPendingBillingSettlements()
+}
+
+// HasUnresolvedPositiveFinalizeSettlement reports whether a user has an
+// upstream-accepted request whose positive final settlement has not completed.
+// New paid requests must stop before they can consume more service against the
+// residual balance. Reserve failures are deliberately excluded: no upstream
+// request has been released for those operation kinds.
+func HasUnresolvedPositiveFinalizeSettlement(userID int) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	if userID <= 0 {
+		return false, nil
+	}
+
+	var record BillingSettlement
+	result := DB.Model(&BillingSettlement{}).
+		Select("id").
+		Where("user_id = ?", userID).
+		Where("funding_delta > 0").
+		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
+		Where("operation_key LIKE ?", "request:%:finalize").
+		Limit(1).
+		Find(&record)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {

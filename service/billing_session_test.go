@@ -170,6 +170,79 @@ func TestBillingSessionWalletPreConsumeUsesDurableRequestIdentity(t *testing.T) 
 	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
 }
 
+func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 851, 852
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "unresolved-finalize-token", 100)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: "request:unresolved-finalize:finalize",
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		FundingDelta: 10,
+		TokenDelta:   10,
+		Status:       model.BillingSettlementStatusManual,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	session, apiErr := NewBillingSession(ctx, &relaycommon.RelayInfo{
+		RequestId:       "blocked-after-finalize",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "unresolved-finalize-token",
+		OriginModelName: "blocked-finalize-model",
+		UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+	}, 10)
+
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.EqualValues(t, 100, getUserQuota(t, userID))
+	assert.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+}
+
+func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 853, 854
+	seedUser(t, userID, 15)
+	seedToken(t, tokenID, userID, "insufficient-finalize-token", 100)
+	ctx, _ := gin.CreateTestContext(nil)
+	newInfo := func(requestID string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			RequestId:       requestID,
+			UserId:          userID,
+			TokenId:         tokenID,
+			TokenKey:        "insufficient-finalize-token",
+			OriginModelName: "insufficient-finalize-model",
+			UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+		}
+	}
+
+	session, apiErr := NewBillingSession(ctx, newInfo("insufficient-finalize-request"), 10)
+	require.Nil(t, apiErr)
+	require.Error(t, session.Settle(20))
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", "request:insufficient-finalize-request:finalize").First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	assert.EqualValues(t, 10, settlement.FundingDelta)
+	assert.Zero(t, settlement.AppliedFundingDelta)
+
+	nextSession, nextErr := NewBillingSession(ctx, newInfo("blocked-after-insufficient-finalize"), 5)
+	require.Nil(t, nextSession)
+	require.NotNil(t, nextErr)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, nextErr.GetErrorCode())
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+}
+
 func TestBillingSessionWalletFirstReplayCannotSwitchFromWalletToSubscription(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subscriptionID = 805, 806, 807, 808

@@ -3,9 +3,11 @@ package relay
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,9 +19,35 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type failingMidjourneyBillingSettler struct {
+	settlementErr error
+	refundCalls   int
+	operationKey  string
+}
+
+func (s *failingMidjourneyBillingSettler) Settle(int) error         { return s.settlementErr }
+func (s *failingMidjourneyBillingSettler) Refund(*gin.Context)      { s.refundCalls++ }
+func (s *failingMidjourneyBillingSettler) NeedsRefund() bool        { return true }
+func (s *failingMidjourneyBillingSettler) GetPreConsumedQuota() int { return 10 }
+func (s *failingMidjourneyBillingSettler) Reserve(int) error        { return nil }
+func (s *failingMidjourneyBillingSettler) PrepareSettlement(int) (*model.BillingSettlementInput, error) {
+	return &model.BillingSettlementInput{
+		OperationKey: s.operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       901,
+		TokenID:      902,
+		FundingDelta: 10,
+		TokenDelta:   10,
+	}, nil
+}
+func (s *failingMidjourneyBillingSettler) PrepareRefundSettlement() (*model.BillingSettlementInput, error) {
+	return nil, nil
+}
 
 func TestWriteMidjourneyStatusCodeUsesChannelMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -236,6 +264,65 @@ func TestClassifyMidjourneySubmissionPreservesUncertainOutcomes(t *testing.T) {
 			require.Equal(t, test.ambiguous, ambiguous)
 		})
 	}
+}
+
+func TestFinalizeMidjourneySubmissionRejectsSuccessWhenSettlementFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Midjourney{}, &model.MidjourneyBillingClaim{}, &model.BillingSettlement{}))
+	t.Cleanup(func() {
+		model.DB = oldDB
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	settler := &failingMidjourneyBillingSettler{
+		settlementErr: errors.New("user quota is not enough"),
+		operationKey:  "request:midjourney-finalize-failure:finalize",
+	}
+	task := &model.Task{
+		TaskID: "task-midjourney-settlement-review", Platform: constant.TaskPlatformMidjourney,
+		UserId: 901, ChannelId: 903, Quota: 10, Status: model.TaskStatusNotStart,
+		PrivateData: model.TaskPrivateData{BillingRequestId: "midjourney-finalize-failure", TokenId: 902, AwaitingUpstreamID: true},
+	}
+	require.NoError(t, db.Create(task).Error)
+	midjourneyTask := &model.Midjourney{
+		UserId: 901, ChannelId: 903, MjId: "provider-midjourney-settlement-review",
+		Quota: 20, Progress: "0%",
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/mj/submit", nil)
+	info := &relaycommon.RelayInfo{
+		Billing:       settler,
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: constant.MjActionImagine},
+		ChannelMeta:   &relaycommon.ChannelMeta{},
+	}
+
+	created, err := finalizeMidjourneySubmission(c, info, task, midjourneyTask)
+
+	require.False(t, created)
+	var settlementErr *midjourneyBillingSettlementPendingError
+	require.ErrorAs(t, err, &settlementErr)
+	assert.Equal(t, midjourneyTask.MjId, settlementErr.taskID)
+	assert.Zero(t, settler.refundCalls)
+	assert.Equal(t, constant.MjBillingSettlementPending, midjourneySubmissionErrorResponse(err).Description)
+	assert.Equal(t, midjourneyTask.MjId, midjourneySubmissionErrorResponse(err).Result)
+
+	var storedTask model.Task
+	require.NoError(t, db.First(&storedTask, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusFailure), storedTask.Status)
+	assert.EqualValues(t, 10, storedTask.Quota)
+	assert.Equal(t, midjourneyTask.MjId, storedTask.PrivateData.UpstreamTaskID)
+
+	var settlement model.BillingSettlement
+	require.NoError(t, db.Where("operation_key = ?", settler.operationKey).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusPending, settlement.Status)
+	assert.EqualValues(t, 10, settlement.FundingDelta)
 }
 
 func TestRelayMidjourneyNotifyCompletesShadowTask(t *testing.T) {

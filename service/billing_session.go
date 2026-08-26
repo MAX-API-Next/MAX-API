@@ -738,6 +738,17 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	if blocked, err := model.HasUnresolvedPositiveFinalizeSettlement(relayInfo.UserId); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	} else if blocked {
+		return nil, types.NewErrorWithStatusCode(
+			errors.New("存在未完成的计费对账，请勿重复提交请求并联系管理员处理"),
+			types.ErrorCodeInsufficientUserQuota,
+			http.StatusForbidden,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 

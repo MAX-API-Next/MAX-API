@@ -52,6 +52,46 @@ func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testi
 	assert.Contains(t, []string{BillingSettlementSourceWallet, BillingSettlementSourceSubscription}, source)
 }
 
+func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	const blockingUserID = 941
+	const nonBlockingUserID = 942
+	now := time.Now().Unix()
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:pending-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: blockingUserID, FundingDelta: 10, TokenDelta: 10,
+			Status: BillingSettlementStatusPending, NextAttempt: now, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:manual-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: blockingUserID, FundingDelta: 5, TokenDelta: 5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:refund-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: nonBlockingUserID, FundingDelta: -5, TokenDelta: -5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:failed-reserve:reserve:1", Source: BillingSettlementSourceWallet,
+			UserID: nonBlockingUserID, FundingDelta: 5, TokenDelta: 5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(blockingUserID)
+
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(nonBlockingUserID)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+}
+
 func TestSubscriptionSettlementUsesActualAppliedRefundForToken(t *testing.T) {
 	setupUserUpdateTestState(t)
 

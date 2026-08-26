@@ -5,6 +5,8 @@ const (
 	MjRequestError = 4
 )
 
+const MjBillingSettlementPending = "billing_settlement_pending"
+
 const (
 	MjActionImagine       = "IMAGINE"
 	MjActionDescribe      = "DESCRIBE"
