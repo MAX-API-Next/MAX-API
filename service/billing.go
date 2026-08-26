@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/logger"
+	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -56,6 +58,18 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	_, err := SettleBillingWithEffect(ctx, relayInfo, actualQuota, nil)
+	return err
+}
+
+// SettleBillingWithEffect settles funding before projecting usage and logs.
+// The returned flag is true when the durable settlement owns the projection;
+// callers must not write a second usage/log record in that case, including when
+// effect processing is still pending after the funding mutation succeeded.
+func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int, effect *model.BillingSettlementEffect) (bool, error) {
+	if relayInfo == nil {
+		return false, fmt.Errorf("relayInfo is nil")
+	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed
@@ -78,8 +92,26 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			))
 		}
 
+		if effect != nil {
+			if settler, ok := relayInfo.Billing.(interface {
+				SettleWithEffect(int, *model.BillingSettlementEffect) error
+			}); ok {
+				if err := settler.SettleWithEffect(actualQuota, effect); err != nil {
+					return true, err
+				}
+				if actualQuota != 0 {
+					if relayInfo.BillingSource == BillingSourceSubscription {
+						checkAndSendSubscriptionQuotaNotify(relayInfo)
+					} else {
+						checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
+					}
+				}
+				return true, nil
+			}
+		}
+
 		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
-			return err
+			return false, err
 		}
 
 		// 发送额度通知（订阅计费使用订阅剩余额度）
@@ -90,13 +122,67 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}
-		return nil
+		return false, nil
 	}
 
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuotaOnce(relayInfo, "finalize", quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		return false, PostConsumeQuotaOnce(relayInfo, "finalize", quotaDelta, relayInfo.FinalPreConsumedQuota, true)
 	}
-	return nil
+	return false, nil
+}
+
+// settleAndRecordConsume keeps the successful usage projection behind the
+// funding settlement. Durable BillingSession effects replay both the log and
+// counters after a transient failure; legacy/custom sessions project locally
+// only after SettleBilling succeeds.
+func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, shouldUpdateUsage bool, params model.RecordConsumeLogParams) {
+	if relayInfo == nil {
+		logger.LogError(ctx, "error settling billing: relayInfo is nil")
+		return
+	}
+	requestID, upstreamRequestID := "", ""
+	if ctx != nil {
+		requestID = ctx.GetString(common.RequestIdKey)
+		upstreamRequestID = ctx.GetString(common.UpstreamRequestIdKey)
+	}
+	if requestID == "" {
+		requestID = relayInfo.RequestId
+	}
+	var effect *model.BillingSettlementEffect
+	if shouldUpdateUsage {
+		effect = &model.BillingSettlementEffect{
+			LogType:           model.LogTypeConsume,
+			Content:           params.Content,
+			ChannelID:         params.ChannelId,
+			ModelName:         params.ModelName,
+			TokenID:           params.TokenId,
+			Group:             params.Group,
+			Other:             params.Other,
+			NodeName:          common.NodeName,
+			UpdateUsage:       true,
+			Quota:             int64(params.Quota),
+			PromptTokens:      params.PromptTokens,
+			CompletionTokens:  params.CompletionTokens,
+			UseTimeSeconds:    params.UseTimeSeconds,
+			IsStream:          params.IsStream,
+			RequestID:         requestID,
+			UpstreamRequestID: upstreamRequestID,
+		}
+	}
+
+	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, params.Quota, effect)
+	if err != nil {
+		logger.LogError(ctx, "error settling billing: "+err.Error())
+		return
+	}
+	if effectHandled {
+		return
+	}
+	if shouldUpdateUsage {
+		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, params.Quota)
+		model.UpdateChannelUsedQuota(relayInfo.ChannelId, params.Quota)
+	}
+	model.RecordConsumeLog(ctx, relayInfo.UserId, params)
 }

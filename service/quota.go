@@ -238,15 +238,6 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent += fmt.Sprintf(", stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota)
 		logger.LogError(ctx, fmt.Sprintf("stream ended abnormally without billable usage, billing fallback quota, userId %d, channelId %d, tokenId %d, model %s, reason %s, fallback quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.StreamStatus.EndReason, fallbackQuota))
 	}
-	if shouldUpdateUsageStats {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
-		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
-	}
-
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
-	}
-
 	logModel := modelName
 	if extraContent != "" {
 		logContent += ", " + extraContent
@@ -257,7 +248,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	settleAndRecordConsume(ctx, relayInfo, shouldUpdateUsageStats, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
@@ -369,15 +360,6 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent += fmt.Sprintf(", stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota)
 		logger.LogError(ctx, fmt.Sprintf("stream ended abnormally without billable usage, billing fallback quota, userId %d, channelId %d, tokenId %d, model %s, reason %s, fallback quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.StreamStatus.EndReason, fallbackQuota))
 	}
-	if shouldUpdateUsageStats {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
-		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
-	}
-
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
-	}
-
 	logModel := relayInfo.OriginModelName
 	if extraContent != "" {
 		logContent += ", " + extraContent
@@ -388,7 +370,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	settleAndRecordConsume(ctx, relayInfo, shouldUpdateUsageStats, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,

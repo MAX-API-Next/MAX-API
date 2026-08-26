@@ -106,16 +106,22 @@ type BillingPreConsumeSelection struct {
 }
 
 type BillingSettlementEffect struct {
-	LogType     int                    `json:"log_type"`
-	Content     string                 `json:"content"`
-	ChannelID   int                    `json:"channel_id"`
-	ModelName   string                 `json:"model_name"`
-	TokenID     int                    `json:"token_id"`
-	Group       string                 `json:"group"`
-	Other       map[string]interface{} `json:"other"`
-	NodeName    string                 `json:"node_name"`
-	UpdateUsage bool                   `json:"update_usage"`
-	Quota       int64                  `json:"quota,omitempty"`
+	LogType           int                    `json:"log_type"`
+	Content           string                 `json:"content"`
+	ChannelID         int                    `json:"channel_id"`
+	ModelName         string                 `json:"model_name"`
+	TokenID           int                    `json:"token_id"`
+	Group             string                 `json:"group"`
+	Other             map[string]interface{} `json:"other"`
+	NodeName          string                 `json:"node_name"`
+	UpdateUsage       bool                   `json:"update_usage"`
+	Quota             int64                  `json:"quota,omitempty"`
+	PromptTokens      int                    `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int                    `json:"completion_tokens,omitempty"`
+	UseTimeSeconds    int                    `json:"use_time_seconds,omitempty"`
+	IsStream          bool                   `json:"is_stream,omitempty"`
+	RequestID         string                 `json:"request_id,omitempty"`
+	UpstreamRequestID string                 `json:"upstream_request_id,omitempty"`
 }
 
 type BillingSettlementInput struct {
@@ -752,6 +758,9 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 			UserId: record.UserID, LogType: effect.LogType, Content: effect.Content,
 			ChannelId: effect.ChannelID, ModelName: effect.ModelName, Quota: int(quota),
 			TokenId: effect.TokenID, Group: effect.Group, Other: other, NodeName: effect.NodeName,
+			PromptTokens: effect.PromptTokens, CompletionTokens: effect.CompletionTokens,
+			UseTimeSeconds: effect.UseTimeSeconds, IsStream: effect.IsStream,
+			RequestId: effect.RequestID, UpstreamRequestId: effect.UpstreamRequestID,
 		}); err != nil {
 			return err
 		}
