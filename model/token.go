@@ -536,6 +536,19 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	return len(tokens), nil
 }
 
+func revokeUserTokensTx(tx *gorm.DB, userID int) ([]CacheInvalidationTask, error) {
+	cacheTasks, err := stageUserTokenCacheInvalidationsTx(tx, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&Token{}).
+		Where("user_id = ?", userID).
+		Update("status", common.TokenStatusDisabled).Error; err != nil {
+		return nil, err
+	}
+	return cacheTasks, nil
+}
+
 func GetTokenKeysByIds(ids []int, userId int) ([]Token, error) {
 	var tokens []Token
 	err := DB.Select("id", commonKeyCol).

@@ -25,6 +25,7 @@ import {
   isPasskeySupported as detectPasskeySupport,
   prepareCredentialCreationOptions,
 } from '@/lib/passkey'
+import { isVerificationRequiredError } from '@/lib/secure-verification'
 import {
   beginPasskeyRegistration,
   deletePasskey,
@@ -70,7 +71,8 @@ export function usePasskeyManagement(
   }, [onStatusChange])
 
   useEffect(() => {
-    fetchStatus()
+    const timer = window.setTimeout(() => void fetchStatus(), 0)
+    return () => window.clearTimeout(timer)
   }, [fetchStatus])
 
   useEffect(() => {
@@ -130,6 +132,9 @@ export function usePasskeyManagement(
       await fetchStatus()
       return true
     } catch (error: unknown) {
+      if (isVerificationRequiredError(error)) {
+        throw error
+      }
       if (error instanceof DOMException && error.name === 'NotAllowedError') {
         toast.info(i18next.t('Passkey registration was cancelled'))
         return false

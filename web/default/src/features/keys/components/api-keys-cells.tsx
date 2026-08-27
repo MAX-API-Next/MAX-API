@@ -19,7 +19,6 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useState, useCallback } from 'react'
 import { Check, Copy, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,6 +40,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
   const {
     resolveRealKey,
     resolvedKeys,
+    clearResolvedKey,
     loadingKeys,
     copiedKeyId,
     markKeyCopied,
@@ -56,24 +56,21 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     (open: boolean) => {
       setPopoverOpen(open)
       if (open && !resolvedFullKey) {
-        resolveRealKey(apiKey.id)
+        void resolveRealKey(apiKey.id, { cache: true })
+      } else if (!open) {
+        clearResolvedKey(apiKey.id)
       }
     },
-    [resolvedFullKey, resolveRealKey, apiKey.id]
+    [clearResolvedKey, resolvedFullKey, resolveRealKey, apiKey.id]
   )
 
   const handleCopy = useCallback(async () => {
-    const realKey = resolvedFullKey
-    if (!realKey) {
-      void resolveRealKey(apiKey.id)
-      toast.info(t('API key is loading, please try again in a moment'))
-      return
-    }
+    const realKey = await resolveRealKey(apiKey.id)
     if (realKey) {
       const ok = await copyToClipboard(realKey)
       if (ok) markKeyCopied(apiKey.id)
     }
-  }, [resolvedFullKey, resolveRealKey, apiKey.id, markKeyCopied, t])
+  }, [resolveRealKey, apiKey.id, markKeyCopied])
 
   return (
     <div className='flex items-center'>
@@ -122,12 +119,6 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
               size='icon'
               className='size-7 shrink-0'
               onClick={handleCopy}
-              onFocus={() => {
-                if (!resolvedFullKey) void resolveRealKey(apiKey.id)
-              }}
-              onPointerEnter={() => {
-                if (!resolvedFullKey) void resolveRealKey(apiKey.id)
-              }}
               disabled={isLoading}
             />
           }

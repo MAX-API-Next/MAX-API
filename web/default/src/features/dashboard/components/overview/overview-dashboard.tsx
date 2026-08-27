@@ -54,6 +54,7 @@ import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
+import { useSecureVerificationGate } from '@/features/auth/secure-verification'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
 import {
@@ -381,6 +382,7 @@ function RequestPreview(props: {
 }) {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
+  const { withVerification } = useSecureVerificationGate()
   const [isCopying, setIsCopying] = useState(false)
   const { copyToClipboard } = useCopyToClipboard({ notify: false })
   const previewCurl = buildCurlCommand({
@@ -391,10 +393,18 @@ function RequestPreview(props: {
   const previewLines = previewCurl.split('\n')
   const handleCopyRequest = async () => {
     if (!props.example.keyId || isCopying) return
+    const keyId = props.example.keyId
 
     setIsCopying(true)
     try {
-      const result = await fetchTokenKey(props.example.keyId)
+      const result = await withVerification(() => fetchTokenKey(keyId), {
+        scope: 'api_token',
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before copying a request with your API key.'
+        ),
+      })
+      if (!result) return
       const key = result.success && result.data?.key ? result.data.key : ''
       if (!key) {
         toast.error(result.message || t('Failed to copy to clipboard'))

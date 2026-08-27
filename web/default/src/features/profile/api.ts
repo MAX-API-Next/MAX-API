@@ -141,6 +141,47 @@ export async function bindWeChat(code: string): Promise<ApiResponse> {
   return res.data
 }
 
+export interface TelegramAuthorizationPayload {
+  id: number
+  first_name?: string
+  last_name?: string
+  username?: string
+  photo_url?: string
+  auth_date: number
+  hash: string
+}
+
+export async function createTelegramBindState(): Promise<
+  ApiResponse<{ state: string }>
+> {
+  const res = await api.post<ApiResponse<{ state: string }>>(
+    '/api/oauth/telegram/bind/state',
+    undefined,
+    sensitiveActionConfig
+  )
+  return res.data
+}
+
+export async function bindTelegramAccount(
+  payload: TelegramAuthorizationPayload & { state: string }
+): Promise<ApiResponse> {
+  const res = await api.post<ApiResponse>(
+    '/api/oauth/telegram/bind',
+    payload,
+    sensitiveActionConfig
+  )
+  return res.data
+}
+
+export async function revokeOtherSessions(): Promise<ApiResponse> {
+  const res = await api.post<ApiResponse>(
+    '/api/user/sessions/revoke',
+    undefined,
+    sensitiveActionConfig
+  )
+  return res.data
+}
+
 // ============================================================================
 // Custom OAuth Binding APIs
 // ============================================================================

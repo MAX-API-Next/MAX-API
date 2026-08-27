@@ -72,14 +72,14 @@ export function SecureVerificationDialog({
   const title =
     state.title ??
     (availableTabs.length
-      ? 'Additional verification required'
-      : 'Verification unavailable')
+      ? t('Additional verification required')
+      : t('Verification unavailable'))
 
   const description =
     state.description ??
     (availableTabs.length
-      ? 'Confirm your identity before accessing this sensitive action.'
-      : 'Enable Two-factor Authentication or Passkey in your profile settings to continue.')
+      ? t('Confirm your identity before accessing this sensitive action.')
+      : t('Add a password or sign in again with a linked account to continue.'))
 
   const handleVerify = () => {
     if (!activeMethod) return
@@ -117,7 +117,7 @@ export function SecureVerificationDialog({
                 </div>
                 <p className='text-muted-foreground text-sm'>
                   {t(
-                    'Enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+                    'Add a password or sign in again with a linked account to unlock sensitive operations.'
                   )}
                 </p>
               </div>

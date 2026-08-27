@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	ErrPasskeyNotFound         = errors.New("passkey credential not found")
-	ErrFriendlyPasskeyNotFound = errors.New("Passkey 验证失败，请重试或联系管理员")
+	ErrPasskeyNotFound          = errors.New("passkey credential not found")
+	ErrPasskeyCredentialChanged = errors.New("Passkey 凭证已变化，请重试")
+	ErrFriendlyPasskeyNotFound  = errors.New("Passkey 验证失败，请重试或联系管理员")
 )
 
 type PasskeyCredential struct {
@@ -178,22 +179,69 @@ func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
 }
 
 func UpsertPasskeyCredential(credential *PasskeyCredential) error {
-	if credential == nil {
+	if credential == nil || credential.UserID <= 0 || credential.CredentialID == "" {
 		common.SysLog("UpsertPasskeyCredential: nil credential provided")
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		// 使用Unscoped()进行硬删除，避免唯一索引冲突
+	result := DB.Model(&PasskeyCredential{}).
+		Where("user_id = ? AND credential_id = ?", credential.UserID, credential.CredentialID).
+		Select(
+			"PublicKey",
+			"AttestationType",
+			"AAGUID",
+			"SignCount",
+			"CloneWarning",
+			"UserPresent",
+			"UserVerified",
+			"BackupEligible",
+			"BackupState",
+			"Transports",
+			"Attachment",
+			"LastUsedAt",
+		).
+		Updates(credential)
+	if result.Error != nil {
+		common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to update credential for user %d: %v", credential.UserID, result.Error))
+		return fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	var count int64
+	if err := DB.Model(&PasskeyCredential{}).
+		Where("user_id = ? AND credential_id = ?", credential.UserID, credential.CredentialID).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	if count == 1 {
+		return nil
+	}
+	return ErrPasskeyCredentialChanged
+}
+
+func ReplacePasskeyCredentialAndBumpSessionGeneration(credential *PasskeyCredential) (int64, error) {
+	if credential == nil || credential.UserID <= 0 {
+		return 0, fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("user_id = ?", credential.UserID).Delete(&PasskeyCredential{}).Error; err != nil {
-			common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to delete existing credential for user %d: %v", credential.UserID, err))
-			return fmt.Errorf("Passkey 保存失败，请重试")
+			return err
 		}
 		if err := tx.Create(credential).Error; err != nil {
-			common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to create credential for user %d: %v", credential.UserID, err))
-			return fmt.Errorf("Passkey 保存失败，请重试")
+			return err
 		}
-		return nil
+		var err error
+		generation, cacheTask, err = bumpUserSessionGenerationTx(tx, credential.UserID)
+		return err
 	})
+	if err != nil {
+		common.SysLog(fmt.Sprintf("ReplacePasskeyCredentialAndBumpSessionGeneration: failed for user %d: %v", credential.UserID, err))
+		return 0, fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
 }
 
 func DeletePasskeyByUserID(userID int) error {
@@ -207,4 +255,29 @@ func DeletePasskeyByUserID(userID int) error {
 		return fmt.Errorf("删除失败，请重试")
 	}
 	return nil
+}
+
+func DeletePasskeyAndBumpSessionGeneration(userID int) (int64, error) {
+	if userID <= 0 {
+		return 0, fmt.Errorf("删除失败，请重试")
+	}
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrPasskeyNotFound
+		}
+		var err error
+		generation, cacheTask, err = bumpUserSessionGenerationTx(tx, userID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
 }

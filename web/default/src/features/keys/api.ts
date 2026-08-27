@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import type {
   ApiKey,
   ApiResponse,
@@ -29,6 +29,11 @@ import type {
 // ============================================================================
 // API Key Management
 // ============================================================================
+
+const apiTokenSensitiveActionConfig: ApiRequestConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+}
 
 // Get paginated API keys list
 export async function getApiKeys(
@@ -63,7 +68,7 @@ export async function getApiKey(id: number): Promise<ApiResponse<ApiKey>> {
 export async function createApiKey(
   data: ApiKeyFormData
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.post('/api/token/', data)
+  const res = await api.post('/api/token/', data, apiTokenSensitiveActionConfig)
   return res.data
 }
 
@@ -102,7 +107,11 @@ export async function updateApiKeyStatus(
 export async function fetchTokenKey(
   id: number
 ): Promise<{ success: boolean; message?: string; data?: { key: string } }> {
-  const res = await api.post(`/api/token/${id}/key`)
+  const res = await api.post(
+    `/api/token/${id}/key`,
+    undefined,
+    apiTokenSensitiveActionConfig
+  )
   return res.data
 }
 
@@ -112,6 +121,10 @@ export async function fetchTokenKeysBatch(ids: number[]): Promise<{
   message?: string
   data?: { keys: Record<number, string> }
 }> {
-  const res = await api.post('/api/token/batch/keys', { ids })
+  const res = await api.post(
+    '/api/token/batch/keys',
+    { ids },
+    apiTokenSensitiveActionConfig
+  )
   return res.data
 }

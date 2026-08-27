@@ -16,8 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import type { ApiResponse, PasskeyOptionsPayload, PasskeyStatus } from './types'
+
+const credentialSensitiveActionConfig: ApiRequestConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+}
 
 export async function getPasskeyStatus(): Promise<ApiResponse<PasskeyStatus>> {
   const res = await api.get<ApiResponse<PasskeyStatus>>('/api/user/passkey')
@@ -28,7 +33,9 @@ export async function beginPasskeyRegistration(): Promise<
   ApiResponse<PasskeyOptionsPayload>
 > {
   const res = await api.post<ApiResponse<PasskeyOptionsPayload>>(
-    '/api/user/passkey/register/begin'
+    '/api/user/passkey/register/begin',
+    undefined,
+    credentialSensitiveActionConfig
   )
   return res.data
 }
@@ -38,7 +45,8 @@ export async function finishPasskeyRegistration(
 ): Promise<ApiResponse> {
   const res = await api.post<ApiResponse>(
     '/api/user/passkey/register/finish',
-    payload
+    payload,
+    credentialSensitiveActionConfig
   )
   return res.data
 }

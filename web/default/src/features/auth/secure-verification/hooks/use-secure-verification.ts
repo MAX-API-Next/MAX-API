@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import {
@@ -35,6 +35,11 @@ import type {
 } from '../types'
 
 type ApiCall = (() => Promise<unknown>) | null
+
+interface PendingVerification {
+  resolve: (value: unknown | null) => void
+  reject: (reason?: unknown) => void
+}
 
 interface InternalState extends SecureVerificationState {
   apiCall: ApiCall
@@ -63,7 +68,8 @@ export function useSecureVerification(
 
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
-  const [open, setOpen] = useState(false)
+  const [open, setDialogOpen] = useState(false)
+  const pendingVerificationRef = useRef<PendingVerification | null>(null)
 
   const fetchVerificationMethods = useCallback(
     async (scope?: VerificationScope) => {
@@ -76,8 +82,26 @@ export function useSecureVerification(
 
   const reset = useCallback(() => {
     setState(initialState)
-    setOpen(false)
+    setDialogOpen(false)
   }, [])
+
+  const settlePendingVerification = useCallback(
+    (value: unknown | null, error?: unknown) => {
+      const pending = pendingVerificationRef.current
+      pendingVerificationRef.current = null
+      if (!pending) return
+      if (error !== undefined) {
+        pending.reject(error)
+      } else {
+        pending.resolve(value)
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    return () => settlePendingVerification(null)
+  }, [settlePendingVerification])
 
   const startVerification = useCallback(
     async (
@@ -94,12 +118,12 @@ export function useSecureVerification(
       ) {
         toast.error(
           i18next.t(
-            'Please enable Two-factor Authentication or Passkey before proceeding'
+            'No verification method is available. Add a password or sign in again with a linked account.'
           )
         )
         onError?.(
           new Error(
-            'No verification methods available. Enable 2FA or Passkey to continue.'
+            'No verification method is available. Add a password or sign in again with a linked account.'
           )
         )
         return false
@@ -118,7 +142,7 @@ export function useSecureVerification(
         description,
         scope,
       }))
-      setOpen(true)
+      setDialogOpen(true)
       return true
     },
     [fetchVerificationMethods, onError]
@@ -141,7 +165,20 @@ export function useSecureVerification(
 
       try {
         await verify(actualMethod, code ?? state.code, state.scope)
+      } catch (error) {
+        setState((prev) => ({ ...prev, loading: false }))
+        const message =
+          error instanceof Error
+            ? error.message
+            : i18next.t('Verification failed')
+        toast.error(message)
+        onError?.(error)
+        throw error
+      }
+
+      try {
         const result = await state.apiCall()
+        settlePendingVerification(result)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -155,18 +192,28 @@ export function useSecureVerification(
 
         return result
       } catch (error) {
+        settlePendingVerification(null, error)
         const message =
           error instanceof Error
             ? error.message
             : i18next.t('Verification failed')
         toast.error(message)
         onError?.(error)
+        reset()
         throw error
       } finally {
         setState((prev) => ({ ...prev, loading: false }))
       }
     },
-    [state, successMessage, onSuccess, onError, autoReset, reset]
+    [
+      state,
+      successMessage,
+      onSuccess,
+      onError,
+      autoReset,
+      reset,
+      settlePendingVerification,
+    ]
   )
 
   const setCode = useCallback((code: string) => {
@@ -178,27 +225,47 @@ export function useSecureVerification(
   }, [])
 
   const cancel = useCallback(() => {
+    settlePendingVerification(null)
     reset()
-  }, [reset])
+  }, [reset, settlePendingVerification])
+
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        cancel()
+        return
+      }
+      setDialogOpen(true)
+    },
+    [cancel]
+  )
 
   const withVerification = useCallback(
-    async (
-      apiCall: () => Promise<unknown>,
+    async <T>(
+      apiCall: () => Promise<T>,
       config: StartVerificationOptions = {}
-    ) => {
+    ): Promise<T | null> => {
       try {
         return await apiCall()
       } catch (error) {
         if (isVerificationRequiredError(error)) {
           const info = extractVerificationInfo(error)
           toast.info(info.message)
-          await startVerification(apiCall, config)
-          return null
+          const started = await startVerification(apiCall, config)
+          if (!started) return null
+
+          settlePendingVerification(null)
+          return await new Promise<T | null>((resolve, reject) => {
+            pendingVerificationRef.current = {
+              resolve: (value) => resolve(value as T | null),
+              reject,
+            }
+          })
         }
         throw error
       }
     },
-    [startVerification]
+    [settlePendingVerification, startVerification]
   )
 
   const canUseMethod = useCallback(

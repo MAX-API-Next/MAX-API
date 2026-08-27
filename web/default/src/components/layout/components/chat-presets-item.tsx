@@ -40,6 +40,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar'
+import { useSecureVerificationGate } from '@/features/auth/secure-verification'
 import { fetchActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import {
@@ -156,6 +157,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
   const { t } = useTranslation()
   const { chatPresets, serverAddress } = useChatPresets()
   const { state, isMobile, setOpenMobile } = useSidebar()
+  const { withVerification } = useSecureVerificationGate()
   const href = useLocation({ select: (location) => location.href })
   const [loadingPresetId, setLoadingPresetId] = useState<string | null>(null)
   const loadingPresetIdRef = useRef<string | null>(null)
@@ -181,7 +183,15 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
         loadingPresetIdRef.current = preset.id
         setLoadingPresetId(preset.id)
         try {
-          activeKey = await fetchActiveChatKey()
+          activeKey =
+            (await withVerification(fetchActiveChatKey, {
+              scope: 'api_token',
+              title: t('Security verification'),
+              description: t(
+                'Confirm your identity before sending an API key to a chat client.'
+              ),
+            })) || undefined
+          if (!activeKey) return
         } catch (error) {
           const message =
             error instanceof Error
@@ -213,7 +223,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       window.open(url, '_blank', 'noopener,noreferrer')
       setOpenMobile(false)
     },
-    [serverAddress, setOpenMobile, t]
+    [serverAddress, setOpenMobile, t, withVerification]
   )
 
   const normalizedHref = normalizeHref(href)

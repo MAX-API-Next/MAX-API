@@ -16,9 +16,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-export * from './api'
-export * from './types'
-export * from './hooks/use-secure-verification'
-export * from './components/secure-verification-dialog'
-export * from './components/secure-verification-context'
-export * from './components/secure-verification-provider'
+import { createContext, useContext } from 'react'
+import type { StartVerificationOptions } from '../types'
+
+interface SecureVerificationContextValue {
+  withVerification: <T>(
+    apiCall: () => Promise<T>,
+    config?: StartVerificationOptions
+  ) => Promise<T | null>
+}
+
+export const SecureVerificationContext =
+  createContext<SecureVerificationContextValue | null>(null)
+
+export function useSecureVerificationGate() {
+  const context = useContext(SecureVerificationContext)
+  if (!context) {
+    throw new Error(
+      'useSecureVerificationGate must be used within SecureVerificationProvider'
+    )
+  }
+  return context
+}

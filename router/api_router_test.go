@@ -338,8 +338,9 @@ func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
 			}
 			schema, schemaOK := value["schema"].(map[string]any)
 			values, valuesOK := schema["enum"].([]any)
-			return schemaOK && valuesOK && len(values) == 2 &&
-				values[0] == "access_token" && values[1] == "account_delete"
+			return schemaOK && valuesOK && len(values) == 4 &&
+				values[0] == "access_token" && values[1] == "account_delete" &&
+				values[2] == "credentials" && values[3] == "api_token"
 		}
 		return false
 	}, "expected supported scope query parameter for GET /api/verify/methods")
@@ -353,5 +354,142 @@ func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
 	properties := schema["properties"].(map[string]any)
 	for _, property := range []string{"method", "code", "password", "scope"} {
 		require.Contains(t, properties, property)
+	}
+}
+
+func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
+	documentBytes, err := os.ReadFile("../docs/openapi/api.json")
+	require.NoError(t, err)
+
+	var document struct {
+		Paths map[string]map[string]map[string]any `json:"paths"`
+	}
+	require.NoError(t, common.Unmarshal(documentBytes, &document))
+
+	telegramBind := document.Paths["/api/oauth/telegram/bind"]
+	require.Contains(t, telegramBind, "post")
+	require.NotContains(t, telegramBind, "get")
+	requestBody := telegramBind["post"]["requestBody"].(map[string]any)
+	content := requestBody["content"].(map[string]any)
+	schema := content["application/json"].(map[string]any)["schema"].(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	for _, property := range []string{"id", "auth_date", "hash", "state"} {
+		require.Contains(t, properties, property)
+	}
+
+	for path, method := range map[string]string{
+		"/api/oauth/telegram/bind/state": "post",
+		"/api/user/sessions/revoke":      "post",
+		"/api/token/{id}/key":            "post",
+		"/api/token/batch/keys":          "post",
+	} {
+		require.Contains(t, document.Paths[path], method, path)
+	}
+}
+
+func TestSensitiveCredentialRoutesRequireStepUp(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)
+
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldGlobalAPIRateLimitEnable := common.GlobalApiRateLimitEnable
+	oldCriticalRateLimitEnable := common.CriticalRateLimitEnable
+
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.GlobalApiRateLimitEnable = false
+	common.CriticalRateLimitEnable = false
+
+	dsn := fmt.Sprintf("file:sensitive_routes_%d?mode=memory&cache=shared", testRun)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Token{},
+		&model.TwoFA{},
+		&model.TwoFABackupCode{},
+		&model.PasskeyCredential{},
+		&model.Log{},
+	))
+	user := model.User{
+		Id:       1300000 + int(testRun),
+		Username: fmt.Sprintf("sensitive-route-user-%d", testRun),
+		Password: "hashed-password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	token := model.Token{
+		Id:          1400000 + int(testRun),
+		UserId:      user.Id,
+		Key:         fmt.Sprintf("sensitive-route-token-%d", testRun),
+		Name:        "sensitive-route-token",
+		Status:      common.TokenStatusEnabled,
+		ExpiredTime: -1,
+	}
+	require.NoError(t, db.Create(&token).Error)
+
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.GlobalApiRateLimitEnable = oldGlobalAPIRateLimitEnable
+		common.CriticalRateLimitEnable = oldCriticalRateLimitEnable
+	})
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("sensitive-route-session"))))
+	engine.GET("/test/login", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("id", user.Id)
+		session.Set("username", user.Username)
+		session.Set("role", user.Role)
+		session.Set("status", user.Status)
+		session.Set("group", user.Group)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+
+	loginRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/test/login", nil))
+	require.Equal(t, http.StatusNoContent, loginRecorder.Code)
+
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "passkey registration", path: "/api/user/passkey/register/begin", body: `{}`},
+		{name: "2fa setup", path: "/api/user/2fa/setup", body: `{}`},
+		{name: "session revocation", path: "/api/user/sessions/revoke", body: `{}`},
+		{name: "telegram bind state", path: "/api/oauth/telegram/bind/state", body: `{}`},
+		{name: "telegram bind", path: "/api/oauth/telegram/bind", body: `{}`},
+		{name: "api token creation", path: "/api/token/", body: `{"name":"blocked","expired_time":-1,"unlimited_quota":true}`},
+		{name: "api token reveal", path: fmt.Sprintf("/api/token/%d/key", token.Id), body: `{}`},
+		{name: "api token batch export", path: "/api/token/batch/keys", body: fmt.Sprintf(`{"ids":[%d]}`, token.Id)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			for _, sessionCookie := range loginRecorder.Result().Cookies() {
+				request.AddCookie(sessionCookie)
+			}
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+			require.Contains(t, recorder.Body.String(), "VERIFICATION_REQUIRED")
+		})
 	}
 }

@@ -27,6 +27,8 @@ const userOAuthIdentityLockName = "maxapi:user-oauth-identity"
 
 var userOAuthIdentityLockMu sync.Mutex
 
+var ErrTelegramIdAlreadyTaken = errors.New("telegram identity is already bound")
+
 type UserUpdateField string
 
 const (
@@ -57,38 +59,39 @@ const (
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id               int            `json:"id"`
-	Username         string         `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password         string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName      string         `json:"display_name" gorm:"index" validate:"max=20"`
-	Role             int            `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email            string         `json:"email" gorm:"index" validate:"max=50"`
-	NormalizedEmail  string         `json:"-" gorm:"column:normalized_email;size:50;index"`
-	GitHubId         string         `json:"github_id" gorm:"column:github_id;size:512;index" validate:"max=512"`
-	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;size:512;index" validate:"max=512"`
-	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;size:512;index" validate:"max=512"`
-	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;size:512;index" validate:"max=512"`
-	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;size:512;index" validate:"max=512"`
-	VerificationCode string         `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	AccessToken      *string        `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int64          `json:"quota" gorm:"type:bigint;default:0"`
-	UsedQuota        int64          `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"` // used quota
-	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`                  // request number
-	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int64          `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int64          `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
-	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt        gorm.DeletedAt `gorm:"index"`
-	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;size:512;index" validate:"max=512"`
-	Setting          string         `json:"setting" gorm:"type:text;column:setting"`
-	Remark           string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	Id                int            `json:"id"`
+	Username          string         `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password          string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword  string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName       string         `json:"display_name" gorm:"index" validate:"max=20"`
+	Role              int            `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status            int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email             string         `json:"email" gorm:"index" validate:"max=50"`
+	NormalizedEmail   string         `json:"-" gorm:"column:normalized_email;size:50;index"`
+	GitHubId          string         `json:"github_id" gorm:"column:github_id;size:512;index" validate:"max=512"`
+	DiscordId         string         `json:"discord_id" gorm:"column:discord_id;size:512;index" validate:"max=512"`
+	OidcId            string         `json:"oidc_id" gorm:"column:oidc_id;size:512;index" validate:"max=512"`
+	WeChatId          string         `json:"wechat_id" gorm:"column:wechat_id;size:512;index" validate:"max=512"`
+	TelegramId        string         `json:"telegram_id" gorm:"column:telegram_id;size:512;index" validate:"max=512"`
+	VerificationCode  string         `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	AccessToken       *string        `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota             int64          `json:"quota" gorm:"type:bigint;default:0"`
+	UsedQuota         int64          `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"` // used quota
+	RequestCount      int            `json:"request_count" gorm:"type:int;default:0;"`                  // request number
+	Group             string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	AffCode           string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount          int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota          int64          `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota   int64          `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
+	InviterId         int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
+	LinuxDOId         string         `json:"linux_do_id" gorm:"column:linux_do_id;size:512;index" validate:"max=512"`
+	Setting           string         `json:"setting" gorm:"type:text;column:setting"`
+	Remark            string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer    string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt         int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt       int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	SessionGeneration int64          `json:"-" gorm:"default:0;not null;column:session_generation"`
 }
 
 func (user *User) BeforeSave(_ *gorm.DB) error {
@@ -103,14 +106,15 @@ func (user *User) normalizeEmailFields() {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:       user.Id,
-		Group:    user.Group,
-		Quota:    user.Quota,
-		Role:     user.Role,
-		Status:   user.Status,
-		Username: user.Username,
-		Setting:  user.Setting,
-		Email:    user.Email,
+		Id:                user.Id,
+		Group:             user.Group,
+		Quota:             user.Quota,
+		Role:              user.Role,
+		Status:            user.Status,
+		Username:          user.Username,
+		Setting:           user.Setting,
+		Email:             user.Email,
+		SessionGeneration: user.SessionGeneration,
 	}
 	return cache
 }
@@ -1091,6 +1095,7 @@ func buildUserUpdateValues(current User, newUser User, updatePassword bool, fiel
 	}
 	if updatePassword {
 		updates["password"] = newUser.Password
+		updates["session_generation"] = gorm.Expr("session_generation + ?", 1)
 	}
 
 	copyUnspecifiedUserUpdateValues(updates, current)
@@ -1541,6 +1546,47 @@ func IsTelegramIdAlreadyTaken(telegramId string) (bool, error) {
 	return result.RowsAffected > 0, result.Error
 }
 
+func BindTelegramIdentityWithAuthFlow(userID int, telegramID string, state string) (int64, error) {
+	if userID <= 0 || strings.TrimSpace(telegramID) == "" || strings.TrimSpace(state) == "" {
+		return 0, ErrAuthFlowInvalid
+	}
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
+		return db.Transaction(func(tx *gorm.DB) error {
+			if _, err := consumeAuthFlowWithDB(tx, state, AuthFlowMatch{
+				Purpose:  AuthFlowPurposeOAuth,
+				Provider: "telegram",
+				Intent:   AuthFlowIntentBind,
+				UserId:   userID,
+			}); err != nil {
+				return err
+			}
+			var count int64
+			if err := tx.Unscoped().Model(&User{}).
+				Where("telegram_id = ? AND id <> ?", telegramID, userID).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return ErrTelegramIdAlreadyTaken
+			}
+			result := tx.Model(&User{}).Where("id = ?", userID).Update("telegram_id", telegramID)
+			if err := ensureUserUpdateMatchedTx(tx, result, userID, ErrUserNotFound); err != nil {
+				return err
+			}
+			var err error
+			generation, cacheTask, err = bumpUserSessionGenerationTx(tx, userID)
+			return err
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
+}
+
 func ResetUserPasswordByEmail(email string, password string) error {
 	if email == "" || password == "" {
 		return errors.New("邮箱地址或密码为空！")
@@ -1553,8 +1599,66 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	if err != nil {
 		return err
 	}
-	err = DB.Model(&User{}).Where("id = ?", user.Id).Update("password", hashedPassword).Error
-	return err
+	var userCacheTask CacheInvalidationTask
+	var tokenCacheTasks []CacheInvalidationTask
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+			"password":           hashedPassword,
+			"access_token":       nil,
+			"session_generation": gorm.Expr("session_generation + ?", 1),
+		})
+		if err := ensureUserUpdateMatchedTx(tx, result, user.Id, ErrUserNotFound); err != nil {
+			return err
+		}
+		var err error
+		tokenCacheTasks, err = revokeUserTokensTx(tx, user.Id)
+		if err != nil {
+			return err
+		}
+		userCacheTask, err = stageUserCacheInvalidationTx(tx, user.Id, false)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	dispatchStagedCacheInvalidation(userCacheTask)
+	dispatchStagedCacheInvalidations(tokenCacheTasks)
+	return nil
+}
+
+func bumpUserSessionGenerationTx(tx *gorm.DB, userID int) (int64, CacheInvalidationTask, error) {
+	if userID <= 0 {
+		return 0, CacheInvalidationTask{}, ErrUserNotFound
+	}
+	result := tx.Model(&User{}).
+		Where("id = ?", userID).
+		UpdateColumn("session_generation", gorm.Expr("session_generation + ?", 1))
+	if err := ensureUserUpdateMatchedTx(tx, result, userID, ErrUserNotFound); err != nil {
+		return 0, CacheInvalidationTask{}, err
+	}
+	var generation int64
+	if err := tx.Model(&User{}).
+		Where("id = ?", userID).
+		Pluck("session_generation", &generation).Error; err != nil {
+		return 0, CacheInvalidationTask{}, err
+	}
+	cacheTask, err := stageUserCacheInvalidationTx(tx, userID, false)
+	return generation, cacheTask, err
+}
+
+func BumpUserSessionGeneration(userID int) (int64, error) {
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		generation, cacheTask, err = bumpUserSessionGenerationTx(tx, userID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
 }
 
 func IsAdmin(userId int) bool {

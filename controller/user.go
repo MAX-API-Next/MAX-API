@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -148,6 +149,13 @@ func setupLogin(user *model.User, c *gin.Context) {
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
+	session.Set("session_generation", user.SessionGeneration)
+	if method := loginMethodFromContext(c); method != "unknown" {
+		session.Set(SecureVerificationSessionKey, time.Now().Unix())
+		session.Set(secureVerificationMethodSessionKey, "login:"+method)
+		session.Set(secureVerificationUserSessionKey, user.Id)
+		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
+	}
 	err := session.Save()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
@@ -183,6 +191,21 @@ func Logout(c *gin.Context) {
 		"message": "",
 		"success": true,
 	})
+}
+
+func RevokeOtherSessions(c *gin.Context) {
+	userID := c.GetInt("id")
+	generation, err := model.BumpUserSessionGeneration(userID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordUserSecurityAudit(c, userID, "user.sessions_revoke_other", nil)
+	common.ApiSuccess(c, nil)
 }
 
 func Register(c *gin.Context) {
@@ -890,12 +913,30 @@ func UpdateSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if updatePassword {
+		if err := preserveCurrentSessionAfterSecurityChange(c, cleanUser.Id, cleanUser.SessionGeneration); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 	})
 	return
+}
+
+func preserveCurrentSessionAfterSecurityChange(c *gin.Context, userID int, generation int64) error {
+	session := sessions.Default(c)
+	session.Set("id", userID)
+	session.Set("session_generation", generation)
+	session.Delete(SecureVerificationSessionKey)
+	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
+	session.Delete(PasskeyReadySessionKey)
+	return session.Save()
 }
 
 func checkUpdatePassword(originalPassword string, newPassword string, userId int) (updatePassword bool, err error) {

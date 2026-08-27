@@ -23,6 +23,8 @@ const (
 	secureVerificationMethodPassword     = "password"
 	secureVerificationScopeAccessToken   = "access_token"
 	secureVerificationScopeAccountDelete = "account_delete"
+	secureVerificationScopeCredentials   = "credentials"
+	secureVerificationScopeAPIToken      = "api_token"
 	// PasskeyReadySessionKey means WebAuthn finished and /api/verify can finalize step-up verification.
 	PasskeyReadySessionKey = "secure_passkey_ready_at"
 	// SecureVerificationTimeout 验证有效期（秒）
@@ -238,7 +240,8 @@ func UniversalVerify(c *gin.Context) {
 
 func isSupportedSecureVerificationScope(scope string) bool {
 	switch scope {
-	case "", secureVerificationScopeAccessToken, secureVerificationScopeAccountDelete:
+	case "", secureVerificationScopeAccessToken, secureVerificationScopeAccountDelete,
+		secureVerificationScopeCredentials, secureVerificationScopeAPIToken:
 		return true
 	default:
 		return false
@@ -246,7 +249,10 @@ func isSupportedSecureVerificationScope(scope string) bool {
 }
 
 func passwordVerificationAllowed(scope string) bool {
-	return scope == secureVerificationScopeAccessToken || scope == secureVerificationScopeAccountDelete
+	return scope == secureVerificationScopeAccessToken ||
+		scope == secureVerificationScopeAccountDelete ||
+		scope == secureVerificationScopeCredentials ||
+		scope == secureVerificationScopeAPIToken
 }
 
 func setSecureVerificationSession(c *gin.Context, userId int, method string, scope string) (int64, error) {

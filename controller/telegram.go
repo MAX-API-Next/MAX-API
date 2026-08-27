@@ -4,126 +4,182 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
+	"errors"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	telegramAuthorizationTTL = 5 * time.Minute
+	telegramClockSkew        = time.Minute
+	telegramBindFlowTTL      = 5 * time.Minute
+)
+
+type telegramAuthPayload struct {
+	ID        int64  `json:"id"`
+	FirstName string `json:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty"`
+	Username  string `json:"username,omitempty"`
+	PhotoURL  string `json:"photo_url,omitempty"`
+	AuthDate  int64  `json:"auth_date"`
+	Hash      string `json:"hash"`
+	State     string `json:"state"`
+}
+
+func (p telegramAuthPayload) values() url.Values {
+	values := url.Values{
+		"id":        {strconv.FormatInt(p.ID, 10)},
+		"auth_date": {strconv.FormatInt(p.AuthDate, 10)},
+		"hash":      {p.Hash},
+		"state":     {p.State},
+	}
+	for key, value := range map[string]string{
+		"first_name": p.FirstName,
+		"last_name":  p.LastName,
+		"username":   p.Username,
+		"photo_url":  p.PhotoURL,
+	} {
+		if value != "" {
+			values.Set(key, value)
+		}
+	}
+	return values
+}
+
+func GenerateTelegramBindState(c *gin.Context) {
+	if !common.TelegramOAuthEnabled {
+		common.ApiErrorMsg(c, "管理员未开启 Telegram 登录")
+		return
+	}
+	userID := c.GetInt("id")
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeOAuth,
+		Provider:  "telegram",
+		Intent:    model.AuthFlowIntentBind,
+		UserId:    userID,
+		ExpiresAt: time.Now().Add(telegramBindFlowTTL),
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	session := sessions.Default(c)
+	session.Set(oauthStateSessionKey, state)
+	if err := session.Save(); err != nil {
+		_, _ = model.ConsumeAuthFlow(state, model.AuthFlowMatch{
+			Purpose:  model.AuthFlowPurposeOAuth,
+			Provider: "telegram",
+			Intent:   model.AuthFlowIntentBind,
+			UserId:   userID,
+		})
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"state": state})
+}
+
 func TelegramBind(c *gin.Context) {
 	if !common.TelegramOAuthEnabled {
-		c.JSON(200, gin.H{
-			"message": "管理员未开启通过 Telegram 登录以及注册",
-			"success": false,
-		})
+		common.ApiErrorMsg(c, "管理员未开启 Telegram 登录")
 		return
 	}
-	params := c.Request.URL.Query()
-	if !checkTelegramAuthorization(params, common.TelegramBotToken) {
-		c.JSON(200, gin.H{
-			"message": "无效的请求",
-			"success": false,
-		})
+	var payload telegramAuthPayload
+	if err := common.DecodeJson(c.Request.Body, &payload); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	telegramId := params["id"][0]
-	taken, err := model.IsTelegramIdAlreadyTaken(telegramId)
-	if handleOAuthIdentityLookupError(c, "Telegram", err) {
+	if !checkTelegramAuthorization(payload.values(), common.TelegramBotToken) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "无效或已过期的 Telegram 授权"})
 		return
 	}
-	if taken {
-		c.JSON(200, gin.H{
-			"message": "该 Telegram 账户已被绑定",
-			"success": false,
-		})
+	if !oauthSessionStateMatches(c, payload.State) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 		return
 	}
-
-	session := sessions.Default(c)
-	id, ok := sessionUserID(session.Get("id"))
-	if !ok {
-		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
+	userID := c.GetInt("id")
+	generation, err := model.BindTelegramIdentityWithAuthFlow(userID, strconv.FormatInt(payload.ID, 10), payload.State)
+	if err != nil {
+		switch {
+		case errors.Is(err, model.ErrTelegramIdAlreadyTaken):
+			common.ApiErrorMsg(c, "该 Telegram 账户已被绑定")
+		case errors.Is(err, model.ErrAuthFlowInvalid), errors.Is(err, model.ErrAuthFlowExpired), errors.Is(err, model.ErrAuthFlowConsumed):
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		default:
+			common.ApiError(c, err)
+		}
 		return
 	}
-	user := model.User{Id: id}
-	if err := user.FillUserById(); err != nil {
-		c.JSON(200, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
+	clearOAuthSessionState(c)
+	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
+		common.ApiError(c, err)
 		return
 	}
-	if user.Id == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户已注销",
-		})
-		return
-	}
-	user.TelegramId = telegramId
-	if err := user.UpdateFields(false, model.UserUpdateFieldTelegramId); err != nil {
-		c.JSON(200, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
-		return
-	}
-
-	c.Redirect(302, common.ThemeAwarePath("/console/personal"))
+	recordUserSecurityAudit(c, userID, "user.telegram_bind", nil)
+	common.ApiSuccess(c, nil)
 }
 
 func TelegramLogin(c *gin.Context) {
 	if !common.TelegramOAuthEnabled {
-		c.JSON(200, gin.H{
-			"message": "管理员未开启通过 Telegram 登录以及注册",
-			"success": false,
-		})
+		common.ApiErrorMsg(c, "管理员未开启 Telegram 登录")
 		return
 	}
 	params := c.Request.URL.Query()
 	if !checkTelegramAuthorization(params, common.TelegramBotToken) {
-		c.JSON(200, gin.H{
-			"message": "无效的请求",
-			"success": false,
-		})
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "无效或已过期的 Telegram 授权"})
 		return
 	}
-
-	telegramId := params["id"][0]
-	user := model.User{TelegramId: telegramId}
+	user := model.User{TelegramId: params.Get("id")}
 	if err := user.FillUserByTelegramId(); handleOAuthUserLookupError(c, err) {
 		return
 	}
 	setupLogin(&user, c)
 }
 
-func checkTelegramAuthorization(params map[string][]string, token string) bool {
-	strs := []string{}
-	var hash = ""
-	for k, v := range params {
-		if k == "hash" {
-			hash = v[0]
-			continue
-		}
-		strs = append(strs, k+"="+v[0])
+func checkTelegramAuthorization(params url.Values, token string) bool {
+	return checkTelegramAuthorizationAt(params, token, time.Now())
+}
+
+func checkTelegramAuthorizationAt(params url.Values, token string, now time.Time) bool {
+	if strings.TrimSpace(token) == "" || params.Get("id") == "" || params.Get("hash") == "" {
+		return false
 	}
-	sort.Strings(strs)
-	var imploded = ""
-	for _, s := range strs {
-		if imploded != "" {
-			imploded += "\n"
-		}
-		imploded += s
+	authDate, err := strconv.ParseInt(params.Get("auth_date"), 10, 64)
+	if err != nil {
+		return false
 	}
-	sha256hash := sha256.New()
-	io.WriteString(sha256hash, token)
-	hmachash := hmac.New(sha256.New, sha256hash.Sum(nil))
-	io.WriteString(hmachash, imploded)
-	ss := hex.EncodeToString(hmachash.Sum(nil))
-	return hash == ss
+	authorizedAt := time.Unix(authDate, 0)
+	if authorizedAt.After(now.Add(telegramClockSkew)) || now.Sub(authorizedAt) > telegramAuthorizationTTL {
+		return false
+	}
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		if key != "hash" && key != "state" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		values := params[key]
+		if len(values) != 1 {
+			return false
+		}
+		lines = append(lines, key+"="+values[0])
+	}
+	secret := sha256.Sum256([]byte(token))
+	mac := hmac.New(sha256.New, secret[:])
+	_, _ = mac.Write([]byte(strings.Join(lines, "\n")))
+	provided, err := hex.DecodeString(params.Get("hash"))
+	return err == nil && hmac.Equal(provided, mac.Sum(nil))
 }

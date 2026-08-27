@@ -83,6 +83,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     setCode,
     switchMethod,
     fetchVerificationMethods,
+    withVerification,
   } = useSecureVerification({
     onSuccess: () => {
       setRestrictedMethod(null)
@@ -105,23 +106,12 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       return
     }
 
-    const methods = await fetchVerificationMethods()
-    if (!methods.has2FA) {
-      // Without 2FA enabled, register directly. The browser-level Passkey prompt
-      // is itself a strong proof of presence, so no extra verification is needed.
-      await register()
-      return
-    }
-
-    setRestrictedMethod('2fa')
-    await startVerification(register, {
-      preferredMethod: '2fa',
+    await withVerification(register, {
+      scope: 'credentials',
       title: t('Security verification'),
-      description: t(
-        'Confirm your identity with Two-factor Authentication before registering a Passkey.'
-      ),
+      description: t('Confirm your identity before registering a Passkey.'),
     })
-  }, [fetchVerificationMethods, register, startVerification, supported, t])
+  }, [register, supported, t, withVerification])
 
   const handleRemove = useCallback(async () => {
     const methods = await fetchVerificationMethods()

@@ -1040,11 +1040,87 @@
         ]
       }
     },
-    "/api/oauth/telegram/bind": {
-      "get": {
-        "summary": "绑定Telegram",
+    "/api/oauth/telegram/bind/state": {
+      "post": {
+        "operationId": "createTelegramBindState",
+        "summary": "Create Telegram binding state",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "Requires an authenticated user and credentials-scoped security verification. Returns a short-lived, user-bound, one-time state value.",
+        "tags": [
+          "OAuth"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "State created",
+            "headers": {}
+          },
+          "403": {
+            "description": "Credentials verification is required or expired",
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
+    "/api/oauth/telegram/bind": {
+      "post": {
+        "operationId": "bindTelegramAccount",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "auth_date",
+                  "hash",
+                  "state"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "first_name": {
+                    "type": "string"
+                  },
+                  "last_name": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "photo_url": {
+                    "type": "string"
+                  },
+                  "auth_date": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Telegram authorization Unix timestamp; must be fresh."
+                  },
+                  "hash": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "绑定 Telegram 账户",
+        "deprecated": false,
+        "description": "需要登录、credentials 作用域安全验证、5 分钟内的 Telegram 签名，以及由 /api/oauth/telegram/bind/state 生成的一次性 state。",
         "tags": [
           "OAuth"
         ],
@@ -1052,6 +1128,10 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "签名、state 或安全验证无效、过期或已使用",
             "headers": {}
           }
         },
@@ -1234,6 +1314,36 @@
         ]
       }
     },
+    "/api/user/sessions/revoke": {
+      "post": {
+        "operationId": "revokeOtherSessions",
+        "summary": "退出其他设备",
+        "deprecated": false,
+        "description": "需要登录并完成 credentials 作用域安全验证。递增会话代次，使其他设备上的 Cookie 会话失效，同时保留当前会话。",
+        "tags": [
+          "用户管理"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "其他会话已撤销",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证",
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
     "/api/user/passkey": {
       "get": {
         "summary": "获取Passkey状态",
@@ -1286,7 +1396,7 @@
       "post": {
         "summary": "开始注册Passkey",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录并完成 credentials 作用域安全验证。已有 Passkey 时，本流程表示显式替换。",
         "tags": [
           "用户管理"
         ],
@@ -1311,7 +1421,7 @@
       "post": {
         "summary": "完成注册Passkey",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录并完成 credentials 作用域安全验证。成功注册或替换后撤销其他会话。",
         "tags": [
           "用户管理"
         ],
@@ -2166,7 +2276,7 @@
       "post": {
         "summary": "设置2FA",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录并完成 credentials 作用域安全验证。返回待确认的 TOTP 密钥与备用码。",
         "tags": [
           "两步验证"
         ],
@@ -2191,7 +2301,7 @@
       "post": {
         "summary": "启用2FA",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录并完成 credentials 作用域安全验证。成功启用后撤销其他会话。",
         "tags": [
           "两步验证"
         ],
@@ -2350,14 +2460,16 @@
                   "password": {
                     "type": "string",
                     "format": "password",
-                    "description": "当前账户密码，仅method=password且scope=access_token或account_delete时使用"
+                    "description": "当前账户密码，仅 method=password 且 scope 为受支持的敏感操作作用域时使用"
                   },
                   "scope": {
                     "type": "string",
-                    "description": "验证作用域；密码验证仅支持access_token或account_delete",
+                    "description": "验证作用域；验证结果仅可用于完全匹配的敏感操作作用域",
                     "enum": [
                       "access_token",
-                      "account_delete"
+                      "account_delete",
+                      "credentials",
+                      "api_token"
                     ]
                   }
                 }
@@ -2394,12 +2506,14 @@
             "name": "scope",
             "in": "query",
             "required": false,
-            "description": "验证作用域；传access_token或account_delete时，无2FA或Passkey的用户可使用密码验证",
+            "description": "验证作用域；无 2FA 或 Passkey 的用户可使用当前密码完成对应作用域的验证",
             "schema": {
               "type": "string",
               "enum": [
                 "access_token",
-                "account_delete"
+                "account_delete",
+                "credentials",
+                "api_token"
               ]
             }
           }
@@ -3466,7 +3580,7 @@
       "post": {
         "summary": "创建令牌",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录并完成 api_token 作用域安全验证。创建接口不返回完整密钥；后续查看仍需调用受 api_token 作用域保护的密钥查看接口。",
         "tags": [
           "令牌管理"
         ],
@@ -3620,6 +3734,96 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
+    "/api/token/{id}/key": {
+      "post": {
+        "operationId": "revealApiTokenKey",
+        "summary": "查看完整 API Token 密钥",
+        "deprecated": false,
+        "description": "需要登录并完成 api_token 作用域安全验证。仅返回当前用户拥有的指定 Token 密钥。",
+        "tags": [
+          "令牌管理"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 api_token 作用域安全验证",
+            "headers": {}
+          }
+        },
+        "security": [
+          {
+            "Combination343": []
+          },
+          {
+            "Combination1243": []
+          }
+        ]
+      }
+    },
+    "/api/token/batch/keys": {
+      "post": {
+        "operationId": "revealApiTokenKeysBatch",
+        "summary": "批量导出完整 API Token 密钥",
+        "deprecated": false,
+        "description": "需要登录并完成 api_token 作用域安全验证。仅返回当前用户拥有的指定 Token 密钥。",
+        "tags": [
+          "令牌管理"
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ids"
+                ],
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 api_token 作用域安全验证",
             "headers": {}
           }
         },

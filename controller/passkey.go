@@ -36,10 +36,6 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	if !requirePasskeyRegistrationVerification(c, user.Id) {
-		return
-	}
-
 	credential, err := model.GetPasskeyByUserID(user.Id)
 	if err != nil && !errors.Is(err, model.ErrPasskeyNotFound) {
 		common.ApiError(c, err)
@@ -100,10 +96,6 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if !requirePasskeyRegistrationVerification(c, user.Id) {
-		return
-	}
-
 	wa, err := passkeysvc.BuildWebAuthn(c.Request)
 	if err != nil {
 		common.ApiError(c, err)
@@ -138,7 +130,12 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpsertPasskeyCredential(passkeyCredential); err != nil {
+	generation, err := model.ReplacePasskeyCredentialAndBumpSessionGeneration(passkeyCredential)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, user.Id, generation); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -164,7 +161,12 @@ func PasskeyDelete(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserID(user.Id); err != nil {
+	generation, err := model.DeletePasskeyAndBumpSessionGeneration(user.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, user.Id, generation); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -370,7 +372,7 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserID(user.Id); err != nil {
+	if _, err := model.DeletePasskeyAndBumpSessionGeneration(user.Id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -529,18 +531,6 @@ func getSessionUser(c *gin.Context) (*model.User, error) {
 		return nil, errors.New("该用户已被禁用")
 	}
 	return user, nil
-}
-
-func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
-	twoFA, err := model.GetTwoFAByUserId(userID)
-	if err != nil {
-		common.ApiError(c, err)
-		return false
-	}
-	if twoFA == nil || !twoFA.IsEnabled {
-		return true
-	}
-	return requireSecureVerificationMethod(c, secureVerificationMethod2FA)
 }
 
 func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {

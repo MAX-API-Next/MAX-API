@@ -20,6 +20,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import useDialogState from '@/hooks/use-dialog'
+import { useSecureVerificationGate } from '@/features/auth/secure-verification'
 import { fetchTokenKey, fetchTokenKeysBatch } from '../api'
 import { ERROR_MESSAGES } from '../constants'
 import { type ApiKey, type ApiKeysDialogType } from '../types'
@@ -33,18 +34,24 @@ type ApiKeysContextType = {
   triggerRefresh: () => void
   resolvedKey: string
   setResolvedKey: React.Dispatch<React.SetStateAction<string>>
-  resolveRealKey: (id: number) => Promise<string | null>
+  resolveRealKey: (
+    id: number,
+    options?: { cache?: boolean }
+  ) => Promise<string | null>
   resolveRealKeysBatch: (ids: number[]) => Promise<Record<number, string>>
   resolvedKeys: Record<number, string>
+  clearResolvedKey: (id: number) => void
   loadingKeys: Record<number, boolean>
   copiedKeyId: number | null
   markKeyCopied: (id: number) => void
+  withApiTokenVerification: <T>(apiCall: () => Promise<T>) => Promise<T | null>
 }
 
 const ApiKeysContext = React.createContext<ApiKeysContextType | null>(null)
 
 export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
+  const { withVerification } = useSecureVerificationGate()
   const [open, setOpen] = useDialogState<ApiKeysDialogType>(null)
   const [currentRow, setCurrentRow] = useState<ApiKey | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
@@ -52,7 +59,9 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
 
   const [resolvedKeys, setResolvedKeys] = useState<Record<number, string>>({})
   const [loadingKeys, setLoadingKeys] = useState<Record<number, boolean>>({})
-  const pendingRequests = useRef<Record<number, Promise<string | null>>>({})
+  const pendingRequests = useRef<
+    Record<number, { promise: Promise<string | null>; cacheRequested: boolean }>
+  >({})
 
   const [copiedKeyId, setCopiedKeyId] = useState<number | null>(null)
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -71,18 +80,40 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
     setRefreshTrigger((prev) => prev + 1)
   }, [])
 
+  const withApiTokenVerification = useCallback(
+    <T,>(apiCall: () => Promise<T>) =>
+      withVerification(apiCall, {
+        scope: 'api_token',
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before creating or revealing API keys.'
+        ),
+      }),
+    [t, withVerification]
+  )
+
   const resolveRealKey = useCallback(
-    async (id: number): Promise<string | null> => {
+    async (
+      id: number,
+      options: { cache?: boolean } = {}
+    ): Promise<string | null> => {
       if (resolvedKeys[id]) return resolvedKeys[id]
-      if (id in pendingRequests.current) return pendingRequests.current[id]
+      const pending = pendingRequests.current[id]
+      if (pending) {
+        pending.cacheRequested ||= Boolean(options.cache)
+        return pending.promise
+      }
 
       const request = (async () => {
         setLoadingKeys((prev) => ({ ...prev, [id]: true }))
         try {
-          const res = await fetchTokenKey(id)
+          const res = await withApiTokenVerification(() => fetchTokenKey(id))
+          if (!res) return null
           if (res.success && res.data?.key) {
             const fullKey = `sk-${res.data.key}`
-            setResolvedKeys((prev) => ({ ...prev, [id]: fullKey }))
+            if (pendingRequests.current[id]?.cacheRequested) {
+              setResolvedKeys((prev) => ({ ...prev, [id]: fullKey }))
+            }
             return fullKey
           }
           toast.error(res.message || t(ERROR_MESSAGES.UNEXPECTED))
@@ -100,47 +131,48 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         }
       })()
 
-      pendingRequests.current[id] = request
+      pendingRequests.current[id] = {
+        promise: request,
+        cacheRequested: Boolean(options.cache),
+      }
       return request
     },
-    [resolvedKeys, t]
+    [resolvedKeys, t, withApiTokenVerification]
   )
+
+  const clearResolvedKey = useCallback((id: number) => {
+    const pending = pendingRequests.current[id]
+    if (pending) pending.cacheRequested = false
+    setResolvedKeys((prev) => {
+      if (!(id in prev)) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }, [])
 
   const resolveRealKeysBatch = useCallback(
     async (ids: number[]): Promise<Record<number, string>> => {
-      const uncachedIds = ids.filter((id) => !resolvedKeys[id])
-      if (uncachedIds.length === 0) {
-        const result: Record<number, string> = {}
-        for (const id of ids) result[id] = resolvedKeys[id]
-        return result
-      }
-
-      for (const id of uncachedIds) {
+      for (const id of ids) {
         setLoadingKeys((prev) => ({ ...prev, [id]: true }))
       }
 
       try {
-        const res = await fetchTokenKeysBatch(uncachedIds)
+        const res = await withApiTokenVerification(() =>
+          fetchTokenKeysBatch(ids)
+        )
+        if (!res) return {}
         if (res.success && res.data?.keys) {
           const newKeys: Record<number, string> = {}
           for (const [idStr, key] of Object.entries(res.data.keys)) {
             newKeys[Number(idStr)] = `sk-${key}`
           }
-          setResolvedKeys((prev) => ({ ...prev, ...newKeys }))
-
-          const result: Record<number, string> = { ...newKeys }
-          for (const id of ids) {
-            if (resolvedKeys[id]) result[id] = resolvedKeys[id]
-          }
-          return result
+          return newKeys
         }
         toast.error(res.message || t(ERROR_MESSAGES.UNEXPECTED))
         return {}
-      } catch {
-        toast.error(t(ERROR_MESSAGES.UNEXPECTED))
-        return {}
       } finally {
-        for (const id of uncachedIds) {
+        for (const id of ids) {
           setLoadingKeys((prev) => {
             const next = { ...prev }
             delete next[id]
@@ -149,7 +181,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [resolvedKeys, t]
+    [t, withApiTokenVerification]
   )
 
   return (
@@ -166,9 +198,11 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         resolveRealKey,
         resolveRealKeysBatch,
         resolvedKeys,
+        clearResolvedKey,
         loadingKeys,
         copiedKeyId,
         markKeyCopied,
+        withApiTokenVerification,
       }}
     >
       {children}

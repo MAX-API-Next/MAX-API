@@ -109,11 +109,15 @@ func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
 }
 
 func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
+	return getAuthFlowWithDB(DB, token, match)
+}
+
+func getAuthFlowWithDB(db *gorm.DB, token string, match AuthFlowMatch) (*AuthFlow, error) {
 	if token == "" || match.Purpose == "" {
 		return nil, ErrAuthFlowInvalid
 	}
 	var flow AuthFlow
-	if err := applyAuthFlowMatch(DB, token, match).First(&flow).Error; err != nil {
+	if err := applyAuthFlowMatch(db, token, match).First(&flow).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrAuthFlowInvalid
 		}
@@ -129,12 +133,16 @@ func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 }
 
 func ConsumeAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
-	flow, err := GetAuthFlow(token, match)
+	return consumeAuthFlowWithDB(DB, token, match)
+}
+
+func consumeAuthFlowWithDB(db *gorm.DB, token string, match AuthFlowMatch) (*AuthFlow, error) {
+	flow, err := getAuthFlowWithDB(db, token, match)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	result := DB.Model(&AuthFlow{}).
+	result := db.Model(&AuthFlow{}).
 		Where("id = ? AND consumed_at IS NULL AND expires_at > ?", flow.Id, now).
 		Update("consumed_at", now)
 	if result.Error != nil {

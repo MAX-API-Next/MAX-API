@@ -186,7 +186,12 @@ func Enable2FA(c *gin.Context) {
 	}
 
 	// 启用2FA
-	if err := twoFA.Enable(); err != nil {
+	generation, err := twoFA.EnableAndBumpSessionGeneration()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -258,7 +263,12 @@ func Disable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFA(userId); err != nil {
+	generation, err := model.DisableTwoFAAndBumpSessionGeneration(userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -373,12 +383,17 @@ func RegenerateBackupCodes(c *gin.Context) {
 	}
 
 	// 保存新的备用码
-	if err := model.CreateBackupCodes(userId, backupCodes); err != nil {
+	generation, err := model.ReplaceBackupCodesAndBumpSessionGeneration(userId, backupCodes)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "保存备用码失败",
 		})
 		common.SysLog("保存备用码失败: " + err.Error())
+		return
+	}
+	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
+		common.ApiError(c, err)
 		return
 	}
 
@@ -529,7 +544,7 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFA(userId); err != nil {
+	if _, err := model.DisableTwoFAAndBumpSessionGeneration(userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
