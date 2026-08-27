@@ -130,6 +130,57 @@ func TestBillingSessionPrepareSettlementPersistsZeroDeltaTaskEffect(t *testing.T
 	assert.Zero(t, input.TokenDelta)
 }
 
+func TestBillingSessionPrepareSettlementBindsTaskReservationAndTarget(t *testing.T) {
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId:     "task-reservation-binding",
+			UserId:        43,
+			TokenId:       44,
+			TokenKey:      "task-reservation-token",
+			TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: 45},
+		},
+		funding:          &WalletFunding{userId: 43},
+		preConsumedQuota: 100,
+	}
+
+	input, err := session.PrepareSettlement(175)
+
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	assert.EqualValues(t, 45, input.TaskID)
+	assert.EqualValues(t, 100, input.TaskQuota)
+	assert.EqualValues(t, 175, input.TaskQuotaTarget)
+	assert.EqualValues(t, 75, input.FundingDelta)
+}
+
+func TestBillingSessionSettleAppliesPersistedZeroDeltaTaskFinalize(t *testing.T) {
+	truncate(t)
+	const userID = 46
+	task := makeTask(userID, 0, 10, 0, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSubmitted
+	persistTask(t, task)
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId:     "task-zero-delta-finalize",
+			UserId:        userID,
+			TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID},
+		},
+		funding:          &WalletFunding{userId: userID},
+		preConsumedQuota: 10,
+	}
+	input, err := session.PrepareSettlement(10)
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	require.NoError(t, task.UpdateWithSettlementIntent(input))
+
+	require.NoError(t, session.Settle(10))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", input.OperationKey).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+	assert.True(t, session.settled)
+}
+
 func TestBillingSessionCompensatesFundingWhenTokenSettlementFails(t *testing.T) {
 	truncate(t)
 	funding := &recordingFundingSource{}

@@ -569,9 +569,11 @@ func RelayTask(c *gin.Context) {
 					reason = taskErr.Error.Error()
 				}
 				if upstreamPersisted {
-					reason += "（上游已接受任务，本地结算记录未完成；已保留预扣费，请人工核对）"
-					if markErr := model.MarkTaskSubmitNeedsReview(result.Task, reason); markErr != nil {
-						common.SysError("mark task submit for manual review error: " + markErr.Error())
+					if shouldMarkTaskSubmitNeedsReview(taskErr, upstreamPersisted, settlementIntentPersisted) {
+						reason += "（上游已接受任务，本地结算记录未完成；已保留预扣费，请人工核对）"
+						if markErr := model.MarkTaskSubmitNeedsReview(result.Task, reason); markErr != nil {
+							common.SysError("mark task submit for manual review error: " + markErr.Error())
+						}
 					}
 				} else if upstreamAmbiguous {
 					if relayInfo.UpstreamTaskOutcomeUnknown {
@@ -699,6 +701,17 @@ func RelayTask(c *gin.Context) {
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
+}
+
+// shouldMarkTaskSubmitNeedsReview keeps an upstream-accepted task pollable
+// when its durable finalize intent already exists. The settlement runner owns
+// recovery in that state; converting the task to FAILURE would permanently
+// remove it from normal polling.
+func shouldMarkTaskSubmitNeedsReview(taskErr *dto.TaskError, upstreamPersisted, settlementIntentPersisted bool) bool {
+	if taskErr == nil {
+		return false
+	}
+	return taskErr.Code != "billing_settlement_pending" || !upstreamPersisted || !settlementIntentPersisted
 }
 
 // finalizeTaskSubmission releases a task success response only after its

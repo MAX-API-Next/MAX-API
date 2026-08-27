@@ -119,13 +119,23 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 		return nil, false, errors.New("billing settlement is already in progress")
 	}
 	delta := actualQuota - s.preConsumedQuota
+	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
+		if delta == 0 && effect == nil {
+			_, found, lookupErr := model.GetBillingSettlementStatus(input.OperationKey)
+			if lookupErr != nil {
+				return nil, false, lookupErr
+			}
+			if !found {
+				s.settled = true
+				return nil, false, nil
+			}
+		}
+		s.settleInFlight = true
+		return &billingSettleIntent{input: *input}, true, nil
+	}
 	if delta == 0 && effect == nil {
 		s.settled = true
 		return nil, false, nil
-	}
-	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
-		s.settleInFlight = true
-		return &billingSettleIntent{input: *input}, true, nil
 	}
 	if effect != nil {
 		return nil, false, errors.New("billing settlement effects require a durable funding source and request id")
@@ -298,7 +308,7 @@ func (s *BillingSession) prepareDurableSettlementLocked(actualQuota int, effect 
 	if s.relayInfo.IsPlayground {
 		tokenDelta = 0
 	}
-	return &model.BillingSettlementInput{
+	input := &model.BillingSettlementInput{
 		OperationKey:                    "request:" + s.relayInfo.RequestId + ":finalize",
 		Source:                          source,
 		UserID:                          userID,
@@ -309,7 +319,13 @@ func (s *BillingSession) prepareDurableSettlementLocked(actualQuota int, effect 
 		TokenDelta:                      tokenDelta,
 		SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(s.funding),
 		Effect:                          effect,
-	}, true
+	}
+	if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.TaskRelayInfo.PersistedTaskID > 0 {
+		input.TaskID = s.relayInfo.TaskRelayInfo.PersistedTaskID
+		input.TaskQuota = int64(s.preConsumedQuota)
+		input.TaskQuotaTarget = int64(actualQuota)
+	}
+	return input, true
 }
 
 func durableFundingIdentity(funding FundingSource) (source string, userID int, subscriptionID int, ok bool) {

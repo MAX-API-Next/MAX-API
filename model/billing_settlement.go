@@ -238,6 +238,27 @@ func HasUnresolvedPositiveFinalizeSettlement(userID int) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+// GetBillingSettlementStatus returns the durable funding state for one stable
+// operation key. Effect replay is intentionally separate: once funding is
+// applied, an effect-only pending state must not block async task polling.
+func GetBillingSettlementStatus(operationKey string) (status string, found bool, err error) {
+	if DB == nil {
+		return "", false, errors.New("database is not initialized")
+	}
+	if operationKey == "" {
+		return "", false, nil
+	}
+	var record BillingSettlement
+	result := DB.Select("status").Where("operation_key = ?", operationKey).Limit(1).Find(&record)
+	if result.Error != nil {
+		return "", false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return "", false, nil
+	}
+	return record.Status, true, nil
+}
+
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
@@ -327,7 +348,7 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 			appliedTokenDelta = effectiveTokenDelta
 		}
 
-		if input.TaskID > 0 {
+		if input.TaskID > 0 && input.TaskQuotaTarget != input.TaskQuota {
 			appliedTaskQuotaTarget := input.TaskQuota + appliedFundingDelta
 			result := tx.Model(&Task{}).
 				Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).

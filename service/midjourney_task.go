@@ -14,6 +14,21 @@ import (
 // durable billing Task through one CAS-protected transaction.
 func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourney, responseItem dto.MidjourneyDto) error {
 	legacyNeedsUpdate := midjourneyTaskNeedsUpdate(task, responseItem)
+	billingTask, err := model.GetMidjourneyBillingTask(task.UserId, task.ChannelId, task.MjId)
+	if err != nil {
+		return err
+	}
+	providerTerminal := responseItem.Status == "SUCCESS" || responseItem.Status == "FAILURE" ||
+		responseItem.FailReason != "" || (responseItem.Status == "" && responseItem.Progress == "100%")
+	if billingTask != nil && providerTerminal {
+		pending, settlementErr := taskFinalSettlementPending(billingTask)
+		if settlementErr != nil {
+			return settlementErr
+		}
+		if pending {
+			return nil
+		}
+	}
 	preStatus := task.Status
 	task.Code = 1
 	if responseItem.Progress != "" {
@@ -80,10 +95,6 @@ func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourne
 		task.Status = "FAILURE"
 		task.Progress = "100%"
 		logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
-	}
-	billingTask, err := model.GetMidjourneyBillingTask(task.UserId, task.ChannelId, task.MjId)
-	if err != nil {
-		return err
 	}
 	var settlement *model.BillingSettlementInput
 	if billingTask != nil {

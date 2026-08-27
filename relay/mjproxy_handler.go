@@ -431,9 +431,6 @@ func finalizeMidjourneySubmission(c *gin.Context, info *relaycommon.RelayInfo, t
 	if info != nil && info.Billing != nil {
 		if err := service.SettleBilling(c, info, midjourneyTask.Quota); err != nil {
 			common.SysError("midjourney billing settlement requires reconciliation: " + err.Error())
-			if markErr := model.MarkTaskSubmitNeedsReview(task, "Midjourney 任务已被上游接受，但计费结算未完成；请勿重复提交，使用任务 ID 查询或联系管理员处理"); markErr != nil {
-				common.SysError("mark midjourney billing settlement for manual review error: " + markErr.Error())
-			}
 			return false, &midjourneyBillingSettlementPendingError{taskID: midjourneyTask.MjId, err: err}
 		}
 		if settlementOperationKey != "" {

@@ -146,6 +146,27 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
+// taskFinalSettlementPending reports only the funding state of the submission
+// finalize operation. A pending settlement effect must not block provider
+// polling because the debit/refund itself is already durably applied.
+func taskFinalSettlementPending(task *model.Task) (bool, error) {
+	if task == nil || task.PrivateData.BillingRequestId == "" {
+		return false, nil
+	}
+	status, found, err := model.GetBillingSettlementStatus("request:" + task.PrivateData.BillingRequestId + ":finalize")
+	if err != nil || !found {
+		return false, err
+	}
+	switch status {
+	case "", model.BillingSettlementStatusApplied:
+		return false, nil
+	case model.BillingSettlementStatusPending, model.BillingSettlementStatusManual:
+		return true, nil
+	default:
+		return true, fmt.Errorf("unknown task submission settlement status %q", status)
+	}
+}
+
 func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {
 	if task == nil || task.Quota == 0 || task.ID <= 0 {
 		return nil

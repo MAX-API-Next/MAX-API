@@ -22,6 +22,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type recordingTaskReservationBilling struct {
+	preConsumed int
+	reserveTo   []int
+}
+
+func (b *recordingTaskReservationBilling) Settle(int) error         { return nil }
+func (b *recordingTaskReservationBilling) Refund(*gin.Context)      {}
+func (b *recordingTaskReservationBilling) NeedsRefund() bool        { return true }
+func (b *recordingTaskReservationBilling) GetPreConsumedQuota() int { return b.preConsumed }
+func (b *recordingTaskReservationBilling) Reserve(targetQuota int) error {
+	b.reserveTo = append(b.reserveTo, targetQuota)
+	if targetQuota > b.preConsumed {
+		b.preConsumed = targetQuota
+	}
+	return nil
+}
+
+func TestReserveTaskQuotaUsesActualReservationAndExtendsRetries(t *testing.T) {
+	billing := &recordingTaskReservationBilling{preConsumed: 100}
+	info := &relaycommon.RelayInfo{
+		Billing: billing,
+		PriceData: types.PriceData{
+			FreeModel: false,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 250)
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, 250, reserved)
+	assert.Equal(t, []int{250}, billing.reserveTo)
+}
+
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
 	t.Helper()
 	original := task_billing_setting.GetRateCardsCopy()

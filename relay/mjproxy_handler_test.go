@@ -315,9 +315,10 @@ func TestFinalizeMidjourneySubmissionRejectsSuccessWhenSettlementFails(t *testin
 
 	var storedTask model.Task
 	require.NoError(t, db.First(&storedTask, task.ID).Error)
-	assert.Equal(t, model.TaskStatus(model.TaskStatusFailure), storedTask.Status)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSubmitted), storedTask.Status)
 	assert.EqualValues(t, 10, storedTask.Quota)
 	assert.Equal(t, midjourneyTask.MjId, storedTask.PrivateData.UpstreamTaskID)
+	assert.Len(t, model.GetAllUnFinishSyncTasks(10), 1)
 
 	var settlement model.BillingSettlement
 	require.NoError(t, db.Where("operation_key = ?", settler.operationKey).First(&settlement).Error)

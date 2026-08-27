@@ -109,6 +109,26 @@ func TaskPersistenceError(err error, code string, safeMessage string) *dto.TaskE
 	return service.TaskErrorWrapperLocal(errors.New(safeMessage), code, http.StatusInternalServerError)
 }
 
+func reserveTaskQuota(c *gin.Context, info *relaycommon.RelayInfo, targetQuota int) (int, *dto.TaskError) {
+	if info == nil {
+		return 0, service.TaskErrorWrapperLocal(errors.New("task relay metadata is unavailable"), "reserve_task_quota_failed", http.StatusInternalServerError)
+	}
+	if !info.PriceData.FreeModel {
+		if info.Billing == nil {
+			info.ForcePreConsume = true
+			if apiErr := service.PreConsumeBilling(c, targetQuota, info); apiErr != nil {
+				return 0, service.TaskErrorFromAPIError(apiErr)
+			}
+		} else if reserveErr := info.Billing.Reserve(targetQuota); reserveErr != nil {
+			return 0, service.TaskErrorWrapperLocal(reserveErr, "reserve_task_quota_failed", http.StatusForbidden)
+		}
+	}
+	if info.Billing != nil {
+		return info.Billing.GetPreConsumedQuota(), nil
+	}
+	return targetQuota, nil
+}
+
 type taskBillingEstimator interface {
 	EstimateTaskBilling(c *gin.Context, info *relaycommon.RelayInfo) (*types.TaskBillingResult, error)
 }
@@ -318,14 +338,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	info.PriceData.QuotaToPreConsume = preConsumedQuota
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, preConsumedQuota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
-		}
+	// 7. 预扣费。重试可能因路由/分组变化得到更高的目标额度，必须通过
+	// BillingSession.Reserve 幂等补足，不能继续沿用较小的首次预留。
+	actualReservedQuota, reservationErr := reserveTaskQuota(c, info, preConsumedQuota)
+	if reservationErr != nil {
+		return nil, reservationErr
 	}
-	task, taskErr := ensureTaskPlaceholder(platform, info, preConsumedQuota)
+	task, taskErr := ensureTaskPlaceholder(platform, info, actualReservedQuota)
 	if taskErr != nil {
 		return nil, taskErr
 	}
@@ -384,7 +403,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	task.PrivateData.UpstreamTaskID = upstreamTaskID
 	task.PrivateData.AwaitingUpstreamID = false
-	task.Quota = finalQuota
+	// Keep the persisted task at the actual reservation until the durable
+	// request-finalize operation applies the funding delta and task quota in one
+	// transaction. Writing finalQuota here would make an unpaid target look
+	// settled and would break settlement recovery's task-quota CAS.
+	task.Quota = actualReservedQuota
 	task.Data = taskData
 	populateTaskBillingMetadata(task, info)
 

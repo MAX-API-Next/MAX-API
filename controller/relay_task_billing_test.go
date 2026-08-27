@@ -54,6 +54,14 @@ func TestFinalizeTaskSubmissionDoesNotWriteSuccessAfterSettlementFailure(t *test
 	assert.Zero(t, writeCount)
 }
 
+func TestPendingTaskSettlementDoesNotMarkAcceptedTaskAsManualFailure(t *testing.T) {
+	taskErr := &dto.TaskError{Code: "billing_settlement_pending"}
+
+	assert.False(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, true))
+	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, false, true))
+	assert.True(t, shouldMarkTaskSubmitNeedsReview(&dto.TaskError{Code: "persist_task_failed"}, true, true))
+}
+
 func TestMidjourneyRelayErrorStatusCodeReportsSettlementPendingAsConflict(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, midjourneyRelayErrorStatusCode(&dto.MidjourneyResponse{
 		Code:        constant.MjRequestError,
