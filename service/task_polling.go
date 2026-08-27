@@ -56,7 +56,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 	timedOutCount := 0
 
 	for _, task := range tasks {
-		settlementPending, settlementErr := taskFinalSettlementPending(task)
+		settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
 		if settlementErr != nil {
 			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
 			continue
@@ -237,15 +237,13 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	}
 	providerTerminal := responseItem.Status == string(model.TaskStatusSuccess) ||
 		responseItem.Status == string(model.TaskStatusFailure) || responseItem.FailReason != ""
-	if providerTerminal {
-		pending, err := taskFinalSettlementPending(task)
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, err))
-			return
-		}
-		if pending {
-			return
-		}
+	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	if settlementErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, settlementErr))
+		return
+	}
+	if pending {
+		return
 	}
 
 	previousStatus := task.Status
@@ -455,14 +453,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			}
 		}
 	}
-	if taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure) {
-		pending, settlementErr := taskFinalSettlementPending(task)
-		if settlementErr != nil {
-			return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
-		}
-		if pending {
-			return nil
-		}
+	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
+	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	if settlementErr != nil {
+		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
+	}
+	if pending {
+		return nil
 	}
 
 	shouldRefund := false

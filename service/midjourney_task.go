@@ -20,8 +20,8 @@ func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourne
 	}
 	providerTerminal := responseItem.Status == "SUCCESS" || responseItem.Status == "FAILURE" ||
 		responseItem.FailReason != "" || (responseItem.Status == "" && responseItem.Progress == "100%")
-	if billingTask != nil && providerTerminal {
-		pending, settlementErr := taskFinalSettlementPending(billingTask)
+	if billingTask != nil {
+		pending, settlementErr := taskTerminalSettlementPending(billingTask, providerTerminal)
 		if settlementErr != nil {
 			return settlementErr
 		}

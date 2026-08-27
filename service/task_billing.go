@@ -167,6 +167,16 @@ func taskFinalSettlementPending(task *model.Task) (bool, error) {
 	}
 }
 
+// taskTerminalSettlementPending gates the submission-settlement lookup on a
+// provider transition that would make the task terminal. Callers keep their
+// own error reporting and skip/return behavior.
+func taskTerminalSettlementPending(task *model.Task, providerTerminal bool) (bool, error) {
+	if !providerTerminal {
+		return false, nil
+	}
+	return taskFinalSettlementPending(task)
+}
+
 func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {
 	if task == nil || task.Quota == 0 || task.ID <= 0 {
 		return nil

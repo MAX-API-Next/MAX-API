@@ -59,6 +59,7 @@ func TestPendingTaskSettlementDoesNotMarkAcceptedTaskAsManualFailure(t *testing.
 
 	assert.False(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, true))
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, false, true))
+	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, false))
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(&dto.TaskError{Code: "persist_task_failed"}, true, true))
 }
 
