@@ -5478,7 +5478,7 @@
     "Failed to initialize Telegram binding": "Не удалось инициализировать привязку Telegram",
     "Failed to load Telegram Login Widget": "Не удалось загрузить виджет входа Telegram",
     "Failed to sign out other sessions": "Не удалось завершить другие сеансы",
-    "Keep this session and revoke all other signed-in devices": "Сохранить текущий сеанс и отозвать все остальные входы",
+    "Keep this session and revoke all other signed-in devices": "Сохранить текущий сеанс и завершить сеансы на всех остальных устройствах",
     "No verification method is available. Add a password or sign in again with a linked account.": "Нет доступного способа подтверждения. Добавьте пароль или снова войдите через привязанную учетную запись.",
     "Other sessions signed out successfully": "Другие сеансы успешно завершены",
     "Preparing Telegram authorization...": "Подготовка авторизации Telegram...",

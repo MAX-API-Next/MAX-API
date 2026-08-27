@@ -126,6 +126,10 @@ func TestPasskeyAndTwoFASecurityChangesBumpSessionGeneration(t *testing.T) {
 	generation, err = ReplaceBackupCodesAndBumpSessionGeneration(user.Id, []string{"ABCD-EFGH"})
 	require.NoError(t, err)
 	require.EqualValues(t, 5, generation)
+	var backupCode TwoFABackupCode
+	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&backupCode).Error)
+	require.NotEqual(t, "ABCD-EFGH", backupCode.CodeHash)
+	require.True(t, common.ValidatePasswordAndHash("ABCD-EFGH", backupCode.CodeHash))
 
 	generation, err = DisableTwoFAAndBumpSessionGeneration(user.Id)
 	require.NoError(t, err)

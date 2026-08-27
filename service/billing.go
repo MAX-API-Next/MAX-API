@@ -25,6 +25,45 @@ func billingLogContext(ctx *gin.Context) context.Context {
 	return ctx
 }
 
+func billingEffectRequestIDs(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) (string, string) {
+	requestID, upstreamRequestID := "", ""
+	if ctx != nil {
+		requestID = ctx.GetString(common.RequestIdKey)
+		upstreamRequestID = ctx.GetString(common.UpstreamRequestIdKey)
+	}
+	if requestID == "" && relayInfo != nil {
+		requestID = relayInfo.RequestId
+	}
+	return requestID, upstreamRequestID
+}
+
+func newConsumeBillingSettlementEffect(
+	params model.RecordConsumeLogParams,
+	requestID string,
+	upstreamRequestID string,
+	updateUsage bool,
+) *model.BillingSettlementEffect {
+	return &model.BillingSettlementEffect{
+		LogType:           model.LogTypeConsume,
+		Content:           params.Content,
+		ChannelID:         params.ChannelId,
+		ModelName:         params.ModelName,
+		TokenID:           params.TokenId,
+		Group:             params.Group,
+		Other:             params.Other,
+		NodeName:          common.NodeName,
+		UpdateUsage:       updateUsage,
+		Quota:             int64(params.Quota),
+		QuotaIsActual:     true,
+		PromptTokens:      params.PromptTokens,
+		CompletionTokens:  params.CompletionTokens,
+		UseTimeSeconds:    params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		RequestID:         requestID,
+		UpstreamRequestID: upstreamRequestID,
+	}
+}
+
 func validatePreConsumedQuota(preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
 	if relayInfo != nil && relayInfo.QuotaClamp != nil {
 		return types.NewErrorWithStatusCode(
@@ -152,36 +191,8 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		logger.LogError(logCtx, "error settling billing: relayInfo is nil")
 		return
 	}
-	requestID, upstreamRequestID := "", ""
-	if ctx != nil {
-		requestID = ctx.GetString(common.RequestIdKey)
-		upstreamRequestID = ctx.GetString(common.UpstreamRequestIdKey)
-	}
-	if requestID == "" {
-		requestID = relayInfo.RequestId
-	}
-	var effect *model.BillingSettlementEffect
-	if shouldUpdateUsage {
-		effect = &model.BillingSettlementEffect{
-			LogType:           model.LogTypeConsume,
-			Content:           params.Content,
-			ChannelID:         params.ChannelId,
-			ModelName:         params.ModelName,
-			TokenID:           params.TokenId,
-			Group:             params.Group,
-			Other:             params.Other,
-			NodeName:          common.NodeName,
-			UpdateUsage:       true,
-			Quota:             int64(params.Quota),
-			QuotaIsActual:     true,
-			PromptTokens:      params.PromptTokens,
-			CompletionTokens:  params.CompletionTokens,
-			UseTimeSeconds:    params.UseTimeSeconds,
-			IsStream:          params.IsStream,
-			RequestID:         requestID,
-			UpstreamRequestID: upstreamRequestID,
-		}
-	}
+	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
+	effect := newConsumeBillingSettlementEffect(params, requestID, upstreamRequestID, shouldUpdateUsage)
 
 	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, params.Quota, effect)
 	if err != nil {

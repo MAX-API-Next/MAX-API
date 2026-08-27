@@ -141,20 +141,32 @@ func (t *TwoFA) IsLocked() bool {
 
 // CreateBackupCodes 创建备用码
 func CreateBackupCodes(userId int, codes []string) error {
+	hashes, err := hashBackupCodes(codes)
+	if err != nil {
+		return err
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return replaceBackupCodesTx(tx, userId, codes)
+		return replaceBackupCodeHashesTx(tx, userId, hashes)
 	})
 }
 
-func replaceBackupCodesTx(tx *gorm.DB, userID int, codes []string) error {
-	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFABackupCode{}).Error; err != nil {
-		return err
-	}
+func hashBackupCodes(codes []string) ([]string, error) {
+	hashes := make([]string, 0, len(codes))
 	for _, code := range codes {
 		hashedCode, err := common.HashBackupCode(code)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		hashes = append(hashes, hashedCode)
+	}
+	return hashes, nil
+}
+
+func replaceBackupCodeHashesTx(tx *gorm.DB, userID int, hashes []string) error {
+	if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFABackupCode{}).Error; err != nil {
+		return err
+	}
+	for _, hashedCode := range hashes {
 		backupCode := TwoFABackupCode{
 			UserId:   userID,
 			CodeHash: hashedCode,
@@ -292,9 +304,13 @@ func (t *TwoFA) EnableAndBumpSessionGeneration() (int64, error) {
 }
 
 func ReplaceBackupCodesAndBumpSessionGeneration(userID int, codes []string) (int64, error) {
+	hashes, err := hashBackupCodes(codes)
+	if err != nil {
+		return 0, err
+	}
 	var generation int64
 	var cacheTask CacheInvalidationTask
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		var enabledCount int64
 		if err := tx.Model(&TwoFA{}).
 			Where("user_id = ? AND is_enabled = ?", userID, true).
@@ -304,7 +320,7 @@ func ReplaceBackupCodesAndBumpSessionGeneration(userID int, codes []string) (int
 		if enabledCount != 1 {
 			return ErrTwoFANotEnabled
 		}
-		if err := replaceBackupCodesTx(tx, userID, codes); err != nil {
+		if err := replaceBackupCodeHashesTx(tx, userID, hashes); err != nil {
 			return err
 		}
 		var err error

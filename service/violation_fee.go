@@ -155,12 +155,19 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"upstream_error_code":  fmt.Sprintf("%v", oai.Code),
 		"violation_fee_marker": CSAMViolationMarker,
 	}
-	effect := &model.BillingSettlementEffect{
-		LogType: model.LogTypeConsume, Content: "Violation fee charged",
-		ChannelID: relayInfo.ChannelId, ModelName: relayInfo.OriginModelName,
-		TokenID: relayInfo.TokenId, Group: relayInfo.UsingGroup, Other: other,
-		UpdateUsage: true, Quota: int64(feeQuota), QuotaIsActual: true,
-	}
+	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
+	effect := newConsumeBillingSettlementEffect(model.RecordConsumeLogParams{
+		ChannelId:      relayInfo.ChannelId,
+		ModelName:      relayInfo.OriginModelName,
+		TokenName:      tokenName,
+		Quota:          feeQuota,
+		Content:        "Violation fee charged",
+		TokenId:        relayInfo.TokenId,
+		UseTimeSeconds: int(useTimeSeconds),
+		IsStream:       relayInfo.IsStream,
+		Group:          relayInfo.UsingGroup,
+		Other:          other,
+	}, requestID, upstreamRequestID, true)
 
 	if settler, ok := relayInfo.Billing.(interface {
 		SettleWithEffect(int, *model.BillingSettlementEffect) error

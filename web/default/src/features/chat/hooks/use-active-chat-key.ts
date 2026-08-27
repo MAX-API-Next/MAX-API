@@ -70,6 +70,7 @@ export function useActiveChatKey(enabled: boolean) {
     enabled: enabled && Boolean(userId),
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 0,
+    retry: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })

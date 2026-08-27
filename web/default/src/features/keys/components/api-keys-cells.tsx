@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useState, useCallback } from 'react'
 import { Check, Copy, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { Button } from '@/components/ui/button'
 import {
@@ -66,11 +67,14 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
 
   const handleCopy = useCallback(async () => {
     const realKey = await resolveRealKey(apiKey.id)
-    if (realKey) {
-      const ok = await copyToClipboard(realKey)
-      if (ok) markKeyCopied(apiKey.id)
+    if (!realKey) return
+    const ok = await copyToClipboard(realKey)
+    if (ok) {
+      markKeyCopied(apiKey.id)
+    } else {
+      toast.error(t('Failed to copy to clipboard'))
     }
-  }, [resolveRealKey, apiKey.id, markKeyCopied])
+  }, [resolveRealKey, apiKey.id, markKeyCopied, t])
 
   return (
     <div className='flex items-center'>
@@ -120,6 +124,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
               className='size-7 shrink-0'
               onClick={handleCopy}
               disabled={isLoading}
+              aria-label={t('Copy API key')}
             />
           }
         >

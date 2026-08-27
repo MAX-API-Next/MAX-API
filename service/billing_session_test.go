@@ -83,6 +83,12 @@ type recordingBillingSettler struct {
 	settleCalls int
 }
 
+type recordingEffectBillingSettler struct {
+	recordingBillingSettler
+	actualQuota int
+	effect      *model.BillingSettlementEffect
+}
+
 func TestSettleAndRecordConsumeHandlesNilContextWithoutPanic(t *testing.T) {
 	originalLogConsumeEnabled := common.LogConsumeEnabled
 	common.LogConsumeEnabled = false
@@ -98,6 +104,50 @@ func TestSettleAndRecordConsumeHandlesNilContextWithoutPanic(t *testing.T) {
 	})
 }
 
+func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) {
+	truncate(t)
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "zero-usage-request")
+	ctx.Set(common.UpstreamRequestIdKey, "zero-usage-upstream-request")
+	settler := &recordingEffectBillingSettler{}
+	info := &relaycommon.RelayInfo{
+		RequestId: "relay-fallback-request",
+		UserId:    601,
+		Billing:   settler,
+	}
+	params := model.RecordConsumeLogParams{
+		ChannelId:        602,
+		PromptTokens:     3,
+		CompletionTokens: 5,
+		ModelName:        "zero-usage-model",
+		Quota:            0,
+		Content:          "upstream omitted billable usage",
+		TokenId:          603,
+		UseTimeSeconds:   7,
+		IsStream:         true,
+		Group:            "default",
+		Other:            map[string]interface{}{"reason": "missing_usage"},
+	}
+
+	settleAndRecordConsume(ctx, info, false, params)
+
+	require.NotNil(t, settler.effect)
+	assert.Zero(t, settler.settleCalls)
+	assert.Zero(t, settler.actualQuota)
+	assert.False(t, settler.effect.UpdateUsage)
+	assert.True(t, settler.effect.QuotaIsActual)
+	assert.Equal(t, params.Content, settler.effect.Content)
+	assert.Equal(t, params.ChannelId, settler.effect.ChannelID)
+	assert.Equal(t, params.ModelName, settler.effect.ModelName)
+	assert.Equal(t, params.TokenId, settler.effect.TokenID)
+	assert.Equal(t, params.PromptTokens, settler.effect.PromptTokens)
+	assert.Equal(t, params.CompletionTokens, settler.effect.CompletionTokens)
+	assert.Equal(t, params.UseTimeSeconds, settler.effect.UseTimeSeconds)
+	assert.Equal(t, params.IsStream, settler.effect.IsStream)
+	assert.Equal(t, "zero-usage-request", settler.effect.RequestID)
+	assert.Equal(t, "zero-usage-upstream-request", settler.effect.UpstreamRequestID)
+}
+
 func (s *recordingBillingSettler) Settle(int) error         { s.settleCalls++; return nil }
 func (s *recordingBillingSettler) Refund(*gin.Context)      {}
 func (s *recordingBillingSettler) NeedsRefund() bool        { return false }
@@ -105,6 +155,12 @@ func (s *recordingBillingSettler) GetPreConsumedQuota() int { return s.preConsum
 func (s *recordingBillingSettler) Reserve(target int) error {
 	s.reserves = append(s.reserves, target)
 	s.preConsumed = target
+	return nil
+}
+
+func (s *recordingEffectBillingSettler) SettleWithEffect(actualQuota int, effect *model.BillingSettlementEffect) error {
+	s.actualQuota = actualQuota
+	s.effect = effect
 	return nil
 }
 
@@ -567,6 +623,8 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
 
 	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "violation-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "violation-upstream-request")
 	info := &relaycommon.RelayInfo{
 		RequestId: "violation-subscription-request", UserId: userID,
 		TokenId: tokenID, TokenKey: "violation-subscription-token",
@@ -596,7 +654,10 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	require.EqualValues(t, feeQuota, getSubscriptionAmountUsed(t, subscriptionID))
 	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
 	require.Equal(t, int64(1), countLogs(t))
-	require.Equal(t, feeQuota, getLastLog(t).Quota)
+	log := getLastLog(t)
+	require.Equal(t, feeQuota, log.Quota)
+	require.Equal(t, "violation-client-request", log.RequestId)
+	require.Equal(t, "violation-upstream-request", log.UpstreamRequestId)
 
 	var finalize model.BillingSettlement
 	require.NoError(t, model.DB.Where("operation_key = ?", "request:violation-subscription-request:finalize").First(&finalize).Error)

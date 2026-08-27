@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -66,19 +67,22 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 		return nil
 	}
 	logContent, other := buildTaskConsumptionLogData(c, info)
-	return &model.BillingSettlementEffect{
-		LogType:       model.LogTypeConsume,
-		Content:       logContent,
-		ChannelID:     info.ChannelId,
-		ModelName:     info.OriginModelName,
-		TokenID:       info.TokenId,
-		Group:         info.UsingGroup,
-		Other:         other,
-		NodeName:      common.NodeName,
-		UpdateUsage:   true,
-		Quota:         int64(quota),
-		QuotaIsActual: true,
+	useTimeSeconds := 0
+	if !info.StartTime.IsZero() {
+		useTimeSeconds = int(time.Since(info.StartTime).Seconds())
 	}
+	requestID, upstreamRequestID := billingEffectRequestIDs(c, info)
+	return newConsumeBillingSettlementEffect(model.RecordConsumeLogParams{
+		ChannelId:      info.ChannelId,
+		ModelName:      info.OriginModelName,
+		Quota:          quota,
+		Content:        logContent,
+		TokenId:        info.TokenId,
+		UseTimeSeconds: useTimeSeconds,
+		IsStream:       info.IsStream,
+		Group:          info.UsingGroup,
+		Other:          other,
+	}, requestID, upstreamRequestID, true)
 }
 
 // LogTaskConsumption records task usage for legacy/custom funding paths that

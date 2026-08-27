@@ -106,11 +106,19 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       return
     }
 
-    await withVerification(register, {
-      scope: 'credentials',
-      title: t('Security verification'),
-      description: t('Confirm your identity before registering a Passkey.'),
-    })
+    try {
+      await withVerification(register, {
+        scope: 'credentials',
+        title: t('Security verification'),
+        description: t('Confirm your identity before registering a Passkey.'),
+      })
+    } catch (error) {
+      // The action and verification hook own user-facing error messages. The
+      // event handler still consumes the rejection to avoid an unhandled
+      // promise when method discovery or the retried action fails.
+      // eslint-disable-next-line no-console
+      console.error('[Passkey] Verification continuation failed', error)
+    }
   }, [register, supported, t, withVerification])
 
   const handleRemove = useCallback(async () => {

@@ -18,7 +18,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  waitFor,
+} from '@testing-library/react'
 import {
   afterAll,
   afterEach,
@@ -43,6 +50,8 @@ const fetchTokenKey = mock(
       resolveTokenKeyRequest = resolve
     })
 )
+const copyToClipboard = mock(async () => false)
+const toastError = mock(() => undefined)
 
 mock.module('../src/features/auth/secure-verification', () => ({
   useSecureVerificationGate: () => ({
@@ -54,6 +63,14 @@ mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
+mock.module('sonner', () => ({
+  toast: { error: toastError },
+}))
+
+mock.module('../src/lib/copy-to-clipboard', () => ({
+  copyToClipboard,
+}))
+
 mock.module('../src/features/keys/api', () => ({
   fetchTokenKey,
   fetchTokenKeysBatch: mock(async () => ({ success: true, data: { keys: {} } })),
@@ -61,6 +78,9 @@ mock.module('../src/features/keys/api', () => ({
 
 const { ApiKeysProvider, useApiKeys } = await import(
   '../src/features/keys/components/api-keys-provider'
+)
+const { ApiKeyCell } = await import(
+  '../src/features/keys/components/api-keys-cells'
 )
 const testEnv = createReactTestEnvironment()
 
@@ -72,10 +92,15 @@ beforeAll(() => testEnv.setup())
 
 beforeEach(() => {
   fetchTokenKey.mockClear()
+  copyToClipboard.mockClear()
+  toastError.mockClear()
   resolveTokenKeyRequest = undefined
 })
 
-afterEach(() => cleanup())
+afterEach(async () => {
+  cleanup()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+})
 
 afterAll(() => testEnv.teardown())
 
@@ -100,5 +125,43 @@ describe('API key plaintext lifecycle', () => {
     })
 
     assert.equal(result.current.resolvedKeys[101], undefined)
+  })
+
+  test('reports clipboard failures without marking the API key as copied', async () => {
+    fetchTokenKey.mockImplementationOnce(async () => ({
+      success: true,
+      data: { key: 'plaintext-copy-key' },
+    }))
+
+    const view = render(
+      <ApiKeysProvider>
+        <ApiKeyCell
+          apiKey={{
+            id: 102,
+            name: 'copy-test',
+            key: 'masked-key',
+            status: 1,
+            remain_quota: 100,
+            used_quota: 0,
+            unlimited_quota: false,
+            expired_time: -1,
+            created_time: 0,
+            accessed_time: 0,
+            group: 'default',
+            cross_group_retry: false,
+            routing: null,
+            model_limits_enabled: false,
+            model_limits: '',
+            allow_ips: '',
+          }}
+        />
+      </ApiKeysProvider>
+    )
+
+    fireEvent.click(view.getByRole('button', { name: 'Copy API key' }))
+
+    await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
+    assert.equal(toastError.mock.calls.length, 1)
+    assert.equal(toastError.mock.calls[0]?.[0], 'Failed to copy to clipboard')
   })
 })

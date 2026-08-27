@@ -5486,6 +5486,6 @@
     "Start Telegram authorization": "Bắt đầu ủy quyền Telegram",
     "Telegram account bound successfully": "Đã liên kết tài khoản Telegram thành công",
     "Telegram will ask you to confirm the account before it is bound.": "Telegram sẽ yêu cầu bạn xác nhận tài khoản trước khi liên kết.",
-    "Verification unavailable": "Không thể xác minh"
+    "Verification unavailable": "Xác minh không khả dụng"
   }
 }

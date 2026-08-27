@@ -240,6 +240,10 @@ export function useSecureVerification(
     [cancel]
   )
 
+  /**
+   * Returns null when the user cancels. Callers must handle rejections from
+   * method discovery, the original action, and the post-verification retry.
+   */
   const withVerification = useCallback(
     async <T>(
       apiCall: () => Promise<T>,

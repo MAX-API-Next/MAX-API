@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,33 @@ func TestShouldApplyTaskResultProgressSkipsNonTerminalCompleteProgress(t *testin
 		Status:   string(model.TaskStatusSuccess),
 		Progress: "100%",
 	}))
+}
+
+func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "task-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "task-upstream-request")
+	info := &relaycommon.RelayInfo{
+		RequestId:       "task-relay-fallback-request",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 91},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+		OriginModelName: "task-model",
+		TokenId:         92,
+		UsingGroup:      "default",
+		StartTime:       time.Now().Add(-3 * time.Second),
+		IsStream:        true,
+	}
+
+	effect := BuildTaskSubmissionSettlementEffect(ctx, info, 123)
+
+	require.NotNil(t, effect)
+	assert.True(t, effect.UpdateUsage)
+	assert.True(t, effect.QuotaIsActual)
+	assert.EqualValues(t, 123, effect.Quota)
+	assert.Equal(t, "task-client-request", effect.RequestID)
+	assert.Equal(t, "task-upstream-request", effect.UpstreamRequestID)
+	assert.GreaterOrEqual(t, effect.UseTimeSeconds, 3)
+	assert.True(t, effect.IsStream)
 }
 
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
