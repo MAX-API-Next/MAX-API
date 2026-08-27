@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
@@ -20,6 +21,9 @@ import (
 
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	originalPreConsumedQuota := common.PreConsumedQuota
+	common.PreConsumedQuota = 2_000
+	t.Cleanup(func() { common.PreConsumedQuota = originalPreConsumedQuota })
 
 	saved := map[string]string{}
 	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
@@ -45,6 +49,7 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	ctx.Set("group", "default")
 
 	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeAlphaSearch,
 		OriginModelName: "tiered-test-model",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -59,9 +64,42 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1500, priceData.QuotaToPreConsume)
 	require.NotNil(t, info.TieredBillingSnapshot)
+	require.Equal(t, 1500, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+}
+
+func TestModelPriceHelperDefersAlphaSearchFloorUntilSurcharge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+
+	common.QuotaPerUnit = 1_000
+	common.PreConsumedQuota = 500
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"alpha-floor-test":0.2}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeAlphaSearch,
+		OriginModelName: "alpha-floor-test",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.Equal(t, 200, priceData.QuotaToPreConsume)
 }
 
 func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
@@ -128,7 +166,7 @@ func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 	require.Equal(t, 100, priceData.Quota)
 }
 
-func TestModelPriceHelperPerCallAppliesPreConsumedQuota(t *testing.T) {
+func TestModelPriceHelperPerCallSeparatesFinalAndPreConsumedQuota(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalQuotaPerUnit := common.QuotaPerUnit
 	originalPreConsumedQuota := common.PreConsumedQuota
@@ -155,7 +193,10 @@ func TestModelPriceHelperPerCallAppliesPreConsumedQuota(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, priceData.FreeModel)
-	require.Equal(t, 1000, priceData.Quota)
+	// The final per-call price remains the model price; the configured value
+	// is only the amount reserved before the upstream request.
+	require.Equal(t, 100, priceData.Quota)
+	require.Equal(t, 1000, priceData.QuotaToPreConsume)
 }
 
 func TestModelPriceHelperAppliesPreConsumedQuotaToFixedPriceModels(t *testing.T) {
@@ -190,7 +231,7 @@ func TestModelPriceHelperAppliesPreConsumedQuotaToFixedPriceModels(t *testing.T)
 	require.Equal(t, 1000, priceData.QuotaToPreConsume)
 }
 
-func TestModelPriceHelperAddsConfiguredPreConsumedQuotaToPromptEstimate(t *testing.T) {
+func TestModelPriceHelperUsesConfiguredPreConsumedQuotaAsPromptEstimateFloor(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalQuotaPerUnit := common.QuotaPerUnit
 	originalPreConsumedQuota := common.PreConsumedQuota
@@ -215,11 +256,26 @@ func TestModelPriceHelperAddsConfiguredPreConsumedQuotaToPromptEstimate(t *testi
 		UsingGroup:      "default",
 	}
 
-	priceData, err := ModelPriceHelper(ctx, info, 250, &types.TokenCountMeta{})
+	for _, test := range []struct {
+		name        string
+		prompt      int
+		maxTokens   int
+		expectedPre int
+	}{
+		{name: "below floor", prompt: 50, expectedPre: 100},
+		{name: "above floor", prompt: 250, expectedPre: 250},
+		{name: "includes completion estimate", prompt: 50, maxTokens: 100, expectedPre: 150},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			priceData, err := ModelPriceHelper(ctx, info, test.prompt, &types.TokenCountMeta{MaxTokens: test.maxTokens})
 
-	require.NoError(t, err)
-	require.False(t, priceData.UsePrice)
-	require.Equal(t, 350, priceData.QuotaToPreConsume)
+			require.NoError(t, err)
+			require.False(t, priceData.UsePrice)
+			// PreConsumedQuota is the minimum admission reservation, not an
+			// extra token estimate that should be multiplied by the ratio.
+			require.Equal(t, test.expectedPre, priceData.QuotaToPreConsume)
+		})
+	}
 }
 
 func TestAddNonNegativeIntsRejectsInvalidBillingEstimates(t *testing.T) {

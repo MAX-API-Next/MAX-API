@@ -32,6 +32,51 @@ func (f *recordingFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
+type uncertainFundingSource struct {
+	deltas  []int
+	applied int64
+	err     error
+}
+
+func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }
+func (f *uncertainFundingSource) PreConsume(int) error { return nil }
+func (f *uncertainFundingSource) Refund() error        { return nil }
+func (f *uncertainFundingSource) Settle(delta int) (int64, error) {
+	f.deltas = append(f.deltas, delta)
+	return f.applied, f.err
+}
+
+func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *testing.T) {
+	cases := []struct {
+		name    string
+		applied int64
+		err     error
+	}{
+		{name: "error after possible commit", applied: 5, err: errors.New("provider timeout")},
+		{name: "partial result", applied: 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			funding := &uncertainFundingSource{applied: tc.applied, err: tc.err}
+			session := &BillingSession{
+				relayInfo: &relaycommon.RelayInfo{UserId: 101, TokenId: 102, TokenKey: "uncertain-funding-token"},
+				funding:   funding, preConsumedQuota: 10,
+			}
+
+			err := session.Settle(15)
+			require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
+			assert.Equal(t, []int{5}, funding.deltas)
+			assert.True(t, session.fundingOutcomeUnknown)
+
+			// A second attempt must not repeat the non-idempotent funding call.
+			require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+			require.ErrorIs(t, session.Reserve(20), ErrBillingFundingOutcomeUnknown)
+			assert.Equal(t, []int{5}, funding.deltas)
+		})
+	}
+}
+
 type recordingBillingSettler struct {
 	preConsumed int
 	reserves    []int
@@ -526,7 +571,7 @@ func (f *compensationFailingFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
-func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *testing.T) {
+func TestBillingSessionFailsClosedWhenCompensationOutcomeIsUnknown(t *testing.T) {
 	truncate(t)
 	funding := &compensationFailingFundingSource{}
 	session := &BillingSession{
@@ -538,14 +583,15 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.True(t, session.fundingSettled)
 	assert.True(t, session.compensationFailed)
+	assert.True(t, session.fundingOutcomeUnknown)
 	assert.False(t, session.settled)
 
 	require.NoError(t, model.DB.Create(&model.Token{
 		Id: 52, UserId: 51, Key: "retry-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
-	require.NoError(t, session.Settle(15))
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
 	assert.Equal(t, []int{5, -5}, funding.deltas)
-	assert.True(t, session.settled)
+	assert.False(t, session.settled)
 }
 
 type ambiguousCompensationFundingSource struct {
@@ -575,6 +621,9 @@ func TestBillingSessionDoesNotReapplyFundingAfterAmbiguousCompensationError(t *t
 	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.EqualValues(t, 5, session.appliedFundingDelta)
 	assert.True(t, session.compensationFailed)
+	assert.True(t, session.fundingOutcomeUnknown)
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 }
 
 type partialCompensationFundingSource struct {
@@ -592,7 +641,7 @@ func (f *partialCompensationFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
-func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testing.T) {
+func TestBillingSessionFailsClosedAfterPartialFundingCompensation(t *testing.T) {
 	truncate(t)
 	funding := &partialCompensationFundingSource{}
 	session := &BillingSession{
@@ -600,19 +649,20 @@ func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testin
 		funding:   funding, preConsumedQuota: 10,
 	}
 
-	require.Error(t, session.Settle(15))
-	require.Equal(t, []int{5, -5, 2, -5, 2, -5}, funding.deltas)
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	require.Equal(t, []int{5, -5}, funding.deltas)
 	require.False(t, session.compensationFailed)
-	require.True(t, session.fundingReconcilePending)
+	require.True(t, session.fundingOutcomeUnknown)
+	require.False(t, session.fundingReconcilePending)
 	require.EqualValues(t, 3, session.appliedFundingDelta)
 
 	require.NoError(t, model.DB.Create(&model.Token{
 		Id: 57, UserId: 56, Key: "partial-compensation-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
-	require.NoError(t, session.Settle(15))
-	assert.True(t, session.settled)
-	assert.EqualValues(t, 5, session.appliedFundingDelta)
-	assert.Equal(t, int64(2), int64(funding.deltas[len(funding.deltas)-1]))
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	assert.False(t, session.settled)
+	assert.EqualValues(t, 3, session.appliedFundingDelta)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 }
 
 type tokenRecoveringFundingSource struct {

@@ -588,7 +588,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		return
 	}
 	params.Content = common.SanitizePersistedLogContent(params.Content)
-	logCtx := context.Context(context.Background())
+	logCtx := context.Background()
 	if c != nil {
 		logCtx = c
 	}

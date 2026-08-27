@@ -258,16 +258,25 @@ func prepareMidjourneyBillingTask(c *gin.Context, info *relaycommon.RelayInfo, a
 	info.Action = action
 	info.OriginModelName = service.CovertMjpActionToModelName(action)
 	info.PriceData = priceData
+	preConsumedQuota := 0
 	if !charge || priceData.FreeModel {
 		info.PriceData.Quota = 0
+		info.PriceData.QuotaToPreConsume = 0
+	} else {
+		var err error
+		preConsumedQuota, err = helper.ApplyPreConsumedQuotaFloor(priceData.Quota, true)
+		if err != nil {
+			return nil, &dto.MidjourneyResponse{Code: constant.MjRequestError, Description: err.Error()}
+		}
+		info.PriceData.QuotaToPreConsume = preConsumedQuota
 	}
-	if info.PriceData.Quota > 0 {
+	if preConsumedQuota > 0 {
 		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+		if apiErr := service.PreConsumeBilling(c, preConsumedQuota, info); apiErr != nil {
 			return nil, &dto.MidjourneyResponse{Code: constant.MjRequestError, Description: apiErr.Error()}
 		}
 	}
-	task, taskErr := ensureTaskPlaceholder(constant.TaskPlatformMidjourney, info)
+	task, taskErr := ensureTaskPlaceholder(constant.TaskPlatformMidjourney, info, preConsumedQuota)
 	if taskErr != nil {
 		if info.Billing != nil {
 			info.Billing.Refund(c)

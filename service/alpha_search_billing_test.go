@@ -63,8 +63,17 @@ func TestAlphaSearchPreConsumeQuotaRejectsOverflow(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestPrepareTieredAlphaSearchBillingKeepsSurchargeAfterGroupChange(t *testing.T) {
+func TestPrepareTieredAlphaSearchBillingAppliesFloorAfterSurcharge(t *testing.T) {
 	const expr = `tier("base", p)`
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	common.QuotaPerUnit = 500_000
+	common.PreConsumedQuota = 20_000
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+	})
+
 	billing := &recordingBillingSettler{preConsumed: 6_000}
 	info := &relaycommon.RelayInfo{
 		RelayMode:             relayconstant.RelayModeAlphaSearch,
@@ -85,12 +94,13 @@ func TestPrepareTieredAlphaSearchBillingKeepsSurchargeAfterGroupChange(t *testin
 		},
 	}
 
-	expected, err := AlphaSearchPreConsumeQuota(2_000, info, 2)
+	totalBeforeFloor, err := AlphaSearchPreConsumeQuota(2_000, info, 2)
 	require.NoError(t, err)
+	require.Equal(t, 12_000, totalBeforeFloor)
 	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, info))
 
-	require.Equal(t, []int{expected}, billing.reserves)
-	require.Equal(t, expected, info.FinalPreConsumedQuota)
-	require.Equal(t, expected, info.PriceData.QuotaToPreConsume)
+	require.Equal(t, []int{20_000}, billing.reserves)
+	require.Equal(t, 20_000, info.FinalPreConsumedQuota)
+	require.Equal(t, 20_000, info.PriceData.QuotaToPreConsume)
 	require.Equal(t, 2_000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }

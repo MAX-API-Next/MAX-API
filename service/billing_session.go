@@ -39,8 +39,14 @@ type BillingSession struct {
 	refunded                bool  // Refund 已调用
 	refundInFlight          bool
 	settleInFlight          bool
+	fundingOutcomeUnknown   bool
 	mu                      sync.Mutex
 }
+
+// ErrBillingFundingOutcomeUnknown means a non-durable funding mutation did
+// not return a fully confirmed result. Such a mutation must not be retried
+// blindly because the provider may already have committed it.
+var ErrBillingFundingOutcomeUnknown = errors.New("billing funding settlement outcome is unknown")
 
 type SettlementPreparer interface {
 	PrepareSettlement(actualQuota int) (*model.BillingSettlementInput, error)
@@ -78,6 +84,9 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 			return nil
 		} else {
 			lastErr = err
+			if errors.Is(err, ErrBillingFundingOutcomeUnknown) {
+				return err
+			}
 		}
 		if attempt < maxAttempts-1 {
 			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
@@ -99,6 +108,9 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 	defer s.mu.Unlock()
 	if s.settled || s.refunded {
 		return nil, false, nil
+	}
+	if s.fundingOutcomeUnknown {
+		return nil, false, ErrBillingFundingOutcomeUnknown
 	}
 	if s.refundInFlight {
 		return nil, false, errors.New("billing refund is already in progress")
@@ -155,8 +167,17 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
 		applied, err := s.funding.Settle(delta)
-		if err != nil {
-			return err
+		if err != nil || applied != int64(delta) {
+			// FundingSource has no durable idempotency contract. Treat both an
+			// error and a short/over-applied result as outcome unknown: the
+			// mutation may have committed and must never be repeated blindly.
+			s.fundingSettled = true
+			s.appliedFundingDelta = applied
+			s.fundingOutcomeUnknown = true
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
+			}
+			return fmt.Errorf("%w: requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, delta, applied)
 		}
 		s.appliedFundingDelta = applied
 		s.fundingSettled = true
@@ -168,16 +189,17 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 		needed := int64(delta) - s.appliedFundingDelta
 		if needed != 0 {
 			applied, err := s.funding.Settle(int(needed))
-			if err != nil {
-				// The operation outcome is ambiguous. Do not issue another funding
-				// mutation automatically; later attempts may only retry the token.
-				s.compensationFailed = true
-				s.fundingReconcilePending = false
-				return err
-			}
 			s.appliedFundingDelta += applied
-			if applied != needed {
-				return fmt.Errorf("funding reconciliation incomplete: needed=%d applied=%d", needed, applied)
+			if err != nil || applied != needed {
+				// The funding source has no durable idempotency contract. A
+				// failed or partial reconciliation may already have committed;
+				// do not repeat it or proceed with the token leg.
+				s.fundingOutcomeUnknown = true
+				s.fundingReconcilePending = false
+				if err != nil {
+					return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
+				}
+				return fmt.Errorf("%w: reconciliation requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, needed, applied)
 			}
 		}
 		if s.appliedFundingDelta != int64(delta) {
@@ -206,15 +228,18 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 				compensated, compensationErr := s.funding.Settle(-int(committed))
 				if compensationErr != nil {
 					// A funding error may be an ambiguous commit. Retain the target
-					// delta and never repeat this non-idempotent compensation.
+					// delta and never repeat this non-idempotent compensation or
+					// continue with the token leg.
 					s.compensationFailed = true
+					s.fundingOutcomeUnknown = true
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
 				} else if compensated != -committed {
 					s.appliedFundingDelta = committed + compensated
 					s.compensationFailed = false
-					s.fundingReconcilePending = true
+					s.fundingOutcomeUnknown = true
+					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("incomplete funding compensation after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d)",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated))
 				} else {
@@ -453,6 +478,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.fundingOutcomeUnknown {
+		return ErrBillingFundingOutcomeUnknown
+	}
 	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
 		return nil
 	}

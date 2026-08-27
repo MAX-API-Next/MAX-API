@@ -244,6 +244,111 @@ func TestPostTextConsumeQuotaUsesFallbackForNilUsageWithEstimate(t *testing.T) {
 	require.Equal(t, 20, log.PromptTokens)
 }
 
+func TestSettleAndRecordConsumeLeavesUsageProjectionPendingWhenFinalChargeExceedsWallet(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 121, 122, 123
+	const preConsumedQuota, actualQuota = 100, 200
+
+	seedUser(t, userID, preConsumedQuota)
+	seedToken(t, tokenID, userID, "final-charge-insufficient-token", preConsumedQuota)
+	seedChannel(t, channelID)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("token_quota", int64(preConsumedQuota))
+	info := &relaycommon.RelayInfo{
+		RequestId:       "final-charge-insufficient-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "final-charge-insufficient-token",
+		OriginModelName: "final-charge-insufficient-model",
+		UsingGroup:      "default",
+		ForcePreConsume: true,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+	}
+
+	session, apiErr := NewBillingSession(ctx, info, preConsumedQuota)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId: channelID,
+		ModelName: "final-charge-insufficient-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     actualQuota,
+		Content:   "final charge exceeds remaining wallet",
+	})
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Zero(t, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+	assert.Zero(t, countLogs(t))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", "request:final-charge-insufficient-request:finalize").First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	assert.Contains(t, settlement.LastError, "user quota is not enough")
+}
+
+func TestSettleAndRecordConsumeProjectsExplicitZeroFinalQuota(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 124, 125, 126
+	const initialQuota, preConsumedQuota = 1_000, 100
+
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, "zero-final-quota-token", initialQuota)
+	seedChannel(t, channelID)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set(common.RequestIdKey, "zero-final-quota-request")
+	ctx.Set("token_quota", int64(initialQuota))
+	info := &relaycommon.RelayInfo{
+		RequestId:       "zero-final-quota-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "zero-final-quota-token",
+		OriginModelName: "zero-final-quota-model",
+		UsingGroup:      "default",
+		ForcePreConsume: true,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+	}
+
+	session, apiErr := NewBillingSession(ctx, info, preConsumedQuota)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId:    channelID,
+		PromptTokens: 1,
+		ModelName:    "zero-final-quota-model",
+		TokenId:      tokenID,
+		Group:        "default",
+		Quota:        0,
+		Content:      "billable usage rounded to zero quota",
+	})
+
+	assert.EqualValues(t, initialQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialQuota, getTokenRemainQuota(t, tokenID))
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Equal(t, 1, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+	assert.Equal(t, int64(1), countLogs(t))
+	log := getLastLog(t)
+	assert.Zero(t, log.Quota)
+	assert.Equal(t, 1, log.PromptTokens)
+	assert.Equal(t, "zero-final-quota-request", log.RequestId)
+}
+
 func TestPostTextConsumeQuotaDoesNotProjectUsageWhenFinalizeSettlementFails(t *testing.T) {
 	truncate(t)
 	gin.SetMode(gin.TestMode)

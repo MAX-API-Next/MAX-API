@@ -159,7 +159,7 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		LogType: model.LogTypeConsume, Content: "Violation fee charged",
 		ChannelID: relayInfo.ChannelId, ModelName: relayInfo.OriginModelName,
 		TokenID: relayInfo.TokenId, Group: relayInfo.UsingGroup, Other: other,
-		UpdateUsage: true, Quota: int64(feeQuota),
+		UpdateUsage: true, Quota: int64(feeQuota), QuotaIsActual: true,
 	}
 
 	if settler, ok := relayInfo.Billing.(interface {

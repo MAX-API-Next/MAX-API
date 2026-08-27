@@ -116,6 +116,7 @@ type BillingSettlementEffect struct {
 	NodeName          string                 `json:"node_name"`
 	UpdateUsage       bool                   `json:"update_usage"`
 	Quota             int64                  `json:"quota,omitempty"`
+	QuotaIsActual     bool                   `json:"quota_is_actual,omitempty"`
 	PromptTokens      int                    `json:"prompt_tokens,omitempty"`
 	CompletionTokens  int                    `json:"completion_tokens,omitempty"`
 	UseTimeSeconds    int                    `json:"use_time_seconds,omitempty"`
@@ -738,11 +739,12 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 	}
 
 	appliedDelta := record.AppliedFundingDelta
+	useActualQuota := effect.QuotaIsActual || effect.Quota > 0
 	logQuota := appliedDelta
-	if effect.Quota > 0 {
+	if useActualQuota {
 		logQuota = effect.Quota
 	}
-	if logQuota != 0 {
+	if logQuota != 0 || effect.QuotaIsActual {
 		other := effect.Other
 		if other == nil {
 			other = make(map[string]interface{})
@@ -777,10 +779,10 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 			return nil
 		}
 		usageQuota := appliedDelta
-		if effect.Quota > 0 {
+		if useActualQuota {
 			usageQuota = effect.Quota
 		}
-		if effect.UpdateUsage && usageQuota > 0 {
+		if effect.UpdateUsage && (usageQuota > 0 || effect.QuotaIsActual) {
 			userResult := tx.Model(&User{}).Where("id = ?", record.UserID).Updates(map[string]interface{}{
 				"used_quota":    gorm.Expr("used_quota + ?", usageQuota),
 				"request_count": gorm.Expr("request_count + ?", 1),

@@ -49,9 +49,15 @@ func (w *WalletFunding) Settle(delta int) (int64, error) {
 		return 0, nil
 	}
 	if delta > 0 {
-		return int64(delta), model.DecreaseUserQuota(w.userId, delta, false)
+		if err := model.DecreaseUserQuota(w.userId, delta, false); err != nil {
+			return 0, err
+		}
+		return int64(delta), nil
 	}
-	return int64(delta), model.IncreaseUserQuota(w.userId, -delta, false)
+	if err := model.IncreaseUserQuota(w.userId, -delta, false); err != nil {
+		return 0, err
+	}
+	return int64(delta), nil
 }
 
 func (w *WalletFunding) Refund() error {

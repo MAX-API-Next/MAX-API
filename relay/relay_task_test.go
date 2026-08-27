@@ -192,6 +192,31 @@ func TestEstimateTaskBillingFallsBackToGenericRateCard(t *testing.T) {
 	assert.Equal(t, 3000, got.Quota)
 }
 
+func TestRecalcQuotaFromRatiosUsesRawEstimateBeforePreConsumeFloor(t *testing.T) {
+	const estimatedQuota = 200
+	info := &relaycommon.RelayInfo{
+		PriceData: types.PriceData{
+			Quota:             estimatedQuota,
+			QuotaToPreConsume: 500,
+			OtherRatios:       map[string]float64{"duration": 2},
+		},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		ratio    float64
+		expected int
+	}{
+		{name: "adjusted below estimate and floor", ratio: 1, expected: 100},
+		{name: "adjusted above reservation", ratio: 6, expected: 600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := recalcQuotaFromRatios(info, estimatedQuota, map[string]float64{"duration": tc.ratio})
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
 func TestPrepareTaskSubmitRequestBodyParamOverrideReturnErrorIsLocal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

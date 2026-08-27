@@ -67,16 +67,17 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 	}
 	logContent, other := buildTaskConsumptionLogData(c, info)
 	return &model.BillingSettlementEffect{
-		LogType:     model.LogTypeConsume,
-		Content:     logContent,
-		ChannelID:   info.ChannelId,
-		ModelName:   info.OriginModelName,
-		TokenID:     info.TokenId,
-		Group:       info.UsingGroup,
-		Other:       other,
-		NodeName:    common.NodeName,
-		UpdateUsage: true,
-		Quota:       int64(quota),
+		LogType:       model.LogTypeConsume,
+		Content:       logContent,
+		ChannelID:     info.ChannelId,
+		ModelName:     info.OriginModelName,
+		TokenID:       info.TokenId,
+		Group:         info.UsingGroup,
+		Other:         other,
+		NodeName:      common.NodeName,
+		UpdateUsage:   true,
+		Quota:         int64(quota),
+		QuotaIsActual: true,
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
@@ -110,8 +111,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
-	configuredPreConsumed, err := configuredPreConsumedQuota()
-	if err != nil {
+	if _, err := configuredPreConsumedQuota(); err != nil {
 		return types.PriceData{}, err
 	}
 	if promptTokens < 0 {
@@ -137,12 +137,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var audioRatio float64
 	var audioCompletionRatio float64
 	var freeModel bool
+	var err error
 	if !usePrice {
-		preConsumedTokens, err := addNonNegativeInts(promptTokens, configuredPreConsumed)
-		if err != nil {
-			return types.PriceData{}, err
-		}
-		if meta.MaxTokens != 0 {
+		preConsumedTokens := promptTokens
+		if meta != nil && meta.MaxTokens != 0 {
 			preConsumedTokens, err = addNonNegativeInts(preConsumedTokens, meta.MaxTokens)
 			if err != nil {
 				return types.PriceData{}, err
@@ -176,17 +174,14 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 		preConsumedQuota = quota
 	} else {
-		if meta.ImagePriceRatio != 0 {
+		if meta != nil && meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
 		quota, err := common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return types.PriceData{}, err
 		}
-		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(quota, groupRatioInfo.GroupRatio > 0)
-		if err != nil {
-			return types.PriceData{}, err
-		}
+		preConsumedQuota = quota
 	}
 
 	// check if free model pre-consume is disabled
@@ -207,7 +202,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 			}
 		}
 	}
-	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+	// Alpha Search adds its deterministic tool surcharge in the controller.
+	// Defer the reservation floor until that complete estimate is available.
+	if !freeModel && groupRatioInfo.GroupRatio > 0 && info.RelayMode != relayconstant.RelayModeAlphaSearch {
 		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(preConsumedQuota, true)
 		if err != nil {
 			return types.PriceData{}, err
@@ -282,10 +279,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	}
 
 	var quota int
+	var err error
 	freeModel := false
 
 	if usePrice {
-		var err error
 		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return types.PriceData{}, err
@@ -298,7 +295,6 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
-		var err error
 		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return types.PriceData{}, err
@@ -311,21 +307,25 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			}
 		}
 	}
+
+	// Keep the model price in Quota for final settlement. The configured
+	// minimum belongs only to the reservation made before the request.
+	preConsumedQuota := quota
 	if !freeModel && groupRatioInfo.GroupRatio > 0 {
-		var err error
-		quota, err = ApplyPreConsumedQuotaFloor(quota, true)
+		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(quota, true)
 		if err != nil {
 			return types.PriceData{}, err
 		}
 	}
 
 	priceData := types.PriceData{
-		FreeModel:      freeModel,
-		ModelPrice:     modelPrice,
-		ModelRatio:     modelRatio,
-		UsePrice:       usePrice,
-		Quota:          quota,
-		GroupRatioInfo: groupRatioInfo,
+		FreeModel:         freeModel,
+		ModelPrice:        modelPrice,
+		ModelRatio:        modelRatio,
+		UsePrice:          usePrice,
+		Quota:             quota,
+		QuotaToPreConsume: preConsumedQuota,
+		GroupRatioInfo:    groupRatioInfo,
 	}
 	return priceData, nil
 }
@@ -351,7 +351,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	}
 
 	estimatedCompletionTokens := 0
-	if meta.MaxTokens != 0 {
+	if meta != nil && meta.MaxTokens != 0 {
 		estimatedCompletionTokens = meta.MaxTokens
 	}
 
@@ -383,7 +383,9 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 			freeModel = true
 		}
 	}
-	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+	// Alpha Search adds its deterministic tool surcharge in the controller.
+	// Defer the reservation floor until that complete estimate is available.
+	if !freeModel && groupRatioInfo.GroupRatio > 0 && info.RelayMode != relayconstant.RelayModeAlphaSearch {
 		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(preConsumedQuota, true)
 		if err != nil {
 			return types.PriceData{}, err

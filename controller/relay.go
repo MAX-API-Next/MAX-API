@@ -67,6 +67,33 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.MaxA
 	return err
 }
 
+func prepareAlphaSearchPreConsumedQuota(priceData types.PriceData, relayInfo *relaycommon.RelayInfo) (types.PriceData, error) {
+	if relayInfo == nil || relayInfo.RelayMode != relayconstant.RelayModeAlphaSearch {
+		return priceData, nil
+	}
+
+	baseQuota := priceData.QuotaToPreConsume
+	totalQuota, err := service.AlphaSearchPreConsumeQuota(
+		baseQuota,
+		relayInfo,
+		priceData.GroupRatioInfo.GroupRatio,
+	)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	if totalQuota > baseQuota {
+		priceData.FreeModel = false
+	}
+	priceData.QuotaToPreConsume, err = helper.ApplyPreConsumedQuotaFloor(
+		totalQuota,
+		!priceData.FreeModel && priceData.GroupRatioInfo.GroupRatio > 0,
+	)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	return priceData, nil
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -157,18 +184,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
 	}
-	basePreConsumedQuota := priceData.QuotaToPreConsume
-	priceData.QuotaToPreConsume, err = service.AlphaSearchPreConsumeQuota(
-		basePreConsumedQuota,
-		relayInfo,
-		priceData.GroupRatioInfo.GroupRatio,
-	)
+	priceData, err = prepareAlphaSearchPreConsumedQuota(priceData, relayInfo)
 	if err != nil {
 		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
-	}
-	if priceData.QuotaToPreConsume > basePreConsumedQuota {
-		priceData.FreeModel = false
 	}
 	relayInfo.PriceData = priceData
 
