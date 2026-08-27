@@ -234,7 +234,7 @@ export async function getNotice(): Promise<{
 // 2FA Management APIs
 // ----------------------------------------------------------------------------
 
-const credentialSensitiveActionConfig: ApiRequestConfig = {
+export const sensitiveActionConfig: ApiRequestConfig = {
   skipBusinessError: true,
   skipErrorHandler: true,
 }
@@ -250,7 +250,7 @@ export async function setup2FA() {
   const res = await api.post(
     '/api/user/2fa/setup',
     undefined,
-    credentialSensitiveActionConfig
+    sensitiveActionConfig
   )
   return res.data
 }
@@ -260,7 +260,7 @@ export async function enable2FA(code: string) {
   const res = await api.post(
     '/api/user/2fa/enable',
     { code },
-    credentialSensitiveActionConfig
+    sensitiveActionConfig
   )
   return res.data
 }

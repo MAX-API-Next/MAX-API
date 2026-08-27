@@ -76,6 +76,14 @@ func TestUserAuthRejectsStaleSessionGeneration(t *testing.T) {
 	engine.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/login", nil))
 	require.Equal(t, http.StatusNoContent, loginRecorder.Code)
 
+	currentRequest := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	for _, sessionCookie := range loginRecorder.Result().Cookies() {
+		currentRequest.AddCookie(sessionCookie)
+	}
+	currentRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(currentRecorder, currentRequest)
+	require.Equal(t, http.StatusNoContent, currentRecorder.Code)
+
 	require.NoError(t, db.Model(&model.User{}).
 		Where("id = ?", user.Id).
 		UpdateColumn("session_generation", 1).Error)

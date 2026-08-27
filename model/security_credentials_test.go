@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -18,24 +17,22 @@ func setupSecurityCredentialTestState(t *testing.T) {
 		&TwoFABackupCode{},
 		&AuthFlow{},
 	))
-	for _, table := range []string{
-		"passkey_credentials",
-		"two_fas",
-		"two_fa_backup_codes",
-		"auth_flows",
-	} {
-		require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
-	}
+	clearSecurityCredentialTestState(t)
 	t.Cleanup(func() {
-		for _, table := range []string{
-			"passkey_credentials",
-			"two_fas",
-			"two_fa_backup_codes",
-			"auth_flows",
-		} {
-			DB.Exec("DELETE FROM " + table)
-		}
+		clearSecurityCredentialTestState(t)
 	})
+}
+
+func clearSecurityCredentialTestState(t *testing.T) {
+	t.Helper()
+	for _, target := range []interface{}{
+		&PasskeyCredential{},
+		&TwoFABackupCode{},
+		&TwoFA{},
+		&AuthFlow{},
+	} {
+		require.NoError(t, DB.Unscoped().Where("1 = 1").Delete(target).Error)
+	}
 }
 
 func TestPasswordSecurityChangesBumpGenerationAndRecoveryRevokesTokens(t *testing.T) {
@@ -218,7 +215,7 @@ func TestTelegramBindingStateIsUserBoundAndConsumedOnce(t *testing.T) {
 	require.EqualValues(t, 1, generation)
 
 	_, err = BindTelegramIdentityWithAuthFlow(owner.Id, "123456", state)
-	require.True(t, errors.Is(err, ErrAuthFlowConsumed) || errors.Is(err, ErrAuthFlowInvalid))
+	require.ErrorIs(t, err, ErrAuthFlowConsumed)
 
 	var stored User
 	require.NoError(t, DB.First(&stored, owner.Id).Error)

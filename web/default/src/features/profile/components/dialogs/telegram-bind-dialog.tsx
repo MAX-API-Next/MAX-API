@@ -112,6 +112,8 @@ export function TelegramBindDialog({
     },
     [onOpenChange, resetBindingState]
   )
+  const callbackHandlersRef = useRef({ handleOpenChange, onSuccess })
+  callbackHandlersRef.current = { handleOpenChange, onSuccess }
 
   useEffect(() => {
     if (!open) return
@@ -152,8 +154,8 @@ export function TelegramBindDialog({
           )
         }
         toast.success(t('Telegram account bound successfully'))
-        onSuccess()
-        handleOpenChange(false)
+        callbackHandlersRef.current.onSuccess()
+        callbackHandlersRef.current.handleOpenChange(false)
       } catch (error) {
         setErrorMessage(
           error instanceof Error
@@ -182,16 +184,7 @@ export function TelegramBindDialog({
       delete windowCallbacks[callbackName]
       container.replaceChildren()
     }
-  }, [
-    bindState,
-    botName,
-    callbackName,
-    handleOpenChange,
-    onSuccess,
-    open,
-    t,
-    withVerification,
-  ])
+  }, [bindState, botName, callbackName, open, t, withVerification])
 
   const retry = () => {
     setBindState('')

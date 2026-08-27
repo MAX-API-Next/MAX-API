@@ -16,17 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback } from 'react'
+import { useCallback, useMemo, type ReactElement, type ReactNode } from 'react'
 import { useSecureVerification } from '../hooks/use-secure-verification'
 import type { VerificationMethod } from '../types'
 import { SecureVerificationContext } from './secure-verification-context'
 import { SecureVerificationDialog } from './secure-verification-dialog'
 
-export function SecureVerificationProvider({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+type SecureVerificationProviderProps = {
+  children: ReactNode
+}
+
+export function SecureVerificationProvider(
+  props: SecureVerificationProviderProps
+): ReactElement {
   const {
     open,
     setOpen,
@@ -50,10 +52,11 @@ export function SecureVerificationProvider({
     },
     [executeVerification]
   )
+  const contextValue = useMemo(() => ({ withVerification }), [withVerification])
 
   return (
-    <SecureVerificationContext.Provider value={{ withVerification }}>
-      {children}
+    <SecureVerificationContext.Provider value={contextValue}>
+      {props.children}
       <SecureVerificationDialog
         open={open}
         onOpenChange={setOpen}

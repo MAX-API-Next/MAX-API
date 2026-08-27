@@ -14,6 +14,8 @@ const (
 	secureVerificationMethodSessionKey = "secure_verified_method"
 	secureVerificationUserSessionKey   = "secure_verified_user_id"
 	secureVerificationScopeSessionKey  = "secure_verified_scope"
+	secureVerificationMethod2FA        = "2fa"
+	secureVerificationMethodPasskey    = "passkey"
 	secureVerificationMethodPassword   = "password"
 	// SecureVerificationTimeout 验证有效期（秒）
 	SecureVerificationTimeout = 300 // 5分钟
@@ -88,7 +90,7 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 		}
 
 		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
-		if !ok || verifiedMethod == "" {
+		if !ok || !isSupportedSecureVerificationMethod(verifiedMethod) {
 			clearSecureVerificationSession(session)
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -185,7 +187,7 @@ func OptionalSecureVerification() gin.HandlerFunc {
 			return
 		}
 		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
-		if !ok || verifiedMethod == "" || verifiedMethod == secureVerificationMethodPassword {
+		if !ok || !isStrongSecureVerificationMethod(verifiedMethod) {
 			c.Set("secure_verified", false)
 			c.Next()
 			return
@@ -195,6 +197,17 @@ func OptionalSecureVerification() gin.HandlerFunc {
 		c.Set("secure_verified_at", verifiedAt)
 		c.Next()
 	}
+}
+
+func isSupportedSecureVerificationMethod(method string) bool {
+	return method == secureVerificationMethod2FA ||
+		method == secureVerificationMethodPasskey ||
+		method == secureVerificationMethodPassword
+}
+
+func isStrongSecureVerificationMethod(method string) bool {
+	return method == secureVerificationMethod2FA ||
+		method == secureVerificationMethodPasskey
 }
 
 // ClearSecureVerification 清除安全验证状态

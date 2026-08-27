@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -192,8 +193,11 @@ func Enable2FA(c *gin.Context) {
 		return
 	}
 	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.ApiError(c, err)
-		return
+		common.SysLog(fmt.Sprintf(
+			"failed to preserve current session after enabling 2FA for user %d: %v",
+			userId,
+			err,
+		))
 	}
 
 	// 记录操作日志
@@ -269,8 +273,11 @@ func Disable2FA(c *gin.Context) {
 		return
 	}
 	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.ApiError(c, err)
-		return
+		common.SysLog(fmt.Sprintf(
+			"failed to preserve current session after disabling 2FA for user %d: %v",
+			userId,
+			err,
+		))
 	}
 
 	// 记录操作日志
@@ -393,8 +400,11 @@ func RegenerateBackupCodes(c *gin.Context) {
 		return
 	}
 	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.ApiError(c, err)
-		return
+		common.SysLog(fmt.Sprintf(
+			"failed to preserve current session after regenerating 2FA backup codes for user %d: %v",
+			userId,
+			err,
+		))
 	}
 
 	// 记录操作日志

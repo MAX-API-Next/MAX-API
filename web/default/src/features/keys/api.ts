@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api, type ApiRequestConfig } from '@/lib/api'
+import { api, sensitiveActionConfig } from '@/lib/api'
 import type {
   ApiKey,
   ApiResponse,
@@ -29,11 +29,6 @@ import type {
 // ============================================================================
 // API Key Management
 // ============================================================================
-
-const apiTokenSensitiveActionConfig: ApiRequestConfig = {
-  skipBusinessError: true,
-  skipErrorHandler: true,
-}
 
 // Get paginated API keys list
 export async function getApiKeys(
@@ -68,7 +63,7 @@ export async function getApiKey(id: number): Promise<ApiResponse<ApiKey>> {
 export async function createApiKey(
   data: ApiKeyFormData
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.post('/api/token/', data, apiTokenSensitiveActionConfig)
+  const res = await api.post('/api/token/', data, sensitiveActionConfig)
   return res.data
 }
 
@@ -110,7 +105,7 @@ export async function fetchTokenKey(
   const res = await api.post(
     `/api/token/${id}/key`,
     undefined,
-    apiTokenSensitiveActionConfig
+    sensitiveActionConfig
   )
   return res.data
 }
@@ -124,7 +119,7 @@ export async function fetchTokenKeysBatch(ids: number[]): Promise<{
   const res = await api.post(
     '/api/token/batch/keys',
     { ids },
-    apiTokenSensitiveActionConfig
+    sensitiveActionConfig
   )
   return res.data
 }

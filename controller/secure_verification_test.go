@@ -186,7 +186,7 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("login-clears-verification-test"))))
-	router.GET("/login", func(c *gin.Context) {
+	router.GET("/api/user/login", func(c *gin.Context) {
 		session := sessions.Default(c)
 		session.Set(SecureVerificationSessionKey, int64(123))
 		session.Set(secureVerificationMethodSessionKey, secureVerificationMethod2FA)
@@ -207,7 +207,7 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 	})
 
 	loginRecorder := httptest.NewRecorder()
-	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/login", nil))
+	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/api/user/login", nil))
 	require.Equal(t, http.StatusOK, loginRecorder.Code)
 
 	inspectRecorder := httptest.NewRecorder()

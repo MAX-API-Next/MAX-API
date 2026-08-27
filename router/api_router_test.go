@@ -19,7 +19,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var universalVerifyRateLimitTestRun uint64
+var universalVerifyRateLimitTestRun int32
 
 func TestUserTokenRouteUsesPostOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -141,7 +141,7 @@ func TestHealthRoutesAreRegistered(t *testing.T) {
 
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)
+	testRun := atomic.AddInt32(&universalVerifyRateLimitTestRun, 1)
 
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB
@@ -236,7 +236,7 @@ func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
 		path := path
 		t.Run(path, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
-			testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)
+			testRun := atomic.AddInt32(&universalVerifyRateLimitTestRun, 1)
 
 			oldDB := model.DB
 			oldLogDB := model.LOG_DB
@@ -389,7 +389,7 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 
 func TestSensitiveCredentialRoutesRequireStepUp(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testRun := atomic.AddUint64(&universalVerifyRateLimitTestRun, 1)
+	testRun := atomic.AddInt32(&universalVerifyRateLimitTestRun, 1)
 
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB

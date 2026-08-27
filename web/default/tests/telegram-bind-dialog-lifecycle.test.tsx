@@ -1,0 +1,160 @@
+/*
+Copyright (C) 2023-2026 MAX-API-Next
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
+*/
+import type { ReactNode } from 'react'
+import { createReactTestEnvironment } from '@/test/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, describe, mock, test } from 'bun:test'
+import assert from 'node:assert/strict'
+
+const createTelegramBindState = mock(async () => ({
+  success: true,
+  data: { state: 'telegram-bind-state' },
+}))
+const bindTelegramAccount = mock(async () => ({ success: true }))
+const toastSuccess = mock(() => undefined)
+const translate = (key: string) => key
+const withVerification = <T,>(apiCall: () => Promise<T>) => apiCall()
+
+mock.module('../src/features/auth/secure-verification', () => ({
+  useSecureVerificationGate: () => ({ withVerification }),
+}))
+
+mock.module('../src/features/profile/api', () => ({
+  bindTelegramAccount,
+  createTelegramBindState,
+}))
+
+mock.module('sonner', () => ({
+  toast: { success: toastSuccess },
+}))
+
+mock.module('react-i18next', () => ({
+  useTranslation: () => ({ t: translate }),
+}))
+
+function TestContainer(props: { children?: ReactNode }) {
+  return <div>{props.children}</div>
+}
+
+mock.module('../src/components/ui/alert', () => ({
+  Alert: TestContainer,
+  AlertDescription: TestContainer,
+}))
+
+mock.module('../src/components/ui/button', () => ({
+  Button: (props: {
+    children?: ReactNode
+    onClick?: () => void
+    type?: 'button' | 'submit' | 'reset'
+  }) => (
+    <button type={props.type} onClick={props.onClick}>
+      {props.children}
+    </button>
+  ),
+}))
+
+mock.module('../src/components/ui/dialog', () => ({
+  Dialog: TestContainer,
+  DialogContent: TestContainer,
+  DialogDescription: TestContainer,
+  DialogHeader: TestContainer,
+  DialogTitle: TestContainer,
+}))
+
+mock.module('../src/components/ui/spinner', () => ({
+  Spinner: () => <span />,
+}))
+
+const { TelegramBindDialog } = await import(
+  '../src/features/profile/components/dialogs/telegram-bind-dialog'
+)
+const testEnv = createReactTestEnvironment()
+
+beforeAll(() => testEnv.setup())
+afterEach(() => cleanup())
+afterAll(() => testEnv.teardown())
+
+describe('TelegramBindDialog widget lifecycle', () => {
+  test('keeps the active widget mounted across callback-only rerenders', async () => {
+    const firstOpenChange = mock(() => undefined)
+    const secondOpenChange = mock(() => undefined)
+    const firstSuccess = mock(() => undefined)
+    const secondSuccess = mock(() => undefined)
+
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={firstOpenChange}
+        botName='max_api_bot'
+        onSuccess={firstSuccess}
+      />
+    )
+
+    await waitFor(() =>
+      assert.equal(createTelegramBindState.mock.calls.length, 1)
+    )
+    const initialScript = await waitFor(() => {
+      const script = document.querySelector<HTMLScriptElement>(
+        'script[data-onauth]'
+      )
+      assert.ok(script)
+      return script
+    })
+    const callbackName = initialScript
+      .getAttribute('data-onauth')
+      ?.replace(/\(user\)$/, '')
+    assert.ok(callbackName)
+
+    view.rerender(
+      <TelegramBindDialog
+        open
+        onOpenChange={secondOpenChange}
+        botName='max_api_bot'
+        onSuccess={secondSuccess}
+      />
+    )
+
+    await act(async () => Promise.resolve())
+    assert.equal(
+      document.querySelector<HTMLScriptElement>('script[data-onauth]'),
+      initialScript
+    )
+
+    const callback = (
+      window as unknown as Record<
+        string,
+        (authorization: {
+          id: number
+          auth_date: number
+          hash: string
+        }) => Promise<void>
+      >
+    )[callbackName]
+    assert.equal(typeof callback, 'function')
+
+    await act(async () => {
+      await callback({ id: 123, auth_date: 456, hash: 'telegram-hash' })
+    })
+
+    assert.equal(firstSuccess.mock.calls.length, 0)
+    assert.equal(firstOpenChange.mock.calls.length, 0)
+    assert.equal(secondSuccess.mock.calls.length, 1)
+    assert.deepEqual(secondOpenChange.mock.calls[0], [false])
+  })
+})

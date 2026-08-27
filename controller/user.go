@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -150,12 +149,6 @@ func setupLogin(user *model.User, c *gin.Context) {
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
 	session.Set("session_generation", user.SessionGeneration)
-	if method := loginMethodFromContext(c); method != "unknown" {
-		session.Set(SecureVerificationSessionKey, time.Now().Unix())
-		session.Set(secureVerificationMethodSessionKey, "login:"+method)
-		session.Set(secureVerificationUserSessionKey, user.Id)
-		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
-	}
 	err := session.Save()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)

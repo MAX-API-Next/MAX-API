@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api, type ApiRequestConfig } from '@/lib/api'
+import { api, sensitiveActionConfig } from '@/lib/api'
 import { selfCustomOAuthUnbindPath, type CustomOAuthBinding } from '@/lib/oauth'
 import { getTurnstileHeaders } from '@/features/auth/lib/turnstile-request'
 import type {
@@ -28,11 +28,6 @@ import type {
   CheckinStatusResponse,
   CheckinResponse,
 } from './types'
-
-const sensitiveActionConfig: ApiRequestConfig = {
-  skipBusinessError: true,
-  skipErrorHandler: true,
-}
 
 // ============================================================================
 // User Profile APIs
