@@ -136,6 +136,34 @@ func TestRecordConsumeLogSanitizesPersistedContent(t *testing.T) {
 	require.LessOrEqual(t, utf8.RuneCountInString(log.Content), common.PersistedLogContentLimit)
 }
 
+func TestRecordConsumeLogWithNilContextPreservesAccountingFields(t *testing.T) {
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalDataExportEnabled := common.DataExportEnabled
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		common.DataExportEnabled = originalDataExportEnabled
+	})
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	RecordConsumeLog(nil, 7, RecordConsumeLogParams{
+		ModelName:        "nil-context-model",
+		Quota:            42,
+		PromptTokens:     3,
+		CompletionTokens: 5,
+	})
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("model_name = ?", "nil-context-model").First(&log).Error)
+	require.Equal(t, 42, log.Quota)
+	require.Equal(t, 3, log.PromptTokens)
+	require.Equal(t, 5, log.CompletionTokens)
+}
+
 func TestBillingSettlementEffectPayloadSanitizesContent(t *testing.T) {
 	payload, err := billingSettlementEffectPayload(&BillingSettlementEffect{
 		LogType: LogTypeConsume,
@@ -908,14 +936,16 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 	})
 
 	RecordTaskBillingLog(RecordTaskBillingLogParams{
-		UserId:    7,
-		LogType:   LogTypeConsume,
-		Content:   "task billing",
-		ChannelId: 13,
-		ModelName: "task-test",
-		Quota:     42,
-		TokenId:   11,
-		Group:     "default",
+		UserId:           7,
+		LogType:          LogTypeConsume,
+		Content:          "task billing",
+		ChannelId:        13,
+		ModelName:        "task-test",
+		Quota:            42,
+		TokenId:          11,
+		Group:            "default",
+		PromptTokens:     3,
+		CompletionTokens: 5,
 	})
 
 	require.Len(t, queued, 1)
@@ -923,6 +953,68 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 
 	queued[0]()
 	require.Len(t, CacheQuotaData, 1)
+	for _, quotaData := range CacheQuotaData {
+		require.Equal(t, 8, quotaData.TokenUsed)
+	}
+}
+
+func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+	resetQuotaDataCacheForTest(t)
+
+	originalDataExportEnabled := common.DataExportEnabled
+	originalRunner := logQuotaDataAsyncRunner
+	common.DataExportEnabled = true
+	logQuotaDataAsyncRunner = func(fn func()) { fn() }
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExportEnabled
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	const userID = 7001
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "settlement-export-user", Status: common.UserStatusEnabled}).Error)
+	const operationKey = "request:settlement-export-token-usage"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:          LogTypeConsume,
+			Content:          "settlement effect",
+			ModelName:        "settlement-model",
+			UpdateUsage:      true,
+			Quota:            42,
+			PromptTokens:     3,
+			CompletionTokens: 5,
+			RequestID:        "settlement-export-request",
+		},
+	})
+	require.NoError(t, err)
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, BillingSettlementStatusApplied, settlement.Status)
+	require.Equal(t, BillingSettlementEffectPending, settlement.EffectStatus)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+	require.NoError(t, DB.First(&settlement, settlement.ID).Error)
+	require.Equal(t, BillingSettlementEffectApplied, settlement.EffectStatus)
+
+	var exportedTokenUsed int
+	for _, quotaData := range CacheQuotaData {
+		exportedTokenUsed = quotaData.TokenUsed
+	}
+	require.Equal(t, 8, exportedTokenUsed)
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-export-request").First(&log).Error)
+	require.Equal(t, 3, log.PromptTokens)
+	require.Equal(t, 5, log.CompletionTokens)
 }
 
 func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {

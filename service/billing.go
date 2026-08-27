@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -16,6 +17,13 @@ const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
 )
+
+func billingLogContext(ctx *gin.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
 
 func validatePreConsumedQuota(preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
 	if relayInfo != nil && relayInfo.QuotaClamp != nil {
@@ -70,24 +78,25 @@ func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	if relayInfo == nil {
 		return false, fmt.Errorf("relayInfo is nil")
 	}
+	logCtx := billingLogContext(ctx)
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed
 
 		if delta > 0 {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
+			logger.LogInfo(logCtx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
 				logger.FormatQuota(delta),
 				logger.FormatQuota(actualQuota),
 				logger.FormatQuota(preConsumed),
 			))
 		} else if delta < 0 {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
+			logger.LogInfo(logCtx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
 				logger.FormatQuota(-delta),
 				logger.FormatQuota(actualQuota),
 				logger.FormatQuota(preConsumed),
 			))
 		} else {
-			logger.LogInfo(ctx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
+			logger.LogInfo(logCtx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
 				logger.FormatQuota(actualQuota),
 			))
 		}
@@ -138,8 +147,9 @@ func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 // counters after a transient failure; legacy/custom sessions project locally
 // only after SettleBilling succeeds.
 func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, shouldUpdateUsage bool, params model.RecordConsumeLogParams) {
+	logCtx := billingLogContext(ctx)
 	if relayInfo == nil {
-		logger.LogError(ctx, "error settling billing: relayInfo is nil")
+		logger.LogError(logCtx, "error settling billing: relayInfo is nil")
 		return
 	}
 	requestID, upstreamRequestID := "", ""
@@ -174,7 +184,7 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 
 	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, params.Quota, effect)
 	if err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+		logger.LogError(logCtx, "error settling billing: "+err.Error())
 		return
 	}
 	if effectHandled {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -459,6 +460,53 @@ func TestPrepareTieredBillingForSelectedGroupFreeToPaidInitializesBilling(t *tes
 	require.Equal(t, expectedQuota, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	require.EqualValues(t, initialQuota-expectedQuota, getUserQuota(t, userID))
 	require.Equal(t, initialQuota-expectedQuota, getTokenRemainQuota(t, tokenID))
+}
+
+func TestPrepareTieredBillingForSelectedGroupFreeToPaidAppliesPreConsumedQuota(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 923
+		tokenID      = 924
+		tokenKey     = "tiered-free-to-paid-preconsume-token"
+		initialQuota = 200_000
+		configured   = 150_000
+	)
+	originalPreConsumedQuota := common.PreConsumedQuota
+	common.PreConsumedQuota = configured
+	t.Cleanup(func() { common.PreConsumedQuota = originalPreConsumedQuota })
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, tokenKey, initialQuota)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId:       "tiered-free-to-paid-preconsume-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        tokenKey,
+		OriginModelName: "tiered-free-to-paid-preconsume-model",
+		UsingGroup:      "paid",
+		UserSetting: dto.UserSetting{
+			BillingPreference: "wallet_only",
+		},
+		PriceData: types.PriceData{
+			FreeModel:      true,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                `tier("base", p)`,
+			ExprHash:                  billingexpr.ExprHashString(`tier("base", p)`),
+			GroupRatio:                0,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  0,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, relayInfo))
+	require.Equal(t, configured, relayInfo.FinalPreConsumedQuota)
+	require.Equal(t, configured, relayInfo.Billing.GetPreConsumedQuota())
+	require.Equal(t, configured, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 
 func TestPrepareTieredBillingForSelectedGroupFreeToPaidRequiresContext(t *testing.T) {

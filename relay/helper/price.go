@@ -38,6 +38,45 @@ func taskModelRequiresConfiguredPrice(modelName string) bool {
 	return modelName == "swap_face" || strings.HasPrefix(modelName, "mj_") || strings.HasPrefix(modelName, "suno_")
 }
 
+func configuredPreConsumedQuota() (int, error) {
+	if common.PreConsumedQuota < 0 {
+		return 0, fmt.Errorf("pre-consumed quota cannot be negative: %d", common.PreConsumedQuota)
+	}
+	return common.PreConsumedQuota, nil
+}
+
+// ApplyPreConsumedQuotaFloor makes the administrator's pre-consume setting
+// effective for every paid pricing mode. The floor is applied to the quota
+// amount, after model/group pricing, and never to a free group.
+func ApplyPreConsumedQuotaFloor(quota int, billable bool) (int, error) {
+	if quota < 0 {
+		return 0, fmt.Errorf("calculated pre-consume quota cannot be negative: %d", quota)
+	}
+	configured, err := configuredPreConsumedQuota()
+	if err != nil {
+		return 0, err
+	}
+	if billable && quota < configured {
+		return configured, nil
+	}
+	return quota, nil
+}
+
+func addNonNegativeInts(values ...int) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	for _, value := range values {
+		if value < 0 {
+			return 0, fmt.Errorf("billing estimate cannot be negative: %d", value)
+		}
+		if total > maxInt-value {
+			return 0, fmt.Errorf("billing estimate overflows integer range")
+		}
+		total += value
+	}
+	return total, nil
+}
+
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
@@ -71,6 +110,13 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
+	configuredPreConsumed, err := configuredPreConsumedQuota()
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	if promptTokens < 0 {
+		return types.PriceData{}, fmt.Errorf("prompt token estimate cannot be negative: %d", promptTokens)
+	}
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
@@ -92,9 +138,15 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var audioCompletionRatio float64
 	var freeModel bool
 	if !usePrice {
-		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
+		preConsumedTokens, err := addNonNegativeInts(promptTokens, configuredPreConsumed)
+		if err != nil {
+			return types.PriceData{}, err
+		}
 		if meta.MaxTokens != 0 {
-			preConsumedTokens += meta.MaxTokens
+			preConsumedTokens, err = addNonNegativeInts(preConsumedTokens, meta.MaxTokens)
+			if err != nil {
+				return types.PriceData{}, err
+			}
 		}
 		var success bool
 		var matchName string
@@ -131,7 +183,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if err != nil {
 			return types.PriceData{}, err
 		}
-		preConsumedQuota = quota
+		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(quota, groupRatioInfo.GroupRatio > 0)
+		if err != nil {
+			return types.PriceData{}, err
+		}
 	}
 
 	// check if free model pre-consume is disabled
@@ -150,6 +205,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 				preConsumedQuota = 0
 				freeModel = true
 			}
+		}
+	}
+	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(preConsumedQuota, true)
+		if err != nil {
+			return types.PriceData{}, err
 		}
 	}
 
@@ -183,6 +244,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		return types.PriceData{}, fmt.Errorf("relay info is nil")
 	}
 	groupRatioInfo := HandleGroupRatio(c, info)
+	if _, err := configuredPreConsumedQuota(); err != nil {
+		return types.PriceData{}, err
+	}
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
@@ -245,6 +309,13 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 				quota = 0
 				freeModel = true
 			}
+		}
+	}
+	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+		var err error
+		quota, err = ApplyPreConsumedQuotaFloor(quota, true)
+		if err != nil {
+			return types.PriceData{}, err
 		}
 	}
 
@@ -310,6 +381,12 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		if groupRatioInfo.GroupRatio == 0 {
 			preConsumedQuota = 0
 			freeModel = true
+		}
+	}
+	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(preConsumedQuota, true)
+		if err != nil {
+			return types.PriceData{}, err
 		}
 	}
 

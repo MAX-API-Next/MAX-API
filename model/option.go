@@ -247,12 +247,16 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -317,6 +321,12 @@ func requireRegisteredOptionKey(key string) error {
 
 func normalizeOptionUpdateValue(key string, value string) (string, error) {
 	switch key {
+	case "PreConsumedQuota":
+		quota, err := parsePreConsumedQuota(value)
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(quota), nil
 	case "GroupRatio", "group_ratio_setting.group_ratio":
 		return ratio_setting.NormalizeGroupRatioJSONString(value)
 	case "DataExportInterval":
@@ -338,11 +348,22 @@ func parseDataExportInterval(value string) (int, error) {
 	return interval, nil
 }
 
+func parsePreConsumedQuota(value string) (int, error) {
+	quota, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || quota < 0 {
+		return 0, fmt.Errorf("PreConsumedQuota must be a non-negative integer")
+	}
+	return quota, nil
+}
+
 func validateOptionUpdate(key string, value string) error {
 	if err := validateRegisteredConfigOption(key, value); err != nil {
 		return err
 	}
 	switch key {
+	case "PreConsumedQuota":
+		_, err := parsePreConsumedQuota(value)
+		return err
 	case "Chats":
 		return validateJSONOption[[]map[string]string](value)
 	case "AutoGroups":
@@ -402,6 +423,13 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	if err := validateOptionUpdate(key, value); err != nil {
 		return err
+	}
+	preConsumedQuota := 0
+	if key == "PreConsumedQuota" {
+		preConsumedQuota, err = parsePreConsumedQuota(value)
+		if err != nil {
+			return err
+		}
 	}
 
 	common.OptionMapRWMutex.Lock()
@@ -681,7 +709,7 @@ func updateOptionMap(key string, value string) (err error) {
 	case "QuotaRemindThreshold":
 		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
 	case "PreConsumedQuota":
-		common.PreConsumedQuota, _ = strconv.Atoi(value)
+		common.PreConsumedQuota = preConsumedQuota
 	case "ModelRequestRateLimitCount":
 		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitDurationMinutes":

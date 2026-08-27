@@ -304,6 +304,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
+	if !info.PriceData.FreeModel && info.PriceData.GroupRatioInfo.GroupRatio > 0 {
+		info.PriceData.Quota, err = helper.ApplyPreConsumedQuotaFloor(info.PriceData.Quota, true)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "pre_consume_quota_error", http.StatusBadRequest)
+		}
+	}
+
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
 		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {

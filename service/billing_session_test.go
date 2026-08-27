@@ -35,9 +35,25 @@ func (f *recordingFundingSource) Settle(delta int) (int64, error) {
 type recordingBillingSettler struct {
 	preConsumed int
 	reserves    []int
+	settleCalls int
 }
 
-func (s *recordingBillingSettler) Settle(int) error         { return nil }
+func TestSettleAndRecordConsumeHandlesNilContextWithoutPanic(t *testing.T) {
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	assert.NotPanics(t, func() {
+		settleAndRecordConsume(nil, nil, false, model.RecordConsumeLogParams{})
+	})
+	assert.NotPanics(t, func() {
+		settler := &recordingBillingSettler{}
+		settleAndRecordConsume(nil, &relaycommon.RelayInfo{Billing: settler}, false, model.RecordConsumeLogParams{})
+		assert.Equal(t, 1, settler.settleCalls)
+	})
+}
+
+func (s *recordingBillingSettler) Settle(int) error         { s.settleCalls++; return nil }
 func (s *recordingBillingSettler) Refund(*gin.Context)      {}
 func (s *recordingBillingSettler) NeedsRefund() bool        { return false }
 func (s *recordingBillingSettler) GetPreConsumedQuota() int { return s.preConsumed }

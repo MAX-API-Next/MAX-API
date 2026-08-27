@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	pricehelper "github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 )
@@ -125,6 +126,10 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 
 	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
 	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
+	if err != nil {
+		return nil, err
+	}
+	estimatedQuota, err = pricehelper.ApplyPreConsumedQuotaFloor(estimatedQuota, groupRatio > 0)
 	if err != nil {
 		return nil, err
 	}

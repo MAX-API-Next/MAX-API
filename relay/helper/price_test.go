@@ -96,15 +96,18 @@ func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
 func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
 	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
 	quotaSetting := operation_setting.GetQuotaSetting()
 	originalEnableFreeModelPreConsume := quotaSetting.EnableFreeModelPreConsume
 	t.Cleanup(func() {
 		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
 		quotaSetting.EnableFreeModelPreConsume = originalEnableFreeModelPreConsume
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
 	})
 	common.QuotaPerUnit = 1000
+	common.PreConsumedQuota = 0
 	quotaSetting.EnableFreeModelPreConsume = true
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
 
@@ -123,4 +126,107 @@ func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 	require.Equal(t, float64(1), priceData.GroupRatioInfo.GroupRatio)
 	require.Equal(t, 0.1, priceData.ModelPrice)
 	require.Equal(t, 100, priceData.Quota)
+}
+
+func TestModelPriceHelperPerCallAppliesPreConsumedQuota(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+
+	common.QuotaPerUnit = 1000
+	common.PreConsumedQuota = 1000
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "suno_music",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+	require.NoError(t, err)
+	require.False(t, priceData.FreeModel)
+	require.Equal(t, 1000, priceData.Quota)
+}
+
+func TestModelPriceHelperAppliesPreConsumedQuotaToFixedPriceModels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+
+	common.QuotaPerUnit = 1000
+	common.PreConsumedQuota = 1000
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-preconsume-test":0.1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-preconsume-test",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 1000, priceData.QuotaToPreConsume)
+}
+
+func TestModelPriceHelperAddsConfiguredPreConsumedQuotaToPromptEstimate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+
+	common.QuotaPerUnit = 1
+	common.PreConsumedQuota = 100
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"ratio-preconsume-test":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "ratio-preconsume-test",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 250, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.False(t, priceData.UsePrice)
+	require.Equal(t, 350, priceData.QuotaToPreConsume)
+}
+
+func TestAddNonNegativeIntsRejectsInvalidBillingEstimates(t *testing.T) {
+	_, err := addNonNegativeInts(-1, 1)
+	require.Error(t, err)
+
+	maxInt := int(^uint(0) >> 1)
+	_, err = addNonNegativeInts(maxInt, 1)
+	require.Error(t, err)
 }

@@ -208,6 +208,64 @@ func TestValidateOptionUpdateRejectsUnsafePricingValues(t *testing.T) {
 	}
 }
 
+func TestValidateOptionUpdateRejectsInvalidPreConsumedQuota(t *testing.T) {
+	for _, value := range []string{"-1", "1.5", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			require.Error(t, validateOptionUpdate("PreConsumedQuota", value))
+		})
+	}
+
+	for _, value := range []string{"0", "500", " 1000 "} {
+		t.Run("accepts-"+strings.TrimSpace(value), func(t *testing.T) {
+			require.NoError(t, validateOptionUpdate("PreConsumedQuota", value))
+		})
+	}
+}
+
+func TestNormalizePreConsumedQuota(t *testing.T) {
+	normalized, err := normalizeOptionUpdateValue("PreConsumedQuota", " 1000 ")
+	require.NoError(t, err)
+	require.Equal(t, "1000", normalized)
+
+	for _, value := range []string{"-1", "1.5", "not-a-number"} {
+		_, err := normalizeOptionUpdateValue("PreConsumedQuota", value)
+		require.Error(t, err)
+	}
+}
+
+func TestUpdateOptionMapRejectsInvalidPreConsumedQuotaWithoutMutation(t *testing.T) {
+	setupOptionMapTestState(t)
+	registerOptionKeysForTest("PreConsumedQuota")
+	originalPreConsumedQuota := common.PreConsumedQuota
+	common.PreConsumedQuota = 123
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap["PreConsumedQuota"] = "123"
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() { common.PreConsumedQuota = originalPreConsumedQuota })
+
+	err := updateOptionMap("PreConsumedQuota", "not-a-number")
+
+	require.Error(t, err)
+	require.Equal(t, 123, common.PreConsumedQuota)
+	require.Equal(t, "123", optionMapValueForTest("PreConsumedQuota"))
+}
+
+func TestUpdateOptionPersistsPreConsumedQuota(t *testing.T) {
+	setupOptionMapTestState(t)
+	registerOptionKeysForTest("PreConsumedQuota")
+	deleteOptionsForTest(t, "PreConsumedQuota")
+	originalPreConsumedQuota := common.PreConsumedQuota
+	t.Cleanup(func() {
+		common.PreConsumedQuota = originalPreConsumedQuota
+		deleteOptionsForTest(t, "PreConsumedQuota")
+	})
+
+	require.NoError(t, UpdateOption("PreConsumedQuota", " 1000 "))
+	require.Equal(t, "1000", optionValueForTest(t, "PreConsumedQuota"))
+	require.Equal(t, "1000", optionMapValueForTest("PreConsumedQuota"))
+	require.Equal(t, 1000, common.PreConsumedQuota)
+}
+
 func TestValidateOptionUpdateRejectsOversizedPricingMaps(t *testing.T) {
 	const entryCount = 20001
 	values := make(map[string]float64, entryCount)
