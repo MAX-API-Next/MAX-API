@@ -235,11 +235,25 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
         if (chatWindow) {
           chatWindow.location.replace(url)
         } else {
-          window.location.assign(url)
+          const openedWindow = window.open(url, '_blank', 'noopener,noreferrer')
+          if (!openedWindow) window.location.assign(url)
         }
       } catch {
         chatWindow?.close()
-        window.location.assign(url)
+        if (chatWindow) {
+          window.location.assign(url)
+        } else {
+          try {
+            const openedWindow = window.open(
+              url,
+              '_blank',
+              'noopener,noreferrer'
+            )
+            if (!openedWindow) window.location.assign(url)
+          } catch {
+            window.location.assign(url)
+          }
+        }
       }
       setOpenMobile(false)
     },

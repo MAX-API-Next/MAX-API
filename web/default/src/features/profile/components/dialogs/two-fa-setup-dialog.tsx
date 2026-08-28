@@ -22,6 +22,8 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { setup2FA, enable2FA } from '@/lib/api'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -198,7 +200,9 @@ export function TwoFASetupDialog({
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Setup 2FA error:', error)
-      toast.error(t('Failed to setup 2FA'))
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, { fallback: t('Failed to setup 2FA') })
+      }
       onOpenChange(false)
     } finally {
       setupInFlightRef.current = false
@@ -236,8 +240,10 @@ export function TwoFASetupDialog({
       } else {
         toast.error(response.message || t('Failed to enable 2FA'))
       }
-    } catch (_error) {
-      toast.error(t('Failed to enable 2FA'))
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, { fallback: t('Failed to enable 2FA') })
+      }
     } finally {
       setLoading(false)
     }

@@ -169,13 +169,22 @@ mock.module('../src/features/chat/hooks/use-chat-presets', () => ({
         type: 'custom-protocol',
         url: 'desktop-chat://connect?key={key}',
       },
+      {
+        id: 'public-chat',
+        name: 'Public chat',
+        type: 'custom-protocol',
+        url: 'https://chat.example.test/public',
+      },
     ],
   }),
 }))
 
 mock.module('../src/features/chat/lib/chat-links', () => ({
-  chatLinkRequiresApiKey: () => true,
-  resolveChatUrl: () => 'https://chat.example.test/?key=resolved-key',
+  chatLinkRequiresApiKey: (url: string) => url.includes('{key}'),
+  resolveChatUrl: ({ template }: { template: string }) =>
+    template.includes('{key}')
+      ? 'https://chat.example.test/?key=resolved-key'
+      : 'https://chat.example.test/public',
 }))
 
 mock.module('../src/features/chat/lib/send-to-fluent', () => ({
@@ -313,6 +322,21 @@ test('chat presets close the placeholder when secure verification is cancelled',
 
   await waitFor(() => assert.equal(closePopup.mock.calls.length, 1))
   assert.equal(replaceLocation.mock.calls.length, 0)
+})
+
+test('chat presets without an API key open the URL in a new tab', async () => {
+  const view = renderChatPresets()
+
+  fireEvent.click(view.getByRole('button', { name: /Public chat/ }))
+
+  await waitFor(() => assert.equal(openWindow.mock.calls.length, 1))
+  assert.deepEqual(openWindow.mock.calls[0], [
+    'https://chat.example.test/public',
+    '_blank',
+    'noopener,noreferrer',
+  ])
+  assert.equal(replaceLocation.mock.calls.length, 0)
+  assert.deepEqual(setOpenMobile.mock.calls[0], [false])
 })
 
 test('reports a clipboard failure when copying an API key', async () => {

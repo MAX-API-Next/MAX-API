@@ -365,7 +365,9 @@ export function ApiKeysMutateDrawer({
       }
     } catch (error) {
       if (!wasSecureVerificationErrorReported(error)) {
-        toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+        handleServerError(error, {
+          fallback: t(ERROR_MESSAGES.UNEXPECTED),
+        })
       }
     } finally {
       setIsSubmitting(false)
