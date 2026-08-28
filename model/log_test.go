@@ -990,6 +990,8 @@ func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
 			LogType:          LogTypeConsume,
 			Content:          "settlement effect",
 			ModelName:        "settlement-model",
+			TokenID:          7002,
+			TokenName:        "request-time-deleted-token",
 			UpdateUsage:      true,
 			Quota:            42,
 			PromptTokens:     3,
@@ -1015,6 +1017,55 @@ func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
 	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-export-request").First(&log).Error)
 	require.Equal(t, 3, log.PromptTokens)
 	require.Equal(t, 5, log.CompletionTokens)
+	require.Equal(t, "request-time-deleted-token", log.TokenName)
+}
+
+func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	const (
+		userID  = 7011
+		tokenID = 7012
+	)
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "settlement-token-user", AffCode: "settlement-token-user-aff",
+		Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Token{
+		Id: tokenID, UserId: userID, Name: "current-token-name", Key: "settlement-token-key",
+		Status: common.TokenStatusEnabled,
+	}).Error)
+	const operationKey = "request:settlement-current-token-name"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "settlement token name precedence",
+			TokenID:       tokenID,
+			TokenName:     "request-time-token-name",
+			Quota:         1,
+			QuotaIsActual: true,
+			RequestID:     "settlement-token-name-request",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-token-name-request").First(&log).Error)
+	require.Equal(t, "current-token-name", log.TokenName)
 }
 
 func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {

@@ -123,6 +123,7 @@ func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) 
 		Quota:            0,
 		Content:          "upstream omitted billable usage",
 		TokenId:          603,
+		TokenName:        "request-time-token-name",
 		UseTimeSeconds:   7,
 		IsStream:         true,
 		Group:            "default",
@@ -140,6 +141,7 @@ func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) 
 	assert.Equal(t, params.ChannelId, settler.effect.ChannelID)
 	assert.Equal(t, params.ModelName, settler.effect.ModelName)
 	assert.Equal(t, params.TokenId, settler.effect.TokenID)
+	assert.Equal(t, params.TokenName, settler.effect.TokenName)
 	assert.Equal(t, params.PromptTokens, settler.effect.PromptTokens)
 	assert.Equal(t, params.CompletionTokens, settler.effect.CompletionTokens)
 	assert.Equal(t, params.UseTimeSeconds, settler.effect.UseTimeSeconds)

@@ -171,6 +171,9 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         }
         toast.error(res.message || t(ERROR_MESSAGES.UNEXPECTED))
         return {}
+      } catch {
+        toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+        return {}
       } finally {
         for (const id of ids) {
           setLoadingKeys((prev) => {

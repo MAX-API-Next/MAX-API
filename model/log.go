@@ -662,6 +662,7 @@ type RecordTaskBillingLogParams struct {
 	ModelName         string
 	Quota             int
 	TokenId           int
+	TokenName         string
 	Group             string
 	Other             map[string]interface{}
 	NodeName          string // 任务发起节点；为空时回退当前节点
@@ -695,7 +696,7 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 	}
 	params.Content = common.SanitizePersistedLogContent(params.Content)
 	username, _ := GetUsernameById(params.UserId, false)
-	tokenName := ""
+	tokenName := params.TokenName
 	if params.TokenId > 0 {
 		if token, err := GetTokenById(params.TokenId); err == nil {
 			tokenName = token.Name

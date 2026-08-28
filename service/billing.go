@@ -49,6 +49,7 @@ func newConsumeBillingSettlementEffect(
 		ChannelID:         params.ChannelId,
 		ModelName:         params.ModelName,
 		TokenID:           params.TokenId,
+		TokenName:         params.TokenName,
 		Group:             params.Group,
 		Other:             params.Other,
 		NodeName:          common.NodeName,

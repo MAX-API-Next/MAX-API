@@ -139,13 +139,15 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 
 func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	truncate(t)
+	const userID = 711
+	seedUser(t, userID, 80)
 	originalTimeout := constant.TaskTimeoutMinutes
 	constant.TaskTimeoutMinutes = 1
 	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
 	now := time.Now().Unix()
 	task := &model.Task{
 		TaskID: "task_timeout_waits_for_settlement", Status: model.TaskStatusSubmitted,
-		Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
+		UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
 		PrivateData: model.TaskPrivateData{
 			UpstreamTaskID:   "provider-timeout-waits-for-settlement",
 			BillingRequestId: "timeout-waits-for-settlement",
@@ -153,10 +155,21 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 		},
 	}
 	require.NoError(t, model.DB.Create(task).Error)
+	submissionInput := model.BillingSettlementInput{
+		OperationKey:    "request:timeout-waits-for-settlement:finalize",
+		Source:          model.BillingSettlementSourceWallet,
+		UserID:          userID,
+		FundingDelta:    10,
+		TaskID:          task.ID,
+		TaskQuota:       20,
+		TaskQuotaTarget: 30,
+	}
 	require.NoError(t, model.DB.Create(&model.BillingSettlement{
-		OperationKey: "request:timeout-waits-for-settlement:finalize",
-		Source:       model.BillingSettlementSourceWallet, UserID: 711,
-		FundingDelta: 10, Status: model.BillingSettlementStatusPending,
+		OperationKey: submissionInput.OperationKey,
+		Source:       submissionInput.Source, UserID: submissionInput.UserID,
+		FundingDelta: submissionInput.FundingDelta, TaskID: submissionInput.TaskID,
+		TaskQuota: submissionInput.TaskQuota, TaskQuotaTarget: submissionInput.TaskQuotaTarget,
+		Status:    model.BillingSettlementStatusPending,
 		CreatedAt: now, UpdatedAt: now, Revision: 1,
 	}).Error)
 
@@ -166,6 +179,27 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
 	assert.Equal(t, 20, reloaded.Quota)
+	assert.EqualValues(t, 80, getUserQuota(t, userID))
+
+	applied, alreadyApplied, err := model.ApplyBillingSettlementOnce(submissionInput)
+	require.NoError(t, err)
+	assert.False(t, alreadyApplied)
+	assert.EqualValues(t, 10, applied)
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+	assert.Equal(t, 30, reloaded.Quota)
+	assert.EqualValues(t, 70, getUserQuota(t, userID))
+
+	sweepTimedOutTasks(context.Background())
+
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Zero(t, reloaded.Quota)
+	assert.EqualValues(t, 100, getUserQuota(t, userID))
+	var refund model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
 }
 
 // ---------------------------------------------------------------------------

@@ -111,6 +111,7 @@ type BillingSettlementEffect struct {
 	ChannelID         int                    `json:"channel_id"`
 	ModelName         string                 `json:"model_name"`
 	TokenID           int                    `json:"token_id"`
+	TokenName         string                 `json:"token_name,omitempty"`
 	Group             string                 `json:"group"`
 	Other             map[string]interface{} `json:"other"`
 	NodeName          string                 `json:"node_name"`
@@ -780,7 +781,8 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 		if err := RecordTaskBillingLogOnce(operationKey, RecordTaskBillingLogParams{
 			UserId: record.UserID, LogType: effect.LogType, Content: effect.Content,
 			ChannelId: effect.ChannelID, ModelName: effect.ModelName, Quota: int(quota),
-			TokenId: effect.TokenID, Group: effect.Group, Other: other, NodeName: effect.NodeName,
+			TokenId: effect.TokenID, TokenName: effect.TokenName,
+			Group: effect.Group, Other: other, NodeName: effect.NodeName,
 			PromptTokens: effect.PromptTokens, CompletionTokens: effect.CompletionTokens,
 			UseTimeSeconds: effect.UseTimeSeconds, IsStream: effect.IsStream,
 			RequestId: effect.RequestID, UpstreamRequestId: effect.UpstreamRequestID,

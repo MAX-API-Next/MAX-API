@@ -43,12 +43,19 @@ let resolveTokenKeyRequest:
       data: { key: string }
     }) => void)
   | undefined
+let rejectTokenKeysBatchRequest: ((reason?: unknown) => void) | undefined
 
 const fetchTokenKey = mock(
   () =>
     new Promise<{ success: boolean; data: { key: string } }>((resolve) => {
       resolveTokenKeyRequest = resolve
     })
+)
+const fetchTokenKeysBatch = mock(
+  async (): Promise<{
+    success: boolean
+    data: { keys: Record<string, string> }
+  }> => ({ success: true, data: { keys: {} } })
 )
 const copyToClipboard = mock(async () => false)
 const toastError = mock(() => undefined)
@@ -73,7 +80,7 @@ mock.module('../src/lib/copy-to-clipboard', () => ({
 
 mock.module('../src/features/keys/api', () => ({
   fetchTokenKey,
-  fetchTokenKeysBatch: mock(async () => ({ success: true, data: { keys: {} } })),
+  fetchTokenKeysBatch,
 }))
 
 const { ApiKeysProvider, useApiKeys } = await import(
@@ -97,9 +104,11 @@ beforeAll(() => testEnv.setup())
 
 beforeEach(() => {
   fetchTokenKey.mockClear()
+  fetchTokenKeysBatch.mockClear()
   copyToClipboard.mockClear()
   toastError.mockClear()
   resolveTokenKeyRequest = undefined
+  rejectTokenKeysBatchRequest = undefined
 })
 
 afterEach(async () => {
@@ -110,6 +119,36 @@ afterEach(async () => {
 afterAll(() => testEnv.teardown())
 
 describe('API key plaintext lifecycle', () => {
+  test('reports batch reveal failures and clears every loading state', async () => {
+    fetchTokenKeysBatch.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectTokenKeysBatchRequest = reject
+        })
+    )
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    let request!: Promise<Record<number, string>>
+    act(() => {
+      request = result.current.resolveRealKeysBatch([201, 202])
+    })
+
+    await waitFor(() => {
+      assert.equal(result.current.loadingKeys[201], true)
+      assert.equal(result.current.loadingKeys[202], true)
+    })
+
+    await act(async () => {
+      rejectTokenKeysBatchRequest?.(new Error('batch request failed'))
+      assert.deepEqual(await request, {})
+    })
+
+    assert.equal(toastError.mock.calls.length, 1)
+    assert.equal(toastError.mock.calls[0]?.[0], 'An unexpected error occurred')
+    assert.equal(result.current.loadingKeys[201], undefined)
+    assert.equal(result.current.loadingKeys[202], undefined)
+  })
+
   test('does not cache a key that resolves after its reveal popover closes', async () => {
     const { result } = renderHook(() => useApiKeys(), { wrapper })
 
