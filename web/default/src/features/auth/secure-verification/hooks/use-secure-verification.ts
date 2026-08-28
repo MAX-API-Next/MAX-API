@@ -80,11 +80,6 @@ export function useSecureVerification(
     []
   )
 
-  const reset = useCallback(() => {
-    setState(initialState)
-    setDialogOpen(false)
-  }, [])
-
   const settlePendingVerification = useCallback(
     (value: unknown | null, error?: unknown): void => {
       const pending = pendingVerificationRef.current
@@ -98,6 +93,12 @@ export function useSecureVerification(
     },
     []
   )
+
+  const reset = useCallback((): void => {
+    settlePendingVerification(null)
+    setState(initialState)
+    setDialogOpen(false)
+  }, [settlePendingVerification])
 
   useEffect(() => {
     return () => settlePendingVerification(null)
@@ -232,9 +233,8 @@ export function useSecureVerification(
   }, [])
 
   const cancel = useCallback((): void => {
-    settlePendingVerification(null)
     reset()
-  }, [reset, settlePendingVerification])
+  }, [reset])
 
   const setOpen = useCallback(
     (nextOpen: boolean): void => {

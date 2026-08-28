@@ -134,6 +134,26 @@ describe('useSecureVerification', () => {
     assert.equal(result.current.open, false)
   })
 
+  test('resolves a pending continuation when reset is called', async () => {
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    let continuation: Promise<unknown | null> | undefined
+    act(() => {
+      continuation = result.current.withVerification(apiCall, {
+        scope: 'credentials',
+      })
+    })
+
+    await waitFor(() => assert.equal(result.current.open, true))
+    act(() => result.current.reset())
+
+    assert.equal(await continuation, null)
+    assert.equal(result.current.open, false)
+  })
+
   test('reports verification method discovery failures before rejecting', async () => {
     checkVerificationMethods.mockImplementationOnce(async () => {
       throw new Error('method discovery unavailable')
