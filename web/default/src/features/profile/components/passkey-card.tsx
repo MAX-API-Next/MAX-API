@@ -121,8 +121,14 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     }
   }, [register, supported, t, withVerification])
 
-  const handleRemove = useCallback(async () => {
-    const methods = await fetchVerificationMethods()
+  const handleRemove = useCallback(async (): Promise<void> => {
+    let methods: VerificationMethods
+    try {
+      methods = await fetchVerificationMethods()
+    } catch {
+      toast.error(t('Verification unavailable'))
+      return
+    }
     const required: VerificationMethod | null = methods.has2FA
       ? '2fa'
       : methods.hasPasskey
@@ -145,13 +151,17 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
     setConfirmOpen(false)
     setRestrictedMethod(required)
-    await startVerification(remove, {
-      preferredMethod: required,
-      title: t('Security verification'),
-      description: t(
-        'Confirm your identity before removing this Passkey from your account.'
-      ),
-    })
+    try {
+      await startVerification(remove, {
+        preferredMethod: required,
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before removing this Passkey from your account.'
+        ),
+      })
+    } catch {
+      // useSecureVerification already reports method discovery failures.
+    }
   }, [fetchVerificationMethods, remove, startVerification, t])
 
   const handleVerificationCancel = useCallback(() => {

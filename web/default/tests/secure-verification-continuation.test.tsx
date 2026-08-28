@@ -29,16 +29,39 @@ import {
 } from 'bun:test'
 import assert from 'node:assert/strict'
 
-const checkVerificationMethods = mock(async () => ({
+const availableVerificationMethods = {
   has2FA: false,
   hasPasskey: false,
   hasPassword: true,
   passkeySupported: false,
-}))
+}
+const checkVerificationMethods = mock(
+  async () => availableVerificationMethods
+)
 const verify = mock(async () => undefined)
 const toastError = mock((_message: string) => undefined)
 const toastInfo = mock((_message: string) => undefined)
 const toastSuccess = mock((_message: string) => undefined)
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (reason?: unknown) => void
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve: ((value: T) => void) | undefined
+  let reject: ((reason?: unknown) => void) | undefined
+  const promise = new Promise<T>((resolver, rejecter) => {
+    resolve = resolver
+    reject = rejecter
+  })
+  return {
+    promise,
+    resolve: (value) => resolve?.(value),
+    reject: (reason) => reject?.(reason),
+  }
+}
 
 mock.module('i18next', () => ({
   default: { t: (key: string) => key },
@@ -76,7 +99,11 @@ beforeAll(() => testEnv.setup())
 
 beforeEach(() => {
   checkVerificationMethods.mockClear()
+  checkVerificationMethods.mockImplementation(
+    async () => availableVerificationMethods
+  )
   verify.mockClear()
+  verify.mockImplementation(async () => undefined)
   toastError.mockClear()
   toastInfo.mockClear()
   toastSuccess.mockClear()
@@ -87,6 +114,36 @@ afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
 describe('useSecureVerification', () => {
+  test('returns an initial protected action success without discovery', async () => {
+    const apiCall = mock(async () => ({ success: true }))
+    const { result } = renderHook(() => useSecureVerification())
+
+    assert.deepEqual(
+      await result.current.withVerification(apiCall, {
+        scope: 'credentials',
+      }),
+      { success: true }
+    )
+    assert.equal(apiCall.mock.calls.length, 1)
+    assert.equal(checkVerificationMethods.mock.calls.length, 0)
+    assert.equal(result.current.open, false)
+  })
+
+  test('rejects an initial protected action failure without discovery', async () => {
+    const apiCall = mock(async () => {
+      throw new Error('protected action failed')
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    await assert.rejects(
+      result.current.withVerification(apiCall, { scope: 'credentials' }),
+      /protected action failed/
+    )
+    assert.equal(apiCall.mock.calls.length, 1)
+    assert.equal(checkVerificationMethods.mock.calls.length, 0)
+    assert.equal(result.current.open, false)
+  })
+
   test('continues the original API call after verification succeeds', async () => {
     let callCount = 0
     const apiCall = mock(async () => {
@@ -152,6 +209,167 @@ describe('useSecureVerification', () => {
 
     assert.equal(await continuation, null)
     assert.equal(result.current.open, false)
+  })
+
+  test('settles reset while the initial protected action is pending', async () => {
+    const initialAction = createDeferred<never>()
+    const apiCall = mock(() => initialAction.promise)
+    const { result } = renderHook(() => useSecureVerification())
+
+    const continuation = result.current.withVerification(apiCall, {
+      scope: 'credentials',
+    })
+    await waitFor(() => assert.equal(apiCall.mock.calls.length, 1))
+
+    act(() => result.current.reset())
+    assert.equal(await continuation, null)
+
+    initialAction.reject(verificationRequiredError)
+    await Promise.resolve()
+    assert.equal(checkVerificationMethods.mock.calls.length, 0)
+    assert.equal(result.current.open, false)
+  })
+
+  test('does not retry the protected action after reset during verification', async () => {
+    const verification = createDeferred<void>()
+    verify.mockImplementationOnce(() => verification.promise)
+    let callCount = 0
+    const apiCall = mock(async () => {
+      callCount += 1
+      if (callCount === 1) throw verificationRequiredError
+      return { success: true }
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    const continuation = result.current.withVerification(apiCall, {
+      scope: 'credentials',
+    })
+    await waitFor(() => assert.equal(result.current.open, true))
+
+    let execution: Promise<unknown> | undefined
+    act(() => {
+      execution = result.current.executeVerification('password', 'secret')
+    })
+    await waitFor(() => assert.equal(verify.mock.calls.length, 1))
+
+    act(() => result.current.reset())
+    assert.equal(await continuation, null)
+
+    await act(async () => {
+      verification.resolve()
+      await execution
+    })
+
+    assert.equal(apiCall.mock.calls.length, 1)
+    assert.equal(toastSuccess.mock.calls.length, 0)
+  })
+
+  test('settles reset before verification method discovery completes', async () => {
+    const discovery = createDeferred<typeof availableVerificationMethods>()
+    checkVerificationMethods.mockImplementationOnce(() => discovery.promise)
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    const continuation = result.current.withVerification(apiCall, {
+      scope: 'credentials',
+    })
+    await waitFor(() =>
+      assert.equal(checkVerificationMethods.mock.calls.length, 1)
+    )
+
+    act(() => result.current.reset())
+    const outcome = await Promise.race([
+      continuation.then((value) => ({ settled: true, value })),
+      new Promise<{ settled: false }>((resolve) => {
+        setTimeout(() => resolve({ settled: false }), 50)
+      }),
+    ])
+
+    await act(async () => {
+      discovery.resolve(availableVerificationMethods)
+      await Promise.resolve()
+    })
+
+    assert.deepEqual(outcome, { settled: true, value: null })
+    assert.equal(result.current.open, false)
+  })
+
+  test('settles unmount before verification method discovery completes', async () => {
+    const discovery = createDeferred<typeof availableVerificationMethods>()
+    checkVerificationMethods.mockImplementationOnce(() => discovery.promise)
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result, unmount } = renderHook(() => useSecureVerification())
+
+    const continuation = result.current.withVerification(apiCall, {
+      scope: 'credentials',
+    })
+    await waitFor(() =>
+      assert.equal(checkVerificationMethods.mock.calls.length, 1)
+    )
+
+    unmount()
+    const outcome = await Promise.race([
+      continuation.then((value) => ({ settled: true, value })),
+      new Promise<{ settled: false }>((resolve) => {
+        setTimeout(() => resolve({ settled: false }), 50)
+      }),
+    ])
+    discovery.resolve(availableVerificationMethods)
+    await Promise.resolve()
+
+    assert.deepEqual(outcome, { settled: true, value: null })
+    assert.equal(apiCall.mock.calls.length, 1)
+  })
+
+  test('does not let an obsolete discovery settle a newer continuation', async () => {
+    const firstDiscovery = createDeferred<typeof availableVerificationMethods>()
+    const secondDiscovery = createDeferred<
+      typeof availableVerificationMethods
+    >()
+    checkVerificationMethods
+      .mockImplementationOnce(() => firstDiscovery.promise)
+      .mockImplementationOnce(() => secondDiscovery.promise)
+    const firstCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const secondCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    const firstContinuation = result.current.withVerification(firstCall, {
+      scope: 'credentials',
+    })
+    await waitFor(() =>
+      assert.equal(checkVerificationMethods.mock.calls.length, 1)
+    )
+    const secondContinuation = result.current.withVerification(secondCall, {
+      scope: 'api_token',
+    })
+    await waitFor(() =>
+      assert.equal(checkVerificationMethods.mock.calls.length, 2)
+    )
+
+    assert.equal(await firstContinuation, null)
+    await act(async () => {
+      firstDiscovery.resolve(availableVerificationMethods)
+      await Promise.resolve()
+    })
+    assert.equal(result.current.open, false)
+
+    await act(async () => {
+      secondDiscovery.resolve(availableVerificationMethods)
+      await Promise.resolve()
+    })
+    await waitFor(() => assert.equal(result.current.open, true))
+    assert.equal(result.current.state.scope, 'api_token')
+
+    act(() => result.current.cancel())
+    assert.equal(await secondContinuation, null)
   })
 
   test('reports verification method discovery failures before rejecting', async () => {

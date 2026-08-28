@@ -37,12 +37,14 @@ import type {
 type ApiCall = (() => Promise<unknown>) | null
 
 interface PendingVerification {
+  attemptId: number
   resolve: (value: unknown | null) => void
   reject: (reason?: unknown) => void
 }
 
 interface InternalState extends SecureVerificationState {
   apiCall: ApiCall
+  attemptId: number | null
 }
 
 const defaultMethods: VerificationMethods = {
@@ -59,6 +61,7 @@ const initialState: InternalState = {
   title: undefined,
   description: undefined,
   apiCall: null,
+  attemptId: null,
 }
 
 export function useSecureVerification(
@@ -70,19 +73,30 @@ export function useSecureVerification(
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setDialogOpen] = useState(false)
   const pendingVerificationRef = useRef<PendingVerification | null>(null)
+  const verificationAttemptRef = useRef(0)
+  const mountedRef = useRef(true)
 
-  const fetchVerificationMethods = useCallback(
-    async (scope?: VerificationScope) => {
-      const result = await checkVerificationMethods(scope)
-      setMethods(result)
-      return result
-    },
+  const loadVerificationMethods = useCallback(
+    async (scope?: VerificationScope): Promise<VerificationMethods> =>
+      checkVerificationMethods(scope),
     []
   )
 
+  const fetchVerificationMethods = useCallback(
+    async (scope?: VerificationScope): Promise<VerificationMethods> => {
+      const result = await loadVerificationMethods(scope)
+      if (mountedRef.current) {
+        setMethods(result)
+      }
+      return result
+    },
+    [loadVerificationMethods]
+  )
+
   const settlePendingVerification = useCallback(
-    (value: unknown | null, error?: unknown): void => {
+    (value: unknown | null, error?: unknown, attemptId?: number): void => {
       const pending = pendingVerificationRef.current
+      if (attemptId !== undefined && pending?.attemptId !== attemptId) return
       pendingVerificationRef.current = null
       if (!pending) return
       if (error !== undefined) {
@@ -94,30 +108,57 @@ export function useSecureVerification(
     []
   )
 
-  const reset = useCallback((): void => {
+  const isVerificationAttemptActive = useCallback(
+    (attemptId: number): boolean =>
+      mountedRef.current && verificationAttemptRef.current === attemptId,
+    []
+  )
+
+  const beginVerificationAttempt = useCallback((): number | null => {
+    if (!mountedRef.current) return null
+    verificationAttemptRef.current += 1
     settlePendingVerification(null)
+    setState(initialState)
+    setDialogOpen(false)
+    return verificationAttemptRef.current
+  }, [settlePendingVerification])
+
+  const reset = useCallback((): void => {
+    verificationAttemptRef.current += 1
+    settlePendingVerification(null)
+    if (!mountedRef.current) return
     setState(initialState)
     setDialogOpen(false)
   }, [settlePendingVerification])
 
   useEffect(() => {
-    return () => settlePendingVerification(null)
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      verificationAttemptRef.current += 1
+      settlePendingVerification(null)
+    }
   }, [settlePendingVerification])
 
-  const startVerification = useCallback(
+  const startVerificationAttempt = useCallback(
     async (
       apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
-    ) => {
+      config: StartVerificationOptions,
+      attemptId: number
+    ): Promise<boolean> => {
       const { preferredMethod, title, description, scope } = config
       let availableMethods: VerificationMethods
       try {
-        availableMethods = await fetchVerificationMethods(scope)
+        availableMethods = await loadVerificationMethods(scope)
       } catch (error) {
+        if (!isVerificationAttemptActive(attemptId)) return false
         toast.error(i18next.t('Verification unavailable'))
         onError?.(error)
         throw error
       }
+
+      if (!isVerificationAttemptActive(attemptId)) return false
+      setMethods(availableMethods)
 
       if (
         !availableMethods.has2FA &&
@@ -145,6 +186,7 @@ export function useSecureVerification(
       setState((prev) => ({
         ...prev,
         apiCall,
+        attemptId,
         method: defaultMethod,
         title,
         description,
@@ -153,27 +195,46 @@ export function useSecureVerification(
       setDialogOpen(true)
       return true
     },
-    [fetchVerificationMethods, onError]
+    [isVerificationAttemptActive, loadVerificationMethods, onError]
+  )
+
+  const startVerification = useCallback(
+    async (
+      apiCall: () => Promise<unknown>,
+      config: StartVerificationOptions = {}
+    ): Promise<boolean> => {
+      const attemptId = beginVerificationAttempt()
+      if (attemptId === null) return false
+      return startVerificationAttempt(apiCall, config, attemptId)
+    },
+    [beginVerificationAttempt, startVerificationAttempt]
   )
 
   const executeVerification = useCallback(
-    async (method?: VerificationMethod, code?: string) => {
-      if (!state.apiCall) {
+    async (
+      method?: VerificationMethod,
+      code?: string
+    ): Promise<unknown | undefined> => {
+      if (!state.apiCall || state.attemptId === null) {
         toast.error(i18next.t('Verification is not configured properly'))
         return
       }
 
+      const attemptId = state.attemptId
+      const apiCall = state.apiCall
       const actualMethod = method ?? state.method
       if (!actualMethod) {
         toast.error(i18next.t('Select a verification method first'))
         return
       }
+      if (!isVerificationAttemptActive(attemptId)) return
 
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
         await verify(actualMethod, code ?? state.code, state.scope)
       } catch (error) {
+        if (!isVerificationAttemptActive(attemptId)) return
         setState((prev) => ({ ...prev, loading: false }))
         const message =
           error instanceof Error
@@ -184,9 +245,12 @@ export function useSecureVerification(
         throw error
       }
 
+      if (!isVerificationAttemptActive(attemptId)) return
+
       try {
-        const result = await state.apiCall()
-        settlePendingVerification(result)
+        const result = await apiCall()
+        if (!isVerificationAttemptActive(attemptId)) return
+        settlePendingVerification(result, undefined, attemptId)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -200,7 +264,8 @@ export function useSecureVerification(
 
         return result
       } catch (error) {
-        settlePendingVerification(null, error)
+        if (!isVerificationAttemptActive(attemptId)) return
+        settlePendingVerification(null, error, attemptId)
         const message =
           error instanceof Error
             ? error.message
@@ -210,11 +275,16 @@ export function useSecureVerification(
         reset()
         throw error
       } finally {
-        setState((prev) => ({ ...prev, loading: false }))
+        if (isVerificationAttemptActive(attemptId)) {
+          setState((prev) =>
+            prev.attemptId === attemptId ? { ...prev, loading: false } : prev
+          )
+        }
       }
     },
     [
       state,
+      isVerificationAttemptActive,
       successMessage,
       onSuccess,
       onError,
@@ -256,27 +326,55 @@ export function useSecureVerification(
       apiCall: () => Promise<T>,
       config: StartVerificationOptions = {}
     ): Promise<T | null> => {
-      try {
-        return await apiCall()
-      } catch (error) {
-        if (isVerificationRequiredError(error)) {
+      const attemptId = beginVerificationAttempt()
+      if (attemptId === null) return null
+      const continuation = new Promise<T | null>((resolve, reject) => {
+        pendingVerificationRef.current = {
+          attemptId,
+          resolve: (value) => resolve(value as T | null),
+          reject,
+        }
+      })
+
+      void (async (): Promise<void> => {
+        try {
+          const result = await apiCall()
+          if (!isVerificationAttemptActive(attemptId)) return
+          settlePendingVerification(result, undefined, attemptId)
+          return
+        } catch (error) {
+          if (!isVerificationAttemptActive(attemptId)) return
+          if (!isVerificationRequiredError(error)) {
+            settlePendingVerification(null, error, attemptId)
+            return
+          }
+
           const info = extractVerificationInfo(error)
           toast.info(info.message)
-          const started = await startVerification(apiCall, config)
-          if (!started) return null
-
-          settlePendingVerification(null)
-          return await new Promise<T | null>((resolve, reject) => {
-            pendingVerificationRef.current = {
-              resolve: (value) => resolve(value as T | null),
-              reject,
-            }
-          })
         }
-        throw error
-      }
+
+        try {
+          const started = await startVerificationAttempt(
+            apiCall,
+            config,
+            attemptId
+          )
+          if (!started) {
+            settlePendingVerification(null, undefined, attemptId)
+          }
+        } catch (error) {
+          settlePendingVerification(null, error, attemptId)
+        }
+      })()
+
+      return await continuation
     },
-    [settlePendingVerification, startVerification]
+    [
+      beginVerificationAttempt,
+      isVerificationAttemptActive,
+      settlePendingVerification,
+      startVerificationAttempt,
+    ]
   )
 
   const canUseMethod = useCallback(

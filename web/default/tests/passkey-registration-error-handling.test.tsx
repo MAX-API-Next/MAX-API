@@ -28,11 +28,36 @@ import {
   test,
 } from 'bun:test'
 import assert from 'node:assert/strict'
+import type { MouseEventHandler, ReactNode } from 'react'
 
 const withVerification = mock(async () => {
   throw new Error('verification method lookup failed')
 })
+const fetchVerificationMethods = mock(async () => ({
+  has2FA: false,
+  hasPasskey: false,
+  hasPassword: true,
+  passkeySupported: true,
+}))
+const startVerification = mock(async () => true)
+const register = mock(async () => true)
+const remove = mock(async () => true)
+const toastError = mock((_message: string) => undefined)
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
+let passkeyEnabled = false
+
+interface DialogPartProps {
+  children?: ReactNode
+}
+
+interface DialogButtonProps extends DialogPartProps {
+  disabled?: boolean
+  onClick?: MouseEventHandler<HTMLButtonElement>
+}
+
+function DialogPart(props: DialogPartProps) {
+  return <div>{props.children}</div>
+}
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -40,23 +65,51 @@ mock.module('react-i18next', () => ({
 
 mock.module('sonner', () => ({
   toast: {
-    error: mock(() => undefined),
+    error: toastError,
     info: mock(() => undefined),
     success: mock(() => undefined),
   },
 }))
 
+mock.module('../src/components/ui/alert-dialog', () => ({
+  AlertDialog: (props: DialogPartProps) => <>{props.children}</>,
+  AlertDialogAction: (props: DialogButtonProps) => (
+    <button
+      type='button'
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
+  ),
+  AlertDialogCancel: (props: DialogButtonProps) => (
+    <button type='button' disabled={props.disabled}>
+      {props.children}
+    </button>
+  ),
+  AlertDialogContent: DialogPart,
+  AlertDialogDescription: DialogPart,
+  AlertDialogFooter: DialogPart,
+  AlertDialogHeader: DialogPart,
+  AlertDialogTitle: DialogPart,
+  AlertDialogTrigger: (props: DialogPartProps) => (
+    <button type='button'>{props.children}</button>
+  ),
+}))
+
 mock.module('../src/features/auth/passkey', () => ({
+  beginPasskeyVerification: mock(async () => ({})),
+  finishPasskeyVerification: mock(async () => ({})),
   usePasskeyManagement: () => ({
     status: null,
     loading: false,
     registering: false,
     removing: false,
     supported: true,
-    enabled: false,
+    enabled: passkeyEnabled,
     lastUsed: null,
-    register: mock(async () => true),
-    remove: mock(async () => true),
+    register,
+    remove,
   }),
 }))
 
@@ -72,17 +125,12 @@ mock.module('../src/features/auth/secure-verification', () => ({
       passkeySupported: true,
     },
     state: { method: null, loading: false, code: '' },
-    startVerification: mock(async () => true),
+    startVerification,
     executeVerification: mock(async () => undefined),
     cancel: mock(() => undefined),
     setCode: mock(() => undefined),
     switchMethod: mock(() => undefined),
-    fetchVerificationMethods: mock(async () => ({
-      has2FA: false,
-      hasPasskey: false,
-      hasPassword: true,
-      passkeySupported: true,
-    })),
+    fetchVerificationMethods,
     withVerification,
   }),
 }))
@@ -96,7 +144,19 @@ beforeAll(() => {
   testEnv.setup()
 })
 beforeEach(() => {
+  passkeyEnabled = false
   withVerification.mockClear()
+  fetchVerificationMethods.mockClear()
+  fetchVerificationMethods.mockImplementation(async () => ({
+    has2FA: false,
+    hasPasskey: false,
+    hasPassword: true,
+    passkeySupported: true,
+  }))
+  startVerification.mockClear()
+  register.mockClear()
+  remove.mockClear()
+  toastError.mockClear()
   consoleError.mockClear()
 })
 afterEach(() => cleanup())
@@ -113,4 +173,22 @@ test('handles a rejected Passkey verification continuation', async () => {
   await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
   await waitFor(() => assert.equal(consoleError.mock.calls.length, 1))
   assert.match(String(consoleError.mock.calls[0]?.[1]), /method lookup failed/)
+})
+
+test('stops Passkey removal when verification method discovery fails', async () => {
+  passkeyEnabled = true
+  fetchVerificationMethods.mockImplementationOnce(async () => {
+    throw new Error('verification methods unavailable')
+  })
+  const view = render(<PasskeyCard loading={false} />)
+
+  fireEvent.click(view.getByRole('button', { name: 'Remove' }))
+
+  await waitFor(() =>
+    assert.equal(fetchVerificationMethods.mock.calls.length, 1)
+  )
+  await waitFor(() => assert.equal(toastError.mock.calls.length, 1))
+  assert.equal(toastError.mock.calls[0]?.[0], 'Verification unavailable')
+  assert.equal(startVerification.mock.calls.length, 0)
+  assert.equal(remove.mock.calls.length, 0)
 })
