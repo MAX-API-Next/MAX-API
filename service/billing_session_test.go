@@ -148,6 +148,68 @@ func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) 
 	assert.Equal(t, "zero-usage-upstream-request", settler.effect.UpstreamRequestID)
 }
 
+func TestSettleAndRecordConsumePersistsLegacyEffectBeforeFailedSettlement(t *testing.T) {
+	truncate(t)
+	const (
+		userID  = 611
+		tokenID = 612
+	)
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "legacy-effect-token", 0)
+	info := &relaycommon.RelayInfo{
+		RequestId: "legacy-effect-request",
+		UserId:    userID,
+		TokenId:   tokenID,
+		TokenKey:  "legacy-effect-token",
+	}
+	params := model.RecordConsumeLogParams{
+		ChannelId: 613,
+		ModelName: "legacy-effect-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     10,
+		Content:   "legacy settlement waits for funding",
+	}
+
+	settleAndRecordConsume(nil, info, true, params)
+
+	operationKey := "request:legacy-effect-request:legacy-post:finalize"
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	require.NotEmpty(t, settlement.EffectPayload)
+	require.Empty(t, settlement.EffectStatus)
+	var logCount int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Count(&logCount).Error)
+	require.Zero(t, logCount)
+
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("quota", 100).Error)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]interface{}{
+		"remain_quota": 100,
+		"used_quota":   0,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("id = ?", settlement.ID).
+		Updates(map[string]interface{}{
+			"status":       model.BillingSettlementStatusPending,
+			"last_error":   "",
+			"next_attempt": time.Now().Unix(),
+		}).Error)
+	model.ProcessPendingBillingSettlementsOnce()
+
+	settleAndRecordConsume(nil, info, true, params)
+	settleAndRecordConsume(nil, info, true, params)
+
+	require.EqualValues(t, 90, getUserQuota(t, userID))
+	require.Equal(t, 90, getTokenRemainQuota(t, tokenID))
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Count(&logCount).Error)
+	require.EqualValues(t, 1, logCount)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&storedUser, userID).Error)
+	require.EqualValues(t, 10, storedUser.UsedQuota)
+	require.Equal(t, 1, storedUser.RequestCount)
+}
+
 func (s *recordingBillingSettler) Settle(int) error         { s.settleCalls++; return nil }
 func (s *recordingBillingSettler) Refund(*gin.Context)      {}
 func (s *recordingBillingSettler) NeedsRefund() bool        { return false }

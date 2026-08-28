@@ -84,6 +84,11 @@ const { ApiKeyCell } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
+function CopiedKeyProbe() {
+  const copiedKeyId = useApiKeys().copiedKeyId
+  return <output data-testid='copied-key-id'>{copiedKeyId ?? 'none'}</output>
+}
+
 function wrapper(props: { children: ReactNode }) {
   return <ApiKeysProvider>{props.children}</ApiKeysProvider>
 }
@@ -155,6 +160,7 @@ describe('API key plaintext lifecycle', () => {
             allow_ips: '',
           }}
         />
+        <CopiedKeyProbe />
       </ApiKeysProvider>
     )
 
@@ -164,6 +170,7 @@ describe('API key plaintext lifecycle', () => {
       assert.equal(copyToClipboard.mock.calls.length, 1)
       assert.equal(toastError.mock.calls.length, 1)
       assert.equal(toastError.mock.calls[0]?.[0], 'Failed to copy to clipboard')
+      assert.equal(view.getByTestId('copied-key-id').textContent, 'none')
     })
   })
 })

@@ -178,9 +178,9 @@ func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
 	return &credential, nil
 }
 
-func UpsertPasskeyCredential(credential *PasskeyCredential) error {
+func UpdatePasskeyCredentialAfterAuthentication(credential *PasskeyCredential) error {
 	if credential == nil || credential.UserID <= 0 || credential.CredentialID == "" {
-		common.SysLog("UpsertPasskeyCredential: nil credential provided")
+		common.SysLog("UpdatePasskeyCredentialAfterAuthentication: nil credential provided")
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
 	result := DB.Model(&PasskeyCredential{}).
@@ -201,7 +201,7 @@ func UpsertPasskeyCredential(credential *PasskeyCredential) error {
 		).
 		Updates(credential)
 	if result.Error != nil {
-		common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to update credential for user %d: %v", credential.UserID, result.Error))
+		common.SysLog(fmt.Sprintf("UpdatePasskeyCredentialAfterAuthentication: failed to update credential for user %d: %v", credential.UserID, result.Error))
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
 	if result.RowsAffected == 1 {

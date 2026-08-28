@@ -95,8 +95,21 @@ export function DataTableRowActions<TData>({
 
   const handleOpenChatPreset = useCallback(
     async (preset: ChatPreset) => {
+      let chatWindow: Window | null = null
+      if (preset.type === 'web' && typeof window !== 'undefined') {
+        try {
+          chatWindow = window.open('about:blank', '_blank')
+          if (chatWindow) chatWindow.opener = null
+        } catch {
+          chatWindow = null
+        }
+      }
+
       const realKey = await resolveRealKey(apiKey.id)
-      if (!realKey) return
+      if (!realKey) {
+        chatWindow?.close()
+        return
+      }
 
       if (preset.type === 'fluent') {
         const success = sendToFluent(realKey, serverAddress)
@@ -119,6 +132,7 @@ export function DataTableRowActions<TData>({
       })
 
       if (!resolvedUrl) {
+        chatWindow?.close()
         toast.error(t('Invalid chat link. Please contact your administrator.'))
         return
       }
@@ -126,8 +140,13 @@ export function DataTableRowActions<TData>({
       if (typeof window === 'undefined') return
 
       try {
-        window.open(resolvedUrl, '_blank', 'noopener,noreferrer')
+        if (chatWindow) {
+          chatWindow.location.replace(resolvedUrl)
+          return
+        }
+        window.location.href = resolvedUrl
       } catch {
+        chatWindow?.close()
         window.location.href = resolvedUrl
       }
     },

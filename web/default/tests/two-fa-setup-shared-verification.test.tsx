@@ -20,6 +20,7 @@ import { createReactTestEnvironment } from '@/test/react'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
 import assert from 'node:assert/strict'
+import type { ReactNode } from 'react'
 
 const setup2FA = mock(async () => ({
   success: true,
@@ -46,6 +47,44 @@ mock.module('qrcode.react', () => ({
   QRCodeSVG: () => <div data-testid='qr-code' />,
 }))
 
+function TestContainer(props: { children?: ReactNode }) {
+  return <div>{props.children}</div>
+}
+
+mock.module('../src/components/ui/alert', () => ({
+  Alert: TestContainer,
+  AlertDescription: TestContainer,
+}))
+
+mock.module('../src/components/ui/button', () => ({
+  Button: (props: { children?: ReactNode; onClick?: () => void }) => (
+    <button type='button' onClick={props.onClick}>
+      {props.children}
+    </button>
+  ),
+}))
+
+mock.module('../src/components/ui/dialog', () => ({
+  Dialog: TestContainer,
+  DialogContent: TestContainer,
+  DialogDescription: TestContainer,
+  DialogFooter: TestContainer,
+  DialogHeader: TestContainer,
+  DialogTitle: TestContainer,
+}))
+
+mock.module('../src/components/ui/input', () => ({
+  Input: (props: { value?: string }) => <input value={props.value} readOnly />,
+}))
+
+mock.module('../src/components/ui/label', () => ({
+  Label: TestContainer,
+}))
+
+mock.module('../src/components/copy-button', () => ({
+  CopyButton: TestContainer,
+}))
+
 mock.module('../src/lib/api', () => ({
   setup2FA,
   enable2FA: mock(async () => ({ success: true })),
@@ -69,7 +108,7 @@ afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
 test('uses the authenticated layout verification gate for 2FA setup', async () => {
-  render(
+  const view = render(
     <TwoFASetupDialog
       open
       onOpenChange={mock(() => undefined)}
@@ -77,6 +116,7 @@ test('uses the authenticated layout verification gate for 2FA setup', async () =
     />
   )
 
+  assert.ok(view.getByText('Setting up 2FA...'))
   await waitFor(() => assert.equal(setup2FA.mock.calls.length, 1))
   assert.equal(withVerification.mock.calls.length, 1)
 })

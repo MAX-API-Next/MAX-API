@@ -50,7 +50,7 @@ export async function fetchActiveChatKey() {
 export function useActiveChatKey(enabled: boolean) {
   const userId = useAuthStore((state) => state.auth.user?.id)
   const { withVerification } = useSecureVerificationGate()
-  const queryFn = useCallback(async () => {
+  const queryFn = useCallback(async (): Promise<string> => {
     const key = await withVerification(fetchActiveChatKey, {
       scope: 'api_token',
       title: i18next.t('Security verification'),

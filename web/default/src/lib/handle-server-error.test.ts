@@ -74,6 +74,19 @@ describe('resolveServerErrorMessage', () => {
     )
   })
 
+  test('uses the localized fallback for Axios transport failures', () => {
+    const error = new AxiosError('Network Error', 'ERR_NETWORK')
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Verification unavailable'
+    )
+  })
+
   test('keeps an Axios response title ahead of other messages', () => {
     const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
     error.response = {

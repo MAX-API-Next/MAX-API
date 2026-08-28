@@ -181,6 +181,8 @@ test('handles a rejected Passkey verification continuation', async () => {
   await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
   await waitFor(() => assert.equal(consoleError.mock.calls.length, 1))
   assert.match(String(consoleError.mock.calls[0]?.[1]), /method lookup failed/)
+  assert.equal(toastError.mock.calls.length, 0)
+  assert.equal(handleServerError.mock.calls.length, 0)
 })
 
 test('stops Passkey removal when verification method discovery fails', async () => {

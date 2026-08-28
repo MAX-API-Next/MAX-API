@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
@@ -24,6 +27,7 @@ func TestPreserveCurrentSessionAfterSecurityChangeUpdatesGenerationAndClearsStep
 		session.Set(secureVerificationMethodSessionKey, "password")
 		session.Set(secureVerificationUserSessionKey, 9911)
 		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
+		session.Set(PasskeyReadySessionKey, time.Now().Unix())
 		require.NoError(t, session.Save())
 		c.Status(http.StatusNoContent)
 	})
@@ -37,6 +41,10 @@ func TestPreserveCurrentSessionAfterSecurityChangeUpdatesGenerationAndClearsStep
 			"id":                 session.Get("id"),
 			"generation":         session.Get("session_generation"),
 			"secure_verified_at": session.Get(SecureVerificationSessionKey),
+			"secure_method":      session.Get(secureVerificationMethodSessionKey),
+			"secure_user":        session.Get(secureVerificationUserSessionKey),
+			"secure_scope":       session.Get(secureVerificationScopeSessionKey),
+			"passkey_ready_at":   session.Get(PasskeyReadySessionKey),
 		})
 	})
 
@@ -59,5 +67,66 @@ func TestPreserveCurrentSessionAfterSecurityChangeUpdatesGenerationAndClearsStep
 	inspectRecorder := httptest.NewRecorder()
 	engine.ServeHTTP(inspectRecorder, inspectRequest)
 	require.Equal(t, http.StatusOK, inspectRecorder.Code)
-	require.JSONEq(t, `{"generation":2,"id":9911,"secure_verified_at":null}`, inspectRecorder.Body.String())
+	require.JSONEq(t, `{"generation":2,"id":9911,"secure_verified_at":null,"secure_method":null,"secure_user":null,"secure_scope":null,"passkey_ready_at":null}`, inspectRecorder.Body.String())
+}
+
+func TestRevokeOtherSessionsReturnsCommittedSuccessWhenSessionPreservationFails(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	user := model.User{Id: 9912, Username: "revoke-session-user", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := performUserSecurityChangeWithFailingSession(t, user.Id, `{}`, RevokeOtherSessions)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+	require.NoError(t, db.First(&user, user.Id).Error)
+	require.EqualValues(t, 1, user.SessionGeneration)
+}
+
+func TestPasswordChangeReturnsCommittedSuccessWhenSessionPreservationFails(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	hash, err := common.Password2Hash("old-password-123")
+	require.NoError(t, err)
+	user := model.User{
+		Id: 9913, Username: "password-session-user", Password: hash,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := performUserSecurityChangeWithFailingSession(
+		t,
+		user.Id,
+		`{"original_password":"old-password-123","password":"new-password-123"}`,
+		UpdateSelf,
+	)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+	require.NoError(t, db.First(&user, user.Id).Error)
+	require.True(t, common.ValidatePasswordAndHash("new-password-123", user.Password))
+	require.EqualValues(t, 1, user.SessionGeneration)
+}
+
+func performUserSecurityChangeWithFailingSession(
+	t *testing.T,
+	userID int,
+	body string,
+	handler gin.HandlerFunc,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(sessions.DefaultKey, &failingSaveSession{values: map[interface{}]interface{}{}})
+		c.Next()
+	})
+	router.POST("/security-change", func(c *gin.Context) {
+		c.Set("id", userID)
+		handler(c)
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/security-change", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	return recorder
 }

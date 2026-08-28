@@ -135,10 +135,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, user.Id, generation); err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, user.Id, generation, "registering a passkey")
 
 	recordUserSecurityAudit(c, user.Id, "user.passkey_register", nil)
 	c.JSON(http.StatusOK, gin.H{
@@ -166,10 +163,7 @@ func PasskeyDelete(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, user.Id, generation); err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, user.Id, generation, "deleting a passkey")
 
 	recordUserSecurityAudit(c, user.Id, "user.passkey_delete", nil)
 	c.JSON(http.StatusOK, gin.H{
@@ -333,7 +327,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 	}
 	now := time.Now()
 	updatedCredential.LastUsedAt = &now
-	if err := model.UpsertPasskeyCredential(updatedCredential); err != nil {
+	if err := model.UpdatePasskeyCredentialAfterAuthentication(updatedCredential); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -490,7 +484,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	// 更新凭证的最后使用时间
 	now := time.Now()
 	credential.LastUsedAt = &now
-	if err := model.UpsertPasskeyCredential(credential); err != nil {
+	if err := model.UpdatePasskeyCredentialAfterAuthentication(credential); err != nil {
 		common.ApiError(c, err)
 		return
 	}

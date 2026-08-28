@@ -193,10 +193,7 @@ func RevokeOtherSessions(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userID, generation, "revoking other sessions")
 	recordUserSecurityAudit(c, userID, "user.sessions_revoke_other", nil)
 	common.ApiSuccess(c, nil)
 }
@@ -907,10 +904,7 @@ func UpdateSelf(c *gin.Context) {
 		return
 	}
 	if updatePassword {
-		if err := preserveCurrentSessionAfterSecurityChange(c, cleanUser.Id, cleanUser.SessionGeneration); err != nil {
-			common.ApiError(c, err)
-			return
-		}
+		preserveCurrentSessionAfterCommittedSecurityChange(c, cleanUser.Id, cleanUser.SessionGeneration, "changing password")
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -930,6 +924,38 @@ func preserveCurrentSessionAfterSecurityChange(c *gin.Context, userID int, gener
 	session.Delete(secureVerificationScopeSessionKey)
 	session.Delete(PasskeyReadySessionKey)
 	return session.Save()
+}
+
+func preserveCurrentSessionAfterCommittedSecurityChange(c *gin.Context, userID int, generation int64, action string) {
+	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
+		common.SysError(fmt.Sprintf(
+			"failed to preserve current session after %s for user %d: %v",
+			action,
+			userID,
+			err,
+		))
+		expireCurrentSessionAfterSecurityChange(c, userID, action)
+	}
+}
+
+func expireCurrentSessionAfterSecurityChange(c *gin.Context, userID int, action string) {
+	session := sessions.Default(c)
+	session.Clear()
+	session.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	if err := session.Save(); err != nil {
+		common.SysError(fmt.Sprintf(
+			"failed to expire current session after %s for user %d: %v",
+			action,
+			userID,
+			err,
+		))
+	}
 }
 
 func checkUpdatePassword(originalPassword string, newPassword string, userId int) (updatePassword bool, err error) {

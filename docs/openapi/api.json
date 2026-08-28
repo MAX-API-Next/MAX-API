@@ -1019,11 +1019,21 @@
       "get": {
         "summary": "Telegram登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth回调）",
+        "description": "🔓 无需鉴权（OAuth回调）；需要先通过 /api/oauth/state 创建并携带当前浏览器会话绑定的一次性 state",
         "tags": [
           "OAuth"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "description": "由 /api/oauth/state 为 Telegram 登录创建的浏览器会话绑定一次性 state",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "成功",

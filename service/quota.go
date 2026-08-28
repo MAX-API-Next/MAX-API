@@ -418,14 +418,26 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 }
 
 func PostConsumeQuotaOnce(relayInfo *relaycommon.RelayInfo, operationKind string, quota int, preConsumedQuota int, sendEmail bool) (err error) {
+	_, err = postConsumeQuotaOnceWithEffect(relayInfo, operationKind, quota, preConsumedQuota, sendEmail, nil)
+	return err
+}
+
+func postConsumeQuotaOnceWithEffect(
+	relayInfo *relaycommon.RelayInfo,
+	operationKind string,
+	quota int,
+	preConsumedQuota int,
+	sendEmail bool,
+	effect *model.BillingSettlementEffect,
+) (effectHandled bool, err error) {
 	if relayInfo == nil {
-		return errors.New("relayInfo is nil")
+		return false, errors.New("relayInfo is nil")
 	}
 	if operationKind == "" {
-		return errors.New("post-consume operation kind is required")
+		return false, errors.New("post-consume operation kind is required")
 	}
-	if quota == 0 {
-		return nil
+	if quota == 0 && effect == nil {
+		return false, nil
 	}
 	if relayInfo.RequestId != "" {
 		source := model.BillingSettlementSourceWallet
@@ -448,9 +460,15 @@ func PostConsumeQuotaOnce(relayInfo *relaycommon.RelayInfo, operationKind string
 			TokenDelta:                      tokenDelta,
 			SubscriptionPreConsumeRequestID: relayInfo.RequestId,
 			AllowMissingToken:               quota < 0,
+			Effect:                          effect,
 		})
 		if durableErr != nil {
-			return durableErr
+			return effect != nil, durableErr
+		}
+		if effect != nil {
+			if effectErr := model.ProcessBillingSettlementEffect(operationKey); effectErr != nil {
+				return true, effectErr
+			}
 		}
 		if sendEmail && (quota+preConsumedQuota) != 0 {
 			if relayInfo.BillingSource == BillingSourceSubscription {
@@ -459,10 +477,10 @@ func PostConsumeQuotaOnce(relayInfo *relaycommon.RelayInfo, operationKind string
 				checkAndSendQuotaNotify(relayInfo, quota, preConsumedQuota)
 			}
 		}
-		return nil
+		return effect != nil, nil
 	}
 
-	return errors.New("balance mutation requires a stable request id")
+	return false, errors.New("balance mutation requires a stable request id")
 }
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {

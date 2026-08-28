@@ -173,7 +173,7 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	now := time.Now()
 	staleUsageUpdate.SignCount = 2
 	staleUsageUpdate.LastUsedAt = &now
-	require.Error(t, UpsertPasskeyCredential(&staleUsageUpdate))
+	require.Error(t, UpdatePasskeyCredentialAfterAuthentication(&staleUsageUpdate))
 
 	stored, err := GetPasskeyByUserID(user.Id)
 	require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	matchingUsageUpdate.ID = 0
 	matchingUsageUpdate.SignCount = 11
 	matchingUsageUpdate.LastUsedAt = &later
-	require.NoError(t, UpsertPasskeyCredential(&matchingUsageUpdate))
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&matchingUsageUpdate))
 	stored, err = GetPasskeyByUserID(user.Id)
 	require.NoError(t, err)
 	require.Equal(t, replacement.CredentialID, stored.CredentialID)

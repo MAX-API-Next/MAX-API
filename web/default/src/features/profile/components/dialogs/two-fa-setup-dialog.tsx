@@ -16,13 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  type ReactNode,
-} from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
@@ -62,6 +56,7 @@ export function TwoFASetupDialog({
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [initializing, setInitializing] = useState(false)
+  const [setupAttempted, setSetupAttempted] = useState(false)
   const [step, setStep] = useState(0)
   const [setupData, setSetupData] = useState<TwoFASetupData | null>(null)
   const [code, setCode] = useState('')
@@ -76,6 +71,7 @@ export function TwoFASetupDialog({
   const handleSetup = useCallback(async () => {
     if (setupInFlightRef.current) return
     setupInFlightRef.current = true
+    setSetupAttempted(false)
     setInitializing(true)
     try {
       const response = await withVerification(setup2FA, {
@@ -102,6 +98,7 @@ export function TwoFASetupDialog({
     } finally {
       setupInFlightRef.current = false
       setInitializing(false)
+      setSetupAttempted(true)
     }
   }, [onOpenChange, t, withVerification])
 
@@ -130,6 +127,7 @@ export function TwoFASetupDialog({
         setStep(0)
         setCode('')
         setSetupData(null)
+        setSetupAttempted(false)
       } else {
         toast.error(response.message || t('Failed to enable 2FA'))
       }
@@ -146,6 +144,7 @@ export function TwoFASetupDialog({
         setStep(0)
         setCode('')
         setSetupData(null)
+        setSetupAttempted(false)
       }
       onOpenChange(open)
     }
@@ -159,7 +158,7 @@ export function TwoFASetupDialog({
   }, [open, setupData, handleSetup])
 
   const renderSetupState = (): ReactNode => {
-    if (initializing) {
+    if (initializing || !setupAttempted) {
       return (
         <div className='flex flex-col items-center justify-center gap-3 py-8'>
           <div className='border-primary h-8 w-8 animate-spin rounded-full border-4 border-t-transparent' />

@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -192,13 +191,7 @@ func Enable2FA(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.SysLog(fmt.Sprintf(
-			"failed to preserve current session after enabling 2FA for user %d: %v",
-			userId,
-			err,
-		))
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "enabling 2FA")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "成功启用两步验证")
@@ -272,13 +265,7 @@ func Disable2FA(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.SysLog(fmt.Sprintf(
-			"failed to preserve current session after disabling 2FA for user %d: %v",
-			userId,
-			err,
-		))
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "disabling 2FA")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "禁用两步验证")
@@ -399,13 +386,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 		common.SysLog("保存备用码失败: " + err.Error())
 		return
 	}
-	if err := preserveCurrentSessionAfterSecurityChange(c, userId, generation); err != nil {
-		common.SysLog(fmt.Sprintf(
-			"failed to preserve current session after regenerating 2FA backup codes for user %d: %v",
-			userId,
-			err,
-		))
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "regenerating 2FA backup codes")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "重新生成两步验证备用码")

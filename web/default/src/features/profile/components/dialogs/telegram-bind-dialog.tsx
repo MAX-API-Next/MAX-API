@@ -16,10 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useRef, useState } from 'react'
 import { RefreshCw, Send } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -31,12 +29,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
-import { useSecureVerificationGate } from '@/features/auth/secure-verification'
-import {
-  bindTelegramAccount,
-  createTelegramBindState,
-  type TelegramAuthorizationPayload,
-} from '../../api'
+import { useTelegramLoginWidget } from '../../hooks/use-telegram-login-widget'
 
 // ============================================================================
 // Telegram Bind Dialog Component
@@ -56,160 +49,8 @@ export function TelegramBindDialog({
   onSuccess,
 }: TelegramBindDialogProps) {
   const { t } = useTranslation()
-  const { withVerification } = useSecureVerificationGate()
-  const widgetContainerRef = useRef<HTMLDivElement>(null)
-  const [callbackName] = useState(
-    () => `telegramAuthCallback_${Math.random().toString(36).slice(2)}`
-  )
-  const [bindState, setBindState] = useState('')
-  const [status, setStatus] = useState<
-    'idle' | 'loading' | 'ready' | 'binding' | 'error'
-  >('idle')
-  const [errorMessage, setErrorMessage] = useState('')
-  const [retryVersion, setRetryVersion] = useState(0)
-
-  const resetBindingState = useCallback(() => {
-    setBindState('')
-    setStatus('idle')
-    setErrorMessage('')
-  }, [])
-
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen) resetBindingState()
-      onOpenChange(nextOpen)
-    },
-    [onOpenChange, resetBindingState]
-  )
-  const callbackHandlersRef = useRef({
-    handleOpenChange,
-    onSuccess,
-    t,
-    withVerification,
-  })
-  useEffect(() => {
-    callbackHandlersRef.current = {
-      handleOpenChange,
-      onSuccess,
-      t,
-      withVerification,
-    }
-  }, [handleOpenChange, onSuccess, t, withVerification])
-
-  const initializeBinding = useCallback(async (): Promise<void> => {
-    const handlers = callbackHandlersRef.current
-    setStatus('loading')
-    setErrorMessage('')
-    try {
-      const response = await handlers.withVerification(
-        createTelegramBindState,
-        {
-          scope: 'credentials',
-          title: handlers.t('Security verification'),
-          description: handlers.t(
-            'Confirm your identity before binding a Telegram account.'
-          ),
-        }
-      )
-      if (!response) {
-        setStatus('idle')
-        return
-      }
-      if (!response.success || !response.data?.state) {
-        throw new Error(
-          response.message ||
-            handlers.t('Failed to initialize Telegram binding')
-        )
-      }
-      setBindState(response.data.state)
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : handlers.t('Failed to initialize Telegram binding')
-      )
-      setStatus('error')
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-    const timer = window.setTimeout(() => void initializeBinding(), 0)
-    return () => window.clearTimeout(timer)
-  }, [initializeBinding, open, retryVersion])
-
-  useEffect(() => {
-    if (!open || !bindState || !widgetContainerRef.current) return
-
-    const container = widgetContainerRef.current
-    const windowCallbacks = window as unknown as Record<string, unknown>
-    container.replaceChildren()
-
-    windowCallbacks[callbackName] = async (
-      authorization: TelegramAuthorizationPayload
-    ) => {
-      const handlers = callbackHandlersRef.current
-      setStatus('binding')
-      setErrorMessage('')
-      try {
-        const response = await handlers.withVerification(
-          () => bindTelegramAccount({ ...authorization, state: bindState }),
-          {
-            scope: 'credentials',
-            title: handlers.t('Security verification'),
-            description: handlers.t(
-              'Confirm your identity before binding a Telegram account.'
-            ),
-          }
-        )
-        if (!response) {
-          setStatus('ready')
-          return
-        }
-        if (!response.success) {
-          throw new Error(
-            response.message || handlers.t('Failed to bind Telegram account')
-          )
-        }
-        toast.success(handlers.t('Telegram account bound successfully'))
-        callbackHandlersRef.current.onSuccess()
-        callbackHandlersRef.current.handleOpenChange(false)
-      } catch (error) {
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : handlers.t('Failed to bind Telegram account')
-        )
-        setStatus('error')
-      }
-    }
-
-    const script = document.createElement('script')
-    script.async = true
-    script.src = 'https://telegram.org/js/telegram-widget.js?22'
-    script.setAttribute('data-telegram-login', botName.replace(/^@/, ''))
-    script.setAttribute('data-size', 'large')
-    script.setAttribute('data-userpic', 'false')
-    script.setAttribute('data-onauth', `${callbackName}(user)`)
-    script.onload = () => setStatus('ready')
-    script.onerror = () => {
-      setErrorMessage(
-        callbackHandlersRef.current.t('Failed to load Telegram Login Widget')
-      )
-      setStatus('error')
-    }
-    container.appendChild(script)
-
-    return () => {
-      delete windowCallbacks[callbackName]
-      container.replaceChildren()
-    }
-  }, [bindState, botName, callbackName, open])
-
-  const retry = () => {
-    setBindState('')
-    setRetryVersion((version) => version + 1)
-  }
+  const { widgetContainerRef, status, errorMessage, retry, handleOpenChange } =
+    useTelegramLoginWidget({ open, onOpenChange, botName, onSuccess })
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>

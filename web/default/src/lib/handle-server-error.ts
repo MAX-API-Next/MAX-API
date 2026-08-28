@@ -63,6 +63,8 @@ export function resolveServerErrorMessage(
 
     const responseMessage = getAxiosResponseText(error, 'message')
     if (responseMessage) return responseMessage
+
+    return isContentNotFound ? contentNotFound : fallback
   }
 
   if (

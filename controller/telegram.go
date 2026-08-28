@@ -26,6 +26,12 @@ const (
 	telegramBindFlowTTL      = 5 * time.Minute
 )
 
+var telegramLoginFlowMatch = model.AuthFlowMatch{
+	Purpose:  model.AuthFlowPurposeOAuth,
+	Provider: "telegram",
+	Intent:   model.AuthFlowIntentLogin,
+}
+
 type telegramAuthPayload struct {
 	ID        int64  `json:"id"`
 	FirstName string `json:"first_name,omitempty"`
@@ -121,10 +127,7 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 	clearOAuthSessionState(c)
-	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userID, generation, "binding Telegram")
 	recordUserSecurityAudit(c, userID, "user.telegram_bind", nil)
 	common.ApiSuccess(c, nil)
 }
@@ -139,10 +142,20 @@ func TelegramLogin(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "无效或已过期的 Telegram 授权"})
 		return
 	}
+	state := params.Get("state")
+	if !oauthSessionStateMatches(c, state) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
 	user := model.User{TelegramId: params.Get("id")}
 	if err := user.FillUserByTelegramId(); handleOAuthUserLookupError(c, err) {
 		return
 	}
+	if _, err := model.ConsumeAuthFlow(state, telegramLoginFlowMatch); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	clearOAuthSessionState(c)
 	setupLogin(&user, c)
 }
 

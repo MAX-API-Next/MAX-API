@@ -5478,7 +5478,7 @@
     "Failed to initialize Telegram binding": "Telegram連携の初期化に失敗しました",
     "Failed to load Telegram Login Widget": "Telegramログインウィジェットの読み込みに失敗しました",
     "Failed to sign out other sessions": "他のセッションからのログアウトに失敗しました",
-    "Keep this session and revoke all other signed-in devices": "現在のセッションを保持し、他のすべての端末のログインを取り消す",
+    "Keep this session and revoke all other signed-in devices": "現在のセッションを保持し、他のすべての端末からログアウトする",
     "No verification method is available. Add a password or sign in again with a linked account.": "利用可能な確認方法がありません。パスワードを追加するか、連携済みアカウントで再度ログインしてください。",
     "Other sessions signed out successfully": "他のセッションから正常にログアウトしました",
     "Preparing Telegram authorization...": "Telegram認証を準備しています...",

@@ -175,6 +175,9 @@ func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
+	if effect != nil && relayInfo.RequestId != "" {
+		return postConsumeQuotaOnceWithEffect(relayInfo, "finalize", quotaDelta, relayInfo.FinalPreConsumedQuota, true, effect)
+	}
 	if quotaDelta != 0 {
 		return false, PostConsumeQuotaOnce(relayInfo, "finalize", quotaDelta, relayInfo.FinalPreConsumedQuota, true)
 	}

@@ -25,9 +25,14 @@ import (
 type recordingTaskReservationBilling struct {
 	preConsumed int
 	reserveTo   []int
+	settleTo    []int
 }
 
-func (b *recordingTaskReservationBilling) Settle(int) error         { return nil }
+func (b *recordingTaskReservationBilling) Settle(actualQuota int) error {
+	b.settleTo = append(b.settleTo, actualQuota)
+	b.preConsumed = actualQuota
+	return nil
+}
 func (b *recordingTaskReservationBilling) Refund(*gin.Context)      {}
 func (b *recordingTaskReservationBilling) NeedsRefund() bool        { return true }
 func (b *recordingTaskReservationBilling) GetPreConsumedQuota() int { return b.preConsumed }
@@ -53,6 +58,27 @@ func TestReserveTaskQuotaUsesActualReservationAndExtendsRetries(t *testing.T) {
 	require.Nil(t, taskErr)
 	assert.Equal(t, 250, reserved)
 	assert.Equal(t, []int{250}, billing.reserveTo)
+}
+
+func TestReserveTaskQuotaPreservesPaidReservationUntilFreeRetrySettlement(t *testing.T) {
+	billing := &recordingTaskReservationBilling{preConsumed: 100}
+	info := &relaycommon.RelayInfo{
+		Billing: billing,
+		PriceData: types.PriceData{
+			FreeModel: true,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 0)
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, 100, reserved)
+	assert.Same(t, billing, info.Billing)
+	assert.Empty(t, billing.reserveTo)
+
+	require.NoError(t, info.Billing.Settle(0))
+	assert.Equal(t, []int{0}, billing.settleTo)
+	assert.Zero(t, info.Billing.GetPreConsumedQuota())
 }
 
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {

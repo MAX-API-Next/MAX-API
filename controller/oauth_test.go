@@ -31,16 +31,44 @@ func (*deletedUserOAuthProvider) ExchangeToken(context.Context, string, *gin.Con
 func setupControllerAuthFlowDB(t *testing.T) {
 	t.Helper()
 	originalDB := model.DB
+	originalLogDB := model.LOG_DB
 	db, err := gorm.Open(sqlite.Open("file:controller_auth_flow?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}))
+	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}, &model.User{}, &model.Log{}))
 	model.DB = db
+	model.LOG_DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
+		model.LOG_DB = originalLogDB
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
 	})
+}
+
+func TestGenerateOAuthCodeCreatesTelegramLoginState(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("telegram-state-create-test"))))
+	router.POST("/api/oauth/state", GenerateOAuthCode)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"login"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Data    string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.NotEmpty(t, response.Data)
+	_, err := model.GetAuthFlow(response.Data, model.AuthFlowMatch{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "telegram", Intent: model.AuthFlowIntentLogin,
+	})
+	require.NoError(t, err)
 }
 
 func TestGenerateOAuthCodeCreatesProviderBoundOpaqueState(t *testing.T) {

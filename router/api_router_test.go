@@ -377,6 +377,14 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 		require.Contains(t, properties, property)
 	}
 
+	telegramLogin := document.Paths["/api/oauth/telegram/login"]["get"]
+	parameters := telegramLogin["parameters"].([]any)
+	require.Len(t, parameters, 1)
+	stateParameter := parameters[0].(map[string]any)
+	require.Equal(t, "state", stateParameter["name"])
+	require.Equal(t, "query", stateParameter["in"])
+	require.Equal(t, true, stateParameter["required"])
+
 	for path, method := range map[string]string{
 		"/api/oauth/telegram/bind/state": "post",
 		"/api/user/sessions/revoke":      "post",

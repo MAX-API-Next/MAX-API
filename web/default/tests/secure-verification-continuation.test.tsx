@@ -374,7 +374,7 @@ describe('useSecureVerification', () => {
     assert.equal(await firstContinuation, null)
     await act(async () => {
       firstDiscovery.resolve(availableVerificationMethods)
-      await Promise.resolve()
+      await flushMacrotask()
     })
     assert.equal(result.current.open, false)
 
