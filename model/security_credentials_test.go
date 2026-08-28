@@ -130,6 +130,12 @@ func TestPasskeyAndTwoFASecurityChangesBumpSessionGeneration(t *testing.T) {
 	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&backupCode).Error)
 	require.NotEqual(t, "ABCD-EFGH", backupCode.CodeHash)
 	require.True(t, common.ValidatePasswordAndHash("ABCD-EFGH", backupCode.CodeHash))
+	valid, err := ValidateBackupCode(user.Id, "ABCD-EFGH")
+	require.NoError(t, err)
+	require.True(t, valid)
+	valid, err = ValidateBackupCode(user.Id, "ABCD-EFGH")
+	require.NoError(t, err)
+	require.False(t, valid)
 
 	generation, err = DisableTwoFAAndBumpSessionGeneration(user.Id)
 	require.NoError(t, err)
@@ -173,7 +179,7 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	now := time.Now()
 	staleUsageUpdate.SignCount = 2
 	staleUsageUpdate.LastUsedAt = &now
-	require.Error(t, UpdatePasskeyCredentialAfterAuthentication(&staleUsageUpdate))
+	require.ErrorIs(t, UpdatePasskeyCredentialAfterAuthentication(&staleUsageUpdate), ErrPasskeyCredentialChanged)
 
 	stored, err := GetPasskeyByUserID(user.Id)
 	require.NoError(t, err)

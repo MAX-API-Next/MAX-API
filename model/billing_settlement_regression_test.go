@@ -92,6 +92,11 @@ func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	assert.False(t, blocked)
 }
 
+func TestBillingRequestFinalizeOperationKey(t *testing.T) {
+	assert.Equal(t, "request:example-request:finalize", BillingRequestFinalizeOperationKey("example-request"))
+	assert.Equal(t, "request:%:finalize", BillingRequestFinalizeOperationKey("%"))
+}
+
 func TestSubscriptionSettlementUsesActualAppliedRefundForToken(t *testing.T) {
 	setupUserUpdateTestState(t)
 

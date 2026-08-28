@@ -309,7 +309,7 @@ func (s *BillingSession) prepareDurableSettlementLocked(actualQuota int, effect 
 		tokenDelta = 0
 	}
 	input := &model.BillingSettlementInput{
-		OperationKey:                    "request:" + s.relayInfo.RequestId + ":finalize",
+		OperationKey:                    model.BillingRequestFinalizeOperationKey(s.relayInfo.RequestId),
 		Source:                          source,
 		UserID:                          userID,
 		SubscriptionID:                  subscriptionID,
@@ -384,7 +384,7 @@ func (s *BillingSession) refundSettlementInputLocked() (*model.BillingSettlement
 		return nil, fmt.Errorf("billing refund skipped for non-durable funding source (userId=%d, requestId=%s)", s.relayInfo.UserId, requestID)
 	}
 	return &model.BillingSettlementInput{
-		OperationKey:                    "request:" + requestID + ":finalize",
+		OperationKey:                    model.BillingRequestFinalizeOperationKey(requestID),
 		Source:                          source,
 		UserID:                          userID,
 		SubscriptionID:                  subscriptionID,

@@ -156,7 +156,7 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"violation_fee_marker": CSAMViolationMarker,
 	}
 	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
-	effect := newConsumeBillingSettlementEffect(model.RecordConsumeLogParams{
+	logParams := model.RecordConsumeLogParams{
 		ChannelId:      relayInfo.ChannelId,
 		ModelName:      relayInfo.OriginModelName,
 		TokenName:      tokenName,
@@ -167,7 +167,8 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		IsStream:       relayInfo.IsStream,
 		Group:          relayInfo.UsingGroup,
 		Other:          other,
-	}, requestID, upstreamRequestID, true)
+	}
+	effect := newConsumeBillingSettlementEffect(logParams, requestID, upstreamRequestID, true)
 
 	if settler, ok := relayInfo.Billing.(interface {
 		SettleWithEffect(int, *model.BillingSettlementEffect) error
@@ -186,18 +187,7 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
 	model.UpdateChannelUsedQuota(relayInfo.ChannelId, feeQuota)
 
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
-		ChannelId:      relayInfo.ChannelId,
-		ModelName:      relayInfo.OriginModelName,
-		TokenName:      tokenName,
-		Quota:          feeQuota,
-		Content:        "Violation fee charged",
-		TokenId:        relayInfo.TokenId,
-		UseTimeSeconds: int(useTimeSeconds),
-		IsStream:       relayInfo.IsStream,
-		Group:          relayInfo.UsingGroup,
-		Other:          other,
-	})
+	model.RecordConsumeLog(ctx, relayInfo.UserId, logParams)
 
 	return violationFeeChargeResult{applicable: true, settled: true}
 }

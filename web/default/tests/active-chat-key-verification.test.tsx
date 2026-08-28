@@ -23,7 +23,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
 import assert from 'node:assert/strict'
 
-const withVerification = mock(async () => null)
+const withApiTokenVerification = mock(async () => null)
 
 mock.module('../src/stores/auth-store', () => ({
   useAuthStore: (selector: (state: unknown) => unknown) =>
@@ -31,7 +31,7 @@ mock.module('../src/stores/auth-store', () => ({
 }))
 
 mock.module('../src/features/auth/secure-verification', () => ({
-  useSecureVerificationGate: () => ({ withVerification }),
+  useApiTokenVerification: () => withApiTokenVerification,
 }))
 
 mock.module('../src/features/keys/api', () => ({
@@ -49,7 +49,7 @@ const { useActiveChatKey } = await import(
 const testEnv = createReactTestEnvironment()
 
 beforeAll(() => testEnv.setup())
-beforeEach(() => withVerification.mockClear())
+beforeEach(() => withApiTokenVerification.mockClear())
 afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
@@ -66,6 +66,6 @@ test('does not retry a cancelled chat API-key verification', async () => {
   const { result } = renderHook(() => useActiveChatKey(true), { wrapper })
 
   await waitFor(() => assert.equal(result.current.isError, true))
-  assert.equal(withVerification.mock.calls.length, 1)
+  assert.equal(withApiTokenVerification.mock.calls.length, 1)
   queryClient.clear()
 })

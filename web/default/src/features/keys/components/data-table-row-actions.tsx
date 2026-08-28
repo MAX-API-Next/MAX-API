@@ -230,7 +230,11 @@ export function DataTableRowActions<TData>({
               const realKey = await resolveRealKey(apiKey.id)
               if (!realKey) return
               const ok = await copyToClipboard(realKey)
-              if (ok) toast.success(t('Copied'))
+              if (ok) {
+                toast.success(t('Copied'))
+              } else {
+                toast.error(t('Failed to copy to clipboard'))
+              }
             }}
           >
             {t('Copy Key')}
@@ -247,7 +251,11 @@ export function DataTableRowActions<TData>({
                 getServerAddress()
               )
               const ok = await copyToClipboard(connStr)
-              if (ok) toast.success(t('Copied'))
+              if (ok) {
+                toast.success(t('Copied'))
+              } else {
+                toast.error(t('Failed to copy to clipboard'))
+              }
             }}
           >
             {t('Copy Connection Info')}

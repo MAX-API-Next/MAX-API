@@ -61,9 +61,10 @@ const copyToClipboard = mock(async () => false)
 const toastError = mock(() => undefined)
 
 mock.module('../src/features/auth/secure-verification', () => ({
-  useSecureVerificationGate: () => ({
-    withVerification: <T,>(apiCall: () => Promise<T>) => apiCall(),
-  }),
+  useApiTokenVerification:
+    () =>
+    <T,>(apiCall: () => Promise<T>) =>
+      apiCall(),
 }))
 
 mock.module('react-i18next', () => ({

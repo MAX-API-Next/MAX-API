@@ -157,7 +157,7 @@ func taskFinalSettlementPending(task *model.Task) (bool, error) {
 	if task == nil || task.PrivateData.BillingRequestId == "" {
 		return false, nil
 	}
-	status, found, err := model.GetBillingSettlementStatus("request:" + task.PrivateData.BillingRequestId + ":finalize")
+	status, found, err := model.GetBillingSettlementStatus(model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId))
 	if err != nil || !found {
 		return false, err
 	}

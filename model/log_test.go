@@ -1068,6 +1068,51 @@ func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
 	require.Equal(t, "current-token-name", log.TokenName)
 }
 
+func TestBillingSettlementEffectRejectsNegativeUsageProjection(t *testing.T) {
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	const userID = 7021
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "negative-effect-user", AffCode: "negative-effect-user-aff",
+		Status: common.UserStatusEnabled, UsedQuota: 12, RequestCount: 3,
+	}).Error)
+	const operationKey = "request:negative-usage-effect"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "negative usage must not project",
+			UpdateUsage:   true,
+			Quota:         -5,
+			QuotaIsActual: true,
+			RequestID:     "negative-usage-effect-request",
+		},
+	})
+	require.NoError(t, err)
+	require.ErrorContains(t, ProcessBillingSettlementEffect(operationKey), "usage quota cannot be negative")
+
+	var user User
+	require.NoError(t, DB.First(&user, userID).Error)
+	require.EqualValues(t, 12, user.UsedQuota)
+	require.Equal(t, 3, user.RequestCount)
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, BillingSettlementEffectPending, settlement.EffectStatus)
+	var logCount int64
+	require.NoError(t, LOG_DB.Where("request_id = ?", "negative-usage-effect-request").Model(&Log{}).Count(&logCount).Error)
+	require.Zero(t, logCount)
+}
+
 func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
 	resetQuotaDataCacheForTest(t)
 

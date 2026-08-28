@@ -38,6 +38,8 @@ const popupWindow = {
   opener: {} as Window,
 } as unknown as Window
 const openWindow = mock(() => popupWindow)
+const copyToClipboard = mock(async () => false)
+const toastError = mock(() => undefined)
 
 function Container(props: { children?: ReactNode }): ReactElement {
   return <div>{props.children}</div>
@@ -49,11 +51,13 @@ mock.module('react-i18next', () => ({
 
 mock.module('sonner', () => ({
   toast: {
-    error: mock(() => undefined),
+    error: toastError,
     info: mock(() => undefined),
     success: mock(() => undefined),
   },
 }))
+
+mock.module('../src/lib/copy-to-clipboard', () => ({ copyToClipboard }))
 
 mock.module('../src/components/ui/button', () => ({
   Button: (props: {
@@ -146,29 +150,8 @@ const { DataTableRowActions } = await import(
 const testEnv = createReactTestEnvironment()
 let originalWindowOpen: typeof window.open
 
-beforeAll(async () => {
-  await testEnv.setup()
-  originalWindowOpen = window.open
-  window.open = openWindow as typeof window.open
-})
-
-beforeEach(() => {
-  resolveKeyRequest = undefined
-  resolveRealKey.mockClear()
-  openWindow.mockClear()
-  replaceLocation.mockClear()
-  closePopup.mockClear()
-})
-
-afterEach(() => cleanup())
-
-afterAll(() => {
-  window.open = originalWindowOpen
-  testEnv.teardown()
-})
-
-test('opens a placeholder before resolving the API key', async () => {
-  const view = render(
+function renderRowActions(): ReturnType<typeof render> {
+  return render(
     <DataTableRowActions
       row={
         {
@@ -194,6 +177,34 @@ test('opens a placeholder before resolving the API key', async () => {
       }
     />
   )
+}
+
+beforeAll(async () => {
+  await testEnv.setup()
+  originalWindowOpen = window.open
+  window.open = openWindow as typeof window.open
+})
+
+beforeEach(() => {
+  resolveKeyRequest = undefined
+  resolveRealKey.mockClear()
+  openWindow.mockClear()
+  replaceLocation.mockClear()
+  closePopup.mockClear()
+  copyToClipboard.mockClear()
+  toastError.mockClear()
+  popupWindow.opener = {} as Window
+})
+
+afterEach(() => cleanup())
+
+afterAll(() => {
+  window.open = originalWindowOpen
+  testEnv.teardown()
+})
+
+test('opens a placeholder before resolving the API key', async () => {
+  const view = renderRowActions()
 
   fireEvent.click(view.getByRole('button', { name: /Browser chat/ }))
 
@@ -206,4 +217,26 @@ test('opens a placeholder before resolving the API key', async () => {
     'https://chat.example.test/?key=resolved-key',
   ])
   assert.equal(popupWindow.opener, null)
+})
+
+test('reports a clipboard failure when copying an API key', async () => {
+  resolveRealKey.mockImplementationOnce(async () => 'resolved-key')
+  const view = renderRowActions()
+
+  fireEvent.click(view.getByRole('button', { name: /Copy Key/ }))
+
+  await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
+  assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
+})
+
+test('reports a clipboard failure when copying connection info', async () => {
+  resolveRealKey.mockImplementationOnce(async () => 'resolved-key')
+  const view = renderRowActions()
+
+  fireEvent.click(
+    view.getByRole('button', { name: /Copy Connection Info/ })
+  )
+
+  await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
+  assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
 })

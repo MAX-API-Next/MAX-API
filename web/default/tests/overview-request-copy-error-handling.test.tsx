@@ -30,10 +30,11 @@ import {
 import assert from 'node:assert/strict'
 
 let verificationError = new Error('request failed')
-const withVerification = mock(
-  async (_apiCall: () => Promise<unknown>, _config?: { scope?: string }) => {
-    throw verificationError
-  }
+const withApiTokenVerification = mock(async () => {
+  throw verificationError
+})
+const useApiTokenVerification = mock(
+  (_description?: string) => withApiTokenVerification
 )
 const handleServerError = mock(
   (_error: unknown, _options?: { fallback?: string }) => undefined
@@ -51,7 +52,7 @@ mock.module('sonner', () => ({
 }))
 
 mock.module('@/features/auth/secure-verification', () => ({
-  useSecureVerificationGate: () => ({ withVerification }),
+  useApiTokenVerification,
 }))
 
 mock.module('@/lib/handle-server-error', () => ({ handleServerError }))
@@ -64,7 +65,8 @@ const testEnv = createReactTestEnvironment()
 beforeAll(() => testEnv.setup())
 beforeEach(() => {
   verificationError = new Error('request failed')
-  withVerification.mockClear()
+  withApiTokenVerification.mockClear()
+  useApiTokenVerification.mockClear()
   handleServerError.mockClear()
 })
 afterEach(() => cleanup())
@@ -107,7 +109,9 @@ test('reports an unreported request-copy rejection and consumes it', async () =>
 
   await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
   await waitForCopyToSettle(view)
-  assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'api_token')
+  assert.equal(useApiTokenVerification.mock.calls[0]?.[0],
+    'Confirm your identity before copying a request with your API key.'
+  )
   assert.equal(handleServerError.mock.calls[0]?.[0], verificationError)
   assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
     fallback: 'Failed to copy to clipboard',
@@ -120,7 +124,9 @@ test('does not duplicate a rejection already reported by verification', async ()
 
   fireEvent.click(view.getByRole('button', { name: 'Copy ready-to-run curl' }))
 
-  await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
+  await waitFor(() =>
+    assert.equal(withApiTokenVerification.mock.calls.length, 1)
+  )
   await waitForCopyToSettle(view)
   assert.equal(handleServerError.mock.calls.length, 0)
 })

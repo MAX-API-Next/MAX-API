@@ -24,6 +24,9 @@ const (
 	BillingSettlementEffectApplied      = "applied"
 )
 
+const billingRequestOperationPrefix = "request:"
+const billingRequestFinalizeSuffix = ":finalize"
+
 var (
 	ErrBillingSettlementManualReview       = errors.New("billing settlement requires manual review")
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
@@ -230,13 +233,17 @@ func HasUnresolvedPositiveFinalizeSettlement(userID int) (bool, error) {
 		Where("user_id = ?", userID).
 		Where("funding_delta > 0").
 		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
-		Where("operation_key LIKE ?", "request:%:finalize").
+		Where("operation_key LIKE ?", BillingRequestFinalizeOperationKey("%")).
 		Limit(1).
 		Find(&record)
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+func BillingRequestFinalizeOperationKey(requestID string) string {
+	return billingRequestOperationPrefix + requestID + billingRequestFinalizeSuffix
 }
 
 // GetBillingSettlementStatus returns the durable funding state for one stable
@@ -765,6 +772,9 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 	logQuota := appliedDelta
 	if useActualQuota {
 		logQuota = effect.Quota
+	}
+	if effect.UpdateUsage && logQuota < 0 {
+		return fmt.Errorf("billing settlement effect usage quota cannot be negative: operation=%s quota=%d", operationKey, logQuota)
 	}
 	if logQuota != 0 || effect.QuotaIsActual {
 		other := effect.Other

@@ -20,7 +20,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import useDialogState from '@/hooks/use-dialog'
-import { useSecureVerificationGate } from '@/features/auth/secure-verification'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, fetchTokenKeysBatch } from '../api'
 import { ERROR_MESSAGES } from '../constants'
 import { type ApiKey, type ApiKeysDialogType } from '../types'
@@ -51,7 +51,9 @@ const ApiKeysContext = React.createContext<ApiKeysContextType | null>(null)
 
 export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation()
-  const { withVerification } = useSecureVerificationGate()
+  const withApiTokenVerification = useApiTokenVerification(
+    t('Confirm your identity before creating or revealing API keys.')
+  )
   const [open, setOpen] = useDialogState<ApiKeysDialogType>(null)
   const [currentRow, setCurrentRow] = useState<ApiKey | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
@@ -79,18 +81,6 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
   const triggerRefresh = useCallback(() => {
     setRefreshTrigger((prev) => prev + 1)
   }, [])
-
-  const withApiTokenVerification = useCallback(
-    <T,>(apiCall: () => Promise<T>) =>
-      withVerification(apiCall, {
-        scope: 'api_token',
-        title: t('Security verification'),
-        description: t(
-          'Confirm your identity before creating or revealing API keys.'
-        ),
-      }),
-    [t, withVerification]
-  )
 
   const resolveRealKey = useCallback(
     async (

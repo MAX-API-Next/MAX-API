@@ -179,6 +179,11 @@ func replaceBackupCodeHashesTx(tx *gorm.DB, userID int, hashes []string) error {
 	return nil
 }
 
+func lockTwoFACredentialUserTx(tx *gorm.DB, userID int) error {
+	var user User
+	return withRowLock(tx).Select("id").Where("id = ?", userID).First(&user).Error
+}
+
 // ValidateBackupCode 验证并使用备用码
 func ValidateBackupCode(userId int, code string) (bool, error) {
 	if !common.ValidateBackupCode(code) {
@@ -187,29 +192,33 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 
 	normalizedCode := common.NormalizeBackupCode(code)
 
-	// 查找未使用的备用码
-	var backupCodes []TwoFABackupCode
-	if err := DB.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
-		return false, err
-	}
-
-	// 验证备用码
-	for _, bc := range backupCodes {
-		if common.ValidatePasswordAndHash(normalizedCode, bc.CodeHash) {
-			// 标记为已使用
-			now := time.Now()
-			bc.IsUsed = true
-			bc.UsedAt = &now
-
-			if err := DB.Save(&bc).Error; err != nil {
-				return false, err
-			}
-
-			return true, nil
+	validated := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
+			return err
 		}
-	}
 
-	return false, nil
+		var backupCodes []TwoFABackupCode
+		if err := tx.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
+			return err
+		}
+		for _, bc := range backupCodes {
+			if !common.ValidatePasswordAndHash(normalizedCode, bc.CodeHash) {
+				continue
+			}
+			now := time.Now()
+			result := tx.Model(&TwoFABackupCode{}).
+				Where("id = ? AND user_id = ? AND is_used = ?", bc.Id, userId, false).
+				Updates(map[string]interface{}{"is_used": true, "used_at": &now})
+			if result.Error != nil {
+				return result.Error
+			}
+			validated = result.RowsAffected == 1
+			return nil
+		}
+		return nil
+	})
+	return validated, err
 }
 
 // GetUnusedBackupCodeCount 获取未使用的备用码数量
@@ -237,6 +246,9 @@ func DisableTwoFAAndBumpSessionGeneration(userID int) (int64, error) {
 	var generation int64
 	var cacheTask CacheInvalidationTask
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, userID); err != nil {
+			return err
+		}
 		var twoFA TwoFA
 		if err := tx.Where("user_id = ? AND is_enabled = ?", userID, true).First(&twoFA).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -311,6 +323,9 @@ func ReplaceBackupCodesAndBumpSessionGeneration(userID int, codes []string) (int
 	var generation int64
 	var cacheTask CacheInvalidationTask
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, userID); err != nil {
+			return err
+		}
 		var enabledCount int64
 		if err := tx.Model(&TwoFA{}).
 			Where("user_id = ? AND is_enabled = ?", userID, true).

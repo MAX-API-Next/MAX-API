@@ -20,7 +20,7 @@ import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { useSecureVerificationGate } from '@/features/auth/secure-verification'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import { API_KEY_STATUS } from '@/features/keys/constants'
 
@@ -49,20 +49,14 @@ export async function fetchActiveChatKey() {
  */
 export function useActiveChatKey(enabled: boolean) {
   const userId = useAuthStore((state) => state.auth.user?.id)
-  const { withVerification } = useSecureVerificationGate()
+  const withApiTokenVerification = useApiTokenVerification()
   const queryFn = useCallback(async (): Promise<string> => {
-    const key = await withVerification(fetchActiveChatKey, {
-      scope: 'api_token',
-      title: i18next.t('Security verification'),
-      description: i18next.t(
-        'Confirm your identity before sending an API key to a chat client.'
-      ),
-    })
+    const key = await withApiTokenVerification(fetchActiveChatKey)
     if (!key) {
       throw new Error(i18next.t('API key verification was cancelled'))
     }
     return key
-  }, [withVerification])
+  }, [withApiTokenVerification])
 
   return useQuery({
     queryKey: ['chat-active-key', userId],

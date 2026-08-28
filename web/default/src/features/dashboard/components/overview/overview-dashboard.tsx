@@ -56,7 +56,7 @@ import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
-import { useSecureVerificationGate } from '@/features/auth/secure-verification'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
 import {
@@ -384,7 +384,9 @@ export function RequestPreview(props: {
 }) {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
-  const { withVerification } = useSecureVerificationGate()
+  const withApiTokenVerification = useApiTokenVerification(
+    t('Confirm your identity before copying a request with your API key.')
+  )
   const [isCopying, setIsCopying] = useState(false)
   const { copyToClipboard } = useCopyToClipboard({ notify: false })
   const previewCurl = buildCurlCommand({
@@ -399,13 +401,7 @@ export function RequestPreview(props: {
 
     setIsCopying(true)
     try {
-      const result = await withVerification(() => fetchTokenKey(keyId), {
-        scope: 'api_token',
-        title: t('Security verification'),
-        description: t(
-          'Confirm your identity before copying a request with your API key.'
-        ),
-      })
+      const result = await withApiTokenVerification(() => fetchTokenKey(keyId))
       if (!result) return
       const key = result.success && result.data?.key ? result.data.key : ''
       if (!key) {
