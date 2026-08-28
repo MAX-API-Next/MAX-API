@@ -19,7 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { getSafeErrorDebugInfo } from './handle-server-error'
+import {
+  getSafeErrorDebugInfo,
+  resolveServerErrorMessage,
+} from './handle-server-error'
 
 describe('getSafeErrorDebugInfo', () => {
   test('does not include request headers or config', () => {
@@ -36,5 +39,83 @@ describe('getSafeErrorDebugInfo', () => {
       status: undefined,
     })
     assert.doesNotMatch(JSON.stringify(debugInfo), /secret-value/)
+  })
+})
+
+describe('resolveServerErrorMessage', () => {
+  test('uses an ordinary Error message before the fallback', () => {
+    assert.equal(
+      resolveServerErrorMessage(
+        new Error('account disabled'),
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'account disabled'
+    )
+  })
+
+  test('uses an Axios response message before the fallback', () => {
+    const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
+    error.response = {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: { message: 'verification service unavailable' },
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'verification service unavailable'
+    )
+  })
+
+  test('keeps an Axios response title ahead of other messages', () => {
+    const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
+    error.response = {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: {
+        title: 'Invalid verification request',
+        message: 'verification failed',
+      },
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Invalid verification request'
+    )
+  })
+
+  test('ignores empty error messages and uses the fallback', () => {
+    assert.equal(
+      resolveServerErrorMessage(
+        new Error('   '),
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Verification unavailable'
+    )
+  })
+
+  test('preserves the content-not-found message for status 204', () => {
+    assert.equal(
+      resolveServerErrorMessage(
+        { status: 204 },
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Content not found.'
+    )
   })
 })

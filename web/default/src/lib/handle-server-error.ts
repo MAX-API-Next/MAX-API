@@ -31,6 +31,51 @@ interface HandleServerErrorOptions {
   fallback?: string
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function getAxiosResponseText(
+  error: AxiosError,
+  property: 'title' | 'message'
+): string | undefined {
+  const responseData = error.response?.data
+  if (!responseData || typeof responseData !== 'object') return undefined
+
+  const value = (responseData as Record<string, unknown>)[property]
+  return isNonEmptyString(value) ? value : undefined
+}
+
+export function resolveServerErrorMessage(
+  error: unknown,
+  fallback: string,
+  contentNotFound: string
+): string {
+  const isContentNotFound =
+    error !== null &&
+    typeof error === 'object' &&
+    'status' in error &&
+    Number(error.status) === 204
+
+  if (error instanceof AxiosError) {
+    const responseTitle = getAxiosResponseText(error, 'title')
+    if (responseTitle) return responseTitle
+
+    const responseMessage = getAxiosResponseText(error, 'message')
+    if (responseMessage) return responseMessage
+  }
+
+  if (
+    !isContentNotFound &&
+    error instanceof Error &&
+    isNonEmptyString(error.message)
+  ) {
+    return error.message
+  }
+
+  return isContentNotFound ? contentNotFound : fallback
+}
+
 export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {
   if (error instanceof AxiosError) {
     return {
@@ -55,25 +100,11 @@ export function handleServerError(
     console.error('[handleServerError]', getSafeErrorDebugInfo(error))
   }
 
-  let errMsg = options.fallback || i18next.t('Something went wrong!')
-
-  if (
-    error &&
-    typeof error === 'object' &&
-    'status' in error &&
-    Number(error.status) === 204
-  ) {
-    errMsg = i18next.t('Content not found.')
-  }
-
-  if (error instanceof AxiosError) {
-    const responseTitle = (
-      error.response?.data as { title?: unknown } | undefined
-    )?.title
-    if (typeof responseTitle === 'string' && responseTitle) {
-      errMsg = responseTitle
-    }
-  }
+  const errMsg = resolveServerErrorMessage(
+    error,
+    options.fallback || i18next.t('Something went wrong!'),
+    i18next.t('Content not found.')
+  )
 
   toast.error(errMsg)
 }
