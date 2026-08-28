@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { createReactTestEnvironment } from '@/test/react'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import {
   afterAll,
@@ -144,8 +145,9 @@ describe('useSecureVerification', () => {
   })
 
   test('rejects an initial protected action failure without discovery', async () => {
+    const actionError = new Error('protected action failed')
     const apiCall = mock(async () => {
-      throw new Error('protected action failed')
+      throw actionError
     })
     const { result } = renderHook(() => useSecureVerification())
 
@@ -156,6 +158,7 @@ describe('useSecureVerification', () => {
     assert.equal(apiCall.mock.calls.length, 1)
     assert.equal(checkVerificationMethods.mock.calls.length, 0)
     assert.equal(result.current.open, false)
+    assert.equal(wasSecureVerificationErrorReported(actionError), false)
   })
 
   test('continues the original API call after verification succeeds', async () => {
@@ -387,8 +390,9 @@ describe('useSecureVerification', () => {
   })
 
   test('reports verification method discovery failures before rejecting', async () => {
+    const discoveryError = new Error('method discovery unavailable')
     checkVerificationMethods.mockImplementationOnce(async () => {
-      throw new Error('method discovery unavailable')
+      throw discoveryError
     })
     const apiCall = mock(async () => {
       throw verificationRequiredError
@@ -408,6 +412,7 @@ describe('useSecureVerification', () => {
     assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
       fallback: 'Verification unavailable',
     })
+    assert.equal(wasSecureVerificationErrorReported(discoveryError), true)
     assert.equal(toastError.mock.calls.length, 0)
   })
 
@@ -450,6 +455,7 @@ describe('useSecureVerification', () => {
     assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
       fallback: 'protected action retry failed',
     })
+    assert.equal(wasSecureVerificationErrorReported(retryError), true)
     assert.equal(toastError.mock.calls.length, 0)
   })
 

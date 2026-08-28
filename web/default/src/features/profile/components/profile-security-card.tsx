@@ -52,7 +52,7 @@ export function ProfileSecurityCard({
   const { withVerification } = useSecureVerificationGate()
   const [revokingSessions, setRevokingSessions] = useState(false)
 
-  const handleRevokeOtherSessions = async () => {
+  const handleRevokeOtherSessions = async (): Promise<void> => {
     setRevokingSessions(true)
     try {
       const response = await withVerification(revokeOtherSessions, {

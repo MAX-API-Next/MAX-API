@@ -49,3 +49,20 @@ func TestTelegramAuthorizationAcceptsFreshSignedPayload(t *testing.T) {
 	params := signedTelegramParams(t, token, time.Now().Add(-time.Minute))
 	require.True(t, checkTelegramAuthorization(params, token))
 }
+
+func TestTelegramAuthorizationIgnoresLocalBindState(t *testing.T) {
+	const token = "123456:telegram-test-token"
+	now := time.Unix(1_800_000_000, 0)
+	params := signedTelegramParams(t, token, now.Add(-time.Minute))
+	params.Set("state", "local-bind-state")
+
+	require.True(t, checkTelegramAuthorizationAt(params, token, now))
+}
+
+func TestTelegramAuthorizationRejectsAuthDateBeyondClockSkew(t *testing.T) {
+	const token = "123456:telegram-test-token"
+	now := time.Unix(1_800_000_000, 0)
+	params := signedTelegramParams(t, token, now.Add(telegramClockSkew+time.Second))
+
+	require.False(t, checkTelegramAuthorizationAt(params, token, now))
+}

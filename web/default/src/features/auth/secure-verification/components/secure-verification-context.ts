@@ -29,7 +29,7 @@ interface SecureVerificationContextValue {
 export const SecureVerificationContext =
   createContext<SecureVerificationContextValue | null>(null)
 
-export function useSecureVerificationGate() {
+export function useSecureVerificationGate(): SecureVerificationContextValue {
   const context = useContext(SecureVerificationContext)
   if (!context) {
     throw new Error(

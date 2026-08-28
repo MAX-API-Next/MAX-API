@@ -5461,7 +5461,7 @@
     "No active alerts.": "アクティブなアラートはありません。",
     "This process is not currently reporting a sustained CPU, memory, or disk alert.": "このプロセスは現在、継続的な CPU、メモリ、ディスクのアラートを報告していません。",
     "Add a password or sign in again with a linked account to continue.": "パスワードを追加するか、連携済みアカウントで再度ログインして続行してください。",
-    "Add a password or sign in again with a linked account to unlock sensitive operations.": "パスワードを追加するか、連携済みアカウントで再度ログインして機密操作を有効にしてください。",
+    "Add a password or sign in again with a linked account to unlock sensitive operations.": "パスワードを追加するか、連携済みアカウントで再度ログインして機密操作のロックを解除してください。",
     "Additional verification required": "追加の本人確認が必要です",
     "API key verification was cancelled": "APIキーの確認がキャンセルされました",
     "Binding Telegram account...": "Telegramアカウントを連携しています...",

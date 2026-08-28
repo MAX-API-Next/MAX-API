@@ -18,6 +18,22 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { AxiosError } from 'axios'
 
+const reportedSecureVerificationErrors = new WeakSet<object>()
+
+function isTrackableError(error: unknown): error is object {
+  return (
+    (typeof error === 'object' && error !== null) || typeof error === 'function'
+  )
+}
+
+export function markSecureVerificationErrorReported(error: unknown): void {
+  if (isTrackableError(error)) reportedSecureVerificationErrors.add(error)
+}
+
+export function wasSecureVerificationErrorReported(error: unknown): boolean {
+  return isTrackableError(error) && reportedSecureVerificationErrors.has(error)
+}
+
 export interface VerificationRequiredInfo {
   code?: string
   message: string

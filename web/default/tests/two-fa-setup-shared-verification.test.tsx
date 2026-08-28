@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { createReactTestEnvironment } from '@/test/react'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
 import assert from 'node:assert/strict'
 
@@ -79,4 +79,49 @@ test('uses the authenticated layout verification gate for 2FA setup', async () =
 
   await waitFor(() => assert.equal(setup2FA.mock.calls.length, 1))
   assert.equal(withVerification.mock.calls.length, 1)
+})
+
+test('does not restart 2FA setup while initialization is pending', async () => {
+  let resolveSetup:
+    | ((value: Awaited<ReturnType<typeof setup2FA>>) => void)
+    | undefined
+  setup2FA.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveSetup = resolve
+      })
+  )
+
+  const view = render(
+    <TwoFASetupDialog
+      open
+      onOpenChange={mock(() => undefined)}
+      onSuccess={mock(() => undefined)}
+    />
+  )
+  await waitFor(() => assert.equal(setup2FA.mock.calls.length, 1))
+
+  view.rerender(
+    <TwoFASetupDialog
+      open
+      onOpenChange={mock(() => undefined)}
+      onSuccess={mock(() => undefined)}
+    />
+  )
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  })
+  assert.equal(setup2FA.mock.calls.length, 1)
+
+  await act(async () => {
+    resolveSetup?.({
+      success: true,
+      data: {
+        qr_code_data: 'otpauth://totp/MAX-API:test',
+        secret: 'TESTSECRET',
+        backup_codes: ['ABCD-EFGH'],
+      },
+    })
+    await Promise.resolve()
+  })
 })

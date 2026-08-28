@@ -160,8 +160,10 @@ describe('API key plaintext lifecycle', () => {
 
     fireEvent.click(view.getByRole('button', { name: 'Copy API key' }))
 
-    await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
-    assert.equal(toastError.mock.calls.length, 1)
-    assert.equal(toastError.mock.calls[0]?.[0], 'Failed to copy to clipboard')
+    await waitFor(() => {
+      assert.equal(copyToClipboard.mock.calls.length, 1)
+      assert.equal(toastError.mock.calls.length, 1)
+      assert.equal(toastError.mock.calls[0]?.[0], 'Failed to copy to clipboard')
+    })
   })
 })

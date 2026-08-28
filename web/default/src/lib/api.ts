@@ -239,6 +239,21 @@ export const sensitiveActionConfig: ApiRequestConfig = {
   skipErrorHandler: true,
 }
 
+export interface TwoFASetupResponse {
+  success: boolean
+  message?: string
+  data?: {
+    secret: string
+    qr_code_data: string
+    backup_codes: string[]
+  }
+}
+
+export interface TwoFAActionResponse {
+  success: boolean
+  message?: string
+}
+
 // Get 2FA status
 export async function get2FAStatus() {
   const res = await api.get('/api/user/2fa/status')
@@ -246,8 +261,8 @@ export async function get2FAStatus() {
 }
 
 // Setup 2FA
-export async function setup2FA() {
-  const res = await api.post(
+export async function setup2FA(): Promise<TwoFASetupResponse> {
+  const res = await api.post<TwoFASetupResponse>(
     '/api/user/2fa/setup',
     undefined,
     sensitiveActionConfig
@@ -256,8 +271,8 @@ export async function setup2FA() {
 }
 
 // Enable 2FA with verification code
-export async function enable2FA(code: string) {
-  const res = await api.post(
+export async function enable2FA(code: string): Promise<TwoFAActionResponse> {
+  const res = await api.post<TwoFAActionResponse>(
     '/api/user/2fa/enable',
     { code },
     sensitiveActionConfig

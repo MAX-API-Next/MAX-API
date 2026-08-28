@@ -470,7 +470,8 @@ func TestSensitiveCredentialRoutesRequireStepUp(t *testing.T) {
 		path string
 		body string
 	}{
-		{name: "passkey registration", path: "/api/user/passkey/register/begin", body: `{}`},
+		{name: "passkey registration begin", path: "/api/user/passkey/register/begin", body: `{}`},
+		{name: "passkey registration finish", path: "/api/user/passkey/register/finish", body: `{}`},
 		{name: "2fa setup", path: "/api/user/2fa/setup", body: `{}`},
 		{name: "session revocation", path: "/api/user/sessions/revoke", body: `{}`},
 		{name: "telegram bind state", path: "/api/oauth/telegram/bind/state", body: `{}`},

@@ -27,6 +27,24 @@ interface VerificationMethodsRequestConfig {
   skipErrorHandler?: boolean
 }
 
+type VerificationMethodsResponse =
+  | {
+      data: {
+        success: true
+        data: {
+          has_2fa: boolean
+          has_passkey: boolean
+          has_password: boolean
+        }
+      }
+    }
+  | {
+      data: {
+        success: false
+        message: string
+      }
+    }
+
 const successfulMethodsResponse = {
   data: {
     success: true,
@@ -39,8 +57,10 @@ const successfulMethodsResponse = {
 }
 
 const apiGet = mock(
-  async (_url: string, _config?: VerificationMethodsRequestConfig) =>
-    successfulMethodsResponse
+  async (
+    _url: string,
+    _config?: VerificationMethodsRequestConfig
+  ): Promise<VerificationMethodsResponse> => successfulMethodsResponse
 )
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 

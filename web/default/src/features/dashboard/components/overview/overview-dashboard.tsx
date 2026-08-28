@@ -45,8 +45,10 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { getUserModels } from '@/lib/api'
 import { formatNumber, formatQuota } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 import { MOTION_TRANSITION } from '@/lib/motion'
 import { ROLE } from '@/lib/roles'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Button } from '@/components/ui/button'
@@ -374,7 +376,7 @@ function StartStepItem(props: {
   )
 }
 
-function RequestPreview(props: {
+export function RequestPreview(props: {
   example: RequestExample
   signals: HeroSignal[]
   isRetrying: boolean
@@ -421,6 +423,12 @@ function RequestPreview(props: {
         toast.success(t('Copied to clipboard'))
       } else {
         toast.error(t('Failed to copy to clipboard'))
+      }
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, {
+          fallback: t('Failed to copy to clipboard'),
+        })
       }
     } finally {
       setIsCopying(false)

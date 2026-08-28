@@ -23,6 +23,7 @@ import { handleServerError } from '@/lib/handle-server-error'
 import {
   extractVerificationInfo,
   isVerificationRequiredError,
+  markSecureVerificationErrorReported,
 } from '@/lib/secure-verification'
 import { checkVerificationMethods, verify } from '../api'
 import { selectVerificationMethod } from '../method-selection'
@@ -156,6 +157,7 @@ export function useSecureVerification(
         handleServerError(error, {
           fallback: i18next.t('Verification unavailable'),
         })
+        markSecureVerificationErrorReported(error)
         onError?.(error)
         throw error
       }
@@ -244,6 +246,7 @@ export function useSecureVerification(
             ? error.message
             : i18next.t('Verification failed')
         toast.error(message)
+        markSecureVerificationErrorReported(error)
         onError?.(error)
         throw error
       }
@@ -274,6 +277,7 @@ export function useSecureVerification(
             ? error.message
             : i18next.t('Verification failed')
         handleServerError(error, { fallback: message })
+        markSecureVerificationErrorReported(error)
         onError?.(error)
         reset()
         throw error

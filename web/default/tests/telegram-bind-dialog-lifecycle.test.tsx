@@ -19,7 +19,15 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import type { ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
-import { afterAll, afterEach, beforeAll, describe, mock, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  mock,
+  test,
+} from 'bun:test'
 import assert from 'node:assert/strict'
 
 const createTelegramBindState = mock(async () => ({
@@ -30,9 +38,14 @@ const bindTelegramAccount = mock(async () => ({ success: true }))
 const toastSuccess = mock(() => undefined)
 const translate = (key: string) => key
 const withVerification = <T,>(apiCall: () => Promise<T>) => apiCall()
+let useUnstableVerificationGate = false
 
 mock.module('../src/features/auth/secure-verification', () => ({
-  useSecureVerificationGate: () => ({ withVerification }),
+  useSecureVerificationGate: () => ({
+    withVerification: useUnstableVerificationGate
+      ? <T,>(apiCall: () => Promise<T>) => apiCall()
+      : withVerification,
+  }),
 }))
 
 mock.module('../src/features/profile/api', () => ({
@@ -87,6 +100,12 @@ const { TelegramBindDialog } = await import(
 const testEnv = createReactTestEnvironment()
 
 beforeAll(() => testEnv.setup())
+beforeEach(() => {
+  useUnstableVerificationGate = false
+  createTelegramBindState.mockClear()
+  bindTelegramAccount.mockClear()
+  toastSuccess.mockClear()
+})
 afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
@@ -156,5 +175,53 @@ describe('TelegramBindDialog widget lifecycle', () => {
     assert.equal(firstOpenChange.mock.calls.length, 0)
     assert.equal(secondSuccess.mock.calls.length, 1)
     assert.deepEqual(secondOpenChange.mock.calls[0], [false])
+  })
+
+  test('keeps the active widget mounted across gate identity changes', async () => {
+    useUnstableVerificationGate = true
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    const initialScript = await waitFor(() => {
+      const script = document.querySelector<HTMLScriptElement>(
+        'script[data-onauth]'
+      )
+      assert.ok(script)
+      return script
+    })
+    const callbackName = initialScript
+      .getAttribute('data-onauth')
+      ?.replace(/\(user\)$/, '')
+    assert.ok(callbackName)
+    const initialCallback = (window as unknown as Record<string, unknown>)[
+      callbackName
+    ]
+    assert.equal(typeof initialCallback, 'function')
+
+    view.rerender(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    await act(async () => Promise.resolve())
+    assert.equal(
+      document.querySelector<HTMLScriptElement>('script[data-onauth]'),
+      initialScript
+    )
+    assert.equal(
+      (window as unknown as Record<string, unknown>)[callbackName],
+      initialCallback
+    )
+    assert.equal(createTelegramBindState.mock.calls.length, 1)
   })
 })

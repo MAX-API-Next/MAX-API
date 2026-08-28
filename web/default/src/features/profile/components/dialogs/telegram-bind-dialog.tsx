@@ -68,37 +68,6 @@ export function TelegramBindDialog({
   const [errorMessage, setErrorMessage] = useState('')
   const [retryVersion, setRetryVersion] = useState(0)
 
-  const initializeBinding = useCallback(async () => {
-    setStatus('loading')
-    setErrorMessage('')
-    try {
-      const response = await withVerification(createTelegramBindState, {
-        scope: 'credentials',
-        title: t('Security verification'),
-        description: t(
-          'Confirm your identity before binding a Telegram account.'
-        ),
-      })
-      if (!response) {
-        setStatus('idle')
-        return
-      }
-      if (!response.success || !response.data?.state) {
-        throw new Error(
-          response.message || t('Failed to initialize Telegram binding')
-        )
-      }
-      setBindState(response.data.state)
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : t('Failed to initialize Telegram binding')
-      )
-      setStatus('error')
-    }
-  }, [t, withVerification])
-
   const resetBindingState = useCallback(() => {
     setBindState('')
     setStatus('idle')
@@ -112,8 +81,56 @@ export function TelegramBindDialog({
     },
     [onOpenChange, resetBindingState]
   )
-  const callbackHandlersRef = useRef({ handleOpenChange, onSuccess })
-  callbackHandlersRef.current = { handleOpenChange, onSuccess }
+  const callbackHandlersRef = useRef({
+    handleOpenChange,
+    onSuccess,
+    t,
+    withVerification,
+  })
+  useEffect(() => {
+    callbackHandlersRef.current = {
+      handleOpenChange,
+      onSuccess,
+      t,
+      withVerification,
+    }
+  }, [handleOpenChange, onSuccess, t, withVerification])
+
+  const initializeBinding = useCallback(async (): Promise<void> => {
+    const handlers = callbackHandlersRef.current
+    setStatus('loading')
+    setErrorMessage('')
+    try {
+      const response = await handlers.withVerification(
+        createTelegramBindState,
+        {
+          scope: 'credentials',
+          title: handlers.t('Security verification'),
+          description: handlers.t(
+            'Confirm your identity before binding a Telegram account.'
+          ),
+        }
+      )
+      if (!response) {
+        setStatus('idle')
+        return
+      }
+      if (!response.success || !response.data?.state) {
+        throw new Error(
+          response.message ||
+            handlers.t('Failed to initialize Telegram binding')
+        )
+      }
+      setBindState(response.data.state)
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : handlers.t('Failed to initialize Telegram binding')
+      )
+      setStatus('error')
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -131,15 +148,16 @@ export function TelegramBindDialog({
     windowCallbacks[callbackName] = async (
       authorization: TelegramAuthorizationPayload
     ) => {
+      const handlers = callbackHandlersRef.current
       setStatus('binding')
       setErrorMessage('')
       try {
-        const response = await withVerification(
+        const response = await handlers.withVerification(
           () => bindTelegramAccount({ ...authorization, state: bindState }),
           {
             scope: 'credentials',
-            title: t('Security verification'),
-            description: t(
+            title: handlers.t('Security verification'),
+            description: handlers.t(
               'Confirm your identity before binding a Telegram account.'
             ),
           }
@@ -150,17 +168,17 @@ export function TelegramBindDialog({
         }
         if (!response.success) {
           throw new Error(
-            response.message || t('Failed to bind Telegram account')
+            response.message || handlers.t('Failed to bind Telegram account')
           )
         }
-        toast.success(t('Telegram account bound successfully'))
+        toast.success(handlers.t('Telegram account bound successfully'))
         callbackHandlersRef.current.onSuccess()
         callbackHandlersRef.current.handleOpenChange(false)
       } catch (error) {
         setErrorMessage(
           error instanceof Error
             ? error.message
-            : t('Failed to bind Telegram account')
+            : handlers.t('Failed to bind Telegram account')
         )
         setStatus('error')
       }
@@ -175,7 +193,9 @@ export function TelegramBindDialog({
     script.setAttribute('data-onauth', `${callbackName}(user)`)
     script.onload = () => setStatus('ready')
     script.onerror = () => {
-      setErrorMessage(t('Failed to load Telegram Login Widget'))
+      setErrorMessage(
+        callbackHandlersRef.current.t('Failed to load Telegram Login Widget')
+      )
       setStatus('error')
     }
     container.appendChild(script)
@@ -184,7 +204,7 @@ export function TelegramBindDialog({
       delete windowCallbacks[callbackName]
       container.replaceChildren()
     }
-  }, [bindState, botName, callbackName, open, t, withVerification])
+  }, [bindState, botName, callbackName, open])
 
   const retry = () => {
     setBindState('')
