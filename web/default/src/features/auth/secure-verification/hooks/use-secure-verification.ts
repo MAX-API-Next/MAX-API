@@ -71,7 +71,9 @@ const initialState: InternalState = {
 const defaultApiTokenVerificationDescription =
   'Confirm your identity before sending an API key to a chat client.'
 
-export function useApiTokenVerification(description?: string) {
+export function useApiTokenVerification(
+  description?: string
+): <T>(apiCall: () => Promise<T>) => Promise<T | null> {
   const { t } = useTranslation()
   const { withVerification } = useSecureVerificationGate()
 
@@ -261,11 +263,9 @@ export function useSecureVerification(
       } catch (error) {
         if (!isVerificationAttemptActive(attemptId)) return
         setState((prev) => ({ ...prev, loading: false }))
-        const message =
-          error instanceof Error
-            ? error.message
-            : i18next.t('Verification failed')
-        toast.error(message)
+        handleServerError(error, {
+          fallback: i18next.t('Verification failed'),
+        })
         markSecureVerificationErrorReported(error)
         onError?.(error)
         throw error

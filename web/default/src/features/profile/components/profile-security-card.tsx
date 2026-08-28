@@ -158,9 +158,9 @@ export function ProfileSecurityCard({
                 )}
               >
                 {item.loading ? (
-                  <Loader2 className='size-5 animate-spin' />
+                  <Loader2 className='size-5 animate-spin' aria-hidden='true' />
                 ) : (
-                  <item.icon className='size-5' />
+                  <item.icon className='size-5' aria-hidden='true' />
                 )}
               </div>
               <div className='min-w-0'>

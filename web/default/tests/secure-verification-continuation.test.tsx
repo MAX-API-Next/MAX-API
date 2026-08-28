@@ -306,7 +306,7 @@ describe('useSecureVerification', () => {
 
     await act(async () => {
       discovery.resolve(availableVerificationMethods)
-      await Promise.resolve()
+      await flushMacrotask()
     })
 
     assert.deepEqual(outcome, { settled: true, value: null })
@@ -460,8 +460,9 @@ describe('useSecureVerification', () => {
   })
 
   test('clears loading after a retryable verification failure', async () => {
+    const incorrectPasswordError = new Error('Incorrect password')
     verify.mockImplementationOnce(async () => {
-      throw new Error('Incorrect password')
+      throw incorrectPasswordError
     })
     const apiCall = mock(async () => {
       throw verificationRequiredError
@@ -487,6 +488,13 @@ describe('useSecureVerification', () => {
     })
 
     assert.match(String(verificationError), /Incorrect password/)
+    assert.equal(handleServerError.mock.calls.length, 1)
+    assert.equal(handleServerError.mock.calls[0]?.[0], incorrectPasswordError)
+    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+      fallback: 'Verification failed',
+    })
+    assert.equal(wasSecureVerificationErrorReported(incorrectPasswordError), true)
+    assert.equal(toastError.mock.calls.length, 0)
     assert.equal(result.current.state.loading, false)
     assert.equal(result.current.open, true)
     act(() => result.current.cancel())

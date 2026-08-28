@@ -49,7 +49,13 @@ type ApiKeysContextType = {
 
 const ApiKeysContext = React.createContext<ApiKeysContextType | null>(null)
 
-export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
+type ApiKeysProviderProps = {
+  children: React.ReactNode
+}
+
+export function ApiKeysProvider(
+  props: ApiKeysProviderProps
+): React.JSX.Element {
   const { t } = useTranslation()
   const withApiTokenVerification = useApiTokenVerification(
     t('Confirm your identity before creating or revealing API keys.')
@@ -198,7 +204,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         withApiTokenVerification,
       }}
     >
-      {children}
+      {props.children}
     </ApiKeysContext>
   )
 }

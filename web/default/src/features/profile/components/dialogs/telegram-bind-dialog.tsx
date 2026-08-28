@@ -64,7 +64,7 @@ export function TelegramBindDialog({
 
         <div className='flex flex-col gap-4 py-4'>
           <Alert>
-            <Send />
+            <Send aria-hidden='true' />
             <AlertDescription>
               {t(
                 'Telegram will ask you to confirm the account before it is bound.'
@@ -74,7 +74,10 @@ export function TelegramBindDialog({
 
           <div className='flex min-h-56 flex-col items-center justify-center gap-4 rounded-lg border p-6'>
             <div className='bg-muted flex size-12 items-center justify-center rounded-xl'>
-              <Send className='text-muted-foreground size-6' />
+              <Send
+                className='text-muted-foreground size-6'
+                aria-hidden='true'
+              />
             </div>
 
             <div className='text-center'>
