@@ -50,6 +50,8 @@ export async function checkVerificationMethods(
     const [methodsResponse, passkeySupported] = await Promise.all([
       api.get<VerificationMethodsApiResponse>('/api/verify/methods', {
         params: scope ? { scope } : undefined,
+        skipBusinessError: true,
+        skipErrorHandler: true,
       }),
       detectPasskeySupport(),
     ])

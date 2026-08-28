@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   extractVerificationInfo,
   isVerificationRequiredError,
@@ -152,7 +153,9 @@ export function useSecureVerification(
         availableMethods = await loadVerificationMethods(scope)
       } catch (error) {
         if (!isVerificationAttemptActive(attemptId)) return false
-        toast.error(i18next.t('Verification unavailable'))
+        handleServerError(error, {
+          fallback: i18next.t('Verification unavailable'),
+        })
         onError?.(error)
         throw error
       }
@@ -270,7 +273,7 @@ export function useSecureVerification(
           error instanceof Error
             ? error.message
             : i18next.t('Verification failed')
-        toast.error(message)
+        handleServerError(error, { fallback: message })
         onError?.(error)
         reset()
         throw error

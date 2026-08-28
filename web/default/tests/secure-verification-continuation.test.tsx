@@ -42,6 +42,9 @@ const verify = mock(async () => undefined)
 const toastError = mock((_message: string) => undefined)
 const toastInfo = mock((_message: string) => undefined)
 const toastSuccess = mock((_message: string) => undefined)
+const handleServerError = mock(
+  (_error: unknown, _options?: { fallback?: string }) => undefined
+)
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -63,6 +66,12 @@ function createDeferred<T>(): Deferred<T> {
   }
 }
 
+async function flushMacrotask(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 mock.module('i18next', () => ({
   default: { t: (key: string) => key },
 }))
@@ -78,6 +87,10 @@ mock.module('sonner', () => ({
 mock.module('../src/features/auth/secure-verification/api', () => ({
   checkVerificationMethods,
   verify,
+}))
+
+mock.module('../src/lib/handle-server-error', () => ({
+  handleServerError,
 }))
 
 const { useSecureVerification } = await import(
@@ -107,6 +120,7 @@ beforeEach(() => {
   toastError.mockClear()
   toastInfo.mockClear()
   toastSuccess.mockClear()
+  handleServerError.mockClear()
 })
 
 afterEach(() => cleanup())
@@ -225,7 +239,7 @@ describe('useSecureVerification', () => {
     assert.equal(await continuation, null)
 
     initialAction.reject(verificationRequiredError)
-    await Promise.resolve()
+    await flushMacrotask()
     assert.equal(checkVerificationMethods.mock.calls.length, 0)
     assert.equal(result.current.open, false)
   })
@@ -319,7 +333,7 @@ describe('useSecureVerification', () => {
       }),
     ])
     discovery.resolve(availableVerificationMethods)
-    await Promise.resolve()
+    await flushMacrotask()
 
     assert.deepEqual(outcome, { settled: true, value: null })
     assert.equal(apiCall.mock.calls.length, 1)
@@ -386,8 +400,57 @@ describe('useSecureVerification', () => {
       /method discovery unavailable/
     )
 
-    assert.equal(toastError.mock.calls.length, 1)
-    assert.equal(toastError.mock.calls[0]?.[0], 'Verification unavailable')
+    assert.equal(handleServerError.mock.calls.length, 1)
+    assert.match(
+      String(handleServerError.mock.calls[0]?.[0]),
+      /method discovery unavailable/
+    )
+    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+      fallback: 'Verification unavailable',
+    })
+    assert.equal(toastError.mock.calls.length, 0)
+  })
+
+  test('reports a protected action retry failure through the shared handler', async () => {
+    const retryError = new Error('protected action retry failed')
+    let callCount = 0
+    const apiCall = mock(async () => {
+      callCount += 1
+      if (callCount === 1) throw verificationRequiredError
+      throw retryError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    const continuation = result.current.withVerification(apiCall, {
+      scope: 'api_token',
+    })
+    const continuationOutcome = continuation.then(
+      (value) => ({ status: 'resolved' as const, value }),
+      (error: unknown) => ({ status: 'rejected' as const, error })
+    )
+    await waitFor(() => assert.equal(result.current.open, true))
+
+    let executionError: unknown
+    await act(async () => {
+      try {
+        await result.current.executeVerification('password', 'secret')
+      } catch (error) {
+        executionError = error
+      }
+    })
+    assert.equal(executionError, retryError)
+
+    const outcome = await continuationOutcome
+    assert.equal(outcome.status, 'rejected')
+    if (outcome.status === 'rejected') {
+      assert.equal(outcome.error, retryError)
+    }
+    assert.equal(handleServerError.mock.calls.length, 1)
+    assert.equal(handleServerError.mock.calls[0]?.[0], retryError)
+    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+      fallback: 'protected action retry failed',
+    })
+    assert.equal(toastError.mock.calls.length, 0)
   })
 
   test('clears loading after a retryable verification failure', async () => {

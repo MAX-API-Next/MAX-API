@@ -43,6 +43,9 @@ const startVerification = mock(async () => true)
 const register = mock(async () => true)
 const remove = mock(async () => true)
 const toastError = mock((_message: string) => undefined)
+const handleServerError = mock(
+  (_error: unknown, _options?: { fallback?: string }) => undefined
+)
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 let passkeyEnabled = false
 
@@ -69,6 +72,10 @@ mock.module('sonner', () => ({
     info: mock(() => undefined),
     success: mock(() => undefined),
   },
+}))
+
+mock.module('../src/lib/handle-server-error', () => ({
+  handleServerError,
 }))
 
 mock.module('../src/components/ui/alert-dialog', () => ({
@@ -157,6 +164,7 @@ beforeEach(() => {
   register.mockClear()
   remove.mockClear()
   toastError.mockClear()
+  handleServerError.mockClear()
   consoleError.mockClear()
 })
 afterEach(() => cleanup())
@@ -187,8 +195,15 @@ test('stops Passkey removal when verification method discovery fails', async () 
   await waitFor(() =>
     assert.equal(fetchVerificationMethods.mock.calls.length, 1)
   )
-  await waitFor(() => assert.equal(toastError.mock.calls.length, 1))
-  assert.equal(toastError.mock.calls[0]?.[0], 'Verification unavailable')
+  await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+  assert.match(
+    String(handleServerError.mock.calls[0]?.[0]),
+    /verification methods unavailable/
+  )
+  assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+    fallback: 'Verification unavailable',
+  })
+  assert.equal(toastError.mock.calls.length, 0)
   assert.equal(startVerification.mock.calls.length, 0)
   assert.equal(remove.mock.calls.length, 0)
 })

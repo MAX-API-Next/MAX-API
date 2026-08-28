@@ -19,7 +19,15 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { afterAll, beforeEach, mock, spyOn, test } from 'bun:test'
 import assert from 'node:assert/strict'
 
-const apiGet = mock(async () => ({
+interface VerificationMethodsRequestConfig {
+  params?: {
+    scope?: string
+  }
+  skipBusinessError?: boolean
+  skipErrorHandler?: boolean
+}
+
+const successfulMethodsResponse = {
   data: {
     success: true,
     data: {
@@ -28,7 +36,12 @@ const apiGet = mock(async () => ({
       has_password: true,
     },
   },
-}))
+}
+
+const apiGet = mock(
+  async (_url: string, _config?: VerificationMethodsRequestConfig) =>
+    successfulMethodsResponse
+)
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
 const passkeyManagementStub = {
@@ -117,5 +130,11 @@ test('preserves a successful response with no available methods', async () => {
     hasPassword: false,
     passkeySupported: false,
   })
+  assert.equal(apiGet.mock.calls[0]?.[0], '/api/verify/methods')
+  assert.deepEqual(apiGet.mock.calls[0]?.[1]?.params, {
+    scope: 'credentials',
+  })
+  assert.equal(apiGet.mock.calls[0]?.[1]?.skipBusinessError, true)
+  assert.equal(apiGet.mock.calls[0]?.[1]?.skipErrorHandler, true)
   assert.equal(consoleError.mock.calls.length, 0)
 })

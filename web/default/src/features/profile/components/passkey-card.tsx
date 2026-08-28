@@ -21,6 +21,7 @@ import { AlertTriangle, KeyRound, Loader2, ShieldAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import dayjs from '@/lib/dayjs'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -125,8 +126,10 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     let methods: VerificationMethods
     try {
       methods = await fetchVerificationMethods()
-    } catch {
-      toast.error(t('Verification unavailable'))
+    } catch (error) {
+      handleServerError(error, {
+        fallback: t('Verification unavailable'),
+      })
       return
     }
     const required: VerificationMethod | null = methods.has2FA
