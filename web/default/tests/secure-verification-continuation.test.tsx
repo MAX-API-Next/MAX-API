@@ -36,6 +36,21 @@ const checkVerificationMethods = mock(async () => ({
   passkeySupported: false,
 }))
 const verify = mock(async () => undefined)
+const toastError = mock((_message: string) => undefined)
+const toastInfo = mock((_message: string) => undefined)
+const toastSuccess = mock((_message: string) => undefined)
+
+mock.module('i18next', () => ({
+  default: { t: (key: string) => key },
+}))
+
+mock.module('sonner', () => ({
+  toast: {
+    error: toastError,
+    info: toastInfo,
+    success: toastSuccess,
+  },
+}))
 
 mock.module('../src/features/auth/secure-verification/api', () => ({
   checkVerificationMethods,
@@ -62,6 +77,9 @@ beforeAll(() => testEnv.setup())
 beforeEach(() => {
   checkVerificationMethods.mockClear()
   verify.mockClear()
+  toastError.mockClear()
+  toastInfo.mockClear()
+  toastSuccess.mockClear()
 })
 
 afterEach(() => cleanup())
@@ -114,6 +132,24 @@ describe('useSecureVerification', () => {
 
     assert.equal(await continuation, null)
     assert.equal(result.current.open, false)
+  })
+
+  test('reports verification method discovery failures before rejecting', async () => {
+    checkVerificationMethods.mockImplementationOnce(async () => {
+      throw new Error('method discovery unavailable')
+    })
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    await assert.rejects(
+      result.current.withVerification(apiCall, { scope: 'credentials' }),
+      /method discovery unavailable/
+    )
+
+    assert.equal(toastError.mock.calls.length, 1)
+    assert.equal(toastError.mock.calls[0]?.[0], 'Verification unavailable')
   })
 
   test('clears loading after a retryable verification failure', async () => {

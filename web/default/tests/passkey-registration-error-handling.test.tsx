@@ -18,12 +18,21 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { createReactTestEnvironment } from '@/test/react'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  mock,
+  spyOn,
+  test,
+} from 'bun:test'
 import assert from 'node:assert/strict'
 
 const withVerification = mock(async () => {
   throw new Error('verification method lookup failed')
 })
+const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -83,12 +92,18 @@ const { PasskeyCard } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-beforeAll(() => testEnv.setup())
+beforeAll(() => {
+  testEnv.setup()
+})
 beforeEach(() => {
   withVerification.mockClear()
+  consoleError.mockClear()
 })
 afterEach(() => cleanup())
-afterAll(() => testEnv.teardown())
+afterAll(() => {
+  consoleError.mockRestore()
+  testEnv.teardown()
+})
 
 test('handles a rejected Passkey verification continuation', async () => {
   const view = render(<PasskeyCard loading={false} />)
@@ -96,5 +111,6 @@ test('handles a rejected Passkey verification continuation', async () => {
   fireEvent.click(view.getByRole('button', { name: 'Enable Passkey' }))
 
   await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
-  await new Promise((resolve) => setTimeout(resolve, 0))
+  await waitFor(() => assert.equal(consoleError.mock.calls.length, 1))
+  assert.match(String(consoleError.mock.calls[0]?.[1]), /method lookup failed/)
 })

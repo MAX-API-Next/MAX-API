@@ -86,7 +86,7 @@ export function useSecureVerification(
   }, [])
 
   const settlePendingVerification = useCallback(
-    (value: unknown | null, error?: unknown) => {
+    (value: unknown | null, error?: unknown): void => {
       const pending = pendingVerificationRef.current
       pendingVerificationRef.current = null
       if (!pending) return
@@ -109,7 +109,14 @@ export function useSecureVerification(
       config: StartVerificationOptions = {}
     ) => {
       const { preferredMethod, title, description, scope } = config
-      const availableMethods = await fetchVerificationMethods(scope)
+      let availableMethods: VerificationMethods
+      try {
+        availableMethods = await fetchVerificationMethods(scope)
+      } catch (error) {
+        toast.error(i18next.t('Verification unavailable'))
+        onError?.(error)
+        throw error
+      }
 
       if (
         !availableMethods.has2FA &&
@@ -224,13 +231,13 @@ export function useSecureVerification(
     setState((prev) => ({ ...prev, method, code: '' }))
   }, [])
 
-  const cancel = useCallback(() => {
+  const cancel = useCallback((): void => {
     settlePendingVerification(null)
     reset()
   }, [reset, settlePendingVerification])
 
   const setOpen = useCallback(
-    (nextOpen: boolean) => {
+    (nextOpen: boolean): void => {
       if (!nextOpen) {
         cancel()
         return

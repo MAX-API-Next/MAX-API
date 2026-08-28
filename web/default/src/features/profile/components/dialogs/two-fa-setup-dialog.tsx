@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { Loader2 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
@@ -152,7 +158,7 @@ export function TwoFASetupDialog({
     return () => window.clearTimeout(timer)
   }, [open, setupData, handleSetup])
 
-  const renderSetupState = () => {
+  const renderSetupState = (): ReactNode => {
     if (initializing) {
       return (
         <div className='flex flex-col items-center justify-center gap-3 py-8'>
