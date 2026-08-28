@@ -192,30 +192,36 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 
 	normalizedCode := common.NormalizeBackupCode(code)
 
+	var backupCodes []TwoFABackupCode
+	if err := DB.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
+		return false, err
+	}
+	matchedID := 0
+	matchedHash := ""
+	for _, backupCode := range backupCodes {
+		if common.ValidatePasswordAndHash(normalizedCode, backupCode.CodeHash) {
+			matchedID = backupCode.Id
+			matchedHash = backupCode.CodeHash
+			break
+		}
+	}
+	if matchedID == 0 {
+		return false, nil
+	}
+
 	validated := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
 			return err
 		}
-
-		var backupCodes []TwoFABackupCode
-		if err := tx.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
-			return err
+		now := time.Now()
+		result := tx.Model(&TwoFABackupCode{}).
+			Where("id = ? AND user_id = ? AND code_hash = ? AND is_used = ?", matchedID, userId, matchedHash, false).
+			Updates(map[string]interface{}{"is_used": true, "used_at": &now})
+		if result.Error != nil {
+			return result.Error
 		}
-		for _, bc := range backupCodes {
-			if !common.ValidatePasswordAndHash(normalizedCode, bc.CodeHash) {
-				continue
-			}
-			now := time.Now()
-			result := tx.Model(&TwoFABackupCode{}).
-				Where("id = ? AND user_id = ? AND is_used = ?", bc.Id, userId, false).
-				Updates(map[string]interface{}{"is_used": true, "used_at": &now})
-			if result.Error != nil {
-				return result.Error
-			}
-			validated = result.RowsAffected == 1
-			return nil
-		}
+		validated = result.RowsAffected == 1
 		return nil
 	})
 	return validated, err
@@ -288,6 +294,9 @@ func (t *TwoFA) EnableAndBumpSessionGeneration() (int64, error) {
 	var generation int64
 	var cacheTask CacheInvalidationTask
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, t.UserId); err != nil {
+			return err
+		}
 		result := tx.Model(&TwoFA{}).
 			Where("id = ? AND user_id = ? AND is_enabled = ?", t.Id, t.UserId, false).
 			Updates(map[string]interface{}{

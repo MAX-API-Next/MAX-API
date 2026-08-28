@@ -1115,7 +1115,7 @@
                   "auth_date": {
                     "type": "integer",
                     "format": "int64",
-                    "description": "Telegram authorization Unix timestamp; must be fresh."
+                    "description": "Telegram 授权的 Unix 时间戳；必须在有效期内。"
                   },
                   "hash": {
                     "type": "string"
@@ -2350,7 +2350,7 @@
       "post": {
         "summary": "禁用2FA",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录。成功禁用后会递增会话代次，并使其他设备上的 Cookie 会话失效。",
         "tags": [
           "两步验证"
         ],
@@ -2389,7 +2389,7 @@
       "post": {
         "summary": "重新生成备用码",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "需要登录。成功重新生成后会递增会话代次，并使其他设备上的 Cookie 会话失效。",
         "tags": [
           "两步验证"
         ],

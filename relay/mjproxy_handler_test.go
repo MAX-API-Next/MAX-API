@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,44 @@ func TestWriteMidjourneyStatusCodeUsesChannelMapping(t *testing.T) {
 	writeMidjourneyStatusCode(c, http.StatusTooManyRequests)
 
 	require.Equal(t, http.StatusServiceUnavailable, c.Writer.Status())
+}
+
+func TestPrepareMidjourneyBillingTaskDoesNotFloorZeroRatio(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldPreConsumedQuota := common.PreConsumedQuota
+	db, err := gorm.Open(sqlite.Open("file:mjproxy_zero_ratio?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	common.PreConsumedQuota = 500
+	require.NoError(t, db.AutoMigrate(&model.Task{}))
+	t.Cleanup(func() {
+		model.DB = oldDB
+		common.PreConsumedQuota = oldPreConsumedQuota
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		RequestId:     "midjourney-zero-ratio",
+		UserId:        901,
+		TokenId:       902,
+		ChannelMeta:   &relaycommon.ChannelMeta{ChannelId: 903},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+	}
+	task, response := prepareMidjourneyBillingTask(c, info, constant.MjActionImagine, types.PriceData{
+		Quota:          0,
+		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0},
+	}, true)
+
+	require.Nil(t, response)
+	require.NotNil(t, task)
+	require.Zero(t, task.Quota)
+	require.Zero(t, info.PriceData.QuotaToPreConsume)
+	require.False(t, info.ForcePreConsume)
+	require.Nil(t, info.Billing)
 }
 
 func TestRelayMidjourneyImageRejectsUnsignedAndWrongUserURLs(t *testing.T) {

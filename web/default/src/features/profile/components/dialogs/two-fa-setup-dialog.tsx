@@ -48,6 +48,111 @@ interface TwoFASetupDialogProps {
   onSuccess: () => void
 }
 
+interface TwoFASetupStepsProps {
+  setupData: TwoFASetupData
+  step: number
+  code: string
+  loading: boolean
+  onCodeChange: (code: string) => void
+}
+
+function TwoFASetupSteps(props: TwoFASetupStepsProps): ReactNode {
+  const { t } = useTranslation()
+
+  if (props.step === 0) {
+    return (
+      <div className='space-y-4'>
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'Scan this QR code with your authenticator app (Google Authenticator, Microsoft Authenticator, etc.)'
+          )}
+        </p>
+        <div className='flex justify-center rounded-lg bg-white p-4'>
+          <QRCodeSVG value={props.setupData.qr_code_data} size={200} />
+        </div>
+        <div className='bg-muted rounded-lg p-3'>
+          <div className='flex items-center justify-between'>
+            <div>
+              <p className='text-muted-foreground text-xs'>
+                {t('Or enter this key manually:')}
+              </p>
+              <code className='font-mono text-sm'>
+                {props.setupData.secret}
+              </code>
+            </div>
+            <CopyButton
+              value={props.setupData.secret}
+              variant='ghost'
+              tooltip={t('Copy secret key')}
+              aria-label={t('Copy secret key')}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (props.step === 1) {
+    return (
+      <div className='space-y-4'>
+        <Alert>
+          <AlertDescription>
+            {t(
+              'Save these backup codes in a safe place. Each code can only be used once.'
+            )}
+          </AlertDescription>
+        </Alert>
+        <div className='rounded-lg border p-4'>
+          <div className='grid grid-cols-2 gap-2'>
+            {props.setupData.backup_codes.map((backupCode, index) => (
+              <div
+                key={index}
+                className='bg-muted rounded-md p-2 text-center font-mono text-sm'
+              >
+                {backupCode}
+              </div>
+            ))}
+          </div>
+        </div>
+        <CopyButton
+          value={props.setupData.backup_codes.join('\n')}
+          variant='outline'
+          size='default'
+          className='w-full'
+          iconClassName='mr-2 size-4'
+          tooltip={t('Copy all backup codes')}
+          aria-label={t('Copy all backup codes')}
+        >
+          {t('Copy All Codes')}
+        </CopyButton>
+      </div>
+    )
+  }
+
+  if (props.step === 2) {
+    return (
+      <div className='space-y-4'>
+        <div className='space-y-2'>
+          <Label htmlFor='code'>{t('Verification Code')}</Label>
+          <Input
+            id='code'
+            value={props.code}
+            onChange={(event) => props.onCodeChange(event.target.value)}
+            placeholder={t('Enter 6-digit code')}
+            maxLength={6}
+            disabled={props.loading}
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t('Enter the 6-digit code from your authenticator app')}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}
+
 export function TwoFASetupDialog({
   open,
   onOpenChange,
@@ -68,7 +173,7 @@ export function TwoFASetupDialog({
     t('Verify Setup'),
   ]
 
-  const handleSetup = useCallback(async () => {
+  const handleSetup = useCallback(async (): Promise<void> => {
     if (setupInFlightRef.current) return
     setupInFlightRef.current = true
     setSetupAttempted(false)
@@ -196,97 +301,13 @@ export function TwoFASetupDialog({
           <div className='space-y-4 py-4'>
             {setupState ??
               (setupData && (
-                <>
-                  {/* Step 0: QR Code */}
-                  {step === 0 && (
-                    <div className='space-y-4'>
-                      <p className='text-muted-foreground text-sm'>
-                        {t(
-                          'Scan this QR code with your authenticator app (Google Authenticator, Microsoft Authenticator, etc.)'
-                        )}
-                      </p>
-                      <div className='flex justify-center rounded-lg bg-white p-4'>
-                        <QRCodeSVG value={setupData.qr_code_data} size={200} />
-                      </div>
-                      <div className='bg-muted rounded-lg p-3'>
-                        <div className='flex items-center justify-between'>
-                          <div>
-                            <p className='text-muted-foreground text-xs'>
-                              {t('Or enter this key manually:')}
-                            </p>
-                            <code className='font-mono text-sm'>
-                              {setupData.secret}
-                            </code>
-                          </div>
-                          <CopyButton
-                            value={setupData.secret}
-                            variant='ghost'
-                            tooltip={t('Copy secret key')}
-                            aria-label={t('Copy secret key')}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Step 1: Backup Codes */}
-                  {step === 1 && (
-                    <div className='space-y-4'>
-                      <Alert>
-                        <AlertDescription>
-                          {t(
-                            'Save these backup codes in a safe place. Each code can only be used once.'
-                          )}
-                        </AlertDescription>
-                      </Alert>
-                      <div className='rounded-lg border p-4'>
-                        <div className='grid grid-cols-2 gap-2'>
-                          {setupData.backup_codes.map((code, index) => (
-                            <div
-                              key={index}
-                              className='bg-muted rounded-md p-2 text-center font-mono text-sm'
-                            >
-                              {code}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <CopyButton
-                        value={setupData.backup_codes.join('\n')}
-                        variant='outline'
-                        size='default'
-                        className='w-full'
-                        iconClassName='mr-2 size-4'
-                        tooltip={t('Copy all backup codes')}
-                        aria-label={t('Copy all backup codes')}
-                      >
-                        {t('Copy All Codes')}
-                      </CopyButton>
-                    </div>
-                  )}
-
-                  {/* Step 2: Verify */}
-                  {step === 2 && (
-                    <div className='space-y-4'>
-                      <div className='space-y-2'>
-                        <Label htmlFor='code'>{t('Verification Code')}</Label>
-                        <Input
-                          id='code'
-                          value={code}
-                          onChange={(e) => setCode(e.target.value)}
-                          placeholder={t('Enter 6-digit code')}
-                          maxLength={6}
-                          disabled={loading}
-                        />
-                        <p className='text-muted-foreground text-xs'>
-                          {t(
-                            'Enter the 6-digit code from your authenticator app'
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </>
+                <TwoFASetupSteps
+                  setupData={setupData}
+                  step={step}
+                  code={code}
+                  loading={loading}
+                  onCodeChange={setCode}
+                />
               ))}
           </div>
 

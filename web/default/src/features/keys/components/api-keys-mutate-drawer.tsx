@@ -27,6 +27,7 @@ import { getUserModels, getUserGroups } from '@/lib/api'
 import { DEFAULT_AUTO_ROUTE_KEY } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
@@ -362,8 +363,10 @@ export function ApiKeysMutateDrawer({
           triggerRefresh()
         }
       }
-    } catch (_error) {
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+      }
     } finally {
       setIsSubmitting(false)
     }

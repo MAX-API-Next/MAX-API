@@ -20,6 +20,8 @@ import { useState } from 'react'
 import { Shield, Key, Trash2, LogOut, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 import { useDialogs } from '@/hooks/use-dialog'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -68,8 +70,12 @@ export function ProfileSecurityCard({
       } else {
         toast.error(response.message || t('Failed to sign out other sessions'))
       }
-    } catch {
-      // The shared verification flow reports transport and verification errors.
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, {
+          fallback: t('Failed to sign out other sessions'),
+        })
+      }
     } finally {
       setRevokingSessions(false)
     }
@@ -100,6 +106,7 @@ export function ProfileSecurityCard({
       description: t('Update your password to keep your account secure'),
       action: () => dialogs.open('password'),
       variant: 'default' as const,
+      loading: false,
     },
     {
       icon: Key,
@@ -107,6 +114,7 @@ export function ProfileSecurityCard({
       description: t('Generate and manage your API access token'),
       action: () => dialogs.open('token'),
       variant: 'default' as const,
+      loading: false,
     },
     {
       icon: LogOut,

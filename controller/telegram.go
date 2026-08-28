@@ -4,7 +4,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -33,32 +35,50 @@ var telegramLoginFlowMatch = model.AuthFlowMatch{
 }
 
 type telegramAuthPayload struct {
-	ID        int64  `json:"id"`
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
-	Username  string `json:"username,omitempty"`
-	PhotoURL  string `json:"photo_url,omitempty"`
-	AuthDate  int64  `json:"auth_date"`
-	Hash      string `json:"hash"`
-	State     string `json:"state"`
+	ID                  int64  `json:"id"`
+	FirstName           string `json:"first_name,omitempty"`
+	LastName            string `json:"last_name,omitempty"`
+	Username            string `json:"username,omitempty"`
+	PhotoURL            string `json:"photo_url,omitempty"`
+	AuthDate            int64  `json:"auth_date"`
+	Hash                string `json:"hash"`
+	State               string `json:"state"`
+	authorizationValues url.Values
+}
+
+func (p *telegramAuthPayload) UnmarshalJSON(data []byte) error {
+	type plainTelegramAuthPayload telegramAuthPayload
+	var decoded plainTelegramAuthPayload
+	if err := common.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var rawFields map[string]json.RawMessage
+	if err := common.Unmarshal(data, &rawFields); err != nil {
+		return err
+	}
+	authorizationValues := make(url.Values, len(rawFields))
+	for key, rawValue := range rawFields {
+		if key == "state" {
+			continue
+		}
+		switch common.GetJsonType(rawValue) {
+		case "string", "number", "boolean":
+			authorizationValues.Set(key, common.JsonRawMessageToString(rawValue))
+		default:
+			return fmt.Errorf("Telegram authorization field %q must be a scalar value", key)
+		}
+	}
+
+	*p = telegramAuthPayload(decoded)
+	p.authorizationValues = authorizationValues
+	return nil
 }
 
 func (p telegramAuthPayload) values() url.Values {
-	values := url.Values{
-		"id":        {strconv.FormatInt(p.ID, 10)},
-		"auth_date": {strconv.FormatInt(p.AuthDate, 10)},
-		"hash":      {p.Hash},
-		"state":     {p.State},
-	}
-	for key, value := range map[string]string{
-		"first_name": p.FirstName,
-		"last_name":  p.LastName,
-		"username":   p.Username,
-		"photo_url":  p.PhotoURL,
-	} {
-		if value != "" {
-			values.Set(key, value)
-		}
+	values := make(url.Values, len(p.authorizationValues))
+	for key, entries := range p.authorizationValues {
+		values[key] = append([]string(nil), entries...)
 	}
 	return values
 }
@@ -83,12 +103,14 @@ func GenerateTelegramBindState(c *gin.Context) {
 	session := sessions.Default(c)
 	session.Set(oauthStateSessionKey, state)
 	if err := session.Save(); err != nil {
-		_, _ = model.ConsumeAuthFlow(state, model.AuthFlowMatch{
+		if _, consumeErr := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
 			Purpose:  model.AuthFlowPurposeOAuth,
 			Provider: "telegram",
 			Intent:   model.AuthFlowIntentBind,
 			UserId:   userID,
-		})
+		}); consumeErr != nil {
+			common.SysError("failed to invalidate Telegram bind flow after session save failure: " + consumeErr.Error())
+		}
 		common.ApiError(c, err)
 		return
 	}

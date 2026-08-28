@@ -258,11 +258,12 @@ func prepareMidjourneyBillingTask(c *gin.Context, info *relaycommon.RelayInfo, a
 	info.Action = action
 	info.OriginModelName = service.CovertMjpActionToModelName(action)
 	info.PriceData = priceData
-	preConsumedQuota := 0
+	preConsumedQuota := priceData.Quota
 	if !charge || priceData.FreeModel {
 		info.PriceData.Quota = 0
 		info.PriceData.QuotaToPreConsume = 0
-	} else {
+		preConsumedQuota = 0
+	} else if priceData.GroupRatioInfo.GroupRatio > 0 {
 		var err error
 		preConsumedQuota, err = helper.ApplyPreConsumedQuotaFloor(priceData.Quota, true)
 		if err != nil {

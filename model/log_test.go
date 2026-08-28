@@ -75,27 +75,18 @@ func markRetryLogBackfillCompletedForTest(t *testing.T) {
 
 func resetQuotaDataCacheForTest(t *testing.T) {
 	t.Helper()
-	resetLogQuotaDataShutdownForTest(t)
-	CacheQuotaDataLock.Lock()
-	CacheQuotaData = make(map[string]*QuotaData)
-	CacheQuotaDataLock.Unlock()
-	t.Cleanup(func() {
+	drainAndReset := func() {
+		WaitPendingLogQuotaData()
 		CacheQuotaDataLock.Lock()
 		CacheQuotaData = make(map[string]*QuotaData)
 		CacheQuotaDataLock.Unlock()
-	})
-}
 
-func resetLogQuotaDataShutdownForTest(t *testing.T) {
-	t.Helper()
-	logQuotaDataShutdownMu.Lock()
-	logQuotaDataShutdownStarted = false
-	logQuotaDataShutdownMu.Unlock()
-	t.Cleanup(func() {
 		logQuotaDataShutdownMu.Lock()
 		logQuotaDataShutdownStarted = false
 		logQuotaDataShutdownMu.Unlock()
-	})
+	}
+	drainAndReset()
+	t.Cleanup(drainAndReset)
 }
 
 func newLogTestContext() *gin.Context {
@@ -1156,6 +1147,56 @@ func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
 		t.Fatal("timed out waiting for queued quota data")
 	}
 	require.Len(t, CacheQuotaData, 1)
+}
+
+func TestResetQuotaDataCacheForTestWaitsForPendingWorkers(t *testing.T) {
+	resetQuotaDataCacheForTest(t)
+
+	originalRunner := logQuotaDataAsyncRunner
+	started := make(chan struct{})
+	release := make(chan struct{})
+	logQuotaDataAsyncRunner = func(fn func()) {
+		go func() {
+			close(started)
+			<-release
+			fn()
+		}()
+	}
+	t.Cleanup(func() {
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	enqueueLogQuotaData(QuotaDataLogParams{
+		UserID:    8,
+		Username:  "quota-reset",
+		ModelName: "gpt-test",
+		Quota:     42,
+		CreatedAt: time.Now().Unix(),
+	})
+	<-started
+
+	resetDone := make(chan struct{})
+	go func() {
+		resetQuotaDataCacheForTest(t)
+		close(resetDone)
+	}()
+
+	returnedBeforeRelease := false
+	select {
+	case <-resetDone:
+		returnedBeforeRelease = true
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-resetDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out resetting quota data cache")
+	}
+
+	require.False(t, returnedBeforeRelease, "reset returned before pending quota data worker completed")
+	require.Empty(t, CacheQuotaData)
 }
 
 func TestEnqueueLogQuotaDataAfterShutdownPersistsSynchronously(t *testing.T) {

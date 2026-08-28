@@ -173,6 +173,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
 
       const needsKey = chatLinkRequiresApiKey(preset.url)
       let activeKey: string | undefined
+      let chatWindow: Window | null = null
 
       if (needsKey && loadingPresetIdRef.current) {
         toast.info(t('Preparing your chat link, please try again in a moment.'))
@@ -180,13 +181,25 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       }
 
       if (needsKey) {
+        if (typeof window !== 'undefined') {
+          try {
+            chatWindow = window.open('about:blank', '_blank')
+            if (chatWindow) chatWindow.opener = null
+          } catch {
+            chatWindow = null
+          }
+        }
         loadingPresetIdRef.current = preset.id
         setLoadingPresetId(preset.id)
         try {
           activeKey =
             (await withApiTokenVerification(fetchActiveChatKey)) || undefined
-          if (!activeKey) return
+          if (!activeKey) {
+            chatWindow?.close()
+            return
+          }
         } catch (error) {
+          chatWindow?.close()
           const message =
             error instanceof Error
               ? error.message
@@ -208,13 +221,26 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       })
 
       if (!url) {
+        chatWindow?.close()
         toast.error(t('Invalid chat link. Please contact the administrator.'))
         return
       }
 
-      if (typeof window === 'undefined') return
+      if (typeof window === 'undefined') {
+        chatWindow?.close()
+        return
+      }
 
-      window.open(url, '_blank', 'noopener,noreferrer')
+      try {
+        if (chatWindow) {
+          chatWindow.location.replace(url)
+        } else {
+          window.location.assign(url)
+        }
+      } catch {
+        chatWindow?.close()
+        window.location.assign(url)
+      }
       setOpenMobile(false)
     },
     [serverAddress, setOpenMobile, t, withApiTokenVerification]

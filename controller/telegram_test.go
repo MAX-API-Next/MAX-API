@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -29,6 +30,13 @@ func signedTelegramParams(t *testing.T, token string, authDate time.Time) url.Va
 		"first_name": {"Security"},
 		"auth_date":  {strconv.FormatInt(authDate.Unix(), 10)},
 	}
+	signTelegramParams(t, token, params)
+	return params
+}
+
+func signTelegramParams(t *testing.T, token string, params url.Values) {
+	t.Helper()
+	params.Del("hash")
 	keys := make([]string, 0, len(params))
 	for key := range params {
 		keys = append(keys, key)
@@ -43,7 +51,6 @@ func signedTelegramParams(t *testing.T, token string, authDate time.Time) url.Va
 	_, err := mac.Write([]byte(strings.Join(lines, "\n")))
 	require.NoError(t, err)
 	params.Set("hash", hex.EncodeToString(mac.Sum(nil)))
-	return params
 }
 
 func TestTelegramAuthorizationRejectsStaleSignedPayload(t *testing.T) {
@@ -65,6 +72,36 @@ func TestTelegramAuthorizationIgnoresLocalBindState(t *testing.T) {
 	params.Set("state", "local-bind-state")
 
 	require.True(t, checkTelegramAuthorizationAt(params, token, now))
+}
+
+func TestTelegramAuthPayloadPreservesUnknownSignedFields(t *testing.T) {
+	const token = "123456:telegram-forward-compatible-test"
+	now := time.Unix(1_800_000_000, 0)
+	params := url.Values{
+		"id":                {"123456"},
+		"first_name":        {"Security"},
+		"auth_date":         {strconv.FormatInt(now.Add(-time.Minute).Unix(), 10)},
+		"future_auth_field": {"future-value"},
+	}
+	signTelegramParams(t, token, params)
+
+	body, err := common.Marshal(map[string]any{
+		"id":                int64(123456),
+		"first_name":        "Security",
+		"auth_date":         now.Add(-time.Minute).Unix(),
+		"future_auth_field": "future-value",
+		"hash":              params.Get("hash"),
+		"state":             "local-bind-state",
+	})
+	require.NoError(t, err)
+
+	var payload telegramAuthPayload
+	require.NoError(t, common.DecodeJson(bytes.NewReader(body), &payload))
+	values := payload.values()
+	require.Equal(t, "future-value", values.Get("future_auth_field"))
+	require.NotContains(t, values, "state")
+	require.Equal(t, "local-bind-state", payload.State)
+	require.True(t, checkTelegramAuthorizationAt(values, token, now))
 }
 
 func TestTelegramAuthorizationRejectsAuthDateBeyondClockSkew(t *testing.T) {

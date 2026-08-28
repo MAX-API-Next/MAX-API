@@ -5476,7 +5476,7 @@
     "Confirm your identity before signing out your other sessions.": "退出其他会话前，请确认您的身份。",
     "Failed to bind Telegram account": "Telegram 账户绑定失败",
     "Failed to initialize Telegram binding": "Telegram 绑定初始化失败",
-    "Failed to load Telegram Login Widget": "Telegram 登录组件加载失败",
+    "Failed to load Telegram Login Widget": "Telegram 登录小部件加载失败",
     "Failed to sign out other sessions": "退出其他会话失败",
     "Keep this session and revoke all other signed-in devices": "保留当前会话并撤销其他设备上的登录",
     "No verification method is available. Add a password or sign in again with a linked account.": "当前没有可用的验证方式。请添加密码，或使用已关联账户重新登录。",
