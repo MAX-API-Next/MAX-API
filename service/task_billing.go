@@ -150,9 +150,9 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
-// taskFinalSettlementPending reports only the funding state of the submission
-// finalize operation. A pending settlement effect must not block provider
-// polling because the debit/refund itself is already durably applied.
+// taskFinalSettlementPending reports whether the submission-finalize funding
+// settlement is pending or requires manual review. Callers use true to defer a
+// provider-driven terminal transition until the funding state is applied.
 func taskFinalSettlementPending(task *model.Task) (bool, error) {
 	if task == nil || task.PrivateData.BillingRequestId == "" {
 		return false, nil

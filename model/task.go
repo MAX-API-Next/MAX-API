@@ -349,10 +349,24 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
+	return GetTimedOutUnfinishedTasksAfter(cutoffUnix, 0, 0, limit)
+}
+
+// GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after
+// the supplied (submit_time, id) cursor in stable ascending order.
+func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) []*Task {
 	var tasks []*Task
-	err := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix).
-		Order("submit_time").
+	query := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix)
+	if afterID > 0 {
+		query = query.Where(
+			"submit_time > ? OR (submit_time = ? AND id > ?)",
+			afterSubmitTime,
+			afterSubmitTime,
+			afterID,
+		)
+	}
+	err := query.Order("submit_time ASC, id ASC").
 		Limit(limit).
 		Find(&tasks).Error
 	if err != nil {

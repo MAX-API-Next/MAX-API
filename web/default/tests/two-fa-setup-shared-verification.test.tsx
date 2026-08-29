@@ -246,7 +246,12 @@ test('reports enable failures with the server error message path', async () => {
   )
 
   await waitFor(() => assert.equal(setup2FA.mock.calls.length, 1))
-  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Next' })))
+  await waitFor(() =>
+    assert.equal(
+      view.getByRole('button', { name: 'Next' }).hasAttribute('disabled'),
+      false
+    )
+  )
   fireEvent.click(view.getByRole('button', { name: 'Next' }))
   fireEvent.click(view.getByRole('button', { name: 'Next' }))
   const input = view.getByRole('textbox')

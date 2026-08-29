@@ -1019,7 +1019,7 @@
       "get": {
         "summary": "Telegram登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth回调）；需要先通过 /api/oauth/state 创建并携带当前浏览器会话绑定的一次性 state",
+        "description": "🔓 无需鉴权（OAuth回调）；需要先通过 /api/oauth/state 创建并携带当前浏览器会话绑定的一次性 state。客户端必须原样转发 Telegram 返回的全部字段，因为签名校验会覆盖除 hash 和 state 外的所有单值字段。",
         "tags": [
           "OAuth"
         ],
@@ -1032,6 +1032,42 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "first_name",
+            "in": "query",
+            "description": "Telegram 返回的名字；存在时必须原样转发。",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "last_name",
+            "in": "query",
+            "description": "Telegram 返回的姓氏；存在时必须原样转发。",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "username",
+            "in": "query",
+            "description": "Telegram 用户名；存在时必须原样转发。",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "photo_url",
+            "in": "query",
+            "description": "Telegram 头像 URL；存在时必须原样转发。",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {

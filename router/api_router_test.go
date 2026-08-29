@@ -403,6 +403,16 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 		require.Equal(t, "query", parameter["in"])
 		require.Equal(t, true, parameter["required"])
 	}
+	for _, name := range []string{"first_name", "last_name", "username", "photo_url"} {
+		parameter, ok := parametersByName[name]
+		require.True(t, ok, "expected optional Telegram login parameter %q", name)
+		require.Equal(t, "query", parameter["in"])
+		require.Equal(t, false, parameter["required"])
+		schema := parameter["schema"].(map[string]any)
+		require.Equal(t, "string", schema["type"])
+	}
+	require.Contains(t, telegramLogin["description"], "全部字段")
+	require.Contains(t, telegramLogin["description"], "hash 和 state")
 
 	for path, method := range map[string]string{
 		"/api/oauth/telegram/bind/state": "post",

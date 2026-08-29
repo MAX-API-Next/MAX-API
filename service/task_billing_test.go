@@ -202,6 +202,55 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
 }
 
+func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
+	truncate(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+
+	now := time.Now().Unix()
+	pendingSubmitTime := legacyTaskRefundCutoff - 2
+	tasks := make([]model.Task, 0, 101)
+	settlements := make([]model.BillingSettlement, 0, 100)
+	for i := 0; i < 100; i++ {
+		requestID := fmt.Sprintf("timeout-pending-page-%d", i)
+		tasks = append(tasks, model.Task{
+			TaskID:     fmt.Sprintf("task_timeout_pending_page_%d", i),
+			Status:     model.TaskStatusSubmitted,
+			SubmitTime: pendingSubmitTime,
+			PrivateData: model.TaskPrivateData{
+				BillingRequestId: requestID,
+			},
+		})
+		settlements = append(settlements, model.BillingSettlement{
+			OperationKey: model.BillingRequestFinalizeOperationKey(requestID),
+			Source:       model.BillingSettlementSourceWallet,
+			UserID:       9000 + i,
+			FundingDelta: 1,
+			Status:       model.BillingSettlementStatusPending,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		})
+	}
+	tasks = append(tasks, model.Task{
+		TaskID:     "task_timeout_after_pending_page",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: pendingSubmitTime + 1,
+	})
+	require.NoError(t, model.DB.CreateInBatches(&tasks, 25).Error)
+	require.NoError(t, model.DB.CreateInBatches(&settlements, 25).Error)
+
+	sweepTimedOutTasks(context.Background())
+
+	var actionable model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", "task_timeout_after_pending_page").First(&actionable).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, actionable.Status)
+	var pending model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", "task_timeout_pending_page_0").First(&pending).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, pending.Status)
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------

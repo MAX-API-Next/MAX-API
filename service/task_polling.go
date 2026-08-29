@@ -45,62 +45,74 @@ func sweepTimedOutTasks(ctx context.Context) {
 		return
 	}
 	cutoff := time.Now().Unix() - int64(constant.TaskTimeoutMinutes)*60
-	tasks := model.GetTimedOutUnfinishedTasks(cutoff, 100)
-	if len(tasks) == 0 {
-		return
-	}
-
 	reason := fmt.Sprintf("任务超时（%d分钟）", constant.TaskTimeoutMinutes)
 	legacyReason := "任务超时（旧系统遗留任务，不进行退款，请联系管理员）"
 	now := time.Now().Unix()
 	timedOutCount := 0
+	remaining := 100
+	var afterSubmitTime int64
+	var afterID int64
+	for remaining > 0 {
+		tasks := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, 100)
+		if len(tasks) == 0 {
+			break
+		}
+		for _, task := range tasks {
+			afterSubmitTime = task.SubmitTime
+			afterID = task.ID
+			settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
+			if settlementErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
+				continue
+			}
+			if settlementPending {
+				continue
+			}
+			remaining--
+			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
+			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
 
-	for _, task := range tasks {
-		settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
-		if settlementErr != nil {
-			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
-			continue
-		}
-		if settlementPending {
-			continue
-		}
-		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
-		isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+			oldStatus := task.Status
+			task.Status = model.TaskStatusFailure
+			task.Progress = "100%"
+			task.FinishTime = now
+			if isLegacy {
+				task.FailReason = legacyReason
+			} else if isUnconfirmedSubmit {
+				task.FailReason = "任务提交超时（无法确认上游是否已创建任务，未自动退款，请人工核对）"
+			} else {
+				task.FailReason = reason
+			}
 
-		oldStatus := task.Status
-		task.Status = model.TaskStatusFailure
-		task.Progress = "100%"
-		task.FinishTime = now
-		if isLegacy {
-			task.FailReason = legacyReason
-		} else if isUnconfirmedSubmit {
-			task.FailReason = "任务提交超时（无法确认上游是否已创建任务，未自动退款，请人工核对）"
-		} else {
-			task.FailReason = reason
+			var settlement *model.BillingSettlementInput
+			if !isLegacy && !isUnconfirmedSubmit {
+				settlement = BuildTaskRefundSettlementInput(task, reason)
+			}
+			var won bool
+			var err error
+			if settlement != nil {
+				won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
+			} else {
+				won, err = task.UpdateWithStatus(oldStatus)
+			}
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
+				continue
+			}
+			if !won {
+				logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s already transitioned, skip", task.TaskID))
+				continue
+			}
+			timedOutCount++
+			if settlement != nil {
+				applyTaskBillingSettlement(ctx, task, settlement)
+			}
+			if remaining == 0 {
+				break
+			}
 		}
-
-		var settlement *model.BillingSettlementInput
-		if !isLegacy && !isUnconfirmedSubmit {
-			settlement = BuildTaskRefundSettlementInput(task, reason)
-		}
-		var won bool
-		var err error
-		if settlement != nil {
-			won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
-		} else {
-			won, err = task.UpdateWithStatus(oldStatus)
-		}
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
-			continue
-		}
-		if !won {
-			logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s already transitioned, skip", task.TaskID))
-			continue
-		}
-		timedOutCount++
-		if settlement != nil {
-			applyTaskBillingSettlement(ctx, task, settlement)
+		if len(tasks) < 100 {
+			break
 		}
 	}
 

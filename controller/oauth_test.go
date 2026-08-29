@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,7 +33,8 @@ func setupControllerAuthFlowDB(t *testing.T) {
 	t.Helper()
 	originalDB := model.DB
 	originalLogDB := model.LOG_DB
-	db, err := gorm.Open(sqlite.Open("file:controller_auth_flow?mode=memory&cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}, &model.User{}, &model.Log{}))
 	model.DB = db
