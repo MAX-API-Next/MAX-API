@@ -5,6 +5,10 @@ import (
 	"math"
 )
 
+// ErrorCodeBillingReconciliationPending identifies admission blocks caused by
+// a previous positive final settlement that still requires reconciliation.
+const ErrorCodeBillingReconciliationPending ErrorCode = "billing_reconciliation_pending"
+
 type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64
