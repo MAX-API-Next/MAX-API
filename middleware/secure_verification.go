@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
@@ -14,10 +15,6 @@ const (
 	secureVerificationMethodSessionKey = "secure_verified_method"
 	secureVerificationUserSessionKey   = "secure_verified_user_id"
 	secureVerificationScopeSessionKey  = "secure_verified_scope"
-	secureVerificationMethod2FA        = "2fa"
-	secureVerificationMethodPasskey    = "passkey"
-	secureVerificationMethodPassword   = "password"
-	secureVerificationMethodOAuth      = "oauth"
 	// SecureVerificationTimeout 验证有效期（秒）
 	SecureVerificationTimeout = 300 // 5分钟
 )
@@ -107,8 +104,8 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 		}
 		verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
 		if (requiredScope != "" && verifiedScope != requiredScope) ||
-			((verifiedMethod == secureVerificationMethodPassword ||
-				verifiedMethod == secureVerificationMethodOAuth) && requiredScope == "") {
+			((verifiedMethod == model.SecureVerificationMethodPassword ||
+				verifiedMethod == model.SecureVerificationMethodOAuth) && requiredScope == "") {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "需要对应操作的安全验证",
@@ -186,15 +183,15 @@ func OptionalSecureVerification() gin.HandlerFunc {
 }
 
 func isSupportedSecureVerificationMethod(method string) bool {
-	return method == secureVerificationMethod2FA ||
-		method == secureVerificationMethodPasskey ||
-		method == secureVerificationMethodPassword ||
-		method == secureVerificationMethodOAuth
+	return method == model.SecureVerificationMethod2FA ||
+		method == model.SecureVerificationMethodPasskey ||
+		method == model.SecureVerificationMethodPassword ||
+		method == model.SecureVerificationMethodOAuth
 }
 
 func isStrongSecureVerificationMethod(method string) bool {
-	return method == secureVerificationMethod2FA ||
-		method == secureVerificationMethodPasskey
+	return method == model.SecureVerificationMethod2FA ||
+		method == model.SecureVerificationMethodPasskey
 }
 
 // ClearSecureVerification 清除安全验证状态

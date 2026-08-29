@@ -14,18 +14,10 @@ import (
 
 const (
 	// SecureVerificationSessionKey means the user has fully passed secure verification.
-	SecureVerificationSessionKey         = "secure_verified_at"
-	secureVerificationMethodSessionKey   = "secure_verified_method"
-	secureVerificationUserSessionKey     = "secure_verified_user_id"
-	secureVerificationScopeSessionKey    = "secure_verified_scope"
-	secureVerificationMethod2FA          = "2fa"
-	secureVerificationMethodPasskey      = "passkey"
-	secureVerificationMethodPassword     = "password"
-	secureVerificationMethodOAuth        = "oauth"
-	secureVerificationScopeAccessToken   = "access_token"
-	secureVerificationScopeAccountDelete = "account_delete"
-	secureVerificationScopeCredentials   = "credentials"
-	secureVerificationScopeAPIToken      = "api_token"
+	SecureVerificationSessionKey       = "secure_verified_at"
+	secureVerificationMethodSessionKey = "secure_verified_method"
+	secureVerificationUserSessionKey   = "secure_verified_user_id"
+	secureVerificationScopeSessionKey  = "secure_verified_scope"
 	// PasskeyReadySessionKey means WebAuthn finished and /api/verify can finalize step-up verification.
 	PasskeyReadySessionKey = "secure_passkey_ready_at"
 	// SecureVerificationTimeout 验证有效期（秒）
@@ -164,7 +156,7 @@ func UniversalVerify(c *gin.Context) {
 	var verifyMethod string
 
 	switch req.Method {
-	case "2fa":
+	case model.SecureVerificationMethod2FA:
 		if !methods.has2FA {
 			common.ApiError(c, fmt.Errorf("用户未启用2FA"))
 			return
@@ -176,7 +168,7 @@ func UniversalVerify(c *gin.Context) {
 		verified = validateTwoFactorAuth(methods.twoFA, req.Code)
 		verifyMethod = "2FA"
 
-	case "passkey":
+	case model.SecureVerificationMethodPasskey:
 		if !methods.hasPasskey {
 			common.ApiError(c, fmt.Errorf("用户未启用Passkey"))
 			return
@@ -193,7 +185,7 @@ func UniversalVerify(c *gin.Context) {
 		}
 		verifyMethod = "Passkey"
 
-	case "password":
+	case model.SecureVerificationMethodPassword:
 		if !methods.hasPassword {
 			common.ApiError(c, fmt.Errorf("密码验证不可用，请使用2FA或Passkey"))
 			return
@@ -211,7 +203,7 @@ func UniversalVerify(c *gin.Context) {
 	}
 
 	if !verified {
-		if req.Method == secureVerificationMethodPassword {
+		if req.Method == model.SecureVerificationMethodPassword {
 			common.ApiError(c, fmt.Errorf("密码错误"))
 		} else {
 			common.ApiError(c, fmt.Errorf("验证失败，请检查验证码"))
@@ -241,8 +233,8 @@ func UniversalVerify(c *gin.Context) {
 
 func isSupportedSecureVerificationScope(scope string) bool {
 	switch scope {
-	case "", secureVerificationScopeAccessToken, secureVerificationScopeAccountDelete,
-		secureVerificationScopeCredentials, secureVerificationScopeAPIToken:
+	case "", model.SecureVerificationScopeAccessToken, model.SecureVerificationScopeAccountDelete,
+		model.SecureVerificationScopeCredentials, model.SecureVerificationScopeAPIToken:
 		return true
 	default:
 		return false
@@ -250,10 +242,10 @@ func isSupportedSecureVerificationScope(scope string) bool {
 }
 
 func passwordVerificationAllowed(scope string) bool {
-	return scope == secureVerificationScopeAccessToken ||
-		scope == secureVerificationScopeAccountDelete ||
-		scope == secureVerificationScopeCredentials ||
-		scope == secureVerificationScopeAPIToken
+	return scope == model.SecureVerificationScopeAccessToken ||
+		scope == model.SecureVerificationScopeAccountDelete ||
+		scope == model.SecureVerificationScopeCredentials ||
+		scope == model.SecureVerificationScopeAPIToken
 }
 
 func setSecureVerificationSession(c *gin.Context, userId int, method string, scope string) (int64, error) {

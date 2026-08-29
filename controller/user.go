@@ -152,9 +152,9 @@ func setupLogin(user *model.User, c *gin.Context) {
 	session.Delete(PasskeyReadySessionKey)
 	if isOAuthCredentialReauthentication(loginMethod) {
 		session.Set(SecureVerificationSessionKey, time.Now().Unix())
-		session.Set(secureVerificationMethodSessionKey, secureVerificationMethodOAuth)
+		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
 		session.Set(secureVerificationUserSessionKey, user.Id)
-		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeCredentials)
 	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)

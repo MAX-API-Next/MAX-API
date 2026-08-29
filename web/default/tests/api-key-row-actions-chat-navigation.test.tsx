@@ -49,6 +49,11 @@ const openWindow = mock(() => popupWindow)
 const focusWindow = mock(() => undefined)
 const copyToClipboard = mock(async () => false)
 const toastError = mock(() => undefined)
+const handleServerError = mock(() => undefined)
+let secureVerificationErrorReported = false
+const wasSecureVerificationErrorReported = mock(
+  () => secureVerificationErrorReported
+)
 
 function Container(props: { children?: ReactNode }): ReactElement {
   return <div>{props.children}</div>
@@ -148,6 +153,12 @@ mock.module('../src/components/ui/sidebar', () => ({
 
 mock.module('../src/features/auth/secure-verification', () => ({
   useApiTokenVerification: () => withApiTokenVerification,
+}))
+
+mock.module('../src/lib/handle-server-error', () => ({ handleServerError }))
+
+mock.module('../src/lib/secure-verification', () => ({
+  wasSecureVerificationErrorReported,
 }))
 
 mock.module('../src/features/chat/hooks/use-active-chat-key', () => ({
@@ -275,6 +286,9 @@ beforeEach(() => {
   closePopup.mockClear()
   copyToClipboard.mockClear()
   toastError.mockClear()
+  handleServerError.mockClear()
+  wasSecureVerificationErrorReported.mockClear()
+  secureVerificationErrorReported = false
   popupWindow.opener = {} as Window
 })
 
@@ -359,6 +373,37 @@ test('chat presets close the placeholder when secure verification is cancelled',
 
   await waitFor(() => assert.equal(closePopup.mock.calls.length, 1))
   assert.equal(replaceLocation.mock.calls.length, 0)
+  assert.equal(toastError.mock.calls.length, 0)
+})
+
+test('chat presets report unhandled verification failures through the shared error handler', async () => {
+  const verificationError = new Error('verification unavailable')
+  withApiTokenVerification.mockImplementationOnce(async () => {
+    throw verificationError
+  })
+  const view = renderChatPresets()
+
+  fireEvent.click(view.getByRole('button', { name: /Desktop chat/ }))
+
+  await waitFor(() => assert.equal(closePopup.mock.calls.length, 1))
+  assert.deepEqual(handleServerError.mock.calls[0], [verificationError, {
+    fallback:
+      'Unable to prepare chat link. Please ensure you have an enabled API key.',
+  }])
+  assert.equal(toastError.mock.calls.length, 0)
+})
+
+test('chat presets do not duplicate verification failures already reported by the gate', async () => {
+  secureVerificationErrorReported = true
+  withApiTokenVerification.mockImplementationOnce(async () => {
+    throw new Error('already reported')
+  })
+  const view = renderChatPresets()
+
+  fireEvent.click(view.getByRole('button', { name: /Desktop chat/ }))
+
+  await waitFor(() => assert.equal(closePopup.mock.calls.length, 1))
+  assert.equal(handleServerError.mock.calls.length, 0)
   assert.equal(toastError.mock.calls.length, 0)
 })
 

@@ -253,12 +253,12 @@ describe('API key plaintext lifecycle', () => {
     })
 
     assert.equal(toastError.mock.calls.length, 1)
-    assert.equal(toastError.mock.calls[0]?.[0], 'batch request failed')
+    assert.equal(toastError.mock.calls[0]?.[0], 'An unexpected error occurred')
     assert.equal(result.current.loadingKeys[201], undefined)
     assert.equal(result.current.loadingKeys[202], undefined)
   })
 
-  test('reports single-key reveal failures with the original error message', async () => {
+  test('reports single-key reveal failures with the generic fallback', async () => {
     fetchTokenKey.mockImplementationOnce(async () => {
       throw new Error('single key request failed')
     })
@@ -269,7 +269,7 @@ describe('API key plaintext lifecycle', () => {
     })
 
     assert.equal(toastError.mock.calls.length, 1)
-    assert.equal(toastError.mock.calls[0]?.[0], 'single key request failed')
+    assert.equal(toastError.mock.calls[0]?.[0], 'An unexpected error occurred')
     assert.equal(result.current.loadingKeys[203], undefined)
   })
 
@@ -414,7 +414,10 @@ describe('API key plaintext lifecycle', () => {
     await waitFor(() => {
       assert.equal(createApiKey.mock.calls.length, 2)
       assert.equal(toastError.mock.calls.length, 1)
-      assert.equal(toastError.mock.calls[0]?.[0], 'second create failed')
+      assert.equal(
+        toastError.mock.calls[0]?.[0],
+        'An unexpected error occurred'
+      )
       assert.equal(toastSuccess.mock.calls.length, 1)
       assert.equal(
         toastSuccess.mock.calls[0]?.[0],

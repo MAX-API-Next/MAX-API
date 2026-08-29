@@ -135,14 +135,14 @@ func TestUniversalVerifyPasswordRequiresAccessTokenScope(t *testing.T) {
 
 func TestSecureVerificationScopeAllowlist(t *testing.T) {
 	require.True(t, isSupportedSecureVerificationScope(""))
-	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccessToken))
-	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccountDelete))
-	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeCredentials))
-	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAPIToken))
+	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeAccessToken))
+	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeAccountDelete))
+	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeCredentials))
+	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeAPIToken))
 	require.False(t, isSupportedSecureVerificationScope("admin_delete"))
-	require.True(t, passwordVerificationAllowed(secureVerificationScopeAccountDelete))
-	require.True(t, passwordVerificationAllowed(secureVerificationScopeCredentials))
-	require.True(t, passwordVerificationAllowed(secureVerificationScopeAPIToken))
+	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeAccountDelete))
+	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeCredentials))
+	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeAPIToken))
 	require.False(t, passwordVerificationAllowed(""))
 }
 
@@ -210,9 +210,9 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 	router.GET("/api/user/login", func(c *gin.Context) {
 		session := sessions.Default(c)
 		session.Set(SecureVerificationSessionKey, int64(123))
-		session.Set(secureVerificationMethodSessionKey, secureVerificationMethod2FA)
+		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethod2FA)
 		session.Set(secureVerificationUserSessionKey, 999)
-		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeAccessToken)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeAccessToken)
 		session.Set(PasskeyReadySessionKey, int64(123))
 		setupLogin(&user, c)
 	})
@@ -297,9 +297,9 @@ func TestOAuthLoginCreatesCredentialScopedSecureVerification(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(inspectRecorder.Body.Bytes(), &verificationSession))
 	require.WithinDuration(t, time.Now(), time.Unix(verificationSession.VerifiedAt, 0), 2*time.Second)
-	require.Equal(t, secureVerificationMethodOAuth, verificationSession.VerifiedMethod)
+	require.Equal(t, model.SecureVerificationMethodOAuth, verificationSession.VerifiedMethod)
 	require.Equal(t, user.Id, verificationSession.VerifiedUserID)
-	require.Equal(t, secureVerificationScopeCredentials, verificationSession.VerifiedScope)
+	require.Equal(t, model.SecureVerificationScopeCredentials, verificationSession.VerifiedScope)
 }
 
 func TestResetPasswordReportsRevokedApiTokens(t *testing.T) {
@@ -361,7 +361,7 @@ func TestPreserveCurrentSessionAfterSecurityChangeUpdatesGenerationAndClearsStep
 		session.Set(SecureVerificationSessionKey, time.Now().Unix())
 		session.Set(secureVerificationMethodSessionKey, "password")
 		session.Set(secureVerificationUserSessionKey, 9911)
-		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeCredentials)
 		session.Set(PasskeyReadySessionKey, time.Now().Unix())
 		require.NoError(t, session.Save())
 		c.Status(http.StatusNoContent)

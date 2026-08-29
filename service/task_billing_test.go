@@ -750,7 +750,7 @@ func TestTaskFinalSettlementPendingBlocksTerminalPollingUntilFundingApplied(t *t
 	persistTask(t, task)
 
 	require.NoError(t, model.DB.Create(&model.BillingSettlement{
-		OperationKey: "request:task-final-settlement-pending:finalize",
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
 		Source:       model.BillingSettlementSourceWallet,
 		UserID:       userID,
 		FundingDelta: 50,
@@ -765,7 +765,7 @@ func TestTaskFinalSettlementPendingBlocksTerminalPollingUntilFundingApplied(t *t
 	assert.True(t, pending)
 
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
-		Where("operation_key = ?", "request:task-final-settlement-pending:finalize").
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
 		Update("status", model.BillingSettlementStatusApplied).Error)
 	pending, err = taskFinalSettlementPending(task)
 	require.NoError(t, err)
@@ -781,7 +781,7 @@ func TestTaskFinalSettlementEffectPendingDoesNotBlockPolling(t *testing.T) {
 	persistTask(t, task)
 
 	require.NoError(t, model.DB.Create(&model.BillingSettlement{
-		OperationKey: "request:task-final-effect-pending:finalize",
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
 		Source:       model.BillingSettlementSourceWallet,
 		UserID:       userID,
 		FundingDelta: 0,
@@ -806,7 +806,7 @@ func TestProcessSunoTaskResponseWaitsForSubmissionSettlement(t *testing.T) {
 	task.PrivateData.BillingRequestId = "suno-waits-for-submission-settlement"
 	persistTask(t, task)
 	require.NoError(t, model.DB.Create(&model.BillingSettlement{
-		OperationKey: "request:suno-waits-for-submission-settlement:finalize",
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
 		Source:       model.BillingSettlementSourceWallet, UserID: userID,
 		FundingDelta: 50, Status: model.BillingSettlementStatusPending,
 		CreatedAt: now, UpdatedAt: now, Revision: 1,
@@ -822,7 +822,7 @@ func TestProcessSunoTaskResponseWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusInProgress, reloaded.Status)
 
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
-		Where("operation_key = ?", "request:suno-waits-for-submission-settlement:finalize").
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
 		Update("status", model.BillingSettlementStatusApplied).Error)
 	processSunoTaskResponse(context.Background(), &reloaded, response)
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
@@ -848,7 +848,7 @@ func TestMidjourneyTerminalCallbackWaitsForSubmissionSettlement(t *testing.T) {
 		CreatedAt: now,
 	}).Error)
 	require.NoError(t, model.DB.Create(&model.BillingSettlement{
-		OperationKey: "request:mj-waits-for-submission-settlement:finalize",
+		OperationKey: model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId),
 		Source:       model.BillingSettlementSourceWallet, UserID: userID,
 		FundingDelta: 50, Status: model.BillingSettlementStatusPending,
 		CreatedAt: now, UpdatedAt: now, Revision: 1,
@@ -866,7 +866,7 @@ func TestMidjourneyTerminalCallbackWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusInProgress, reloadedBilling.Status)
 
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
-		Where("operation_key = ?", "request:mj-waits-for-submission-settlement:finalize").
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId)).
 		Update("status", model.BillingSettlementStatusApplied).Error)
 	require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &reloadedLegacy, response))
 	require.NoError(t, model.DB.First(&reloadedLegacy, legacy.Id).Error)

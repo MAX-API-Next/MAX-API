@@ -539,7 +539,7 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 	if twoFA != nil && twoFA.IsEnabled {
-		return requireSecureVerificationMethod(c, secureVerificationMethod2FA)
+		return requireSecureVerificationMethod(c, model.SecureVerificationMethod2FA)
 	}
 
 	_, err = model.GetPasskeyByUserID(userID)
@@ -555,7 +555,7 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 
-	return requireSecureVerificationMethod(c, secureVerificationMethodPasskey)
+	return requireSecureVerificationMethod(c, model.SecureVerificationMethodPasskey)
 }
 
 func requireSecureVerificationMethod(c *gin.Context, method string) bool {

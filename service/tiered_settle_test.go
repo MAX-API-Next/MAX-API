@@ -426,6 +426,9 @@ func TestPrepareTieredBillingForSelectedGroupFreeToPaidInitializesBilling(t *tes
 	seedToken(t, tokenID, userID, tokenKey, initialQuota)
 
 	ctx, _ := gin.CreateTestContext(nil)
+	// This fixture covers generic tiered free-to-paid group repricing. Alpha
+	// Search adds its surcharge before the floor and is covered separately in
+	// alpha_search_billing_test.go, so it intentionally keeps the normal mode.
 	relayInfo := &relaycommon.RelayInfo{
 		RequestId:       "tiered-free-to-paid-request",
 		UserId:          userID,

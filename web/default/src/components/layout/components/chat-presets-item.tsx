@@ -21,6 +21,8 @@ import { Link, useLocation } from '@tanstack/react-router'
 import { ExternalLink, Loader2, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import {
   Collapsible,
   CollapsibleContent,
@@ -210,13 +212,13 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
           }
         } catch (error) {
           chatWindow?.close()
-          const message =
-            error instanceof Error
-              ? error.message
-              : t(
-                  'Unable to prepare chat link. Please ensure you have an enabled API key.'
-                )
-          toast.error(message)
+          if (!wasSecureVerificationErrorReported(error)) {
+            handleServerError(error, {
+              fallback: t(
+                'Unable to prepare chat link. Please ensure you have an enabled API key.'
+              ),
+            })
+          }
           return
         } finally {
           loadingPresetIdRef.current = null

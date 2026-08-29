@@ -19,6 +19,16 @@ const (
 	AuthFlowIntentBind              = "bind"
 	AuthFlowTokenBytes              = 32
 	AuthFlowDefaultCleanupRetention = 24 * time.Hour
+
+	SecureVerificationMethod2FA      = "2fa"
+	SecureVerificationMethodPasskey  = "passkey"
+	SecureVerificationMethodPassword = "password"
+	SecureVerificationMethodOAuth    = "oauth"
+
+	SecureVerificationScopeAccessToken   = "access_token"
+	SecureVerificationScopeAccountDelete = "account_delete"
+	SecureVerificationScopeCredentials   = "credentials"
+	SecureVerificationScopeAPIToken      = "api_token"
 )
 
 var (
