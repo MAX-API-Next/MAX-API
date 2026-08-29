@@ -165,6 +165,9 @@ export function usePasskeyManagement(
       await fetchStatus()
       return true
     } catch (error) {
+      if (isVerificationRequiredError(error)) {
+        throw error
+      }
       // eslint-disable-next-line no-console
       console.error('[Passkey] Removal error', error)
       toast.error(i18next.t('Failed to remove Passkey'))

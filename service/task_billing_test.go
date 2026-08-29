@@ -251,6 +251,64 @@ func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusSubmitted, pending.Status)
 }
 
+func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
+	truncate(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	originalScanBudget := timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes = 1
+	timedOutTaskScanBudget = 2
+	timedOutTaskSweepCursor.Lock()
+	timedOutTaskSweepCursor.afterSubmitTime = 0
+	timedOutTaskSweepCursor.afterID = 0
+	timedOutTaskSweepCursor.Unlock()
+	t.Cleanup(func() {
+		constant.TaskTimeoutMinutes = originalTimeout
+		timedOutTaskScanBudget = originalScanBudget
+		timedOutTaskSweepCursor.Lock()
+		timedOutTaskSweepCursor.afterSubmitTime = 0
+		timedOutTaskSweepCursor.afterID = 0
+		timedOutTaskSweepCursor.Unlock()
+	})
+
+	now := time.Now().Unix()
+	submitTime := legacyTaskRefundCutoff - 2
+	for i := 0; i < 2; i++ {
+		requestID := fmt.Sprintf("bounded-timeout-pending-%d", i)
+		task := model.Task{
+			TaskID:      fmt.Sprintf("bounded_timeout_pending_%d", i),
+			Status:      model.TaskStatusSubmitted,
+			SubmitTime:  submitTime,
+			PrivateData: model.TaskPrivateData{BillingRequestId: requestID},
+		}
+		require.NoError(t, model.DB.Create(&task).Error)
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingRequestFinalizeOperationKey(requestID),
+			Source:       model.BillingSettlementSourceWallet,
+			UserID:       9100 + i,
+			FundingDelta: 1,
+			Status:       model.BillingSettlementStatusPending,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		}).Error)
+	}
+	actionable := model.Task{
+		TaskID:     "bounded_timeout_actionable",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: submitTime + 1,
+	}
+	require.NoError(t, model.DB.Create(&actionable).Error)
+
+	sweepTimedOutTasks(context.Background())
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+
+	sweepTimedOutTasks(context.Background())
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------

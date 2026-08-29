@@ -168,7 +168,7 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		Group:          relayInfo.UsingGroup,
 		Other:          other,
 	}
-	effect := newConsumeBillingSettlementEffect(logParams, requestID, upstreamRequestID, true)
+	effect := newConsumeBillingSettlementEffect(relayInfo, logParams, requestID, upstreamRequestID, true)
 
 	if settler, ok := relayInfo.Billing.(interface {
 		SettleWithEffect(int, *model.BillingSettlementEffect) error

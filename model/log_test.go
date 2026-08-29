@@ -1021,6 +1021,55 @@ func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
 	require.Equal(t, "request-time-deleted-token", log.TokenName)
 }
 
+func TestApplySubscriptionSettlementEffectMetadataUsesAppliedDelta(t *testing.T) {
+	tests := []struct {
+		name         string
+		delta        int64
+		wantPost     bool
+		wantConsumed bool
+		consumed     int64
+		used         int64
+		remain       int64
+	}{
+		{name: "positive settlement", delta: 5, wantPost: true, wantConsumed: true, consumed: 15, used: 45, remain: 55},
+		{name: "zero settlement", wantConsumed: true, consumed: 10, used: 40, remain: 60},
+		{name: "full reservation refund", delta: -10, wantPost: true, used: 30, remain: 70},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := map[string]interface{}{
+				"subscription_post_delta": 99,
+				"subscription_consumed":   99,
+			}
+			applySubscriptionSettlementEffectMetadata(BillingSettlement{
+				Source:              BillingSettlementSourceSubscription,
+				AppliedFundingDelta: tt.delta,
+			}, &BillingSettlementEffect{
+				Subscription: &BillingSettlementSubscriptionEffect{
+					PreConsumed:               10,
+					AmountTotal:               100,
+					AmountUsedAfterPreConsume: 40,
+				},
+			}, other)
+
+			if tt.wantPost {
+				require.EqualValues(t, tt.delta, other["subscription_post_delta"])
+			} else {
+				require.NotContains(t, other, "subscription_post_delta")
+			}
+			if tt.wantConsumed {
+				require.EqualValues(t, tt.consumed, other["subscription_consumed"])
+			} else {
+				require.NotContains(t, other, "subscription_consumed")
+			}
+			require.EqualValues(t, 100, other["subscription_total"])
+			require.EqualValues(t, tt.used, other["subscription_used"])
+			require.EqualValues(t, tt.remain, other["subscription_remain"])
+		})
+	}
+}
+
 func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
 	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
 	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)

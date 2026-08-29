@@ -112,24 +112,31 @@ type BillingPreConsumeSelection struct {
 }
 
 type BillingSettlementEffect struct {
-	LogType           int                    `json:"log_type"`
-	Content           string                 `json:"content"`
-	ChannelID         int                    `json:"channel_id"`
-	ModelName         string                 `json:"model_name"`
-	TokenID           int                    `json:"token_id"`
-	TokenName         string                 `json:"token_name,omitempty"`
-	Group             string                 `json:"group"`
-	Other             map[string]interface{} `json:"other"`
-	NodeName          string                 `json:"node_name"`
-	UpdateUsage       bool                   `json:"update_usage"`
-	Quota             int64                  `json:"quota,omitempty"`
-	QuotaIsActual     bool                   `json:"quota_is_actual,omitempty"`
-	PromptTokens      int                    `json:"prompt_tokens,omitempty"`
-	CompletionTokens  int                    `json:"completion_tokens,omitempty"`
-	UseTimeSeconds    int                    `json:"use_time_seconds,omitempty"`
-	IsStream          bool                   `json:"is_stream,omitempty"`
-	RequestID         string                 `json:"request_id,omitempty"`
-	UpstreamRequestID string                 `json:"upstream_request_id,omitempty"`
+	LogType           int                                  `json:"log_type"`
+	Content           string                               `json:"content"`
+	ChannelID         int                                  `json:"channel_id"`
+	ModelName         string                               `json:"model_name"`
+	TokenID           int                                  `json:"token_id"`
+	TokenName         string                               `json:"token_name,omitempty"`
+	Group             string                               `json:"group"`
+	Other             map[string]interface{}               `json:"other"`
+	NodeName          string                               `json:"node_name"`
+	UpdateUsage       bool                                 `json:"update_usage"`
+	Quota             int64                                `json:"quota,omitempty"`
+	QuotaIsActual     bool                                 `json:"quota_is_actual,omitempty"`
+	PromptTokens      int                                  `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int                                  `json:"completion_tokens,omitempty"`
+	UseTimeSeconds    int                                  `json:"use_time_seconds,omitempty"`
+	IsStream          bool                                 `json:"is_stream,omitempty"`
+	RequestID         string                               `json:"request_id,omitempty"`
+	UpstreamRequestID string                               `json:"upstream_request_id,omitempty"`
+	Subscription      *BillingSettlementSubscriptionEffect `json:"subscription,omitempty"`
+}
+
+type BillingSettlementSubscriptionEffect struct {
+	PreConsumed               int64 `json:"pre_consumed"`
+	AmountTotal               int64 `json:"amount_total"`
+	AmountUsedAfterPreConsume int64 `json:"amount_used_after_pre_consume"`
 }
 
 type BillingSettlementInput struct {
@@ -843,6 +850,7 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 		if other == nil {
 			other = make(map[string]interface{})
 		}
+		applySubscriptionSettlementEffectMetadata(record, effect, other)
 		if record.TaskID > 0 {
 			other["actual_quota"] = record.TaskQuota + appliedDelta
 		}
@@ -906,6 +914,49 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 		}
 		return nil
 	})
+}
+
+func applySubscriptionSettlementEffectMetadata(
+	record BillingSettlement,
+	effect *BillingSettlementEffect,
+	other map[string]interface{},
+) {
+	if record.Source != BillingSettlementSourceSubscription || effect == nil ||
+		effect.Subscription == nil || other == nil {
+		return
+	}
+
+	info := effect.Subscription
+	postDelta := record.AppliedFundingDelta
+	if postDelta != 0 {
+		other["subscription_post_delta"] = postDelta
+	} else {
+		delete(other, "subscription_post_delta")
+	}
+
+	consumed := info.PreConsumed + postDelta
+	if consumed < 0 {
+		consumed = 0
+	}
+	if consumed > 0 {
+		other["subscription_consumed"] = consumed
+	} else {
+		delete(other, "subscription_consumed")
+	}
+
+	used := info.AmountUsedAfterPreConsume + postDelta
+	if used < 0 {
+		used = 0
+	}
+	if info.AmountTotal > 0 {
+		remain := info.AmountTotal - used
+		if remain < 0 {
+			remain = 0
+		}
+		other["subscription_total"] = info.AmountTotal
+		other["subscription_used"] = used
+		other["subscription_remain"] = remain
+	}
 }
 
 func validateBillingSettlementInput(input BillingSettlementInput) error {

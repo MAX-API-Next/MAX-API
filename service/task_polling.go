@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -36,9 +37,18 @@ type TaskPollingAdaptor interface {
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
 const legacyTaskRefundCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
+const timedOutTaskTransitionBudget = 100
+
+var timedOutTaskScanBudget = 2000
+
+var timedOutTaskSweepCursor struct {
+	sync.Mutex
+	afterSubmitTime int64
+	afterID         int64
+}
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
-// 每次最多处理 100 条，剩余的下个周期继续处理。
+// 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
 func sweepTimedOutTasks(ctx context.Context) {
 	if constant.TaskTimeoutMinutes <= 0 {
@@ -49,17 +59,28 @@ func sweepTimedOutTasks(ctx context.Context) {
 	legacyReason := "任务超时（旧系统遗留任务，不进行退款，请联系管理员）"
 	now := time.Now().Unix()
 	timedOutCount := 0
-	remaining := 100
-	var afterSubmitTime int64
-	var afterID int64
-	for remaining > 0 {
-		tasks := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, 100)
+	timedOutTaskSweepCursor.Lock()
+	defer timedOutTaskSweepCursor.Unlock()
+
+	remaining := timedOutTaskTransitionBudget
+	scanBudget := timedOutTaskScanBudget
+	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
+	afterID := timedOutTaskSweepCursor.afterID
+	for remaining > 0 && scanBudget > 0 {
+		queryLimit := 100
+		if scanBudget < queryLimit {
+			queryLimit = scanBudget
+		}
+		tasks := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, queryLimit)
 		if len(tasks) == 0 {
+			afterSubmitTime = 0
+			afterID = 0
 			break
 		}
 		for _, task := range tasks {
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
+			scanBudget--
 			settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
 			if settlementErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
@@ -107,14 +128,18 @@ func sweepTimedOutTasks(ctx context.Context) {
 			if settlement != nil {
 				applyTaskBillingSettlement(ctx, task, settlement)
 			}
-			if remaining == 0 {
+			if remaining == 0 || scanBudget == 0 {
 				break
 			}
 		}
-		if len(tasks) < 100 {
+		if len(tasks) < queryLimit && remaining > 0 && scanBudget > 0 {
+			afterSubmitTime = 0
+			afterID = 0
 			break
 		}
 	}
+	timedOutTaskSweepCursor.afterSubmitTime = afterSubmitTime
+	timedOutTaskSweepCursor.afterID = afterID
 
 	if timedOutCount > 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: timed out %d tasks", timedOutCount))

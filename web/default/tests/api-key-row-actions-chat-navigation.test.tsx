@@ -194,9 +194,7 @@ mock.module('../src/features/chat/hooks/use-chat-presets', () => ({
 mock.module('../src/features/chat/lib/chat-links', () => ({
   chatLinkRequiresApiKey: (url: string) => url.includes('{key}'),
   resolveChatUrl: ({ template }: { template: string }) =>
-    template.includes('{key}')
-      ? 'https://chat.example.test/?key=resolved-key'
-      : 'https://chat.example.test/public',
+    template.replace('{key}', 'resolved-key'),
 }))
 
 mock.module('../src/features/chat/lib/send-to-fluent', () => ({
@@ -329,7 +327,7 @@ test('opens a placeholder for custom-protocol presets before resolving the API k
   resolveKeyRequest?.('resolved-key')
   await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
   assert.deepEqual(replaceLocation.mock.calls[0], [
-    'https://chat.example.test/?key=resolved-key',
+    'desktop-chat://connect?key=resolved-key',
   ])
 })
 
@@ -359,7 +357,7 @@ test('chat presets open a placeholder before secure API-key verification resolve
   resolvePresetVerification?.('resolved-key')
   await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
   assert.deepEqual(replaceLocation.mock.calls[0], [
-    'https://chat.example.test/?key=resolved-key',
+    'desktop-chat://connect?key=resolved-key',
   ])
   assert.equal(popupWindow.opener, null)
   assert.deepEqual(setOpenMobile.mock.calls[0], [false])

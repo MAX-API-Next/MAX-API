@@ -729,6 +729,55 @@ func TestBillingSessionWalletFirstReplayCannotSwitchFromSubscriptionToWallet(t *
 	assert.EqualValues(t, 1, countSubscriptionPreConsumeRecords(t, "subscription-replay-request"))
 }
 
+func TestSettleAndRecordConsumeLogsPostSettlementSubscriptionUsage(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID, planID, subscriptionID = 819, 820, 821, 822, 823
+	const preConsumedQuota, actualQuota int64 = 10, 15
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "subscription-log-token", 100)
+	seedChannel(t, channelID)
+	seedBillingSubscription(t, planID, subscriptionID, userID, 100)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		RequestId: "subscription-log-request", UserId: userID,
+		TokenId: tokenID, TokenKey: "subscription-log-token",
+		OriginModelName: "subscription-log-model", UsingGroup: "default",
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID},
+		UserSetting: dto.UserSetting{BillingPreference: "subscription_first"},
+	}
+	session, apiErr := NewBillingSession(ctx, info, int(preConsumedQuota))
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+	other := map[string]interface{}{}
+	appendBillingInfo(info, other)
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId: channelID,
+		ModelName: "subscription-log-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     int(actualQuota),
+		Content:   "subscription settlement metadata",
+		Other:     other,
+	})
+
+	require.Equal(t, actualQuota, getSubscriptionAmountUsed(t, subscriptionID))
+	log := getLastLog(t)
+	var metadata struct {
+		PostDelta int64 `json:"subscription_post_delta"`
+		Consumed  int64 `json:"subscription_consumed"`
+		Used      int64 `json:"subscription_used"`
+		Remain    int64 `json:"subscription_remain"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &metadata))
+	assert.Equal(t, actualQuota-preConsumedQuota, metadata.PostDelta)
+	assert.Equal(t, actualQuota, metadata.Consumed)
+	assert.Equal(t, actualQuota, metadata.Used)
+	assert.Equal(t, int64(100)-actualQuota, metadata.Remain)
+}
+
 func TestBillingSessionTrustedWalletReplayFailsClosedInsteadOfSwitchingFunding(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subscriptionID = 815, 816, 817, 818

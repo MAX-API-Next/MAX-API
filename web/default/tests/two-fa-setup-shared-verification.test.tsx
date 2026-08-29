@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { createReactTestEnvironment } from '@/test/react'
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  waitFor,
+} from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import type { ReactElement, ReactNode } from 'react'
@@ -31,6 +38,11 @@ const setup2FA = mock(async () => ({
   },
 }))
 const enable2FA = mock(async () => ({ success: true }))
+const deletePasskey = mock(async () => ({ success: true }))
+const getPasskeyStatus = mock(async () => ({
+  success: true,
+  data: { enabled: true },
+}))
 interface VerificationOptions {
   scope?: string
   title?: string
@@ -111,7 +123,30 @@ mock.module('../src/lib/handle-server-error', () => ({
 }))
 
 mock.module('../src/lib/secure-verification', () => ({
+  isVerificationRequiredError: (error: unknown) => {
+    const candidate = error as {
+      response?: { status?: number; data?: { code?: string } }
+    }
+    return (
+      candidate.response?.status === 403 &&
+      candidate.response.data?.code === 'VERIFICATION_REQUIRED'
+    )
+  },
   wasSecureVerificationErrorReported: () => false,
+}))
+
+mock.module('../src/features/auth/passkey/api', () => ({
+  beginPasskeyRegistration: mock(async () => ({ success: false })),
+  deletePasskey,
+  finishPasskeyRegistration: mock(async () => ({ success: false })),
+  getPasskeyStatus,
+}))
+
+mock.module('../src/lib/passkey', () => ({
+  buildRegistrationResult: mock(() => null),
+  createCredential: mock(async () => null),
+  isPasskeySupported: mock(async () => true),
+  prepareCredentialCreationOptions: mock(() => ({})),
 }))
 
 mock.module('../src/features/auth/secure-verification', () => ({
@@ -121,12 +156,22 @@ mock.module('../src/features/auth/secure-verification', () => ({
 const { TwoFASetupDialog } = await import(
   '../src/features/profile/components/dialogs/two-fa-setup-dialog'
 )
+const { usePasskeyManagement } = await import(
+  '../src/features/auth/passkey/hooks/use-passkey-management'
+)
 const testEnv = createReactTestEnvironment()
 
 beforeAll(() => testEnv.setup())
 beforeEach(() => {
   setup2FA.mockClear()
   enable2FA.mockClear()
+  deletePasskey.mockClear()
+  deletePasskey.mockImplementation(async () => ({ success: true }))
+  getPasskeyStatus.mockClear()
+  getPasskeyStatus.mockImplementation(async () => ({
+    success: true,
+    data: { enabled: true },
+  }))
   withVerification.mockClear()
   handleServerError.mockClear()
 })
@@ -269,4 +314,30 @@ test('reports enable failures with the server error message path', async () => {
     error,
     { fallback: 'Failed to enable 2FA' },
   ])
+})
+
+test('propagates verification-required errors from Passkey removal', async () => {
+  const verificationRequiredError = Object.assign(
+    new Error('verification required'),
+    {
+      response: {
+        status: 403,
+        data: { code: 'VERIFICATION_REQUIRED' },
+      },
+    }
+  )
+  deletePasskey.mockImplementationOnce(async () => {
+    throw verificationRequiredError
+  })
+  const { result } = renderHook(() => usePasskeyManagement())
+  await waitFor(() => assert.equal(result.current.loading, false))
+
+  await act(async () => {
+    await assert.rejects(
+      result.current.remove(),
+      (error: unknown) => error === verificationRequiredError
+    )
+  })
+
+  assert.equal(result.current.removing, false)
 })

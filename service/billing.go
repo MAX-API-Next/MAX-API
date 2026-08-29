@@ -39,12 +39,13 @@ func billingEffectRequestIDs(ctx *gin.Context, relayInfo *relaycommon.RelayInfo)
 }
 
 func newConsumeBillingSettlementEffect(
+	relayInfo *relaycommon.RelayInfo,
 	params model.RecordConsumeLogParams,
 	requestID string,
 	upstreamRequestID string,
 	updateUsage bool,
 ) *model.BillingSettlementEffect {
-	return &model.BillingSettlementEffect{
+	effect := &model.BillingSettlementEffect{
 		LogType:           model.LogTypeConsume,
 		Content:           params.Content,
 		ChannelID:         params.ChannelId,
@@ -64,6 +65,14 @@ func newConsumeBillingSettlementEffect(
 		RequestID:         requestID,
 		UpstreamRequestID: upstreamRequestID,
 	}
+	if relayInfo != nil && relayInfo.BillingSource == BillingSourceSubscription {
+		effect.Subscription = &model.BillingSettlementSubscriptionEffect{
+			PreConsumed:               relayInfo.SubscriptionPreConsumed,
+			AmountTotal:               relayInfo.SubscriptionAmountTotal,
+			AmountUsedAfterPreConsume: relayInfo.SubscriptionAmountUsedAfterPreConsume,
+		}
+	}
+	return effect
 }
 
 func validatePreConsumedQuota(preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.MaxAPIError {
@@ -202,7 +211,7 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		return
 	}
 	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
-	effect := newConsumeBillingSettlementEffect(params, requestID, upstreamRequestID, shouldUpdateUsage)
+	effect := newConsumeBillingSettlementEffect(relayInfo, params, requestID, upstreamRequestID, shouldUpdateUsage)
 
 	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, params.Quota, effect)
 	if err != nil {
@@ -212,6 +221,10 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	if effectHandled {
 		return
 	}
+	if params.Other == nil {
+		params.Other = make(map[string]interface{})
+	}
+	appendBillingInfo(relayInfo, params.Other)
 	if shouldUpdateUsage {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, params.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, params.Quota)

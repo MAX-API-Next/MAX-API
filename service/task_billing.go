@@ -72,7 +72,7 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 		useTimeSeconds = int(time.Since(info.StartTime).Seconds())
 	}
 	requestID, upstreamRequestID := billingEffectRequestIDs(c, info)
-	return newConsumeBillingSettlementEffect(model.RecordConsumeLogParams{
+	return newConsumeBillingSettlementEffect(info, model.RecordConsumeLogParams{
 		ChannelId:      info.ChannelId,
 		ModelName:      info.OriginModelName,
 		Quota:          quota,
