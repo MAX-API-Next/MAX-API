@@ -550,7 +550,7 @@
     "Auth value": "认证值",
     "Auth value is required": "认证值不能为空",
     "auth.resetPasswordConfirm.backToLogin": "返回登录",
-    "auth.resetPasswordConfirm.apiTokensRevoked": "为保障账户安全，所有现有 API Token 已被撤销。请登录并重新创建 API Token。",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "为保障账户安全，所有现有 API 令牌已被撤销。请登录并重新创建 API 令牌。",
     "auth.resetPasswordConfirm.confirm": "确认重置密码",
     "auth.resetPasswordConfirm.description": "确认重置请求以生成新密码。",
     "auth.resetPasswordConfirm.retry": "重试 ({{seconds}}s)",

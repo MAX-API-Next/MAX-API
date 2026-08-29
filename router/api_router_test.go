@@ -516,24 +516,26 @@ func TestSensitiveCredentialRoutesRequireStepUp(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, loginRecorder.Code)
 
 	tests := []struct {
-		name string
-		path string
-		body string
+		name   string
+		method string
+		path   string
+		body   string
 	}{
-		{name: "passkey registration begin", path: "/api/user/passkey/register/begin", body: `{}`},
-		{name: "passkey registration finish", path: "/api/user/passkey/register/finish", body: `{}`},
-		{name: "2fa setup", path: "/api/user/2fa/setup", body: `{}`},
-		{name: "2fa enable", path: "/api/user/2fa/enable", body: `{"code":"000000"}`},
-		{name: "session revocation", path: "/api/user/sessions/revoke", body: `{}`},
-		{name: "telegram bind state", path: "/api/oauth/telegram/bind/state", body: `{}`},
-		{name: "telegram bind", path: "/api/oauth/telegram/bind", body: `{}`},
-		{name: "api token creation", path: "/api/token/", body: `{"name":"blocked","expired_time":-1,"unlimited_quota":true}`},
-		{name: "api token reveal", path: fmt.Sprintf("/api/token/%d/key", token.Id), body: `{}`},
-		{name: "api token batch export", path: "/api/token/batch/keys", body: fmt.Sprintf(`{"ids":[%d]}`, token.Id)},
+		{name: "passkey registration begin", method: http.MethodPost, path: "/api/user/passkey/register/begin", body: `{}`},
+		{name: "passkey registration finish", method: http.MethodPost, path: "/api/user/passkey/register/finish", body: `{}`},
+		{name: "passkey deletion", method: http.MethodDelete, path: "/api/user/passkey", body: `{}`},
+		{name: "2fa setup", method: http.MethodPost, path: "/api/user/2fa/setup", body: `{}`},
+		{name: "2fa enable", method: http.MethodPost, path: "/api/user/2fa/enable", body: `{"code":"000000"}`},
+		{name: "session revocation", method: http.MethodPost, path: "/api/user/sessions/revoke", body: `{}`},
+		{name: "telegram bind state", method: http.MethodPost, path: "/api/oauth/telegram/bind/state", body: `{}`},
+		{name: "telegram bind", method: http.MethodPost, path: "/api/oauth/telegram/bind", body: `{}`},
+		{name: "api token creation", method: http.MethodPost, path: "/api/token/", body: `{"name":"blocked","expired_time":-1,"unlimited_quota":true}`},
+		{name: "api token reveal", method: http.MethodPost, path: fmt.Sprintf("/api/token/%d/key", token.Id), body: `{}`},
+		{name: "api token batch export", method: http.MethodPost, path: "/api/token/batch/keys", body: fmt.Sprintf(`{"ids":[%d]}`, token.Id)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 			request.Header.Set("Content-Type", "application/json")
 			for _, sessionCookie := range loginRecorder.Result().Cookies() {
 				request.AddCookie(sessionCookie)

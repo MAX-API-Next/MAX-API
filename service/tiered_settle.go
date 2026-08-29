@@ -8,7 +8,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
-	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	pricehelper "github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -129,14 +128,6 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	if err != nil {
 		return nil, err
 	}
-	// Alpha Search has a deterministic tool surcharge. Its reservation floor
-	// is applied after that surcharge is added in PrepareTieredBillingForSelectedGroup.
-	if relayInfo.RelayMode != relayconstant.RelayModeAlphaSearch {
-		estimatedQuota, err = pricehelper.ApplyPreConsumedQuotaFloor(estimatedQuota, groupRatio > 0)
-		if err != nil {
-			return nil, err
-		}
-	}
 	snap.GroupRatio = groupRatio
 	snap.EstimatedQuotaAfterGroup = estimatedQuota
 	return snap, nil
@@ -170,18 +161,16 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	if relayInfo.RelayMode == relayconstant.RelayModeAlphaSearch {
-		targetQuota, quotaErr = pricehelper.ApplyPreConsumedQuotaFloor(targetQuota, snap.GroupRatio > 0)
-		if quotaErr != nil {
-			return types.NewErrorWithStatusCode(
-				quotaErr,
-				types.ErrorCodeModelPriceError,
-				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
-			)
-		}
-		relayInfo.PriceData.QuotaToPreConsume = targetQuota
+	targetQuota, quotaErr = pricehelper.ApplyPreConsumedQuotaFloor(targetQuota, snap.GroupRatio > 0)
+	if quotaErr != nil {
+		return types.NewErrorWithStatusCode(
+			quotaErr,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
+	relayInfo.PriceData.QuotaToPreConsume = targetQuota
 	if snap.GroupRatio == 0 {
 		return nil
 	}

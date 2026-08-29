@@ -27,15 +27,15 @@ export function useApiTokenVerification(
   description?: string
 ): <T>(apiCall: () => Promise<T>) => Promise<T | null> {
   const { t } = useTranslation()
-  const { withVerification } = useSecureVerificationGate()
+  const secureVerificationGate = useSecureVerificationGate()
 
   return useCallback(
     <T>(apiCall: () => Promise<T>): Promise<T | null> =>
-      withVerification(apiCall, {
+      secureVerificationGate.withVerification(apiCall, {
         scope: 'api_token',
         title: t('Security verification'),
         description: description ?? t(defaultApiTokenVerificationDescription),
       }),
-    [description, t, withVerification]
+    [description, t, secureVerificationGate.withVerification]
   )
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -67,11 +69,17 @@ func TestPrepareTieredAlphaSearchBillingAppliesFloorAfterSurcharge(t *testing.T)
 	const expr = `tier("base", p)`
 	originalQuotaPerUnit := common.QuotaPerUnit
 	originalPreConsumedQuota := common.PreConsumedQuota
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	originalToolPrice := toolPrices.Prices[dto.BuildInToolWebSearchPreview]
 	common.QuotaPerUnit = 500_000
 	common.PreConsumedQuota = 20_000
+	toolPrices.Prices[dto.BuildInToolWebSearchPreview] = 10
+	operation_setting.RebuildToolPriceIndex()
 	t.Cleanup(func() {
 		common.QuotaPerUnit = originalQuotaPerUnit
 		common.PreConsumedQuota = originalPreConsumedQuota
+		toolPrices.Prices[dto.BuildInToolWebSearchPreview] = originalToolPrice
+		operation_setting.RebuildToolPriceIndex()
 	})
 
 	billing := &recordingBillingSettler{preConsumed: 6_000}

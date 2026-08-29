@@ -150,8 +150,8 @@ const { PasskeyCard } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-beforeAll(() => {
-  testEnv.setup()
+beforeAll(async (): Promise<void> => {
+  await testEnv.setup()
 })
 beforeEach(() => {
   passkeyEnabled = false
