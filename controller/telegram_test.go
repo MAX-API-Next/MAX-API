@@ -74,6 +74,27 @@ func TestTelegramAuthorizationIgnoresLocalBindState(t *testing.T) {
 	require.True(t, checkTelegramAuthorizationAt(params, token, now))
 }
 
+func TestTelegramAuthorizationRejectsTamperedPayload(t *testing.T) {
+	const token = "123456:telegram-test-token"
+	now := time.Unix(1_800_000_000, 0)
+	params := signedTelegramParams(t, token, now.Add(-time.Minute))
+	params.Set("id", "654321")
+
+	require.False(t, checkTelegramAuthorizationAt(params, token, now))
+}
+
+func TestTelegramAuthorizationRejectsForeignBotToken(t *testing.T) {
+	const token = "123456:telegram-test-token"
+	now := time.Unix(1_800_000_000, 0)
+	params := signedTelegramParams(t, token, now.Add(-time.Minute))
+
+	require.False(t, checkTelegramAuthorizationAt(
+		params,
+		"987654:another-telegram-test-token",
+		now,
+	))
+}
+
 func TestTelegramAuthPayloadPreservesUnknownSignedFields(t *testing.T) {
 	const token = "123456:telegram-forward-compatible-test"
 	now := time.Unix(1_800_000_000, 0)

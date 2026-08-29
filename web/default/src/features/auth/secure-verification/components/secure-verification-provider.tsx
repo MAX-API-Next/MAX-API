@@ -42,7 +42,7 @@ export function SecureVerificationProvider(
   } = useSecureVerification()
 
   const handleVerification = useCallback(
-    async (method: VerificationMethod, code?: string) => {
+    async (method: VerificationMethod, code?: string): Promise<void> => {
       try {
         await executeVerification(method, code)
       } catch {
