@@ -106,7 +106,9 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			requiredScope = requiredScopes[0]
 		}
 		verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
-		if requiredScope != "" && verifiedScope != requiredScope {
+		if (requiredScope != "" && verifiedScope != requiredScope) ||
+			((verifiedMethod == secureVerificationMethodPassword ||
+				verifiedMethod == secureVerificationMethodOAuth) && requiredScope == "") {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "需要对应操作的安全验证",
@@ -115,17 +117,6 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if (verifiedMethod == secureVerificationMethodPassword ||
-			verifiedMethod == secureVerificationMethodOAuth) && requiredScope == "" {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "需要对应操作的安全验证",
-				"code":    "VERIFICATION_REQUIRED",
-			})
-			c.Abort()
-			return
-		}
-
 		c.Next()
 	}
 }

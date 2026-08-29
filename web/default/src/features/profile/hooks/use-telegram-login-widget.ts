@@ -50,6 +50,7 @@ export function useTelegramLoginWidget(
 ): UseTelegramLoginWidgetResult {
   const { t } = useTranslation()
   const { withVerification } = useSecureVerificationGate()
+  const { onOpenChange } = options
   const widgetContainerRef = useRef<HTMLDivElement>(null)
   const [callbackName] = useState(
     () => `telegramAuthCallback_${Math.random().toString(36).slice(2)}`
@@ -68,9 +69,9 @@ export function useTelegramLoginWidget(
   const handleOpenChange = useCallback(
     (nextOpen: boolean): void => {
       if (!nextOpen) resetBindingState()
-      options.onOpenChange(nextOpen)
+      onOpenChange(nextOpen)
     },
-    [options.onOpenChange, resetBindingState]
+    [onOpenChange, resetBindingState]
   )
 
   const callbackHandlersRef = useRef({
@@ -91,6 +92,7 @@ export function useTelegramLoginWidget(
 
   const initializeBinding = useCallback(async (): Promise<void> => {
     const handlers = callbackHandlersRef.current
+    setBindState('')
     setStatus('loading')
     setErrorMessage('')
     try {

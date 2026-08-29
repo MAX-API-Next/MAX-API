@@ -163,6 +163,32 @@ func TestGenerateOAuthCodeRejectsAnonymousBind(t *testing.T) {
 	require.Equal(t, "Unauthorized", response.Message)
 }
 
+func TestGenerateOAuthCodeRejectsTelegramBindIntent(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	require.NoError(t, appi18n.Init())
+	originalEnabled := common.TelegramOAuthEnabled
+	common.TelegramOAuthEnabled = true
+	t.Cleanup(func() { common.TelegramOAuthEnabled = originalEnabled })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"bind"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 123)
+
+	GenerateOAuthCode(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AuthFlow{}).Count(&count).Error)
+	require.Zero(t, count)
+}
+
 func TestHandleOAuthRejectsConsumedStateBeforeProviderExchange(t *testing.T) {
 	setupControllerAuthFlowDB(t)
 	require.NoError(t, appi18n.Init())

@@ -48,6 +48,11 @@ type BillingSession struct {
 // blindly because the provider may already have committed it.
 var ErrBillingFundingOutcomeUnknown = errors.New("billing funding settlement outcome is unknown")
 
+// ErrBillingSettlementEffectNotDurable means no idempotent settlement record
+// can own the usage/log projection. The settlement remains failed; callers must
+// not mistake it for a durable pending effect or project successful usage.
+var ErrBillingSettlementEffectNotDurable = errors.New("billing settlement effect requires a durable funding source and request id")
+
 type SettlementPreparer interface {
 	PrepareSettlement(actualQuota int) (*model.BillingSettlementInput, error)
 }
@@ -138,7 +143,7 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 		return nil, false, nil
 	}
 	if effect != nil {
-		return nil, false, errors.New("billing settlement effects require a durable funding source and request id")
+		return nil, false, ErrBillingSettlementEffectNotDurable
 	}
 	return nil, false, s.settleNonDurableLocked(delta)
 }

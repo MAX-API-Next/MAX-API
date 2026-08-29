@@ -201,8 +201,6 @@ export function TwoFASetupDialog({
       setSetupData(response.data)
       setStep(0)
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Setup 2FA error:', error)
       if (!wasSecureVerificationErrorReported(error)) {
         handleServerError(error, { fallback: t('Failed to setup 2FA') })
       }

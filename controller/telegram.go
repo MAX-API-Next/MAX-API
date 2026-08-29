@@ -89,6 +89,10 @@ func GenerateTelegramBindState(c *gin.Context) {
 		return
 	}
 	userID := c.GetInt("id")
+	if userID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": i18n.T(c, i18n.MsgUnauthorized)})
+		return
+	}
 	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
 		Purpose:   model.AuthFlowPurposeOAuth,
 		Provider:  "telegram",

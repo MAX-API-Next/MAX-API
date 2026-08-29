@@ -87,6 +87,7 @@ type recordingEffectBillingSettler struct {
 	recordingBillingSettler
 	actualQuota int
 	effect      *model.BillingSettlementEffect
+	err         error
 }
 
 func TestSettleAndRecordConsumeHandlesNilContextWithoutPanic(t *testing.T) {
@@ -148,6 +149,27 @@ func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) 
 	assert.Equal(t, params.IsStream, settler.effect.IsStream)
 	assert.Equal(t, "zero-usage-request", settler.effect.RequestID)
 	assert.Equal(t, "zero-usage-upstream-request", settler.effect.UpstreamRequestID)
+}
+
+func TestSettleBillingWithEffectDoesNotClaimPrePersistenceFailure(t *testing.T) {
+	settler := &recordingEffectBillingSettler{err: ErrBillingSettlementEffectNotDurable}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingSettlementEffectNotDurable)
+	assert.False(t, handled)
+}
+
+func TestSettleBillingWithEffectKeepsDurablyOwnedFailureHandled(t *testing.T) {
+	settlementErr := errors.New("durable settlement remains pending")
+	settler := &recordingEffectBillingSettler{err: settlementErr}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, settlementErr)
+	assert.True(t, handled)
 }
 
 func TestSettleAndRecordConsumePersistsLegacyEffectBeforeFailedSettlement(t *testing.T) {
@@ -225,7 +247,7 @@ func (s *recordingBillingSettler) Reserve(target int) error {
 func (s *recordingEffectBillingSettler) SettleWithEffect(actualQuota int, effect *model.BillingSettlementEffect) error {
 	s.actualQuota = actualQuota
 	s.effect = effect
-	return nil
+	return s.err
 }
 
 func TestBillingSessionPrepareSettlementPersistsZeroDeltaTaskEffect(t *testing.T) {

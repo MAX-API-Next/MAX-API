@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -146,7 +147,7 @@ func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 				SettleWithEffect(int, *model.BillingSettlementEffect) error
 			}); ok {
 				if err := settler.SettleWithEffect(actualQuota, effect); err != nil {
-					return true, err
+					return !errors.Is(err, ErrBillingSettlementEffectNotDurable), err
 				}
 				if actualQuota != 0 {
 					if relayInfo.BillingSource == BillingSourceSubscription {

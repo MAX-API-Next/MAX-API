@@ -28,7 +28,7 @@ import {
   test,
 } from 'bun:test'
 import assert from 'node:assert/strict'
-import type { MouseEventHandler, ReactNode } from 'react'
+import type { MouseEventHandler, ReactElement, ReactNode } from 'react'
 
 const withVerification = mock(
   async <T,>(
@@ -63,7 +63,7 @@ interface DialogButtonProps extends DialogPartProps {
   onClick?: MouseEventHandler<HTMLButtonElement>
 }
 
-function DialogPart(props: DialogPartProps) {
+function DialogPart(props: DialogPartProps): ReactElement {
   return <div>{props.children}</div>
 }
 
@@ -84,8 +84,8 @@ mock.module('../src/lib/handle-server-error', () => ({
 }))
 
 mock.module('../src/components/ui/alert-dialog', () => ({
-  AlertDialog: (props: DialogPartProps) => <>{props.children}</>,
-  AlertDialogAction: (props: DialogButtonProps) => (
+  AlertDialog: (props: DialogPartProps): ReactElement => <>{props.children}</>,
+  AlertDialogAction: (props: DialogButtonProps): ReactElement => (
     <button
       type='button'
       disabled={props.disabled}
@@ -94,7 +94,7 @@ mock.module('../src/components/ui/alert-dialog', () => ({
       {props.children}
     </button>
   ),
-  AlertDialogCancel: (props: DialogButtonProps) => (
+  AlertDialogCancel: (props: DialogButtonProps): ReactElement => (
     <button type='button' disabled={props.disabled}>
       {props.children}
     </button>
@@ -104,7 +104,7 @@ mock.module('../src/components/ui/alert-dialog', () => ({
   AlertDialogFooter: DialogPart,
   AlertDialogHeader: DialogPart,
   AlertDialogTitle: DialogPart,
-  AlertDialogTrigger: (props: DialogPartProps) => (
+  AlertDialogTrigger: (props: DialogPartProps): ReactElement => (
     <button type='button'>{props.children}</button>
   ),
 }))
@@ -126,7 +126,7 @@ mock.module('../src/features/auth/passkey', () => ({
 }))
 
 mock.module('../src/features/auth/secure-verification', () => ({
-  SecureVerificationDialog: () => null,
+  SecureVerificationDialog: (): ReactElement | null => null,
   useSecureVerification: () => ({
     open: false,
     setOpen: mock(() => undefined),

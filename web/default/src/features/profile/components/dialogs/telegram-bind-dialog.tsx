@@ -103,14 +103,16 @@ export function TelegramBindDialog({
 
             {status === 'error' && (
               <div className='flex max-w-sm flex-col items-center gap-3 text-center'>
-                <p className='text-destructive text-sm'>{errorMessage}</p>
+                <p className='text-destructive text-sm' role='alert'>
+                  {errorMessage}
+                </p>
                 <Button
                   type='button'
                   variant='outline'
                   size='sm'
                   onClick={retry}
                 >
-                  <RefreshCw data-icon='inline-start' />
+                  <RefreshCw data-icon='inline-start' aria-hidden='true' />
                   {t('Retry')}
                 </Button>
               </div>

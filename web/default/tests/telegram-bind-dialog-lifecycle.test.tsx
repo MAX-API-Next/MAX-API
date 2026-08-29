@@ -238,7 +238,7 @@ describe('TelegramBindDialog widget lifecycle', () => {
       throw initializationError
     })
 
-    render(
+    const view = render(
       <TelegramBindDialog
         open
         onOpenChange={mock(() => undefined)}
@@ -251,6 +251,10 @@ describe('TelegramBindDialog widget lifecycle', () => {
     assert.deepEqual(handleServerError.mock.calls[0], [initializationError, {
       fallback: 'Failed to initialize Telegram binding',
     }])
+    const alert = view.getByRole('alert')
+    assert.equal(alert.textContent, 'Failed to initialize Telegram binding')
+    const retryIcon = view.getByRole('button', { name: 'Retry' }).querySelector('svg')
+    assert.equal(retryIcon?.getAttribute('aria-hidden'), 'true')
   })
 
   test('reports binding failures through the shared server error handler', async () => {

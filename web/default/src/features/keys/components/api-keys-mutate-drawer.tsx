@@ -332,32 +332,30 @@ export function ApiKeysMutateDrawer({
         // Create mode - handle batch creation
         const count = data.tokenCount || 1
         let created = 0
-        const successCount = await withApiTokenVerification(
-          async (): Promise<number> => {
-            for (let i = created; i < count; i++) {
-              const result = await createApiKey({
-                ...basePayload,
-                name:
-                  i === 0 && data.name
-                    ? data.name
-                    : `${data.name || 'default'}-${Math.random().toString(36).slice(2, 8)}`,
-              })
-              if (result.success) {
-                created++
-              } else {
-                toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
-                break
-              }
+        await withApiTokenVerification(async (): Promise<number> => {
+          for (let i = created; i < count; i++) {
+            const result = await createApiKey({
+              ...basePayload,
+              name:
+                i === 0 && data.name
+                  ? data.name
+                  : `${data.name || 'default'}-${Math.random().toString(36).slice(2, 8)}`,
+            })
+            if (result.success) {
+              created++
+            } else {
+              toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
+              break
             }
-
-            return created
           }
-        )
 
-        if (successCount !== null && successCount > 0) {
+          return created
+        })
+
+        if (created > 0) {
           toast.success(
             t('Successfully created {{count}} API Key(s)', {
-              count: successCount,
+              count: created,
             })
           )
           onOpenChange(false)
