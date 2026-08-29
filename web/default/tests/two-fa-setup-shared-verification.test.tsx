@@ -38,6 +38,7 @@ const setup2FA = mock(async () => ({
   },
 }))
 const enable2FA = mock(async () => ({ success: true }))
+const beginPasskeyRegistration = mock(async () => ({ success: false }))
 const deletePasskey = mock(async () => ({ success: true }))
 const getPasskeyStatus = mock(async () => ({
   success: true,
@@ -55,6 +56,10 @@ const handleServerError = mock(() => undefined)
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}))
+
+mock.module('i18next', () => ({
+  default: { t: (key: string) => key },
 }))
 
 mock.module('sonner', () => ({
@@ -136,7 +141,7 @@ mock.module('../src/lib/secure-verification', () => ({
 }))
 
 mock.module('../src/features/auth/passkey/api', () => ({
-  beginPasskeyRegistration: mock(async () => ({ success: false })),
+  beginPasskeyRegistration,
   deletePasskey,
   finishPasskeyRegistration: mock(async () => ({ success: false })),
   getPasskeyStatus,
@@ -165,6 +170,8 @@ beforeAll(() => testEnv.setup())
 beforeEach(() => {
   setup2FA.mockClear()
   enable2FA.mockClear()
+  beginPasskeyRegistration.mockClear()
+  beginPasskeyRegistration.mockImplementation(async () => ({ success: false }))
   deletePasskey.mockClear()
   deletePasskey.mockImplementation(async () => ({ success: true }))
   getPasskeyStatus.mockClear()
@@ -340,4 +347,35 @@ test('propagates verification-required errors from Passkey removal', async () =>
   })
 
   assert.equal(result.current.removing, false)
+})
+
+test('reports ordinary Passkey registration failures through the shared handler', async () => {
+  const registrationError = new Error('registration transport failed')
+  beginPasskeyRegistration.mockImplementationOnce(async () => {
+    throw registrationError
+  })
+  const originalCredentials = navigator.credentials
+  Object.defineProperty(navigator, 'credentials', {
+    configurable: true,
+    value: {},
+  })
+
+  try {
+    const { result } = renderHook(() => usePasskeyManagement())
+    await waitFor(() => assert.equal(result.current.loading, false))
+    await waitFor(() => assert.equal(result.current.supported, true))
+
+    await act(async () => {
+      assert.equal(await result.current.register(), false)
+    })
+
+    assert.deepEqual(handleServerError.mock.calls[0], [registrationError, {
+      fallback: 'Failed to register Passkey',
+    }])
+  } finally {
+    Object.defineProperty(navigator, 'credentials', {
+      configurable: true,
+      value: originalCredentials,
+    })
+  }
 })

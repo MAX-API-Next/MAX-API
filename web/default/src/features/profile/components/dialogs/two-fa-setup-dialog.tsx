@@ -252,7 +252,7 @@ export function TwoFASetupDialog({
     }
   }
 
-  const handleOpenChange = (open: boolean) => {
+  const handleOpenChange = (open: boolean): void => {
     if (!loading && !initializing) {
       if (!open) {
         setStep(0)

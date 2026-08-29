@@ -316,7 +316,7 @@ func TestUserAuthRejectsStaleSessionGeneration(t *testing.T) {
 		session.Set("role", user.Role)
 		session.Set("status", user.Status)
 		session.Set("group", user.Group)
-		session.Set("session_generation", 0)
+		session.Set("session_generation", int64(0))
 		require.NoError(t, session.Save())
 		c.Status(http.StatusNoContent)
 	})

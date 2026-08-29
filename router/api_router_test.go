@@ -243,6 +243,7 @@ func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
 		{name: "affiliate transfer", method: http.MethodPost, path: "/api/user/aff_transfer", body: `{"quota":1}`},
 		{name: "disable 2fa", method: http.MethodPost, path: "/api/user/2fa/disable", body: `{"code":"000000"}`},
 		{name: "regenerate 2fa backup codes", method: http.MethodPost, path: "/api/user/2fa/backup_codes", body: `{"code":"000000"}`},
+		{name: "delete passkey", method: http.MethodDelete, path: "/api/user/passkey"},
 		{name: "update api token", method: http.MethodPut, path: "/api/token/", body: `{"id":1,"name":"updated"}`},
 		{name: "delete api token", method: http.MethodDelete, path: "/api/token/1"},
 		{name: "delete api token batch", method: http.MethodPost, path: "/api/token/batch", body: `{"ids":[1]}`},

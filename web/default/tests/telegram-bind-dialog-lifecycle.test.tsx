@@ -30,11 +30,22 @@ import {
 } from 'bun:test'
 import assert from 'node:assert/strict'
 
-const createTelegramBindState = mock(async () => ({
+interface TelegramBindStateResponse {
+  success: boolean
+  data?: { state: string }
+  message?: string
+}
+
+interface TelegramBindResponse {
+  success: boolean
+  message?: string
+}
+
+const createTelegramBindState = mock(async (): Promise<TelegramBindStateResponse> => ({
   success: true,
   data: { state: 'telegram-bind-state' },
 }))
-const bindTelegramAccount = mock(async () => ({ success: true }))
+const bindTelegramAccount = mock(async (): Promise<TelegramBindResponse> => ({ success: true }))
 const toastSuccess = mock((): void => undefined)
 const toastError = mock((): void => undefined)
 const handleServerError = mock((): void => undefined)
@@ -334,6 +345,28 @@ describe('TelegramBindDialog widget lifecycle', (): void => {
     assert.equal(retryIcon?.getAttribute('aria-hidden'), 'true')
   })
 
+  test('preserves Telegram initialization business messages inline', async (): Promise<void> => {
+    createTelegramBindState.mockImplementationOnce(async () => ({
+      success: false,
+      message: 'Telegram state is unavailable',
+    }))
+
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+    assert.equal(view.getByRole('alert').textContent, 'Telegram state is unavailable')
+    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+      fallback: 'Telegram state is unavailable',
+    })
+  })
+
   test('reports binding failures through the shared server error handler', async (): Promise<void> => {
     const view = render(
       <TelegramBindDialog
@@ -372,5 +405,51 @@ describe('TelegramBindDialog widget lifecycle', (): void => {
 
     await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
     assert.equal(view.getByText('Failed to bind Telegram account') !== null, true)
+  })
+
+  test('preserves Telegram binding business messages inline', async (): Promise<void> => {
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    const script = await waitFor(() => {
+      const element = document.querySelector<HTMLScriptElement>(
+        'script[data-onauth]'
+      )
+      assert.ok(element)
+      return element
+    })
+    const callbackName = script
+      .getAttribute('data-onauth')
+      ?.replace(/\(user\)$/, '')
+    assert.ok(callbackName)
+    bindTelegramAccount.mockImplementationOnce(async () => ({
+      success: false,
+      message: 'Telegram account is already bound',
+    }))
+
+    const callback = (window as unknown as Record<string, unknown>)[
+      callbackName
+    ] as (authorization: {
+      id: number
+      auth_date: number
+      hash: string
+    }) => Promise<void>
+    await act(async () => {
+      await callback({ id: 123, auth_date: 456, hash: 'telegram-hash' })
+    })
+
+    assert.equal(
+      view.getByRole('alert').textContent,
+      'Telegram account is already bound'
+    )
+    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
+      fallback: 'Telegram account is already bound',
+    })
   })
 })

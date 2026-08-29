@@ -120,10 +120,12 @@ export function useTelegramLoginWidget(
         return
       }
       if (!response.success || !response.data?.state) {
-        throw new Error(
-          response.message ||
-            handlers.t('Failed to initialize Telegram binding')
-        )
+        const fallback = handlers.t('Failed to initialize Telegram binding')
+        const message = response.message || fallback
+        handleServerError(new Error(message), { fallback: message })
+        setErrorMessage(message)
+        setStatus('error')
+        return
       }
       setBindState(response.data.state)
     } catch (error) {
@@ -182,9 +184,12 @@ export function useTelegramLoginWidget(
           return
         }
         if (!response.success) {
-          throw new Error(
-            response.message || handlers.t('Failed to bind Telegram account')
-          )
+          const fallback = handlers.t('Failed to bind Telegram account')
+          const message = response.message || fallback
+          handleServerError(new Error(message), { fallback: message })
+          setErrorMessage(message)
+          setStatus('error')
+          return
         }
         toast.success(handlers.t('Telegram account bound successfully'))
         callbackHandlersRef.current.onSuccess()

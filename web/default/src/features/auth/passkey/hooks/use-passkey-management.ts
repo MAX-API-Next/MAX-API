@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   buildRegistrationResult,
   createCredential,
@@ -139,13 +140,9 @@ export function usePasskeyManagement(
         toast.info(i18next.t('Passkey registration was cancelled'))
         return false
       }
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Registration error', error)
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : i18next.t('Failed to register Passkey')
-      )
+      handleServerError(error, {
+        fallback: i18next.t('Failed to register Passkey'),
+      })
       return false
     } finally {
       setRegistering(false)
