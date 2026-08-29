@@ -27,9 +27,36 @@ import {
   beforeAll,
   beforeEach,
   mock,
+  spyOn,
   test,
 } from 'bun:test'
 import assert from 'node:assert/strict'
+
+interface VerificationMethodsRequestConfig {
+  params?: {
+    scope?: string
+  }
+  skipBusinessError?: boolean
+  skipErrorHandler?: boolean
+}
+
+type VerificationMethodsResponse =
+  | {
+      data: {
+        success: true
+        data: {
+          has_2fa: boolean
+          has_passkey: boolean
+          has_password: boolean
+        }
+      }
+    }
+  | {
+      data: {
+        success: false
+        message: string
+      }
+    }
 
 let verificationError = new Error('request failed')
 const withApiTokenVerification = mock(async () => {
@@ -50,6 +77,7 @@ const resetPasswordPost = mock(async () => ({
     api_tokens_revoked: true,
   },
 }))
+const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -88,6 +116,9 @@ const { RequestPreview } = await import(
 const { ResetPasswordConfirm } = await import(
   '../src/features/auth/reset-password-confirm'
 )
+const { checkVerificationMethods } = await import(
+  '../src/features/auth/secure-verification/api'
+)
 const testEnv = createReactTestEnvironment()
 
 beforeAll(() => testEnv.setup())
@@ -99,9 +130,13 @@ beforeEach(() => {
   navigate.mockClear()
   copyToClipboard.mockClear()
   resetPasswordPost.mockClear()
+  consoleError.mockClear()
 })
 afterEach(() => cleanup())
-afterAll(() => testEnv.teardown())
+afterAll(() => {
+  consoleError.mockRestore()
+  testEnv.teardown()
+})
 
 function renderRequestPreview(): ReturnType<typeof render> {
   return render(
@@ -193,5 +228,77 @@ test('shows that password recovery revokes existing API tokens', async () => {
     )
   } finally {
     api.post = originalPost
+  }
+})
+
+test('propagates verification method request failures', async () => {
+  const originalGet = api.get
+  api.get = mock(async () => {
+    throw new Error('verification methods unavailable')
+  }) as typeof api.get
+  try {
+    await assert.rejects(
+      checkVerificationMethods('credentials'),
+      /verification methods unavailable/
+    )
+    assert.equal(consoleError.mock.calls.length, 1)
+  } finally {
+    api.get = originalGet
+  }
+})
+
+test('rejects unsuccessful verification method responses', async () => {
+  const originalGet = api.get
+  api.get = mock(async () => ({
+    data: {
+      success: false,
+      message: 'failed to load verification methods',
+    },
+  })) as typeof api.get
+  try {
+    await assert.rejects(
+      checkVerificationMethods('credentials'),
+      /failed to load verification methods/
+    )
+    assert.equal(consoleError.mock.calls.length, 1)
+  } finally {
+    api.get = originalGet
+  }
+})
+
+test('preserves a successful response with no available methods', async () => {
+  const originalGet = api.get
+  const methodsGet = mock(
+    async (
+      _url: string,
+      _config?: VerificationMethodsRequestConfig
+    ): Promise<VerificationMethodsResponse> => ({
+      data: {
+        success: true,
+        data: {
+          has_2fa: false,
+          has_passkey: false,
+          has_password: false,
+        },
+      },
+    })
+  )
+  api.get = methodsGet as typeof api.get
+  try {
+    assert.deepEqual(await checkVerificationMethods('credentials'), {
+      has2FA: false,
+      hasPasskey: false,
+      hasPassword: false,
+      passkeySupported: false,
+    })
+    assert.equal(methodsGet.mock.calls[0]?.[0], '/api/verify/methods')
+    assert.deepEqual(methodsGet.mock.calls[0]?.[1]?.params, {
+      scope: 'credentials',
+    })
+    assert.equal(methodsGet.mock.calls[0]?.[1]?.skipBusinessError, true)
+    assert.equal(methodsGet.mock.calls[0]?.[1]?.skipErrorHandler, true)
+    assert.equal(consoleError.mock.calls.length, 0)
+  } finally {
+    api.get = originalGet
   }
 })
