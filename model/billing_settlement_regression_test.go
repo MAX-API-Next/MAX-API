@@ -162,6 +162,29 @@ func TestFailedSettlementLeavesDurablePendingOperation(t *testing.T) {
 	require.EqualValues(t, 90, getRegressionTokenRemainQuota(t, token.Id))
 }
 
+func TestBillingSettlementEffectSerializationFailureIsNotDurable(t *testing.T) {
+	setupUserUpdateTestState(t)
+	input := BillingSettlementInput{
+		OperationKey: "regression:effect-serialization-failure",
+		Source:       BillingSettlementSourceWallet,
+		UserID:       905,
+		FundingDelta: 10,
+		Effect: &BillingSettlementEffect{
+			Other: map[string]interface{}{"unsupported": func() {}},
+		},
+	}
+
+	_, _, err := ApplyBillingSettlementOnce(input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBillingSettlementRecordNotDurable)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).
+		Where("operation_key = ?", input.OperationKey).
+		Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestBillingSettlementPendingInvalidationBypassesStaleUserCache(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 977, Username: "settlement-pending-cache-user", Quota: 100, Status: common.UserStatusEnabled}

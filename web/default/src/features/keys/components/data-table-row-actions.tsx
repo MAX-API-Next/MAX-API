@@ -52,7 +52,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
-import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
+import {
+  chatLinkRequiresApiKey,
+  resolveChatUrl,
+  type ChatPreset,
+} from '@/features/chat/lib/chat-links'
 import { sendToFluent } from '@/features/chat/lib/send-to-fluent'
 import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
@@ -96,7 +100,7 @@ export function DataTableRowActions<TData>({
   const handleOpenChatPreset = useCallback(
     async (preset: ChatPreset) => {
       let chatWindow: Window | null = null
-      if (preset.type === 'web' && typeof window !== 'undefined') {
+      if (preset.type !== 'fluent' && typeof window !== 'undefined') {
         try {
           chatWindow = window.open('about:blank', '_blank')
           if (chatWindow) chatWindow.opener = null
@@ -105,13 +109,19 @@ export function DataTableRowActions<TData>({
         }
       }
 
-      const realKey = await resolveRealKey(apiKey.id)
-      if (!realKey) {
-        chatWindow?.close()
-        return
+      const needsApiKey = chatLinkRequiresApiKey(preset.url)
+      let realKey: string | undefined
+      if (needsApiKey || preset.type === 'fluent') {
+        const resolvedKey = await resolveRealKey(apiKey.id)
+        if (!resolvedKey) {
+          chatWindow?.close()
+          return
+        }
+        realKey = resolvedKey
       }
 
       if (preset.type === 'fluent') {
+        if (!realKey) return
         const success = sendToFluent(realKey, serverAddress)
         if (success) {
           toast.success(t('Sent the API key to FluentRead.'))
@@ -127,7 +137,7 @@ export function DataTableRowActions<TData>({
 
       const resolvedUrl = resolveChatUrl({
         template: preset.url,
-        apiKey: realKey,
+        apiKey: needsApiKey ? realKey : undefined,
         serverAddress,
       })
 

@@ -31,6 +31,7 @@ var (
 	ErrBillingSettlementManualReview       = errors.New("billing settlement requires manual review")
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
 	ErrBillingSettlementOperationConflict  = errors.New("billing settlement operation conflict")
+	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
 )
@@ -527,11 +528,11 @@ func ensureBillingSettlementRecord(input BillingSettlementInput) (BillingSettlem
 
 func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) (BillingSettlement, bool, error) {
 	if db == nil {
-		return BillingSettlement{}, false, errors.New("database is not initialized")
+		return BillingSettlement{}, false, fmt.Errorf("%w: database is not initialized", ErrBillingSettlementRecordNotDurable)
 	}
 	effectPayload, err := billingSettlementEffectPayload(input.Effect)
 	if err != nil {
-		return BillingSettlement{}, false, err
+		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, err)
 	}
 	now := time.Now().Unix()
 	record := BillingSettlement{
@@ -555,7 +556,7 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 		DoNothing: true,
 	}).Create(&record)
 	if result.Error != nil {
-		return BillingSettlement{}, false, result.Error
+		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
 	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
 		return BillingSettlement{}, false, err

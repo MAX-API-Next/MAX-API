@@ -296,6 +296,36 @@ test('opens a placeholder before resolving the API key', async () => {
   assert.equal(popupWindow.opener, null)
 })
 
+test('opens a placeholder for custom-protocol presets before resolving the API key', async () => {
+  const view = renderRowActions()
+
+  fireEvent.click(view.getByRole('button', { name: /Desktop chat/ }))
+
+  assert.equal(openWindow.mock.calls.length, 1)
+  assert.deepEqual(openWindow.mock.calls[0], ['about:blank', '_blank'])
+  assert.equal(resolveRealKey.mock.calls.length, 1)
+  assert.equal(replaceLocation.mock.calls.length, 0)
+
+  resolveKeyRequest?.('resolved-key')
+  await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
+  assert.deepEqual(replaceLocation.mock.calls[0], [
+    'https://chat.example.test/?key=resolved-key',
+  ])
+})
+
+test('navigates public presets without resolving the API key', async () => {
+  const view = renderRowActions()
+
+  fireEvent.click(view.getByRole('button', { name: /Public chat/ }))
+
+  await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
+  assert.equal(resolveRealKey.mock.calls.length, 0)
+  assert.deepEqual(replaceLocation.mock.calls[0], [
+    'https://chat.example.test/public',
+  ])
+  assert.equal(openWindow.mock.calls.length, 1)
+})
+
 test('chat presets open a placeholder before secure API-key verification resolves', async () => {
   const view = renderChatPresets()
 

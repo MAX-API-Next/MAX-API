@@ -147,6 +147,43 @@ func TestNonPasswordVerificationIsRestrictedToMatchingScope(t *testing.T) {
 	require.Contains(t, deleteRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }
 
+func TestPasskeyDeletionRequiresCredentialVerificationScope(t *testing.T) {
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-passkey-delete-scope-test"))))
+	router.GET("/seed", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set(SecureVerificationSessionKey, time.Now().Unix())
+		session.Set(secureVerificationUserSessionKey, 1001)
+		session.Set(secureVerificationMethodSessionKey, secureVerificationMethodPasskey)
+		session.Set(secureVerificationScopeSessionKey, "access_token")
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	router.DELETE(
+		"/passkey",
+		func(c *gin.Context) {
+			c.Set("id", 1001)
+			c.Next()
+		},
+		SecureVerificationRequired("credentials"),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+
+	seedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(seedRecorder, httptest.NewRequest(http.MethodGet, "/seed", nil))
+	require.Equal(t, http.StatusNoContent, seedRecorder.Code)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/passkey", nil)
+	for _, sessionCookie := range seedRecorder.Result().Cookies() {
+		request.AddCookie(sessionCookie)
+	}
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+}
+
 func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-oauth-scope-test"))))

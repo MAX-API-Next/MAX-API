@@ -463,7 +463,10 @@ func postConsumeQuotaOnceWithEffect(
 			Effect:                          effect,
 		})
 		if durableErr != nil {
-			return effect != nil, durableErr
+			if effect != nil && !errors.Is(durableErr, model.ErrBillingSettlementRecordNotDurable) {
+				return true, durableErr
+			}
+			return false, durableErr
 		}
 		if effect != nil {
 			if effectErr := model.ProcessBillingSettlementEffect(operationKey); effectErr != nil {
