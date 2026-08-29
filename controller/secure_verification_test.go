@@ -137,12 +137,12 @@ func TestSecureVerificationScopeAllowlist(t *testing.T) {
 	require.True(t, isSupportedSecureVerificationScope(""))
 	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccessToken))
 	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAccountDelete))
-	require.True(t, isSupportedSecureVerificationScope("credentials"))
-	require.True(t, isSupportedSecureVerificationScope("api_token"))
+	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeCredentials))
+	require.True(t, isSupportedSecureVerificationScope(secureVerificationScopeAPIToken))
 	require.False(t, isSupportedSecureVerificationScope("admin_delete"))
 	require.True(t, passwordVerificationAllowed(secureVerificationScopeAccountDelete))
-	require.True(t, passwordVerificationAllowed("credentials"))
-	require.True(t, passwordVerificationAllowed("api_token"))
+	require.True(t, passwordVerificationAllowed(secureVerificationScopeCredentials))
+	require.True(t, passwordVerificationAllowed(secureVerificationScopeAPIToken))
 	require.False(t, passwordVerificationAllowed(""))
 }
 

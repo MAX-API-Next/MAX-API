@@ -57,6 +57,7 @@ func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testi
 
 func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	setupUserUpdateTestState(t)
+	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_admission"))
 
 	const blockingUserID = 941
 	const nonBlockingUserID = 942

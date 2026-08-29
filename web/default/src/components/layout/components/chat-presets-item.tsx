@@ -183,7 +183,16 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       if (typeof window !== 'undefined') {
         try {
           chatWindow = window.open('about:blank', '_blank')
-          if (chatWindow) chatWindow.opener = null
+          if (chatWindow) {
+            chatWindow.opener = null
+            if (needsKey) {
+              try {
+                window.focus()
+              } catch {
+                // The placeholder remains usable even when focus is restricted.
+              }
+            }
+          }
         } catch {
           chatWindow = null
         }

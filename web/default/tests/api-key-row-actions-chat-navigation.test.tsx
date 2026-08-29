@@ -46,6 +46,7 @@ const popupWindow = {
   opener: {} as Window,
 } as unknown as Window
 const openWindow = mock(() => popupWindow)
+const focusWindow = mock(() => undefined)
 const copyToClipboard = mock(async () => false)
 const toastError = mock(() => undefined)
 
@@ -213,6 +214,7 @@ const { ChatPresetsItem } = await import(
 )
 const testEnv = createReactTestEnvironment()
 let originalWindowOpen: typeof window.open
+let originalWindowFocus: typeof window.focus
 
 function renderRowActions(): ReturnType<typeof render> {
   return render(
@@ -250,7 +252,9 @@ function renderChatPresets(): ReturnType<typeof render> {
 beforeAll(async () => {
   await testEnv.setup()
   originalWindowOpen = window.open
+  originalWindowFocus = window.focus
   window.open = openWindow as typeof window.open
+  window.focus = focusWindow as typeof window.focus
 })
 
 beforeEach(() => {
@@ -266,6 +270,7 @@ beforeEach(() => {
   )
   setOpenMobile.mockClear()
   openWindow.mockClear()
+  focusWindow.mockClear()
   replaceLocation.mockClear()
   closePopup.mockClear()
   copyToClipboard.mockClear()
@@ -277,6 +282,7 @@ afterEach(() => cleanup())
 
 afterAll(() => {
   window.open = originalWindowOpen
+  window.focus = originalWindowFocus
   testEnv.teardown()
 })
 
@@ -333,6 +339,7 @@ test('chat presets open a placeholder before secure API-key verification resolve
 
   assert.equal(openWindow.mock.calls.length, 1)
   assert.deepEqual(openWindow.mock.calls[0], ['about:blank', '_blank'])
+  assert.equal(focusWindow.mock.calls.length, 1)
   assert.equal(replaceLocation.mock.calls.length, 0)
 
   resolvePresetVerification?.('resolved-key')
@@ -362,6 +369,7 @@ test('chat presets without an API key use a placeholder before navigating', asyn
 
   await waitFor(() => assert.equal(openWindow.mock.calls.length, 1))
   assert.deepEqual(openWindow.mock.calls[0], ['about:blank', '_blank'])
+  assert.equal(focusWindow.mock.calls.length, 0)
   await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
   assert.deepEqual(replaceLocation.mock.calls[0], [
     'https://chat.example.test/public',

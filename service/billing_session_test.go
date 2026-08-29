@@ -272,6 +272,68 @@ func TestSettleBillingWithEffectKeepsDurablyOwnedFailureHandled(t *testing.T) {
 	assert.True(t, handled)
 }
 
+func TestSettleAndRecordConsumeDoesNotProjectNonDurableSettlementFailure(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.LogConsumeEnabled = true
+	common.BatchUpdateEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		common.BatchUpdateEnabled = originalBatchUpdateEnabled
+	})
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "effect not durable", err: ErrBillingSettlementEffectNotDurable},
+		{name: "record not durable", err: model.ErrBillingSettlementRecordNotDurable},
+		{name: "funding outcome unknown", err: ErrBillingFundingOutcomeUnknown},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := 621 + i
+			channelID := 631 + i
+			require.NoError(t, model.DB.Create(&model.User{
+				Id:       userID,
+				Username: fmt.Sprintf("non-durable-settlement-user-%d", i),
+				AffCode:  fmt.Sprintf("non-durable-%d", i),
+				Quota:    100,
+				Status:   common.UserStatusEnabled,
+			}).Error)
+			seedChannel(t, channelID)
+			settler := &recordingEffectBillingSettler{err: tc.err}
+			params := model.RecordConsumeLogParams{
+				ChannelId: channelID,
+				ModelName: "non-durable-settlement-model",
+				Quota:     10,
+				Content:   tc.name,
+			}
+
+			settleAndRecordConsume(nil, &relaycommon.RelayInfo{
+				UserId:  userID,
+				Billing: settler,
+			}, true, params)
+
+			require.NotNil(t, settler.effect)
+			var user model.User
+			require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+			assert.Zero(t, user.UsedQuota)
+			assert.Zero(t, user.RequestCount)
+			var channel model.Channel
+			require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+			assert.Zero(t, channel.UsedQuota)
+			var logCount int64
+			require.NoError(t, model.LOG_DB.Model(&model.Log{}).
+				Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).
+				Count(&logCount).Error)
+			assert.Zero(t, logCount)
+		})
+	}
+}
+
 func TestSettleAndRecordConsumePersistsLegacyEffectBeforeFailedSettlement(t *testing.T) {
 	truncate(t)
 	const (

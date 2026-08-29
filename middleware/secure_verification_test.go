@@ -276,7 +276,9 @@ func TestUserAuthRejectsStaleSessionGeneration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB
 	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
 	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -299,6 +301,7 @@ func TestUserAuthRejectsStaleSessionGeneration(t *testing.T) {
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
