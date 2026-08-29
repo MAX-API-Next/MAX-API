@@ -916,6 +916,17 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 	})
 }
 
+func BillingSettlementOwnsEffect(operationKey string) (bool, error) {
+	if DB == nil || operationKey == "" {
+		return false, errors.New("billing settlement effect operation key is required")
+	}
+	var record BillingSettlement
+	if err := DB.Select("effect_payload").Where("operation_key = ?", operationKey).First(&record).Error; err != nil {
+		return false, err
+	}
+	return record.EffectPayload != "", nil
+}
+
 func applySubscriptionSettlementEffectMetadata(
 	record BillingSettlement,
 	effect *BillingSettlementEffect,

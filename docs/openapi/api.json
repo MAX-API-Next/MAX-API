@@ -1124,7 +1124,7 @@
         "operationId": "createTelegramBindState",
         "summary": "创建 Telegram 绑定 state",
         "deprecated": false,
-        "description": "需要登录并完成 credentials 作用域安全验证。返回短期有效、与用户绑定的一次性 state。",
+        "description": "需要登录，并完成 credentials 作用域安全验证或刚刚通过已绑定 OAuth 账户重新认证（oauth_reauthentication）。返回短期有效、与用户绑定的一次性 state。",
         "tags": [
           "OAuth"
         ],
@@ -1135,7 +1135,7 @@
             "headers": {}
           },
           "403": {
-            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "description": "需要 credentials 或 oauth_reauthentication 作用域安全验证，或验证已过期",
             "headers": {}
           }
         },
@@ -1212,7 +1212,7 @@
         },
         "summary": "绑定 Telegram 账户",
         "deprecated": false,
-        "description": "需要登录、credentials 作用域安全验证、5 分钟内的 Telegram 签名，以及由 /api/oauth/telegram/bind/state 生成的一次性 state。",
+        "description": "需要登录、credentials 或 oauth_reauthentication 作用域安全验证、5 分钟内的 Telegram 签名，以及由 /api/oauth/telegram/bind/state 生成的一次性 state。",
         "tags": [
           "OAuth"
         ],
@@ -1492,7 +1492,7 @@
       "post": {
         "summary": "开始注册Passkey",
         "deprecated": false,
-        "description": "需要登录并完成 credentials 作用域安全验证。已有 Passkey 时，本流程表示显式替换。",
+        "description": "需要登录并完成 passkey_register、credentials 或 oauth_reauthentication 作用域安全验证。已有 Passkey 时，本流程表示显式替换。",
         "tags": [
           "用户管理"
         ],
@@ -1503,7 +1503,7 @@
             "headers": {}
           },
           "403": {
-            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "description": "需要 passkey_register、credentials 或 oauth_reauthentication 作用域安全验证，或验证已过期",
             "headers": {}
           }
         },
@@ -1521,7 +1521,7 @@
       "post": {
         "summary": "完成注册Passkey",
         "deprecated": false,
-        "description": "需要登录并完成 credentials 作用域安全验证。成功注册或替换后撤销其他会话。",
+        "description": "需要登录并完成 passkey_register、credentials 或 oauth_reauthentication 作用域安全验证。成功注册或替换后撤销其他会话。",
         "tags": [
           "用户管理"
         ],
@@ -1532,7 +1532,7 @@
             "headers": {}
           },
           "403": {
-            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "description": "需要 passkey_register、credentials 或 oauth_reauthentication 作用域安全验证，或验证已过期",
             "headers": {}
           }
         },
@@ -2380,7 +2380,7 @@
       "post": {
         "summary": "设置2FA",
         "deprecated": false,
-        "description": "需要登录并完成 credentials 作用域安全验证。返回待确认的 TOTP 密钥与备用码。",
+        "description": "需要登录并完成 credentials 作用域安全验证；仅使用关联 OAuth 登录且尚无其他验证方式的账户，也可使用刚完成 OAuth 登录授予的 oauth_reauthentication 作用域。返回待确认的 TOTP 密钥与备用码。",
         "tags": [
           "两步验证"
         ],
@@ -2391,7 +2391,7 @@
             "headers": {}
           },
           "403": {
-            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "description": "需要 credentials 或 oauth_reauthentication 作用域安全验证，或验证已过期",
             "headers": {}
           }
         },
@@ -2409,7 +2409,7 @@
       "post": {
         "summary": "启用2FA",
         "deprecated": false,
-        "description": "需要登录并完成 credentials 作用域安全验证。成功启用后撤销其他会话。",
+        "description": "需要登录并完成 credentials 作用域安全验证；仅使用关联 OAuth 登录且尚无其他验证方式的账户，也可使用刚完成 OAuth 登录授予的 oauth_reauthentication 作用域。成功启用后撤销其他会话。",
         "tags": [
           "两步验证"
         ],
@@ -2434,7 +2434,7 @@
             "headers": {}
           },
           "403": {
-            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "description": "需要 credentials 或 oauth_reauthentication 作用域安全验证，或验证已过期",
             "headers": {}
           }
         },
@@ -2576,12 +2576,13 @@
                   },
                   "scope": {
                     "type": "string",
-                    "description": "验证作用域；验证结果仅可用于完全匹配的敏感操作作用域",
+                    "description": "验证作用域；验证结果仅可用于明确允许该作用域的敏感操作",
                     "enum": [
                       "access_token",
                       "account_delete",
                       "credentials",
-                      "api_token"
+                      "api_token",
+                      "passkey_register"
                     ]
                   }
                 }
@@ -2625,7 +2626,8 @@
                 "access_token",
                 "account_delete",
                 "credentials",
-                "api_token"
+                "api_token",
+                "passkey_register"
               ]
             }
           }

@@ -122,7 +122,7 @@ export function useTelegramLoginWidget(
       if (!response.success || !response.data?.state) {
         const fallback = handlers.t('Failed to initialize Telegram binding')
         const message = response.message || fallback
-        handleServerError(new Error(message), { fallback: message })
+        toast.error(message)
         setErrorMessage(message)
         setStatus('error')
         return
@@ -186,7 +186,7 @@ export function useTelegramLoginWidget(
         if (!response.success) {
           const fallback = handlers.t('Failed to bind Telegram account')
           const message = response.message || fallback
-          handleServerError(new Error(message), { fallback: message })
+          toast.error(message)
           setErrorMessage(message)
           setStatus('error')
           return

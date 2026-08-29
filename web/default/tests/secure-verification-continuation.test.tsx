@@ -204,6 +204,38 @@ describe('useSecureVerification', () => {
     assert.equal(result.current.open, false)
   })
 
+  test('forces restricted verification before invoking the protected action', async () => {
+    checkVerificationMethods.mockImplementationOnce(async () => ({
+      has2FA: true,
+      hasPasskey: true,
+      hasPassword: false,
+      passkeySupported: true,
+    }))
+    const apiCall = mock(async () => ({ success: true }))
+    const { result } = renderHook(() => useSecureVerification())
+
+    let continuation: Promise<{ success: boolean } | null> | undefined
+    act(() => {
+      continuation = result.current.withVerification(apiCall, {
+        scope: 'credentials',
+        preferredMethod: '2fa',
+        allowedMethods: ['2fa'],
+        forceVerification: true,
+      })
+    })
+
+    await waitFor(() => assert.equal(result.current.open, true))
+    assert.equal(apiCall.mock.calls.length, 0)
+    assert.equal(result.current.methods.has2FA, true)
+    assert.equal(result.current.methods.hasPasskey, false)
+    await act(async () => {
+      await result.current.executeVerification('2fa', '123456')
+    })
+
+    assert.deepEqual(await continuation, { success: true })
+    assert.equal(apiCall.mock.calls.length, 1)
+  })
+
   test('rejects an initial protected action failure without discovery', async () => {
     const actionError = new Error('protected action failed')
     const apiCall = mock(async () => {

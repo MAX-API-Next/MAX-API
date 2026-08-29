@@ -360,7 +360,7 @@ func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, af
 		Where("submit_time < ?", cutoffUnix)
 	if afterID > 0 {
 		query = query.Where(
-			"submit_time > ? OR (submit_time = ? AND id > ?)",
+			"(submit_time > ? OR (submit_time = ? AND id > ?))",
 			afterSubmitTime,
 			afterSubmitTime,
 			afterID,

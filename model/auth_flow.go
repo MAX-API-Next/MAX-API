@@ -25,10 +25,12 @@ const (
 	SecureVerificationMethodPassword = "password"
 	SecureVerificationMethodOAuth    = "oauth"
 
-	SecureVerificationScopeAccessToken   = "access_token"
-	SecureVerificationScopeAccountDelete = "account_delete"
-	SecureVerificationScopeCredentials   = "credentials"
-	SecureVerificationScopeAPIToken      = "api_token"
+	SecureVerificationScopeAccessToken           = "access_token"
+	SecureVerificationScopeAccountDelete         = "account_delete"
+	SecureVerificationScopeCredentials           = "credentials"
+	SecureVerificationScopeAPIToken              = "api_token"
+	SecureVerificationScopeOAuthReauthentication = "oauth_reauthentication"
+	SecureVerificationScopePasskeyRegister       = "passkey_register"
 )
 
 var (

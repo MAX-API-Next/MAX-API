@@ -960,12 +960,13 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 }
 
 func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
+	const userID = 7001
 	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
-		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	})
@@ -980,7 +981,6 @@ func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
 		logQuotaDataAsyncRunner = originalRunner
 	})
 
-	const userID = 7001
 	require.NoError(t, DB.Create(&User{Id: userID, Username: "settlement-export-user", Status: common.UserStatusEnabled}).Error)
 	const operationKey = "request:settlement-export-token-usage"
 	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
@@ -1071,6 +1071,10 @@ func TestApplySubscriptionSettlementEffectMetadataUsesAppliedDelta(t *testing.T)
 }
 
 func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
+	const (
+		userID  = 7011
+		tokenID = 7012
+	)
 	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
 	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
@@ -1078,15 +1082,11 @@ func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
 		require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
-		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	})
 
-	const (
-		userID  = 7011
-		tokenID = 7012
-	)
 	require.NoError(t, DB.Create(&User{
 		Id: userID, Username: "settlement-token-user", AffCode: "settlement-token-user-aff",
 		Status: common.UserStatusEnabled,
@@ -1119,17 +1119,17 @@ func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
 }
 
 func TestBillingSettlementEffectRejectsNegativeUsageProjection(t *testing.T) {
+	const userID = 7021
 	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
-		require.NoError(t, DB.Where("1 = 1").Delete(&User{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
 	})
 
-	const userID = 7021
 	require.NoError(t, DB.Create(&User{
 		Id: userID, Username: "negative-effect-user", AffCode: "negative-effect-user-aff",
 		Status: common.UserStatusEnabled, UsedQuota: 12, RequestCount: 3,

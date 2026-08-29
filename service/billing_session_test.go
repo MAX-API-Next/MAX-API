@@ -405,6 +405,77 @@ func TestSettleAndRecordConsumePersistsLegacyEffectBeforeFailedSettlement(t *tes
 	require.Equal(t, 1, storedUser.RequestCount)
 }
 
+func TestSettleAndRecordConsumeProjectsLocallyWhenExistingSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID = 614
+	seedUser(t, userID, 100)
+	const requestID = "legacy-effectless-settlement"
+	operationKey := "request:" + requestID + ":legacy-post:finalize"
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey:                    operationKey,
+		Source:                          model.BillingSettlementSourceWallet,
+		UserID:                          userID,
+		SubscriptionPreConsumeRequestID: requestID,
+	})
+	require.NoError(t, err)
+	ownsEffect, err := model.BillingSettlementOwnsEffect(operationKey)
+	require.NoError(t, err)
+	require.False(t, ownsEffect)
+
+	settleAndRecordConsume(nil, &relaycommon.RelayInfo{
+		RequestId: requestID,
+		UserId:    userID,
+	}, false, model.RecordConsumeLogParams{
+		ModelName: "legacy-effectless-model",
+		Content:   "effectless settlement projection",
+	})
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.Equal(t, "effectless settlement projection", logs[0].Content)
+}
+
+func TestSettleAndRecordConsumeProjectsLocallyWhenBillingSessionSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID = 615
+	seedUser(t, userID, 100)
+	const requestID = "billing-session-effectless-settlement"
+	operationKey := model.BillingRequestFinalizeOperationKey(requestID)
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+	})
+	require.NoError(t, err)
+
+	info := &relaycommon.RelayInfo{
+		RequestId: requestID,
+		UserId:    userID,
+	}
+	info.Billing = &BillingSession{
+		relayInfo: info,
+		funding:   &WalletFunding{userId: userID},
+	}
+	settleAndRecordConsume(nil, info, false, model.RecordConsumeLogParams{
+		ModelName: "billing-session-effectless-model",
+		Content:   "billing session effectless projection",
+	})
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.Equal(t, "billing session effectless projection", logs[0].Content)
+}
+
 func (s *recordingBillingSettler) Settle(int) error         { s.settleCalls++; return nil }
 func (s *recordingBillingSettler) Refund(*gin.Context)      {}
 func (s *recordingBillingSettler) NeedsRefund() bool        { return false }

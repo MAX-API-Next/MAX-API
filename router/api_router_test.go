@@ -356,7 +356,7 @@ func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
 			if !schemaOK || !valuesOK {
 				return false
 			}
-			for _, requiredScope := range []any{"access_token", "account_delete", "credentials", "api_token"} {
+			for _, requiredScope := range []any{"access_token", "account_delete", "credentials", "api_token", "passkey_register"} {
 				if !slices.Contains(values, requiredScope) {
 					return false
 				}
@@ -426,6 +426,28 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 	telegramLoginResponses := telegramLogin["responses"].(map[string]any)
 	require.Contains(t, telegramLoginResponses, "200")
 	require.Contains(t, telegramLoginResponses, "403")
+	require.Contains(t, document.Paths["/api/oauth/telegram/bind/state"]["post"]["description"], "oauth_reauthentication")
+	require.Contains(t, telegramBind["post"]["description"], "oauth_reauthentication")
+
+	for _, path := range []string{
+		"/api/user/passkey/register/begin",
+		"/api/user/passkey/register/finish",
+	} {
+		operation := document.Paths[path]["post"]
+		require.Contains(t, operation["description"], "passkey_register", path)
+		require.Contains(t, operation["description"], "oauth_reauthentication", path)
+		responses := operation["responses"].(map[string]any)
+		require.Contains(t, responses, "403", path)
+	}
+	for _, path := range []string{
+		"/api/user/2fa/setup",
+		"/api/user/2fa/enable",
+	} {
+		operation := document.Paths[path]["post"]
+		require.Contains(t, operation["description"], "oauth_reauthentication", path)
+		responses := operation["responses"].(map[string]any)
+		require.Contains(t, responses, "403", path)
+	}
 
 	for path, method := range map[string]string{
 		"/api/oauth/telegram/bind/state": "post",

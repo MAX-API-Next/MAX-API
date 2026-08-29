@@ -184,7 +184,7 @@ func TestPasskeyDeletionRequiresCredentialVerificationScope(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }
 
-func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
+func TestOAuthVerificationIsRestrictedToNarrowReauthenticationScope(t *testing.T) {
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-oauth-scope-test"))))
 	router.GET("/seed", func(c *gin.Context) {
@@ -192,7 +192,7 @@ func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
 		session.Set(SecureVerificationSessionKey, time.Now().Unix())
 		session.Set(secureVerificationUserSessionKey, 1001)
 		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
-		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeCredentials)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeOAuthReauthentication)
 		require.NoError(t, session.Save())
 		c.Status(http.StatusNoContent)
 	})
@@ -200,10 +200,29 @@ func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
 		c.Set("id", 1001)
 		c.Next()
 	}
-	router.POST("/credentials", setUser, SecureVerificationRequired("credentials"), func(c *gin.Context) {
+	router.POST("/telegram-bind", setUser, SecureVerificationRequired(
+		model.SecureVerificationScopeCredentials,
+		model.SecureVerificationScopeOAuthReauthentication,
+	), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	router.POST("/api-token", setUser, SecureVerificationRequired("api_token"), func(c *gin.Context) {
+	router.POST("/passkey-register", setUser, SecureVerificationRequired(
+		model.SecureVerificationScopePasskeyRegister,
+		model.SecureVerificationScopeCredentials,
+		model.SecureVerificationScopeOAuthReauthentication,
+	), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/two-fa-setup", setUser, SecureVerificationRequired(
+		model.SecureVerificationScopeCredentials,
+		model.SecureVerificationScopeOAuthReauthentication,
+	), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/credentials", setUser, SecureVerificationRequired(model.SecureVerificationScopeCredentials), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/api-token", setUser, SecureVerificationRequired(model.SecureVerificationScopeAPIToken), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
 	router.POST("/unscoped", setUser, SecureVerificationRequired(), func(c *gin.Context) {
@@ -224,7 +243,12 @@ func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
 		return recorder
 	}
 
-	require.Equal(t, http.StatusNoContent, perform("/credentials").Code)
+	require.Equal(t, http.StatusNoContent, perform("/telegram-bind").Code)
+	require.Equal(t, http.StatusNoContent, perform("/passkey-register").Code)
+	require.Equal(t, http.StatusNoContent, perform("/two-fa-setup").Code)
+	credentialsRecorder := perform("/credentials")
+	require.Equal(t, http.StatusForbidden, credentialsRecorder.Code)
+	require.Contains(t, credentialsRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 	apiTokenRecorder := perform("/api-token")
 	require.Equal(t, http.StatusForbidden, apiTokenRecorder.Code)
 	require.Contains(t, apiTokenRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)

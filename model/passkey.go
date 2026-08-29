@@ -183,23 +183,10 @@ func UpdatePasskeyCredentialAfterAuthentication(credential *PasskeyCredential) e
 		common.SysLog("UpdatePasskeyCredentialAfterAuthentication: nil credential provided")
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
+	updates := passkeyAuthenticationUpdates(credential)
 	result := DB.Model(&PasskeyCredential{}).
 		Where("user_id = ? AND credential_id = ?", credential.UserID, credential.CredentialID).
-		Select(
-			"PublicKey",
-			"AttestationType",
-			"AAGUID",
-			"SignCount",
-			"CloneWarning",
-			"UserPresent",
-			"UserVerified",
-			"BackupEligible",
-			"BackupState",
-			"Transports",
-			"Attachment",
-			"LastUsedAt",
-		).
-		Updates(credential)
+		Updates(updates)
 	if result.Error != nil {
 		common.SysLog(fmt.Sprintf("UpdatePasskeyCredentialAfterAuthentication: failed to update credential for user %d: %v", credential.UserID, result.Error))
 		return fmt.Errorf("Passkey 保存失败，请重试")
@@ -217,6 +204,32 @@ func UpdatePasskeyCredentialAfterAuthentication(credential *PasskeyCredential) e
 		return nil
 	}
 	return ErrPasskeyCredentialChanged
+}
+
+func passkeyAuthenticationUpdates(credential *PasskeyCredential) map[string]interface{} {
+	updates := map[string]interface{}{
+		"public_key":       credential.PublicKey,
+		"attestation_type": credential.AttestationType,
+		"aa_guid":          credential.AAGUID,
+		"user_present":     credential.UserPresent,
+		"user_verified":    credential.UserVerified,
+		"backup_eligible":  credential.BackupEligible,
+		"backup_state":     credential.BackupState,
+		"transports":       credential.Transports,
+		"attachment":       credential.Attachment,
+		"sign_count":       gorm.Expr("CASE WHEN sign_count < ? THEN ? ELSE sign_count END", credential.SignCount, credential.SignCount),
+	}
+	if credential.CloneWarning {
+		updates["clone_warning"] = true
+	}
+	if credential.LastUsedAt != nil {
+		updates["last_used_at"] = gorm.Expr(
+			"CASE WHEN last_used_at IS NULL OR last_used_at < ? THEN ? ELSE last_used_at END",
+			*credential.LastUsedAt,
+			*credential.LastUsedAt,
+		)
+	}
+	return updates
 }
 
 func ReplacePasskeyCredentialAndBumpSessionGeneration(credential *PasskeyCredential) (int64, error) {

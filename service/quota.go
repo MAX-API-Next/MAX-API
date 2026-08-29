@@ -468,9 +468,17 @@ func postConsumeQuotaOnceWithEffect(
 			}
 			return false, durableErr
 		}
+		effectHandled := false
 		if effect != nil {
-			if effectErr := model.ProcessBillingSettlementEffect(operationKey); effectErr != nil {
-				return true, effectErr
+			ownsEffect, ownershipErr := model.BillingSettlementOwnsEffect(operationKey)
+			if ownershipErr != nil {
+				return true, ownershipErr
+			}
+			if ownsEffect {
+				effectHandled = true
+				if effectErr := model.ProcessBillingSettlementEffect(operationKey); effectErr != nil {
+					return true, effectErr
+				}
 			}
 		}
 		if sendEmail && (quota+preConsumedQuota) != 0 {
@@ -480,7 +488,7 @@ func postConsumeQuotaOnceWithEffect(
 				checkAndSendQuotaNotify(relayInfo, quota, preConsumedQuota)
 			}
 		}
-		return effect != nil, nil
+		return effectHandled, nil
 	}
 
 	return false, errors.New("balance mutation requires a stable request id")

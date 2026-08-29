@@ -234,7 +234,8 @@ func UniversalVerify(c *gin.Context) {
 func isSupportedSecureVerificationScope(scope string) bool {
 	switch scope {
 	case "", model.SecureVerificationScopeAccessToken, model.SecureVerificationScopeAccountDelete,
-		model.SecureVerificationScopeCredentials, model.SecureVerificationScopeAPIToken:
+		model.SecureVerificationScopeCredentials, model.SecureVerificationScopeAPIToken,
+		model.SecureVerificationScopePasskeyRegister:
 		return true
 	default:
 		return false
@@ -245,7 +246,8 @@ func passwordVerificationAllowed(scope string) bool {
 	return scope == model.SecureVerificationScopeAccessToken ||
 		scope == model.SecureVerificationScopeAccountDelete ||
 		scope == model.SecureVerificationScopeCredentials ||
-		scope == model.SecureVerificationScopeAPIToken
+		scope == model.SecureVerificationScopeAPIToken ||
+		scope == model.SecureVerificationScopePasskeyRegister
 }
 
 func setSecureVerificationSession(c *gin.Context, userId int, method string, scope string) (int64, error) {

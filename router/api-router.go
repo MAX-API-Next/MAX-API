@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/MAX-API-Next/MAX-API/controller"
 	"github.com/MAX-API-Next/MAX-API/middleware"
+	"github.com/MAX-API-Next/MAX-API/model"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/MAX-API-Next/MAX-API/oauth"
@@ -53,8 +54,8 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), controller.WeChatAuth)
 		apiRouter.POST("/oauth/wechat/bind", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.WeChatBind)
 		apiRouter.GET("/oauth/telegram/login", middleware.CriticalRateLimit(), controller.TelegramLogin)
-		apiRouter.POST("/oauth/telegram/bind/state", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), anonymousRequestBodyLimit, controller.GenerateTelegramBindState)
-		apiRouter.POST("/oauth/telegram/bind", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), anonymousRequestBodyLimit, controller.TelegramBind)
+		apiRouter.POST("/oauth/telegram/bind/state", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), anonymousRequestBodyLimit, controller.GenerateTelegramBindState)
+		apiRouter.POST("/oauth/telegram/bind", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), anonymousRequestBodyLimit, controller.TelegramBind)
 		// Standard OAuth providers (GitHub, Discord, OIDC, LinuxDO) - unified route
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.HandleOAuth)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
@@ -94,8 +95,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("access_token"), controller.GenerateAccessToken)
 				selfRoute.POST("/sessions/revoke", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.RevokeOtherSessions)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
-				selfRoute.POST("/passkey/register/begin", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.PasskeyRegisterBegin)
-				selfRoute.POST("/passkey/register/finish", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.PasskeyRegisterFinish)
+				selfRoute.POST("/passkey/register/begin", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopePasskeyRegister, model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), controller.PasskeyRegisterBegin)
+				selfRoute.POST("/passkey/register/finish", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopePasskeyRegister, model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), controller.PasskeyRegisterFinish)
 				selfRoute.POST("/passkey/verify/begin", controller.PasskeyVerifyBegin)
 				selfRoute.POST("/passkey/verify/finish", controller.PasskeyVerifyFinish)
 				selfRoute.DELETE("/passkey", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.PasskeyDelete)
@@ -117,8 +118,8 @@ func SetApiRouter(router *gin.Engine) {
 
 				// 2FA routes
 				selfRoute.GET("/2fa/status", controller.Get2FAStatus)
-				selfRoute.POST("/2fa/setup", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.Setup2FA)
-				selfRoute.POST("/2fa/enable", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.Enable2FA)
+				selfRoute.POST("/2fa/setup", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), controller.Setup2FA)
+				selfRoute.POST("/2fa/enable", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(model.SecureVerificationScopeCredentials, model.SecureVerificationScopeOAuthReauthentication), controller.Enable2FA)
 				selfRoute.POST("/2fa/disable", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), controller.Disable2FA)
 				selfRoute.POST("/2fa/backup_codes", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), controller.RegenerateBackupCodes)
 

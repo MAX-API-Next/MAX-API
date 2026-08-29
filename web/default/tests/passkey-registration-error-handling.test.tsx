@@ -37,13 +37,12 @@ const withVerification = mock(
     throw new Error('verification method lookup failed')
   }
 )
-const fetchVerificationMethods = mock(async () => ({
+const checkVerificationMethods = mock(async () => ({
   has2FA: false,
   hasPasskey: false,
   hasPassword: true,
   passkeySupported: true,
 }))
-const startVerification = mock(async () => true)
 const register = mock(async () => true)
 const remove = mock(async () => true)
 const toastError = mock((_message: string) => undefined)
@@ -124,23 +123,8 @@ mock.module('../src/features/auth/passkey', () => ({
 }))
 
 mock.module('../src/features/auth/secure-verification', () => ({
-  SecureVerificationDialog: (): ReactElement | null => null,
-  useSecureVerification: () => ({
-    open: false,
-    setOpen: mock(() => undefined),
-    methods: {
-      has2FA: false,
-      hasPasskey: false,
-      hasPassword: true,
-      passkeySupported: true,
-    },
-    state: { method: null, loading: false, code: '' },
-    startVerification,
-    executeVerification: mock(async () => undefined),
-    cancel: mock(() => undefined),
-    setCode: mock(() => undefined),
-    switchMethod: mock(() => undefined),
-    fetchVerificationMethods,
+  checkVerificationMethods,
+  useSecureVerificationGate: () => ({
     withVerification,
   }),
 }))
@@ -159,14 +143,13 @@ beforeEach(() => {
   withVerification.mockImplementation(async () => {
     throw new Error('verification method lookup failed')
   })
-  fetchVerificationMethods.mockClear()
-  fetchVerificationMethods.mockImplementation(async () => ({
+  checkVerificationMethods.mockClear()
+  checkVerificationMethods.mockImplementation(async () => ({
     has2FA: false,
     hasPasskey: false,
     hasPassword: true,
     passkeySupported: true,
   }))
-  startVerification.mockClear()
   register.mockClear()
   remove.mockClear()
   toastError.mockClear()
@@ -177,7 +160,7 @@ afterAll(() => {
   testEnv.teardown()
 })
 
-test('registers the first Passkey when a fresh OAuth reauthentication already satisfies the server gate', async () => {
+test('uses the dedicated scope for Passkey registration', async () => {
   withVerification.mockImplementationOnce(async (apiCall) => apiCall())
   const view = render(<PasskeyCard loading={false} />)
 
@@ -185,7 +168,7 @@ test('registers the first Passkey when a fresh OAuth reauthentication already sa
 
   await waitFor(() => assert.equal(register.mock.calls.length, 1))
   assert.equal(withVerification.mock.calls.length, 1)
-  assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'credentials')
+  assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'passkey_register')
 })
 
 test('consumes a rejected Passkey verification continuation without duplicate notification', async () => {
@@ -193,17 +176,17 @@ test('consumes a rejected Passkey verification continuation without duplicate no
 
   fireEvent.click(view.getByRole('button', { name: 'Enable Passkey' }))
 
-	await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
-	await act(async () => {
-		await new Promise<void>((resolve) => setTimeout(resolve, 0))
-	})
-	assert.equal(toastError.mock.calls.length, 0)
+  await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  })
+  assert.equal(toastError.mock.calls.length, 0)
   assert.equal(handleServerError.mock.calls.length, 0)
 })
 
 test('stops Passkey removal when verification method discovery fails', async () => {
   passkeyEnabled = true
-  fetchVerificationMethods.mockImplementationOnce(async () => {
+  checkVerificationMethods.mockImplementationOnce(async () => {
     throw new Error('verification methods unavailable')
   })
   const view = render(<PasskeyCard loading={false} />)
@@ -211,7 +194,7 @@ test('stops Passkey removal when verification method discovery fails', async () 
   fireEvent.click(view.getByRole('button', { name: 'Remove' }))
 
   await waitFor(() =>
-    assert.equal(fetchVerificationMethods.mock.calls.length, 1)
+    assert.equal(checkVerificationMethods.mock.calls.length, 1)
   )
   await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
   assert.match(
@@ -222,6 +205,32 @@ test('stops Passkey removal when verification method discovery fails', async () 
     fallback: 'Verification unavailable',
   })
   assert.equal(toastError.mock.calls.length, 0)
-  assert.equal(startVerification.mock.calls.length, 0)
+  assert.equal(remove.mock.calls.length, 0)
+})
+
+test('routes restricted Passkey removal through the shared verification gate', async () => {
+  passkeyEnabled = true
+  checkVerificationMethods.mockImplementationOnce(async () => ({
+    has2FA: true,
+    hasPasskey: true,
+    hasPassword: false,
+    passkeySupported: true,
+  }))
+  withVerification.mockImplementationOnce(async () => null)
+  const view = render(<PasskeyCard loading={false} />)
+
+  fireEvent.click(view.getByRole('button', { name: 'Remove' }))
+
+  await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
+  assert.equal(withVerification.mock.calls[0]?.[0], remove)
+  assert.deepEqual(withVerification.mock.calls[0]?.[1], {
+    scope: 'credentials',
+    preferredMethod: '2fa',
+    allowedMethods: ['2fa'],
+    forceVerification: true,
+    title: 'Security verification',
+    description:
+      'Confirm your identity before removing this Passkey from your account.',
+  })
   assert.equal(remove.mock.calls.length, 0)
 })

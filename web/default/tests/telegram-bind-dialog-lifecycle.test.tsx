@@ -360,11 +360,10 @@ describe('TelegramBindDialog widget lifecycle', (): void => {
       />
     )
 
-    await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+    await waitFor(() => assert.equal(toastError.mock.calls.length, 1))
     assert.equal(view.getByRole('alert').textContent, 'Telegram state is unavailable')
-    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
-      fallback: 'Telegram state is unavailable',
-    })
+    assert.equal(toastError.mock.calls[0]?.[0], 'Telegram state is unavailable')
+    assert.equal(handleServerError.mock.calls.length, 0)
   })
 
   test('reports binding failures through the shared server error handler', async (): Promise<void> => {
@@ -448,8 +447,8 @@ describe('TelegramBindDialog widget lifecycle', (): void => {
       view.getByRole('alert').textContent,
       'Telegram account is already bound'
     )
-    assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
-      fallback: 'Telegram account is already bound',
-    })
+    assert.equal(toastError.mock.calls.length, 1)
+    assert.equal(toastError.mock.calls[0]?.[0], 'Telegram account is already bound')
+    assert.equal(handleServerError.mock.calls.length, 0)
   })
 })

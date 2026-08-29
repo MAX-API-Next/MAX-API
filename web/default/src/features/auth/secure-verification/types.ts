@@ -22,6 +22,7 @@ export type VerificationScope =
   | 'account_delete'
   | 'credentials'
   | 'api_token'
+  | 'passkey_register'
 
 export interface VerificationMethods {
   has2FA: boolean
@@ -48,6 +49,8 @@ export interface UseSecureVerificationOptions {
 
 export interface StartVerificationOptions {
   preferredMethod?: VerificationMethod
+  allowedMethods?: VerificationMethod[]
+  forceVerification?: boolean
   title?: string
   description?: string
   scope?: VerificationScope

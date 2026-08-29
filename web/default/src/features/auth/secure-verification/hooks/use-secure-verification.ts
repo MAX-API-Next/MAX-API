@@ -66,6 +66,20 @@ const initialState: InternalState = {
   attemptId: null,
 }
 
+function restrictVerificationMethods(
+  methods: VerificationMethods,
+  allowedMethods?: VerificationMethod[]
+): VerificationMethods {
+  if (!allowedMethods?.length) return methods
+  const allowed = new Set(allowedMethods)
+  return {
+    has2FA: methods.has2FA && allowed.has('2fa'),
+    hasPasskey: methods.hasPasskey && allowed.has('passkey'),
+    hasPassword: methods.hasPassword && allowed.has('password'),
+    passkeySupported: methods.passkeySupported,
+  }
+}
+
 export function useSecureVerification(
   options: UseSecureVerificationOptions = {}
 ) {
@@ -148,10 +162,14 @@ export function useSecureVerification(
       config: StartVerificationOptions,
       attemptId: number
     ): Promise<boolean> => {
-      const { preferredMethod, title, description, scope } = config
+      const { preferredMethod, allowedMethods, title, description, scope } =
+        config
       let availableMethods: VerificationMethods
       try {
-        availableMethods = await loadVerificationMethods(scope)
+        availableMethods = restrictVerificationMethods(
+          await loadVerificationMethods(scope),
+          allowedMethods
+        )
       } catch (error) {
         if (!isVerificationAttemptActive(attemptId)) return false
         handleServerError(error, {
@@ -340,6 +358,21 @@ export function useSecureVerification(
       })
 
       void (async (): Promise<void> => {
+        if (config.forceVerification) {
+          try {
+            const started = await startVerificationAttempt(
+              apiCall,
+              config,
+              attemptId
+            )
+            if (!started) {
+              settlePendingVerification(null, undefined, attemptId)
+            }
+          } catch (error) {
+            settlePendingVerification(null, error, attemptId)
+          }
+          return
+        }
         try {
           const result = await apiCall()
           if (!isVerificationAttemptActive(attemptId)) return

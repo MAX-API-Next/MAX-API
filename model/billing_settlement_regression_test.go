@@ -904,6 +904,89 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	require.WithinDuration(t, later, *stored.LastUsedAt, time.Second)
 }
 
+func TestPasskeyUsageUpdateMergesConcurrentAuthenticationStateMonotonically(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8824,
+		Username: "passkey-monotonic-auth-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	credential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "bW9ub3RvbmljLWNlcnQ=",
+		PublicKey:    "bW9ub3RvbmljLXB1YmxpYy1rZXk=",
+		SignCount:    9,
+	}
+	_, err := ReplacePasskeyCredentialAndBumpSessionGeneration(credential)
+	require.NoError(t, err)
+
+	older := time.Now()
+	newer := older.Add(time.Second)
+	higherCounter := *credential
+	higherCounter.SignCount = 11
+	higherCounter.CloneWarning = true
+	higherCounter.LastUsedAt = &newer
+	lowerCounter := *credential
+	lowerCounter.SignCount = 10
+	lowerCounter.CloneWarning = false
+	lowerCounter.LastUsedAt = &older
+
+	higherDone := make(chan struct{})
+	lowerDone := make(chan struct{})
+	var updateErrors [2]error
+	go func() {
+		updateErrors[0] = UpdatePasskeyCredentialAfterAuthentication(&higherCounter)
+		close(higherDone)
+	}()
+	go func() {
+		<-higherDone
+		updateErrors[1] = UpdatePasskeyCredentialAfterAuthentication(&lowerCounter)
+		close(lowerDone)
+	}()
+	<-higherDone
+	<-lowerDone
+	require.NoError(t, updateErrors[0])
+	require.NoError(t, updateErrors[1])
+
+	stored, err := GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.EqualValues(t, 11, stored.SignCount)
+	require.True(t, stored.CloneWarning)
+	require.WithinDuration(t, newer, *stored.LastUsedAt, time.Second)
+}
+
+func TestPasskeyAuthenticationUpdateKeysMatchSchema(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+	now := time.Now()
+	updates := passkeyAuthenticationUpdates(&PasskeyCredential{
+		PublicKey: "schema-public-key", CloneWarning: true, LastUsedAt: &now,
+	})
+	statement := &gorm.Statement{DB: DB}
+	require.NoError(t, statement.Parse(&PasskeyCredential{}))
+	for key := range updates {
+		require.Contains(t, statement.Schema.DBNames, key)
+	}
+}
+
+func TestTimedOutTaskCursorRemainsGroupedWithStatusPredicate(t *testing.T) {
+	truncateTables(t)
+	const submitTime = int64(100)
+	tasks := []Task{
+		{ID: 401, TaskID: "cursor-unfinished", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 402, TaskID: "cursor-success", Status: TaskStatusSuccess, SubmitTime: submitTime},
+		{ID: 403, TaskID: "cursor-failure", Status: TaskStatusFailure, SubmitTime: submitTime},
+	}
+	require.NoError(t, DB.Create(&tasks).Error)
+
+	got := GetTimedOutUnfinishedTasksAfter(200, submitTime, 400, 10)
+	require.Len(t, got, 1)
+	require.Equal(t, "cursor-unfinished", got[0].TaskID)
+}
+
 func TestPasskeyValidatedCredentialStateIsPersisted(t *testing.T) {
 	setupSecurityCredentialTestState(t)
 

@@ -103,6 +103,18 @@ func getSessionUser(session sessions.Session) (*model.UserBase, error) {
 	return model.GetUserCache(id)
 }
 
+func sessionUserForRequest(session sessions.Session) (*model.UserBase, error) {
+	user, err := getSessionUser(session)
+	if err != nil {
+		return nil, err
+	}
+	if !sessionGenerationMatches(session, user) {
+		clearInvalidSession(session)
+		return nil, nil
+	}
+	return user, nil
+}
+
 func writeSessionUserContext(c *gin.Context, user *model.UserBase) {
 	c.Set("id", user.Id)
 	c.Set("username", user.Username)
@@ -278,11 +290,9 @@ func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
 		if session.Get("id") != nil {
-			if userCache, err := getSessionUser(session); err == nil && userCache.Status == common.UserStatusEnabled && sessionGenerationMatches(session, userCache) {
+			if userCache, err := sessionUserForRequest(session); err == nil && userCache != nil && userCache.Status == common.UserStatusEnabled {
 				refreshSessionFromUser(session, userCache)
 				writeSessionUserContext(c, userCache)
-			} else if err == nil && userCache != nil && !sessionGenerationMatches(session, userCache) {
-				clearInvalidSession(session)
 			}
 		}
 		c.Next()
@@ -318,15 +328,12 @@ func TokenOrUserAuth() func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
 		if session.Get("id") != nil {
-			userCache, err := getSessionUser(session)
-			if err == nil && userCache.Status == common.UserStatusEnabled && sessionGenerationMatches(session, userCache) {
+			userCache, err := sessionUserForRequest(session)
+			if err == nil && userCache != nil && userCache.Status == common.UserStatusEnabled {
 				refreshSessionFromUser(session, userCache)
 				writeSessionUserContext(c, userCache)
 				c.Next()
 				return
-			}
-			if err == nil && userCache != nil && !sessionGenerationMatches(session, userCache) {
-				clearInvalidSession(session)
 			}
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				common.SysLog("TokenOrUserAuth session user refresh error: " + err.Error())

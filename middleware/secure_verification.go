@@ -103,7 +103,16 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			requiredScope = requiredScopes[0]
 		}
 		verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
-		if (requiredScope != "" && verifiedScope != requiredScope) ||
+		scopeMatches := requiredScope == ""
+		if !scopeMatches {
+			for _, allowedScope := range requiredScopes {
+				if verifiedScope == allowedScope {
+					scopeMatches = true
+					break
+				}
+			}
+		}
+		if !scopeMatches ||
 			((verifiedMethod == model.SecureVerificationMethodPassword ||
 				verifiedMethod == model.SecureVerificationMethodOAuth) && requiredScope == "") {
 			c.JSON(http.StatusForbidden, gin.H{

@@ -53,6 +53,8 @@ var ErrBillingFundingOutcomeUnknown = errors.New("billing funding settlement out
 // not mistake it for a durable pending effect or project successful usage.
 var ErrBillingSettlementEffectNotDurable = errors.New("billing settlement effect requires a durable funding source and request id")
 
+var errBillingSettlementEffectNotOwned = errors.New("billing settlement record does not own the requested effect")
+
 const billingSettlementBacklogNotificationInterval = 15 * time.Minute
 
 var billingSettlementBacklogAlertState struct {
@@ -208,7 +210,8 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 			return nil
 		} else {
 			lastErr = err
-			if errors.Is(err, ErrBillingFundingOutcomeUnknown) {
+			if errors.Is(err, ErrBillingFundingOutcomeUnknown) ||
+				errors.Is(err, errBillingSettlementEffectNotOwned) {
 				return err
 			}
 		}
@@ -286,7 +289,14 @@ func (s *BillingSession) applyDurableSettleIntent(intent *billingSettleIntent) e
 
 	var effectErr error
 	if intent.input.Effect != nil {
-		effectErr = model.ProcessBillingSettlementEffect(intent.input.OperationKey)
+		ownsEffect, ownershipErr := model.BillingSettlementOwnsEffect(intent.input.OperationKey)
+		if ownershipErr != nil {
+			effectErr = ownershipErr
+		} else if !ownsEffect {
+			effectErr = errBillingSettlementEffectNotOwned
+		} else {
+			effectErr = model.ProcessBillingSettlementEffect(intent.input.OperationKey)
+		}
 	}
 	s.finishDurableSettleIntent(true, applied)
 	return effectErr

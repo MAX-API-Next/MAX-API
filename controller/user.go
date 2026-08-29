@@ -136,7 +136,7 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 }
 
 func isOAuthCredentialReauthentication(method string) bool {
-	return method == "wechat" || method == "telegram" || method == "oauth" ||
+	return method == "wechat" || method == "oauth" ||
 		strings.HasPrefix(method, "oauth:")
 }
 
@@ -154,7 +154,7 @@ func setupLogin(user *model.User, c *gin.Context) {
 		session.Set(SecureVerificationSessionKey, time.Now().Unix())
 		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
 		session.Set(secureVerificationUserSessionKey, user.Id)
-		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeCredentials)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeOAuthReauthentication)
 	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)

@@ -139,10 +139,13 @@ func TestSecureVerificationScopeAllowlist(t *testing.T) {
 	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeAccountDelete))
 	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeCredentials))
 	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeAPIToken))
+	require.True(t, isSupportedSecureVerificationScope(model.SecureVerificationScopePasskeyRegister))
+	require.False(t, isSupportedSecureVerificationScope(model.SecureVerificationScopeOAuthReauthentication))
 	require.False(t, isSupportedSecureVerificationScope("admin_delete"))
 	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeAccountDelete))
 	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeCredentials))
 	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopeAPIToken))
+	require.True(t, passwordVerificationAllowed(model.SecureVerificationScopePasskeyRegister))
 	require.False(t, passwordVerificationAllowed(""))
 }
 
@@ -248,7 +251,7 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 	}`, inspectRecorder.Body.String())
 }
 
-func TestOAuthLoginCreatesCredentialScopedSecureVerification(t *testing.T) {
+func TestOAuthLoginCreatesNarrowReauthenticationScope(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Log{}))
 
@@ -299,7 +302,40 @@ func TestOAuthLoginCreatesCredentialScopedSecureVerification(t *testing.T) {
 	require.WithinDuration(t, time.Now(), time.Unix(verificationSession.VerifiedAt, 0), 2*time.Second)
 	require.Equal(t, model.SecureVerificationMethodOAuth, verificationSession.VerifiedMethod)
 	require.Equal(t, user.Id, verificationSession.VerifiedUserID)
-	require.Equal(t, model.SecureVerificationScopeCredentials, verificationSession.VerifiedScope)
+	require.Equal(t, model.SecureVerificationScopeOAuthReauthentication, verificationSession.VerifiedScope)
+}
+
+func TestTelegramLoginDoesNotCreateSecureVerificationGrant(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	user := model.User{
+		Id: 1005, Username: "telegram-no-step-up-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("telegram-no-step-up-test"))))
+	router.GET("/api/oauth/telegram/login", func(c *gin.Context) { setupLogin(&user, c) })
+	router.GET("/verification-session", func(c *gin.Context) {
+		session := sessions.Default(c)
+		c.JSON(http.StatusOK, gin.H{
+			"verified_at":     session.Get(SecureVerificationSessionKey),
+			"verified_method": session.Get(secureVerificationMethodSessionKey),
+			"verified_scope":  session.Get(secureVerificationScopeSessionKey),
+		})
+	})
+
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/api/oauth/telegram/login", nil))
+	require.Equal(t, http.StatusOK, loginRecorder.Code)
+	inspectRecorder := httptest.NewRecorder()
+	inspectRequest := httptest.NewRequest(http.MethodGet, "/verification-session", nil)
+	for _, sessionCookie := range loginRecorder.Result().Cookies() {
+		inspectRequest.AddCookie(sessionCookie)
+	}
+	router.ServeHTTP(inspectRecorder, inspectRequest)
+	require.JSONEq(t, `{"verified_at":null,"verified_method":null,"verified_scope":null}`, inspectRecorder.Body.String())
 }
 
 func TestResetPasswordReportsRevokedApiTokens(t *testing.T) {
