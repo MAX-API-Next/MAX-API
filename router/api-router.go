@@ -119,8 +119,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/2fa/status", controller.Get2FAStatus)
 				selfRoute.POST("/2fa/setup", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.Setup2FA)
 				selfRoute.POST("/2fa/enable", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired("credentials"), controller.Enable2FA)
-				selfRoute.POST("/2fa/disable", controller.Disable2FA)
-				selfRoute.POST("/2fa/backup_codes", controller.RegenerateBackupCodes)
+				selfRoute.POST("/2fa/disable", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), controller.Disable2FA)
+				selfRoute.POST("/2fa/backup_codes", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), controller.RegenerateBackupCodes)
 
 				// Check-in routes
 				selfRoute.GET("/checkin", controller.GetCheckinStatus)

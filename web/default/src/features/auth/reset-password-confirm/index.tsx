@@ -37,6 +37,12 @@ export type ResetPasswordSearchParams = {
 
 type ResetPasswordConfirmProps = ResetPasswordSearchParams
 
+interface ResetPasswordResponse {
+  success: boolean
+  data: string
+  api_tokens_revoked?: boolean
+}
+
 export function ResetPasswordConfirm({
   email,
   token,
@@ -64,9 +70,11 @@ export function ResetPasswordConfirm({
     startCountdown()
     setLoading(true)
     try {
-      const res = await api.post('/api/user/reset', { email, token }, {
-        skipBusinessError: true,
-      } as Record<string, unknown>)
+      const res = await api.post<ResetPasswordResponse>(
+        '/api/user/reset',
+        { email, token },
+        { skipBusinessError: true }
+      )
 
       if (res?.data?.success) {
         const password = res.data.data
@@ -90,7 +98,7 @@ export function ResetPasswordConfirm({
     }
   }
 
-  async function handleCopy() {
+  async function handleCopy(): Promise<void> {
     if (!newPassword) return
 
     const copySuccess = await copyToClipboard(newPassword)

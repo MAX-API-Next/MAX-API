@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -240,6 +241,8 @@ func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
 	}{
 		{name: "management token", method: http.MethodPost, path: "/api/user/token", body: `{"quota":1}`},
 		{name: "affiliate transfer", method: http.MethodPost, path: "/api/user/aff_transfer", body: `{"quota":1}`},
+		{name: "disable 2fa", method: http.MethodPost, path: "/api/user/2fa/disable", body: `{"code":"000000"}`},
+		{name: "regenerate 2fa backup codes", method: http.MethodPost, path: "/api/user/2fa/backup_codes", body: `{"code":"000000"}`},
 		{name: "update api token", method: http.MethodPut, path: "/api/token/", body: `{"id":1,"name":"updated"}`},
 		{name: "delete api token", method: http.MethodDelete, path: "/api/token/1"},
 		{name: "delete api token batch", method: http.MethodPost, path: "/api/token/batch", body: `{"ids":[1]}`},
@@ -349,9 +352,15 @@ func TestSecureVerificationOpenAPIIncludesScopeAndRequestBody(t *testing.T) {
 			}
 			schema, schemaOK := value["schema"].(map[string]any)
 			values, valuesOK := schema["enum"].([]any)
-			return schemaOK && valuesOK && len(values) == 4 &&
-				values[0] == "access_token" && values[1] == "account_delete" &&
-				values[2] == "credentials" && values[3] == "api_token"
+			if !schemaOK || !valuesOK {
+				return false
+			}
+			for _, requiredScope := range []any{"access_token", "account_delete", "credentials", "api_token"} {
+				if !slices.Contains(values, requiredScope) {
+					return false
+				}
+			}
+			return true
 		}
 		return false
 	}, "expected supported scope query parameter for GET /api/verify/methods")

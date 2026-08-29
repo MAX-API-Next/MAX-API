@@ -24,8 +24,8 @@ import {
   resolveServerErrorMessage,
 } from './handle-server-error'
 
-describe('getSafeErrorDebugInfo', () => {
-  test('does not include request headers or config', () => {
+describe('getSafeErrorDebugInfo', (): void => {
+  test('does not include request headers or config', (): void => {
     const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
     error.config = {
       headers: { Authorization: 'Bearer secret-value' },
@@ -42,19 +42,19 @@ describe('getSafeErrorDebugInfo', () => {
   })
 })
 
-describe('resolveServerErrorMessage', () => {
-  test('uses an ordinary Error message before the fallback', () => {
+describe('resolveServerErrorMessage', (): void => {
+  test('uses the localized fallback for ordinary errors', (): void => {
     assert.equal(
       resolveServerErrorMessage(
         new Error('account disabled'),
         'Verification unavailable',
         'Content not found.'
       ),
-      'account disabled'
+      'Verification unavailable'
     )
   })
 
-  test('uses an Axios response message before the fallback', () => {
+  test('uses an Axios response message before the fallback', (): void => {
     const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
     error.response = {
       status: 503,
@@ -74,7 +74,7 @@ describe('resolveServerErrorMessage', () => {
     )
   })
 
-  test('uses the localized fallback for Axios transport failures', () => {
+  test('uses the localized fallback for Axios transport failures', (): void => {
     const error = new AxiosError('Network Error', 'ERR_NETWORK')
 
     assert.equal(
@@ -87,7 +87,7 @@ describe('resolveServerErrorMessage', () => {
     )
   })
 
-  test('keeps an Axios response title ahead of other messages', () => {
+  test('keeps an Axios response title ahead of other messages', (): void => {
     const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
     error.response = {
       status: 400,
@@ -110,7 +110,7 @@ describe('resolveServerErrorMessage', () => {
     )
   })
 
-  test('ignores empty error messages and uses the fallback', () => {
+  test('ignores empty error messages and uses the fallback', (): void => {
     assert.equal(
       resolveServerErrorMessage(
         new Error('   '),
@@ -121,7 +121,7 @@ describe('resolveServerErrorMessage', () => {
     )
   })
 
-  test('preserves the content-not-found message for status 204', () => {
+  test('preserves the content-not-found message for status 204', (): void => {
     assert.equal(
       resolveServerErrorMessage(
         { status: 204 },

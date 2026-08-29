@@ -183,6 +183,11 @@ type billingSettleIntent struct {
 	input model.BillingSettlementInput
 }
 
+type fundingOutcomeUnknownNotification struct {
+	requested int64
+	applied   int64
+}
+
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交。若令牌调整失败，会优先反向补偿已提交的
 // 资金差额。已确认的部分补偿会记录剩余差额并在重试令牌前补齐；补偿
@@ -223,8 +228,14 @@ func (s *BillingSession) settleAttempt(actualQuota int, effect *model.BillingSet
 }
 
 func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.BillingSettlementEffect) (*billingSettleIntent, bool, error) {
+	var notification *fundingOutcomeUnknownNotification
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		if notification != nil {
+			s.notifyFundingOutcomeUnknown(notification.requested, notification.applied)
+		}
+	}()
 	if s.settled || s.refunded {
 		return nil, false, nil
 	}
@@ -240,6 +251,8 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 	delta := actualQuota - s.preConsumedQuota
 	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
 		if delta == 0 && effect == nil {
+			// A persisted zero-delta record still owns settlement completion and
+			// must be confirmed; no record means there is nothing left to apply.
 			_, found, lookupErr := model.GetBillingSettlementStatus(input.OperationKey)
 			if lookupErr != nil {
 				return nil, false, lookupErr
@@ -259,7 +272,9 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 	if effect != nil {
 		return nil, false, ErrBillingSettlementEffectNotDurable
 	}
-	return nil, false, s.settleNonDurableLocked(delta)
+	settleErr, outcomeNotification := s.settleNonDurableLocked(delta)
+	notification = outcomeNotification
+	return nil, false, settleErr
 }
 
 func (s *BillingSession) applyDurableSettleIntent(intent *billingSettleIntent) error {
@@ -292,7 +307,7 @@ func (s *BillingSession) finishDurableSettleIntent(applied bool, appliedDelta in
 	s.settled = true
 }
 
-func (s *BillingSession) settleNonDurableLocked(delta int) error {
+func (s *BillingSession) settleNonDurableLocked(delta int) (error, *fundingOutcomeUnknownNotification) {
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
 		applied, err := s.funding.Settle(delta)
@@ -303,11 +318,11 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 			s.fundingSettled = true
 			s.appliedFundingDelta = applied
 			s.fundingOutcomeUnknown = true
-			s.notifyFundingOutcomeUnknown(int64(delta), applied)
+			notification := &fundingOutcomeUnknownNotification{requested: int64(delta), applied: applied}
 			if err != nil {
-				return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
+				return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err), notification
 			}
-			return fmt.Errorf("%w: requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, delta, applied)
+			return fmt.Errorf("%w: requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, delta, applied), notification
 		}
 		s.appliedFundingDelta = applied
 		s.fundingSettled = true
@@ -325,16 +340,16 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 				// failed or partial reconciliation may already have committed;
 				// do not repeat it or proceed with the token leg.
 				s.fundingOutcomeUnknown = true
-				s.notifyFundingOutcomeUnknown(needed, applied)
 				s.fundingReconcilePending = false
+				notification := &fundingOutcomeUnknownNotification{requested: needed, applied: applied}
 				if err != nil {
-					return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
+					return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err), notification
 				}
-				return fmt.Errorf("%w: reconciliation requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, needed, applied)
+				return fmt.Errorf("%w: reconciliation requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, needed, applied), notification
 			}
 		}
 		if s.appliedFundingDelta != int64(delta) {
-			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta)
+			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta), nil
 		}
 		s.fundingReconcilePending = false
 	}
@@ -347,10 +362,11 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
 		}
 		if tokenErr != nil {
+			var notification *fundingOutcomeUnknownNotification
 			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
 			if s.compensationFailed {
-				return tokenErr
+				return tokenErr, nil
 			}
 			if s.appliedFundingDelta == 0 {
 				s.fundingSettled = false
@@ -363,7 +379,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					// continue with the token leg.
 					s.compensationFailed = true
 					s.fundingOutcomeUnknown = true
-					s.notifyFundingOutcomeUnknown(-committed, compensated)
+					notification = &fundingOutcomeUnknownNotification{requested: -committed, applied: compensated}
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
@@ -371,7 +387,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					s.appliedFundingDelta = committed + compensated
 					s.compensationFailed = false
 					s.fundingOutcomeUnknown = true
-					s.notifyFundingOutcomeUnknown(-committed, compensated)
+					notification = &fundingOutcomeUnknownNotification{requested: -committed, applied: compensated}
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("incomplete funding compensation after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d)",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated))
@@ -382,7 +398,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					s.fundingReconcilePending = false
 				}
 			}
-			return tokenErr
+			return tokenErr, notification
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
@@ -392,7 +408,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 	s.compensationFailed = false
 	s.fundingReconcilePending = false
 	s.settled = true
-	return nil
+	return nil, nil
 }
 
 // PrepareSettlement returns the exact durable request-finalize intent without

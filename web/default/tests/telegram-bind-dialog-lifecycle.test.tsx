@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import {
@@ -35,11 +35,11 @@ const createTelegramBindState = mock(async () => ({
   data: { state: 'telegram-bind-state' },
 }))
 const bindTelegramAccount = mock(async () => ({ success: true }))
-const toastSuccess = mock(() => undefined)
-const toastError = mock(() => undefined)
-const handleServerError = mock(() => undefined)
-const translate = (key: string) => key
-const withVerification = <T,>(apiCall: () => Promise<T>) => apiCall()
+const toastSuccess = mock((): void => undefined)
+const toastError = mock((): void => undefined)
+const handleServerError = mock((): void => undefined)
+const translate = (key: string): string => key
+const withVerification = <T,>(apiCall: () => Promise<T>): Promise<T> => apiCall()
 let useUnstableVerificationGate = false
 
 interface Deferred<T> {
@@ -58,51 +58,51 @@ function createDeferred<T>(): Deferred<T> {
   }
 }
 
-mock.module('../src/features/auth/secure-verification', () => ({
-  useSecureVerificationGate: () => ({
+mock.module('../src/features/auth/secure-verification', (): object => ({
+  useSecureVerificationGate: (): object => ({
     withVerification: useUnstableVerificationGate
-      ? <T,>(apiCall: () => Promise<T>) => apiCall()
+      ? <T,>(apiCall: () => Promise<T>): Promise<T> => apiCall()
       : withVerification,
   }),
 }))
 
-mock.module('../src/features/profile/api', () => ({
+mock.module('../src/features/profile/api', (): object => ({
   bindTelegramAccount,
   createTelegramBindState,
 }))
 
-mock.module('../src/lib/handle-server-error', () => ({ handleServerError }))
+mock.module('../src/lib/handle-server-error', (): object => ({ handleServerError }))
 
-mock.module('sonner', () => ({
+mock.module('sonner', (): object => ({
   toast: { error: toastError, success: toastSuccess },
 }))
 
-mock.module('react-i18next', () => ({
-  useTranslation: () => ({ t: translate }),
+mock.module('react-i18next', (): object => ({
+  useTranslation: (): object => ({ t: translate }),
 }))
 
-function TestContainer(props: { children?: ReactNode }) {
+function TestContainer(props: { children?: ReactNode }): ReactElement {
   return <div>{props.children}</div>
 }
 
-mock.module('../src/components/ui/alert', () => ({
+mock.module('../src/components/ui/alert', (): object => ({
   Alert: TestContainer,
   AlertDescription: TestContainer,
 }))
 
-mock.module('../src/components/ui/button', () => ({
+mock.module('../src/components/ui/button', (): object => ({
   Button: (props: {
     children?: ReactNode
     onClick?: () => void
     type?: 'button' | 'submit' | 'reset'
-  }) => (
+  }): ReactElement => (
     <button type={props.type} onClick={props.onClick}>
       {props.children}
     </button>
   ),
 }))
 
-mock.module('../src/components/ui/dialog', () => ({
+mock.module('../src/components/ui/dialog', (): object => ({
   Dialog: TestContainer,
   DialogContent: TestContainer,
   DialogDescription: TestContainer,
@@ -110,8 +110,8 @@ mock.module('../src/components/ui/dialog', () => ({
   DialogTitle: TestContainer,
 }))
 
-mock.module('../src/components/ui/spinner', () => ({
-  Spinner: () => <span />,
+mock.module('../src/components/ui/spinner', (): object => ({
+  Spinner: (): ReactElement => <span />,
 }))
 
 const { TelegramBindDialog } = await import(
@@ -119,8 +119,8 @@ const { TelegramBindDialog } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-beforeAll(() => testEnv.setup())
-beforeEach(() => {
+beforeAll(async (): Promise<void> => testEnv.setup())
+beforeEach((): void => {
   useUnstableVerificationGate = false
   createTelegramBindState.mockClear()
   bindTelegramAccount.mockClear()
@@ -129,11 +129,11 @@ beforeEach(() => {
   handleServerError.mockClear()
   assert.equal(document.querySelector('script[data-onauth]'), null)
 })
-afterEach(() => cleanup())
-afterAll(() => testEnv.teardown())
+afterEach((): void => cleanup())
+afterAll((): void => testEnv.teardown())
 
-describe('TelegramBindDialog widget lifecycle', () => {
-  test('ignores an obsolete bind-state response after close and reopen', async () => {
+describe('TelegramBindDialog widget lifecycle', (): void => {
+  test('ignores an obsolete bind-state response after close and reopen', async (): Promise<void> => {
     const firstAttempt = createDeferred<{
       success: boolean
       data: { state: string }
@@ -194,7 +194,7 @@ describe('TelegramBindDialog widget lifecycle', () => {
     )
   })
 
-  test('keeps the active widget mounted across callback-only rerenders', async () => {
+  test('keeps the active widget mounted across callback-only rerenders', async (): Promise<void> => {
     const firstOpenChange = mock(() => undefined)
     const secondOpenChange = mock(() => undefined)
     const firstSuccess = mock(() => undefined)
@@ -261,7 +261,7 @@ describe('TelegramBindDialog widget lifecycle', () => {
     assert.deepEqual(secondOpenChange.mock.calls[0], [false])
   })
 
-  test('keeps the active widget mounted across gate identity changes', async () => {
+  test('keeps the active widget mounted across gate identity changes', async (): Promise<void> => {
     useUnstableVerificationGate = true
     const view = render(
       <TelegramBindDialog
@@ -309,7 +309,7 @@ describe('TelegramBindDialog widget lifecycle', () => {
     assert.equal(createTelegramBindState.mock.calls.length, 1)
   })
 
-  test('reports initialization failures through the shared server error handler', async () => {
+  test('reports initialization failures through the shared server error handler', async (): Promise<void> => {
     const initializationError = new Error('backend unavailable')
     createTelegramBindState.mockImplementationOnce(async () => {
       throw initializationError
@@ -334,7 +334,7 @@ describe('TelegramBindDialog widget lifecycle', () => {
     assert.equal(retryIcon?.getAttribute('aria-hidden'), 'true')
   })
 
-  test('reports binding failures through the shared server error handler', async () => {
+  test('reports binding failures through the shared server error handler', async (): Promise<void> => {
     const view = render(
       <TelegramBindDialog
         open

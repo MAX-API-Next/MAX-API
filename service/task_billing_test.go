@@ -156,7 +156,7 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	}
 	require.NoError(t, model.DB.Create(task).Error)
 	submissionInput := model.BillingSettlementInput{
-		OperationKey:    "request:timeout-waits-for-settlement:finalize",
+		OperationKey:    model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
 		Source:          model.BillingSettlementSourceWallet,
 		UserID:          userID,
 		FundingDelta:    10,

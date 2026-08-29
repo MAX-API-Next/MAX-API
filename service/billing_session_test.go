@@ -111,7 +111,13 @@ func (f *uncertainFundingSource) Settle(delta int) (int64, error) {
 func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *testing.T) {
 	originalSender := billingFundingOutcomeUnknownAlertNotificationSender
 	var alerts []SmartOpsAlert
+	var activeSession *BillingSession
+	var senderObservedUnlocked bool
 	billingFundingOutcomeUnknownAlertNotificationSender = func(alert SmartOpsAlert) {
+		if activeSession != nil && activeSession.mu.TryLock() {
+			senderObservedUnlocked = true
+			activeSession.mu.Unlock()
+		}
 		alerts = append(alerts, alert)
 	}
 	t.Cleanup(func() {
@@ -130,17 +136,20 @@ func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *t
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			alerts = nil
+			senderObservedUnlocked = false
 			funding := &uncertainFundingSource{applied: tc.applied, err: tc.err}
 			session := &BillingSession{
 				relayInfo: &relaycommon.RelayInfo{UserId: 101, TokenId: 102, TokenKey: "uncertain-funding-token"},
 				funding:   funding, preConsumedQuota: 10,
 			}
+			activeSession = session
 
 			err := session.Settle(15)
 			require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
 			assert.Equal(t, []int{5}, funding.deltas)
 			assert.True(t, session.fundingOutcomeUnknown)
 			require.Len(t, alerts, 1)
+			assert.True(t, senderObservedUnlocked, "funding alerts must be enqueued after releasing the billing session mutex")
 			assert.Equal(t, "billing_funding_outcome_unknown", alerts[0].Key)
 			assert.Equal(t, smartOpsAlertStatusFiring, alerts[0].Status)
 			assert.Contains(t, alerts[0].Message, "userId=101")

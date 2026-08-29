@@ -67,14 +67,6 @@ export function resolveServerErrorMessage(
     return isContentNotFound ? contentNotFound : fallback
   }
 
-  if (
-    !isContentNotFound &&
-    error instanceof Error &&
-    isNonEmptyString(error.message)
-  ) {
-    return error.message
-  }
-
   return isContentNotFound ? contentNotFound : fallback
 }
 

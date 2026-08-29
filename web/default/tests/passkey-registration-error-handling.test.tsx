@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { createReactTestEnvironment } from '@/test/react'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
   afterAll,
   afterEach,
@@ -193,8 +193,11 @@ test('consumes a rejected Passkey verification continuation without duplicate no
 
   fireEvent.click(view.getByRole('button', { name: 'Enable Passkey' }))
 
-  await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
-  assert.equal(toastError.mock.calls.length, 0)
+	await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
+	await act(async () => {
+		await new Promise<void>((resolve) => setTimeout(resolve, 0))
+	})
+	assert.equal(toastError.mock.calls.length, 0)
   assert.equal(handleServerError.mock.calls.length, 0)
 })
 
