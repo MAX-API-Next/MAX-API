@@ -260,7 +260,7 @@ export interface TwoFAStatusResponse {
   data?: {
     enabled: boolean
     locked: boolean
-    backup_codes_remaining?: number
+    backup_codes_remaining: number
   }
 }
 

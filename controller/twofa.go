@@ -287,8 +287,9 @@ func Get2FAStatus(c *gin.Context) {
 	}
 
 	status := map[string]interface{}{
-		"enabled": false,
-		"locked":  false,
+		"enabled":                false,
+		"locked":                 false,
+		"backup_codes_remaining": 0,
 	}
 
 	if twoFA != nil {

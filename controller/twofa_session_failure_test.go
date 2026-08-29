@@ -159,3 +159,26 @@ func TestRegenerateBackupCodesReturnsCodesWhenSessionPreservationFails(t *testin
 	require.NoError(t, model.DB.First(&stored, user.Id).Error)
 	require.EqualValues(t, 1, stored.SessionGeneration)
 }
+
+func TestGet2FAStatusAlwaysReturnsBackupCodeCount(t *testing.T) {
+	user, _ := setupTwoFASessionFailureTest(t, false)
+	router := gin.New()
+	router.GET("/twofa/status", func(c *gin.Context) {
+		c.Set("id", user.Id)
+		Get2FAStatus(c)
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/twofa/status", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{
+		"success": true,
+		"message": "",
+		"data": {
+			"enabled": false,
+			"locked": false,
+			"backup_codes_remaining": 0
+		}
+	}`, recorder.Body.String())
+}
