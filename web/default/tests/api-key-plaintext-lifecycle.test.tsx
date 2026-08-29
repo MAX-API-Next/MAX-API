@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ReactElement, ReactNode } from 'react'
+import {
+  useState,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
 import {
@@ -60,6 +65,46 @@ const fetchTokenKeysBatch = mock(
 )
 const copyToClipboard = mock(async () => false)
 const toastError = mock(() => undefined)
+const toastSuccess = mock(() => undefined)
+const createApiKey = mock(async () => ({ success: true }))
+const updateApiKey = mock(async () => ({ success: true }))
+const getApiKey = mock(async () => ({ success: false }))
+const translate = (key: string, values?: Record<string, unknown>) =>
+  key.replace(/{{\s*(\w+)\s*}}/g, (match, name: string) => {
+    const value = values?.[name]
+    return value === undefined ? match : String(value)
+  })
+const userModelsQueryResult = { data: { data: [] }, isLoading: false }
+const userGroupsQueryResult = {
+  data: {
+    data: {
+      default: { desc: 'Default', ratio: 1 },
+    },
+    auto_routes: [{ key: 'auto', name: 'Automatic', groups: ['default'] }],
+  },
+  isLoading: false,
+}
+const emptyQueryResult = { data: undefined, isLoading: false, error: null }
+
+function TestSheetContainer({
+  children,
+}: {
+  children?: ReactNode
+}): ReactElement {
+  return <div>{children}</div>
+}
+
+function TestInput({
+  onChange,
+  ...props
+}: ComponentProps<'input'>): ReactElement {
+  return (
+    <input
+      {...props}
+      onInput={onChange as ComponentProps<'input'>['onInput']}
+    />
+  )
+}
 
 mock.module('../src/features/auth/secure-verification', () => ({
   useApiTokenVerification:
@@ -69,12 +114,45 @@ mock.module('../src/features/auth/secure-verification', () => ({
 }))
 
 mock.module('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: translate, i18n: { language: 'en' } }),
 }))
 
 mock.module('sonner', () => ({
-  toast: { error: toastError },
+  toast: { error: toastError, success: toastSuccess },
 }))
+
+mock.module('@tanstack/react-query', () => ({
+  useQuery: ({ queryKey }: { queryKey: string[] }) => {
+    if (queryKey[0] === 'user-models') {
+      return userModelsQueryResult
+    }
+    if (queryKey[0] === 'user-groups') {
+      return userGroupsQueryResult
+    }
+    return emptyQueryResult
+  },
+}))
+
+mock.module('../src/hooks/use-status', () => ({
+  useStatus: () => ({
+    status: { default_auto_route: 'auto' },
+    loading: false,
+    error: null,
+  }),
+}))
+
+mock.module('../src/components/ui/sheet', () => ({
+  Sheet: ({ open, children }: { open?: boolean; children?: ReactNode }) =>
+    open ? <div>{children}</div> : null,
+  SheetClose: TestSheetContainer,
+  SheetContent: TestSheetContainer,
+  SheetDescription: TestSheetContainer,
+  SheetFooter: TestSheetContainer,
+  SheetHeader: TestSheetContainer,
+  SheetTitle: TestSheetContainer,
+}))
+
+mock.module('../src/components/ui/input', () => ({ Input: TestInput }))
 
 mock.module('../src/lib/copy-to-clipboard', () => ({
   copyToClipboard,
@@ -83,6 +161,9 @@ mock.module('../src/lib/copy-to-clipboard', () => ({
 mock.module('../src/features/keys/api', () => ({
   fetchTokenKey,
   fetchTokenKeysBatch,
+  createApiKey,
+  updateApiKey,
+  getApiKey,
 }))
 
 const { ApiKeysProvider, useApiKeys } = await import(
@@ -90,6 +171,9 @@ const { ApiKeysProvider, useApiKeys } = await import(
 )
 const { ApiKeyCell } = await import(
   '../src/features/keys/components/api-keys-cells'
+)
+const { ApiKeysMutateDrawer } = await import(
+  '../src/features/keys/components/api-keys-mutate-drawer'
 )
 const testEnv = createReactTestEnvironment()
 
@@ -102,17 +186,36 @@ function CopiedKeyProbe(): ReactElement {
   return <output data-testid='copied-key-id'>{copiedKeyId ?? 'none'}</output>
 }
 
+function RefreshProbe(): ReactElement {
+  return (
+    <output data-testid='refresh-trigger'>{useApiKeys().refreshTrigger}</output>
+  )
+}
+
 function wrapper(props: ApiKeysProviderWrapperProps): ReactElement {
   return <ApiKeysProvider>{props.children}</ApiKeysProvider>
 }
 
-beforeAll(() => testEnv.setup())
+beforeAll(async () => {
+  await testEnv.setup()
+  window.requestAnimationFrame = globalThis.requestAnimationFrame
+  window.cancelAnimationFrame = globalThis.cancelAnimationFrame
+  Object.defineProperties(window.HTMLElement.prototype, {
+    attachEvent: { configurable: true, value: () => undefined },
+    detachEvent: { configurable: true, value: () => undefined },
+    scrollIntoView: { configurable: true, value: () => undefined },
+  })
+})
 
 beforeEach(() => {
   fetchTokenKey.mockClear()
   fetchTokenKeysBatch.mockClear()
   copyToClipboard.mockClear()
   toastError.mockClear()
+  toastSuccess.mockClear()
+  createApiKey.mockClear()
+  updateApiKey.mockClear()
+  getApiKey.mockClear()
   resolveTokenKeyRequest = undefined
   rejectTokenKeysBatchRequest = undefined
 })
@@ -264,6 +367,65 @@ describe('API key plaintext lifecycle', () => {
       assert.equal(toastError.mock.calls.length, 1)
       assert.equal(toastError.mock.calls[0]?.[0], 'Failed to copy to clipboard')
       assert.equal(view.getByTestId('copied-key-id').textContent, 'none')
+    })
+  })
+
+  test('finalizes a partially successful batch when a later create throws', async () => {
+    createApiKey
+      .mockImplementationOnce(async () => ({ success: true }))
+      .mockImplementationOnce(async () => {
+        throw new Error('second create failed')
+      })
+    const onOpenChange = mock(() => undefined)
+
+    function DrawerHarness(): ReactElement {
+      const [open, setOpen] = useState(true)
+      return (
+        <>
+          <ApiKeysMutateDrawer
+            open={open}
+            onOpenChange={(nextOpen) => {
+              onOpenChange(nextOpen)
+              setOpen(nextOpen)
+            }}
+          />
+          <RefreshProbe />
+        </>
+      )
+    }
+
+    const view = render(
+      <ApiKeysProvider>
+        <DrawerHarness />
+      </ApiKeysProvider>
+    )
+
+    await waitFor(() => {
+      assert.ok(view.getByRole('textbox', { name: 'Name' }))
+    })
+    fireEvent.input(view.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'partial-batch' },
+    })
+    fireEvent.input(view.getByRole('spinbutton', { name: 'Quantity' }), {
+      target: { value: '2' },
+    })
+    fireEvent.click(view.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => {
+      assert.equal(createApiKey.mock.calls.length, 2)
+      assert.equal(toastError.mock.calls.length, 1)
+      assert.equal(toastError.mock.calls[0]?.[0], 'second create failed')
+      assert.equal(toastSuccess.mock.calls.length, 1)
+      assert.equal(
+        toastSuccess.mock.calls[0]?.[0],
+        'Successfully created 1 API Key(s)'
+      )
+      assert.ok(onOpenChange.mock.calls.some(([open]) => open === false))
+      assert.equal(view.getByTestId('refresh-trigger').textContent, '1')
+      assert.equal(
+        view.queryByRole('button', { name: 'Save changes' }),
+        null
+      )
     })
   })
 })

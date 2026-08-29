@@ -298,6 +298,7 @@ export function ApiKeysMutateDrawer({
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
+    let created = 0
     try {
       const dirtyFields = form.formState.dirtyFields
       const routingChanged = Boolean(
@@ -331,7 +332,6 @@ export function ApiKeysMutateDrawer({
       } else {
         // Create mode - handle batch creation
         const count = data.tokenCount || 1
-        let created = 0
         await withApiTokenVerification(async (): Promise<number> => {
           for (let i = created; i < count; i++) {
             const result = await createApiKey({
@@ -351,16 +351,6 @@ export function ApiKeysMutateDrawer({
 
           return created
         })
-
-        if (created > 0) {
-          toast.success(
-            t('Successfully created {{count}} API Key(s)', {
-              count: created,
-            })
-          )
-          onOpenChange(false)
-          triggerRefresh()
-        }
       }
     } catch (error) {
       if (!wasSecureVerificationErrorReported(error)) {
@@ -370,6 +360,15 @@ export function ApiKeysMutateDrawer({
       }
     } finally {
       setIsSubmitting(false)
+      if (!isUpdate && created > 0) {
+        toast.success(
+          t('Successfully created {{count}} API Key(s)', {
+            count: created,
+          })
+        )
+        onOpenChange(false)
+        triggerRefresh()
+      }
     }
   }
 
