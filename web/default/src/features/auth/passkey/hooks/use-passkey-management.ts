@@ -165,9 +165,9 @@ export function usePasskeyManagement(
       if (isVerificationRequiredError(error)) {
         throw error
       }
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Removal error', error)
-      toast.error(i18next.t('Failed to remove Passkey'))
+      handleServerError(error, {
+        fallback: i18next.t('Failed to remove Passkey'),
+      })
       return false
     } finally {
       setRemoving(false)

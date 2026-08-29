@@ -349,6 +349,24 @@ test('propagates verification-required errors from Passkey removal', async () =>
   assert.equal(result.current.removing, false)
 })
 
+test('reports ordinary Passkey removal failures through the shared handler', async () => {
+  const removalError = new Error('removal transport failed')
+  deletePasskey.mockImplementationOnce(async () => {
+    throw removalError
+  })
+  const { result } = renderHook(() => usePasskeyManagement())
+  await waitFor(() => assert.equal(result.current.loading, false))
+
+  await act(async () => {
+    assert.equal(await result.current.remove(), false)
+  })
+
+  assert.deepEqual(handleServerError.mock.calls[0], [removalError, {
+    fallback: 'Failed to remove Passkey',
+  }])
+  assert.equal(result.current.removing, false)
+})
+
 test('reports ordinary Passkey registration failures through the shared handler', async () => {
   const registrationError = new Error('registration transport failed')
   beginPasskeyRegistration.mockImplementationOnce(async () => {

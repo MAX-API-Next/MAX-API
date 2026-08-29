@@ -86,12 +86,12 @@ const userGroupsQueryResult = {
 }
 const emptyQueryResult = { data: undefined, isLoading: false, error: null }
 
-function TestSheetContainer({
-  children,
-}: {
+interface TestSheetContainerProps {
   children?: ReactNode
-}): ReactElement {
-  return <div>{children}</div>
+}
+
+function TestSheetContainer(props: TestSheetContainerProps): ReactElement {
+  return <div>{props.children}</div>
 }
 
 function TestInput({

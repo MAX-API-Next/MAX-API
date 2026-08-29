@@ -222,6 +222,7 @@ test('shows that password recovery revokes existing API tokens', async () => {
         )
       )
     })
+    assert.ok(view.getByRole('button', { name: 'Copy password' }))
     assert.equal(
       view.getByDisplayValue('NewPassword123').hasAttribute('disabled'),
       true

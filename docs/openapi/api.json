@@ -1103,6 +1103,10 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "403": {
+            "description": "Telegram 签名或 state 无效、过期或已使用",
+            "headers": {}
           }
         },
         "security": [

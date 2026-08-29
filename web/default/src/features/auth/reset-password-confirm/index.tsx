@@ -159,12 +159,13 @@ export function ResetPasswordConfirm(props: ResetPasswordConfirmProps) {
                     type='button'
                     size='icon'
                     variant='outline'
+                    aria-label={t('Copy password')}
                     onClick={handleCopy}
                   >
                     {copied ? (
-                      <CheckIcon className='h-4 w-4' />
+                      <CheckIcon aria-hidden='true' className='h-4 w-4' />
                     ) : (
-                      <CopyIcon className='h-4 w-4' />
+                      <CopyIcon aria-hidden='true' className='h-4 w-4' />
                     )}
                   </Button>
                 </div>

@@ -423,6 +423,9 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 	}
 	require.Contains(t, telegramLogin["description"], "全部字段")
 	require.Contains(t, telegramLogin["description"], "hash 和 state")
+	telegramLoginResponses := telegramLogin["responses"].(map[string]any)
+	require.Contains(t, telegramLoginResponses, "200")
+	require.Contains(t, telegramLoginResponses, "403")
 
 	for path, method := range map[string]string{
 		"/api/oauth/telegram/bind/state": "post",
