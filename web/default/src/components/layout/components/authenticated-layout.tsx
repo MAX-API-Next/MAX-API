@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactElement } from 'react'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
 import { LayoutProvider } from '@/context/layout-provider'
@@ -31,7 +32,9 @@ type AuthenticatedLayoutProps = {
   children?: React.ReactNode
 }
 
-export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
+export function AuthenticatedLayout(
+  props: AuthenticatedLayoutProps
+): ReactElement {
   const defaultOpen = getCookie('sidebar_state') !== 'false'
 
   return (

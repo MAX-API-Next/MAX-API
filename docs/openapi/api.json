@@ -1394,7 +1394,7 @@
       "delete": {
         "summary": "删除Passkey",
         "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
+        "description": "🔐 需要登录（User权限）并完成 credentials 作用域安全验证",
         "tags": [
           "用户管理"
         ],
@@ -1402,6 +1402,10 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证或验证已过期",
             "headers": {}
           }
         },

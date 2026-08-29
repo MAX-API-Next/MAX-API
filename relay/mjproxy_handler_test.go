@@ -65,7 +65,8 @@ func TestPrepareMidjourneyBillingTaskDoesNotFloorZeroRatio(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB
 	oldPreConsumedQuota := common.PreConsumedQuota
-	db, err := gorm.Open(sqlite.Open("file:mjproxy_zero_ratio?mode=memory&cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
 	common.PreConsumedQuota = 500

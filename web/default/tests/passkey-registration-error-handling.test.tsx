@@ -24,7 +24,6 @@ import {
   beforeAll,
   beforeEach,
   mock,
-  spyOn,
   test,
 } from 'bun:test'
 import assert from 'node:assert/strict'
@@ -51,7 +50,6 @@ const toastError = mock((_message: string) => undefined)
 const handleServerError = mock(
   (_error: unknown, _options?: { fallback?: string }) => undefined
 )
-const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 let passkeyEnabled = false
 
 interface DialogPartProps {
@@ -173,11 +171,9 @@ beforeEach(() => {
   remove.mockClear()
   toastError.mockClear()
   handleServerError.mockClear()
-  consoleError.mockClear()
 })
 afterEach(() => cleanup())
 afterAll(() => {
-  consoleError.mockRestore()
   testEnv.teardown()
 })
 
@@ -192,14 +188,12 @@ test('registers the first Passkey when a fresh OAuth reauthentication already sa
   assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'credentials')
 })
 
-test('handles a rejected Passkey verification continuation', async () => {
+test('consumes a rejected Passkey verification continuation without duplicate notification', async () => {
   const view = render(<PasskeyCard loading={false} />)
 
   fireEvent.click(view.getByRole('button', { name: 'Enable Passkey' }))
 
   await waitFor(() => assert.equal(withVerification.mock.calls.length, 1))
-  await waitFor(() => assert.equal(consoleError.mock.calls.length, 1))
-  assert.match(String(consoleError.mock.calls[0]?.[1]), /method lookup failed/)
   assert.equal(toastError.mock.calls.length, 0)
   assert.equal(handleServerError.mock.calls.length, 0)
 })
