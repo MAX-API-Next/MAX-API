@@ -1,10 +1,13 @@
 package model
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -198,6 +201,66 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	require.Equal(t, replacement.CredentialID, stored.CredentialID)
 	require.EqualValues(t, 11, stored.SignCount)
 	require.WithinDuration(t, later, *stored.LastUsedAt, time.Second)
+}
+
+func TestPasskeyValidatedCredentialStateIsPersisted(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8823,
+		Username: "passkey-validated-state-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	credentialID := []byte("validated-state-credential")
+	storedCredential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: base64.StdEncoding.EncodeToString(credentialID),
+		PublicKey:    base64.StdEncoding.EncodeToString([]byte("old-public-key")),
+		SignCount:    1,
+	}
+	_, err := ReplacePasskeyCredentialAndBumpSessionGeneration(storedCredential)
+	require.NoError(t, err)
+
+	validatedCredential := &webauthn.Credential{
+		ID:              credentialID,
+		PublicKey:       []byte("updated-public-key"),
+		AttestationType: "none",
+		Transport:       []protocol.AuthenticatorTransport{protocol.USB},
+		Flags: webauthn.CredentialFlags{
+			UserPresent:    true,
+			UserVerified:   true,
+			BackupEligible: true,
+			BackupState:    true,
+		},
+		Authenticator: webauthn.Authenticator{
+			AAGUID:       []byte("updated-aaguid"),
+			SignCount:    2,
+			CloneWarning: true,
+			Attachment:   protocol.Platform,
+		},
+	}
+
+	storedCredential.ApplyValidatedCredential(validatedCredential)
+	now := time.Now()
+	storedCredential.LastUsedAt = &now
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(storedCredential))
+
+	updated, err := GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.Equal(t, base64.StdEncoding.EncodeToString(credentialID), updated.CredentialID)
+	require.Equal(t, base64.StdEncoding.EncodeToString(validatedCredential.PublicKey), updated.PublicKey)
+	require.EqualValues(t, 2, updated.SignCount)
+	require.True(t, updated.CloneWarning)
+	require.True(t, updated.UserPresent)
+	require.True(t, updated.UserVerified)
+	require.True(t, updated.BackupEligible)
+	require.True(t, updated.BackupState)
+	require.Equal(t, string(protocol.Platform), updated.Attachment)
+	require.Equal(t, []protocol.AuthenticatorTransport{protocol.USB}, updated.TransportList())
+	require.WithinDuration(t, now, *updated.LastUsedAt, time.Second)
 }
 
 func TestTelegramBindingStateIsUserBoundAndConsumedOnce(t *testing.T) {

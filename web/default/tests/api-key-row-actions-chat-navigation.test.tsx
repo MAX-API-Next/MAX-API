@@ -374,8 +374,10 @@ test('reports a clipboard failure when copying an API key', async () => {
 
   fireEvent.click(view.getByRole('button', { name: /Copy Key/ }))
 
-  await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
-  assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
+  await waitFor(() => {
+    assert.equal(copyToClipboard.mock.calls.length, 1)
+    assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
+  })
 })
 
 test('reports a clipboard failure when copying connection info', async () => {
@@ -386,6 +388,8 @@ test('reports a clipboard failure when copying connection info', async () => {
     view.getByRole('button', { name: /Copy Connection Info/ })
   )
 
-  await waitFor(() => assert.equal(copyToClipboard.mock.calls.length, 1))
-  assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
+  await waitFor(() => {
+    assert.equal(copyToClipboard.mock.calls.length, 1)
+    assert.deepEqual(toastError.mock.calls[0], ['Failed to copy to clipboard'])
+  })
 })

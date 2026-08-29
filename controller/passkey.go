@@ -475,13 +475,18 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	}
 
 	waUser := passkeysvc.NewWebAuthnUser(user, credential)
-	_, err = wa.FinishLogin(waUser, *sessionData, c.Request)
+	validatedCredential, err := wa.FinishLogin(waUser, *sessionData, c.Request)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	if validatedCredential == nil {
+		common.ApiErrorMsg(c, "Passkey 凭证更新失败")
+		return
+	}
 
 	// 更新凭证的最后使用时间
+	credential.ApplyValidatedCredential(validatedCredential)
 	now := time.Now()
 	credential.LastUsedAt = &now
 	if err := model.UpdatePasskeyCredentialAfterAuthentication(credential); err != nil {
