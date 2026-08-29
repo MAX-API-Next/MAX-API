@@ -5483,7 +5483,7 @@
     "No verification method is available. Add a password or sign in again with a linked account.": "当前没有可用的验证方式。请添加密码，或使用已关联账户重新登录。",
     "Other sessions signed out successfully": "已成功退出其他会话",
     "Preparing Telegram authorization...": "正在准备 Telegram 授权…",
-    "Sign Out Other Devices": "退出其他设备",
+    "Sign Out Other Devices": "退出其他设备登录",
     "Start Telegram authorization": "开始 Telegram 授权",
     "Telegram account bound successfully": "Telegram 账户绑定成功",
     "Telegram will ask you to confirm the account before it is bound.": "绑定前，Telegram 会要求您确认账户。",

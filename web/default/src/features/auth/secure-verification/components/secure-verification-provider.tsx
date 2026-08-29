@@ -16,14 +16,40 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useMemo, type ReactElement, type ReactNode } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import { useSecureVerification } from '../hooks/use-secure-verification'
-import type { VerificationMethod } from '../types'
-import { SecureVerificationContext } from './secure-verification-context'
+import type { StartVerificationOptions, VerificationMethod } from '../types'
 import { SecureVerificationDialog } from './secure-verification-dialog'
 
 type SecureVerificationProviderProps = {
   children: ReactNode
+}
+
+interface SecureVerificationContextValue {
+  withVerification: <T>(
+    apiCall: () => Promise<T>,
+    config?: StartVerificationOptions
+  ) => Promise<T | null>
+}
+
+export const SecureVerificationContext =
+  createContext<SecureVerificationContextValue | null>(null)
+
+export function useSecureVerificationGate(): SecureVerificationContextValue {
+  const context = useContext(SecureVerificationContext)
+  if (!context) {
+    throw new Error(
+      'useSecureVerificationGate must be used within SecureVerificationProvider'
+    )
+  }
+  return context
 }
 
 export function SecureVerificationProvider(

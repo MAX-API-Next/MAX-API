@@ -104,7 +104,7 @@ mock.module('../src/features/auth/secure-verification/api', () => ({
 }))
 
 mock.module(
-  '../src/features/auth/secure-verification/components/secure-verification-context',
+  '../src/features/auth/secure-verification/components/secure-verification-provider',
   () => ({
     useSecureVerificationGate: () => ({
       withVerification: gateWithVerification,
@@ -130,7 +130,10 @@ mock.module('../src/features/keys/api', () => ({
   fetchTokenKey: mock(async () => ({ success: false })),
 }))
 
-const { useApiTokenVerification, useSecureVerification } = await import(
+const { useApiTokenVerification } = await import(
+  '../src/features/auth/secure-verification/hooks/use-api-token-verification'
+)
+const { useSecureVerification } = await import(
   '../src/features/auth/secure-verification/hooks/use-secure-verification'
 )
 const { useActiveChatKey } = await import(

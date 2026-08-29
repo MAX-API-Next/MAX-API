@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 export * from './api'
 export * from './types'
+export * from './hooks/use-api-token-verification'
 export * from './hooks/use-secure-verification'
 export * from './components/secure-verification-dialog'
-export * from './components/secure-verification-context'
 export * from './components/secure-verification-provider'
