@@ -292,11 +292,9 @@ export function useSecureVerification(
       } catch (error) {
         if (!isVerificationAttemptActive(attemptId)) return
         settlePendingVerification(null, error, attemptId)
-        const message =
-          error instanceof Error
-            ? error.message
-            : i18next.t('Verification failed')
-        handleServerError(error, { fallback: message })
+        handleServerError(error, {
+          fallback: i18next.t('Verification failed'),
+        })
         markSecureVerificationErrorReported(error)
         onError?.(error)
         reset()

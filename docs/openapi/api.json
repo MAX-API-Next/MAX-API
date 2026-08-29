@@ -1025,6 +1025,35 @@
         ],
         "parameters": [
           {
+            "name": "id",
+            "in": "query",
+            "description": "Telegram 用户 ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "auth_date",
+            "in": "query",
+            "description": "Telegram 授权的 Unix 时间戳；必须在有效期内。",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "query",
+            "description": "Telegram Login Widget 签名",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "state",
             "in": "query",
             "description": "由 /api/oauth/state 为 Telegram 登录创建的浏览器会话绑定一次性 state",

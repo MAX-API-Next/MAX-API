@@ -599,6 +599,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		requestId = c.GetString(common.RequestIdKey)
 		upstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
 	}
+	if username == "" {
+		username, _ = GetUsernameById(userId, false)
+	}
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false

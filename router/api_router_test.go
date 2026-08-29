@@ -390,11 +390,19 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 
 	telegramLogin := document.Paths["/api/oauth/telegram/login"]["get"]
 	parameters := telegramLogin["parameters"].([]any)
-	require.Len(t, parameters, 1)
-	stateParameter := parameters[0].(map[string]any)
-	require.Equal(t, "state", stateParameter["name"])
-	require.Equal(t, "query", stateParameter["in"])
-	require.Equal(t, true, stateParameter["required"])
+	parametersByName := make(map[string]map[string]any, len(parameters))
+	for _, rawParameter := range parameters {
+		parameter := rawParameter.(map[string]any)
+		name, ok := parameter["name"].(string)
+		require.True(t, ok)
+		parametersByName[name] = parameter
+	}
+	for _, name := range []string{"id", "auth_date", "hash", "state"} {
+		parameter, ok := parametersByName[name]
+		require.True(t, ok, "expected required Telegram login parameter %q", name)
+		require.Equal(t, "query", parameter["in"])
+		require.Equal(t, true, parameter["required"])
+	}
 
 	for path, method := range map[string]string{
 		"/api/oauth/telegram/bind/state": "post",

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState, type ReactElement } from 'react'
 import { AlertTriangle, KeyRound, Loader2, ShieldAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -55,7 +55,9 @@ interface PasskeyCardProps {
   loading: boolean
 }
 
-export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
+export function PasskeyCard({
+  loading: pageLoading,
+}: PasskeyCardProps): ReactElement {
   const { t } = useTranslation()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [restrictedMethod, setRestrictedMethod] =

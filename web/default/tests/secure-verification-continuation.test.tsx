@@ -325,7 +325,7 @@ describe('useSecureVerification', () => {
   })
 
   test('does not retry the protected action after reset during verification', async () => {
-    const verification = createDeferred<void>()
+    const verification = createDeferred<undefined>()
     verify.mockImplementationOnce(() => verification.promise)
     let callCount = 0
     const apiCall = mock(async () => {
@@ -350,7 +350,7 @@ describe('useSecureVerification', () => {
     assert.equal(await continuation, null)
 
     await act(async () => {
-      verification.resolve()
+      verification.resolve(undefined)
       await execution
     })
 
@@ -530,7 +530,7 @@ describe('useSecureVerification', () => {
     assert.equal(handleServerError.mock.calls.length, 1)
     assert.equal(handleServerError.mock.calls[0]?.[0], retryError)
     assert.deepEqual(handleServerError.mock.calls[0]?.[1], {
-      fallback: 'protected action retry failed',
+      fallback: 'Verification failed',
     })
     assert.equal(wasSecureVerificationErrorReported(retryError), true)
     assert.equal(toastError.mock.calls.length, 0)

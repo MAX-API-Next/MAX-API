@@ -136,12 +136,21 @@ func TestRecordConsumeLogWithNilContextPreservesAccountingFields(t *testing.T) {
 		common.LogConsumeEnabled = originalLogConsumeEnabled
 		common.DataExportEnabled = originalDataExportEnabled
 	})
+	const userID = 72007
 	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+	require.NoError(t, DB.Create(&User{
+		Id:       userID,
+		Username: "nil-context-log-user",
+		AffCode:  "nil-context-log-user-aff",
+		Status:   common.UserStatusEnabled,
+	}).Error)
 	t.Cleanup(func() {
 		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
 	})
 
-	RecordConsumeLog(nil, 7, RecordConsumeLogParams{
+	RecordConsumeLog(nil, userID, RecordConsumeLogParams{
 		ModelName:        "nil-context-model",
 		Quota:            42,
 		PromptTokens:     3,
@@ -153,6 +162,7 @@ func TestRecordConsumeLogWithNilContextPreservesAccountingFields(t *testing.T) {
 	require.Equal(t, 42, log.Quota)
 	require.Equal(t, 3, log.PromptTokens)
 	require.Equal(t, 5, log.CompletionTokens)
+	require.Equal(t, "nil-context-log-user", log.Username)
 }
 
 func TestBillingSettlementEffectPayloadSanitizesContent(t *testing.T) {

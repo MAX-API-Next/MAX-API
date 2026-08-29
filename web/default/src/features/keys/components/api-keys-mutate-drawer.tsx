@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
@@ -97,7 +97,7 @@ export function ApiKeysMutateDrawer({
   open,
   onOpenChange,
   currentRow,
-}: ApiKeyMutateDrawerProps) {
+}: ApiKeyMutateDrawerProps): ReactElement {
   const { t } = useTranslation()
   const isUpdate = !!currentRow
   const { triggerRefresh, withApiTokenVerification } = useApiKeys()
