@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -134,15 +135,27 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 	}, extra)
 }
 
+func isOAuthCredentialReauthentication(method string) bool {
+	return method == "wechat" || method == "telegram" || method == "oauth" ||
+		strings.HasPrefix(method, "oauth:")
+}
+
 // setup session & cookies and then return user info
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
 	session := sessions.Default(c)
+	loginMethod := loginMethodFromContext(c)
 	session.Delete(SecureVerificationSessionKey)
 	session.Delete(secureVerificationMethodSessionKey)
 	session.Delete(secureVerificationUserSessionKey)
 	session.Delete(secureVerificationScopeSessionKey)
 	session.Delete(PasskeyReadySessionKey)
+	if isOAuthCredentialReauthentication(loginMethod) {
+		session.Set(SecureVerificationSessionKey, time.Now().Unix())
+		session.Set(secureVerificationMethodSessionKey, secureVerificationMethodOAuth)
+		session.Set(secureVerificationUserSessionKey, user.Id)
+		session.Set(secureVerificationScopeSessionKey, secureVerificationScopeCredentials)
+	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)

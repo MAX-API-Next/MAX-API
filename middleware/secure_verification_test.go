@@ -147,6 +147,55 @@ func TestNonPasswordVerificationIsRestrictedToMatchingScope(t *testing.T) {
 	require.Contains(t, deleteRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }
 
+func TestOAuthVerificationIsRestrictedToCredentialScope(t *testing.T) {
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-oauth-scope-test"))))
+	router.GET("/seed", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set(SecureVerificationSessionKey, time.Now().Unix())
+		session.Set(secureVerificationUserSessionKey, 1001)
+		session.Set(secureVerificationMethodSessionKey, secureVerificationMethodOAuth)
+		session.Set(secureVerificationScopeSessionKey, "credentials")
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	setUser := func(c *gin.Context) {
+		c.Set("id", 1001)
+		c.Next()
+	}
+	router.POST("/credentials", setUser, SecureVerificationRequired("credentials"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/api-token", setUser, SecureVerificationRequired("api_token"), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	router.POST("/unscoped", setUser, SecureVerificationRequired(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	seedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(seedRecorder, httptest.NewRequest(http.MethodGet, "/seed", nil))
+	require.Equal(t, http.StatusNoContent, seedRecorder.Code)
+
+	perform := func(path string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		for _, sessionCookie := range seedRecorder.Result().Cookies() {
+			request.AddCookie(sessionCookie)
+		}
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	require.Equal(t, http.StatusNoContent, perform("/credentials").Code)
+	apiTokenRecorder := perform("/api-token")
+	require.Equal(t, http.StatusForbidden, apiTokenRecorder.Code)
+	require.Contains(t, apiTokenRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+	unscopedRecorder := perform("/unscoped")
+	require.Equal(t, http.StatusForbidden, unscopedRecorder.Code)
+	require.Contains(t, unscopedRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+}
+
 func TestSecureVerificationRejectsLoginMethodMarker(t *testing.T) {
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-login-marker-test"))))
@@ -198,7 +247,7 @@ func TestUserAuthRejectsStaleSessionGeneration(t *testing.T) {
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.User{}))
 	if !db.Migrator().HasColumn(&model.User{}, "session_generation") {
-		require.NoError(t, db.Exec("ALTER TABLE users ADD COLUMN session_generation INTEGER NOT NULL DEFAULT 0").Error)
+		require.NoError(t, db.Migrator().AddColumn(&model.User{}, "SessionGeneration"))
 	}
 	user := model.User{
 		Id:       73001,

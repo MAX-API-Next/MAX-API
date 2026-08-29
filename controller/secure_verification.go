@@ -21,6 +21,7 @@ const (
 	secureVerificationMethod2FA          = "2fa"
 	secureVerificationMethodPasskey      = "passkey"
 	secureVerificationMethodPassword     = "password"
+	secureVerificationMethodOAuth        = "oauth"
 	secureVerificationScopeAccessToken   = "access_token"
 	secureVerificationScopeAccountDelete = "account_delete"
 	secureVerificationScopeCredentials   = "credentials"

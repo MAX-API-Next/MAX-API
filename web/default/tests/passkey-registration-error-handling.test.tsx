@@ -30,9 +30,14 @@ import {
 import assert from 'node:assert/strict'
 import type { MouseEventHandler, ReactNode } from 'react'
 
-const withVerification = mock(async () => {
-  throw new Error('verification method lookup failed')
-})
+const withVerification = mock(
+  async <T,>(
+    _apiCall: () => Promise<T>,
+    _options?: { scope?: string }
+  ): Promise<T | null> => {
+    throw new Error('verification method lookup failed')
+  }
+)
 const fetchVerificationMethods = mock(async () => ({
   has2FA: false,
   hasPasskey: false,
@@ -153,6 +158,9 @@ beforeAll(() => {
 beforeEach(() => {
   passkeyEnabled = false
   withVerification.mockClear()
+  withVerification.mockImplementation(async () => {
+    throw new Error('verification method lookup failed')
+  })
   fetchVerificationMethods.mockClear()
   fetchVerificationMethods.mockImplementation(async () => ({
     has2FA: false,
@@ -171,6 +179,17 @@ afterEach(() => cleanup())
 afterAll(() => {
   consoleError.mockRestore()
   testEnv.teardown()
+})
+
+test('registers the first Passkey when a fresh OAuth reauthentication already satisfies the server gate', async () => {
+  withVerification.mockImplementationOnce(async (apiCall) => apiCall())
+  const view = render(<PasskeyCard loading={false} />)
+
+  fireEvent.click(view.getByRole('button', { name: 'Enable Passkey' }))
+
+  await waitFor(() => assert.equal(register.mock.calls.length, 1))
+  assert.equal(withVerification.mock.calls.length, 1)
+  assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'credentials')
 })
 
 test('handles a rejected Passkey verification continuation', async () => {

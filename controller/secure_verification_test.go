@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
@@ -225,4 +226,58 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 		"verified_scope": null,
 		"passkey_ready_at": null
 	}`, inspectRecorder.Body.String())
+}
+
+func TestOAuthLoginCreatesCredentialScopedSecureVerification(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+
+	user := model.User{
+		Id:          1004,
+		Username:    "oauth-reauth-user",
+		DisplayName: "OAuth Reauth User",
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+		Group:       "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("oauth-credential-verification-test"))))
+	router.GET("/api/oauth/:provider", func(c *gin.Context) {
+		setupLogin(&user, c)
+	})
+	router.GET("/verification-session", func(c *gin.Context) {
+		session := sessions.Default(c)
+		c.JSON(http.StatusOK, gin.H{
+			"verified_at":      session.Get(SecureVerificationSessionKey),
+			"verified_method":  session.Get(secureVerificationMethodSessionKey),
+			"verified_user_id": session.Get(secureVerificationUserSessionKey),
+			"verified_scope":   session.Get(secureVerificationScopeSessionKey),
+		})
+	})
+
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/api/oauth/github", nil))
+	require.Equal(t, http.StatusOK, loginRecorder.Code)
+
+	inspectRecorder := httptest.NewRecorder()
+	inspectRequest := httptest.NewRequest(http.MethodGet, "/verification-session", nil)
+	for _, sessionCookie := range loginRecorder.Result().Cookies() {
+		inspectRequest.AddCookie(sessionCookie)
+	}
+	router.ServeHTTP(inspectRecorder, inspectRequest)
+
+	require.Equal(t, http.StatusOK, inspectRecorder.Code)
+	var verificationSession struct {
+		VerifiedAt     int64  `json:"verified_at"`
+		VerifiedMethod string `json:"verified_method"`
+		VerifiedUserID int    `json:"verified_user_id"`
+		VerifiedScope  string `json:"verified_scope"`
+	}
+	require.NoError(t, common.Unmarshal(inspectRecorder.Body.Bytes(), &verificationSession))
+	require.WithinDuration(t, time.Now(), time.Unix(verificationSession.VerifiedAt, 0), 2*time.Second)
+	require.Equal(t, secureVerificationMethodOAuth, verificationSession.VerifiedMethod)
+	require.Equal(t, user.Id, verificationSession.VerifiedUserID)
+	require.Equal(t, secureVerificationScopeCredentials, verificationSession.VerifiedScope)
 }

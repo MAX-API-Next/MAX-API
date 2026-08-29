@@ -31,7 +31,14 @@ const setup2FA = mock(async () => ({
   },
 }))
 const enable2FA = mock(async () => ({ success: true }))
-const withVerification = mock(<T,>(apiCall: () => Promise<T>) => apiCall())
+interface VerificationOptions {
+  scope?: string
+  title?: string
+  description?: string
+}
+const withVerification = mock(
+  <T,>(apiCall: () => Promise<T>, _options?: VerificationOptions) => apiCall()
+)
 const handleServerError = mock(() => undefined)
 
 mock.module('react-i18next', () => ({
@@ -59,8 +66,12 @@ mock.module('../src/components/ui/alert', () => ({
 }))
 
 mock.module('../src/components/ui/button', () => ({
-  Button: (props: { children?: ReactNode; onClick?: () => void }) => (
-    <button type='button' onClick={props.onClick}>
+  Button: (props: {
+    children?: ReactNode
+    disabled?: boolean
+    onClick?: () => void
+  }) => (
+    <button type='button' disabled={props.disabled} onClick={props.onClick}>
       {props.children}
     </button>
   ),
@@ -134,6 +145,7 @@ test('uses the authenticated layout verification gate for 2FA setup', async () =
   assert.ok(view.getByText('Setting up 2FA...'))
   await waitFor(() => assert.equal(setup2FA.mock.calls.length, 1))
   assert.equal(withVerification.mock.calls.length, 1)
+  assert.equal(withVerification.mock.calls[0]?.[1]?.scope, 'credentials')
 })
 
 test('does not restart 2FA setup while initialization is pending', async () => {
@@ -246,6 +258,7 @@ test('reports enable failures with the server error message path', async () => {
   fireEvent.click(view.getByRole('button', { name: 'Enable 2FA' }))
 
   await waitFor(() => assert.equal(enable2FA.mock.calls.length, 1))
+  assert.equal(withVerification.mock.calls[1]?.[1]?.scope, 'credentials')
   await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
   assert.deepEqual(handleServerError.mock.calls[0], [
     error,

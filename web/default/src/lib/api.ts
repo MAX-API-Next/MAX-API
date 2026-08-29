@@ -254,9 +254,19 @@ export interface TwoFAActionResponse {
   message?: string
 }
 
+export interface TwoFAStatusResponse {
+  success: boolean
+  message?: string
+  data?: {
+    enabled: boolean
+    locked: boolean
+    backup_codes_remaining?: number
+  }
+}
+
 // Get 2FA status
-export async function get2FAStatus() {
-  const res = await api.get('/api/user/2fa/status')
+export async function get2FAStatus(): Promise<TwoFAStatusResponse> {
+  const res = await api.get<TwoFAStatusResponse>('/api/user/2fa/status')
   return res.data
 }
 

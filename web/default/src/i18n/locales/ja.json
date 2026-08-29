@@ -5463,7 +5463,7 @@
     "Add a password or sign in again with a linked account to continue.": "パスワードを追加するか、連携済みアカウントで再度ログインして続行してください。",
     "Add a password or sign in again with a linked account to unlock sensitive operations.": "パスワードを追加するか、連携済みアカウントで再度ログインして機密操作のロックを解除してください。",
     "Additional verification required": "追加の本人確認が必要です",
-    "API key verification was cancelled": "APIキーの確認がキャンセルされました",
+    "API key verification was cancelled": "APIキー操作の本人確認がキャンセルされました",
     "Binding Telegram account...": "Telegramアカウントを連携しています...",
     "Confirm your identity before accessing this sensitive action.": "この機密操作を実行する前に本人確認を行ってください。",
     "Confirm your identity before binding a Telegram account.": "Telegramアカウントを連携する前に本人確認を行ってください。",
