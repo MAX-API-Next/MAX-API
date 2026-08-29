@@ -912,12 +912,13 @@ func UpdateSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := cleanUser.UpdateFields(updatePassword, updateFields...); err != nil {
+	generation, err := cleanUser.UpdateFieldsWithSessionGeneration(updatePassword, updateFields...)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	if updatePassword {
-		preserveCurrentSessionAfterCommittedSecurityChange(c, cleanUser.Id, cleanUser.SessionGeneration, "changing password")
+		preserveCurrentSessionAfterCommittedSecurityChange(c, cleanUser.Id, generation, "changing password")
 	}
 
 	c.JSON(http.StatusOK, gin.H{

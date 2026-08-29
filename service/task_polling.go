@@ -78,6 +78,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 			break
 		}
 		for _, task := range tasks {
+			if remaining <= 0 || scanBudget <= 0 {
+				break
+			}
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
 			scanBudget--
@@ -127,9 +130,6 @@ func sweepTimedOutTasks(ctx context.Context) {
 			timedOutCount++
 			if settlement != nil {
 				applyTaskBillingSettlement(ctx, task, settlement)
-			}
-			if remaining == 0 || scanBudget == 0 {
-				break
 			}
 		}
 		if len(tasks) < queryLimit && remaining > 0 && scanBudget > 0 {

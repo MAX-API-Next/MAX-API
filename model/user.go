@@ -1001,6 +1001,15 @@ func (user *User) Update(updatePassword bool) error {
 }
 
 func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) error {
+	_, err := user.updateFields(updatePassword, fields...)
+	return err
+}
+
+func (user *User) UpdateFieldsWithSessionGeneration(updatePassword bool, fields ...UserUpdateField) (int64, error) {
+	return user.updateFields(updatePassword, fields...)
+}
+
+func (user *User) updateFields(updatePassword bool, fields ...UserUpdateField) (int64, error) {
 	var cacheTask CacheInvalidationTask
 	update := func(db *gorm.DB) error {
 		return db.Transaction(func(tx *gorm.DB) error {
@@ -1019,10 +1028,10 @@ func (user *User) UpdateFields(updatePassword bool, fields ...UserUpdateField) e
 		err = withUserOAuthIdentityMutationLock(DB, update)
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	dispatchStagedCacheInvalidation(cacheTask)
-	return nil
+	return user.SessionGeneration, nil
 }
 
 func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {

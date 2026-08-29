@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { api } from '@/lib/api'
 import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
@@ -85,8 +85,10 @@ mock.module('react-i18next', () => ({
 }))
 
 mock.module('@tanstack/react-router', () => ({
-  Link: (props: { children?: ReactNode }) => <a>{props.children}</a>,
-  Outlet: () => null,
+  Link: (props: { children?: ReactNode }): ReactElement => (
+    <a>{props.children}</a>
+  ),
+  Outlet: (): null => null,
   useNavigate: () => navigate,
   useRouterState: (options?: {
     select?: (state: { location: { pathname: string } }) => unknown
@@ -122,8 +124,8 @@ const { checkVerificationMethods } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-beforeAll(() => testEnv.setup())
-beforeEach(() => {
+beforeAll((): void => testEnv.setup())
+beforeEach((): void => {
   verificationError = new Error('request failed')
   withApiTokenVerification.mockClear()
   useApiTokenVerification.mockClear()
@@ -134,8 +136,8 @@ beforeEach(() => {
   resetPasswordPost.mockClear()
   consoleError.mockClear()
 })
-afterEach(() => cleanup())
-afterAll(() => {
+afterEach((): void => cleanup())
+afterAll((): void => {
   consoleError.mockRestore()
   testEnv.teardown()
 })
@@ -170,7 +172,7 @@ async function waitForCopyToSettle(
   })
 }
 
-test('reports an unreported request-copy rejection and consumes it', async () => {
+test('reports an unreported request-copy rejection and consumes it', async (): Promise<void> => {
   const view = renderRequestPreview()
 
   fireEvent.click(view.getByRole('button', { name: 'Copy ready-to-run curl' }))
@@ -186,7 +188,7 @@ test('reports an unreported request-copy rejection and consumes it', async () =>
   })
 })
 
-test('does not duplicate a rejection already reported by verification', async () => {
+test('does not duplicate a rejection already reported by verification', async (): Promise<void> => {
   markSecureVerificationErrorReported(verificationError)
   const view = renderRequestPreview()
 
@@ -199,7 +201,7 @@ test('does not duplicate a rejection already reported by verification', async ()
   assert.equal(handleServerError.mock.calls.length, 0)
 })
 
-test('shows that password recovery revokes existing API tokens', async () => {
+test('shows that password recovery revokes existing API tokens', async (): Promise<void> => {
   const originalPost = api.post
   api.post = resetPasswordPost as typeof api.post
   try {
@@ -235,7 +237,7 @@ test('shows that password recovery revokes existing API tokens', async () => {
   }
 })
 
-test('does not claim the reset password was copied when clipboard access fails', async () => {
+test('does not claim the reset password was copied when clipboard access fails', async (): Promise<void> => {
   copyToClipboard.mockImplementationOnce(async () => false)
   const originalPost = api.post
   api.post = resetPasswordPost as typeof api.post
@@ -270,7 +272,7 @@ test('does not claim the reset password was copied when clipboard access fails',
   }
 })
 
-test('propagates verification method request failures', async () => {
+test('propagates verification method request failures', async (): Promise<void> => {
   const originalGet = api.get
   api.get = mock(async () => {
     throw new Error('verification methods unavailable')
@@ -286,7 +288,7 @@ test('propagates verification method request failures', async () => {
   }
 })
 
-test('rejects unsuccessful verification method responses', async () => {
+test('rejects unsuccessful verification method responses', async (): Promise<void> => {
   const originalGet = api.get
   api.get = mock(async () => ({
     data: {
@@ -305,7 +307,7 @@ test('rejects unsuccessful verification method responses', async () => {
   }
 })
 
-test('preserves a successful response with no available methods', async () => {
+test('preserves a successful response with no available methods', async (): Promise<void> => {
   const originalGet = api.get
   const methodsGet = mock(
     async (

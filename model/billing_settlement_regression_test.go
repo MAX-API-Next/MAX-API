@@ -58,6 +58,7 @@ func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testi
 func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	setupUserUpdateTestState(t)
 	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_admission"))
+	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_status_funding"))
 
 	const blockingUserID = 941
 	const nonBlockingUserID = 942
@@ -904,7 +905,7 @@ func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
 	require.WithinDuration(t, later, *stored.LastUsedAt, time.Second)
 }
 
-func TestPasskeyUsageUpdateMergesConcurrentAuthenticationStateMonotonically(t *testing.T) {
+func TestPasskeyUsageUpdateMergesOrderedAuthenticationStateMonotonically(t *testing.T) {
 	setupSecurityCredentialTestState(t)
 
 	user := User{
@@ -935,22 +936,8 @@ func TestPasskeyUsageUpdateMergesConcurrentAuthenticationStateMonotonically(t *t
 	lowerCounter.CloneWarning = false
 	lowerCounter.LastUsedAt = &older
 
-	higherDone := make(chan struct{})
-	lowerDone := make(chan struct{})
-	var updateErrors [2]error
-	go func() {
-		updateErrors[0] = UpdatePasskeyCredentialAfterAuthentication(&higherCounter)
-		close(higherDone)
-	}()
-	go func() {
-		<-higherDone
-		updateErrors[1] = UpdatePasskeyCredentialAfterAuthentication(&lowerCounter)
-		close(lowerDone)
-	}()
-	<-higherDone
-	<-lowerDone
-	require.NoError(t, updateErrors[0])
-	require.NoError(t, updateErrors[1])
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&higherCounter))
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&lowerCounter))
 
 	stored, err := GetPasskeyByUserID(user.Id)
 	require.NoError(t, err)

@@ -93,13 +93,11 @@ type ApiKeyMutateDrawerProps = {
   currentRow?: ApiKey
 }
 
-export function ApiKeysMutateDrawer({
-  open,
-  onOpenChange,
-  currentRow,
-}: ApiKeyMutateDrawerProps): ReactElement {
+export function ApiKeysMutateDrawer(
+  props: ApiKeyMutateDrawerProps
+): ReactElement {
   const { t } = useTranslation()
-  const isUpdate = !!currentRow
+  const isUpdate = !!props.currentRow
   const { triggerRefresh, withApiTokenVerification } = useApiKeys()
   const { status } = useStatus()
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -109,7 +107,7 @@ export function ApiKeysMutateDrawer({
   const [preservedManualGroups, setPreservedManualGroups] = useState<string[]>(
     []
   )
-  const currentRowId = currentRow?.id
+  const currentRowId = props.currentRow?.id
   const defaultAutoRoute =
     typeof status?.default_auto_route === 'string'
       ? status.default_auto_route
@@ -222,7 +220,7 @@ export function ApiKeysMutateDrawer({
 
   // Load existing data when updating
   useEffect(() => {
-    if (!open || groupsLoading) return
+    if (!props.open || groupsLoading) return
 
     let cancelled = false
     const {
@@ -294,7 +292,7 @@ export function ApiKeysMutateDrawer({
     return () => {
       cancelled = true
     }
-  }, [open, isUpdate, currentRowId, form, groupsLoading, t])
+  }, [props.open, isUpdate, currentRowId, form, groupsLoading, t])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
@@ -317,14 +315,14 @@ export function ApiKeysMutateDrawer({
         ),
       })
 
-      if (isUpdate && currentRow) {
+      if (isUpdate && props.currentRow) {
         const result = await updateApiKey({
           ...basePayload,
-          id: currentRow.id,
+          id: props.currentRow.id,
         })
         if (result.success) {
           toast.success(t(SUCCESS_MESSAGES.API_KEY_UPDATED))
-          onOpenChange(false)
+          props.onOpenChange(false)
           triggerRefresh()
         } else {
           toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -366,7 +364,7 @@ export function ApiKeysMutateDrawer({
             count: created,
           })
         )
-        onOpenChange(false)
+        props.onOpenChange(false)
         triggerRefresh()
       }
     }
@@ -406,9 +404,9 @@ export function ApiKeysMutateDrawer({
 
   return (
     <Sheet
-      open={open}
+      open={props.open}
       onOpenChange={(v) => {
-        onOpenChange(v)
+        props.onOpenChange(v)
         if (!v) {
           setEditingLegacyRouting(false)
           setPreservedSmartRoute(undefined)

@@ -78,7 +78,7 @@ mock.module('../src/components/ui/button', () => ({
     children?: ReactNode
     onClick?: () => void
     type?: 'button' | 'submit' | 'reset'
-  }) => (
+  }): ReactElement => (
     <button type={props.type} onClick={props.onClick}>
       {props.children}
     </button>
@@ -91,8 +91,8 @@ mock.module('../src/components/ui/dropdown-menu', () => ({
   DropdownMenuItem: (props: {
     children?: ReactNode
     onClick?: () => void
-  }) => <button onClick={props.onClick}>{props.children}</button>,
-  DropdownMenuSeparator: () => null,
+  }): ReactElement => <button onClick={props.onClick}>{props.children}</button>,
+  DropdownMenuSeparator: (): null => null,
   DropdownMenuSub: Container,
   DropdownMenuSubContent: Container,
   DropdownMenuSubTrigger: Container,
@@ -100,7 +100,7 @@ mock.module('../src/components/ui/dropdown-menu', () => ({
   DropdownMenuTrigger: (props: {
     children?: ReactNode
     render?: ReactElement
-  }) => (
+  }): ReactElement => (
     <>
       {props.render}
       {props.children}
@@ -114,7 +114,7 @@ mock.module('../src/components/ui/tooltip', () => ({
   TooltipTrigger: (props: {
     children?: ReactNode
     render?: ReactElement
-  }) => (
+  }): ReactElement => (
     <>
       {props.render}
       {props.children}
@@ -123,7 +123,9 @@ mock.module('../src/components/ui/tooltip', () => ({
 }))
 
 mock.module('@tanstack/react-router', () => ({
-  Link: (props: { children?: ReactNode }) => <a>{props.children}</a>,
+  Link: (props: { children?: ReactNode }): ReactElement => (
+    <a>{props.children}</a>
+  ),
   useLocation: (options: {
     select: (location: { href: string }) => string
   }) => options.select({ href: '/dashboard' }),
@@ -142,7 +144,7 @@ mock.module('../src/components/ui/sidebar', () => ({
   SidebarMenuSubButton: (props: {
     children?: ReactNode
     onClick?: () => void
-  }) => <button onClick={props.onClick}>{props.children}</button>,
+  }): ReactElement => <button onClick={props.onClick}>{props.children}</button>,
   SidebarMenuSubItem: Container,
   useSidebar: () => ({
     state: 'expanded',
@@ -258,7 +260,7 @@ function renderChatPresets(): ReturnType<typeof render> {
   return render(<ChatPresetsItem item={{ title: 'Chat clients' } as never} />)
 }
 
-beforeAll(async () => {
+beforeAll(async (): Promise<void> => {
   await testEnv.setup()
   originalWindowOpen = window.open
   originalWindowFocus = window.focus
@@ -266,7 +268,7 @@ beforeAll(async () => {
   window.focus = focusWindow as typeof window.focus
 })
 
-beforeEach(() => {
+beforeEach((): void => {
   resolveKeyRequest = undefined
   resolvePresetVerification = undefined
   resolveRealKey.mockClear()
@@ -290,15 +292,15 @@ beforeEach(() => {
   popupWindow.opener = {} as Window
 })
 
-afterEach(() => cleanup())
+afterEach((): void => cleanup())
 
-afterAll(() => {
+afterAll((): void => {
   window.open = originalWindowOpen
   window.focus = originalWindowFocus
   testEnv.teardown()
 })
 
-test('opens a placeholder before resolving the API key', async () => {
+test('opens a placeholder before resolving the API key', async (): Promise<void> => {
   const view = renderRowActions()
 
   fireEvent.click(view.getByRole('button', { name: /Browser chat/ }))
@@ -314,7 +316,7 @@ test('opens a placeholder before resolving the API key', async () => {
   assert.equal(popupWindow.opener, null)
 })
 
-test('opens a placeholder for custom-protocol presets before resolving the API key', async () => {
+test('opens a placeholder for custom-protocol presets before resolving the API key', async (): Promise<void> => {
   const view = renderRowActions()
 
   fireEvent.click(view.getByRole('button', { name: /Desktop chat/ }))
@@ -331,7 +333,7 @@ test('opens a placeholder for custom-protocol presets before resolving the API k
   ])
 })
 
-test('navigates public presets without resolving the API key', async () => {
+test('navigates public presets without resolving the API key', async (): Promise<void> => {
   const view = renderRowActions()
 
   fireEvent.click(view.getByRole('button', { name: /Public chat/ }))
@@ -344,7 +346,7 @@ test('navigates public presets without resolving the API key', async () => {
   assert.equal(openWindow.mock.calls.length, 1)
 })
 
-test('chat presets open a placeholder before secure API-key verification resolves', async () => {
+test('chat presets open a placeholder before secure API-key verification resolves', async (): Promise<void> => {
   const view = renderChatPresets()
 
   fireEvent.click(view.getByRole('button', { name: /Desktop chat/ }))
@@ -363,7 +365,7 @@ test('chat presets open a placeholder before secure API-key verification resolve
   assert.deepEqual(setOpenMobile.mock.calls[0], [false])
 })
 
-test('chat presets close the placeholder when secure verification is cancelled', async () => {
+test('chat presets close the placeholder when secure verification is cancelled', async (): Promise<void> => {
   withApiTokenVerification.mockImplementationOnce(async () => null)
   const view = renderChatPresets()
 
@@ -374,7 +376,7 @@ test('chat presets close the placeholder when secure verification is cancelled',
   assert.equal(toastError.mock.calls.length, 0)
 })
 
-test('chat presets report unhandled verification failures through the shared error handler', async () => {
+test('chat presets report unhandled verification failures through the shared error handler', async (): Promise<void> => {
   const verificationError = new Error('verification unavailable')
   withApiTokenVerification.mockImplementationOnce(async () => {
     throw verificationError
@@ -391,7 +393,7 @@ test('chat presets report unhandled verification failures through the shared err
   assert.equal(toastError.mock.calls.length, 0)
 })
 
-test('chat presets do not duplicate verification failures already reported by the gate', async () => {
+test('chat presets do not duplicate verification failures already reported by the gate', async (): Promise<void> => {
   secureVerificationErrorReported = true
   withApiTokenVerification.mockImplementationOnce(async () => {
     throw new Error('already reported')
@@ -405,7 +407,7 @@ test('chat presets do not duplicate verification failures already reported by th
   assert.equal(toastError.mock.calls.length, 0)
 })
 
-test('chat presets without an API key use a placeholder before navigating', async () => {
+test('chat presets without an API key use a placeholder before navigating', async (): Promise<void> => {
   const view = renderChatPresets()
 
   fireEvent.click(view.getByRole('button', { name: /Public chat/ }))
@@ -420,7 +422,7 @@ test('chat presets without an API key use a placeholder before navigating', asyn
   assert.deepEqual(setOpenMobile.mock.calls[0], [false])
 })
 
-test('reports a clipboard failure when copying an API key', async () => {
+test('reports a clipboard failure when copying an API key', async (): Promise<void> => {
   resolveRealKey.mockImplementationOnce(async () => 'resolved-key')
   const view = renderRowActions()
 
@@ -432,7 +434,7 @@ test('reports a clipboard failure when copying an API key', async () => {
   })
 })
 
-test('reports a clipboard failure when copying connection info', async () => {
+test('reports a clipboard failure when copying connection info', async (): Promise<void> => {
   resolveRealKey.mockImplementationOnce(async () => 'resolved-key')
   const view = renderRowActions()
 

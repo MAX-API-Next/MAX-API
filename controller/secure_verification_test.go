@@ -441,6 +441,54 @@ func TestPreserveCurrentSessionAfterSecurityChangeUpdatesGenerationAndClearsStep
 	require.JSONEq(t, `{"generation":2,"id":9911,"secure_verified_at":null,"secure_method":null,"secure_user":null,"secure_scope":null,"passkey_ready_at":null}`, inspectRecorder.Body.String())
 }
 
+func TestPasswordChangePreservesCommittedSessionGeneration(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	hash, err := common.Password2Hash("old-password-123")
+	require.NoError(t, err)
+	user := model.User{
+		Id: 9914, Username: "password-generation-session-user", Password: hash,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, SessionGeneration: 4,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("password-generation-session-test"))))
+	engine.POST("/api/user/self", func(c *gin.Context) {
+		c.Set("id", user.Id)
+		UpdateSelf(c)
+	})
+	engine.GET("/session", func(c *gin.Context) {
+		session := sessions.Default(c)
+		c.JSON(http.StatusOK, gin.H{
+			"id":         session.Get("id"),
+			"generation": session.Get("session_generation"),
+		})
+	})
+
+	updateRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/api/user/self",
+		bytes.NewBufferString(`{"original_password":"old-password-123","password":"new-password-123"}`),
+	)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(updateRecorder, updateRequest)
+	require.Equal(t, http.StatusOK, updateRecorder.Code)
+
+	inspectRequest := httptest.NewRequest(http.MethodGet, "/session", nil)
+	for _, sessionCookie := range updateRecorder.Result().Cookies() {
+		inspectRequest.AddCookie(sessionCookie)
+	}
+	inspectRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(inspectRecorder, inspectRequest)
+	require.Equal(t, http.StatusOK, inspectRecorder.Code)
+	require.JSONEq(t, `{"generation":5,"id":9914}`, inspectRecorder.Body.String())
+
+	require.NoError(t, db.First(&user, user.Id).Error)
+	require.EqualValues(t, 5, user.SessionGeneration)
+	require.True(t, common.ValidatePasswordAndHash("new-password-123", user.Password))
+}
+
 func TestRevokeOtherSessionsReturnsCommittedSuccessWhenSessionPreservationFails(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Log{}))

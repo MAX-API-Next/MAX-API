@@ -70,14 +70,14 @@ type BillingSettlement struct {
 	UserID                          int    `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:1"`
 	SubscriptionID                  int    `gorm:"not null;default:0"`
 	TokenID                         int    `gorm:"not null;default:0"`
-	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3"`
+	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3;index:idx_billing_settlement_status_funding,priority:2"`
 	AppliedFundingDelta             int64  `gorm:"not null;default:0"`
 	TokenDelta                      int64  `gorm:"not null;default:0"`
 	AppliedTokenDelta               int64  `gorm:"not null;default:0"`
 	TaskID                          int64  `gorm:"not null;default:0"`
 	TaskQuota                       int64  `gorm:"not null;default:0"`
 	TaskQuotaTarget                 int64  `gorm:"not null;default:0"`
-	Status                          string `gorm:"type:varchar(16);index;index:idx_billing_settlement_admission,priority:2;not null;default:'applied'"`
+	Status                          string `gorm:"type:varchar(16);index;index:idx_billing_settlement_admission,priority:2;index:idx_billing_settlement_status_funding,priority:1;not null;default:'applied'"`
 	Attempts                        int    `gorm:"not null;default:0"`
 	LastError                       string `gorm:"type:text"`
 	NextAttempt                     int64  `gorm:"index;not null;default:0"`
