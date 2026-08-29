@@ -29,13 +29,15 @@ export function ApiKeysDialogs() {
     <>
       <ApiKeysMutateDrawer
         open={open === 'create' || open === 'update'}
-        onOpenChange={(isOpen) => !isOpen && setOpen(null)}
+        onOpenChange={(isOpen: boolean): void => {
+          if (!isOpen) setOpen(null)
+        }}
         currentRow={open === 'update' ? currentRow || undefined : undefined}
       />
       <ApiKeysDeleteDialog />
       <CCSwitchDialog
         open={open === 'cc-switch'}
-        onOpenChange={(isOpen) => {
+        onOpenChange={(isOpen: boolean): void => {
           if (!isOpen) {
             setResolvedKey('')
             setOpen(null)

@@ -244,19 +244,6 @@ func ReplacePasskeyCredentialAndBumpSessionGeneration(credential *PasskeyCredent
 	return generation, nil
 }
 
-func DeletePasskeyByUserID(userID int) error {
-	if userID == 0 {
-		common.SysLog("DeletePasskeyByUserID: empty user ID")
-		return fmt.Errorf("删除失败，请重试")
-	}
-	// 使用Unscoped()进行硬删除，避免唯一索引冲突
-	if err := DB.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{}).Error; err != nil {
-		common.SysLog(fmt.Sprintf("DeletePasskeyByUserID: failed to delete passkey for user %d: %v", userID, err))
-		return fmt.Errorf("删除失败，请重试")
-	}
-	return nil
-}
-
 func DeletePasskeyAndBumpSessionGeneration(userID int) (int64, error) {
 	if userID <= 0 {
 		return 0, fmt.Errorf("删除失败，请重试")

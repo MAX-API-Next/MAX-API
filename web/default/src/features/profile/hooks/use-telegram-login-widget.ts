@@ -19,6 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { useSecureVerificationGate } from '@/features/auth/secure-verification'
 import {
   bindTelegramAccount,
@@ -114,11 +116,11 @@ export function useTelegramLoginWidget(
       }
       setBindState(response.data.state)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : handlers.t('Failed to initialize Telegram binding')
-      )
+      const fallback = handlers.t('Failed to initialize Telegram binding')
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, { fallback })
+      }
+      setErrorMessage(fallback)
       setStatus('error')
     }
   }, [])
@@ -166,11 +168,11 @@ export function useTelegramLoginWidget(
         callbackHandlersRef.current.onSuccess()
         callbackHandlersRef.current.handleOpenChange(false)
       } catch (error) {
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : handlers.t('Failed to bind Telegram account')
-        )
+        const fallback = handlers.t('Failed to bind Telegram account')
+        if (!wasSecureVerificationErrorReported(error)) {
+          handleServerError(error, { fallback })
+        }
+        setErrorMessage(fallback)
         setStatus('error')
       }
     }

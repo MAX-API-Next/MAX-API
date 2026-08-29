@@ -376,12 +376,14 @@ function StartStepItem(props: {
   )
 }
 
-export function RequestPreview(props: {
+type RequestPreviewProps = {
   example: RequestExample
   signals: HeroSignal[]
   isRetrying: boolean
   onRetry: () => void
-}) {
+}
+
+export function RequestPreview(props: RequestPreviewProps) {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
   const withApiTokenVerification = useApiTokenVerification(

@@ -136,7 +136,7 @@ export function ApiKeysProvider(
     [resolvedKeys, t, withApiTokenVerification]
   )
 
-  const clearResolvedKey = useCallback((id: number) => {
+  const clearResolvedKey = useCallback((id: number): void => {
     const pending = pendingRequests.current[id]
     if (pending) pending.cacheRequested = false
     setResolvedKeys((prev) => {

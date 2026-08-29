@@ -1415,6 +1415,10 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "headers": {}
           }
         },
         "security": [
@@ -1439,6 +1443,10 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证或验证已过期",
             "headers": {}
           }
         },
@@ -2295,6 +2303,10 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证或验证已过期",
+            "headers": {}
           }
         },
         "security": [
@@ -2333,6 +2345,10 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 credentials 作用域安全验证或验证已过期",
             "headers": {}
           }
         },
@@ -3607,6 +3623,10 @@
         "responses": {
           "200": {
             "description": "成功",
+            "headers": {}
+          },
+          "403": {
+            "description": "需要 api_token 作用域安全验证或验证已过期",
             "headers": {}
           }
         },

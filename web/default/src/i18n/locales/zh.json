@@ -5468,7 +5468,7 @@
     "Confirm your identity before accessing this sensitive action.": "执行此敏感操作前，请确认您的身份。",
     "Confirm your identity before binding a Telegram account.": "绑定 Telegram 账户前，请确认您的身份。",
     "Confirm your identity before copying a request with your API key.": "复制包含 API 密钥的请求前，请确认您的身份。",
-    "Confirm your identity before creating or revealing API keys.": "创建或查看 API 密钥前，请确认您的身份。",
+    "Confirm your identity before creating or revealing API keys.": "创建或显示 API 密钥前，请确认您的身份。",
     "Confirm your identity before enabling Two-factor Authentication.": "启用双重身份验证前，请确认您的身份。",
     "Confirm your identity before registering a Passkey.": "注册 Passkey 前，请确认您的身份。",
     "Confirm your identity before sending an API key to a chat client.": "将 API 密钥发送到聊天客户端前，请确认您的身份。",

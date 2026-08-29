@@ -36,6 +36,8 @@ const createTelegramBindState = mock(async () => ({
 }))
 const bindTelegramAccount = mock(async () => ({ success: true }))
 const toastSuccess = mock(() => undefined)
+const toastError = mock(() => undefined)
+const handleServerError = mock(() => undefined)
 const translate = (key: string) => key
 const withVerification = <T,>(apiCall: () => Promise<T>) => apiCall()
 let useUnstableVerificationGate = false
@@ -53,8 +55,10 @@ mock.module('../src/features/profile/api', () => ({
   createTelegramBindState,
 }))
 
+mock.module('../src/lib/handle-server-error', () => ({ handleServerError }))
+
 mock.module('sonner', () => ({
-  toast: { success: toastSuccess },
+  toast: { error: toastError, success: toastSuccess },
 }))
 
 mock.module('react-i18next', () => ({
@@ -105,6 +109,9 @@ beforeEach(() => {
   createTelegramBindState.mockClear()
   bindTelegramAccount.mockClear()
   toastSuccess.mockClear()
+  toastError.mockClear()
+  handleServerError.mockClear()
+  assert.equal(document.querySelector('script[data-onauth]'), null)
 })
 afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
@@ -223,5 +230,66 @@ describe('TelegramBindDialog widget lifecycle', () => {
       initialCallback
     )
     assert.equal(createTelegramBindState.mock.calls.length, 1)
+  })
+
+  test('reports initialization failures through the shared server error handler', async () => {
+    const initializationError = new Error('backend unavailable')
+    createTelegramBindState.mockImplementationOnce(async () => {
+      throw initializationError
+    })
+
+    render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+    assert.deepEqual(handleServerError.mock.calls[0], [initializationError, {
+      fallback: 'Failed to initialize Telegram binding',
+    }])
+  })
+
+  test('reports binding failures through the shared server error handler', async () => {
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    const script = await waitFor(() => {
+      const element = document.querySelector<HTMLScriptElement>(
+        'script[data-onauth]'
+      )
+      assert.ok(element)
+      return element
+    })
+    const callbackName = script
+      .getAttribute('data-onauth')
+      ?.replace(/\(user\)$/, '')
+    assert.ok(callbackName)
+    bindTelegramAccount.mockImplementationOnce(async () => {
+      throw new Error('binding failed')
+    })
+
+    const callback = (window as unknown as Record<string, unknown>)[
+      callbackName
+    ] as (authorization: {
+      id: number
+      auth_date: number
+      hash: string
+    }) => Promise<void>
+    await act(async () => {
+      await callback({ id: 123, auth_date: 456, hash: 'telegram-hash' })
+    })
+
+    await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+    assert.equal(view.getByText('Failed to bind Telegram account') !== null, true)
   })
 })

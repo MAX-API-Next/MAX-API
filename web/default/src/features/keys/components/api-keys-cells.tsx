@@ -54,7 +54,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
   const maskedKey = `sk-${apiKey.key}`
 
   const handlePopoverOpen = useCallback(
-    (open: boolean) => {
+    (open: boolean): void => {
       setPopoverOpen(open)
       if (open && !resolvedFullKey) {
         void resolveRealKey(apiKey.id, { cache: true })
@@ -65,7 +65,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     [clearResolvedKey, resolvedFullKey, resolveRealKey, apiKey.id]
   )
 
-  const handleCopy = useCallback(async () => {
+  const handleCopy = useCallback(async (): Promise<void> => {
     const realKey = await resolveRealKey(apiKey.id)
     if (!realKey) return
     const ok = await copyToClipboard(realKey)
