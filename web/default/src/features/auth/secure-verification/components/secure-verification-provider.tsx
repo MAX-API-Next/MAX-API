@@ -55,43 +55,36 @@ export function useSecureVerificationGate(): SecureVerificationContextValue {
 export function SecureVerificationProvider(
   props: SecureVerificationProviderProps
 ): ReactElement {
-  const {
-    open,
-    setOpen,
-    methods,
-    state,
-    executeVerification,
-    cancel,
-    setCode,
-    switchMethod,
-    withVerification,
-  } = useSecureVerification()
+  const secureVerification = useSecureVerification()
 
   const handleVerification = useCallback(
     async (method: VerificationMethod, code?: string): Promise<void> => {
       try {
-        await executeVerification(method, code)
+        await secureVerification.executeVerification(method, code)
       } catch {
         // The shared verification hook reports the error and keeps retryable
         // verification failures inside the dialog.
       }
     },
-    [executeVerification]
+    [secureVerification.executeVerification]
   )
-  const contextValue = useMemo(() => ({ withVerification }), [withVerification])
+  const contextValue = useMemo(
+    () => ({ withVerification: secureVerification.withVerification }),
+    [secureVerification.withVerification]
+  )
 
   return (
     <SecureVerificationContext.Provider value={contextValue}>
       {props.children}
       <SecureVerificationDialog
-        open={open}
-        onOpenChange={setOpen}
-        methods={methods}
-        state={state}
+        open={secureVerification.open}
+        onOpenChange={secureVerification.setOpen}
+        methods={secureVerification.methods}
+        state={secureVerification.state}
         onVerify={handleVerification}
-        onCancel={cancel}
-        onCodeChange={setCode}
-        onMethodChange={switchMethod}
+        onCancel={secureVerification.cancel}
+        onCodeChange={secureVerification.setCode}
+        onMethodChange={secureVerification.switchMethod}
       />
     </SecureVerificationContext.Provider>
   )

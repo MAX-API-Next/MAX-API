@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { CheckIcon, CopyIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -43,7 +43,9 @@ interface ResetPasswordResponse {
   api_tokens_revoked?: boolean
 }
 
-export function ResetPasswordConfirm(props: ResetPasswordConfirmProps) {
+export function ResetPasswordConfirm(
+  props: ResetPasswordConfirmProps
+): ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [newPassword, setNewPassword] = useState('')

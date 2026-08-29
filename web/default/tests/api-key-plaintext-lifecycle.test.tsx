@@ -94,16 +94,20 @@ function TestSheetContainer(props: TestSheetContainerProps): ReactElement {
   return <div>{props.children}</div>
 }
 
-function TestInput({
-  onChange,
-  ...props
-}: ComponentProps<'input'>): ReactElement {
+type TestInputProps = ComponentProps<'input'>
+
+function TestInput(props: TestInputProps): ReactElement {
   return (
     <input
       {...props}
-      onInput={onChange as ComponentProps<'input'>['onInput']}
+      onInput={props.onChange as ComponentProps<'input'>['onInput']}
     />
   )
+}
+
+type MockSheetProps = {
+  open?: boolean
+  children?: ReactNode
 }
 
 mock.module('../src/features/auth/secure-verification', () => ({
@@ -142,8 +146,8 @@ mock.module('../src/hooks/use-status', () => ({
 }))
 
 mock.module('../src/components/ui/sheet', () => ({
-  Sheet: ({ open, children }: { open?: boolean; children?: ReactNode }) =>
-    open ? <div>{children}</div> : null,
+  Sheet: (props: MockSheetProps): ReactElement =>
+    props.open ? <div>{props.children}</div> : null,
   SheetClose: TestSheetContainer,
   SheetContent: TestSheetContainer,
   SheetDescription: TestSheetContainer,

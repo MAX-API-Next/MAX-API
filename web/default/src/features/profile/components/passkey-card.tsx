@@ -55,9 +55,7 @@ interface PasskeyCardProps {
   loading: boolean
 }
 
-export function PasskeyCard({
-  loading: pageLoading,
-}: PasskeyCardProps): ReactElement {
+export function PasskeyCard(props: PasskeyCardProps): ReactElement {
   const { t } = useTranslation()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [restrictedMethod, setRestrictedMethod] =
@@ -196,7 +194,7 @@ export function PasskeyCard({
     [executeVerification]
   )
 
-  if (pageLoading || loading) {
+  if (props.loading || loading) {
     return (
       <Card className='gap-0 overflow-hidden py-0'>
         <CardHeader className='p-3 sm:p-5'>
