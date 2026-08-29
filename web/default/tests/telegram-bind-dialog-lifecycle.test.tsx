@@ -42,6 +42,22 @@ const translate = (key: string) => key
 const withVerification = <T,>(apiCall: () => Promise<T>) => apiCall()
 let useUnstableVerificationGate = false
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve: ((value: T) => void) | undefined
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver
+  })
+  return {
+    promise,
+    resolve: (value) => resolve?.(value),
+  }
+}
+
 mock.module('../src/features/auth/secure-verification', () => ({
   useSecureVerificationGate: () => ({
     withVerification: useUnstableVerificationGate
@@ -117,6 +133,67 @@ afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
 describe('TelegramBindDialog widget lifecycle', () => {
+  test('ignores an obsolete bind-state response after close and reopen', async () => {
+    const firstAttempt = createDeferred<{
+      success: boolean
+      data: { state: string }
+    }>()
+    const secondAttempt = createDeferred<{
+      success: boolean
+      data: { state: string }
+    }>()
+    createTelegramBindState
+      .mockImplementationOnce(() => firstAttempt.promise)
+      .mockImplementationOnce(() => secondAttempt.promise)
+    const onOpenChange = mock(() => undefined)
+    const onSuccess = mock(() => undefined)
+    const view = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={onOpenChange}
+        botName='max_api_bot'
+        onSuccess={onSuccess}
+      />
+    )
+
+    await waitFor(() =>
+      assert.equal(createTelegramBindState.mock.calls.length, 1)
+    )
+    view.rerender(
+      <TelegramBindDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        botName='max_api_bot'
+        onSuccess={onSuccess}
+      />
+    )
+    view.rerender(
+      <TelegramBindDialog
+        open
+        onOpenChange={onOpenChange}
+        botName='max_api_bot'
+        onSuccess={onSuccess}
+      />
+    )
+    await waitFor(() =>
+      assert.equal(createTelegramBindState.mock.calls.length, 2)
+    )
+
+    await act(async () => {
+      firstAttempt.resolve({ success: true, data: { state: 'obsolete' } })
+      await firstAttempt.promise
+    })
+    assert.equal(document.querySelector('script[data-onauth]'), null)
+
+    await act(async () => {
+      secondAttempt.resolve({ success: true, data: { state: 'current' } })
+      await secondAttempt.promise
+    })
+    await waitFor(() =>
+      assert.notEqual(document.querySelector('script[data-onauth]'), null)
+    )
+  })
+
   test('keeps the active widget mounted across callback-only rerenders', async () => {
     const firstOpenChange = mock(() => undefined)
     const secondOpenChange = mock(() => undefined)

@@ -232,9 +232,20 @@ func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {
 }
 
 func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
-	for _, path := range []string{"/api/user/token", "/api/user/aff_transfer"} {
-		path := path
-		t.Run(path, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "management token", method: http.MethodPost, path: "/api/user/token", body: `{"quota":1}`},
+		{name: "affiliate transfer", method: http.MethodPost, path: "/api/user/aff_transfer", body: `{"quota":1}`},
+		{name: "update api token", method: http.MethodPut, path: "/api/token/", body: `{"id":1,"name":"updated"}`},
+		{name: "delete api token", method: http.MethodDelete, path: "/api/token/1"},
+		{name: "delete api token batch", method: http.MethodPost, path: "/api/token/batch", body: `{"ids":[1]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			testRun := atomic.AddInt32(&universalVerifyRateLimitTestRun, 1)
 
@@ -259,7 +270,7 @@ func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
 			require.NoError(t, err)
 			model.DB = db
 			model.LOG_DB = db
-			require.NoError(t, db.AutoMigrate(&model.User{}))
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
 			user := model.User{
 				Id: 1200000 + int(testRun), Username: fmt.Sprintf("critical-user-%d", testRun),
 				Password: "hashed-password", Role: common.RoleCommonUser,
@@ -301,7 +312,7 @@ func TestCriticalAccountRoutesRateLimitSameUserAcrossIPs(t *testing.T) {
 
 			perform := func(remoteAddr string) *httptest.ResponseRecorder {
 				recorder := httptest.NewRecorder()
-				request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"quota":1}`))
+				request := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 				request.RemoteAddr = remoteAddr
 				request.Header.Set("Content-Type", "application/json")
 				for _, sessionCookie := range loginRecorder.Result().Cookies() {

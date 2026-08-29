@@ -9,6 +9,7 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupSecurityCredentialTestState(t *testing.T) {
@@ -147,6 +148,14 @@ func TestPasskeyAndTwoFASecurityChangesBumpSessionGeneration(t *testing.T) {
 	var stored User
 	require.NoError(t, DB.First(&stored, user.Id).Error)
 	require.EqualValues(t, 6, stored.SessionGeneration)
+}
+
+func TestBackupCodeMutationsRequireCredentialOwner(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+	const missingUserID = 8899
+
+	require.ErrorIs(t, CreateBackupCodes(missingUserID, []string{"ABCD-EFGH"}), gorm.ErrRecordNotFound)
+	require.ErrorIs(t, (&TwoFA{Id: 1, UserId: missingUserID}).Delete(), gorm.ErrRecordNotFound)
 }
 
 func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {

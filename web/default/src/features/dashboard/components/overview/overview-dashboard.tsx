@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type JSX, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -383,7 +383,7 @@ type RequestPreviewProps = {
   onRetry: () => void
 }
 
-export function RequestPreview(props: RequestPreviewProps) {
+export function RequestPreview(props: RequestPreviewProps): JSX.Element {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
   const withApiTokenVerification = useApiTokenVerification(

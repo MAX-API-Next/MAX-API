@@ -15,6 +15,7 @@ import (
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,25 @@ func (s *failingTaskBillingSettler) Refund(*gin.Context)      {}
 func (s *failingTaskBillingSettler) NeedsRefund() bool        { return true }
 func (s *failingTaskBillingSettler) GetPreConsumedQuota() int { return 10 }
 func (s *failingTaskBillingSettler) Reserve(int) error        { return nil }
+
+type recordingSelectedGroupBillingSettler struct {
+	preConsumed int
+	reserves    []int
+}
+
+func (s *recordingSelectedGroupBillingSettler) Settle(int) error    { return nil }
+func (s *recordingSelectedGroupBillingSettler) Refund(*gin.Context) {}
+func (s *recordingSelectedGroupBillingSettler) NeedsRefund() bool   { return true }
+func (s *recordingSelectedGroupBillingSettler) GetPreConsumedQuota() int {
+	return s.preConsumed
+}
+func (s *recordingSelectedGroupBillingSettler) Reserve(targetQuota int) error {
+	s.reserves = append(s.reserves, targetQuota)
+	if targetQuota > s.preConsumed {
+		s.preConsumed = targetQuota
+	}
+	return nil
+}
 
 func TestFinalizeTaskSubmissionDoesNotWriteSuccessAfterSettlementFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -125,4 +145,52 @@ func TestPrepareAlphaSearchPreConsumedQuotaAppliesFloorAfterSurcharge(t *testing
 			require.Equal(t, test.expectedFree, priceData.FreeModel)
 		})
 	}
+}
+
+func TestPrepareBillingForSelectedGroupRepricesAlphaSearchCrossGroupRetry(t *testing.T) {
+	const modelName = "alpha-cross-group-retry"
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalPreConsumedQuota := common.PreConsumedQuota
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	common.QuotaPerUnit = 1_000
+	common.PreConsumedQuota = 2_500
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"alpha-cross-group-retry":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"initial":1,"retry":3}`))
+
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	originalPrices := make(map[string]float64, len(toolPrices.Prices))
+	for key, value := range toolPrices.Prices {
+		originalPrices[key] = value
+	}
+	toolPrices.Prices = map[string]float64{"web_search_preview": 10}
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		common.PreConsumedQuota = originalPreConsumedQuota
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		toolPrices.Prices = originalPrices
+		operation_setting.RebuildToolPriceIndex()
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyAutoGroup, "retry")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "retry")
+	billing := &recordingSelectedGroupBillingSettler{preConsumed: 2_500}
+	info := &relaycommon.RelayInfo{
+		RelayMode:             relayconstant.RelayModeAlphaSearch,
+		OriginModelName:       modelName,
+		UsingGroup:            "initial",
+		Billing:               billing,
+		FinalPreConsumedQuota: 2_500,
+	}
+
+	require.Nil(t, prepareBillingForSelectedGroup(c, info, 1_000, &types.TokenCountMeta{}))
+
+	require.Equal(t, "retry", info.UsingGroup)
+	require.Equal(t, 3.0, info.PriceData.GroupRatioInfo.GroupRatio)
+	require.Equal(t, 3_030, info.PriceData.QuotaToPreConsume)
+	require.Equal(t, []int{3_030}, billing.reserves)
+	require.Equal(t, 3_030, info.FinalPreConsumedQuota)
 }

@@ -352,6 +352,7 @@ test('chat presets close the placeholder when secure verification is cancelled',
 
   await waitFor(() => assert.equal(closePopup.mock.calls.length, 1))
   assert.equal(replaceLocation.mock.calls.length, 0)
+  assert.equal(toastError.mock.calls.length, 0)
 })
 
 test('chat presets without an API key use a placeholder before navigating', async () => {

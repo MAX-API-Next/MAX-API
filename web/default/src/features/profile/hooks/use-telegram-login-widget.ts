@@ -59,12 +59,18 @@ export function useTelegramLoginWidget(
   const [status, setStatus] = useState<TelegramWidgetStatus>('idle')
   const [errorMessage, setErrorMessage] = useState('')
   const [retryVersion, setRetryVersion] = useState(0)
+  const bindingAttemptRef = useRef(0)
+
+  const invalidateBindingAttempt = useCallback((): void => {
+    bindingAttemptRef.current += 1
+  }, [])
 
   const resetBindingState = useCallback((): void => {
+    invalidateBindingAttempt()
     setBindState('')
     setStatus('idle')
     setErrorMessage('')
-  }, [])
+  }, [invalidateBindingAttempt])
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean): void => {
@@ -92,6 +98,8 @@ export function useTelegramLoginWidget(
 
   const initializeBinding = useCallback(async (): Promise<void> => {
     const handlers = callbackHandlersRef.current
+    const attemptId = bindingAttemptRef.current + 1
+    bindingAttemptRef.current = attemptId
     setBindState('')
     setStatus('loading')
     setErrorMessage('')
@@ -106,6 +114,7 @@ export function useTelegramLoginWidget(
           ),
         }
       )
+      if (bindingAttemptRef.current !== attemptId) return
       if (!response) {
         setStatus('idle')
         return
@@ -118,6 +127,7 @@ export function useTelegramLoginWidget(
       }
       setBindState(response.data.state)
     } catch (error) {
+      if (bindingAttemptRef.current !== attemptId) return
       const fallback = handlers.t('Failed to initialize Telegram binding')
       if (!wasSecureVerificationErrorReported(error)) {
         handleServerError(error, { fallback })
@@ -128,22 +138,31 @@ export function useTelegramLoginWidget(
   }, [])
 
   useEffect(() => {
-    if (!options.open) return
+    if (!options.open) {
+      invalidateBindingAttempt()
+      return
+    }
     const timer = window.setTimeout(() => void initializeBinding(), 0)
-    return () => window.clearTimeout(timer)
-  }, [initializeBinding, options.open, retryVersion])
+    return () => {
+      window.clearTimeout(timer)
+      invalidateBindingAttempt()
+    }
+  }, [initializeBinding, invalidateBindingAttempt, options.open, retryVersion])
 
   useEffect(() => {
     if (!options.open || !bindState || !widgetContainerRef.current) return
 
     const container = widgetContainerRef.current
     const windowCallbacks = window as unknown as Record<string, unknown>
+    const attemptId = bindingAttemptRef.current
+    let active = true
     container.replaceChildren()
 
     windowCallbacks[callbackName] = async (
       authorization: TelegramAuthorizationPayload
     ): Promise<void> => {
       const handlers = callbackHandlersRef.current
+      if (!active || bindingAttemptRef.current !== attemptId) return
       setStatus('binding')
       setErrorMessage('')
       try {
@@ -157,6 +176,7 @@ export function useTelegramLoginWidget(
             ),
           }
         )
+        if (!active || bindingAttemptRef.current !== attemptId) return
         if (!response) {
           setStatus('ready')
           return
@@ -170,6 +190,7 @@ export function useTelegramLoginWidget(
         callbackHandlersRef.current.onSuccess()
         callbackHandlersRef.current.handleOpenChange(false)
       } catch (error) {
+        if (!active || bindingAttemptRef.current !== attemptId) return
         const fallback = handlers.t('Failed to bind Telegram account')
         if (!wasSecureVerificationErrorReported(error)) {
           handleServerError(error, { fallback })
@@ -189,8 +210,11 @@ export function useTelegramLoginWidget(
     script.setAttribute('data-size', 'large')
     script.setAttribute('data-userpic', 'false')
     script.setAttribute('data-onauth', `${callbackName}(user)`)
-    script.onload = () => setStatus('ready')
+    script.onload = () => {
+      if (active && bindingAttemptRef.current === attemptId) setStatus('ready')
+    }
     script.onerror = () => {
+      if (!active || bindingAttemptRef.current !== attemptId) return
       setErrorMessage(
         callbackHandlersRef.current.t('Failed to load Telegram Login Widget')
       )
@@ -199,17 +223,19 @@ export function useTelegramLoginWidget(
     container.appendChild(script)
 
     return () => {
+      active = false
       delete windowCallbacks[callbackName]
       container.replaceChildren()
     }
   }, [bindState, callbackName, options.botName, options.open])
 
   const retry = useCallback((): void => {
+    invalidateBindingAttempt()
     setBindState('')
     setStatus('idle')
     setErrorMessage('')
     setRetryVersion((version) => version + 1)
-  }, [])
+  }, [invalidateBindingAttempt])
 
   return {
     widgetContainerRef,

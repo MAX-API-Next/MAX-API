@@ -46,6 +46,12 @@ const toastSuccess = mock((_message: string) => undefined)
 const handleServerError = mock(
   (_error: unknown, _options?: { fallback?: string }) => undefined
 )
+const gateWithVerification = mock(
+  async <T,>(
+    apiCall: () => Promise<T>,
+    _options?: { scope?: string; title?: string; description?: string }
+  ) => apiCall()
+)
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -77,6 +83,10 @@ mock.module('i18next', () => ({
   default: { t: (key: string) => key },
 }))
 
+mock.module('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}))
+
 mock.module('sonner', () => ({
   toast: {
     error: toastError,
@@ -90,11 +100,20 @@ mock.module('../src/features/auth/secure-verification/api', () => ({
   verify,
 }))
 
+mock.module(
+  '../src/features/auth/secure-verification/components/secure-verification-context',
+  () => ({
+    useSecureVerificationGate: () => ({
+      withVerification: gateWithVerification,
+    }),
+  })
+)
+
 mock.module('../src/lib/handle-server-error', () => ({
   handleServerError,
 }))
 
-const { useSecureVerification } = await import(
+const { useApiTokenVerification, useSecureVerification } = await import(
   '../src/features/auth/secure-verification/hooks/use-secure-verification'
 )
 const testEnv = createReactTestEnvironment()
@@ -122,6 +141,7 @@ beforeEach(() => {
   toastInfo.mockClear()
   toastSuccess.mockClear()
   handleServerError.mockClear()
+  gateWithVerification.mockClear()
 })
 
 afterEach(() => cleanup())
@@ -129,6 +149,22 @@ afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
 
 describe('useSecureVerification', () => {
+  test('keeps the API-token step-up scope when invoking the protected action', async () => {
+    const apiCall = mock(async () => ({ success: true }))
+    const { result } = renderHook(() =>
+      useApiTokenVerification('Copy the ready-to-run request.')
+    )
+
+    assert.deepEqual(await result.current(apiCall), { success: true })
+    assert.equal(gateWithVerification.mock.calls.length, 1)
+    assert.equal(gateWithVerification.mock.calls[0]?.[0], apiCall)
+    assert.deepEqual(gateWithVerification.mock.calls[0]?.[1], {
+      scope: 'api_token',
+      title: 'Security verification',
+      description: 'Copy the ready-to-run request.',
+    })
+  })
+
   test('returns an initial protected action success without discovery', async () => {
     const apiCall = mock(async () => ({ success: true }))
     const { result } = renderHook(() => useSecureVerification())
@@ -203,6 +239,26 @@ describe('useSecureVerification', () => {
 
     await waitFor(() => assert.equal(result.current.open, true))
     act(() => result.current.cancel())
+
+    assert.equal(await continuation, null)
+    assert.equal(result.current.open, false)
+  })
+
+  test('resolves null when the verification dialog is dismissed', async () => {
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const { result } = renderHook(() => useSecureVerification())
+
+    let continuation: Promise<unknown | null> | undefined
+    act(() => {
+      continuation = result.current.withVerification(apiCall, {
+        scope: 'credentials',
+      })
+    })
+
+    await waitFor(() => assert.equal(result.current.open, true))
+    act(() => result.current.setOpen(false))
 
     assert.equal(await continuation, null)
     assert.equal(result.current.open, false)

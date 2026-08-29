@@ -101,6 +101,9 @@ func (t *TwoFA) Delete() error {
 
 	// 使用事务确保原子性
 	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, t.UserId); err != nil {
+			return err
+		}
 		// 同时删除相关的备用码记录（硬删除）
 		if err := tx.Unscoped().Where("user_id = ?", t.UserId).Delete(&TwoFABackupCode{}).Error; err != nil {
 			return err
@@ -146,6 +149,9 @@ func CreateBackupCodes(userId int, codes []string) error {
 		return err
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
+			return err
+		}
 		return replaceBackupCodeHashesTx(tx, userId, hashes)
 	})
 }

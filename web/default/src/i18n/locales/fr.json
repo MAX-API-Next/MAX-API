@@ -5480,7 +5480,7 @@
     "Failed to sign out other sessions": "Échec de la déconnexion des autres sessions",
     "Keep this session and revoke all other signed-in devices": "Conserver cette session et révoquer tous les autres appareils connectés",
     "No verification method is available. Add a password or sign in again with a linked account.": "Aucune méthode de vérification d’identité n’est disponible. Ajoutez un mot de passe ou reconnectez-vous avec un compte associé.",
-    "Other sessions signed out successfully": "Les autres sessions ont été déconnectées",
+    "Other sessions signed out successfully": "Les autres sessions ont été déconnectées avec succès",
     "Preparing Telegram authorization...": "Préparation de l’autorisation Telegram...",
     "Sign Out Other Devices": "Déconnecter les autres appareils",
     "Start Telegram authorization": "Démarrer l’autorisation Telegram",

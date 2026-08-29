@@ -94,6 +94,49 @@ func prepareAlphaSearchPreConsumedQuota(priceData types.PriceData, relayInfo *re
 	return priceData, nil
 }
 
+func prepareBillingForSelectedGroup(
+	c *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	promptTokens int,
+	meta *types.TokenCountMeta,
+) *types.MaxAPIError {
+	if relayInfo.TieredBillingSnapshot != nil {
+		return service.PrepareTieredBillingForSelectedGroup(c, relayInfo)
+	}
+
+	priceData, err := helper.ModelPriceHelper(c, relayInfo, promptTokens, meta)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	priceData, err = prepareAlphaSearchPreConsumedQuota(priceData, relayInfo)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	relayInfo.PriceData = priceData
+	if priceData.FreeModel {
+		return nil
+	}
+
+	if relayInfo.Billing == nil {
+		return service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
+	}
+	if err := relayInfo.Billing.Reserve(priceData.QuotaToPreConsume); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -230,7 +273,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
-		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+		if billingErr := prepareBillingForSelectedGroup(c, relayInfo, tokens, meta); billingErr != nil {
 			maxAPIError = billingErr
 			break
 		}

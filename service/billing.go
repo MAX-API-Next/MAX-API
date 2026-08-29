@@ -148,7 +148,8 @@ func SettleBillingWithEffect(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 			}); ok {
 				if err := settler.SettleWithEffect(actualQuota, effect); err != nil {
 					if errors.Is(err, ErrBillingSettlementEffectNotDurable) ||
-						errors.Is(err, model.ErrBillingSettlementRecordNotDurable) {
+						errors.Is(err, model.ErrBillingSettlementRecordNotDurable) ||
+						errors.Is(err, ErrBillingFundingOutcomeUnknown) {
 						return false, err
 					}
 					return true, err

@@ -171,6 +171,16 @@ func TestSettleBillingWithEffectDoesNotClaimModelRecordPersistenceFailure(t *tes
 	assert.False(t, handled)
 }
 
+func TestSettleBillingWithEffectDoesNotClaimUnknownFundingOutcome(t *testing.T) {
+	settler := &recordingEffectBillingSettler{err: ErrBillingFundingOutcomeUnknown}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
+	assert.False(t, handled)
+}
+
 func TestSettleBillingWithEffectKeepsDurablyOwnedFailureHandled(t *testing.T) {
 	settlementErr := errors.New("durable settlement remains pending")
 	settler := &recordingEffectBillingSettler{err: settlementErr}
