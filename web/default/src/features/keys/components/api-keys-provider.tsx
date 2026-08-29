@@ -19,6 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import React, { useState, useCallback, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import useDialogState from '@/hooks/use-dialog'
 import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, fetchTokenKeysBatch } from '../api'
@@ -114,8 +116,12 @@ export function ApiKeysProvider(
           }
           toast.error(res.message || t(ERROR_MESSAGES.UNEXPECTED))
           return null
-        } catch {
-          toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+        } catch (error) {
+          if (!wasSecureVerificationErrorReported(error)) {
+            handleServerError(error, {
+              fallback: t(ERROR_MESSAGES.UNEXPECTED),
+            })
+          }
           return null
         } finally {
           delete pendingRequests.current[id]
@@ -167,8 +173,12 @@ export function ApiKeysProvider(
         }
         toast.error(res.message || t(ERROR_MESSAGES.UNEXPECTED))
         return {}
-      } catch {
-        toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+      } catch (error) {
+        if (!wasSecureVerificationErrorReported(error)) {
+          handleServerError(error, {
+            fallback: t(ERROR_MESSAGES.UNEXPECTED),
+          })
+        }
         return {}
       } finally {
         for (const id of ids) {

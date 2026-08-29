@@ -124,6 +124,10 @@ func reserveTaskQuota(c *gin.Context, info *relaycommon.RelayInfo, targetQuota i
 		}
 	}
 	if info.Billing != nil {
+		// A free retry still owns any reservation from an earlier paid attempt
+		// until the upstream accepts it. Keep that reservation on the task
+		// placeholder, then settle the successful free result to quota zero;
+		// failed attempts may continue to another paid channel.
 		return info.Billing.GetPreConsumedQuota(), nil
 	}
 	return targetQuota, nil

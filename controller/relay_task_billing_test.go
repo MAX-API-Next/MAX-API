@@ -72,7 +72,7 @@ func TestFinalizeTaskSubmissionDoesNotWriteSuccessAfterSettlementFailure(t *test
 	})
 
 	require.NotNil(t, taskErr)
-	assert.Equal(t, "billing_settlement_pending", taskErr.Code)
+	assert.Equal(t, constant.MjBillingSettlementPending, taskErr.Code)
 	assert.Equal(t, http.StatusConflict, taskErr.StatusCode)
 	assert.True(t, taskErr.LocalError)
 	assert.Equal(t, map[string]string{"task_id": "task-settlement-review"}, taskErr.Data)
@@ -80,7 +80,7 @@ func TestFinalizeTaskSubmissionDoesNotWriteSuccessAfterSettlementFailure(t *test
 }
 
 func TestPendingTaskSettlementDoesNotMarkAcceptedTaskAsManualFailure(t *testing.T) {
-	taskErr := &dto.TaskError{Code: "billing_settlement_pending"}
+	taskErr := &dto.TaskError{Code: constant.MjBillingSettlementPending}
 
 	assert.False(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, true))
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, false, true))
@@ -193,4 +193,40 @@ func TestPrepareBillingForSelectedGroupRepricesAlphaSearchCrossGroupRetry(t *tes
 	require.Equal(t, 3_030, info.PriceData.QuotaToPreConsume)
 	require.Equal(t, []int{3_030}, billing.reserves)
 	require.Equal(t, 3_030, info.FinalPreConsumedQuota)
+}
+
+func TestPrepareBillingForSelectedGroupClearsFallbackQuotaForFreeRetry(t *testing.T) {
+	const modelName = "free-cross-group-retry"
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	quotaSetting := operation_setting.GetQuotaSetting()
+	originalFreeModelPreConsume := quotaSetting.EnableFreeModelPreConsume
+	quotaSetting.EnableFreeModelPreConsume = false
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"free-cross-group-retry":1}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"initial":1,"free":0}`))
+	t.Cleanup(func() {
+		quotaSetting.EnableFreeModelPreConsume = originalFreeModelPreConsume
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyAutoGroup, "free")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "free")
+	billing := &recordingSelectedGroupBillingSettler{preConsumed: 2_500}
+	info := &relaycommon.RelayInfo{
+		OriginModelName:       modelName,
+		UsingGroup:            "initial",
+		Billing:               billing,
+		FinalPreConsumedQuota: 2_500,
+	}
+
+	require.Nil(t, prepareBillingForSelectedGroup(c, info, 1_000, &types.TokenCountMeta{}))
+
+	require.Equal(t, "free", info.UsingGroup)
+	require.True(t, info.PriceData.FreeModel)
+	require.Zero(t, info.FinalPreConsumedQuota)
+	require.Same(t, billing, info.Billing)
+	require.Equal(t, 2_500, billing.GetPreConsumedQuota())
+	require.Empty(t, billing.reserves)
 }

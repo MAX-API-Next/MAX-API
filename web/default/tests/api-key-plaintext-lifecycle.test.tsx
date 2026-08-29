@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
+import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
 import {
   act,
   cleanup,
@@ -145,9 +146,57 @@ describe('API key plaintext lifecycle', () => {
     })
 
     assert.equal(toastError.mock.calls.length, 1)
-    assert.equal(toastError.mock.calls[0]?.[0], 'An unexpected error occurred')
+    assert.equal(toastError.mock.calls[0]?.[0], 'batch request failed')
     assert.equal(result.current.loadingKeys[201], undefined)
     assert.equal(result.current.loadingKeys[202], undefined)
+  })
+
+  test('reports single-key reveal failures with the original error message', async () => {
+    fetchTokenKey.mockImplementationOnce(async () => {
+      throw new Error('single key request failed')
+    })
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    await act(async () => {
+      assert.equal(await result.current.resolveRealKey(203), null)
+    })
+
+    assert.equal(toastError.mock.calls.length, 1)
+    assert.equal(toastError.mock.calls[0]?.[0], 'single key request failed')
+    assert.equal(result.current.loadingKeys[203], undefined)
+  })
+
+  test('does not duplicate batch errors already reported by verification', async () => {
+    const verificationError = new Error('batch verification failed')
+    markSecureVerificationErrorReported(verificationError)
+    fetchTokenKeysBatch.mockImplementationOnce(async () => {
+      throw verificationError
+    })
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    await act(async () => {
+      assert.deepEqual(await result.current.resolveRealKeysBatch([205, 206]), {})
+    })
+
+    assert.equal(toastError.mock.calls.length, 0)
+    assert.equal(result.current.loadingKeys[205], undefined)
+    assert.equal(result.current.loadingKeys[206], undefined)
+  })
+
+  test('does not duplicate single-key errors already reported by verification', async () => {
+    const verificationError = new Error('verification failed')
+    markSecureVerificationErrorReported(verificationError)
+    fetchTokenKey.mockImplementationOnce(async () => {
+      throw verificationError
+    })
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    await act(async () => {
+      assert.equal(await result.current.resolveRealKey(204), null)
+    })
+
+    assert.equal(toastError.mock.calls.length, 0)
+    assert.equal(result.current.loadingKeys[204], undefined)
   })
 
   test('does not cache a key that resolves after its reveal popover closes', async () => {

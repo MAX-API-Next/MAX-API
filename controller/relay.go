@@ -124,6 +124,10 @@ func prepareBillingForSelectedGroup(
 	}
 	relayInfo.PriceData = priceData
 	if priceData.FreeModel {
+		// Keep any existing Billing session so a successful free retry can
+		// settle the prior reservation to zero, while preventing this free
+		// attempt from inheriting the paid attempt's fallback charge.
+		relayInfo.FinalPreConsumedQuota = 0
 		return nil
 	}
 
@@ -754,7 +758,7 @@ func shouldMarkTaskSubmitNeedsReview(taskErr *dto.TaskError, upstreamPersisted, 
 	if taskErr == nil {
 		return false
 	}
-	return taskErr.Code != "billing_settlement_pending" || !upstreamPersisted || !settlementIntentPersisted
+	return taskErr.Code != constant.MjBillingSettlementPending || !upstreamPersisted || !settlementIntentPersisted
 }
 
 // finalizeTaskSubmission releases a task success response only after its
@@ -768,7 +772,7 @@ func finalizeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo, re
 	if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 		common.SysError("settle task billing requires reconciliation: " + settleErr.Error())
 		return &dto.TaskError{
-			Code:       "billing_settlement_pending",
+			Code:       constant.MjBillingSettlementPending,
 			Message:    "任务已被上游接受，但计费结算未完成；请勿重复提交，可使用 task_id 查询任务或联系管理员处理",
 			Data:       map[string]string{"task_id": result.Task.TaskID},
 			StatusCode: http.StatusConflict,
