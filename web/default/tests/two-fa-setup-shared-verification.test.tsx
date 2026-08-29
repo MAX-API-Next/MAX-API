@@ -20,7 +20,7 @@ import { createReactTestEnvironment } from '@/test/react'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 
 const setup2FA = mock(async () => ({
   success: true,
@@ -53,10 +53,10 @@ mock.module('sonner', () => ({
 }))
 
 mock.module('qrcode.react', () => ({
-  QRCodeSVG: () => <div data-testid='qr-code' />,
+  QRCodeSVG: (): ReactElement => <div data-testid='qr-code' />,
 }))
 
-function TestContainer(props: { children?: ReactNode }) {
+function TestContainer(props: { children?: ReactNode }): ReactElement {
   return <div>{props.children}</div>
 }
 
@@ -70,7 +70,7 @@ mock.module('../src/components/ui/button', () => ({
     children?: ReactNode
     disabled?: boolean
     onClick?: () => void
-  }) => (
+  }): ReactElement => (
     <button type='button' disabled={props.disabled} onClick={props.onClick}>
       {props.children}
     </button>
@@ -90,7 +90,7 @@ mock.module('../src/components/ui/input', () => ({
   Input: (props: {
     value?: string
     onChange?: (event: { target: { value: string } }) => void
-  }) => <input value={props.value} onInput={props.onChange} />,
+  }): ReactElement => <input value={props.value} onInput={props.onChange} />,
 }))
 
 mock.module('../src/components/ui/label', () => ({

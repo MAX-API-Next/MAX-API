@@ -43,10 +43,7 @@ interface ResetPasswordResponse {
   api_tokens_revoked?: boolean
 }
 
-export function ResetPasswordConfirm({
-  email,
-  token,
-}: ResetPasswordConfirmProps) {
+export function ResetPasswordConfirm(props: ResetPasswordConfirmProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [newPassword, setNewPassword] = useState('')
@@ -59,10 +56,10 @@ export function ResetPasswordConfirm({
     start: startCountdown,
   } = useCountdown({ initialSeconds: 30 })
 
-  const isValidResetLink = Boolean(email && token)
+  const isValidResetLink = Boolean(props.email && props.token)
 
   async function handleSubmit(): Promise<void> {
-    if (!isValidResetLink || !email || !token) {
+    if (!isValidResetLink || !props.email || !props.token) {
       toast.error(t('Invalid reset link, please request a new password reset'))
       return
     }
@@ -72,7 +69,7 @@ export function ResetPasswordConfirm({
     try {
       const res = await api.post<ResetPasswordResponse>(
         '/api/user/reset',
-        { email, token },
+        { email: props.email, token: props.token },
         { skipBusinessError: true }
       )
 
@@ -141,7 +138,7 @@ export function ResetPasswordConfirm({
             <Input
               id='email'
               type='email'
-              value={email || ''}
+              value={props.email || ''}
               disabled
               placeholder={t('Waiting for email...')}
             />
