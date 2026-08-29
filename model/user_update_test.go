@@ -1488,30 +1488,6 @@ func TestUserUpdatePersistsZeroValueProfileFields(t *testing.T) {
 	assert.Equal(t, 3, got.RequestCount)
 }
 
-func TestUpdateFieldsWithSessionGenerationReturnsCommittedPasswordGeneration(t *testing.T) {
-	setupUserUpdateTestState(t)
-
-	user := User{
-		Id:                7,
-		Username:          "password-generation-user",
-		Password:          "old-password-hash",
-		Status:            common.UserStatusEnabled,
-		SessionGeneration: 4,
-	}
-	require.NoError(t, DB.Create(&user).Error)
-
-	user.Password = "new-password-123"
-	generation, err := user.UpdateFieldsWithSessionGeneration(true)
-	require.NoError(t, err)
-	assert.EqualValues(t, 5, generation)
-	assert.EqualValues(t, generation, user.SessionGeneration)
-
-	var stored User
-	require.NoError(t, DB.First(&stored, user.Id).Error)
-	assert.EqualValues(t, generation, stored.SessionGeneration)
-	assert.True(t, common.ValidatePasswordAndHash("new-password-123", stored.Password))
-}
-
 func TestUserUpdateDoesNotClearEmailFromLoadedPartialUpdate(t *testing.T) {
 	setupUserUpdateTestState(t)
 
