@@ -54,7 +54,7 @@ const successfulMethodsResponse = {
       has_password: true,
     },
   },
-}
+} satisfies VerificationMethodsResponse
 
 const apiGet = mock(
   async (

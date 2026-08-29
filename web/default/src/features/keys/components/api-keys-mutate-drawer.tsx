@@ -330,12 +330,11 @@ export function ApiKeysMutateDrawer({
         }
       } else {
         // Create mode - handle batch creation
+        const count = data.tokenCount || 1
+        let created = 0
         const successCount = await withApiTokenVerification(
           async (): Promise<number> => {
-            const count = data.tokenCount || 1
-            let created = 0
-
-            for (let i = 0; i < count; i++) {
+            for (let i = created; i < count; i++) {
               const result = await createApiKey({
                 ...basePayload,
                 name:

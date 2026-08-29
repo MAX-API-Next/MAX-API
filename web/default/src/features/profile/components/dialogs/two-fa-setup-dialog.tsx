@@ -180,6 +180,7 @@ export function TwoFASetupDialog({
     setupInFlightRef.current = true
     setSetupAttempted(false)
     setInitializing(true)
+    let shouldMarkSetupAttempted = true
     try {
       const response = await withVerification(setup2FA, {
         scope: 'credentials',
@@ -189,6 +190,8 @@ export function TwoFASetupDialog({
         ),
       })
       if (!response) {
+        shouldMarkSetupAttempted = false
+        setSetupAttempted(false)
         onOpenChange(false)
         return
       }
@@ -203,11 +206,13 @@ export function TwoFASetupDialog({
       if (!wasSecureVerificationErrorReported(error)) {
         handleServerError(error, { fallback: t('Failed to setup 2FA') })
       }
+      shouldMarkSetupAttempted = false
+      setSetupAttempted(false)
       onOpenChange(false)
     } finally {
       setupInFlightRef.current = false
       setInitializing(false)
-      setSetupAttempted(true)
+      setSetupAttempted(shouldMarkSetupAttempted)
     }
   }, [onOpenChange, t, withVerification])
 

@@ -324,18 +324,17 @@ test('chat presets close the placeholder when secure verification is cancelled',
   assert.equal(replaceLocation.mock.calls.length, 0)
 })
 
-test('chat presets without an API key open the URL in a new tab', async () => {
+test('chat presets without an API key use a placeholder before navigating', async () => {
   const view = renderChatPresets()
 
   fireEvent.click(view.getByRole('button', { name: /Public chat/ }))
 
   await waitFor(() => assert.equal(openWindow.mock.calls.length, 1))
-  assert.deepEqual(openWindow.mock.calls[0], [
+  assert.deepEqual(openWindow.mock.calls[0], ['about:blank', '_blank'])
+  await waitFor(() => assert.equal(replaceLocation.mock.calls.length, 1))
+  assert.deepEqual(replaceLocation.mock.calls[0], [
     'https://chat.example.test/public',
-    '_blank',
-    'noopener,noreferrer',
   ])
-  assert.equal(replaceLocation.mock.calls.length, 0)
   assert.deepEqual(setOpenMobile.mock.calls[0], [false])
 })
 

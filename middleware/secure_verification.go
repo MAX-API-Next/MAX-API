@@ -114,21 +114,14 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if verifiedMethod == secureVerificationMethodPassword {
-			requiredScope := ""
-			if len(requiredScopes) > 0 {
-				requiredScope = requiredScopes[0]
-			}
-			verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
-			if requiredScope == "" || verifiedScope != requiredScope {
-				c.JSON(http.StatusForbidden, gin.H{
-					"success": false,
-					"message": "需要对应操作的安全验证",
-					"code":    "VERIFICATION_REQUIRED",
-				})
-				c.Abort()
-				return
-			}
+		if verifiedMethod == secureVerificationMethodPassword && requiredScope == "" {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "需要对应操作的安全验证",
+				"code":    "VERIFICATION_REQUIRED",
+			})
+			c.Abort()
+			return
 		}
 
 		c.Next()

@@ -5464,9 +5464,9 @@
     "Add a password or sign in again with a linked account to unlock sensitive operations.": "Ajoutez un mot de passe ou reconnectez-vous avec un compte associé pour déverrouiller les opérations sensibles.",
     "Additional verification required": "Vérification supplémentaire requise",
     "API key verification was cancelled": "La vérification de la clé API a été annulée",
-    "Binding Telegram account...": "Association du compte Telegram...",
+    "Binding Telegram account...": "Liaison du compte Telegram...",
     "Confirm your identity before accessing this sensitive action.": "Confirmez votre identité avant d’effectuer cette action sensible.",
-    "Confirm your identity before binding a Telegram account.": "Confirmez votre identité avant d’associer un compte Telegram.",
+    "Confirm your identity before binding a Telegram account.": "Confirmez votre identité avant de lier un compte Telegram.",
     "Confirm your identity before copying a request with your API key.": "Confirmez votre identité avant de copier une requête contenant votre clé API.",
     "Confirm your identity before creating or revealing API keys.": "Confirmez votre identité avant de créer ou d’afficher des clés API.",
     "Confirm your identity before enabling Two-factor Authentication.": "Confirmez votre identité avant d’activer l’authentification à deux facteurs.",
@@ -5474,8 +5474,8 @@
     "Confirm your identity before sending an API key to a chat client.": "Confirmez votre identité avant d’envoyer une clé API à un client de discussion.",
     "Confirm your identity before setting up Two-factor Authentication.": "Confirmez votre identité avant de configurer l’authentification à deux facteurs.",
     "Confirm your identity before signing out your other sessions.": "Confirmez votre identité avant de déconnecter vos autres sessions.",
-    "Failed to bind Telegram account": "Échec de l’association du compte Telegram",
-    "Failed to initialize Telegram binding": "Échec de l’initialisation de l’association Telegram",
+    "Failed to bind Telegram account": "Échec de la liaison du compte Telegram",
+    "Failed to initialize Telegram binding": "Échec de l’initialisation de la liaison Telegram",
     "Failed to load Telegram Login Widget": "Échec du chargement du widget de connexion Telegram",
     "Failed to sign out other sessions": "Échec de la déconnexion des autres sessions",
     "Keep this session and revoke all other signed-in devices": "Conserver cette session et révoquer tous les autres appareils connectés",
@@ -5484,8 +5484,8 @@
     "Preparing Telegram authorization...": "Préparation de l’autorisation Telegram...",
     "Sign Out Other Devices": "Déconnecter les autres appareils",
     "Start Telegram authorization": "Démarrer l’autorisation Telegram",
-    "Telegram account bound successfully": "Compte Telegram associé avec succès",
-    "Telegram will ask you to confirm the account before it is bound.": "Telegram vous demandera de confirmer le compte avant son association.",
+    "Telegram account bound successfully": "Compte Telegram lié avec succès",
+    "Telegram will ask you to confirm the account before it is bound.": "Telegram vous demandera de confirmer le compte avant de le lier.",
     "Verification unavailable": "Vérification indisponible"
   }
 }

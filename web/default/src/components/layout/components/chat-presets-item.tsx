@@ -180,15 +180,16 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
         return
       }
 
-      if (needsKey) {
-        if (typeof window !== 'undefined') {
-          try {
-            chatWindow = window.open('about:blank', '_blank')
-            if (chatWindow) chatWindow.opener = null
-          } catch {
-            chatWindow = null
-          }
+      if (typeof window !== 'undefined') {
+        try {
+          chatWindow = window.open('about:blank', '_blank')
+          if (chatWindow) chatWindow.opener = null
+        } catch {
+          chatWindow = null
         }
+      }
+
+      if (needsKey) {
         loadingPresetIdRef.current = preset.id
         setLoadingPresetId(preset.id)
         try {
@@ -235,25 +236,11 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
         if (chatWindow) {
           chatWindow.location.replace(url)
         } else {
-          const openedWindow = window.open(url, '_blank', 'noopener,noreferrer')
-          if (!openedWindow) window.location.assign(url)
+          window.location.assign(url)
         }
       } catch {
         chatWindow?.close()
-        if (chatWindow) {
-          window.location.assign(url)
-        } else {
-          try {
-            const openedWindow = window.open(
-              url,
-              '_blank',
-              'noopener,noreferrer'
-            )
-            if (!openedWindow) window.location.assign(url)
-          } catch {
-            window.location.assign(url)
-          }
-        }
+        window.location.assign(url)
       }
       setOpenMobile(false)
     },

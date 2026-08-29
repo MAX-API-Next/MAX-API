@@ -202,6 +202,23 @@ test('reports setup failures with the server error message path', async () => {
   ])
 })
 
+test('keeps the setup state reset when verification is cancelled', async () => {
+  const onOpenChange = mock(() => undefined)
+  withVerification.mockImplementationOnce(async () => null)
+
+  const view = render(
+    <TwoFASetupDialog
+      open
+      onOpenChange={onOpenChange}
+      onSuccess={mock(() => undefined)}
+    />
+  )
+
+  await waitFor(() => assert.equal(onOpenChange.mock.calls.length, 1))
+  assert.ok(view.getByText('Setting up 2FA...'))
+  assert.equal(view.queryByText('Failed to load setup data'), null)
+})
+
 test('reports enable failures with the server error message path', async () => {
   const error = new Error('enable request failed')
   enable2FA.mockImplementationOnce(async () => {
