@@ -87,7 +87,7 @@ export function TelegramBindDialog(
               <p className='text-muted-foreground text-sm'>
                 {t('Bot:')}{' '}
                 <span className='font-mono font-semibold'>
-                  @{props.botName}
+                  @{props.botName.replace(/^@/, '')}
                 </span>
               </p>
               <p className='text-muted-foreground mt-1 text-xs'>

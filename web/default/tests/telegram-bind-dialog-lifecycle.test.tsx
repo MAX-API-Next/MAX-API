@@ -144,6 +144,37 @@ afterEach((): void => cleanup())
 afterAll((): void => testEnv.teardown())
 
 describe('TelegramBindDialog widget lifecycle', (): void => {
+  test('renders the bot name with exactly one leading at-sign', (): void => {
+    const prefixedView = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='@max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    assert.equal(
+      prefixedView.getByText('@max_api_bot').textContent,
+      '@max_api_bot'
+    )
+    prefixedView.unmount()
+
+    const plainView = render(
+      <TelegramBindDialog
+        open
+        onOpenChange={mock(() => undefined)}
+        botName='max_api_bot'
+        onSuccess={mock(() => undefined)}
+      />
+    )
+
+    assert.equal(
+      plainView.getByText('@max_api_bot').textContent,
+      '@max_api_bot'
+    )
+  })
+
   test('ignores an obsolete bind-state response after close and reopen', async (): Promise<void> => {
     const firstAttempt = createDeferred<{
       success: boolean
