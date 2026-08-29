@@ -109,6 +109,15 @@ func (f *uncertainFundingSource) Settle(delta int) (int64, error) {
 }
 
 func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *testing.T) {
+	originalSender := billingFundingOutcomeUnknownAlertNotificationSender
+	var alerts []SmartOpsAlert
+	billingFundingOutcomeUnknownAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+	t.Cleanup(func() {
+		billingFundingOutcomeUnknownAlertNotificationSender = originalSender
+	})
+
 	cases := []struct {
 		name    string
 		applied int64
@@ -120,6 +129,7 @@ func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *t
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			alerts = nil
 			funding := &uncertainFundingSource{applied: tc.applied, err: tc.err}
 			session := &BillingSession{
 				relayInfo: &relaycommon.RelayInfo{UserId: 101, TokenId: 102, TokenKey: "uncertain-funding-token"},
@@ -130,11 +140,19 @@ func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *t
 			require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
 			assert.Equal(t, []int{5}, funding.deltas)
 			assert.True(t, session.fundingOutcomeUnknown)
+			require.Len(t, alerts, 1)
+			assert.Equal(t, "billing_funding_outcome_unknown", alerts[0].Key)
+			assert.Equal(t, smartOpsAlertStatusFiring, alerts[0].Status)
+			assert.Contains(t, alerts[0].Message, "userId=101")
+			assert.Contains(t, alerts[0].Message, "tokenId=102")
+			assert.Contains(t, alerts[0].Message, "requested=5")
+			assert.Contains(t, alerts[0].Message, fmt.Sprintf("applied=%d", tc.applied))
 
 			// A second attempt must not repeat the non-idempotent funding call.
 			require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
 			require.ErrorIs(t, session.Reserve(20), ErrBillingFundingOutcomeUnknown)
 			assert.Equal(t, []int{5}, funding.deltas)
+			require.Len(t, alerts, 1, "fail-closed retries must not emit duplicate outcome-unknown alerts")
 		})
 	}
 }

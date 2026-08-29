@@ -64,6 +64,7 @@ var billingSettlementBacklogAlertState struct {
 }
 
 var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
+var billingFundingOutcomeUnknownAlertNotificationSender = enqueueSmartOpsAlertNotification
 
 func init() {
 	model.SetBillingSettlementBacklogObserver(observeBillingSettlementBacklog)
@@ -136,6 +137,32 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 			"存在 %d 条未完成的正向最终计费对账，最早已等待 %s。相关用户的新付费请求会被阻止，请尽快处理 pending/manual 记录。",
 			stats.Count,
 			oldestAge.Round(time.Second),
+		),
+	})
+}
+
+func (s *BillingSession) notifyFundingOutcomeUnknown(requested, applied int64) {
+	userID := 0
+	tokenID := 0
+	if s.relayInfo != nil {
+		userID = s.relayInfo.UserId
+		tokenID = s.relayInfo.TokenId
+	}
+	billingFundingOutcomeUnknownAlertNotificationSender(SmartOpsAlert{
+		Key:          "billing_funding_outcome_unknown",
+		Status:       smartOpsAlertStatusFiring,
+		Severity:     smartOpsAlertSeverityWarning,
+		Component:    "billing",
+		Node:         smartOpsAlertNodeName(),
+		CurrentValue: float64(requested),
+		Threshold:    float64(applied),
+		ObservedAt:   time.Now(),
+		Message: fmt.Sprintf(
+			"计费资金变更结果不明确（userId=%d, tokenId=%d, requested=%d, applied=%d）。系统已停止自动重试，请立即人工核对。",
+			userID,
+			tokenID,
+			requested,
+			applied,
 		),
 	})
 }
@@ -276,6 +303,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 			s.fundingSettled = true
 			s.appliedFundingDelta = applied
 			s.fundingOutcomeUnknown = true
+			s.notifyFundingOutcomeUnknown(int64(delta), applied)
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
 			}
@@ -297,6 +325,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 				// failed or partial reconciliation may already have committed;
 				// do not repeat it or proceed with the token leg.
 				s.fundingOutcomeUnknown = true
+				s.notifyFundingOutcomeUnknown(needed, applied)
 				s.fundingReconcilePending = false
 				if err != nil {
 					return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err)
@@ -334,6 +363,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					// continue with the token leg.
 					s.compensationFailed = true
 					s.fundingOutcomeUnknown = true
+					s.notifyFundingOutcomeUnknown(-committed, compensated)
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
@@ -341,6 +371,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					s.appliedFundingDelta = committed + compensated
 					s.compensationFailed = false
 					s.fundingOutcomeUnknown = true
+					s.notifyFundingOutcomeUnknown(-committed, compensated)
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("incomplete funding compensation after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d)",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated))

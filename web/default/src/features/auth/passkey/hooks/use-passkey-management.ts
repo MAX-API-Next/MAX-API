@@ -81,7 +81,7 @@ export function usePasskeyManagement(
       .catch(() => setSupported(false))
   }, [])
 
-  const register = useCallback(async () => {
+  const register = useCallback(async (): Promise<boolean> => {
     if (!supported) {
       toast.error(i18next.t('This device does not support Passkey'))
       return false

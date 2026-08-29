@@ -550,7 +550,7 @@
     "Auth value": "認証値",
     "Auth value is required": "認証値は必須です",
     "auth.resetPasswordConfirm.backToLogin": "ログインに戻る",
-    "auth.resetPasswordConfirm.apiTokensRevoked": "セキュリティ保護のため、既存の API トークンはすべて無効化されました。必要に応じてログイン後に再作成してください。",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "セキュリティ保護のため、既存の API トークンはすべて無効化されました。ログインして新しい API トークンを作成してください。",
     "auth.resetPasswordConfirm.confirm": "パスワードリセットを確認",
     "auth.resetPasswordConfirm.description": "新しいパスワードを生成するには、リセット要求を確認してください。",
     "auth.resetPasswordConfirm.retry": "再試行 ({{seconds}}秒)",

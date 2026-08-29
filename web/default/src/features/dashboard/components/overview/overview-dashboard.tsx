@@ -397,7 +397,7 @@ export function RequestPreview(props: RequestPreviewProps): JSX.Element {
     model: props.example.model,
   })
   const previewLines = previewCurl.split('\n')
-  const handleCopyRequest = async () => {
+  const handleCopyRequest = async (): Promise<void> => {
     if (!props.example.keyId || isCopying) return
     const keyId = props.example.keyId
 

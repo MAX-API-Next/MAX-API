@@ -55,7 +55,7 @@ export function ResetPasswordConfirm({
 
   const isValidResetLink = Boolean(email && token)
 
-  async function handleSubmit() {
+  async function handleSubmit(): Promise<void> {
     if (!isValidResetLink || !email || !token) {
       toast.error(t('Invalid reset link, please request a new password reset'))
       return

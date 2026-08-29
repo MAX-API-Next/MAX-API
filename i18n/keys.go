@@ -121,6 +121,8 @@ const (
 	MsgUserQuotaChangeZero           = "user.quota_change_zero"
 )
 
+const MsgUserPasswordResetSuccessTokensRevoked = "user.password_reset_success_tokens_revoked"
+
 // Quota related messages
 const (
 	MsgQuotaNegative        = "quota.negative"
