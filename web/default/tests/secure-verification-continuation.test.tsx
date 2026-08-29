@@ -16,9 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactElement, ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   afterAll,
   afterEach,
@@ -52,6 +54,7 @@ const gateWithVerification = mock(
     _options?: { scope?: string; title?: string; description?: string }
   ) => apiCall()
 )
+const activeChatVerification = mock(async () => null)
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -113,8 +116,25 @@ mock.module('../src/lib/handle-server-error', () => ({
   handleServerError,
 }))
 
+mock.module('../src/stores/auth-store', () => ({
+  useAuthStore: (selector: (state: unknown) => unknown) =>
+    selector({ auth: { user: { id: 77 } } }),
+}))
+
+mock.module('../src/features/auth/secure-verification', () => ({
+  useApiTokenVerification: () => activeChatVerification,
+}))
+
+mock.module('../src/features/keys/api', () => ({
+  getApiKeys: mock(async () => ({ success: true, data: { items: [] } })),
+  fetchTokenKey: mock(async () => ({ success: false })),
+}))
+
 const { useApiTokenVerification, useSecureVerification } = await import(
   '../src/features/auth/secure-verification/hooks/use-secure-verification'
+)
+const { useActiveChatKey } = await import(
+  '../src/features/chat/hooks/use-active-chat-key'
 )
 const testEnv = createReactTestEnvironment()
 
@@ -142,6 +162,7 @@ beforeEach(() => {
   toastSuccess.mockClear()
   handleServerError.mockClear()
   gateWithVerification.mockClear()
+  activeChatVerification.mockClear()
 })
 
 afterEach(() => cleanup())
@@ -555,5 +576,29 @@ describe('useSecureVerification', () => {
     assert.equal(result.current.open, true)
     act(() => result.current.cancel())
     assert.equal(await continuation, null)
+  })
+})
+
+describe('active chat API-key verification', () => {
+  test('does not retry when secure verification is cancelled', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: 2, retryDelay: 0 },
+      },
+    })
+    interface QueryWrapperProps {
+      children: ReactNode
+    }
+    const wrapper = (props: QueryWrapperProps): ReactElement => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    )
+
+    const { result } = renderHook(() => useActiveChatKey(true), { wrapper })
+
+    await waitFor(() => assert.equal(result.current.isError, true))
+    assert.equal(activeChatVerification.mock.calls.length, 1)
+    queryClient.clear()
   })
 })

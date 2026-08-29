@@ -408,9 +408,10 @@ func ResetPassword(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    password,
+		"success":            true,
+		"message":            "Password reset successfully. For your security, all existing API tokens were revoked; sign in and create new API tokens if needed.",
+		"data":               password,
+		"api_tokens_revoked": true,
 	})
 	return
 }

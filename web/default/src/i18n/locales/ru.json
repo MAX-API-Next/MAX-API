@@ -550,6 +550,7 @@
     "Auth value": "Значение auth",
     "Auth value is required": "Значение auth обязательно",
     "auth.resetPasswordConfirm.backToLogin": "Вернуться ко входу",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "В целях безопасности все существующие API-токены были отозваны. При необходимости войдите в систему и создайте новые.",
     "auth.resetPasswordConfirm.confirm": "Подтвердить сброс пароля",
     "auth.resetPasswordConfirm.description": "Подтвердите запрос на сброс, чтобы создать новый пароль.",
     "auth.resetPasswordConfirm.retry": "Повторить ({{seconds}}с)",

@@ -53,6 +53,93 @@ var ErrBillingFundingOutcomeUnknown = errors.New("billing funding settlement out
 // not mistake it for a durable pending effect or project successful usage.
 var ErrBillingSettlementEffectNotDurable = errors.New("billing settlement effect requires a durable funding source and request id")
 
+const billingSettlementBacklogNotificationInterval = 15 * time.Minute
+
+var billingSettlementBacklogAlertState struct {
+	sync.Mutex
+	active          bool
+	lastCount       int64
+	oldestCreatedAt int64
+	lastNotifiedAt  time.Time
+}
+
+var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
+
+func init() {
+	model.SetBillingSettlementBacklogObserver(observeBillingSettlementBacklog)
+}
+
+func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, observedAt time.Time) {
+	if observedAt.IsZero() {
+		observedAt = time.Now()
+	}
+
+	billingSettlementBacklogAlertState.Lock()
+	wasActive := billingSettlementBacklogAlertState.active
+	previousCount := billingSettlementBacklogAlertState.lastCount
+	previousOldestCreatedAt := billingSettlementBacklogAlertState.oldestCreatedAt
+	if stats.Count <= 0 {
+		billingSettlementBacklogAlertState.active = false
+		billingSettlementBacklogAlertState.lastCount = 0
+		billingSettlementBacklogAlertState.oldestCreatedAt = 0
+		billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+		billingSettlementBacklogAlertState.Unlock()
+		if wasActive {
+			billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
+				Key:          "billing_settlement_backlog",
+				Status:       smartOpsAlertStatusResolved,
+				Severity:     smartOpsAlertSeverityWarning,
+				Component:    "billing",
+				Node:         smartOpsAlertNodeName(),
+				CurrentValue: 0,
+				Threshold:    0,
+				ObservedAt:   observedAt,
+				Message:      fmt.Sprintf("未完成的正向最终计费对账已清空，此前共 %d 条。", previousCount),
+			})
+		}
+		return
+	}
+
+	oldestAge := time.Duration(0)
+	if stats.OldestCreatedAt > 0 {
+		oldestAge = observedAt.Sub(time.Unix(stats.OldestCreatedAt, 0))
+		if oldestAge < 0 {
+			oldestAge = 0
+		}
+	}
+	shouldNotify := !wasActive ||
+		stats.Count != previousCount ||
+		stats.OldestCreatedAt != previousOldestCreatedAt ||
+		billingSettlementBacklogAlertState.lastNotifiedAt.IsZero() ||
+		observedAt.Sub(billingSettlementBacklogAlertState.lastNotifiedAt) >= billingSettlementBacklogNotificationInterval
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = stats.Count
+	billingSettlementBacklogAlertState.oldestCreatedAt = stats.OldestCreatedAt
+	if shouldNotify {
+		billingSettlementBacklogAlertState.lastNotifiedAt = observedAt
+	}
+	billingSettlementBacklogAlertState.Unlock()
+	if !shouldNotify {
+		return
+	}
+
+	billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
+		Key:          "billing_settlement_backlog",
+		Status:       smartOpsAlertStatusFiring,
+		Severity:     smartOpsAlertSeverityWarning,
+		Component:    "billing",
+		Node:         smartOpsAlertNodeName(),
+		CurrentValue: float64(stats.Count),
+		Threshold:    oldestAge.Seconds(),
+		ObservedAt:   observedAt,
+		Message: fmt.Sprintf(
+			"存在 %d 条未完成的正向最终计费对账，最早已等待 %s。相关用户的新付费请求会被阻止，请尽快处理 pending/manual 记录。",
+			stats.Count,
+			oldestAge.Round(time.Second),
+		),
+	})
+}
+
 type SettlementPreparer interface {
 	PrepareSettlement(actualQuota int) (*model.BillingSettlementInput, error)
 }

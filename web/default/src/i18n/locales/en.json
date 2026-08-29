@@ -550,6 +550,7 @@
     "Auth value": "Auth value",
     "Auth value is required": "Auth value is required",
     "auth.resetPasswordConfirm.backToLogin": "Return to login",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "For your security, all existing API tokens were revoked. Sign in and create new API tokens if needed.",
     "auth.resetPasswordConfirm.confirm": "Confirm reset password",
     "auth.resetPasswordConfirm.description": "Confirm the reset request to generate a new password.",
     "auth.resetPasswordConfirm.retry": "Retry ({{seconds}}s)",

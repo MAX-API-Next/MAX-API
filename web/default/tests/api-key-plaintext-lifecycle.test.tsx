@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ReactNode } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
 import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
 import {
@@ -93,12 +93,16 @@ const { ApiKeyCell } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-function CopiedKeyProbe() {
+interface ApiKeysProviderWrapperProps {
+  children: ReactNode
+}
+
+function CopiedKeyProbe(): ReactElement {
   const copiedKeyId = useApiKeys().copiedKeyId
   return <output data-testid='copied-key-id'>{copiedKeyId ?? 'none'}</output>
 }
 
-function wrapper(props: { children: ReactNode }) {
+function wrapper(props: ApiKeysProviderWrapperProps): ReactElement {
   return <ApiKeysProvider>{props.children}</ApiKeysProvider>
 }
 

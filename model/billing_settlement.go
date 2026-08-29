@@ -27,6 +27,8 @@ const (
 const billingRequestOperationPrefix = "request:"
 const billingRequestFinalizeSuffix = ":finalize"
 
+const billingSettlementBacklogSampleInterval = 30 * time.Second
+
 var (
 	ErrBillingSettlementManualReview       = errors.New("billing settlement requires manual review")
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
@@ -156,11 +158,39 @@ type BillingSettlementInput struct {
 	PreConsumeEffectiveQuota int64
 }
 
+// BillingSettlementBacklogStats is a read-only operational projection of
+// positive final settlements that currently block new paid requests.
+type BillingSettlementBacklogStats struct {
+	Count           int64 `gorm:"column:record_count"`
+	OldestCreatedAt int64 `gorm:"column:oldest_created_at"`
+}
+
+func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
+	return db.Model(&BillingSettlement{}).
+		Where("funding_delta > 0").
+		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
+		Where("operation_key LIKE ?", BillingRequestFinalizeOperationKey("%"))
+}
+
 var billingSettlementRunnerOnce sync.Once
 var billingSettlementRunnerState struct {
 	sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+var billingSettlementBacklogObserverState struct {
+	sync.RWMutex
+	observer func(BillingSettlementBacklogStats, time.Time)
+}
+
+// SetBillingSettlementBacklogObserver installs the operational observer used
+// by the background settlement runner. The observer must remain read-only: it
+// may alert operators, but it must not mutate or retry settlement records.
+func SetBillingSettlementBacklogObserver(observer func(BillingSettlementBacklogStats, time.Time)) {
+	billingSettlementBacklogObserverState.Lock()
+	billingSettlementBacklogObserverState.observer = observer
+	billingSettlementBacklogObserverState.Unlock()
 }
 
 // StartBillingSettlementTaskRunner retries durable settlement intents after a
@@ -180,14 +210,19 @@ func StartBillingSettlementTaskRunner() {
 		gopool.Go(func() {
 			defer close(done)
 			ProcessPendingBillingSettlementsOnce()
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			observeBillingSettlementBacklog(time.Now())
+			settlementTicker := time.NewTicker(time.Second)
+			backlogTicker := time.NewTicker(billingSettlementBacklogSampleInterval)
+			defer settlementTicker.Stop()
+			defer backlogTicker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
+				case <-settlementTicker.C:
 					ProcessPendingBillingSettlementsOnce()
+				case observedAt := <-backlogTicker.C:
+					observeBillingSettlementBacklog(observedAt)
 				}
 			}
 		})
@@ -215,6 +250,35 @@ func ProcessPendingBillingSettlementsOnce() {
 	processPendingBillingSettlements()
 }
 
+func observeBillingSettlementBacklog(observedAt time.Time) {
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to query unresolved positive final billing settlements: %s", err.Error()))
+		return
+	}
+	billingSettlementBacklogObserverState.RLock()
+	observer := billingSettlementBacklogObserverState.observer
+	billingSettlementBacklogObserverState.RUnlock()
+	if observer != nil {
+		observer(stats, observedAt)
+	}
+}
+
+// GetUnresolvedPositiveFinalizeSettlementStats returns the global count and
+// oldest creation time for positive request-finalize settlements in pending or
+// manual state. It is intentionally read-only and portable across all supported
+// databases.
+func GetUnresolvedPositiveFinalizeSettlementStats() (BillingSettlementBacklogStats, error) {
+	if DB == nil {
+		return BillingSettlementBacklogStats{}, errors.New("database is not initialized")
+	}
+	var stats BillingSettlementBacklogStats
+	err := unresolvedPositiveFinalizeSettlementScope(DB).
+		Select("COUNT(*) AS record_count, COALESCE(MIN(created_at), 0) AS oldest_created_at").
+		Scan(&stats).Error
+	return stats, err
+}
+
 // HasUnresolvedPositiveFinalizeSettlement reports whether a user has an
 // upstream-accepted request whose positive final settlement has not completed.
 // New paid requests must stop before they can consume more service against the
@@ -229,12 +293,9 @@ func HasUnresolvedPositiveFinalizeSettlement(userID int) (bool, error) {
 	}
 
 	var record BillingSettlement
-	result := DB.Model(&BillingSettlement{}).
+	result := unresolvedPositiveFinalizeSettlementScope(DB).
 		Select("id").
 		Where("user_id = ?", userID).
-		Where("funding_delta > 0").
-		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
-		Where("operation_key LIKE ?", BillingRequestFinalizeOperationKey("%")).
 		Limit(1).
 		Find(&record)
 	if result.Error != nil {

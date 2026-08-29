@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
+import { api } from '@/lib/api'
 import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
@@ -39,9 +41,30 @@ const useApiTokenVerification = mock(
 const handleServerError = mock(
   (_error: unknown, _options?: { fallback?: string }) => undefined
 )
+const navigate = mock(() => undefined)
+const copyToClipboard = mock(async () => true)
+const resetPasswordPost = mock(async () => ({
+  data: {
+    success: true,
+    data: 'NewPassword123',
+    api_tokens_revoked: true,
+  },
+}))
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}))
+
+mock.module('@tanstack/react-router', () => ({
+  Link: (props: { children?: ReactNode }) => <a>{props.children}</a>,
+  Outlet: () => null,
+  useNavigate: () => navigate,
+  useRouterState: (options?: {
+    select?: (state: { location: { pathname: string } }) => unknown
+  }) =>
+    options?.select?.({ location: { pathname: '/' } }) ?? {
+      location: { pathname: '/' },
+    },
 }))
 
 mock.module('sonner', () => ({
@@ -57,8 +80,13 @@ mock.module('@/features/auth/secure-verification', () => ({
 
 mock.module('@/lib/handle-server-error', () => ({ handleServerError }))
 
+mock.module('@/lib/copy-to-clipboard', () => ({ copyToClipboard }))
+
 const { RequestPreview } = await import(
   '../src/features/dashboard/components/overview/overview-dashboard'
+)
+const { ResetPasswordConfirm } = await import(
+  '../src/features/auth/reset-password-confirm'
 )
 const testEnv = createReactTestEnvironment()
 
@@ -68,6 +96,9 @@ beforeEach(() => {
   withApiTokenVerification.mockClear()
   useApiTokenVerification.mockClear()
   handleServerError.mockClear()
+  navigate.mockClear()
+  copyToClipboard.mockClear()
+  resetPasswordPost.mockClear()
 })
 afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
@@ -129,4 +160,38 @@ test('does not duplicate a rejection already reported by verification', async ()
   )
   await waitForCopyToSettle(view)
   assert.equal(handleServerError.mock.calls.length, 0)
+})
+
+test('shows that password recovery revokes existing API tokens', async () => {
+  const originalPost = api.post
+  api.post = resetPasswordPost as typeof api.post
+  try {
+    const view = render(
+      <ResetPasswordConfirm
+        email='recovery@example.com'
+        token='recovery-token'
+      />
+    )
+
+    fireEvent.click(
+      view.getByRole('button', {
+        name: 'auth.resetPasswordConfirm.confirm',
+      })
+    )
+
+    await waitFor(() => {
+      assert.equal(resetPasswordPost.mock.calls.length, 1)
+      assert.ok(
+        (view.container.textContent ?? '').includes(
+          'auth.resetPasswordConfirm.apiTokensRevoked'
+        )
+      )
+    })
+    assert.equal(
+      view.getByDisplayValue('NewPassword123').hasAttribute('disabled'),
+      true
+    )
+  } finally {
+    api.post = originalPost
+  }
 })

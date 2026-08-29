@@ -550,6 +550,7 @@
     "Auth value": "Valeur auth",
     "Auth value is required": "La valeur auth est requise",
     "auth.resetPasswordConfirm.backToLogin": "Retour à la connexion",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "Pour votre sécurité, tous les jetons API existants ont été révoqués. Connectez-vous et créez-en de nouveaux si nécessaire.",
     "auth.resetPasswordConfirm.confirm": "Confirmer la réinitialisation du mot de passe",
     "auth.resetPasswordConfirm.description": "Confirmez la demande de réinitialisation pour générer un nouveau mot de passe.",
     "auth.resetPasswordConfirm.retry": "Réessayer ({{seconds}}s)",

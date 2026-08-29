@@ -38,6 +38,68 @@ type uncertainFundingSource struct {
 	err     error
 }
 
+func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	billingSettlementBacklogAlertState.Lock()
+	originalState := struct {
+		active          bool
+		lastCount       int64
+		oldestCreatedAt int64
+		lastNotifiedAt  time.Time
+	}{
+		active:          billingSettlementBacklogAlertState.active,
+		lastCount:       billingSettlementBacklogAlertState.lastCount,
+		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
+		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+	}
+	billingSettlementBacklogAlertState.active = false
+	billingSettlementBacklogAlertState.lastCount = 0
+	billingSettlementBacklogAlertState.oldestCreatedAt = 0
+	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+		billingSettlementBacklogAlertState.Lock()
+		billingSettlementBacklogAlertState.active = originalState.active
+		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
+		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
+		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.Unlock()
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+	now := time.Unix(10_000, 0)
+	stats := model.BillingSettlementBacklogStats{Count: 2, OldestCreatedAt: now.Add(-2 * time.Hour).Unix()}
+
+	observeBillingSettlementBacklog(stats, now)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, smartOpsAlertStatusFiring, alerts[0].Status)
+	assert.Equal(t, "billing", alerts[0].Component)
+	assert.Equal(t, float64(2), alerts[0].CurrentValue)
+	assert.Equal(t, (2 * time.Hour).Seconds(), alerts[0].Threshold)
+	assert.Contains(t, alerts[0].Message, "2 条")
+	assert.Contains(t, alerts[0].Message, "2h0m0s")
+
+	observeBillingSettlementBacklog(stats, now.Add(time.Minute))
+	require.Len(t, alerts, 1, "an unchanged backlog must be deduplicated inside the reminder interval")
+
+	stats.Count = 3
+	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute))
+	require.Len(t, alerts, 2)
+	assert.Equal(t, float64(3), alerts[1].CurrentValue)
+
+	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute+billingSettlementBacklogNotificationInterval))
+	require.Len(t, alerts, 3, "a persistent backlog must produce an age reminder")
+
+	observeBillingSettlementBacklog(model.BillingSettlementBacklogStats{}, now.Add(20*time.Minute))
+	require.Len(t, alerts, 4)
+	assert.Equal(t, smartOpsAlertStatusResolved, alerts[3].Status)
+	assert.Contains(t, alerts[3].Message, "此前共 3 条")
+}
+
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }
 func (f *uncertainFundingSource) PreConsume(int) error { return nil }
 func (f *uncertainFundingSource) Refund() error        { return nil }

@@ -550,6 +550,7 @@
     "Auth value": "Giá trị xác thực",
     "Auth value is required": "Bắt buộc giá trị xác thực",
     "auth.resetPasswordConfirm.backToLogin": "Quay lại đăng nhập",
+    "auth.resetPasswordConfirm.apiTokensRevoked": "Để bảo vệ tài khoản, tất cả API token hiện có đã bị thu hồi. Hãy đăng nhập và tạo token mới nếu cần.",
     "auth.resetPasswordConfirm.confirm": "Xác nhận đặt lại mật khẩu",
     "auth.resetPasswordConfirm.description": "Xác nhận yêu cầu đặt lại để tạo mật khẩu mới.",
     "auth.resetPasswordConfirm.retry": "Thử lại ({{seconds}} giây)",

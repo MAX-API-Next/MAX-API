@@ -58,11 +58,12 @@ func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	const blockingUserID = 941
 	const nonBlockingUserID = 942
 	now := time.Now().Unix()
+	oldest := now - int64(time.Hour/time.Second)
 	records := []BillingSettlement{
 		{
 			OperationKey: "request:pending-finalize:finalize", Source: BillingSettlementSourceWallet,
 			UserID: blockingUserID, FundingDelta: 10, TokenDelta: 10,
-			Status: BillingSettlementStatusPending, NextAttempt: now, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			Status: BillingSettlementStatusPending, NextAttempt: now, CreatedAt: oldest, UpdatedAt: now, Revision: 1,
 		},
 		{
 			OperationKey: "request:manual-finalize:finalize", Source: BillingSettlementSourceWallet,
@@ -90,6 +91,17 @@ func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	blocked, err = HasUnresolvedPositiveFinalizeSettlement(nonBlockingUserID)
 	require.NoError(t, err)
 	assert.False(t, blocked)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, stats.Count)
+	assert.Equal(t, oldest, stats.OldestCreatedAt)
+
+	require.NoError(t, DB.Where("user_id = ?", blockingUserID).Delete(&BillingSettlement{}).Error)
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count)
+	assert.Zero(t, stats.OldestCreatedAt)
 }
 
 func TestBillingRequestFinalizeOperationKey(t *testing.T) {

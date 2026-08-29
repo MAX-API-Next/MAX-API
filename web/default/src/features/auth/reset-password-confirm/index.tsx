@@ -44,6 +44,7 @@ export function ResetPasswordConfirm({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [newPassword, setNewPassword] = useState('')
+  const [apiTokensRevoked, setApiTokensRevoked] = useState(false)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const {
@@ -70,6 +71,7 @@ export function ResetPasswordConfirm({
       if (res?.data?.success) {
         const password = res.data.data
         setNewPassword(password)
+        setApiTokensRevoked(res.data.api_tokens_revoked === true)
         const copySuccess = await copyToClipboard(password)
         if (copySuccess) {
           toast.success(
@@ -138,31 +140,40 @@ export function ResetPasswordConfirm({
           </div>
 
           {newPassword && (
-            <div className='space-y-2'>
-              <Label htmlFor='password'>{t('New password')}</Label>
-              <div className='flex gap-2'>
-                <Input
-                  id='password'
-                  value={newPassword}
-                  disabled
-                  className='font-mono'
-                />
-                <Button
-                  type='button'
-                  size='icon'
-                  variant='outline'
-                  onClick={handleCopy}
-                >
-                  {copied ? (
-                    <CheckIcon className='h-4 w-4' />
-                  ) : (
-                    <CopyIcon className='h-4 w-4' />
-                  )}
-                </Button>
+            <div className='space-y-3'>
+              <div className='space-y-2'>
+                <Label htmlFor='password'>{t('New password')}</Label>
+                <div className='flex gap-2'>
+                  <Input
+                    id='password'
+                    value={newPassword}
+                    disabled
+                    className='font-mono'
+                  />
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='outline'
+                    onClick={handleCopy}
+                  >
+                    {copied ? (
+                      <CheckIcon className='h-4 w-4' />
+                    ) : (
+                      <CopyIcon className='h-4 w-4' />
+                    )}
+                  </Button>
+                </div>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Password has been copied to clipboard')}
+                </p>
               </div>
-              <p className='text-muted-foreground text-xs'>
-                {t('Password has been copied to clipboard')}
-              </p>
+              {apiTokensRevoked && (
+                <Alert role='status'>
+                  <AlertDescription>
+                    {t('auth.resetPasswordConfirm.apiTokensRevoked')}
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
           )}
 
