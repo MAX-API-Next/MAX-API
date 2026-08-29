@@ -162,13 +162,11 @@ export function useSecureVerification(
       config: StartVerificationOptions,
       attemptId: number
     ): Promise<boolean> => {
-      const { preferredMethod, allowedMethods, title, description, scope } =
-        config
       let availableMethods: VerificationMethods
       try {
         availableMethods = restrictVerificationMethods(
-          await loadVerificationMethods(scope),
-          allowedMethods
+          await loadVerificationMethods(config.scope),
+          config.allowedMethods
         )
       } catch (error) {
         if (!isVerificationAttemptActive(attemptId)) return false
@@ -203,7 +201,7 @@ export function useSecureVerification(
 
       const defaultMethod = selectVerificationMethod(
         availableMethods,
-        preferredMethod
+        config.preferredMethod
       )
 
       setState((prev) => ({
@@ -211,9 +209,9 @@ export function useSecureVerification(
         apiCall,
         attemptId,
         method: defaultMethod,
-        title,
-        description,
-        scope,
+        title: config.title,
+        description: config.description,
+        scope: config.scope,
       }))
       setDialogOpen(true)
       return true

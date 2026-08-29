@@ -70,6 +70,7 @@ const handleServerError = mock(
 )
 const navigate = mock(() => undefined)
 const copyToClipboard = mock(async () => true)
+const toastSuccess = mock(() => undefined)
 const resetPasswordPost = mock(async () => ({
   data: {
     success: true,
@@ -98,7 +99,7 @@ mock.module('@tanstack/react-router', () => ({
 mock.module('sonner', () => ({
   toast: {
     error: mock(() => undefined),
-    success: mock(() => undefined),
+    success: toastSuccess,
   },
 }))
 
@@ -129,6 +130,7 @@ beforeEach(() => {
   handleServerError.mockClear()
   navigate.mockClear()
   copyToClipboard.mockClear()
+  toastSuccess.mockClear()
   resetPasswordPost.mockClear()
   consoleError.mockClear()
 })
@@ -223,10 +225,46 @@ test('shows that password recovery revokes existing API tokens', async () => {
       )
     })
     assert.ok(view.getByRole('button', { name: 'Copy password' }))
+    assert.ok(view.getByText('Password has been copied to clipboard'))
     assert.equal(
       view.getByDisplayValue('NewPassword123').hasAttribute('disabled'),
       true
     )
+  } finally {
+    api.post = originalPost
+  }
+})
+
+test('does not claim the reset password was copied when clipboard access fails', async () => {
+  copyToClipboard.mockImplementationOnce(async () => false)
+  const originalPost = api.post
+  api.post = resetPasswordPost as typeof api.post
+  try {
+    const view = render(
+      <ResetPasswordConfirm
+        email='recovery@example.com'
+        token='recovery-token'
+      />
+    )
+
+    fireEvent.click(
+      view.getByRole('button', {
+        name: 'auth.resetPasswordConfirm.confirm',
+      })
+    )
+
+    await waitFor(() => {
+      assert.ok(view.getByDisplayValue('NewPassword123'))
+      assert.equal(
+        view.queryByText('Password has been copied to clipboard'),
+        null
+      )
+      assert.equal(toastSuccess.mock.calls.length, 1)
+      assert.equal(
+        toastSuccess.mock.calls[0]?.[0],
+        'Password reset: {{password}}'
+      )
+    })
   } finally {
     api.post = originalPost
   }

@@ -50,6 +50,7 @@ export function ResetPasswordConfirm(
   const navigate = useNavigate()
   const [newPassword, setNewPassword] = useState('')
   const [apiTokensRevoked, setApiTokensRevoked] = useState(false)
+  const [autoCopied, setAutoCopied] = useState(false)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const {
@@ -80,6 +81,7 @@ export function ResetPasswordConfirm(
         setNewPassword(password)
         setApiTokensRevoked(res.data.api_tokens_revoked === true)
         const copySuccess = await copyToClipboard(password)
+        setAutoCopied(copySuccess)
         if (copySuccess) {
           toast.success(
             t('Password reset and copied to clipboard: {{password}}', {
@@ -171,9 +173,11 @@ export function ResetPasswordConfirm(
                     )}
                   </Button>
                 </div>
-                <p className='text-muted-foreground text-xs'>
-                  {t('Password has been copied to clipboard')}
-                </p>
+                {(autoCopied || copied) && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Password has been copied to clipboard')}
+                  </p>
+                )}
               </div>
               {apiTokensRevoked && (
                 <Alert role='status'>

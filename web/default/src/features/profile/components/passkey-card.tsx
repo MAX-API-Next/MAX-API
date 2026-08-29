@@ -73,7 +73,7 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
 
   const { withVerification } = useSecureVerificationGate()
 
-  const handleRegister = useCallback(async () => {
+  const handleRegister = useCallback(async (): Promise<void> => {
     if (!supported) {
       toast.info(t('This device does not support Passkey'))
       return

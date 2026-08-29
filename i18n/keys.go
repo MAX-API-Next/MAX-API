@@ -132,6 +132,9 @@ const (
 	MsgQuotaThresholdGtZero = "quota.threshold_gt_zero"
 )
 
+// Billing related messages
+const MsgBillingReconciliationPending = "billing.reconciliation_pending"
+
 // Subscription related messages
 const (
 	MsgSubscriptionNotEnabled       = "subscription.not_enabled"

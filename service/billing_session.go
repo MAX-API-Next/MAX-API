@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -935,8 +936,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	} else if blocked {
 		return nil, types.NewErrorWithStatusCode(
-			errors.New("存在未完成的计费对账，请勿重复提交请求并联系管理员处理"),
-			types.ErrorCodeInsufficientUserQuota,
+			errors.New(i18n.Translate(relayInfo.UserSetting.Language, i18n.MsgBillingReconciliationPending)),
+			types.ErrorCodeBillingReconciliationPending,
 			http.StatusForbidden,
 			types.ErrOptionWithSkipRetry(),
 			types.ErrOptionWithNoRecordErrorLog(),

@@ -10,6 +10,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -667,6 +668,7 @@ func TestBillingSessionWalletPreConsumeUsesDurableRequestIdentity(t *testing.T) 
 }
 
 func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	truncate(t)
 	const userID, tokenID = 851, 852
 	seedUser(t, userID, 100)
@@ -692,17 +694,30 @@ func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing
 		TokenId:         tokenID,
 		TokenKey:        "unresolved-finalize-token",
 		OriginModelName: "blocked-finalize-model",
-		UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+		UserSetting: dto.UserSetting{
+			BillingPreference: "wallet_only",
+			Language:          i18n.LangEn,
+		},
 	}, 10)
 
 	require.Nil(t, session)
 	require.NotNil(t, apiErr)
-	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.Equal(
+		t,
+		types.ErrorCodeBillingReconciliationPending,
+		apiErr.GetErrorCode(),
+	)
+	assert.Equal(
+		t,
+		"Billing reconciliation is incomplete. Do not submit another request; contact an administrator for assistance.",
+		apiErr.Error(),
+	)
 	assert.EqualValues(t, 100, getUserQuota(t, userID))
 	assert.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
 }
 
 func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
+	require.NoError(t, i18n.Init())
 	truncate(t)
 	const userID, tokenID = 853, 854
 	seedUser(t, userID, 15)
@@ -715,7 +730,10 @@ func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
 			TokenId:         tokenID,
 			TokenKey:        "insufficient-finalize-token",
 			OriginModelName: "insufficient-finalize-model",
-			UserSetting:     dto.UserSetting{BillingPreference: "wallet_only"},
+			UserSetting: dto.UserSetting{
+				BillingPreference: "wallet_only",
+				Language:          i18n.LangZhCN,
+			},
 		}
 	}
 
@@ -734,7 +752,12 @@ func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
 	nextSession, nextErr := NewBillingSession(ctx, newInfo("blocked-after-insufficient-finalize"), 5)
 	require.Nil(t, nextSession)
 	require.NotNil(t, nextErr)
-	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, nextErr.GetErrorCode())
+	assert.Equal(
+		t,
+		types.ErrorCodeBillingReconciliationPending,
+		nextErr.GetErrorCode(),
+	)
+	assert.Equal(t, "存在未完成的计费对账，请勿重复提交请求并联系管理员处理", nextErr.Error())
 	assert.EqualValues(t, 5, getUserQuota(t, userID))
 	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
 }

@@ -110,11 +110,13 @@ type MockSheetProps = {
   children?: ReactNode
 }
 
+const verificationResult = { declined: false }
+
 mock.module('../src/features/auth/secure-verification', () => ({
   useApiTokenVerification:
     () =>
-    <T,>(apiCall: () => Promise<T>) =>
-      apiCall(),
+    <T,>(apiCall: () => Promise<T>): Promise<T | null> =>
+      verificationResult.declined ? Promise.resolve(null) : apiCall(),
 }))
 
 mock.module('react-i18next', () => ({
@@ -220,6 +222,7 @@ beforeEach(() => {
   createApiKey.mockClear()
   updateApiKey.mockClear()
   getApiKey.mockClear()
+  verificationResult.declined = false
   resolveTokenKeyRequest = undefined
   rejectTokenKeysBatchRequest = undefined
 })
@@ -232,6 +235,77 @@ afterEach(async () => {
 afterAll(() => testEnv.teardown())
 
 describe('API key plaintext lifecycle', () => {
+  test('treats declined batch verification as cancellation and clears loading state', async () => {
+    verificationResult.declined = true
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    await act(async () => {
+      assert.deepEqual(await result.current.resolveRealKeysBatch([207, 208]), {})
+    })
+
+    assert.equal(fetchTokenKeysBatch.mock.calls.length, 0)
+    assert.equal(toastError.mock.calls.length, 0)
+    assert.equal(result.current.loadingKeys[207], undefined)
+    assert.equal(result.current.loadingKeys[208], undefined)
+  })
+
+  test('treats declined single-key verification as cancellation without an error toast', async () => {
+    verificationResult.declined = true
+    const { result } = renderHook(() => useApiKeys(), { wrapper })
+
+    await act(async () => {
+      assert.equal(await result.current.resolveRealKey(209), null)
+    })
+
+    assert.equal(fetchTokenKey.mock.calls.length, 0)
+    assert.equal(toastError.mock.calls.length, 0)
+    assert.equal(result.current.loadingKeys[209], undefined)
+  })
+
+  test('stops copy cleanly when API key verification is declined', async () => {
+    verificationResult.declined = true
+    const view = render(
+      <ApiKeysProvider>
+        <ApiKeyCell
+          apiKey={{
+            id: 210,
+            name: 'declined-copy-test',
+            key: 'masked-key',
+            status: 1,
+            remain_quota: 100,
+            used_quota: 0,
+            unlimited_quota: false,
+            expired_time: -1,
+            created_time: 0,
+            accessed_time: 0,
+            group: 'default',
+            cross_group_retry: false,
+            routing: null,
+            model_limits_enabled: false,
+            model_limits: '',
+            allow_ips: '',
+          }}
+        />
+        <CopiedKeyProbe />
+      </ApiKeysProvider>
+    )
+
+    fireEvent.click(view.getByRole('button', { name: 'Copy API key' }))
+
+    await waitFor(() => {
+      assert.equal(fetchTokenKey.mock.calls.length, 0)
+      assert.equal(copyToClipboard.mock.calls.length, 0)
+      assert.equal(toastError.mock.calls.length, 0)
+      assert.equal(view.getByTestId('copied-key-id').textContent, 'none')
+      assert.equal(
+        view
+          .getByRole('button', { name: 'Copy API key' })
+          .hasAttribute('disabled'),
+        false
+      )
+    })
+  })
+
   test('reports batch reveal failures and clears every loading state', async () => {
     fetchTokenKeysBatch.mockImplementationOnce(
       () =>

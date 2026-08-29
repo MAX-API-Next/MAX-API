@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import type { ReactElement } from 'react'
 import { RefreshCw, Send } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -42,18 +43,20 @@ interface TelegramBindDialogProps {
   onSuccess: () => void
 }
 
-export function TelegramBindDialog({
-  open,
-  onOpenChange,
-  botName,
-  onSuccess,
-}: TelegramBindDialogProps) {
+export function TelegramBindDialog(
+  props: TelegramBindDialogProps
+): ReactElement {
   const { t } = useTranslation()
   const { widgetContainerRef, status, errorMessage, retry, handleOpenChange } =
-    useTelegramLoginWidget({ open, onOpenChange, botName, onSuccess })
+    useTelegramLoginWidget({
+      open: props.open,
+      onOpenChange: props.onOpenChange,
+      botName: props.botName,
+      onSuccess: props.onSuccess,
+    })
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={props.open} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>{t('Bind Telegram Account')}</DialogTitle>
@@ -83,7 +86,9 @@ export function TelegramBindDialog({
             <div className='text-center'>
               <p className='text-muted-foreground text-sm'>
                 {t('Bot:')}{' '}
-                <span className='font-mono font-semibold'>@{botName}</span>
+                <span className='font-mono font-semibold'>
+                  @{props.botName}
+                </span>
               </p>
               <p className='text-muted-foreground mt-1 text-xs'>
                 {t(

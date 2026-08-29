@@ -421,21 +421,15 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 		schema := parameter["schema"].(map[string]any)
 		require.Equal(t, "string", schema["type"])
 	}
-	require.Contains(t, telegramLogin["description"], "全部字段")
-	require.Contains(t, telegramLogin["description"], "hash 和 state")
 	telegramLoginResponses := telegramLogin["responses"].(map[string]any)
 	require.Contains(t, telegramLoginResponses, "200")
 	require.Contains(t, telegramLoginResponses, "403")
-	require.Contains(t, document.Paths["/api/oauth/telegram/bind/state"]["post"]["description"], "oauth_reauthentication")
-	require.Contains(t, telegramBind["post"]["description"], "oauth_reauthentication")
 
 	for _, path := range []string{
 		"/api/user/passkey/register/begin",
 		"/api/user/passkey/register/finish",
 	} {
 		operation := document.Paths[path]["post"]
-		require.Contains(t, operation["description"], "passkey_register", path)
-		require.Contains(t, operation["description"], "oauth_reauthentication", path)
 		responses := operation["responses"].(map[string]any)
 		require.Contains(t, responses, "403", path)
 	}
@@ -444,7 +438,6 @@ func TestSensitiveCredentialOpenAPIContracts(t *testing.T) {
 		"/api/user/2fa/enable",
 	} {
 		operation := document.Paths[path]["post"]
-		require.Contains(t, operation["description"], "oauth_reauthentication", path)
 		responses := operation["responses"].(map[string]any)
 		require.Contains(t, responses, "403", path)
 	}

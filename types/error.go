@@ -86,6 +86,9 @@ const (
 	// quota error
 	ErrorCodeInsufficientUserQuota      ErrorCode = "insufficient_user_quota"
 	ErrorCodePreConsumeTokenQuotaFailed ErrorCode = "pre_consume_token_quota_failed"
+
+	// billing error
+	ErrorCodeBillingReconciliationPending ErrorCode = "billing_reconciliation_pending"
 )
 
 type MaxAPIError struct {

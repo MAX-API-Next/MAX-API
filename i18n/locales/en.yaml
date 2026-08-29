@@ -116,6 +116,9 @@ quota.insufficient: "Insufficient quota"
 quota.warning_invalid: "Invalid warning type"
 quota.threshold_gt_zero: "Warning threshold must be greater than 0"
 
+# Billing messages
+billing.reconciliation_pending: "Billing reconciliation is incomplete. Do not submit another request; contact an administrator for assistance."
+
 # Subscription messages
 subscription.not_enabled: "Subscription plan is not enabled"
 subscription.title_empty: "Subscription plan title cannot be empty"

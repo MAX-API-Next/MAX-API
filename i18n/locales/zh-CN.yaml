@@ -117,6 +117,9 @@ quota.insufficient: "额度不足"
 quota.warning_invalid: "无效的预警类型"
 quota.threshold_gt_zero: "预警阈值必须大于0"
 
+# Billing messages
+billing.reconciliation_pending: "存在未完成的计费对账，请勿重复提交请求并联系管理员处理"
+
 # Subscription messages
 subscription.not_enabled: "套餐未启用"
 subscription.title_empty: "套餐标题不能为空"
