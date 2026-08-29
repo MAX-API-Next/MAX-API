@@ -41,12 +41,7 @@ export function useTwoFA(enabled = true) {
       setLoading(true)
       const response = await get2FAStatus()
       if (response.success && response.data) {
-        setStatus({
-          enabled: response.data.enabled,
-          locked: response.data.locked,
-          backup_codes_remaining:
-            response.data.backup_codes_remaining ?? 0,
-        })
+        setStatus(response.data)
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -57,7 +52,6 @@ export function useTwoFA(enabled = true) {
   }, [enabled])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Fetching remote status on mount updates this hook's loading and status state asynchronously.
     fetchStatus()
   }, [fetchStatus])
 
