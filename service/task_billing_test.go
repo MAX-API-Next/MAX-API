@@ -897,6 +897,63 @@ func TestProcessSunoTaskResponseWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
 }
 
+func TestProcessSunoStoredFailureWaitsForSubmissionSettlement(t *testing.T) {
+	for index, settlementStatus := range []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+	} {
+		t.Run(settlementStatus, func(t *testing.T) {
+			truncate(t)
+			userID := 720 + index
+			now := time.Now().Unix()
+			seedUser(t, userID, 900)
+
+			task := makeTask(userID, 0, 100, 0, BillingSourceWallet, 0)
+			task.Platform = constant.TaskPlatformSuno
+			task.Status = model.TaskStatusFailure
+			task.Progress = "50%"
+			task.FailReason = "stored provider failure"
+			task.PrivateData.BillingRequestId = "suno-stored-failure-" + settlementStatus
+			persistTask(t, task)
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{
+				OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+				Source:       model.BillingSettlementSourceWallet, UserID: userID,
+				Status: settlementStatus, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			}).Error)
+
+			response := dto.SunoDataResponse{TaskID: task.TaskID, Data: task.Data}
+			processSunoTaskResponse(context.Background(), task, response)
+
+			var blocked model.Task
+			require.NoError(t, model.DB.First(&blocked, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blocked.Status)
+			assert.Equal(t, "50%", blocked.Progress)
+			assert.Equal(t, 100, blocked.Quota)
+			assert.EqualValues(t, 900, getUserQuota(t, userID))
+			var refundCount int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).
+				Count(&refundCount).Error)
+			assert.Zero(t, refundCount)
+
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
+				Update("status", model.BillingSettlementStatusApplied).Error)
+			processSunoTaskResponse(context.Background(), &blocked, response)
+
+			require.NoError(t, model.DB.First(&blocked, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blocked.Status)
+			assert.Equal(t, "100%", blocked.Progress)
+			assert.Zero(t, blocked.Quota)
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+		})
+	}
+}
+
 func TestMidjourneyTerminalCallbackWaitsForSubmissionSettlement(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 704, 705

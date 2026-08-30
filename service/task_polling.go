@@ -276,8 +276,23 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	if !taskNeedsUpdate(task, responseItem) {
 		return
 	}
-	providerTerminal := responseItem.Status == string(model.TaskStatusSuccess) ||
-		responseItem.Status == string(model.TaskStatusFailure) || responseItem.FailReason != ""
+	mergedTask := *task
+	mergedTask.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(mergedTask.Status)
+	mergedTask.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(mergedTask.FailReason)
+	mergedTask.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(mergedTask.SubmitTime)
+	mergedTask.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(mergedTask.StartTime)
+	mergedTask.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(mergedTask.FinishTime)
+	isFailure := responseItem.FailReason != "" || mergedTask.Status == model.TaskStatusFailure
+	if isFailure {
+		mergedTask.Status = model.TaskStatusFailure
+		mergedTask.Progress = "100%"
+	}
+	if responseItem.Status == model.TaskStatusSuccess {
+		mergedTask.Progress = "100%"
+	}
+	mergedTask.Data = responseItem.Data
+	providerTerminal := mergedTask.Status == model.TaskStatusSuccess ||
+		mergedTask.Status == model.TaskStatusFailure || mergedTask.FailReason != ""
 	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
 	if settlementErr != nil {
 		logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, settlementErr))
@@ -288,21 +303,10 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	}
 
 	previousStatus := task.Status
-	task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
-	task.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(task.FailReason)
-	task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
-	task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
-	task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
-	isFailure := responseItem.FailReason != "" || task.Status == model.TaskStatusFailure
+	*task = mergedTask
 	if isFailure {
 		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
-		task.Status = model.TaskStatusFailure
-		task.Progress = "100%"
 	}
-	if responseItem.Status == model.TaskStatusSuccess {
-		task.Progress = "100%"
-	}
-	task.Data = responseItem.Data
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
