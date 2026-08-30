@@ -151,7 +151,9 @@ const verificationRequiredError = {
   },
 }
 
-beforeAll(() => testEnv.setup())
+beforeAll(async (): Promise<void> => {
+  await testEnv.setup()
+})
 
 beforeEach(() => {
   checkVerificationMethods.mockClear()

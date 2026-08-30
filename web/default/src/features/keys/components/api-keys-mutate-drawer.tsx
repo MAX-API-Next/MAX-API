@@ -294,7 +294,7 @@ export function ApiKeysMutateDrawer(
     }
   }, [props.open, isUpdate, currentRowId, form, groupsLoading, t])
 
-  const onSubmit = async (data: ApiKeyFormValues) => {
+  const onSubmit = async (data: ApiKeyFormValues): Promise<void> => {
     setIsSubmitting(true)
     let created = 0
     try {
