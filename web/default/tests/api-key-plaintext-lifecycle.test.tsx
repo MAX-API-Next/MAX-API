@@ -69,7 +69,10 @@ const toastSuccess = mock(() => undefined)
 const createApiKey = mock(async () => ({ success: true }))
 const updateApiKey = mock(async () => ({ success: true }))
 const getApiKey = mock(async () => ({ success: false }))
-const translate = (key: string, values?: Record<string, unknown>) =>
+const translate = (
+  key: string,
+  values?: Record<string, unknown>
+): string =>
   key.replace(/{{\s*(\w+)\s*}}/g, (match, name: string) => {
     const value = values?.[name]
     return value === undefined ? match : String(value)

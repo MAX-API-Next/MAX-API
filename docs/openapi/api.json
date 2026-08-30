@@ -2576,7 +2576,7 @@
                   },
                   "scope": {
                     "type": "string",
-                    "description": "验证作用域；验证结果仅可用于明确允许该作用域的敏感操作",
+                    "description": "验证作用域；验证结果仅可用于明确允许该作用域的敏感操作。oauth_reauthentication 仅在完成 OAuth 登录后由登录流程授予，不属于本接口可提交值",
                     "enum": [
                       "access_token",
                       "account_delete",
@@ -2619,7 +2619,7 @@
             "name": "scope",
             "in": "query",
             "required": false,
-            "description": "验证作用域；无 2FA 或 Passkey 的用户可使用当前密码完成对应作用域的验证",
+            "description": "验证作用域；无 2FA 或 Passkey 的用户可使用当前密码完成对应作用域的验证。oauth_reauthentication 仅在完成 OAuth 登录后由登录流程授予，不属于本接口可查询值",
             "schema": {
               "type": "string",
               "enum": [

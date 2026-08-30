@@ -250,11 +250,6 @@ func TestModelPriceHelperUsesConfiguredPreConsumedQuotaAsPromptEstimateFloor(t *
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	info := &relaycommon.RelayInfo{
-		OriginModelName: "ratio-preconsume-test",
-		UserGroup:       "default",
-		UsingGroup:      "default",
-	}
 
 	for _, test := range []struct {
 		name        string
@@ -267,6 +262,11 @@ func TestModelPriceHelperUsesConfiguredPreConsumedQuotaAsPromptEstimateFloor(t *
 		{name: "includes completion estimate", prompt: 50, maxTokens: 100, expectedPre: 150},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "ratio-preconsume-test",
+				UserGroup:       "default",
+				UsingGroup:      "default",
+			}
 			priceData, err := ModelPriceHelper(ctx, info, test.prompt, &types.TokenCountMeta{MaxTokens: test.maxTokens})
 
 			require.NoError(t, err)

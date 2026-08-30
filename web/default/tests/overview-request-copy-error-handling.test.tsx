@@ -81,14 +81,16 @@ const resetPasswordPost = mock(async () => ({
 }))
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
+type LinkProps = {
+  children?: ReactNode
+}
+
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
 mock.module('@tanstack/react-router', () => ({
-  Link: (props: { children?: ReactNode }): ReactElement => (
-    <a>{props.children}</a>
-  ),
+  Link: (props: LinkProps): ReactElement => <a>{props.children}</a>,
   Outlet: (): null => null,
   useNavigate: () => navigate,
   useRouterState: (options?: {
