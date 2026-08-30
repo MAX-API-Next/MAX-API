@@ -85,11 +85,15 @@ describe('formatLocalizedCount', () => {
 
     assert.equal(
       formatDurationSeconds(90_061, 'ru', instance.t),
-      'Дни: 1 Часы: 1'
+      'Дней: 1 Часов: 1'
     )
     assert.equal(
       formatDurationSeconds(180_122, 'ru', instance.t),
-      'Дни: 2 Часы: 2'
+      'Дней: 2 Часов: 2'
+    )
+    assert.equal(
+      formatDurationSeconds(61, 'ru', instance.t),
+      'Минут: 1 Секунд: 1'
     )
     assert.equal(
       formatLocalizedCount(
