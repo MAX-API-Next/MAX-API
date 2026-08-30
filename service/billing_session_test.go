@@ -10,6 +10,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -32,12 +33,496 @@ func (f *recordingFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
+type uncertainFundingSource struct {
+	deltas  []int
+	applied int64
+	err     error
+}
+
+func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	billingSettlementBacklogAlertState.Lock()
+	originalState := struct {
+		active          bool
+		lastCount       int64
+		oldestCreatedAt int64
+		lastNotifiedAt  time.Time
+	}{
+		active:          billingSettlementBacklogAlertState.active,
+		lastCount:       billingSettlementBacklogAlertState.lastCount,
+		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
+		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+	}
+	billingSettlementBacklogAlertState.active = false
+	billingSettlementBacklogAlertState.lastCount = 0
+	billingSettlementBacklogAlertState.oldestCreatedAt = 0
+	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+		billingSettlementBacklogAlertState.Lock()
+		billingSettlementBacklogAlertState.active = originalState.active
+		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
+		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
+		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.Unlock()
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+	now := time.Unix(10_000, 0)
+	stats := model.BillingSettlementBacklogStats{Count: 2, OldestCreatedAt: now.Add(-2 * time.Hour).Unix()}
+
+	observeBillingSettlementBacklog(stats, now)
+	require.Len(t, alerts, 1)
+	assert.Equal(t, smartOpsAlertStatusFiring, alerts[0].Status)
+	assert.Equal(t, "billing", alerts[0].Component)
+	assert.Equal(t, float64(2), alerts[0].CurrentValue)
+	assert.Equal(t, (2 * time.Hour).Seconds(), alerts[0].Threshold)
+	assert.Contains(t, alerts[0].Message, "2 条")
+	assert.Contains(t, alerts[0].Message, "2h0m0s")
+
+	observeBillingSettlementBacklog(stats, now.Add(time.Minute))
+	require.Len(t, alerts, 1, "an unchanged backlog must be deduplicated inside the reminder interval")
+
+	stats.Count = 3
+	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute))
+	require.Len(t, alerts, 2)
+	assert.Equal(t, float64(3), alerts[1].CurrentValue)
+
+	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute+billingSettlementBacklogNotificationInterval))
+	require.Len(t, alerts, 3, "a persistent backlog must produce an age reminder")
+
+	observeBillingSettlementBacklog(model.BillingSettlementBacklogStats{}, now.Add(20*time.Minute))
+	require.Len(t, alerts, 4)
+	assert.Equal(t, smartOpsAlertStatusResolved, alerts[3].Status)
+	assert.Contains(t, alerts[3].Message, "此前共 3 条")
+}
+
+func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }
+func (f *uncertainFundingSource) PreConsume(int) error { return nil }
+func (f *uncertainFundingSource) Refund() error        { return nil }
+func (f *uncertainFundingSource) Settle(delta int) (int64, error) {
+	f.deltas = append(f.deltas, delta)
+	return f.applied, f.err
+}
+
+func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *testing.T) {
+	originalSender := billingFundingOutcomeUnknownAlertNotificationSender
+	var alerts []SmartOpsAlert
+	var activeSession *BillingSession
+	var senderObservedUnlocked bool
+	billingFundingOutcomeUnknownAlertNotificationSender = func(alert SmartOpsAlert) {
+		if activeSession != nil && activeSession.mu.TryLock() {
+			senderObservedUnlocked = true
+			activeSession.mu.Unlock()
+		}
+		alerts = append(alerts, alert)
+	}
+	t.Cleanup(func() {
+		billingFundingOutcomeUnknownAlertNotificationSender = originalSender
+	})
+
+	cases := []struct {
+		name    string
+		applied int64
+		err     error
+	}{
+		{name: "error after possible commit", applied: 5, err: errors.New("provider timeout")},
+		{name: "partial result", applied: 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			alerts = nil
+			senderObservedUnlocked = false
+			funding := &uncertainFundingSource{applied: tc.applied, err: tc.err}
+			session := &BillingSession{
+				relayInfo: &relaycommon.RelayInfo{UserId: 101, TokenId: 102, TokenKey: "uncertain-funding-token"},
+				funding:   funding, preConsumedQuota: 10,
+			}
+			activeSession = session
+
+			err := session.Settle(15)
+			require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
+			assert.Equal(t, []int{5}, funding.deltas)
+			assert.True(t, session.fundingOutcomeUnknown)
+			require.Len(t, alerts, 1)
+			assert.True(t, senderObservedUnlocked, "funding alerts must be enqueued after releasing the billing session mutex")
+			assert.Equal(t, "billing_funding_outcome_unknown", alerts[0].Key)
+			assert.Equal(t, smartOpsAlertStatusFiring, alerts[0].Status)
+			assert.Contains(t, alerts[0].Message, "userId=101")
+			assert.Contains(t, alerts[0].Message, "tokenId=102")
+			assert.Contains(t, alerts[0].Message, "requested=5")
+			assert.Contains(t, alerts[0].Message, fmt.Sprintf("applied=%d", tc.applied))
+
+			// A second attempt must not repeat the non-idempotent funding call.
+			require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+			require.ErrorIs(t, session.Reserve(20), ErrBillingFundingOutcomeUnknown)
+			assert.Equal(t, []int{5}, funding.deltas)
+			require.Len(t, alerts, 1, "fail-closed retries must not emit duplicate outcome-unknown alerts")
+		})
+	}
+}
+
+func TestBillingSessionReturnsNonDurableEffectErrorWithoutRetryWrapping(t *testing.T) {
+	funding := &recordingFundingSource{}
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId: "non-durable-effect-request",
+			UserId:    103,
+			TokenId:   104,
+			TokenKey:  "non-durable-effect-token",
+		},
+		funding:          funding,
+		preConsumedQuota: 10,
+	}
+
+	err := session.SettleWithEffect(15, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingSettlementEffectNotDurable)
+	require.Equal(t, ErrBillingSettlementEffectNotDurable, err)
+	assert.Empty(t, funding.deltas)
+	assert.False(t, session.settled)
+}
+
 type recordingBillingSettler struct {
 	preConsumed int
 	reserves    []int
+	settleCalls int
 }
 
-func (s *recordingBillingSettler) Settle(int) error         { return nil }
+type recordingEffectBillingSettler struct {
+	recordingBillingSettler
+	actualQuota int
+	effect      *model.BillingSettlementEffect
+	err         error
+}
+
+func TestSettleAndRecordConsumeHandlesNilContextWithoutPanic(t *testing.T) {
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	assert.NotPanics(t, func() {
+		settleAndRecordConsume(nil, nil, false, model.RecordConsumeLogParams{})
+	})
+	assert.NotPanics(t, func() {
+		settler := &recordingBillingSettler{}
+		settleAndRecordConsume(nil, &relaycommon.RelayInfo{Billing: settler}, false, model.RecordConsumeLogParams{})
+		assert.Equal(t, 1, settler.settleCalls)
+	})
+}
+
+func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) {
+	truncate(t)
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "zero-usage-request")
+	ctx.Set(common.UpstreamRequestIdKey, "zero-usage-upstream-request")
+	settler := &recordingEffectBillingSettler{}
+	info := &relaycommon.RelayInfo{
+		RequestId: "relay-fallback-request",
+		UserId:    601,
+		Billing:   settler,
+	}
+	params := model.RecordConsumeLogParams{
+		ChannelId:        602,
+		PromptTokens:     3,
+		CompletionTokens: 5,
+		ModelName:        "zero-usage-model",
+		Quota:            0,
+		Content:          "upstream omitted billable usage",
+		TokenId:          603,
+		TokenName:        "request-time-token-name",
+		UseTimeSeconds:   7,
+		IsStream:         true,
+		Group:            "default",
+		Other:            map[string]interface{}{"reason": "missing_usage"},
+	}
+
+	settleAndRecordConsume(ctx, info, false, params)
+
+	require.NotNil(t, settler.effect)
+	assert.Zero(t, settler.settleCalls)
+	assert.Zero(t, settler.actualQuota)
+	assert.False(t, settler.effect.UpdateUsage)
+	assert.True(t, settler.effect.QuotaIsActual)
+	assert.Equal(t, params.Content, settler.effect.Content)
+	assert.Equal(t, params.ChannelId, settler.effect.ChannelID)
+	assert.Equal(t, params.ModelName, settler.effect.ModelName)
+	assert.Equal(t, params.TokenId, settler.effect.TokenID)
+	assert.Equal(t, params.TokenName, settler.effect.TokenName)
+	assert.Equal(t, params.PromptTokens, settler.effect.PromptTokens)
+	assert.Equal(t, params.CompletionTokens, settler.effect.CompletionTokens)
+	assert.Equal(t, params.UseTimeSeconds, settler.effect.UseTimeSeconds)
+	assert.Equal(t, params.IsStream, settler.effect.IsStream)
+	assert.Equal(t, "zero-usage-request", settler.effect.RequestID)
+	assert.Equal(t, "zero-usage-upstream-request", settler.effect.UpstreamRequestID)
+}
+
+func TestSettleAndRecordConsumeAddsBillingMetadataBeforeDurableEffect(t *testing.T) {
+	settler := &recordingEffectBillingSettler{}
+	info := &relaycommon.RelayInfo{
+		Billing:                               settler,
+		BillingSource:                         BillingSourceSubscription,
+		SubscriptionId:                        701,
+		SubscriptionPlanId:                    702,
+		SubscriptionPreConsumed:               10,
+		SubscriptionAmountTotal:               100,
+		SubscriptionAmountUsedAfterPreConsume: 10,
+		UserSetting: dto.UserSetting{
+			BillingPreference: "subscription_first",
+		},
+	}
+
+	settleAndRecordConsume(nil, info, false, model.RecordConsumeLogParams{})
+
+	require.NotNil(t, settler.effect)
+	require.NotNil(t, settler.effect.Other)
+	assert.Equal(t, BillingSourceSubscription, settler.effect.Other["billing_source"])
+	assert.Equal(t, "subscription_first", settler.effect.Other["billing_preference"])
+	assert.Equal(t, 702, settler.effect.Other["subscription_plan_id"])
+}
+
+func TestSettleBillingWithEffectDoesNotClaimPrePersistenceFailure(t *testing.T) {
+	settler := &recordingEffectBillingSettler{err: ErrBillingSettlementEffectNotDurable}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingSettlementEffectNotDurable)
+	assert.False(t, handled)
+}
+
+func TestSettleBillingWithEffectDoesNotClaimModelRecordPersistenceFailure(t *testing.T) {
+	settler := &recordingEffectBillingSettler{err: model.ErrBillingSettlementRecordNotDurable}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, model.ErrBillingSettlementRecordNotDurable)
+	assert.False(t, handled)
+}
+
+func TestSettleBillingWithEffectDoesNotClaimUnknownFundingOutcome(t *testing.T) {
+	settler := &recordingEffectBillingSettler{err: ErrBillingFundingOutcomeUnknown}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingFundingOutcomeUnknown)
+	assert.False(t, handled)
+}
+
+func TestSettleBillingWithEffectKeepsDurablyOwnedFailureHandled(t *testing.T) {
+	settlementErr := errors.New("durable settlement remains pending")
+	settler := &recordingEffectBillingSettler{err: settlementErr}
+	info := &relaycommon.RelayInfo{Billing: settler}
+
+	handled, err := SettleBillingWithEffect(nil, info, 10, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, settlementErr)
+	assert.True(t, handled)
+}
+
+func TestSettleAndRecordConsumeDoesNotProjectNonDurableSettlementFailure(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.LogConsumeEnabled = true
+	common.BatchUpdateEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		common.BatchUpdateEnabled = originalBatchUpdateEnabled
+	})
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "effect not durable", err: ErrBillingSettlementEffectNotDurable},
+		{name: "record not durable", err: model.ErrBillingSettlementRecordNotDurable},
+		{name: "funding outcome unknown", err: ErrBillingFundingOutcomeUnknown},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := 621 + i
+			channelID := 631 + i
+			require.NoError(t, model.DB.Create(&model.User{
+				Id:       userID,
+				Username: fmt.Sprintf("non-durable-settlement-user-%d", i),
+				AffCode:  fmt.Sprintf("non-durable-%d", i),
+				Quota:    100,
+				Status:   common.UserStatusEnabled,
+			}).Error)
+			seedChannel(t, channelID)
+			settler := &recordingEffectBillingSettler{err: tc.err}
+			params := model.RecordConsumeLogParams{
+				ChannelId: channelID,
+				ModelName: "non-durable-settlement-model",
+				Quota:     10,
+				Content:   tc.name,
+			}
+
+			settleAndRecordConsume(nil, &relaycommon.RelayInfo{
+				UserId:  userID,
+				Billing: settler,
+			}, true, params)
+
+			require.NotNil(t, settler.effect)
+			var user model.User
+			require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+			assert.Zero(t, user.UsedQuota)
+			assert.Zero(t, user.RequestCount)
+			var channel model.Channel
+			require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+			assert.Zero(t, channel.UsedQuota)
+			var logCount int64
+			require.NoError(t, model.LOG_DB.Model(&model.Log{}).
+				Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).
+				Count(&logCount).Error)
+			assert.Zero(t, logCount)
+		})
+	}
+}
+
+func TestSettleAndRecordConsumePersistsLegacyEffectBeforeFailedSettlement(t *testing.T) {
+	truncate(t)
+	const (
+		userID  = 611
+		tokenID = 612
+	)
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "legacy-effect-token", 0)
+	info := &relaycommon.RelayInfo{
+		RequestId: "legacy-effect-request",
+		UserId:    userID,
+		TokenId:   tokenID,
+		TokenKey:  "legacy-effect-token",
+	}
+	params := model.RecordConsumeLogParams{
+		ChannelId: 613,
+		ModelName: "legacy-effect-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     10,
+		Content:   "legacy settlement waits for funding",
+	}
+
+	settleAndRecordConsume(nil, info, true, params)
+
+	operationKey := "request:legacy-effect-request:legacy-post:finalize"
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	require.NotEmpty(t, settlement.EffectPayload)
+	require.Empty(t, settlement.EffectStatus)
+	var logCount int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Count(&logCount).Error)
+	require.Zero(t, logCount)
+
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("quota", 100).Error)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]interface{}{
+		"remain_quota": 100,
+		"used_quota":   0,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("id = ?", settlement.ID).
+		Updates(map[string]interface{}{
+			"status":       model.BillingSettlementStatusPending,
+			"last_error":   "",
+			"next_attempt": time.Now().Unix(),
+		}).Error)
+	model.ProcessPendingBillingSettlementsOnce()
+
+	settleAndRecordConsume(nil, info, true, params)
+	settleAndRecordConsume(nil, info, true, params)
+
+	require.EqualValues(t, 90, getUserQuota(t, userID))
+	require.Equal(t, 90, getTokenRemainQuota(t, tokenID))
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Count(&logCount).Error)
+	require.EqualValues(t, 1, logCount)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&storedUser, userID).Error)
+	require.EqualValues(t, 10, storedUser.UsedQuota)
+	require.Equal(t, 1, storedUser.RequestCount)
+}
+
+func TestSettleAndRecordConsumeProjectsLocallyWhenExistingSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID = 614
+	seedUser(t, userID, 100)
+	const requestID = "legacy-effectless-settlement"
+	operationKey := "request:" + requestID + ":legacy-post:finalize"
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey:                    operationKey,
+		Source:                          model.BillingSettlementSourceWallet,
+		UserID:                          userID,
+		SubscriptionPreConsumeRequestID: requestID,
+	})
+	require.NoError(t, err)
+	ownsEffect, err := model.BillingSettlementOwnsEffect(operationKey)
+	require.NoError(t, err)
+	require.False(t, ownsEffect)
+
+	settleAndRecordConsume(nil, &relaycommon.RelayInfo{
+		RequestId: requestID,
+		UserId:    userID,
+	}, false, model.RecordConsumeLogParams{
+		ModelName: "legacy-effectless-model",
+		Content:   "effectless settlement projection",
+	})
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.Equal(t, "effectless settlement projection", logs[0].Content)
+}
+
+func TestSettleAndRecordConsumeProjectsLocallyWhenBillingSessionSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID = 615
+	seedUser(t, userID, 100)
+	const requestID = "billing-session-effectless-settlement"
+	operationKey := model.BillingRequestFinalizeOperationKey(requestID)
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+	})
+	require.NoError(t, err)
+
+	info := &relaycommon.RelayInfo{
+		RequestId: requestID,
+		UserId:    userID,
+	}
+	info.Billing = &BillingSession{
+		relayInfo: info,
+		funding:   &WalletFunding{userId: userID},
+	}
+	settleAndRecordConsume(nil, info, false, model.RecordConsumeLogParams{
+		ModelName: "billing-session-effectless-model",
+		Content:   "billing session effectless projection",
+	})
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeConsume).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.Equal(t, "billing session effectless projection", logs[0].Content)
+}
+
+func (s *recordingBillingSettler) Settle(int) error         { s.settleCalls++; return nil }
 func (s *recordingBillingSettler) Refund(*gin.Context)      {}
 func (s *recordingBillingSettler) NeedsRefund() bool        { return false }
 func (s *recordingBillingSettler) GetPreConsumedQuota() int { return s.preConsumed }
@@ -45,6 +530,12 @@ func (s *recordingBillingSettler) Reserve(target int) error {
 	s.reserves = append(s.reserves, target)
 	s.preConsumed = target
 	return nil
+}
+
+func (s *recordingEffectBillingSettler) SettleWithEffect(actualQuota int, effect *model.BillingSettlementEffect) error {
+	s.actualQuota = actualQuota
+	s.effect = effect
+	return s.err
 }
 
 func TestBillingSessionPrepareSettlementPersistsZeroDeltaTaskEffect(t *testing.T) {
@@ -67,6 +558,57 @@ func TestBillingSessionPrepareSettlementPersistsZeroDeltaTaskEffect(t *testing.T
 	assert.Equal(t, "request:task-fixed-price-request:finalize", input.OperationKey)
 	assert.Zero(t, input.FundingDelta)
 	assert.Zero(t, input.TokenDelta)
+}
+
+func TestBillingSessionPrepareSettlementBindsTaskReservationAndTarget(t *testing.T) {
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId:     "task-reservation-binding",
+			UserId:        43,
+			TokenId:       44,
+			TokenKey:      "task-reservation-token",
+			TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: 45},
+		},
+		funding:          &WalletFunding{userId: 43},
+		preConsumedQuota: 100,
+	}
+
+	input, err := session.PrepareSettlement(175)
+
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	assert.EqualValues(t, 45, input.TaskID)
+	assert.EqualValues(t, 100, input.TaskQuota)
+	assert.EqualValues(t, 175, input.TaskQuotaTarget)
+	assert.EqualValues(t, 75, input.FundingDelta)
+}
+
+func TestBillingSessionSettleAppliesPersistedZeroDeltaTaskFinalize(t *testing.T) {
+	truncate(t)
+	const userID = 46
+	task := makeTask(userID, 0, 10, 0, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSubmitted
+	persistTask(t, task)
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId:     "task-zero-delta-finalize",
+			UserId:        userID,
+			TaskRelayInfo: &relaycommon.TaskRelayInfo{PersistedTaskID: task.ID},
+		},
+		funding:          &WalletFunding{userId: userID},
+		preConsumedQuota: 10,
+	}
+	input, err := session.PrepareSettlement(10)
+	require.NoError(t, err)
+	require.NotNil(t, input)
+	require.NoError(t, task.UpdateWithSettlementIntent(input))
+
+	require.NoError(t, session.Settle(10))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", input.OperationKey).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+	assert.True(t, session.settled)
 }
 
 func TestBillingSessionCompensatesFundingWhenTokenSettlementFails(t *testing.T) {
@@ -170,6 +712,101 @@ func TestBillingSessionWalletPreConsumeUsesDurableRequestIdentity(t *testing.T) 
 	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
 }
 
+func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	truncate(t)
+	const userID, tokenID = 851, 852
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "unresolved-finalize-token", 100)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: "request:unresolved-finalize:finalize",
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		FundingDelta: 10,
+		TokenDelta:   10,
+		Status:       model.BillingSettlementStatusManual,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	session, apiErr := NewBillingSession(ctx, &relaycommon.RelayInfo{
+		RequestId:       "blocked-after-finalize",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "unresolved-finalize-token",
+		OriginModelName: "blocked-finalize-model",
+		UserSetting: dto.UserSetting{
+			BillingPreference: "wallet_only",
+			Language:          i18n.LangEn,
+		},
+	}, 10)
+
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	assert.Equal(
+		t,
+		types.ErrorCodeBillingReconciliationPending,
+		apiErr.GetErrorCode(),
+	)
+	assert.Equal(
+		t,
+		"Billing reconciliation is incomplete. Do not submit another request; contact an administrator for assistance.",
+		apiErr.Error(),
+	)
+	assert.EqualValues(t, 100, getUserQuota(t, userID))
+	assert.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
+}
+
+func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	truncate(t)
+	const userID, tokenID = 853, 854
+	seedUser(t, userID, 15)
+	seedToken(t, tokenID, userID, "insufficient-finalize-token", 100)
+	ctx, _ := gin.CreateTestContext(nil)
+	newInfo := func(requestID string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{
+			RequestId:       requestID,
+			UserId:          userID,
+			TokenId:         tokenID,
+			TokenKey:        "insufficient-finalize-token",
+			OriginModelName: "insufficient-finalize-model",
+			UserSetting: dto.UserSetting{
+				BillingPreference: "wallet_only",
+				Language:          i18n.LangZhCN,
+			},
+		}
+	}
+
+	session, apiErr := NewBillingSession(ctx, newInfo("insufficient-finalize-request"), 10)
+	require.Nil(t, apiErr)
+	require.Error(t, session.Settle(20))
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", "request:insufficient-finalize-request:finalize").First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	assert.EqualValues(t, 10, settlement.FundingDelta)
+	assert.Zero(t, settlement.AppliedFundingDelta)
+
+	nextSession, nextErr := NewBillingSession(ctx, newInfo("blocked-after-insufficient-finalize"), 5)
+	require.Nil(t, nextSession)
+	require.NotNil(t, nextErr)
+	assert.Equal(
+		t,
+		types.ErrorCodeBillingReconciliationPending,
+		nextErr.GetErrorCode(),
+	)
+	assert.Equal(t, "存在未完成的计费对账，请勿重复提交请求并联系管理员处理", nextErr.Error())
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+}
+
 func TestBillingSessionWalletFirstReplayCannotSwitchFromWalletToSubscription(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subscriptionID = 805, 806, 807, 808
@@ -229,6 +866,55 @@ func TestBillingSessionWalletFirstReplayCannotSwitchFromSubscriptionToWallet(t *
 	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
 	assert.EqualValues(t, 10, getSubscriptionAmountUsed(t, subscriptionID))
 	assert.EqualValues(t, 1, countSubscriptionPreConsumeRecords(t, "subscription-replay-request"))
+}
+
+func TestSettleAndRecordConsumeLogsPostSettlementSubscriptionUsage(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID, planID, subscriptionID = 819, 820, 821, 822, 823
+	const preConsumedQuota, actualQuota int64 = 10, 15
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "subscription-log-token", 100)
+	seedChannel(t, channelID)
+	seedBillingSubscription(t, planID, subscriptionID, userID, 100)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		RequestId: "subscription-log-request", UserId: userID,
+		TokenId: tokenID, TokenKey: "subscription-log-token",
+		OriginModelName: "subscription-log-model", UsingGroup: "default",
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID},
+		UserSetting: dto.UserSetting{BillingPreference: "subscription_first"},
+	}
+	session, apiErr := NewBillingSession(ctx, info, int(preConsumedQuota))
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+	other := map[string]interface{}{}
+	appendBillingInfo(info, other)
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId: channelID,
+		ModelName: "subscription-log-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     int(actualQuota),
+		Content:   "subscription settlement metadata",
+		Other:     other,
+	})
+
+	require.Equal(t, actualQuota, getSubscriptionAmountUsed(t, subscriptionID))
+	log := getLastLog(t)
+	var metadata struct {
+		PostDelta int64 `json:"subscription_post_delta"`
+		Consumed  int64 `json:"subscription_consumed"`
+		Used      int64 `json:"subscription_used"`
+		Remain    int64 `json:"subscription_remain"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &metadata))
+	assert.Equal(t, actualQuota-preConsumedQuota, metadata.PostDelta)
+	assert.Equal(t, actualQuota, metadata.Consumed)
+	assert.Equal(t, actualQuota, metadata.Used)
+	assert.Equal(t, int64(100)-actualQuota, metadata.Remain)
 }
 
 func TestBillingSessionTrustedWalletReplayFailsClosedInsteadOfSwitchingFunding(t *testing.T) {
@@ -382,6 +1068,8 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
 
 	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "violation-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "violation-upstream-request")
 	info := &relaycommon.RelayInfo{
 		RequestId: "violation-subscription-request", UserId: userID,
 		TokenId: tokenID, TokenKey: "violation-subscription-token",
@@ -411,7 +1099,10 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	require.EqualValues(t, feeQuota, getSubscriptionAmountUsed(t, subscriptionID))
 	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
 	require.Equal(t, int64(1), countLogs(t))
-	require.Equal(t, feeQuota, getLastLog(t).Quota)
+	log := getLastLog(t)
+	require.Equal(t, feeQuota, log.Quota)
+	require.Equal(t, "violation-client-request", log.RequestId)
+	require.Equal(t, "violation-upstream-request", log.UpstreamRequestId)
 
 	var finalize model.BillingSettlement
 	require.NoError(t, model.DB.Where("operation_key = ?", "request:violation-subscription-request:finalize").First(&finalize).Error)
@@ -420,6 +1111,76 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
 		Where("operation_key LIKE ?", "request:violation-subscription-request:legacy-post:%").Count(&legacyCount).Error)
 	require.Zero(t, legacyCount)
+}
+
+func TestViolationFeeProjectsLocallyWhenExistingSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID, tokenID, channelID = 835, 836, 837
+	const requestID = "violation-effectless-request"
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "violation-effectless-token", 100)
+	seedChannel(t, channelID)
+
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 100
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+	feeQuota := calcViolationFeeQuota(0.05, 1)
+	operationKey := model.BillingRequestFinalizeOperationKey(requestID)
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		TokenKey:     "violation-effectless-token",
+		FundingDelta: int64(feeQuota),
+		TokenDelta:   int64(feeQuota),
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 100-feeQuota, getUserQuota(t, userID))
+	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
+
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "violation-effectless-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "violation-effectless-upstream-request")
+	info := &relaycommon.RelayInfo{
+		RequestId: requestID, UserId: userID,
+		TokenId: tokenID, TokenKey: "violation-effectless-token",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		OriginModelName: "grok-effectless-test", UsingGroup: "default",
+		BillingSource: BillingSourceWallet,
+		StartTime:     time.Now(),
+	}
+	info.PriceData.GroupRatioInfo.GroupRatio = 1
+	info.Billing = &BillingSession{
+		relayInfo: info,
+		funding:   &WalletFunding{userId: userID},
+	}
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(CSAMViolationMarker), types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+
+	HandleFailedBilling(ctx, info, NormalizeViolationFeeError(apiErr))
+	HandleFailedBilling(ctx, info, NormalizeViolationFeeError(apiErr))
+
+	require.EqualValues(t, 100-feeQuota, getUserQuota(t, userID))
+	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, int64(1), countLogs(t))
+	log := getLastLog(t)
+	require.Equal(t, feeQuota, log.Quota)
+	require.Equal(t, "violation-effectless-client-request", log.RequestId)
+	require.Equal(t, "violation-effectless-upstream-request", log.UpstreamRequestId)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&storedUser, userID).Error)
+	require.EqualValues(t, feeQuota, storedUser.UsedQuota)
+	require.Equal(t, 1, storedUser.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	require.EqualValues(t, feeQuota, channel.UsedQuota)
 }
 
 type compensationFailingFundingSource struct {
@@ -437,7 +1198,7 @@ func (f *compensationFailingFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
-func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *testing.T) {
+func TestBillingSessionFailsClosedWhenCompensationOutcomeIsUnknown(t *testing.T) {
 	truncate(t)
 	funding := &compensationFailingFundingSource{}
 	session := &BillingSession{
@@ -449,14 +1210,15 @@ func TestBillingSessionKeepsCommittedFundingRetryableWhenCompensationFails(t *te
 	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.True(t, session.fundingSettled)
 	assert.True(t, session.compensationFailed)
+	assert.True(t, session.fundingOutcomeUnknown)
 	assert.False(t, session.settled)
 
 	require.NoError(t, model.DB.Create(&model.Token{
 		Id: 52, UserId: 51, Key: "retry-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
-	require.NoError(t, session.Settle(15))
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
 	assert.Equal(t, []int{5, -5}, funding.deltas)
-	assert.True(t, session.settled)
+	assert.False(t, session.settled)
 }
 
 type ambiguousCompensationFundingSource struct {
@@ -486,6 +1248,9 @@ func TestBillingSessionDoesNotReapplyFundingAfterAmbiguousCompensationError(t *t
 	assert.Equal(t, []int{5, -5}, funding.deltas)
 	assert.EqualValues(t, 5, session.appliedFundingDelta)
 	assert.True(t, session.compensationFailed)
+	assert.True(t, session.fundingOutcomeUnknown)
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 }
 
 type partialCompensationFundingSource struct {
@@ -503,7 +1268,7 @@ func (f *partialCompensationFundingSource) Settle(delta int) (int64, error) {
 	return int64(delta), nil
 }
 
-func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testing.T) {
+func TestBillingSessionFailsClosedAfterPartialFundingCompensation(t *testing.T) {
 	truncate(t)
 	funding := &partialCompensationFundingSource{}
 	session := &BillingSession{
@@ -511,19 +1276,20 @@ func TestBillingSessionReconcilesPartialFundingCompensationBeforeRetry(t *testin
 		funding:   funding, preConsumedQuota: 10,
 	}
 
-	require.Error(t, session.Settle(15))
-	require.Equal(t, []int{5, -5, 2, -5, 2, -5}, funding.deltas)
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	require.Equal(t, []int{5, -5}, funding.deltas)
 	require.False(t, session.compensationFailed)
-	require.True(t, session.fundingReconcilePending)
+	require.True(t, session.fundingOutcomeUnknown)
+	require.False(t, session.fundingReconcilePending)
 	require.EqualValues(t, 3, session.appliedFundingDelta)
 
 	require.NoError(t, model.DB.Create(&model.Token{
 		Id: 57, UserId: 56, Key: "partial-compensation-token", Status: common.TokenStatusEnabled, RemainQuota: 20,
 	}).Error)
-	require.NoError(t, session.Settle(15))
-	assert.True(t, session.settled)
-	assert.EqualValues(t, 5, session.appliedFundingDelta)
-	assert.Equal(t, int64(2), int64(funding.deltas[len(funding.deltas)-1]))
+	require.ErrorIs(t, session.Settle(15), ErrBillingFundingOutcomeUnknown)
+	assert.False(t, session.settled)
+	assert.EqualValues(t, 3, session.appliedFundingDelta)
+	assert.Equal(t, []int{5, -5}, funding.deltas)
 }
 
 type tokenRecoveringFundingSource struct {

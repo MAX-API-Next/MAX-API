@@ -52,7 +52,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
-import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
+import {
+  chatLinkRequiresApiKey,
+  resolveChatUrl,
+  type ChatPreset,
+} from '@/features/chat/lib/chat-links'
 import { sendToFluent } from '@/features/chat/lib/send-to-fluent'
 import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
@@ -87,39 +91,37 @@ export function DataTableRowActions<TData>({
     triggerRefresh,
     setResolvedKey,
     resolveRealKey,
-    resolvedKeys,
-    loadingKeys,
   } = useApiKeys()
   const isEnabled = apiKey.status === API_KEY_STATUS.ENABLED
   const { chatPresets, serverAddress } = useChatPresets()
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
-  const resolvedRealKey = resolvedKeys[apiKey.id]
-  const isRealKeyLoading = Boolean(loadingKeys[apiKey.id])
-
   const hasChatPresets = chatPresets.length > 0
-
-  const handleMenuOpenChange = useCallback(
-    (open: boolean) => {
-      if (open && !resolvedRealKey && !isRealKeyLoading) {
-        void resolveRealKey(apiKey.id)
-      }
-    },
-    [apiKey.id, isRealKeyLoading, resolvedRealKey, resolveRealKey]
-  )
-
-  const getCachedRealKey = useCallback(() => {
-    if (resolvedRealKey) return resolvedRealKey
-    void resolveRealKey(apiKey.id)
-    toast.info(t('API key is loading, please try again in a moment'))
-    return null
-  }, [apiKey.id, resolvedRealKey, resolveRealKey, t])
 
   const handleOpenChatPreset = useCallback(
     async (preset: ChatPreset) => {
-      const realKey = await resolveRealKey(apiKey.id)
-      if (!realKey) return
+      let chatWindow: Window | null = null
+      if (preset.type !== 'fluent' && typeof window !== 'undefined') {
+        try {
+          chatWindow = window.open('about:blank', '_blank')
+          if (chatWindow) chatWindow.opener = null
+        } catch {
+          chatWindow = null
+        }
+      }
+
+      const needsApiKey = chatLinkRequiresApiKey(preset.url)
+      let realKey: string | undefined
+      if (needsApiKey || preset.type === 'fluent') {
+        const resolvedKey = await resolveRealKey(apiKey.id)
+        if (!resolvedKey) {
+          chatWindow?.close()
+          return
+        }
+        realKey = resolvedKey
+      }
 
       if (preset.type === 'fluent') {
+        if (!realKey) return
         const success = sendToFluent(realKey, serverAddress)
         if (success) {
           toast.success(t('Sent the API key to FluentRead.'))
@@ -135,11 +137,12 @@ export function DataTableRowActions<TData>({
 
       const resolvedUrl = resolveChatUrl({
         template: preset.url,
-        apiKey: realKey,
+        apiKey: needsApiKey ? realKey : undefined,
         serverAddress,
       })
 
       if (!resolvedUrl) {
+        chatWindow?.close()
         toast.error(t('Invalid chat link. Please contact your administrator.'))
         return
       }
@@ -147,8 +150,13 @@ export function DataTableRowActions<TData>({
       if (typeof window === 'undefined') return
 
       try {
-        window.open(resolvedUrl, '_blank', 'noopener,noreferrer')
+        if (chatWindow) {
+          chatWindow.location.replace(resolvedUrl)
+          return
+        }
+        window.location.href = resolvedUrl
       } catch {
+        chatWindow?.close()
         window.location.href = resolvedUrl
       }
     },
@@ -214,7 +222,7 @@ export function DataTableRowActions<TData>({
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenu modal={false} onOpenChange={handleMenuOpenChange}>
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger
           render={
             <Button
@@ -229,10 +237,14 @@ export function DataTableRowActions<TData>({
         <DropdownMenuContent align='end' className='w-[200px]'>
           <DropdownMenuItem
             onClick={async () => {
-              const realKey = getCachedRealKey()
+              const realKey = await resolveRealKey(apiKey.id)
               if (!realKey) return
               const ok = await copyToClipboard(realKey)
-              if (ok) toast.success(t('Copied'))
+              if (ok) {
+                toast.success(t('Copied'))
+              } else {
+                toast.error(t('Failed to copy to clipboard'))
+              }
             }}
           >
             {t('Copy Key')}
@@ -242,14 +254,18 @@ export function DataTableRowActions<TData>({
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={async () => {
-              const realKey = getCachedRealKey()
+              const realKey = await resolveRealKey(apiKey.id)
               if (!realKey) return
               const connStr = encodeChannelConnectionInfo(
                 realKey,
                 getServerAddress()
               )
               const ok = await copyToClipboard(connStr)
-              if (ok) toast.success(t('Copied'))
+              if (ok) {
+                toast.success(t('Copied'))
+              } else {
+                toast.error(t('Failed to copy to clipboard'))
+              }
             }}
           >
             {t('Copy Connection Info')}

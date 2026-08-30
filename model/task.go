@@ -46,7 +46,7 @@ const (
 )
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	ID         int64                 `json:"id" gorm:"primaryKey;index:idx_task_timeout_cursor,priority:2"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
 	UpdatedAt  int64                 `json:"updated_at"`
 	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
@@ -58,7 +58,7 @@ type Task struct {
 	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
 	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
 	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
+	SubmitTime int64                 `json:"submit_time" gorm:"index;index:idx_task_timeout_cursor,priority:1"`
 	StartTime  int64                 `json:"start_time" gorm:"index"`
 	FinishTime int64                 `json:"finish_time" gorm:"index"`
 	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
@@ -349,16 +349,31 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
+	tasks, _ := GetTimedOutUnfinishedTasksAfter(cutoffUnix, 0, 0, limit)
+	return tasks
+}
+
+// GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after
+// the supplied (submit_time, id) cursor in stable ascending order.
+func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) ([]*Task, error) {
 	var tasks []*Task
-	err := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix).
-		Order("submit_time").
+	query := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix)
+	if afterID > 0 {
+		query = query.Where(
+			"(submit_time > ? OR (submit_time = ? AND id > ?))",
+			afterSubmitTime,
+			afterSubmitTime,
+			afterID,
+		)
+	}
+	err := query.Order("submit_time ASC, id ASC").
 		Limit(limit).
 		Find(&tasks).Error
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return tasks
+	return tasks, nil
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {

@@ -121,6 +121,8 @@ const (
 	MsgUserQuotaChangeZero           = "user.quota_change_zero"
 )
 
+const MsgUserPasswordResetSuccessTokensRevoked = "user.password_reset_success_tokens_revoked"
+
 // Quota related messages
 const (
 	MsgQuotaNegative        = "quota.negative"
@@ -129,6 +131,9 @@ const (
 	MsgQuotaWarningInvalid  = "quota.warning_invalid"
 	MsgQuotaThresholdGtZero = "quota.threshold_gt_zero"
 )
+
+// Billing related messages
+const MsgBillingReconciliationPending = "billing.reconciliation_pending"
 
 // Subscription related messages
 const (

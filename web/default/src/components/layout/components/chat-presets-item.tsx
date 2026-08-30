@@ -21,6 +21,8 @@ import { Link, useLocation } from '@tanstack/react-router'
 import { ExternalLink, Loader2, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import {
   Collapsible,
   CollapsibleContent,
@@ -40,6 +42,7 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from '@/components/ui/sidebar'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import {
@@ -156,6 +159,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
   const { t } = useTranslation()
   const { chatPresets, serverAddress } = useChatPresets()
   const { state, isMobile, setOpenMobile } = useSidebar()
+  const withApiTokenVerification = useApiTokenVerification()
   const href = useLocation({ select: (location) => location.href })
   const [loadingPresetId, setLoadingPresetId] = useState<string | null>(null)
   const loadingPresetIdRef = useRef<string | null>(null)
@@ -171,25 +175,50 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
 
       const needsKey = chatLinkRequiresApiKey(preset.url)
       let activeKey: string | undefined
+      let chatWindow: Window | null = null
 
       if (needsKey && loadingPresetIdRef.current) {
         toast.info(t('Preparing your chat link, please try again in a moment.'))
         return
       }
 
+      if (typeof window !== 'undefined') {
+        try {
+          chatWindow = window.open('about:blank', '_blank')
+          if (chatWindow) {
+            chatWindow.opener = null
+            if (needsKey) {
+              try {
+                window.focus()
+              } catch {
+                // The placeholder remains usable even when focus is restricted.
+              }
+            }
+          }
+        } catch {
+          chatWindow = null
+        }
+      }
+
       if (needsKey) {
         loadingPresetIdRef.current = preset.id
         setLoadingPresetId(preset.id)
         try {
-          activeKey = await fetchActiveChatKey()
+          activeKey =
+            (await withApiTokenVerification(fetchActiveChatKey)) || undefined
+          if (!activeKey) {
+            chatWindow?.close()
+            return
+          }
         } catch (error) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : t(
-                  'Unable to prepare chat link. Please ensure you have an enabled API key.'
-                )
-          toast.error(message)
+          chatWindow?.close()
+          if (!wasSecureVerificationErrorReported(error)) {
+            handleServerError(error, {
+              fallback: t(
+                'Unable to prepare chat link. Please ensure you have an enabled API key.'
+              ),
+            })
+          }
           return
         } finally {
           loadingPresetIdRef.current = null
@@ -204,16 +233,29 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
       })
 
       if (!url) {
+        chatWindow?.close()
         toast.error(t('Invalid chat link. Please contact the administrator.'))
         return
       }
 
-      if (typeof window === 'undefined') return
+      if (typeof window === 'undefined') {
+        chatWindow?.close()
+        return
+      }
 
-      window.open(url, '_blank', 'noopener,noreferrer')
+      try {
+        if (chatWindow) {
+          chatWindow.location.replace(url)
+        } else {
+          window.location.assign(url)
+        }
+      } catch {
+        chatWindow?.close()
+        window.location.assign(url)
+      }
       setOpenMobile(false)
     },
-    [serverAddress, setOpenMobile, t]
+    [serverAddress, setOpenMobile, t, withApiTokenVerification]
   )
 
   const normalizedHref = normalizeHref(href)

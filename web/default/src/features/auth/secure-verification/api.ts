@@ -50,30 +50,28 @@ export async function checkVerificationMethods(
     const [methodsResponse, passkeySupported] = await Promise.all([
       api.get<VerificationMethodsApiResponse>('/api/verify/methods', {
         params: scope ? { scope } : undefined,
+        skipBusinessError: true,
+        skipErrorHandler: true,
       }),
       detectPasskeySupport(),
     ])
     const methods = methodsResponse.data?.data
+    if (!methodsResponse.data?.success || !methods) {
+      throw new Error(
+        methodsResponse.data?.message || i18next.t('Verification unavailable')
+      )
+    }
 
     return {
-      has2FA:
-        Boolean(methodsResponse.data?.success) && Boolean(methods?.has_2fa),
-      hasPasskey:
-        Boolean(methodsResponse.data?.success) && Boolean(methods?.has_passkey),
-      hasPassword:
-        Boolean(methodsResponse.data?.success) &&
-        Boolean(methods?.has_password),
+      has2FA: Boolean(methods.has_2fa),
+      hasPasskey: Boolean(methods.has_passkey),
+      hasPassword: Boolean(methods.has_password),
       passkeySupported,
     }
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('[Secure Verification] Failed to check methods', error)
-    return {
-      has2FA: false,
-      hasPasskey: false,
-      hasPassword: false,
-      passkeySupported: false,
-    }
+    throw error
   }
 }
 

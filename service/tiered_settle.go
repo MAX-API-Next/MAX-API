@@ -8,7 +8,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
-	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	pricehelper "github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 )
@@ -161,9 +161,16 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	if relayInfo.RelayMode == relayconstant.RelayModeAlphaSearch {
-		relayInfo.PriceData.QuotaToPreConsume = targetQuota
+	targetQuota, quotaErr = pricehelper.ApplyPreConsumedQuotaFloor(targetQuota, snap.GroupRatio > 0)
+	if quotaErr != nil {
+		return types.NewErrorWithStatusCode(
+			quotaErr,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
+	relayInfo.PriceData.QuotaToPreConsume = targetQuota
 	if snap.GroupRatio == 0 {
 		return nil
 	}

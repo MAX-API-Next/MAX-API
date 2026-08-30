@@ -155,31 +155,8 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"upstream_error_code":  fmt.Sprintf("%v", oai.Code),
 		"violation_fee_marker": CSAMViolationMarker,
 	}
-	effect := &model.BillingSettlementEffect{
-		LogType: model.LogTypeConsume, Content: "Violation fee charged",
-		ChannelID: relayInfo.ChannelId, ModelName: relayInfo.OriginModelName,
-		TokenID: relayInfo.TokenId, Group: relayInfo.UsingGroup, Other: other,
-		UpdateUsage: true, Quota: int64(feeQuota),
-	}
-
-	if settler, ok := relayInfo.Billing.(interface {
-		SettleWithEffect(int, *model.BillingSettlementEffect) error
-	}); ok {
-		if err := settler.SettleWithEffect(feeQuota, effect); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("violation fee settlement remains pending/manual: %s", err.Error()))
-			return violationFeeChargeResult{applicable: true}
-		}
-		return violationFeeChargeResult{applicable: true, settled: true}
-	}
-
-	if err := SettleBilling(ctx, relayInfo, feeQuota); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("violation fee settlement remains pending/manual: %s", err.Error()))
-		return violationFeeChargeResult{applicable: true}
-	}
-	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
-	model.UpdateChannelUsedQuota(relayInfo.ChannelId, feeQuota)
-
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
+	logParams := model.RecordConsumeLogParams{
 		ChannelId:      relayInfo.ChannelId,
 		ModelName:      relayInfo.OriginModelName,
 		TokenName:      tokenName,
@@ -190,7 +167,21 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		IsStream:       relayInfo.IsStream,
 		Group:          relayInfo.UsingGroup,
 		Other:          other,
-	})
+	}
+	effect := newConsumeBillingSettlementEffect(relayInfo, logParams, requestID, upstreamRequestID, true)
+
+	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, feeQuota, effect)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("violation fee settlement remains pending/manual: %s", err.Error()))
+		return violationFeeChargeResult{applicable: true}
+	}
+	if effectHandled {
+		return violationFeeChargeResult{applicable: true, settled: true}
+	}
+	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
+	model.UpdateChannelUsedQuota(relayInfo.ChannelId, feeQuota)
+
+	model.RecordConsumeLog(ctx, relayInfo.UserId, logParams)
 
 	return violationFeeChargeResult{applicable: true, settled: true}
 }

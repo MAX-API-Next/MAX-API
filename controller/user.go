@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -134,20 +135,38 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 	}, extra)
 }
 
+func isOAuthCredentialReauthentication(method string) bool {
+	return method == "wechat" || method == "oauth" ||
+		strings.HasPrefix(method, "oauth:")
+}
+
 // setup session & cookies and then return user info
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
 	session := sessions.Default(c)
+	loginMethod := loginMethodFromContext(c)
 	session.Delete(SecureVerificationSessionKey)
 	session.Delete(secureVerificationMethodSessionKey)
 	session.Delete(secureVerificationUserSessionKey)
 	session.Delete(secureVerificationScopeSessionKey)
 	session.Delete(PasskeyReadySessionKey)
+	if isOAuthCredentialReauthentication(loginMethod) {
+		allowed, grantErr := model.CanUseOAuthReauthentication(user.Id)
+		if grantErr != nil {
+			common.SysError(fmt.Sprintf("failed to evaluate OAuth reauthentication grant for user %d: %v", user.Id, grantErr))
+		} else if allowed {
+			session.Set(SecureVerificationSessionKey, time.Now().Unix())
+			session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
+			session.Set(secureVerificationUserSessionKey, user.Id)
+			session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeOAuthReauthentication)
+		}
+	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
+	session.Set("session_generation", user.SessionGeneration)
 	err := session.Save()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
@@ -183,6 +202,18 @@ func Logout(c *gin.Context) {
 		"message": "",
 		"success": true,
 	})
+}
+
+func RevokeOtherSessions(c *gin.Context) {
+	userID := c.GetInt("id")
+	generation, err := model.BumpUserSessionGeneration(userID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userID, generation, "revoking other sessions")
+	recordUserSecurityAudit(c, userID, "user.sessions_revoke_other", nil)
+	common.ApiSuccess(c, nil)
 }
 
 func Register(c *gin.Context) {
@@ -886,9 +917,13 @@ func UpdateSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := cleanUser.UpdateFields(updatePassword, updateFields...); err != nil {
+	generation, err := cleanUser.UpdateFieldsWithSessionGeneration(updatePassword, updateFields...)
+	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if updatePassword {
+		preserveCurrentSessionAfterCommittedSecurityChange(c, cleanUser.Id, generation, "changing password")
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -896,6 +931,50 @@ func UpdateSelf(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func preserveCurrentSessionAfterSecurityChange(c *gin.Context, userID int, generation int64) error {
+	session := sessions.Default(c)
+	session.Set("id", userID)
+	session.Set("session_generation", generation)
+	session.Delete(SecureVerificationSessionKey)
+	session.Delete(secureVerificationMethodSessionKey)
+	session.Delete(secureVerificationUserSessionKey)
+	session.Delete(secureVerificationScopeSessionKey)
+	session.Delete(PasskeyReadySessionKey)
+	return session.Save()
+}
+
+func preserveCurrentSessionAfterCommittedSecurityChange(c *gin.Context, userID int, generation int64, action string) {
+	if err := preserveCurrentSessionAfterSecurityChange(c, userID, generation); err != nil {
+		common.SysError(fmt.Sprintf(
+			"failed to preserve current session after %s for user %d: %v",
+			action,
+			userID,
+			err,
+		))
+		expireCurrentSessionAfterSecurityChange(c, userID, action)
+	}
+}
+
+func expireCurrentSessionAfterSecurityChange(c *gin.Context, userID int, action string) {
+	session := sessions.Default(c)
+	session.Clear()
+	session.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	if err := session.Save(); err != nil {
+		common.SysError(fmt.Sprintf(
+			"failed to expire current session after %s for user %d: %v",
+			action,
+			userID,
+			err,
+		))
+	}
 }
 
 func checkUpdatePassword(originalPassword string, newPassword string, userId int) (updatePassword bool, err error) {

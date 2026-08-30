@@ -67,6 +67,80 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.MaxA
 	return err
 }
 
+func prepareAlphaSearchPreConsumedQuota(priceData types.PriceData, relayInfo *relaycommon.RelayInfo) (types.PriceData, error) {
+	if relayInfo == nil || relayInfo.RelayMode != relayconstant.RelayModeAlphaSearch {
+		return priceData, nil
+	}
+
+	baseQuota := priceData.QuotaToPreConsume
+	totalQuota, err := service.AlphaSearchPreConsumeQuota(
+		baseQuota,
+		relayInfo,
+		priceData.GroupRatioInfo.GroupRatio,
+	)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	if totalQuota > baseQuota {
+		priceData.FreeModel = false
+	}
+	priceData.QuotaToPreConsume, err = helper.ApplyPreConsumedQuotaFloor(
+		totalQuota,
+		!priceData.FreeModel && priceData.GroupRatioInfo.GroupRatio > 0,
+	)
+	if err != nil {
+		return types.PriceData{}, err
+	}
+	return priceData, nil
+}
+
+func prepareBillingForSelectedGroup(
+	c *gin.Context,
+	relayInfo *relaycommon.RelayInfo,
+	promptTokens int,
+	meta *types.TokenCountMeta,
+) *types.MaxAPIError {
+	if relayInfo.TieredBillingSnapshot != nil {
+		return service.PrepareTieredBillingForSelectedGroup(c, relayInfo)
+	}
+
+	priceData, err := helper.ModelPriceHelper(c, relayInfo, promptTokens, meta)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	priceData, err = prepareAlphaSearchPreConsumedQuota(priceData, relayInfo)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	relayInfo.PriceData = priceData
+	if priceData.FreeModel {
+		// Keep any existing Billing session so a successful free retry can
+		// settle the prior reservation to zero, while preventing this free
+		// attempt from inheriting the paid attempt's fallback charge.
+		relayInfo.FinalPreConsumedQuota = 0
+		return nil
+	}
+
+	if relayInfo.Billing == nil {
+		return service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
+	}
+	if err := relayInfo.Billing.Reserve(priceData.QuotaToPreConsume); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
+
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
@@ -157,18 +231,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
 	}
-	basePreConsumedQuota := priceData.QuotaToPreConsume
-	priceData.QuotaToPreConsume, err = service.AlphaSearchPreConsumeQuota(
-		basePreConsumedQuota,
-		relayInfo,
-		priceData.GroupRatioInfo.GroupRatio,
-	)
+	priceData, err = prepareAlphaSearchPreConsumedQuota(priceData, relayInfo)
 	if err != nil {
 		maxAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		return
-	}
-	if priceData.QuotaToPreConsume > basePreConsumedQuota {
-		priceData.FreeModel = false
 	}
 	relayInfo.PriceData = priceData
 
@@ -211,7 +277,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
-		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+		if billingErr := prepareBillingForSelectedGroup(c, relayInfo, tokens, meta); billingErr != nil {
 			maxAPIError = billingErr
 			break
 		}
@@ -451,10 +517,9 @@ func RelayMidjourney(c *gin.Context) {
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
 	if mjErr != nil {
-		statusCode := http.StatusBadRequest
+		statusCode := midjourneyRelayErrorStatusCode(mjErr)
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
-			statusCode = http.StatusTooManyRequests
 		}
 		c.JSON(statusCode, gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
@@ -464,6 +529,19 @@ func RelayMidjourney(c *gin.Context) {
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
+}
+
+func midjourneyRelayErrorStatusCode(mjErr *dto.MidjourneyResponse) int {
+	if mjErr == nil {
+		return http.StatusBadRequest
+	}
+	if mjErr.Code == 30 {
+		return http.StatusTooManyRequests
+	}
+	if mjErr.Description == constant.MjBillingSettlementPending {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
 }
 
 func RelayNotImplemented(c *gin.Context) {
@@ -524,11 +602,12 @@ func RelayTask(c *gin.Context) {
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
 	var settlementEffectOperationKey string
+	var settlementIntentPersisted bool
 	defer func() {
 		if taskErr != nil {
 			upstreamAmbiguous := relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown
 			upstreamPersisted := result != nil && result.Task != nil
-			if relayInfo.Billing != nil && !upstreamAmbiguous {
+			if relayInfo.Billing != nil && !upstreamAmbiguous && !settlementIntentPersisted && taskErr.Code != taskResponseWriteFailedCode {
 				relayInfo.Billing.Refund(c)
 			}
 			if relayInfo.PersistedTaskID > 0 {
@@ -537,9 +616,11 @@ func RelayTask(c *gin.Context) {
 					reason = taskErr.Error.Error()
 				}
 				if upstreamPersisted {
-					reason += "（上游已接受任务，本地结算记录未完成；已保留预扣费，请人工核对）"
-					if markErr := model.MarkTaskSubmitNeedsReview(result.Task, reason); markErr != nil {
-						common.SysError("mark task submit for manual review error: " + markErr.Error())
+					if shouldMarkTaskSubmitNeedsReview(taskErr, upstreamPersisted, settlementIntentPersisted) {
+						reason += "（上游已接受任务，本地结算记录未完成；已保留预扣费，请人工核对）"
+						if markErr := model.MarkTaskSubmitNeedsReview(result.Task, reason); markErr != nil {
+							common.SysError("mark task submit for manual review error: " + markErr.Error())
+						}
 					}
 				} else if upstreamAmbiguous {
 					if relayInfo.UpstreamTaskOutcomeUnknown {
@@ -652,23 +733,15 @@ func RelayTask(c *gin.Context) {
 				}
 				if err = result.Task.UpdateWithSettlementIntent(settlementIntent); err != nil {
 					taskErr = relay.TaskPersistenceError(err, "persist_task_result_failed", "failed to persist task result")
+				} else {
+					settlementIntentPersisted = settlementIntent != nil
 				}
 			}
 		}
 		if taskErr == nil {
-			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-				common.SysError("settle task billing remains pending/manual: " + settleErr.Error())
-			}
-			if settlementEffectOperationKey != "" {
-				if effectErr := model.ProcessBillingSettlementEffect(settlementEffectOperationKey); effectErr != nil {
-					common.SysError("task billing effect remains pending/manual: " + effectErr.Error())
-				}
-			} else {
-				service.LogTaskConsumption(c, relayInfo)
-			}
-			if writeErr := result.WriteResponse(c); writeErr != nil {
-				common.SysError("write task response error: " + writeErr.Error())
-			}
+			taskErr = finalizeTaskSubmission(c, relayInfo, result, settlementEffectOperationKey, func() error {
+				return result.WriteResponse(c)
+			})
 		}
 	}
 
@@ -677,7 +750,65 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
-// respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
+const taskResponseWriteFailedCode = "write_task_response_failed"
+
+// shouldMarkTaskSubmitNeedsReview keeps an upstream-accepted task pollable
+// when its durable finalize intent already exists. The settlement runner owns
+// recovery in that state; converting the task to FAILURE would permanently
+// remove it from normal polling.
+func shouldMarkTaskSubmitNeedsReview(taskErr *dto.TaskError, upstreamPersisted, settlementIntentPersisted bool) bool {
+	if taskErr == nil {
+		return false
+	}
+	if taskErr.Code == taskResponseWriteFailedCode {
+		return false
+	}
+	return taskErr.Code != constant.MjBillingSettlementPending || !upstreamPersisted || !settlementIntentPersisted
+}
+
+// finalizeTaskSubmission releases a task success response only after its
+// billing settlement succeeds. The upstream task may already exist when this
+// fails, so callers persist it for reconciliation and return a local no-retry
+// error instead of pretending the request completed normally.
+func finalizeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo, result *relay.TaskSubmitResult, settlementEffectOperationKey string, writeResponse func() error) *dto.TaskError {
+	if result == nil || result.Task == nil {
+		return service.TaskErrorWrapperLocal(errors.New("task submit result is incomplete"), "persist_task_failed", http.StatusInternalServerError)
+	}
+	if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+		common.SysError("settle task billing requires reconciliation: " + settleErr.Error())
+		return &dto.TaskError{
+			Code:       constant.MjBillingSettlementPending,
+			Message:    "任务已被上游接受，但计费结算未完成；请勿重复提交，可使用 task_id 查询任务或联系管理员处理",
+			Data:       map[string]string{"task_id": result.Task.TaskID},
+			StatusCode: http.StatusConflict,
+			LocalError: true,
+			Error:      settleErr,
+		}
+	}
+	if settlementEffectOperationKey != "" {
+		if effectErr := model.ProcessBillingSettlementEffect(settlementEffectOperationKey); effectErr != nil {
+			common.SysError("task billing effect remains pending/manual: " + effectErr.Error())
+		}
+	} else {
+		service.LogTaskConsumption(c, relayInfo)
+	}
+	if writeResponse != nil {
+		if writeErr := writeResponse(); writeErr != nil {
+			common.SysError("write task response error: " + writeErr.Error())
+			return &dto.TaskError{
+				Code:       taskResponseWriteFailedCode,
+				Message:    "任务已提交并完成结算，但响应写入失败；请勿重复提交，可使用 task_id 查询任务",
+				Data:       map[string]string{"task_id": result.Task.TaskID},
+				StatusCode: http.StatusConflict,
+				LocalError: true,
+				Error:      writeErr,
+			}
+		}
+	}
+	return nil
+}
+
+// respondTaskError writes the task error response and normalizes the 429 message.
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"

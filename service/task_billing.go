@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -66,18 +67,27 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 		return nil
 	}
 	logContent, other := buildTaskConsumptionLogData(c, info)
-	return &model.BillingSettlementEffect{
-		LogType:     model.LogTypeConsume,
-		Content:     logContent,
-		ChannelID:   info.ChannelId,
-		ModelName:   info.OriginModelName,
-		TokenID:     info.TokenId,
-		Group:       info.UsingGroup,
-		Other:       other,
-		NodeName:    common.NodeName,
-		UpdateUsage: true,
-		Quota:       int64(quota),
+	useTimeSeconds := 0
+	if !info.StartTime.IsZero() {
+		useTimeSeconds = int(time.Since(info.StartTime).Seconds())
 	}
+	tokenName := ""
+	if c != nil {
+		tokenName = c.GetString("token_name")
+	}
+	requestID, upstreamRequestID := billingEffectRequestIDs(c, info)
+	return newConsumeBillingSettlementEffect(info, model.RecordConsumeLogParams{
+		ChannelId:      info.ChannelId,
+		ModelName:      info.OriginModelName,
+		Quota:          quota,
+		Content:        logContent,
+		TokenId:        info.TokenId,
+		TokenName:      tokenName,
+		UseTimeSeconds: useTimeSeconds,
+		IsStream:       info.IsStream,
+		Group:          info.UsingGroup,
+		Other:          other,
+	}, requestID, upstreamRequestID, true)
 }
 
 // LogTaskConsumption records task usage for legacy/custom funding paths that
@@ -143,6 +153,37 @@ func taskModelName(task *model.Task) string {
 		return bc.OriginModelName
 	}
 	return task.Properties.OriginModelName
+}
+
+// taskFinalSettlementPending reports whether the submission-finalize funding
+// settlement is pending or requires manual review. Callers use true to defer a
+// provider-driven terminal transition until the funding state is applied.
+func taskFinalSettlementPending(task *model.Task) (bool, error) {
+	if task == nil || task.PrivateData.BillingRequestId == "" {
+		return false, nil
+	}
+	status, found, err := model.GetBillingSettlementStatus(model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId))
+	if err != nil || !found {
+		return false, err
+	}
+	switch status {
+	case "", model.BillingSettlementStatusApplied:
+		return false, nil
+	case model.BillingSettlementStatusPending, model.BillingSettlementStatusManual:
+		return true, nil
+	default:
+		return true, fmt.Errorf("unknown task submission settlement status %q", status)
+	}
+}
+
+// taskTerminalSettlementPending gates the submission-settlement lookup on a
+// provider transition that would make the task terminal. Callers keep their
+// own error reporting and skip/return behavior.
+func taskTerminalSettlementPending(task *model.Task, providerTerminal bool) (bool, error) {
+	if !providerTerminal {
+		return false, nil
+	}
+	return taskFinalSettlementPending(task)
 }
 
 func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {

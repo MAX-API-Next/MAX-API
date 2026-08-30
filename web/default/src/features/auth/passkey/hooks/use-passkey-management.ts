@@ -19,12 +19,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   buildRegistrationResult,
   createCredential,
   isPasskeySupported as detectPasskeySupport,
   prepareCredentialCreationOptions,
 } from '@/lib/passkey'
+import { isVerificationRequiredError } from '@/lib/secure-verification'
 import {
   beginPasskeyRegistration,
   deletePasskey,
@@ -59,10 +61,10 @@ export function usePasskeyManagement(
         setStatus(null)
         toast.error(res.message || i18next.t('Failed to load Passkey status'))
       }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Failed to fetch status', error)
-      toast.error(i18next.t('Failed to load Passkey status'))
+    } catch (error: unknown) {
+      handleServerError(error, {
+        fallback: i18next.t('Failed to load Passkey status'),
+      })
       setStatus(null)
     } finally {
       setLoading(false)
@@ -70,7 +72,8 @@ export function usePasskeyManagement(
   }, [onStatusChange])
 
   useEffect(() => {
-    fetchStatus()
+    const timer = window.setTimeout(() => void fetchStatus(), 0)
+    return () => window.clearTimeout(timer)
   }, [fetchStatus])
 
   useEffect(() => {
@@ -79,7 +82,7 @@ export function usePasskeyManagement(
       .catch(() => setSupported(false))
   }, [])
 
-  const register = useCallback(async () => {
+  const register = useCallback(async (): Promise<boolean> => {
     if (!supported) {
       toast.error(i18next.t('This device does not support Passkey'))
       return false
@@ -130,24 +133,23 @@ export function usePasskeyManagement(
       await fetchStatus()
       return true
     } catch (error: unknown) {
+      if (isVerificationRequiredError(error)) {
+        throw error
+      }
       if (error instanceof DOMException && error.name === 'NotAllowedError') {
         toast.info(i18next.t('Passkey registration was cancelled'))
         return false
       }
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Registration error', error)
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : i18next.t('Failed to register Passkey')
-      )
+      handleServerError(error, {
+        fallback: i18next.t('Failed to register Passkey'),
+      })
       return false
     } finally {
       setRegistering(false)
     }
   }, [supported, fetchStatus])
 
-  const remove = useCallback(async () => {
+  const remove = useCallback(async (): Promise<boolean> => {
     setRemoving(true)
     try {
       const res = await deletePasskey()
@@ -160,9 +162,12 @@ export function usePasskeyManagement(
       await fetchStatus()
       return true
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Removal error', error)
-      toast.error(i18next.t('Failed to remove Passkey'))
+      if (isVerificationRequiredError(error)) {
+        throw error
+      }
+      handleServerError(error, {
+        fallback: i18next.t('Failed to remove Passkey'),
+      })
       return false
     } finally {
       setRemoving(false)

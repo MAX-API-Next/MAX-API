@@ -75,27 +75,18 @@ func markRetryLogBackfillCompletedForTest(t *testing.T) {
 
 func resetQuotaDataCacheForTest(t *testing.T) {
 	t.Helper()
-	resetLogQuotaDataShutdownForTest(t)
-	CacheQuotaDataLock.Lock()
-	CacheQuotaData = make(map[string]*QuotaData)
-	CacheQuotaDataLock.Unlock()
-	t.Cleanup(func() {
+	drainAndReset := func() {
+		WaitPendingLogQuotaData()
 		CacheQuotaDataLock.Lock()
 		CacheQuotaData = make(map[string]*QuotaData)
 		CacheQuotaDataLock.Unlock()
-	})
-}
 
-func resetLogQuotaDataShutdownForTest(t *testing.T) {
-	t.Helper()
-	logQuotaDataShutdownMu.Lock()
-	logQuotaDataShutdownStarted = false
-	logQuotaDataShutdownMu.Unlock()
-	t.Cleanup(func() {
 		logQuotaDataShutdownMu.Lock()
 		logQuotaDataShutdownStarted = false
 		logQuotaDataShutdownMu.Unlock()
-	})
+	}
+	drainAndReset()
+	t.Cleanup(drainAndReset)
 }
 
 func newLogTestContext() *gin.Context {
@@ -134,6 +125,44 @@ func TestRecordConsumeLogSanitizesPersistedContent(t *testing.T) {
 	require.Contains(t, log.Content, "line1  line2 line3")
 	require.True(t, strings.HasSuffix(log.Content, "... [truncated]"))
 	require.LessOrEqual(t, utf8.RuneCountInString(log.Content), common.PersistedLogContentLimit)
+}
+
+func TestRecordConsumeLogWithNilContextPreservesAccountingFields(t *testing.T) {
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	originalDataExportEnabled := common.DataExportEnabled
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = originalLogConsumeEnabled
+		common.DataExportEnabled = originalDataExportEnabled
+	})
+	const userID = 72007
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+	require.NoError(t, DB.Create(&User{
+		Id:       userID,
+		Username: "nil-context-log-user",
+		AffCode:  "nil-context-log-user-aff",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+	})
+
+	RecordConsumeLog(nil, userID, RecordConsumeLogParams{
+		ModelName:        "nil-context-model",
+		Quota:            42,
+		PromptTokens:     3,
+		CompletionTokens: 5,
+	})
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("model_name = ?", "nil-context-model").First(&log).Error)
+	require.Equal(t, 42, log.Quota)
+	require.Equal(t, 3, log.PromptTokens)
+	require.Equal(t, 5, log.CompletionTokens)
+	require.Equal(t, "nil-context-log-user", log.Username)
 }
 
 func TestBillingSettlementEffectPayloadSanitizesContent(t *testing.T) {
@@ -908,14 +937,16 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 	})
 
 	RecordTaskBillingLog(RecordTaskBillingLogParams{
-		UserId:    7,
-		LogType:   LogTypeConsume,
-		Content:   "task billing",
-		ChannelId: 13,
-		ModelName: "task-test",
-		Quota:     42,
-		TokenId:   11,
-		Group:     "default",
+		UserId:           7,
+		LogType:          LogTypeConsume,
+		Content:          "task billing",
+		ChannelId:        13,
+		ModelName:        "task-test",
+		Quota:            42,
+		TokenId:          11,
+		Group:            "default",
+		PromptTokens:     3,
+		CompletionTokens: 5,
 	})
 
 	require.Len(t, queued, 1)
@@ -923,6 +954,262 @@ func TestRecordTaskBillingLogQueuesQuotaDataAsync(t *testing.T) {
 
 	queued[0]()
 	require.Len(t, CacheQuotaData, 1)
+	for _, quotaData := range CacheQuotaData {
+		require.Equal(t, 8, quotaData.TokenUsed)
+	}
+}
+
+func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
+	const userID = 7001
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+	resetQuotaDataCacheForTest(t)
+
+	originalDataExportEnabled := common.DataExportEnabled
+	originalRunner := logQuotaDataAsyncRunner
+	common.DataExportEnabled = true
+	logQuotaDataAsyncRunner = func(fn func()) { fn() }
+	t.Cleanup(func() {
+		common.DataExportEnabled = originalDataExportEnabled
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "settlement-export-user", Status: common.UserStatusEnabled}).Error)
+	const operationKey = "request:settlement-export-token-usage"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:          LogTypeConsume,
+			Content:          "settlement effect",
+			ModelName:        "settlement-model",
+			TokenID:          7002,
+			TokenName:        "request-time-deleted-token",
+			UpdateUsage:      true,
+			Quota:            42,
+			PromptTokens:     3,
+			CompletionTokens: 5,
+			RequestID:        "settlement-export-request",
+		},
+	})
+	require.NoError(t, err)
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, BillingSettlementStatusApplied, settlement.Status)
+	require.Equal(t, BillingSettlementEffectPending, settlement.EffectStatus)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+	require.NoError(t, DB.First(&settlement, settlement.ID).Error)
+	require.Equal(t, BillingSettlementEffectApplied, settlement.EffectStatus)
+
+	var exportedTokenUsed int
+	require.Len(t, CacheQuotaData, 1)
+	for _, quotaData := range CacheQuotaData {
+		exportedTokenUsed = quotaData.TokenUsed
+	}
+	require.Equal(t, 8, exportedTokenUsed)
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-export-request").First(&log).Error)
+	require.Equal(t, 3, log.PromptTokens)
+	require.Equal(t, 5, log.CompletionTokens)
+	require.Equal(t, "request-time-deleted-token", log.TokenName)
+}
+
+func TestApplySubscriptionSettlementEffectMetadataUsesAppliedDelta(t *testing.T) {
+	tests := []struct {
+		name         string
+		delta        int64
+		wantPost     bool
+		wantConsumed bool
+		consumed     int64
+		used         int64
+		remain       int64
+	}{
+		{name: "positive settlement", delta: 5, wantPost: true, wantConsumed: true, consumed: 15, used: 45, remain: 55},
+		{name: "zero settlement", wantConsumed: true, consumed: 10, used: 40, remain: 60},
+		{name: "full reservation refund", delta: -10, wantPost: true, used: 30, remain: 70},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := map[string]interface{}{
+				"subscription_post_delta": 99,
+				"subscription_consumed":   99,
+			}
+			applySubscriptionSettlementEffectMetadata(BillingSettlement{
+				Source:              BillingSettlementSourceSubscription,
+				AppliedFundingDelta: tt.delta,
+			}, &BillingSettlementEffect{
+				Subscription: &BillingSettlementSubscriptionEffect{
+					PreConsumed:               10,
+					AmountTotal:               100,
+					AmountUsedAfterPreConsume: 40,
+				},
+			}, other)
+
+			if tt.wantPost {
+				require.EqualValues(t, tt.delta, other["subscription_post_delta"])
+			} else {
+				require.NotContains(t, other, "subscription_post_delta")
+			}
+			if tt.wantConsumed {
+				require.EqualValues(t, tt.consumed, other["subscription_consumed"])
+			} else {
+				require.NotContains(t, other, "subscription_consumed")
+			}
+			require.EqualValues(t, 100, other["subscription_total"])
+			require.EqualValues(t, tt.used, other["subscription_used"])
+			require.EqualValues(t, tt.remain, other["subscription_remain"])
+		})
+	}
+}
+
+func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
+	const (
+		userID  = 7011
+		tokenID = 7012
+	)
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "settlement-token-user", AffCode: "settlement-token-user-aff",
+		Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Token{
+		Id: tokenID, UserId: userID, Name: "current-token-name", Key: "settlement-token-key",
+		Status: common.TokenStatusEnabled,
+	}).Error)
+	const operationKey = "request:settlement-current-token-name"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "settlement token name precedence",
+			TokenID:       tokenID,
+			TokenName:     "request-time-token-name",
+			Quota:         1,
+			QuotaIsActual: true,
+			RequestID:     "settlement-token-name-request",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-token-name-request").First(&log).Error)
+	require.Equal(t, "current-token-name", log.TokenName)
+}
+
+func TestBillingSettlementEffectReplayPreservesRequestTokenNameWhenCurrentNameEmpty(t *testing.T) {
+	const (
+		userID  = 7013
+		tokenID = 7014
+	)
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "empty-token-name-user", AffCode: "empty-token-name-user-aff",
+		Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Token{
+		Id: tokenID, UserId: userID, Name: "", Key: "empty-name-token-key",
+		Status: common.TokenStatusEnabled,
+	}).Error)
+	const operationKey = "request:settlement-empty-current-token-name"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "settlement empty token name fallback",
+			TokenID:       tokenID,
+			TokenName:     "request-time-token-name",
+			Quota:         1,
+			QuotaIsActual: true,
+			RequestID:     "settlement-empty-token-name-request",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-empty-token-name-request").First(&log).Error)
+	require.Equal(t, "request-time-token-name", log.TokenName)
+}
+
+func TestBillingSettlementEffectRejectsNegativeUsageProjection(t *testing.T) {
+	const userID = 7021
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "negative-effect-user", AffCode: "negative-effect-user-aff",
+		Status: common.UserStatusEnabled, UsedQuota: 12, RequestCount: 3,
+	}).Error)
+	const operationKey = "request:negative-usage-effect"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "negative usage must not project",
+			UpdateUsage:   true,
+			Quota:         -5,
+			QuotaIsActual: true,
+			RequestID:     "negative-usage-effect-request",
+		},
+	})
+	require.NoError(t, err)
+	require.ErrorContains(t, ProcessBillingSettlementEffect(operationKey), "usage quota cannot be negative")
+
+	var user User
+	require.NoError(t, DB.First(&user, userID).Error)
+	require.EqualValues(t, 12, user.UsedQuota)
+	require.Equal(t, 3, user.RequestCount)
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
+	require.Equal(t, BillingSettlementEffectPending, settlement.EffectStatus)
+	var logCount int64
+	require.NoError(t, LOG_DB.Where("request_id = ?", "negative-usage-effect-request").Model(&Log{}).Count(&logCount).Error)
+	require.Zero(t, logCount)
 }
 
 func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
@@ -968,6 +1255,56 @@ func TestWaitPendingLogQuotaDataDrainsEnqueuedWork(t *testing.T) {
 		t.Fatal("timed out waiting for queued quota data")
 	}
 	require.Len(t, CacheQuotaData, 1)
+}
+
+func TestResetQuotaDataCacheForTestWaitsForPendingWorkers(t *testing.T) {
+	resetQuotaDataCacheForTest(t)
+
+	originalRunner := logQuotaDataAsyncRunner
+	started := make(chan struct{})
+	release := make(chan struct{})
+	logQuotaDataAsyncRunner = func(fn func()) {
+		go func() {
+			close(started)
+			<-release
+			fn()
+		}()
+	}
+	t.Cleanup(func() {
+		logQuotaDataAsyncRunner = originalRunner
+	})
+
+	enqueueLogQuotaData(QuotaDataLogParams{
+		UserID:    8,
+		Username:  "quota-reset",
+		ModelName: "gpt-test",
+		Quota:     42,
+		CreatedAt: time.Now().Unix(),
+	})
+	<-started
+
+	resetDone := make(chan struct{})
+	go func() {
+		resetQuotaDataCacheForTest(t)
+		close(resetDone)
+	}()
+
+	returnedBeforeRelease := false
+	select {
+	case <-resetDone:
+		returnedBeforeRelease = true
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-resetDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out resetting quota data cache")
+	}
+
+	require.False(t, returnedBeforeRelease, "reset returned before pending quota data worker completed")
+	require.Empty(t, CacheQuotaData)
 }
 
 func TestEnqueueLogQuotaDataAfterShutdownPersistsSynchronously(t *testing.T) {

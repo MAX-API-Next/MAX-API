@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useForm, type SubmitErrorHandler } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
@@ -27,6 +27,7 @@ import { getUserModels, getUserGroups } from '@/lib/api'
 import { DEFAULT_AUTO_ROUTE_KEY } from '@/lib/auto-routes'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
@@ -92,14 +93,12 @@ type ApiKeyMutateDrawerProps = {
   currentRow?: ApiKey
 }
 
-export function ApiKeysMutateDrawer({
-  open,
-  onOpenChange,
-  currentRow,
-}: ApiKeyMutateDrawerProps) {
+export function ApiKeysMutateDrawer(
+  props: ApiKeyMutateDrawerProps
+): ReactElement {
   const { t } = useTranslation()
-  const isUpdate = !!currentRow
-  const { triggerRefresh } = useApiKeys()
+  const isUpdate = !!props.currentRow
+  const { triggerRefresh, withApiTokenVerification } = useApiKeys()
   const { status } = useStatus()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -108,7 +107,7 @@ export function ApiKeysMutateDrawer({
   const [preservedManualGroups, setPreservedManualGroups] = useState<string[]>(
     []
   )
-  const currentRowId = currentRow?.id
+  const currentRowId = props.currentRow?.id
   const defaultAutoRoute =
     typeof status?.default_auto_route === 'string'
       ? status.default_auto_route
@@ -221,7 +220,7 @@ export function ApiKeysMutateDrawer({
 
   // Load existing data when updating
   useEffect(() => {
-    if (!open || groupsLoading) return
+    if (!props.open || groupsLoading) return
 
     let cancelled = false
     const {
@@ -293,10 +292,11 @@ export function ApiKeysMutateDrawer({
     return () => {
       cancelled = true
     }
-  }, [open, isUpdate, currentRowId, form, groupsLoading, t])
+  }, [props.open, isUpdate, currentRowId, form, groupsLoading, t])
 
-  const onSubmit = async (data: ApiKeyFormValues) => {
+  const onSubmit = async (data: ApiKeyFormValues): Promise<void> => {
     setIsSubmitting(true)
+    let created = 0
     try {
       const dirtyFields = form.formState.dirtyFields
       const routingChanged = Boolean(
@@ -315,14 +315,14 @@ export function ApiKeysMutateDrawer({
         ),
       })
 
-      if (isUpdate && currentRow) {
+      if (isUpdate && props.currentRow) {
         const result = await updateApiKey({
           ...basePayload,
-          id: currentRow.id,
+          id: props.currentRow.id,
         })
         if (result.success) {
           toast.success(t(SUCCESS_MESSAGES.API_KEY_UPDATED))
-          onOpenChange(false)
+          props.onOpenChange(false)
           triggerRefresh()
         } else {
           toast.error(result.message || t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -330,38 +330,43 @@ export function ApiKeysMutateDrawer({
       } else {
         // Create mode - handle batch creation
         const count = data.tokenCount || 1
-        let successCount = 0
-
-        for (let i = 0; i < count; i++) {
-          const result = await createApiKey({
-            ...basePayload,
-            name:
-              i === 0 && data.name
-                ? data.name
-                : `${data.name || 'default'}-${Math.random().toString(36).slice(2, 8)}`,
-          })
-          if (result.success) {
-            successCount++
-          } else {
-            toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
-            break
-          }
-        }
-
-        if (successCount > 0) {
-          toast.success(
-            t('Successfully created {{count}} API Key(s)', {
-              count: successCount,
+        await withApiTokenVerification(async (): Promise<number> => {
+          for (let i = created; i < count; i++) {
+            const result = await createApiKey({
+              ...basePayload,
+              name:
+                i === 0 && data.name
+                  ? data.name
+                  : `${data.name || 'default'}-${Math.random().toString(36).slice(2, 8)}`,
             })
-          )
-          onOpenChange(false)
-          triggerRefresh()
-        }
+            if (result.success) {
+              created++
+            } else {
+              toast.error(result.message || t(ERROR_MESSAGES.CREATE_FAILED))
+              break
+            }
+          }
+
+          return created
+        })
       }
-    } catch (_error) {
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, {
+          fallback: t(ERROR_MESSAGES.UNEXPECTED),
+        })
+      }
     } finally {
       setIsSubmitting(false)
+      if (!isUpdate && created > 0) {
+        toast.success(
+          t('Successfully created {{count}} API Key(s)', {
+            count: created,
+          })
+        )
+        props.onOpenChange(false)
+        triggerRefresh()
+      }
     }
   }
 
@@ -399,9 +404,9 @@ export function ApiKeysMutateDrawer({
 
   return (
     <Sheet
-      open={open}
-      onOpenChange={(v) => {
-        onOpenChange(v)
+      open={props.open}
+      onOpenChange={(v: boolean): void => {
+        props.onOpenChange(v)
         if (!v) {
           setEditingLegacyRouting(false)
           setPreservedSmartRoute(undefined)

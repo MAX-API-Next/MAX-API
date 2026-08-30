@@ -1,15 +1,45 @@
 package model
 
 import (
+	"encoding/base64"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/glebarez/sqlite"
+	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
+
+func TestTaskSchemaUsesPortableAutoIncrementPrimaryKeyAndTimeoutCursorIndex(t *testing.T) {
+	parsed, err := schema.Parse(&Task{}, &sync.Map{}, schema.NamingStrategy{})
+	require.NoError(t, err)
+
+	id := parsed.LookUpField("ID")
+	require.NotNil(t, id)
+	assert.True(t, id.PrimaryKey)
+	assert.True(t, id.AutoIncrement)
+
+	index, ok := parsed.ParseIndexes()["idx_task_timeout_cursor"]
+	require.True(t, ok)
+	require.Len(t, index.Fields, 2)
+	assert.Equal(t, "submit_time", index.Fields[0].DBName)
+	assert.Equal(t, "id", index.Fields[1].DBName)
+}
+
+func TestTaskSQLiteCreateGeneratesID(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "portable-auto-increment", Status: TaskStatusNotStart}
+
+	require.NoError(t, DB.Create(task).Error)
+	assert.Positive(t, task.ID)
+}
 
 func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testing.T) {
 	setupUserUpdateTestState(t)
@@ -50,6 +80,65 @@ func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testi
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Contains(t, []string{BillingSettlementSourceWallet, BillingSettlementSourceSubscription}, source)
+}
+
+func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
+	setupUserUpdateTestState(t)
+	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_admission"))
+	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_status_funding"))
+
+	const blockingUserID = 941
+	const nonBlockingUserID = 942
+	now := time.Now().Unix()
+	oldest := now - int64(time.Hour/time.Second)
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:pending-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: blockingUserID, FundingDelta: 10, TokenDelta: 10,
+			Status: BillingSettlementStatusPending, NextAttempt: now, CreatedAt: oldest, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:manual-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: blockingUserID, FundingDelta: 5, TokenDelta: 5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:refund-finalize:finalize", Source: BillingSettlementSourceWallet,
+			UserID: nonBlockingUserID, FundingDelta: -5, TokenDelta: -5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:failed-reserve:reserve:1", Source: BillingSettlementSourceWallet,
+			UserID: nonBlockingUserID, FundingDelta: 5, TokenDelta: 5,
+			Status: BillingSettlementStatusManual, CreatedAt: now, UpdatedAt: now, Revision: 1,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(blockingUserID)
+
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(nonBlockingUserID)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, stats.Count)
+	assert.Equal(t, oldest, stats.OldestCreatedAt)
+
+	require.NoError(t, DB.Where("user_id = ?", blockingUserID).Delete(&BillingSettlement{}).Error)
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count)
+	assert.Zero(t, stats.OldestCreatedAt)
+}
+
+func TestBillingRequestFinalizeOperationKey(t *testing.T) {
+	assert.Equal(t, "request:example-request:finalize", BillingRequestFinalizeOperationKey("example-request"))
+	assert.Equal(t, "request:%:finalize", BillingRequestFinalizeOperationKey("%"))
 }
 
 func TestSubscriptionSettlementUsesActualAppliedRefundForToken(t *testing.T) {
@@ -115,6 +204,29 @@ func TestFailedSettlementLeavesDurablePendingOperation(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 90, getRegressionUserQuota(t, user.Id))
 	require.EqualValues(t, 90, getRegressionTokenRemainQuota(t, token.Id))
+}
+
+func TestBillingSettlementEffectSerializationFailureIsNotDurable(t *testing.T) {
+	setupUserUpdateTestState(t)
+	input := BillingSettlementInput{
+		OperationKey: "regression:effect-serialization-failure",
+		Source:       BillingSettlementSourceWallet,
+		UserID:       905,
+		FundingDelta: 10,
+		Effect: &BillingSettlementEffect{
+			Other: map[string]interface{}{"unsupported": func() {}},
+		},
+	}
+
+	_, _, err := ApplyBillingSettlementOnce(input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBillingSettlementRecordNotDurable)
+
+	var count int64
+	require.NoError(t, DB.Model(&BillingSettlement{}).
+		Where("operation_key = ?", input.OperationKey).
+		Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestBillingSettlementPendingInvalidationBypassesStaleUserCache(t *testing.T) {
@@ -382,6 +494,31 @@ func TestBillingSettlementTaskConflictRollsBackAllLedgerLegs(t *testing.T) {
 	assert.Equal(t, BillingSettlementStatusManual, settlement.Status)
 }
 
+func TestBillingSettlementZeroDeltaTaskConflictIsRejected(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 912, Username: "zero-delta-task-conflict-user", Quota: 100, Status: common.UserStatusEnabled}
+	task := Task{ID: 913, TaskID: "zero-delta-task-conflict", UserId: user.Id, Quota: 20, Status: TaskStatusSubmitted}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&task).Error)
+
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey:    "regression:zero-delta-task-conflict",
+		Source:          BillingSettlementSourceWallet,
+		UserID:          user.Id,
+		TaskID:          task.ID,
+		TaskQuota:       10,
+		TaskQuotaTarget: 10,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrBillingSettlementTaskConflict)
+	assert.EqualValues(t, 20, getRegressionTaskQuota(t, task.ID))
+	assert.EqualValues(t, 100, getRegressionUserQuota(t, user.Id))
+
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", "regression:zero-delta-task-conflict").First(&settlement).Error)
+	assert.Equal(t, BillingSettlementStatusManual, settlement.Status)
+}
+
 func TestSubscriptionSettlementRefusesCrossResetPeriodReplay(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 912, Username: "subscription-period-user", Quota: 0, Status: common.UserStatusEnabled}
@@ -618,4 +755,426 @@ func getRegressionTaskQuota(t *testing.T, taskID int64) int {
 	var task Task
 	require.NoError(t, DB.First(&task, taskID).Error)
 	return task.Quota
+}
+
+func setupSecurityCredentialTestState(t *testing.T) {
+	t.Helper()
+	setupUserUpdateTestState(t)
+	require.NoError(t, DB.AutoMigrate(
+		&PasskeyCredential{},
+		&TwoFA{},
+		&TwoFABackupCode{},
+		&AuthFlow{},
+	))
+	clearSecurityCredentialTestState(t)
+	t.Cleanup(func() {
+		clearSecurityCredentialTestState(t)
+	})
+}
+
+func clearSecurityCredentialTestState(t *testing.T) {
+	t.Helper()
+	for _, target := range []interface{}{
+		&PasskeyCredential{},
+		&TwoFABackupCode{},
+		&TwoFA{},
+		&AuthFlow{},
+	} {
+		require.NoError(t, DB.Unscoped().Where("1 = 1").Delete(target).Error)
+	}
+}
+
+func TestPasswordSecurityChangesBumpGenerationAndRecoveryRevokesTokens(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:                8801,
+		Username:          "password-security-user",
+		Password:          "OldPassword123",
+		Email:             "password-security@example.com",
+		Role:              common.RoleCommonUser,
+		Status:            common.UserStatusEnabled,
+		SessionGeneration: 3,
+	}
+	user.SetAccessToken("management-access-token")
+	require.NoError(t, DB.Create(&user).Error)
+
+	loaded, err := GetUserById(user.Id, true)
+	require.NoError(t, err)
+	loaded.Password = "ChangedPassword123"
+	require.NoError(t, loaded.Update(true))
+	require.EqualValues(t, 4, loaded.SessionGeneration)
+	require.True(t, common.ValidatePasswordAndHash("ChangedPassword123", loaded.Password))
+
+	tokens := []Token{
+		{Id: 8811, UserId: user.Id, Name: "enabled", Key: "password-reset-enabled", Status: common.TokenStatusEnabled},
+		{Id: 8812, UserId: user.Id, Name: "disabled", Key: "password-reset-disabled", Status: common.TokenStatusDisabled},
+	}
+	require.NoError(t, DB.Create(&tokens).Error)
+
+	require.NoError(t, ResetUserPasswordByEmail(user.Email, "RecoveredPassword123"))
+
+	var recovered User
+	require.NoError(t, DB.First(&recovered, user.Id).Error)
+	require.EqualValues(t, 5, recovered.SessionGeneration)
+	require.Empty(t, recovered.GetAccessToken())
+	require.True(t, common.ValidatePasswordAndHash("RecoveredPassword123", recovered.Password))
+
+	var storedTokens []Token
+	require.NoError(t, DB.Where("user_id = ?", user.Id).Order("id asc").Find(&storedTokens).Error)
+	require.Len(t, storedTokens, 2)
+	for _, token := range storedTokens {
+		require.Equal(t, common.TokenStatusDisabled, token.Status)
+	}
+}
+
+func TestPasskeyAndTwoFASecurityChangesBumpSessionGeneration(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8821,
+		Username: "credential-generation-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	firstCredential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "Y3JlZGVudGlhbC0x",
+		PublicKey:    "cHVibGljLWtleS0x",
+	}
+	generation, err := ReplacePasskeyCredentialAndBumpSessionGeneration(firstCredential)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, generation)
+
+	replacement := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "Y3JlZGVudGlhbC0y",
+		PublicKey:    "cHVibGljLWtleS0y",
+	}
+	generation, err = ReplacePasskeyCredentialAndBumpSessionGeneration(replacement)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, generation)
+
+	var credentials []PasskeyCredential
+	require.NoError(t, DB.Unscoped().Where("user_id = ?", user.Id).Find(&credentials).Error)
+	require.Len(t, credentials, 1)
+	require.Equal(t, replacement.CredentialID, credentials[0].CredentialID)
+
+	generation, err = DeletePasskeyAndBumpSessionGeneration(user.Id)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, generation)
+
+	twoFA := &TwoFA{UserId: user.Id, Secret: "TESTSECRET", IsEnabled: false}
+	require.NoError(t, DB.Create(twoFA).Error)
+	generation, err = twoFA.EnableAndBumpSessionGeneration()
+	require.NoError(t, err)
+	require.EqualValues(t, 4, generation)
+
+	generation, err = ReplaceBackupCodesAndBumpSessionGeneration(user.Id, []string{"ABCD-EFGH"})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, generation)
+	var backupCode TwoFABackupCode
+	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&backupCode).Error)
+	require.NotEqual(t, "ABCD-EFGH", backupCode.CodeHash)
+	require.True(t, common.ValidatePasswordAndHash("ABCD-EFGH", backupCode.CodeHash))
+	valid, err := ValidateBackupCode(user.Id, "ABCD-EFGH")
+	require.NoError(t, err)
+	require.True(t, valid)
+	valid, err = ValidateBackupCode(user.Id, "ABCD-EFGH")
+	require.NoError(t, err)
+	require.False(t, valid)
+
+	generation, err = DisableTwoFAAndBumpSessionGeneration(user.Id)
+	require.NoError(t, err)
+	require.EqualValues(t, 6, generation)
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	require.EqualValues(t, 6, stored.SessionGeneration)
+}
+
+func TestBackupCodeMutationsRequireCredentialOwner(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+	const missingUserID = 8899
+
+	require.EqualError(t, (&TwoFA{Id: 1}).Delete(), "2FA用户ID不能为空")
+	require.EqualError(t, (&TwoFA{Id: 1, UserId: -1}).Delete(), "2FA用户ID不能为空")
+	require.ErrorIs(t, CreateBackupCodes(missingUserID, []string{"ABCD-EFGH"}), gorm.ErrRecordNotFound)
+	require.ErrorIs(t, (&TwoFA{Id: 1, UserId: missingUserID}).Delete(), gorm.ErrRecordNotFound)
+}
+
+func TestPasskeyUsageUpdateCannotRestoreReplacedCredential(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8822,
+		Username: "passkey-usage-race-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	staleCredential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "c3RhbGUtY3JlZGVudGlhbA==",
+		PublicKey:    "c3RhbGUtcHVibGljLWtleQ==",
+		SignCount:    1,
+	}
+	_, err := ReplacePasskeyCredentialAndBumpSessionGeneration(staleCredential)
+	require.NoError(t, err)
+	staleUsageUpdate := *staleCredential
+
+	replacement := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "cmVwbGFjZW1lbnQtY3JlZGVudGlhbA==",
+		PublicKey:    "cmVwbGFjZW1lbnQtcHVibGljLWtleQ==",
+		SignCount:    10,
+	}
+	_, err = ReplacePasskeyCredentialAndBumpSessionGeneration(replacement)
+	require.NoError(t, err)
+
+	now := time.Now()
+	staleUsageUpdate.SignCount = 2
+	staleUsageUpdate.LastUsedAt = &now
+	require.ErrorIs(t, UpdatePasskeyCredentialAfterAuthentication(&staleUsageUpdate), ErrPasskeyCredentialChanged)
+
+	stored, err := GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.Equal(t, replacement.CredentialID, stored.CredentialID)
+	require.Equal(t, replacement.PublicKey, stored.PublicKey)
+	require.EqualValues(t, 10, stored.SignCount)
+
+	later := now.Add(time.Second)
+	matchingUsageUpdate := *replacement
+	matchingUsageUpdate.ID = 0
+	matchingUsageUpdate.SignCount = 11
+	matchingUsageUpdate.LastUsedAt = &later
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&matchingUsageUpdate))
+	stored, err = GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.Equal(t, replacement.CredentialID, stored.CredentialID)
+	require.EqualValues(t, 11, stored.SignCount)
+	require.WithinDuration(t, later, *stored.LastUsedAt, time.Second)
+}
+
+func TestPasskeyUsageUpdateMergesOrderedAuthenticationStateMonotonically(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8824,
+		Username: "passkey-monotonic-auth-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	credential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: "bW9ub3RvbmljLWNlcnQ=",
+		PublicKey:    "bW9ub3RvbmljLXB1YmxpYy1rZXk=",
+		SignCount:    9,
+	}
+	_, err := ReplacePasskeyCredentialAndBumpSessionGeneration(credential)
+	require.NoError(t, err)
+
+	older := time.Now()
+	newer := older.Add(time.Second)
+	higherCounter := *credential
+	higherCounter.SignCount = 11
+	higherCounter.CloneWarning = true
+	higherCounter.LastUsedAt = &newer
+	lowerCounter := *credential
+	lowerCounter.SignCount = 10
+	lowerCounter.CloneWarning = false
+	lowerCounter.LastUsedAt = &older
+
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&higherCounter))
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(&lowerCounter))
+
+	stored, err := GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.EqualValues(t, 11, stored.SignCount)
+	require.True(t, stored.CloneWarning)
+	require.WithinDuration(t, newer, *stored.LastUsedAt, time.Second)
+}
+
+func TestPasskeyAuthenticationUpdateKeysMatchSchema(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+	now := time.Now()
+	updates := passkeyAuthenticationUpdates(&PasskeyCredential{
+		PublicKey: "schema-public-key", CloneWarning: true, LastUsedAt: &now,
+	})
+	statement := &gorm.Statement{DB: DB}
+	require.NoError(t, statement.Parse(&PasskeyCredential{}))
+	for key := range updates {
+		require.Contains(t, statement.Schema.DBNames, key)
+	}
+}
+
+func TestTimedOutTaskCursorRemainsGroupedWithStatusPredicate(t *testing.T) {
+	truncateTables(t)
+	require.True(t, DB.Migrator().HasIndex(&Task{}, "idx_task_timeout_cursor"))
+	const submitTime = int64(100)
+	tasks := []Task{
+		{ID: 401, TaskID: "cursor-unfinished", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 402, TaskID: "cursor-success", Status: TaskStatusSuccess, SubmitTime: submitTime},
+		{ID: 403, TaskID: "cursor-failure", Status: TaskStatusFailure, SubmitTime: submitTime},
+	}
+	require.NoError(t, DB.Create(&tasks).Error)
+
+	got, err := GetTimedOutUnfinishedTasksAfter(200, submitTime, 400, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "cursor-unfinished", got[0].TaskID)
+}
+
+func TestTimedOutTaskCursorReturnsQueryError(t *testing.T) {
+	failingDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := failingDB.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	originalDB := DB
+	DB = failingDB
+	t.Cleanup(func() { DB = originalDB })
+
+	tasks, queryErr := GetTimedOutUnfinishedTasksAfter(200, 0, 0, 10)
+	require.Error(t, queryErr)
+	require.Nil(t, tasks)
+}
+
+func TestPasskeyValidatedCredentialStateIsPersisted(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	user := User{
+		Id:       8823,
+		Username: "passkey-validated-state-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	credentialID := []byte("validated-state-credential")
+	storedCredential := &PasskeyCredential{
+		UserID:       user.Id,
+		CredentialID: base64.StdEncoding.EncodeToString(credentialID),
+		PublicKey:    base64.StdEncoding.EncodeToString([]byte("old-public-key")),
+		SignCount:    1,
+	}
+	_, err := ReplacePasskeyCredentialAndBumpSessionGeneration(storedCredential)
+	require.NoError(t, err)
+
+	validatedCredential := &webauthn.Credential{
+		ID:              credentialID,
+		PublicKey:       []byte("updated-public-key"),
+		AttestationType: "none",
+		Transport:       []protocol.AuthenticatorTransport{protocol.USB},
+		Flags: webauthn.CredentialFlags{
+			UserPresent:    true,
+			UserVerified:   true,
+			BackupEligible: true,
+			BackupState:    true,
+		},
+		Authenticator: webauthn.Authenticator{
+			AAGUID:       []byte("updated-aaguid"),
+			SignCount:    2,
+			CloneWarning: true,
+			Attachment:   protocol.Platform,
+		},
+	}
+
+	storedCredential.ApplyValidatedCredential(validatedCredential)
+	now := time.Now()
+	storedCredential.LastUsedAt = &now
+	require.NoError(t, UpdatePasskeyCredentialAfterAuthentication(storedCredential))
+
+	updated, err := GetPasskeyByUserID(user.Id)
+	require.NoError(t, err)
+	require.Equal(t, base64.StdEncoding.EncodeToString(credentialID), updated.CredentialID)
+	require.Equal(t, base64.StdEncoding.EncodeToString(validatedCredential.PublicKey), updated.PublicKey)
+	require.EqualValues(t, 2, updated.SignCount)
+	require.True(t, updated.CloneWarning)
+	require.True(t, updated.UserPresent)
+	require.True(t, updated.UserVerified)
+	require.True(t, updated.BackupEligible)
+	require.True(t, updated.BackupState)
+	require.Equal(t, string(protocol.Platform), updated.Attachment)
+	require.Equal(t, []protocol.AuthenticatorTransport{protocol.USB}, updated.TransportList())
+	require.WithinDuration(t, now, *updated.LastUsedAt, time.Second)
+}
+
+func TestTelegramBindingStateIsUserBoundAndConsumedOnce(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	owner := User{Id: 8831, Username: "telegram-owner", AffCode: "telegram-owner", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	other := User{Id: 8832, Username: "telegram-other", AffCode: "telegram-other", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&owner).Error)
+	require.NoError(t, DB.Create(&other).Error)
+
+	state, _, err := CreateAuthFlow(AuthFlowCreate{
+		Purpose:   AuthFlowPurposeOAuth,
+		Provider:  "telegram",
+		Intent:    AuthFlowIntentBind,
+		UserId:    owner.Id,
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	_, err = BindTelegramIdentityWithAuthFlow(other.Id, "123456", state)
+	require.ErrorIs(t, err, ErrAuthFlowInvalid)
+
+	generation, err := BindTelegramIdentityWithAuthFlow(owner.Id, "123456", state)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, generation)
+
+	_, err = BindTelegramIdentityWithAuthFlow(owner.Id, "123456", state)
+	require.ErrorIs(t, err, ErrAuthFlowConsumed)
+
+	var stored User
+	require.NoError(t, DB.First(&stored, owner.Id).Error)
+	require.Equal(t, "123456", stored.TelegramId)
+	require.EqualValues(t, 1, stored.SessionGeneration)
+}
+
+func TestOAuthReauthenticationBootstrapRequiresNoExistingCredentials(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	users := []User{
+		{Id: 8841, Username: "oauth-bootstrap-user", AffCode: "oauth-bootstrap", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8842, Username: "oauth-password-user", Password: "existing-password-hash", AffCode: "oauth-password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8843, Username: "oauth-two-fa-user", AffCode: "oauth-two-fa", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8844, Username: "oauth-passkey-user", AffCode: "oauth-passkey", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+	}
+	require.NoError(t, DB.Create(&users).Error)
+	require.NoError(t, DB.Create(&TwoFA{
+		UserId:    users[2].Id,
+		Secret:    "oauth-reauth-test-secret",
+		IsEnabled: true,
+	}).Error)
+	require.NoError(t, DB.Create(&PasskeyCredential{
+		UserID:       users[3].Id,
+		CredentialID: "oauth-reauth-credential-id",
+		PublicKey:    "oauth-reauth-public-key",
+	}).Error)
+
+	tests := []struct {
+		name    string
+		userID  int
+		allowed bool
+	}{
+		{name: "oauth only", userID: users[0].Id, allowed: true},
+		{name: "password", userID: users[1].Id, allowed: false},
+		{name: "enabled 2FA", userID: users[2].Id, allowed: false},
+		{name: "Passkey", userID: users[3].Id, allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			allowed, err := CanUseOAuthReauthentication(test.userID)
+			require.NoError(t, err)
+			require.Equal(t, test.allowed, allowed)
+		})
+	}
 }

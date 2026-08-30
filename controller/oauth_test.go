@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,16 +32,75 @@ func (*deletedUserOAuthProvider) ExchangeToken(context.Context, string, *gin.Con
 func setupControllerAuthFlowDB(t *testing.T) {
 	t.Helper()
 	originalDB := model.DB
-	db, err := gorm.Open(sqlite.Open("file:controller_auth_flow?mode=memory&cache=shared"), &gorm.Config{})
+	originalLogDB := model.LOG_DB
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}))
+	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}, &model.User{}, &model.Log{}))
 	model.DB = db
+	model.LOG_DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
+		model.LOG_DB = originalLogDB
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
 	})
+}
+
+func TestGenerateOAuthCodeCreatesTelegramLoginState(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	originalEnabled := common.TelegramOAuthEnabled
+	common.TelegramOAuthEnabled = true
+	t.Cleanup(func() { common.TelegramOAuthEnabled = originalEnabled })
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("telegram-state-create-test"))))
+	router.POST("/api/oauth/state", GenerateOAuthCode)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"login"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	var response struct {
+		Success bool   `json:"success"`
+		Data    string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.NotEmpty(t, response.Data)
+	_, err := model.GetAuthFlow(response.Data, model.AuthFlowMatch{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "telegram", Intent: model.AuthFlowIntentLogin,
+	})
+	require.NoError(t, err)
+}
+
+func TestGenerateOAuthCodeRejectsTelegramLoginStateWhenDisabled(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	require.NoError(t, appi18n.Init())
+	originalEnabled := common.TelegramOAuthEnabled
+	common.TelegramOAuthEnabled = false
+	t.Cleanup(func() { common.TelegramOAuthEnabled = originalEnabled })
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("telegram-state-disabled-test"))))
+	router.POST("/api/oauth/state", GenerateOAuthCode)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"login"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AuthFlow{}).Count(&count).Error)
+	require.Zero(t, count)
 }
 
 func TestGenerateOAuthCodeCreatesProviderBoundOpaqueState(t *testing.T) {
@@ -133,6 +193,32 @@ func TestGenerateOAuthCodeRejectsAnonymousBind(t *testing.T) {
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.False(t, response.Success)
 	require.Equal(t, "Unauthorized", response.Message)
+}
+
+func TestGenerateOAuthCodeRejectsTelegramBindIntent(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	require.NoError(t, appi18n.Init())
+	originalEnabled := common.TelegramOAuthEnabled
+	common.TelegramOAuthEnabled = true
+	t.Cleanup(func() { common.TelegramOAuthEnabled = originalEnabled })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"bind"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", 123)
+
+	GenerateOAuthCode(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AuthFlow{}).Count(&count).Error)
+	require.Zero(t, count)
 }
 
 func TestHandleOAuthRejectsConsumedStateBeforeProviderExchange(t *testing.T) {

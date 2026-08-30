@@ -588,10 +588,20 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		return
 	}
 	params.Content = common.SanitizePersistedLogContent(params.Content)
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
-	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
-	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	logCtx := context.Background()
+	if c != nil {
+		logCtx = c
+	}
+	logger.LogInfo(logCtx, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+	username, requestId, upstreamRequestId := "", "", ""
+	if c != nil {
+		username = c.GetString("username")
+		requestId = c.GetString(common.RequestIdKey)
+		upstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+	}
+	if username == "" {
+		username, _ = GetUsernameById(userId, false)
+	}
 	otherStr := common.MapToJsonStr(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -617,7 +627,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		IsStream:         params.IsStream,
 		Group:            params.Group,
 		Ip: func() string {
-			if needRecordIp {
+			if needRecordIp && c != nil {
 				return c.ClientIP()
 			}
 			return ""
@@ -628,7 +638,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
-		logger.LogError(c, "failed to record log: "+err.Error())
+		logger.LogError(logCtx, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
 		createdAt := common.GetTimestamp()
@@ -648,16 +658,23 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 }
 
 type RecordTaskBillingLogParams struct {
-	UserId    int
-	LogType   int
-	Content   string
-	ChannelId int
-	ModelName string
-	Quota     int
-	TokenId   int
-	Group     string
-	Other     map[string]interface{}
-	NodeName  string // 任务发起节点；为空时回退当前节点
+	UserId            int
+	LogType           int
+	Content           string
+	ChannelId         int
+	ModelName         string
+	Quota             int
+	TokenId           int
+	TokenName         string
+	Group             string
+	Other             map[string]interface{}
+	NodeName          string // 任务发起节点；为空时回退当前节点
+	PromptTokens      int
+	CompletionTokens  int
+	UseTimeSeconds    int
+	IsStream          bool
+	RequestId         string
+	UpstreamRequestId string
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -682,26 +699,32 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 	}
 	params.Content = common.SanitizePersistedLogContent(params.Content)
 	username, _ := GetUsernameById(params.UserId, false)
-	tokenName := ""
+	tokenName := params.TokenName
 	if params.TokenId > 0 {
-		if token, err := GetTokenById(params.TokenId); err == nil {
+		if token, err := GetTokenById(params.TokenId); err == nil && token.Name != "" {
 			tokenName = token.Name
 		}
 	}
 	createdAt := common.GetTimestamp()
 	log := &Log{
-		UserId:    params.UserId,
-		Username:  username,
-		CreatedAt: createdAt,
-		Type:      params.LogType,
-		Content:   params.Content,
-		TokenName: tokenName,
-		ModelName: params.ModelName,
-		Quota:     params.Quota,
-		ChannelId: params.ChannelId,
-		TokenId:   params.TokenId,
-		Group:     params.Group,
-		Other:     common.MapToJsonStr(params.Other),
+		UserId:            params.UserId,
+		Username:          username,
+		CreatedAt:         createdAt,
+		Type:              params.LogType,
+		Content:           params.Content,
+		TokenName:         tokenName,
+		ModelName:         params.ModelName,
+		Quota:             params.Quota,
+		PromptTokens:      params.PromptTokens,
+		CompletionTokens:  params.CompletionTokens,
+		UseTime:           params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		ChannelId:         params.ChannelId,
+		TokenId:           params.TokenId,
+		Group:             params.Group,
+		RequestId:         params.RequestId,
+		UpstreamRequestId: params.UpstreamRequestId,
+		Other:             common.MapToJsonStr(params.Other),
 	}
 	inserted := true
 	if operationKey == "" {
@@ -754,6 +777,7 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 			ModelName: params.ModelName,
 			Quota:     params.Quota,
 			CreatedAt: createdAt,
+			TokenUsed: params.PromptTokens + params.CompletionTokens,
 			UseGroup:  params.Group,
 			TokenID:   params.TokenId,
 			ChannelID: params.ChannelId,

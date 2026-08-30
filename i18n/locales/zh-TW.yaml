@@ -80,6 +80,7 @@ user.verification_code_error: "驗證碼錯誤或已過期"
 user.email_already_taken: "信箱位址已被占用"
 user.password_unset: "目前帳號未設定密碼，請使用密碼重置或聯繫管理員重置密碼"
 user.password_reset_link_invalid: "重置連結非法或已過期"
+user.password_reset_success_tokens_revoked: "密碼重設成功。為保障帳戶安全，所有現有 API 令牌已被撤銷。請登入並重新建立 API 令牌。"
 user.input_invalid: "輸入不合法 {{.Error}}"
 user.no_permission_same_level: "無權獲取同級或更高等級使用者的資訊"
 user.no_permission_higher_level: "無權更新同權限等級或更高權限等級的使用者資訊"
@@ -115,6 +116,9 @@ quota.exceed_max: "額度值超出有效範圍"
 quota.insufficient: "額度不足"
 quota.warning_invalid: "無效的預警類型"
 quota.threshold_gt_zero: "預警閾值必須大於0"
+
+# Billing messages
+billing.reconciliation_pending: "存在未完成的計費對帳，請勿重複提交請求並聯絡管理員處理"
 
 # Subscription messages
 subscription.not_enabled: "訂閱方案未啟用"

@@ -45,6 +45,35 @@ func sessionInt(value any) (int, bool) {
 	}
 }
 
+func sessionInt64(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+func sessionGenerationMatches(session sessions.Session, user *model.UserBase) bool {
+	value := session.Get("session_generation")
+	if value == nil {
+		return user.SessionGeneration == 0
+	}
+	generation, ok := sessionInt64(value)
+	return ok && generation == user.SessionGeneration
+}
+
+func clearInvalidSession(session sessions.Session) {
+	session.Clear()
+	if err := session.Save(); err != nil {
+		common.SysLog("failed to clear invalid session: " + err.Error())
+	}
+}
+
 func refreshSessionFromUser(session sessions.Session, user *model.UserBase) {
 	changed := false
 	setIfChanged := func(key string, value any) {
@@ -58,6 +87,7 @@ func refreshSessionFromUser(session sessions.Session, user *model.UserBase) {
 	setIfChanged("role", user.Role)
 	setIfChanged("status", user.Status)
 	setIfChanged("group", user.Group)
+	setIfChanged("session_generation", user.SessionGeneration)
 	if changed {
 		if err := session.Save(); err != nil {
 			common.SysLog(fmt.Sprintf("failed to refresh session for user %d: %v", user.Id, err))
@@ -71,6 +101,18 @@ func getSessionUser(session sessions.Session) (*model.UserBase, error) {
 		return nil, gorm.ErrRecordNotFound
 	}
 	return model.GetUserCache(id)
+}
+
+func sessionUserForRequest(session sessions.Session) (*model.UserBase, error) {
+	user, err := getSessionUser(session)
+	if err != nil {
+		return nil, err
+	}
+	if !sessionGenerationMatches(session, user) {
+		clearInvalidSession(session)
+		return nil, nil
+	}
+	return user, nil
 }
 
 func writeSessionUserContext(c *gin.Context, user *model.UserBase) {
@@ -108,6 +150,15 @@ func freshAuthHelper(c *gin.Context, minRole int) {
 					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
 				})
 			}
+			c.Abort()
+			return
+		}
+		if !sessionGenerationMatches(session, userCache) {
+			clearInvalidSession(session)
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+			})
 			c.Abort()
 			return
 		}
@@ -239,7 +290,7 @@ func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
 		if session.Get("id") != nil {
-			if userCache, err := getSessionUser(session); err == nil && userCache.Status == common.UserStatusEnabled {
+			if userCache, err := sessionUserForRequest(session); err == nil && userCache != nil && userCache.Status == common.UserStatusEnabled {
 				refreshSessionFromUser(session, userCache)
 				writeSessionUserContext(c, userCache)
 			}
@@ -277,8 +328,8 @@ func TokenOrUserAuth() func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
 		if session.Get("id") != nil {
-			userCache, err := getSessionUser(session)
-			if err == nil && userCache.Status == common.UserStatusEnabled {
+			userCache, err := sessionUserForRequest(session)
+			if err == nil && userCache != nil && userCache.Status == common.UserStatusEnabled {
 				refreshSessionFromUser(session, userCache)
 				writeSessionUserContext(c, userCache)
 				c.Next()

@@ -175,6 +175,16 @@ func TestMidjourneyFailureRefundsWalletAndTokenThroughDurableSettlement(t *testi
 	require.NoError(t, err)
 	require.True(t, created)
 	require.False(t, refundDuplicate)
+	settlementInput := model.BillingSettlementInput{
+		OperationKey: "request:midjourney-refund-request:finalize", Source: model.BillingSettlementSourceWallet,
+		UserID: user.Id, TokenID: token.Id,
+	}
+	_, alreadyApplied, err := model.ApplyBillingSettlementOnce(settlementInput)
+	require.NoError(t, err)
+	require.False(t, alreadyApplied)
+	_, alreadyApplied, err = model.ApplyBillingSettlementOnce(settlementInput)
+	require.NoError(t, err)
+	require.True(t, alreadyApplied)
 
 	err = updateMidjourneyTaskFromResponse(context.Background(), mj, dto.MidjourneyDto{
 		MjId: mj.MjId, Status: "FAILURE", Progress: "100%", FailReason: "provider failed",
@@ -258,8 +268,18 @@ func TestApplyMidjourneyTaskResponsePreservesLateCompletionWithoutRefund(t *test
 			require.NoError(t, err)
 			require.True(t, created)
 			require.False(t, refundDuplicate)
+			settlementInput := model.BillingSettlementInput{
+				OperationKey: "request:midjourney-late-success-request-" + suffix + ":finalize", Source: model.BillingSettlementSourceWallet,
+				UserID: user.Id, TokenID: token.Id,
+			}
+			_, alreadyApplied, err := model.ApplyBillingSettlementOnce(settlementInput)
+			require.NoError(t, err)
+			require.False(t, alreadyApplied)
 			var settlementCountBefore int64
 			require.NoError(t, db.Model(&model.BillingSettlement{}).Count(&settlementCountBefore).Error)
+			_, alreadyApplied, err = model.ApplyBillingSettlementOnce(settlementInput)
+			require.NoError(t, err)
+			require.True(t, alreadyApplied)
 
 			err = applyMidjourneyTaskResponse(context.Background(), map[string]*model.Midjourney{mj.MjId: mj}, dto.MidjourneyDto{
 				MjId: mj.MjId, Status: tt.responseStatus, Progress: "100%", FinishTime: finishTime,

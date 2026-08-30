@@ -22,6 +22,79 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type recordingTaskReservationBilling struct {
+	preConsumed int
+	reserveTo   []int
+	settleTo    []int
+}
+
+func (b *recordingTaskReservationBilling) Settle(actualQuota int) error {
+	b.settleTo = append(b.settleTo, actualQuota)
+	b.preConsumed = actualQuota
+	return nil
+}
+func (b *recordingTaskReservationBilling) Refund(*gin.Context)      {}
+func (b *recordingTaskReservationBilling) NeedsRefund() bool        { return true }
+func (b *recordingTaskReservationBilling) GetPreConsumedQuota() int { return b.preConsumed }
+func (b *recordingTaskReservationBilling) Reserve(targetQuota int) error {
+	b.reserveTo = append(b.reserveTo, targetQuota)
+	if targetQuota > b.preConsumed {
+		b.preConsumed = targetQuota
+	}
+	return nil
+}
+
+func TestReserveTaskQuotaExtendsExistingReservationToActualTarget(t *testing.T) {
+	billing := &recordingTaskReservationBilling{preConsumed: 100}
+	info := &relaycommon.RelayInfo{
+		Billing: billing,
+		PriceData: types.PriceData{
+			FreeModel: false,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 250)
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, 250, reserved)
+	assert.Equal(t, []int{250}, billing.reserveTo)
+}
+
+func TestReserveTaskQuotaPreservesPaidReservationUntilFreeRetrySettlement(t *testing.T) {
+	billing := &recordingTaskReservationBilling{preConsumed: 100}
+	info := &relaycommon.RelayInfo{
+		Billing: billing,
+		PriceData: types.PriceData{
+			FreeModel: true,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 0)
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, 100, reserved)
+	assert.Same(t, billing, info.Billing)
+	assert.Empty(t, billing.reserveTo)
+
+	require.NoError(t, info.Billing.Settle(0))
+	assert.Equal(t, []int{0}, billing.settleTo)
+	assert.Zero(t, info.Billing.GetPreConsumedQuota())
+}
+
+func TestReserveTaskQuotaReturnsZeroForUnreservedFreeTask(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		PriceData: types.PriceData{
+			FreeModel: true,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 250)
+
+	require.Nil(t, taskErr)
+	assert.Zero(t, reserved)
+	assert.Nil(t, info.Billing)
+}
+
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
 	t.Helper()
 	original := task_billing_setting.GetRateCardsCopy()
@@ -190,6 +263,31 @@ func TestEstimateTaskBillingFallsBackToGenericRateCard(t *testing.T) {
 	assert.Equal(t, "720p_no_audio", got.RowID)
 	assert.InDelta(t, 6.0, got.Quantity, 1e-9)
 	assert.Equal(t, 3000, got.Quota)
+}
+
+func TestRecalcQuotaFromRatiosUsesRawEstimateBeforePreConsumeFloor(t *testing.T) {
+	const estimatedQuota = 200
+	info := &relaycommon.RelayInfo{
+		PriceData: types.PriceData{
+			Quota:             estimatedQuota,
+			QuotaToPreConsume: 500,
+			OtherRatios:       map[string]float64{"duration": 2},
+		},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		ratio    float64
+		expected int
+	}{
+		{name: "adjusted below estimate and floor", ratio: 1, expected: 100},
+		{name: "adjusted above reservation", ratio: 6, expected: 600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := recalcQuotaFromRatios(info, estimatedQuota, map[string]float64{"duration": tc.ratio})
+			assert.Equal(t, tc.expected, got)
+		})
+	}
 }
 
 func TestPrepareTaskSubmitRequestBodyParamOverrideReturnErrorIsLocal(t *testing.T) {

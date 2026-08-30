@@ -24,10 +24,16 @@ const (
 	BillingSettlementEffectApplied      = "applied"
 )
 
+const billingRequestOperationPrefix = "request:"
+const billingRequestFinalizeSuffix = ":finalize"
+
+const billingSettlementBacklogSampleInterval = 30 * time.Second
+
 var (
 	ErrBillingSettlementManualReview       = errors.New("billing settlement requires manual review")
 	ErrBillingSettlementTaskConflict       = errors.New("billing settlement task quota conflict")
 	ErrBillingSettlementOperationConflict  = errors.New("billing settlement operation conflict")
+	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
 )
@@ -61,17 +67,17 @@ type BillingSettlement struct {
 	ID                              int64  `gorm:"primaryKey"`
 	OperationKey                    string `gorm:"type:varchar(191);uniqueIndex;not null"`
 	Source                          string `gorm:"type:varchar(32);not null"`
-	UserID                          int    `gorm:"not null;default:0"`
+	UserID                          int    `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:1"`
 	SubscriptionID                  int    `gorm:"not null;default:0"`
 	TokenID                         int    `gorm:"not null;default:0"`
-	FundingDelta                    int64  `gorm:"not null;default:0"`
+	FundingDelta                    int64  `gorm:"not null;default:0;index:idx_billing_settlement_admission,priority:3;index:idx_billing_settlement_status_funding,priority:2"`
 	AppliedFundingDelta             int64  `gorm:"not null;default:0"`
 	TokenDelta                      int64  `gorm:"not null;default:0"`
 	AppliedTokenDelta               int64  `gorm:"not null;default:0"`
 	TaskID                          int64  `gorm:"not null;default:0"`
 	TaskQuota                       int64  `gorm:"not null;default:0"`
 	TaskQuotaTarget                 int64  `gorm:"not null;default:0"`
-	Status                          string `gorm:"type:varchar(16);index;not null;default:'applied'"`
+	Status                          string `gorm:"type:varchar(16);index;index:idx_billing_settlement_admission,priority:2;index:idx_billing_settlement_status_funding,priority:1;not null;default:'applied'"`
 	Attempts                        int    `gorm:"not null;default:0"`
 	LastError                       string `gorm:"type:text"`
 	NextAttempt                     int64  `gorm:"index;not null;default:0"`
@@ -106,16 +112,31 @@ type BillingPreConsumeSelection struct {
 }
 
 type BillingSettlementEffect struct {
-	LogType     int                    `json:"log_type"`
-	Content     string                 `json:"content"`
-	ChannelID   int                    `json:"channel_id"`
-	ModelName   string                 `json:"model_name"`
-	TokenID     int                    `json:"token_id"`
-	Group       string                 `json:"group"`
-	Other       map[string]interface{} `json:"other"`
-	NodeName    string                 `json:"node_name"`
-	UpdateUsage bool                   `json:"update_usage"`
-	Quota       int64                  `json:"quota,omitempty"`
+	LogType           int                                  `json:"log_type"`
+	Content           string                               `json:"content"`
+	ChannelID         int                                  `json:"channel_id"`
+	ModelName         string                               `json:"model_name"`
+	TokenID           int                                  `json:"token_id"`
+	TokenName         string                               `json:"token_name,omitempty"`
+	Group             string                               `json:"group"`
+	Other             map[string]interface{}               `json:"other"`
+	NodeName          string                               `json:"node_name"`
+	UpdateUsage       bool                                 `json:"update_usage"`
+	Quota             int64                                `json:"quota,omitempty"`
+	QuotaIsActual     bool                                 `json:"quota_is_actual,omitempty"`
+	PromptTokens      int                                  `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int                                  `json:"completion_tokens,omitempty"`
+	UseTimeSeconds    int                                  `json:"use_time_seconds,omitempty"`
+	IsStream          bool                                 `json:"is_stream,omitempty"`
+	RequestID         string                               `json:"request_id,omitempty"`
+	UpstreamRequestID string                               `json:"upstream_request_id,omitempty"`
+	Subscription      *BillingSettlementSubscriptionEffect `json:"subscription,omitempty"`
+}
+
+type BillingSettlementSubscriptionEffect struct {
+	PreConsumed               int64 `json:"pre_consumed"`
+	AmountTotal               int64 `json:"amount_total"`
+	AmountUsedAfterPreConsume int64 `json:"amount_used_after_pre_consume"`
 }
 
 type BillingSettlementInput struct {
@@ -144,11 +165,39 @@ type BillingSettlementInput struct {
 	PreConsumeEffectiveQuota int64
 }
 
+// BillingSettlementBacklogStats is a read-only operational projection of
+// positive final settlements that currently block new paid requests.
+type BillingSettlementBacklogStats struct {
+	Count           int64 `gorm:"column:record_count"`
+	OldestCreatedAt int64 `gorm:"column:oldest_created_at"`
+}
+
+func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
+	return db.Model(&BillingSettlement{}).
+		Where("funding_delta > 0").
+		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
+		Where("operation_key LIKE ?", BillingRequestFinalizeOperationKey("%"))
+}
+
 var billingSettlementRunnerOnce sync.Once
 var billingSettlementRunnerState struct {
 	sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+var billingSettlementBacklogObserverState struct {
+	sync.RWMutex
+	observer func(BillingSettlementBacklogStats, time.Time)
+}
+
+// SetBillingSettlementBacklogObserver installs the operational observer used
+// by the background settlement runner. The observer must remain read-only: it
+// may alert operators, but it must not mutate or retry settlement records.
+func SetBillingSettlementBacklogObserver(observer func(BillingSettlementBacklogStats, time.Time)) {
+	billingSettlementBacklogObserverState.Lock()
+	billingSettlementBacklogObserverState.observer = observer
+	billingSettlementBacklogObserverState.Unlock()
 }
 
 // StartBillingSettlementTaskRunner retries durable settlement intents after a
@@ -168,14 +217,19 @@ func StartBillingSettlementTaskRunner() {
 		gopool.Go(func() {
 			defer close(done)
 			ProcessPendingBillingSettlementsOnce()
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			observeBillingSettlementBacklog(time.Now())
+			settlementTicker := time.NewTicker(time.Second)
+			backlogTicker := time.NewTicker(billingSettlementBacklogSampleInterval)
+			defer settlementTicker.Stop()
+			defer backlogTicker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
+				case <-settlementTicker.C:
 					ProcessPendingBillingSettlementsOnce()
+				case observedAt := <-backlogTicker.C:
+					observeBillingSettlementBacklog(observedAt)
 				}
 			}
 		})
@@ -201,6 +255,85 @@ func StopBillingSettlementTaskRunner(ctx context.Context) error {
 
 func ProcessPendingBillingSettlementsOnce() {
 	processPendingBillingSettlements()
+}
+
+func observeBillingSettlementBacklog(observedAt time.Time) {
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to query unresolved positive final billing settlements: %s", err.Error()))
+		return
+	}
+	billingSettlementBacklogObserverState.RLock()
+	observer := billingSettlementBacklogObserverState.observer
+	billingSettlementBacklogObserverState.RUnlock()
+	if observer != nil {
+		observer(stats, observedAt)
+	}
+}
+
+// GetUnresolvedPositiveFinalizeSettlementStats returns the global count and
+// oldest creation time for positive request-finalize settlements in pending or
+// manual state. It is intentionally read-only and portable across all supported
+// databases.
+func GetUnresolvedPositiveFinalizeSettlementStats() (BillingSettlementBacklogStats, error) {
+	if DB == nil {
+		return BillingSettlementBacklogStats{}, errors.New("database is not initialized")
+	}
+	var stats BillingSettlementBacklogStats
+	err := unresolvedPositiveFinalizeSettlementScope(DB).
+		Select("COUNT(*) AS record_count, COALESCE(MIN(created_at), 0) AS oldest_created_at").
+		Scan(&stats).Error
+	return stats, err
+}
+
+// HasUnresolvedPositiveFinalizeSettlement reports whether a user has an
+// upstream-accepted request whose positive final settlement has not completed.
+// New paid requests must stop before they can consume more service against the
+// residual balance. Reserve failures are deliberately excluded: no upstream
+// request has been released for those operation kinds.
+func HasUnresolvedPositiveFinalizeSettlement(userID int) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	if userID <= 0 {
+		return false, nil
+	}
+
+	var record BillingSettlement
+	result := unresolvedPositiveFinalizeSettlementScope(DB).
+		Select("id").
+		Where("user_id = ?", userID).
+		Limit(1).
+		Find(&record)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func BillingRequestFinalizeOperationKey(requestID string) string {
+	return billingRequestOperationPrefix + requestID + billingRequestFinalizeSuffix
+}
+
+// GetBillingSettlementStatus returns the durable funding state for one stable
+// operation key. Effect replay is intentionally separate: once funding is
+// applied, an effect-only pending state must not block async task polling.
+func GetBillingSettlementStatus(operationKey string) (status string, found bool, err error) {
+	if DB == nil {
+		return "", false, errors.New("database is not initialized")
+	}
+	if operationKey == "" {
+		return "", false, nil
+	}
+	var record BillingSettlement
+	result := DB.Select("status").Where("operation_key = ?", operationKey).Limit(1).Find(&record)
+	if result.Error != nil {
+		return "", false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return "", false, nil
+	}
+	return record.Status, true, nil
 }
 
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
@@ -276,6 +409,22 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 				resolvedTokenKey = token.Key
 			}
 		}
+		if input.TaskID > 0 {
+			var task Task
+			taskErr := withRowLock(tx).
+				Select("quota").
+				Where("id = ?", input.TaskID).
+				First(&task).Error
+			if taskErr != nil {
+				if errors.Is(taskErr, gorm.ErrRecordNotFound) {
+					return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+				}
+				return taskErr
+			}
+			if int64(task.Quota) != input.TaskQuota {
+				return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+			}
+		}
 
 		var applyErr error
 		appliedFundingDelta, applyErr = applyFundingDeltaTx(tx, input)
@@ -294,14 +443,16 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 
 		if input.TaskID > 0 {
 			appliedTaskQuotaTarget := input.TaskQuota + appliedFundingDelta
-			result := tx.Model(&Task{}).
-				Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
-				Update("quota", appliedTaskQuotaTarget)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+			if appliedTaskQuotaTarget != input.TaskQuota {
+				result := tx.Model(&Task{}).
+					Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
+					Update("quota", appliedTaskQuotaTarget)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+				}
 			}
 		}
 
@@ -463,11 +614,11 @@ func ensureBillingSettlementRecord(input BillingSettlementInput) (BillingSettlem
 
 func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) (BillingSettlement, bool, error) {
 	if db == nil {
-		return BillingSettlement{}, false, errors.New("database is not initialized")
+		return BillingSettlement{}, false, fmt.Errorf("%w: database is not initialized", ErrBillingSettlementRecordNotDurable)
 	}
 	effectPayload, err := billingSettlementEffectPayload(input.Effect)
 	if err != nil {
-		return BillingSettlement{}, false, err
+		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, err)
 	}
 	now := time.Now().Unix()
 	record := BillingSettlement{
@@ -491,7 +642,7 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 		DoNothing: true,
 	}).Create(&record)
 	if result.Error != nil {
-		return BillingSettlement{}, false, result.Error
+		return BillingSettlement{}, false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
 	}
 	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
 		return BillingSettlement{}, false, err
@@ -704,15 +855,20 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 	}
 
 	appliedDelta := record.AppliedFundingDelta
+	useActualQuota := effect.QuotaIsActual || effect.Quota > 0
 	logQuota := appliedDelta
-	if effect.Quota > 0 {
+	if useActualQuota {
 		logQuota = effect.Quota
 	}
-	if logQuota != 0 {
+	if effect.UpdateUsage && logQuota < 0 {
+		return fmt.Errorf("billing settlement effect usage quota cannot be negative: operation=%s quota=%d", operationKey, logQuota)
+	}
+	if logQuota != 0 || effect.QuotaIsActual {
 		other := effect.Other
 		if other == nil {
 			other = make(map[string]interface{})
 		}
+		applySubscriptionSettlementEffectMetadata(record, effect, other)
 		if record.TaskID > 0 {
 			other["actual_quota"] = record.TaskQuota + appliedDelta
 		}
@@ -723,7 +879,11 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 		if err := RecordTaskBillingLogOnce(operationKey, RecordTaskBillingLogParams{
 			UserId: record.UserID, LogType: effect.LogType, Content: effect.Content,
 			ChannelId: effect.ChannelID, ModelName: effect.ModelName, Quota: int(quota),
-			TokenId: effect.TokenID, Group: effect.Group, Other: other, NodeName: effect.NodeName,
+			TokenId: effect.TokenID, TokenName: effect.TokenName,
+			Group: effect.Group, Other: other, NodeName: effect.NodeName,
+			PromptTokens: effect.PromptTokens, CompletionTokens: effect.CompletionTokens,
+			UseTimeSeconds: effect.UseTimeSeconds, IsStream: effect.IsStream,
+			RequestId: effect.RequestID, UpstreamRequestId: effect.UpstreamRequestID,
 		}); err != nil {
 			return err
 		}
@@ -740,10 +900,10 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 			return nil
 		}
 		usageQuota := appliedDelta
-		if effect.Quota > 0 {
+		if useActualQuota {
 			usageQuota = effect.Quota
 		}
-		if effect.UpdateUsage && usageQuota > 0 {
+		if effect.UpdateUsage && (usageQuota > 0 || effect.QuotaIsActual) {
 			userResult := tx.Model(&User{}).Where("id = ?", record.UserID).Updates(map[string]interface{}{
 				"used_quota":    gorm.Expr("used_quota + ?", usageQuota),
 				"request_count": gorm.Expr("request_count + ?", 1),
@@ -772,6 +932,60 @@ func ProcessBillingSettlementEffect(operationKey string) error {
 		}
 		return nil
 	})
+}
+
+func BillingSettlementOwnsEffect(operationKey string) (bool, error) {
+	if DB == nil || operationKey == "" {
+		return false, errors.New("billing settlement effect operation key is required")
+	}
+	var record BillingSettlement
+	if err := DB.Select("effect_payload").Where("operation_key = ?", operationKey).First(&record).Error; err != nil {
+		return false, err
+	}
+	return record.EffectPayload != "", nil
+}
+
+func applySubscriptionSettlementEffectMetadata(
+	record BillingSettlement,
+	effect *BillingSettlementEffect,
+	other map[string]interface{},
+) {
+	if record.Source != BillingSettlementSourceSubscription || effect == nil ||
+		effect.Subscription == nil || other == nil {
+		return
+	}
+
+	info := effect.Subscription
+	postDelta := record.AppliedFundingDelta
+	if postDelta != 0 {
+		other["subscription_post_delta"] = postDelta
+	} else {
+		delete(other, "subscription_post_delta")
+	}
+
+	consumed := info.PreConsumed + postDelta
+	if consumed < 0 {
+		consumed = 0
+	}
+	if consumed > 0 {
+		other["subscription_consumed"] = consumed
+	} else {
+		delete(other, "subscription_consumed")
+	}
+
+	used := info.AmountUsedAfterPreConsume + postDelta
+	if used < 0 {
+		used = 0
+	}
+	if info.AmountTotal > 0 {
+		remain := info.AmountTotal - used
+		if remain < 0 {
+			remain = 0
+		}
+		other["subscription_total"] = info.AmountTotal
+		other["subscription_used"] = used
+		other["subscription_remain"] = remain
+	}
 }
 
 func validateBillingSettlementInput(input BillingSettlementInput) error {

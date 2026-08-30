@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -36,65 +37,113 @@ type TaskPollingAdaptor interface {
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
 const legacyTaskRefundCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
+const timedOutTaskTransitionBudget = 100
+
+var timedOutTaskScanBudget = 2000
+
+var timedOutTaskSweepCursor struct {
+	sync.Mutex
+	afterSubmitTime int64
+	afterID         int64
+}
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
-// 每次最多处理 100 条，剩余的下个周期继续处理。
+// 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
 func sweepTimedOutTasks(ctx context.Context) {
 	if constant.TaskTimeoutMinutes <= 0 {
 		return
 	}
 	cutoff := time.Now().Unix() - int64(constant.TaskTimeoutMinutes)*60
-	tasks := model.GetTimedOutUnfinishedTasks(cutoff, 100)
-	if len(tasks) == 0 {
-		return
-	}
-
 	reason := fmt.Sprintf("任务超时（%d分钟）", constant.TaskTimeoutMinutes)
 	legacyReason := "任务超时（旧系统遗留任务，不进行退款，请联系管理员）"
 	now := time.Now().Unix()
 	timedOutCount := 0
+	timedOutTaskSweepCursor.Lock()
+	defer timedOutTaskSweepCursor.Unlock()
 
-	for _, task := range tasks {
-		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
-		isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+	remaining := timedOutTaskTransitionBudget
+	scanBudget := timedOutTaskScanBudget
+	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
+	afterID := timedOutTaskSweepCursor.afterID
+	for remaining > 0 && scanBudget > 0 {
+		queryLimit := 100
+		if scanBudget < queryLimit {
+			queryLimit = scanBudget
+		}
+		tasks, queryErr := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, queryLimit)
+		if queryErr != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks query error after cursor (%d, %d): %v", afterSubmitTime, afterID, queryErr))
+			break
+		}
+		if len(tasks) == 0 {
+			afterSubmitTime = 0
+			afterID = 0
+			break
+		}
+		for _, task := range tasks {
+			if remaining <= 0 || scanBudget <= 0 {
+				break
+			}
+			afterSubmitTime = task.SubmitTime
+			afterID = task.ID
+			scanBudget--
+			settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
+			if settlementErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
+				continue
+			}
+			if settlementPending {
+				continue
+			}
+			remaining--
+			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
+			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
 
-		oldStatus := task.Status
-		task.Status = model.TaskStatusFailure
-		task.Progress = "100%"
-		task.FinishTime = now
-		if isLegacy {
-			task.FailReason = legacyReason
-		} else if isUnconfirmedSubmit {
-			task.FailReason = "任务提交超时（无法确认上游是否已创建任务，未自动退款，请人工核对）"
-		} else {
-			task.FailReason = reason
-		}
+			oldStatus := task.Status
+			task.Status = model.TaskStatusFailure
+			task.Progress = "100%"
+			task.FinishTime = now
+			if isLegacy {
+				task.FailReason = legacyReason
+			} else if isUnconfirmedSubmit {
+				task.FailReason = "任务提交超时（无法确认上游是否已创建任务，未自动退款，请人工核对）"
+			} else {
+				task.FailReason = reason
+			}
 
-		var settlement *model.BillingSettlementInput
-		if !isLegacy && !isUnconfirmedSubmit {
-			settlement = BuildTaskRefundSettlementInput(task, reason)
+			var settlement *model.BillingSettlementInput
+			if !isLegacy && !isUnconfirmedSubmit {
+				settlement = BuildTaskRefundSettlementInput(task, reason)
+			}
+			var won bool
+			var err error
+			if settlement != nil {
+				won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
+			} else {
+				won, err = task.UpdateWithStatus(oldStatus)
+			}
+			if err != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
+				continue
+			}
+			if !won {
+				logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s already transitioned, skip", task.TaskID))
+				continue
+			}
+			timedOutCount++
+			if settlement != nil {
+				applyTaskBillingSettlement(ctx, task, settlement)
+			}
 		}
-		var won bool
-		var err error
-		if settlement != nil {
-			won, err = task.UpdateWithStatusAndSettlement(oldStatus, *settlement)
-		} else {
-			won, err = task.UpdateWithStatus(oldStatus)
-		}
-		if err != nil {
-			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks CAS update error for task %s: %v", task.TaskID, err))
-			continue
-		}
-		if !won {
-			logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s already transitioned, skip", task.TaskID))
-			continue
-		}
-		timedOutCount++
-		if settlement != nil {
-			applyTaskBillingSettlement(ctx, task, settlement)
+		if len(tasks) < queryLimit && remaining > 0 && scanBudget > 0 {
+			afterSubmitTime = 0
+			afterID = 0
+			break
 		}
 	}
+	timedOutTaskSweepCursor.afterSubmitTime = afterSubmitTime
+	timedOutTaskSweepCursor.afterID = afterID
 
 	if timedOutCount > 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: timed out %d tasks", timedOutCount))
@@ -227,23 +276,37 @@ func processSunoTaskResponse(ctx context.Context, task *model.Task, responseItem
 	if !taskNeedsUpdate(task, responseItem) {
 		return
 	}
-
-	previousStatus := task.Status
-	task.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(task.Status)
-	task.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(task.FailReason)
-	task.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(task.SubmitTime)
-	task.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(task.StartTime)
-	task.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(task.FinishTime)
-	isFailure := responseItem.FailReason != "" || task.Status == model.TaskStatusFailure
+	mergedTask := *task
+	mergedTask.Status = lo.If(model.TaskStatus(responseItem.Status) != "", model.TaskStatus(responseItem.Status)).Else(mergedTask.Status)
+	mergedTask.FailReason = lo.If(responseItem.FailReason != "", common.SanitizePersistedLogContent(responseItem.FailReason)).Else(mergedTask.FailReason)
+	mergedTask.SubmitTime = lo.If(responseItem.SubmitTime != 0, responseItem.SubmitTime).Else(mergedTask.SubmitTime)
+	mergedTask.StartTime = lo.If(responseItem.StartTime != 0, responseItem.StartTime).Else(mergedTask.StartTime)
+	mergedTask.FinishTime = lo.If(responseItem.FinishTime != 0, responseItem.FinishTime).Else(mergedTask.FinishTime)
+	isFailure := responseItem.FailReason != "" || mergedTask.Status == model.TaskStatusFailure
 	if isFailure {
-		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
-		task.Status = model.TaskStatusFailure
-		task.Progress = "100%"
+		mergedTask.Status = model.TaskStatusFailure
+		mergedTask.Progress = "100%"
 	}
 	if responseItem.Status == model.TaskStatusSuccess {
-		task.Progress = "100%"
+		mergedTask.Progress = "100%"
 	}
-	task.Data = responseItem.Data
+	mergedTask.Data = responseItem.Data
+	providerTerminal := mergedTask.Status == model.TaskStatusSuccess ||
+		mergedTask.Status == model.TaskStatusFailure || mergedTask.FailReason != ""
+	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	if settlementErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("Suno task %s settlement lookup failed: %v", task.TaskID, settlementErr))
+		return
+	}
+	if pending {
+		return
+	}
+
+	previousStatus := task.Status
+	*task = mergedTask
+	if isFailure {
+		logger.LogInfo(ctx, task.TaskID+" 构建失败，"+task.FailReason)
+	}
 
 	var settlement *model.BillingSettlementInput
 	if isFailure {
@@ -434,6 +497,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 				taskResult = relaycommon.FailTaskInfo("upstream returned unrecognized message")
 			}
 		}
+	}
+	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
+	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	if settlementErr != nil {
+		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
+	}
+	if pending {
+		return nil
 	}
 
 	shouldRefund := false

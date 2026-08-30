@@ -36,10 +36,6 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		return
 	}
 
-	if !requirePasskeyRegistrationVerification(c, user.Id) {
-		return
-	}
-
 	credential, err := model.GetPasskeyByUserID(user.Id)
 	if err != nil && !errors.Is(err, model.ErrPasskeyNotFound) {
 		common.ApiError(c, err)
@@ -100,10 +96,6 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if !requirePasskeyRegistrationVerification(c, user.Id) {
-		return
-	}
-
 	wa, err := passkeysvc.BuildWebAuthn(c.Request)
 	if err != nil {
 		common.ApiError(c, err)
@@ -138,10 +130,12 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		return
 	}
 
-	if err := model.UpsertPasskeyCredential(passkeyCredential); err != nil {
+	generation, err := model.ReplacePasskeyCredentialAndBumpSessionGeneration(passkeyCredential)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, user.Id, generation, "registering a passkey")
 
 	recordUserSecurityAudit(c, user.Id, "user.passkey_register", nil)
 	c.JSON(http.StatusOK, gin.H{
@@ -164,10 +158,12 @@ func PasskeyDelete(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserID(user.Id); err != nil {
+	generation, err := model.DeletePasskeyAndBumpSessionGeneration(user.Id)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, user.Id, generation, "deleting a passkey")
 
 	recordUserSecurityAudit(c, user.Id, "user.passkey_delete", nil)
 	c.JSON(http.StatusOK, gin.H{
@@ -331,7 +327,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 	}
 	now := time.Now()
 	updatedCredential.LastUsedAt = &now
-	if err := model.UpsertPasskeyCredential(updatedCredential); err != nil {
+	if err := model.UpdatePasskeyCredentialAfterAuthentication(updatedCredential); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -370,7 +366,7 @@ func AdminResetPasskey(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeletePasskeyByUserID(user.Id); err != nil {
+	if _, err := model.DeletePasskeyAndBumpSessionGeneration(user.Id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -479,16 +475,21 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	}
 
 	waUser := passkeysvc.NewWebAuthnUser(user, credential)
-	_, err = wa.FinishLogin(waUser, *sessionData, c.Request)
+	validatedCredential, err := wa.FinishLogin(waUser, *sessionData, c.Request)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	if validatedCredential == nil {
+		common.ApiErrorMsg(c, "Passkey 凭证更新失败")
+		return
+	}
 
 	// 更新凭证的最后使用时间
+	credential.ApplyValidatedCredential(validatedCredential)
 	now := time.Now()
 	credential.LastUsedAt = &now
-	if err := model.UpsertPasskeyCredential(credential); err != nil {
+	if err := model.UpdatePasskeyCredentialAfterAuthentication(credential); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -531,18 +532,6 @@ func getSessionUser(c *gin.Context) (*model.User, error) {
 	return user, nil
 }
 
-func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
-	twoFA, err := model.GetTwoFAByUserId(userID)
-	if err != nil {
-		common.ApiError(c, err)
-		return false
-	}
-	if twoFA == nil || !twoFA.IsEnabled {
-		return true
-	}
-	return requireSecureVerificationMethod(c, secureVerificationMethod2FA)
-}
-
 func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 	twoFA, err := model.GetTwoFAByUserId(userID)
 	if err != nil {
@@ -550,7 +539,7 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 	if twoFA != nil && twoFA.IsEnabled {
-		return requireSecureVerificationMethod(c, secureVerificationMethod2FA)
+		return requireSecureVerificationMethod(c, model.SecureVerificationMethod2FA)
 	}
 
 	_, err = model.GetPasskeyByUserID(userID)
@@ -566,7 +555,7 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 
-	return requireSecureVerificationMethod(c, secureVerificationMethodPasskey)
+	return requireSecureVerificationMethod(c, model.SecureVerificationMethodPasskey)
 }
 
 func requireSecureVerificationMethod(c *gin.Context, method string) bool {

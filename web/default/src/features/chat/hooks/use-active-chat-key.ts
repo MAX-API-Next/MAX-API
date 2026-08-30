@@ -16,8 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import i18next from 'i18next'
 import { useAuthStore } from '@/stores/auth-store'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import { API_KEY_STATUS } from '@/features/keys/constants'
 
@@ -46,12 +49,23 @@ export async function fetchActiveChatKey() {
  */
 export function useActiveChatKey(enabled: boolean) {
   const userId = useAuthStore((state) => state.auth.user?.id)
+  const withApiTokenVerification = useApiTokenVerification()
+  const queryFn = useCallback(async (): Promise<string> => {
+    const key = await withApiTokenVerification(fetchActiveChatKey)
+    if (!key) {
+      throw new Error(i18next.t('API key verification was cancelled'))
+    }
+    return key
+  }, [withApiTokenVerification])
 
   return useQuery({
     queryKey: ['chat-active-key', userId],
-    queryFn: fetchActiveChatKey,
+    queryFn,
     enabled: enabled && Boolean(userId),
-    staleTime: 5 * 60 * 1000,
-    gcTime: 10 * 60 * 1000,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 }

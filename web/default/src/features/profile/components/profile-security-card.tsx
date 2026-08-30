@@ -16,12 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { Shield, Key, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { Shield, Key, Trash2, LogOut, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
+import { cn } from '@/lib/utils'
 import { useDialogs } from '@/hooks/use-dialog'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
+import { useSecureVerificationGate } from '@/features/auth/secure-verification'
+import { revokeOtherSessions } from '../api'
 import type { UserProfile } from '../types'
 import { AccessTokenDialog } from './dialogs/access-token-dialog'
 import { ChangePasswordDialog } from './dialogs/change-password-dialog'
@@ -44,6 +51,35 @@ export function ProfileSecurityCard({
 }: ProfileSecurityCardProps) {
   const { t } = useTranslation()
   const dialogs = useDialogs<DialogKey>()
+  const { withVerification } = useSecureVerificationGate()
+  const [revokingSessions, setRevokingSessions] = useState(false)
+
+  const handleRevokeOtherSessions = async (): Promise<void> => {
+    setRevokingSessions(true)
+    try {
+      const response = await withVerification(revokeOtherSessions, {
+        scope: 'credentials',
+        title: t('Security verification'),
+        description: t(
+          'Confirm your identity before signing out your other sessions.'
+        ),
+      })
+      if (!response) return
+      if (response.success) {
+        toast.success(t('Other sessions signed out successfully'))
+      } else {
+        toast.error(response.message || t('Failed to sign out other sessions'))
+      }
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, {
+          fallback: t('Failed to sign out other sessions'),
+        })
+      }
+    } finally {
+      setRevokingSessions(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -70,6 +106,7 @@ export function ProfileSecurityCard({
       description: t('Update your password to keep your account secure'),
       action: () => dialogs.open('password'),
       variant: 'default' as const,
+      loading: false,
     },
     {
       icon: Key,
@@ -77,6 +114,17 @@ export function ProfileSecurityCard({
       description: t('Generate and manage your API access token'),
       action: () => dialogs.open('token'),
       variant: 'default' as const,
+      loading: false,
+    },
+    {
+      icon: LogOut,
+      title: t('Sign Out Other Devices'),
+      description: t(
+        'Keep this session and revoke all other signed-in devices'
+      ),
+      action: handleRevokeOtherSessions,
+      variant: 'default' as const,
+      loading: revokingSessions,
     },
     {
       icon: Trash2,
@@ -84,6 +132,7 @@ export function ProfileSecurityCard({
       description: t('Permanently delete your account and all data'),
       action: () => dialogs.open('delete'),
       variant: 'destructive' as const,
+      loading: false,
     },
   ]
 
@@ -94,30 +143,37 @@ export function ProfileSecurityCard({
         description={t('Manage your security settings and account access')}
         icon={<Shield className='h-4 w-4' />}
       >
-        <div className='grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-3'>
+        <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
           {securityActions.map((item) => (
             <button
               key={item.title}
               type='button'
               onClick={item.action}
-              className={`hover:bg-muted/50 flex items-center gap-3 rounded-lg border p-3 text-left transition-colors md:flex-col md:gap-2 md:p-4 md:text-center ${
-                item.variant === 'destructive'
-                  ? 'border-destructive/30 hover:border-destructive/50 hover:bg-destructive/5'
-                  : ''
-              }`}
+              disabled={item.loading}
+              aria-busy={item.loading || undefined}
+              className={cn(
+                'hover:bg-muted/50 flex items-center gap-3 rounded-lg border p-3 text-left transition-colors disabled:pointer-events-none disabled:opacity-60 md:p-4',
+                item.variant === 'destructive' &&
+                  'border-destructive/30 hover:border-destructive/50 hover:bg-destructive/5'
+              )}
             >
               <div
-                className={`rounded-md p-2 ${
+                className={cn(
+                  'rounded-md p-2',
                   item.variant === 'destructive'
                     ? 'bg-destructive/10 text-destructive'
                     : 'bg-muted'
-                }`}
+                )}
               >
-                <item.icon className='h-5 w-5' />
+                {item.loading ? (
+                  <Loader2 className='size-5 animate-spin' aria-hidden='true' />
+                ) : (
+                  <item.icon className='size-5' aria-hidden='true' />
+                )}
               </div>
-              <div className='min-w-0 md:contents'>
+              <div className='min-w-0'>
                 <p className='text-sm font-medium'>{item.title}</p>
-                <p className='text-muted-foreground line-clamp-1 text-xs md:line-clamp-none'>
+                <p className='text-muted-foreground line-clamp-2 text-xs'>
                   {item.description}
                 </p>
               </div>

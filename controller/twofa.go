@@ -186,10 +186,12 @@ func Enable2FA(c *gin.Context) {
 	}
 
 	// 启用2FA
-	if err := twoFA.Enable(); err != nil {
+	generation, err := twoFA.EnableAndBumpSessionGeneration()
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "enabling 2FA")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "成功启用两步验证")
@@ -258,10 +260,12 @@ func Disable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFA(userId); err != nil {
+	generation, err := model.DisableTwoFAAndBumpSessionGeneration(userId)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "disabling 2FA")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "禁用两步验证")
@@ -283,8 +287,9 @@ func Get2FAStatus(c *gin.Context) {
 	}
 
 	status := map[string]interface{}{
-		"enabled": false,
-		"locked":  false,
+		"enabled":                false,
+		"locked":                 false,
+		"backup_codes_remaining": 0,
 	}
 
 	if twoFA != nil {
@@ -373,7 +378,8 @@ func RegenerateBackupCodes(c *gin.Context) {
 	}
 
 	// 保存新的备用码
-	if err := model.CreateBackupCodes(userId, backupCodes); err != nil {
+	generation, err := model.ReplaceBackupCodesAndBumpSessionGeneration(userId, backupCodes)
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "保存备用码失败",
@@ -381,6 +387,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 		common.SysLog("保存备用码失败: " + err.Error())
 		return
 	}
+	preserveCurrentSessionAfterCommittedSecurityChange(c, userId, generation, "regenerating 2FA backup codes")
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "重新生成两步验证备用码")
@@ -529,7 +536,7 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFA(userId); err != nil {
+	if _, err := model.DisableTwoFAAndBumpSessionGeneration(userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

@@ -14,77 +14,32 @@ import (
 // durable billing Task through one CAS-protected transaction.
 func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourney, responseItem dto.MidjourneyDto) error {
 	legacyNeedsUpdate := midjourneyTaskNeedsUpdate(task, responseItem)
-	preStatus := task.Status
-	task.Code = 1
-	if responseItem.Progress != "" {
-		task.Progress = responseItem.Progress
-	}
-	if responseItem.PromptEn != "" {
-		task.PromptEn = responseItem.PromptEn
-	}
-	if responseItem.State != "" {
-		task.State = responseItem.State
-	}
-	if responseItem.SubmitTime > 0 {
-		task.SubmitTime = responseItem.SubmitTime
-	}
-	if responseItem.StartTime > 0 {
-		task.StartTime = responseItem.StartTime
-	}
-	if responseItem.FinishTime > 0 {
-		task.FinishTime = responseItem.FinishTime
-	}
-	if responseItem.ImageUrl != "" {
-		task.ImageUrl = responseItem.ImageUrl
-	}
-	if responseItem.VideoUrl != "" {
-		task.VideoUrl = responseItem.VideoUrl
-	}
-	if responseItem.Status != "" {
-		task.Status = responseItem.Status
-	}
-	if responseItem.FailReason != "" {
-		task.FailReason = common.SanitizePersistedLogContent(responseItem.FailReason)
-	}
-	if responseItem.Properties != nil {
-		properties, err := common.Marshal(responseItem.Properties)
-		if err != nil {
-			return err
-		}
-		task.Properties = string(properties)
-	}
-	if responseItem.Buttons != nil {
-		buttons, err := common.Marshal(responseItem.Buttons)
-		if err != nil {
-			return err
-		}
-		task.Buttons = string(buttons)
-	}
-	if responseItem.VideoUrls != nil {
-		videoURLs, err := common.Marshal(responseItem.VideoUrls)
-		if err != nil {
-			return err
-		}
-		task.VideoUrls = string(videoURLs)
-	}
-
-	providerSucceeded := responseItem.Status == "SUCCESS" ||
-		(responseItem.Status == "" && responseItem.Progress == "100%" && responseItem.FailReason == "")
-	if providerSucceeded {
-		legacyNeedsUpdate = legacyNeedsUpdate || preStatus != "SUCCESS" || task.FailReason != ""
-		task.Status = "SUCCESS"
-		task.FailReason = ""
-	}
-	isFailure := !providerSucceeded && (task.Status == "FAILURE" || task.FailReason != "")
-	if isFailure {
-		task.Status = "FAILURE"
-		task.Progress = "100%"
-		logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
-	}
 	billingTask, err := model.GetMidjourneyBillingTask(task.UserId, task.ChannelId, task.MjId)
 	if err != nil {
 		return err
 	}
+	preStatus := task.Status
+	mergedTask := *task
+	providerTerminal, isFailure, err := mergeMidjourneyTaskResponse(&mergedTask, responseItem)
+	if err != nil {
+		return err
+	}
+	legacyNeedsUpdate = legacyNeedsUpdate || mergedTask.Status != task.Status ||
+		mergedTask.Progress != task.Progress || mergedTask.FailReason != task.FailReason
+	if billingTask != nil {
+		pending, settlementErr := taskTerminalSettlementPending(billingTask, providerTerminal)
+		if settlementErr != nil {
+			return settlementErr
+		}
+		if pending {
+			return nil
+		}
+	}
+	*task = mergedTask
+	if isFailure {
+		logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
+	}
+
 	var settlement *model.BillingSettlementInput
 	if billingTask != nil {
 		billingFromStatus := billingTask.Status
@@ -139,6 +94,76 @@ func UpdateMidjourneyTaskFromResponse(ctx context.Context, task *model.Midjourne
 		ApplyTaskBillingSettlement(ctx, billingTask, settlement)
 	}
 	return nil
+}
+
+func mergeMidjourneyTaskResponse(task *model.Midjourney, responseItem dto.MidjourneyDto) (providerTerminal, isFailure bool, err error) {
+	task.Code = 1
+	if responseItem.Progress != "" {
+		task.Progress = responseItem.Progress
+	}
+	if responseItem.PromptEn != "" {
+		task.PromptEn = responseItem.PromptEn
+	}
+	if responseItem.State != "" {
+		task.State = responseItem.State
+	}
+	if responseItem.SubmitTime > 0 {
+		task.SubmitTime = responseItem.SubmitTime
+	}
+	if responseItem.StartTime > 0 {
+		task.StartTime = responseItem.StartTime
+	}
+	if responseItem.FinishTime > 0 {
+		task.FinishTime = responseItem.FinishTime
+	}
+	if responseItem.ImageUrl != "" {
+		task.ImageUrl = responseItem.ImageUrl
+	}
+	if responseItem.VideoUrl != "" {
+		task.VideoUrl = responseItem.VideoUrl
+	}
+	if responseItem.Status != "" {
+		task.Status = responseItem.Status
+	}
+	if responseItem.FailReason != "" {
+		task.FailReason = common.SanitizePersistedLogContent(responseItem.FailReason)
+	}
+	if responseItem.Properties != nil {
+		properties, err := common.Marshal(responseItem.Properties)
+		if err != nil {
+			return false, false, err
+		}
+		task.Properties = string(properties)
+	}
+	if responseItem.Buttons != nil {
+		buttons, err := common.Marshal(responseItem.Buttons)
+		if err != nil {
+			return false, false, err
+		}
+		task.Buttons = string(buttons)
+	}
+	if responseItem.VideoUrls != nil {
+		videoURLs, err := common.Marshal(responseItem.VideoUrls)
+		if err != nil {
+			return false, false, err
+		}
+		task.VideoUrls = string(videoURLs)
+	}
+
+	providerSucceeded := responseItem.Status == "SUCCESS" ||
+		(responseItem.Status == "" && responseItem.Progress == "100%" && responseItem.FailReason == "")
+	if providerSucceeded {
+		task.Status = "SUCCESS"
+		task.FailReason = ""
+	}
+	isFailure = !providerSucceeded && (task.Status == "FAILURE" || task.FailReason != "")
+	if isFailure {
+		task.Status = "FAILURE"
+		task.Progress = "100%"
+	}
+	providerTerminal = task.Status == "SUCCESS" || task.Status == "FAILURE" ||
+		task.FailReason != "" || (task.Status == "" && task.Progress == "100%")
+	return providerTerminal, isFailure, nil
 }
 
 func midjourneyBillingTaskStatus(status, progress string) model.TaskStatus {

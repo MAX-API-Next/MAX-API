@@ -54,6 +54,13 @@ func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
 }
 
+func supportsOAuthState(provider string, intent string) bool {
+	if provider == "telegram" {
+		return common.TelegramOAuthEnabled && intent == model.AuthFlowIntentLogin
+	}
+	return oauth.GetProvider(provider) != nil
+}
+
 func oauthProviderUserUpdateField(provider oauth.Provider) (model.UserUpdateField, bool) {
 	switch provider.(type) {
 	case *oauth.GitHubProvider:
@@ -120,7 +127,7 @@ func GenerateOAuthCode(c *gin.Context) {
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
 	request.Intent = strings.TrimSpace(request.Intent)
 	request.Aff = strings.TrimSpace(request.Aff)
-	if oauth.GetProvider(request.Provider) == nil ||
+	if !supportsOAuthState(request.Provider, request.Intent) ||
 		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentBind) ||
 		len(request.Aff) > 32 ||
 		(request.Intent == model.AuthFlowIntentBind && request.Aff != "") {

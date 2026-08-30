@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type JSX, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -45,8 +45,10 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { getUserModels } from '@/lib/api'
 import { formatNumber, formatQuota } from '@/lib/format'
+import { handleServerError } from '@/lib/handle-server-error'
 import { MOTION_TRANSITION } from '@/lib/motion'
 import { ROLE } from '@/lib/roles'
+import { wasSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Button } from '@/components/ui/button'
@@ -54,6 +56,7 @@ import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
+import { useApiTokenVerification } from '@/features/auth/secure-verification'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
 import {
@@ -373,14 +376,19 @@ function StartStepItem(props: {
   )
 }
 
-function RequestPreview(props: {
+type RequestPreviewProps = {
   example: RequestExample
   signals: HeroSignal[]
   isRetrying: boolean
   onRetry: () => void
-}) {
+}
+
+export function RequestPreview(props: RequestPreviewProps): JSX.Element {
   const { t } = useTranslation()
   const shouldReduceMotion = useReducedMotion()
+  const withApiTokenVerification = useApiTokenVerification(
+    t('Confirm your identity before copying a request with your API key.')
+  )
   const [isCopying, setIsCopying] = useState(false)
   const { copyToClipboard } = useCopyToClipboard({ notify: false })
   const previewCurl = buildCurlCommand({
@@ -389,12 +397,14 @@ function RequestPreview(props: {
     model: props.example.model,
   })
   const previewLines = previewCurl.split('\n')
-  const handleCopyRequest = async () => {
+  const handleCopyRequest = async (): Promise<void> => {
     if (!props.example.keyId || isCopying) return
+    const keyId = props.example.keyId
 
     setIsCopying(true)
     try {
-      const result = await fetchTokenKey(props.example.keyId)
+      const result = await withApiTokenVerification(() => fetchTokenKey(keyId))
+      if (!result) return
       const key = result.success && result.data?.key ? result.data.key : ''
       if (!key) {
         toast.error(result.message || t('Failed to copy to clipboard'))
@@ -411,6 +421,12 @@ function RequestPreview(props: {
         toast.success(t('Copied to clipboard'))
       } else {
         toast.error(t('Failed to copy to clipboard'))
+      }
+    } catch (error) {
+      if (!wasSecureVerificationErrorReported(error)) {
+        handleServerError(error, {
+          fallback: t('Failed to copy to clipboard'),
+        })
       }
     } finally {
       setIsCopying(false)

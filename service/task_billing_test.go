@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,8 @@ func TestMain(m *testing.M) {
 		&model.BillingSettlement{},
 		&model.BillingPreConsumeSelection{},
 		&model.CacheInvalidationTask{},
+		&model.Midjourney{},
+		&model.MidjourneyBillingClaim{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -76,8 +79,38 @@ func TestShouldApplyTaskResultProgressSkipsNonTerminalCompleteProgress(t *testin
 	}))
 }
 
+func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "task-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "task-upstream-request")
+	ctx.Set("token_name", "request-time-task-token")
+	info := &relaycommon.RelayInfo{
+		RequestId:       "task-relay-fallback-request",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 91},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+		OriginModelName: "task-model",
+		TokenId:         92,
+		UsingGroup:      "default",
+		StartTime:       time.Now().Add(-3 * time.Second),
+		IsStream:        true,
+	}
+
+	effect := BuildTaskSubmissionSettlementEffect(ctx, info, 123)
+
+	require.NotNil(t, effect)
+	assert.True(t, effect.UpdateUsage)
+	assert.True(t, effect.QuotaIsActual)
+	assert.EqualValues(t, 123, effect.Quota)
+	assert.Equal(t, "task-client-request", effect.RequestID)
+	assert.Equal(t, "task-upstream-request", effect.UpstreamRequestID)
+	assert.Equal(t, "request-time-task-token", effect.TokenName)
+	assert.GreaterOrEqual(t, effect.UseTimeSeconds, 3)
+	assert.True(t, effect.IsStream)
+}
+
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
 	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
 	constant.TaskTimeoutMinutes = 1
 	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
@@ -107,6 +140,185 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 	require.Zero(t, settlementCount)
 }
 
+func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	const userID = 711
+	seedUser(t, userID, 80)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+	now := time.Now().Unix()
+	task := &model.Task{
+		TaskID: "task_timeout_waits_for_settlement", Status: model.TaskStatusSubmitted,
+		UserId: userID, Quota: 20, SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID:   "provider-timeout-waits-for-settlement",
+			BillingRequestId: "timeout-waits-for-settlement",
+			BillingSource:    model.BillingSettlementSourceWallet,
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	submissionInput := model.BillingSettlementInput{
+		OperationKey:    model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+		Source:          model.BillingSettlementSourceWallet,
+		UserID:          userID,
+		FundingDelta:    10,
+		TaskID:          task.ID,
+		TaskQuota:       20,
+		TaskQuotaTarget: 30,
+	}
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: submissionInput.OperationKey,
+		Source:       submissionInput.Source, UserID: submissionInput.UserID,
+		FundingDelta: submissionInput.FundingDelta, TaskID: submissionInput.TaskID,
+		TaskQuota: submissionInput.TaskQuota, TaskQuotaTarget: submissionInput.TaskQuotaTarget,
+		Status:    model.BillingSettlementStatusPending,
+		CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}).Error)
+
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+	assert.Equal(t, 20, reloaded.Quota)
+	assert.EqualValues(t, 80, getUserQuota(t, userID))
+
+	applied, alreadyApplied, err := model.ApplyBillingSettlementOnce(submissionInput)
+	require.NoError(t, err)
+	assert.False(t, alreadyApplied)
+	assert.EqualValues(t, 10, applied)
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+	assert.Equal(t, 30, reloaded.Quota)
+	assert.EqualValues(t, 70, getUserQuota(t, userID))
+
+	sweepTimedOutTasks(context.Background())
+
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Zero(t, reloaded.Quota)
+	assert.EqualValues(t, 100, getUserQuota(t, userID))
+	var refund model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&refund).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, refund.Status)
+	assert.EqualValues(t, -30, refund.AppliedFundingDelta)
+}
+
+func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+
+	now := time.Now().Unix()
+	pendingSubmitTime := legacyTaskRefundCutoff - 2
+	tasks := make([]model.Task, 0, 101)
+	settlements := make([]model.BillingSettlement, 0, 100)
+	for i := 0; i < 100; i++ {
+		requestID := fmt.Sprintf("timeout-pending-page-%d", i)
+		tasks = append(tasks, model.Task{
+			TaskID:     fmt.Sprintf("task_timeout_pending_page_%d", i),
+			Status:     model.TaskStatusSubmitted,
+			SubmitTime: pendingSubmitTime,
+			PrivateData: model.TaskPrivateData{
+				BillingRequestId: requestID,
+			},
+		})
+		settlements = append(settlements, model.BillingSettlement{
+			OperationKey: model.BillingRequestFinalizeOperationKey(requestID),
+			Source:       model.BillingSettlementSourceWallet,
+			UserID:       9000 + i,
+			FundingDelta: 1,
+			Status:       model.BillingSettlementStatusPending,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		})
+	}
+	tasks = append(tasks, model.Task{
+		TaskID:     "task_timeout_after_pending_page",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: pendingSubmitTime + 1,
+	})
+	require.NoError(t, model.DB.CreateInBatches(&tasks, 25).Error)
+	require.NoError(t, model.DB.CreateInBatches(&settlements, 25).Error)
+
+	sweepTimedOutTasks(context.Background())
+
+	var actionable model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", "task_timeout_after_pending_page").First(&actionable).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, actionable.Status)
+	var pending model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", "task_timeout_pending_page_0").First(&pending).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, pending.Status)
+}
+
+func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	originalScanBudget := timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes = 1
+	timedOutTaskScanBudget = 2
+	t.Cleanup(func() {
+		constant.TaskTimeoutMinutes = originalTimeout
+		timedOutTaskScanBudget = originalScanBudget
+	})
+
+	now := time.Now().Unix()
+	submitTime := legacyTaskRefundCutoff - 2
+	for i := 0; i < 2; i++ {
+		requestID := fmt.Sprintf("bounded-timeout-pending-%d", i)
+		task := model.Task{
+			TaskID:      fmt.Sprintf("bounded_timeout_pending_%d", i),
+			Status:      model.TaskStatusSubmitted,
+			SubmitTime:  submitTime,
+			PrivateData: model.TaskPrivateData{BillingRequestId: requestID},
+		}
+		require.NoError(t, model.DB.Create(&task).Error)
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingRequestFinalizeOperationKey(requestID),
+			Source:       model.BillingSettlementSourceWallet,
+			UserID:       9100 + i,
+			FundingDelta: 1,
+			Status:       model.BillingSettlementStatusPending,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		}).Error)
+	}
+	actionable := model.Task{
+		TaskID:     "bounded_timeout_actionable",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: submitTime + 1,
+	}
+	require.NoError(t, model.DB.Create(&actionable).Error)
+
+	sweepTimedOutTasks(context.Background())
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+
+	sweepTimedOutTasks(context.Background())
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+}
+
+func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		timedOutTaskSweepCursor.Lock()
+		timedOutTaskSweepCursor.afterSubmitTime = 0
+		timedOutTaskSweepCursor.afterID = 0
+		timedOutTaskSweepCursor.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers
 // ---------------------------------------------------------------------------
@@ -127,6 +339,8 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM billing_settlements")
 		model.DB.Exec("DELETE FROM billing_pre_consume_selections")
 		model.DB.Exec("DELETE FROM cache_invalidation_tasks")
+		model.DB.Exec("DELETE FROM midjourneys")
+		model.DB.Exec("DELETE FROM midjourney_billing_claims")
 	})
 }
 
@@ -593,6 +807,282 @@ func TestProcessSunoTaskResponseRefundsWhenFailureReasonSanitizesEmpty(t *testin
 	var settlement model.BillingSettlement
 	require.NoError(t, model.DB.Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).First(&settlement).Error)
 	assert.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+}
+
+func TestTaskFinalSettlementPendingBlocksTerminalPollingUntilFundingApplied(t *testing.T) {
+	truncate(t)
+	const userID = 701
+	now := time.Now().Unix()
+	task := makeTask(userID, 0, 100, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingRequestId = "task-final-settlement-pending"
+	persistTask(t, task)
+
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		FundingDelta: 50,
+		Status:       model.BillingSettlementStatusPending,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}).Error)
+
+	pending, err := taskFinalSettlementPending(task)
+	require.NoError(t, err)
+	assert.True(t, pending)
+
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
+		Update("status", model.BillingSettlementStatusApplied).Error)
+	pending, err = taskFinalSettlementPending(task)
+	require.NoError(t, err)
+	assert.False(t, pending)
+}
+
+func TestTaskFinalSettlementEffectPendingDoesNotBlockPolling(t *testing.T) {
+	truncate(t)
+	const userID = 702
+	now := time.Now().Unix()
+	task := makeTask(userID, 0, 100, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingRequestId = "task-final-effect-pending"
+	persistTask(t, task)
+
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		FundingDelta: 0,
+		Status:       model.BillingSettlementStatusApplied,
+		EffectStatus: model.BillingSettlementEffectPending,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}).Error)
+
+	pending, err := taskFinalSettlementPending(task)
+	require.NoError(t, err)
+	assert.False(t, pending)
+}
+
+func TestProcessSunoTaskResponseWaitsForSubmissionSettlement(t *testing.T) {
+	truncate(t)
+	const userID = 703
+	now := time.Now().Unix()
+	task := makeTask(userID, 0, 100, 0, BillingSourceWallet, 0)
+	task.Platform = constant.TaskPlatformSuno
+	task.PrivateData.BillingRequestId = "suno-waits-for-submission-settlement"
+	persistTask(t, task)
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+		Source:       model.BillingSettlementSourceWallet, UserID: userID,
+		FundingDelta: 50, Status: model.BillingSettlementStatusPending,
+		CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}).Error)
+	response := dto.SunoDataResponse{
+		TaskID: task.TaskID, Status: string(model.TaskStatusSuccess),
+		FinishTime: now, Data: json.RawMessage(`{"status":"SUCCESS"}`),
+	}
+
+	processSunoTaskResponse(context.Background(), task, response)
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusInProgress, reloaded.Status)
+
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
+		Update("status", model.BillingSettlementStatusApplied).Error)
+	processSunoTaskResponse(context.Background(), &reloaded, response)
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+}
+
+func TestProcessSunoStoredFailureWaitsForSubmissionSettlement(t *testing.T) {
+	for index, settlementStatus := range []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+	} {
+		t.Run(settlementStatus, func(t *testing.T) {
+			truncate(t)
+			userID := 720 + index
+			now := time.Now().Unix()
+			seedUser(t, userID, 900)
+
+			task := makeTask(userID, 0, 100, 0, BillingSourceWallet, 0)
+			task.Platform = constant.TaskPlatformSuno
+			task.Status = model.TaskStatusFailure
+			task.Progress = "50%"
+			task.FailReason = "stored provider failure"
+			task.PrivateData.BillingRequestId = "suno-stored-failure-" + settlementStatus
+			persistTask(t, task)
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{
+				OperationKey: model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId),
+				Source:       model.BillingSettlementSourceWallet, UserID: userID,
+				Status: settlementStatus, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			}).Error)
+
+			response := dto.SunoDataResponse{TaskID: task.TaskID, Data: task.Data}
+			processSunoTaskResponse(context.Background(), task, response)
+
+			var blocked model.Task
+			require.NoError(t, model.DB.First(&blocked, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blocked.Status)
+			assert.Equal(t, "50%", blocked.Progress)
+			assert.Equal(t, 100, blocked.Quota)
+			assert.EqualValues(t, 900, getUserQuota(t, userID))
+			var refundCount int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).
+				Count(&refundCount).Error)
+			assert.Zero(t, refundCount)
+
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)).
+				Update("status", model.BillingSettlementStatusApplied).Error)
+			processSunoTaskResponse(context.Background(), &blocked, response)
+
+			require.NoError(t, model.DB.First(&blocked, task.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blocked.Status)
+			assert.Equal(t, "100%", blocked.Progress)
+			assert.Zero(t, blocked.Quota)
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", task.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+		})
+	}
+}
+
+func TestMidjourneyTerminalCallbackWaitsForSubmissionSettlement(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 704, 705
+	now := time.Now().Unix()
+	legacy := &model.Midjourney{
+		UserId: userID, ChannelId: channelID, MjId: "provider-mj-waits-for-settlement",
+		Status: "IN_PROGRESS", Progress: "50%", Code: 1,
+	}
+	require.NoError(t, model.DB.Create(legacy).Error)
+	billingTask := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+	billingTask.Platform = constant.TaskPlatformMidjourney
+	billingTask.PrivateData.BillingRequestId = "mj-waits-for-submission-settlement"
+	persistTask(t, billingTask)
+	require.NoError(t, model.DB.Create(&model.MidjourneyBillingClaim{
+		ChannelID: channelID, MjID: legacy.MjId, UserID: userID,
+		BillingTaskID: billingTask.ID, BillingRequestID: billingTask.PrivateData.BillingRequestId,
+		CreatedAt: now,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId),
+		Source:       model.BillingSettlementSourceWallet, UserID: userID,
+		FundingDelta: 50, Status: model.BillingSettlementStatusPending,
+		CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}).Error)
+	response := dto.MidjourneyDto{
+		MjId: legacy.MjId, Status: "SUCCESS", Progress: "100%", FinishTime: now * 1000,
+	}
+
+	require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), legacy, response))
+	var reloadedLegacy model.Midjourney
+	require.NoError(t, model.DB.First(&reloadedLegacy, legacy.Id).Error)
+	assert.Equal(t, "IN_PROGRESS", reloadedLegacy.Status)
+	var reloadedBilling model.Task
+	require.NoError(t, model.DB.First(&reloadedBilling, billingTask.ID).Error)
+	assert.EqualValues(t, model.TaskStatusInProgress, reloadedBilling.Status)
+
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId)).
+		Update("status", model.BillingSettlementStatusApplied).Error)
+	require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &reloadedLegacy, response))
+	require.NoError(t, model.DB.First(&reloadedLegacy, legacy.Id).Error)
+	assert.Equal(t, "SUCCESS", reloadedLegacy.Status)
+	require.NoError(t, model.DB.First(&reloadedBilling, billingTask.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloadedBilling.Status)
+}
+
+func TestMidjourneyMergedFailureWaitsForSubmissionSettlement(t *testing.T) {
+	for index, settlementStatus := range []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+	} {
+		t.Run(settlementStatus, func(t *testing.T) {
+			truncate(t)
+			userID := 706 + index
+			channelID := 708 + index
+			now := time.Now().Unix()
+			seedUser(t, userID, 900)
+
+			legacy := &model.Midjourney{
+				UserId: userID, ChannelId: channelID,
+				MjId:   "provider-mj-merged-failure-" + settlementStatus,
+				Status: "IN_PROGRESS", Progress: "50%", FailReason: "stored provider failure",
+				Code: 1, Quota: 100,
+			}
+			require.NoError(t, model.DB.Create(legacy).Error)
+
+			billingTask := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+			billingTask.Platform = constant.TaskPlatformMidjourney
+			billingTask.Status = model.TaskStatusInProgress
+			billingTask.Progress = "50%"
+			billingTask.PrivateData.BillingRequestId = "mj-merged-failure-" + settlementStatus
+			persistTask(t, billingTask)
+			require.NoError(t, model.DB.Create(&model.MidjourneyBillingClaim{
+				ChannelID: channelID, MjID: legacy.MjId, UserID: userID,
+				BillingTaskID: billingTask.ID, BillingRequestID: billingTask.PrivateData.BillingRequestId,
+				CreatedAt: now,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{
+				OperationKey: model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId),
+				Source:       model.BillingSettlementSourceWallet, UserID: userID,
+				Status: settlementStatus, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			}).Error)
+
+			response := dto.MidjourneyDto{
+				MjId: legacy.MjId, Status: "IN_PROGRESS", Progress: "50%",
+			}
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), legacy, response))
+
+			var blockedLegacy model.Midjourney
+			require.NoError(t, model.DB.First(&blockedLegacy, legacy.Id).Error)
+			assert.Equal(t, "IN_PROGRESS", blockedLegacy.Status)
+			assert.Equal(t, "50%", blockedLegacy.Progress)
+			assert.Equal(t, "stored provider failure", blockedLegacy.FailReason)
+			var blockedBilling model.Task
+			require.NoError(t, model.DB.First(&blockedBilling, billingTask.ID).Error)
+			assert.EqualValues(t, model.TaskStatusInProgress, blockedBilling.Status)
+			assert.Equal(t, 100, blockedBilling.Quota)
+			assert.EqualValues(t, 900, getUserQuota(t, userID))
+			var refundCount int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.Zero(t, refundCount)
+
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId)).
+				Update("status", model.BillingSettlementStatusApplied).Error)
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &blockedLegacy, response))
+
+			require.NoError(t, model.DB.First(&blockedLegacy, legacy.Id).Error)
+			assert.Equal(t, "FAILURE", blockedLegacy.Status)
+			assert.Equal(t, "100%", blockedLegacy.Progress)
+			require.NoError(t, model.DB.First(&blockedBilling, billingTask.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blockedBilling.Status)
+			assert.Zero(t, blockedBilling.Quota)
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &blockedLegacy, response))
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+		})
+	}
 }
 
 // ===========================================================================

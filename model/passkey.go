@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	ErrPasskeyNotFound         = errors.New("passkey credential not found")
-	ErrFriendlyPasskeyNotFound = errors.New("Passkey 验证失败，请重试或联系管理员")
+	ErrPasskeyNotFound          = errors.New("passkey credential not found")
+	ErrPasskeyCredentialChanged = errors.New("Passkey 凭证已变化，请重试")
+	ErrFriendlyPasskeyNotFound  = errors.New("Passkey 验证失败，请重试或联系管理员")
 )
 
 type PasskeyCredential struct {
@@ -26,7 +27,7 @@ type PasskeyCredential struct {
 	CredentialID    string         `json:"credential_id" gorm:"type:varchar(512);uniqueIndex;not null"` // base64 encoded
 	PublicKey       string         `json:"public_key" gorm:"type:text;not null"`                        // base64 encoded
 	AttestationType string         `json:"attestation_type" gorm:"type:varchar(255)"`
-	AAGUID          string         `json:"aaguid" gorm:"type:varchar(512)"` // base64 encoded
+	AAGUID          string         `json:"aaguid" gorm:"column:aa_guid;type:varchar(512)"` // base64 encoded
 	SignCount       uint32         `json:"sign_count" gorm:"default:0"`
 	CloneWarning    bool           `json:"clone_warning"`
 	UserPresent     bool           `json:"user_present"`
@@ -177,34 +178,106 @@ func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
 	return &credential, nil
 }
 
-func UpsertPasskeyCredential(credential *PasskeyCredential) error {
-	if credential == nil {
-		common.SysLog("UpsertPasskeyCredential: nil credential provided")
+func UpdatePasskeyCredentialAfterAuthentication(credential *PasskeyCredential) error {
+	if credential == nil || credential.UserID <= 0 || credential.CredentialID == "" {
+		common.SysLog("UpdatePasskeyCredentialAfterAuthentication: nil credential provided")
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		// 使用Unscoped()进行硬删除，避免唯一索引冲突
-		if err := tx.Unscoped().Where("user_id = ?", credential.UserID).Delete(&PasskeyCredential{}).Error; err != nil {
-			common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to delete existing credential for user %d: %v", credential.UserID, err))
-			return fmt.Errorf("Passkey 保存失败，请重试")
-		}
-		if err := tx.Create(credential).Error; err != nil {
-			common.SysLog(fmt.Sprintf("UpsertPasskeyCredential: failed to create credential for user %d: %v", credential.UserID, err))
-			return fmt.Errorf("Passkey 保存失败，请重试")
-		}
+	updates := passkeyAuthenticationUpdates(credential)
+	result := DB.Model(&PasskeyCredential{}).
+		Where("user_id = ? AND credential_id = ?", credential.UserID, credential.CredentialID).
+		Updates(updates)
+	if result.Error != nil {
+		common.SysLog(fmt.Sprintf("UpdatePasskeyCredentialAfterAuthentication: failed to update credential for user %d: %v", credential.UserID, result.Error))
+		return fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	if result.RowsAffected == 1 {
 		return nil
-	})
+	}
+	var count int64
+	if err := DB.Model(&PasskeyCredential{}).
+		Where("user_id = ? AND credential_id = ?", credential.UserID, credential.CredentialID).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	if count == 1 {
+		return nil
+	}
+	return ErrPasskeyCredentialChanged
 }
 
-func DeletePasskeyByUserID(userID int) error {
-	if userID == 0 {
-		common.SysLog("DeletePasskeyByUserID: empty user ID")
-		return fmt.Errorf("删除失败，请重试")
+func passkeyAuthenticationUpdates(credential *PasskeyCredential) map[string]interface{} {
+	updates := map[string]interface{}{
+		"public_key":       credential.PublicKey,
+		"attestation_type": credential.AttestationType,
+		"aa_guid":          credential.AAGUID,
+		"user_present":     credential.UserPresent,
+		"user_verified":    credential.UserVerified,
+		"backup_eligible":  credential.BackupEligible,
+		"backup_state":     credential.BackupState,
+		"transports":       credential.Transports,
+		"attachment":       credential.Attachment,
+		"sign_count":       gorm.Expr("CASE WHEN sign_count < ? THEN ? ELSE sign_count END", credential.SignCount, credential.SignCount),
 	}
-	// 使用Unscoped()进行硬删除，避免唯一索引冲突
-	if err := DB.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{}).Error; err != nil {
-		common.SysLog(fmt.Sprintf("DeletePasskeyByUserID: failed to delete passkey for user %d: %v", userID, err))
-		return fmt.Errorf("删除失败，请重试")
+	if credential.CloneWarning {
+		updates["clone_warning"] = true
 	}
-	return nil
+	if credential.LastUsedAt != nil {
+		updates["last_used_at"] = gorm.Expr(
+			"CASE WHEN last_used_at IS NULL OR last_used_at < ? THEN ? ELSE last_used_at END",
+			*credential.LastUsedAt,
+			*credential.LastUsedAt,
+		)
+	}
+	return updates
+}
+
+func ReplacePasskeyCredentialAndBumpSessionGeneration(credential *PasskeyCredential) (int64, error) {
+	if credential == nil || credential.UserID <= 0 {
+		return 0, fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Where("user_id = ?", credential.UserID).Delete(&PasskeyCredential{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(credential).Error; err != nil {
+			return err
+		}
+		var err error
+		generation, cacheTask, err = bumpUserSessionGenerationTx(tx, credential.UserID)
+		return err
+	})
+	if err != nil {
+		common.SysLog(fmt.Sprintf("ReplacePasskeyCredentialAndBumpSessionGeneration: failed for user %d: %v", credential.UserID, err))
+		return 0, fmt.Errorf("Passkey 保存失败，请重试")
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
+}
+
+func DeletePasskeyAndBumpSessionGeneration(userID int) (int64, error) {
+	if userID <= 0 {
+		return 0, fmt.Errorf("删除失败，请重试")
+	}
+	var generation int64
+	var cacheTask CacheInvalidationTask
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrPasskeyNotFound
+		}
+		var err error
+		generation, cacheTask, err = bumpUserSessionGenerationTx(tx, userID)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	dispatchStagedCacheInvalidation(cacheTask)
+	return generation, nil
 }

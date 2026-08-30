@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { handleServerError } from '@/lib/handle-server-error'
 import {
   extractVerificationInfo,
   isVerificationRequiredError,
+  markSecureVerificationErrorReported,
 } from '@/lib/secure-verification'
 import { checkVerificationMethods, verify } from '../api'
 import { selectVerificationMethod } from '../method-selection'
@@ -36,8 +38,15 @@ import type {
 
 type ApiCall = (() => Promise<unknown>) | null
 
+interface PendingVerification {
+  attemptId: number
+  resolve: (value: unknown | null) => void
+  reject: (reason?: unknown) => void
+}
+
 interface InternalState extends SecureVerificationState {
   apiCall: ApiCall
+  attemptId: number | null
 }
 
 const defaultMethods: VerificationMethods = {
@@ -54,6 +63,21 @@ const initialState: InternalState = {
   title: undefined,
   description: undefined,
   apiCall: null,
+  attemptId: null,
+}
+
+function restrictVerificationMethods(
+  methods: VerificationMethods,
+  allowedMethods?: VerificationMethod[]
+): VerificationMethods {
+  if (!allowedMethods?.length) return methods
+  const allowed = new Set(allowedMethods)
+  return {
+    has2FA: methods.has2FA && allowed.has('2fa'),
+    hasPasskey: methods.hasPasskey && allowed.has('passkey'),
+    hasPassword: methods.hasPassword && allowed.has('password'),
+    passkeySupported: methods.passkeySupported,
+  }
 }
 
 export function useSecureVerification(
@@ -63,29 +87,99 @@ export function useSecureVerification(
 
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
-  const [open, setOpen] = useState(false)
+  const [open, setDialogOpen] = useState(false)
+  const pendingVerificationRef = useRef<PendingVerification | null>(null)
+  const verificationAttemptRef = useRef(0)
+  const mountedRef = useRef(true)
+
+  const loadVerificationMethods = useCallback(
+    async (scope?: VerificationScope): Promise<VerificationMethods> =>
+      checkVerificationMethods(scope),
+    []
+  )
 
   const fetchVerificationMethods = useCallback(
-    async (scope?: VerificationScope) => {
-      const result = await checkVerificationMethods(scope)
-      setMethods(result)
+    async (scope?: VerificationScope): Promise<VerificationMethods> => {
+      const result = await loadVerificationMethods(scope)
+      if (mountedRef.current) {
+        setMethods(result)
+      }
       return result
+    },
+    [loadVerificationMethods]
+  )
+
+  const settlePendingVerification = useCallback(
+    (value: unknown | null, error?: unknown, attemptId?: number): void => {
+      const pending = pendingVerificationRef.current
+      if (attemptId !== undefined && pending?.attemptId !== attemptId) return
+      pendingVerificationRef.current = null
+      if (!pending) return
+      if (error !== undefined) {
+        pending.reject(error)
+      } else {
+        pending.resolve(value)
+      }
     },
     []
   )
 
-  const reset = useCallback(() => {
-    setState(initialState)
-    setOpen(false)
-  }, [])
+  const isVerificationAttemptActive = useCallback(
+    (attemptId: number): boolean =>
+      mountedRef.current && verificationAttemptRef.current === attemptId,
+    []
+  )
 
-  const startVerification = useCallback(
+  const beginVerificationAttempt = useCallback((): number | null => {
+    if (!mountedRef.current) return null
+    verificationAttemptRef.current += 1
+    settlePendingVerification(null)
+    setState(initialState)
+    setDialogOpen(false)
+    return verificationAttemptRef.current
+  }, [settlePendingVerification])
+
+  const reset = useCallback((): void => {
+    verificationAttemptRef.current += 1
+    settlePendingVerification(null)
+    if (!mountedRef.current) return
+    setState(initialState)
+    setDialogOpen(false)
+  }, [settlePendingVerification])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      verificationAttemptRef.current += 1
+      settlePendingVerification(null)
+    }
+  }, [settlePendingVerification])
+
+  const startVerificationAttempt = useCallback(
     async (
       apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
-    ) => {
-      const { preferredMethod, title, description, scope } = config
-      const availableMethods = await fetchVerificationMethods(scope)
+      config: StartVerificationOptions,
+      attemptId: number
+    ): Promise<boolean> => {
+      let availableMethods: VerificationMethods
+      try {
+        availableMethods = restrictVerificationMethods(
+          await loadVerificationMethods(config.scope),
+          config.allowedMethods
+        )
+      } catch (error) {
+        if (!isVerificationAttemptActive(attemptId)) return false
+        handleServerError(error, {
+          fallback: i18next.t('Verification unavailable'),
+        })
+        markSecureVerificationErrorReported(error)
+        onError?.(error)
+        throw error
+      }
+
+      if (!isVerificationAttemptActive(attemptId)) return false
+      setMethods(availableMethods)
 
       if (
         !availableMethods.has2FA &&
@@ -94,12 +188,12 @@ export function useSecureVerification(
       ) {
         toast.error(
           i18next.t(
-            'Please enable Two-factor Authentication or Passkey before proceeding'
+            'No verification method is available. Add a password or sign in again with a linked account.'
           )
         )
         onError?.(
           new Error(
-            'No verification methods available. Enable 2FA or Passkey to continue.'
+            'No verification method is available. Add a password or sign in again with a linked account.'
           )
         )
         return false
@@ -107,41 +201,76 @@ export function useSecureVerification(
 
       const defaultMethod = selectVerificationMethod(
         availableMethods,
-        preferredMethod
+        config.preferredMethod
       )
 
       setState((prev) => ({
         ...prev,
         apiCall,
+        attemptId,
         method: defaultMethod,
-        title,
-        description,
-        scope,
+        title: config.title,
+        description: config.description,
+        scope: config.scope,
       }))
-      setOpen(true)
+      setDialogOpen(true)
       return true
     },
-    [fetchVerificationMethods, onError]
+    [isVerificationAttemptActive, loadVerificationMethods, onError]
+  )
+
+  const startVerification = useCallback(
+    async (
+      apiCall: () => Promise<unknown>,
+      config: StartVerificationOptions = {}
+    ): Promise<boolean> => {
+      const attemptId = beginVerificationAttempt()
+      if (attemptId === null) return false
+      return startVerificationAttempt(apiCall, config, attemptId)
+    },
+    [beginVerificationAttempt, startVerificationAttempt]
   )
 
   const executeVerification = useCallback(
-    async (method?: VerificationMethod, code?: string) => {
-      if (!state.apiCall) {
+    async (
+      method?: VerificationMethod,
+      code?: string
+    ): Promise<unknown | undefined> => {
+      if (!state.apiCall || state.attemptId === null) {
         toast.error(i18next.t('Verification is not configured properly'))
         return
       }
 
+      const attemptId = state.attemptId
+      const apiCall = state.apiCall
       const actualMethod = method ?? state.method
       if (!actualMethod) {
         toast.error(i18next.t('Select a verification method first'))
         return
       }
+      if (!isVerificationAttemptActive(attemptId)) return
 
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
         await verify(actualMethod, code ?? state.code, state.scope)
-        const result = await state.apiCall()
+      } catch (error) {
+        if (!isVerificationAttemptActive(attemptId)) return
+        setState((prev) => ({ ...prev, loading: false }))
+        handleServerError(error, {
+          fallback: i18next.t('Verification failed'),
+        })
+        markSecureVerificationErrorReported(error)
+        onError?.(error)
+        throw error
+      }
+
+      if (!isVerificationAttemptActive(attemptId)) return
+
+      try {
+        const result = await apiCall()
+        if (!isVerificationAttemptActive(attemptId)) return
+        settlePendingVerification(result, undefined, attemptId)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -155,18 +284,33 @@ export function useSecureVerification(
 
         return result
       } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : i18next.t('Verification failed')
-        toast.error(message)
+        if (!isVerificationAttemptActive(attemptId)) return
+        settlePendingVerification(null, error, attemptId)
+        handleServerError(error, {
+          fallback: i18next.t('Verification failed'),
+        })
+        markSecureVerificationErrorReported(error)
         onError?.(error)
+        reset()
         throw error
       } finally {
-        setState((prev) => ({ ...prev, loading: false }))
+        if (isVerificationAttemptActive(attemptId)) {
+          setState((prev) =>
+            prev.attemptId === attemptId ? { ...prev, loading: false } : prev
+          )
+        }
       }
     },
-    [state, successMessage, onSuccess, onError, autoReset, reset]
+    [
+      state,
+      isVerificationAttemptActive,
+      successMessage,
+      onSuccess,
+      onError,
+      autoReset,
+      reset,
+      settlePendingVerification,
+    ]
   )
 
   const setCode = useCallback((code: string) => {
@@ -177,28 +321,98 @@ export function useSecureVerification(
     setState((prev) => ({ ...prev, method, code: '' }))
   }, [])
 
-  const cancel = useCallback(() => {
+  const cancel = useCallback((): void => {
     reset()
   }, [reset])
 
+  const setOpen = useCallback(
+    (nextOpen: boolean): void => {
+      if (!nextOpen) {
+        cancel()
+        return
+      }
+      setDialogOpen(true)
+    },
+    [cancel]
+  )
+
+  /**
+   * Returns null when the user cancels. Callers must handle rejections from
+   * method discovery, the original action, and the post-verification retry.
+   */
   const withVerification = useCallback(
-    async (
-      apiCall: () => Promise<unknown>,
+    <T>(
+      apiCall: () => Promise<T>,
       config: StartVerificationOptions = {}
-    ) => {
-      try {
-        return await apiCall()
-      } catch (error) {
-        if (isVerificationRequiredError(error)) {
+    ): Promise<T | null> => {
+      const attemptId = beginVerificationAttempt()
+      if (attemptId === null) return Promise.resolve(null)
+      const continuation = new Promise<T | null>((resolve, reject) => {
+        pendingVerificationRef.current = {
+          attemptId,
+          resolve: (value) => resolve(value as T | null),
+          reject,
+        }
+      })
+      // Keep the original promise and rejection contract for awaiting callers,
+      // while ensuring fire-and-forget UI effects do not produce an unhandled
+      // rejection after the shared flow has already reported the failure.
+      void continuation.catch(() => undefined)
+
+      void (async (): Promise<void> => {
+        if (config.forceVerification) {
+          try {
+            const started = await startVerificationAttempt(
+              apiCall,
+              config,
+              attemptId
+            )
+            if (!started) {
+              settlePendingVerification(null, undefined, attemptId)
+            }
+          } catch (error) {
+            settlePendingVerification(null, error, attemptId)
+          }
+          return
+        }
+        try {
+          const result = await apiCall()
+          if (!isVerificationAttemptActive(attemptId)) return
+          settlePendingVerification(result, undefined, attemptId)
+          return
+        } catch (error) {
+          if (!isVerificationAttemptActive(attemptId)) return
+          if (!isVerificationRequiredError(error)) {
+            settlePendingVerification(null, error, attemptId)
+            return
+          }
+
           const info = extractVerificationInfo(error)
           toast.info(info.message)
-          await startVerification(apiCall, config)
-          return null
         }
-        throw error
-      }
+
+        try {
+          const started = await startVerificationAttempt(
+            apiCall,
+            config,
+            attemptId
+          )
+          if (!started) {
+            settlePendingVerification(null, undefined, attemptId)
+          }
+        } catch (error) {
+          settlePendingVerification(null, error, attemptId)
+        }
+      })()
+
+      return continuation
     },
-    [startVerification]
+    [
+      beginVerificationAttempt,
+      isVerificationAttemptActive,
+      settlePendingVerification,
+      startVerificationAttempt,
+    ]
   )
 
   const canUseMethod = useCallback(

@@ -1,9 +1,12 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
@@ -14,7 +17,6 @@ const (
 	secureVerificationMethodSessionKey = "secure_verified_method"
 	secureVerificationUserSessionKey   = "secure_verified_user_id"
 	secureVerificationScopeSessionKey  = "secure_verified_scope"
-	secureVerificationMethodPassword   = "password"
 	// SecureVerificationTimeout 验证有效期（秒）
 	SecureVerificationTimeout = 300 // 5分钟
 )
@@ -88,7 +90,7 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 		}
 
 		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
-		if !ok || verifiedMethod == "" {
+		if !ok || !isSupportedSecureVerificationMethod(verifiedMethod) {
 			clearSecureVerificationSession(session)
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -98,12 +100,25 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		requiredScope := ""
-		if len(requiredScopes) > 0 {
-			requiredScope = requiredScopes[0]
-		}
 		verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
-		if requiredScope != "" && verifiedScope != requiredScope {
+		hasRequiredScope := false
+		scopeMatches := false
+		for _, allowedScope := range requiredScopes {
+			if allowedScope == "" {
+				continue
+			}
+			hasRequiredScope = true
+			if verifiedScope == allowedScope {
+				scopeMatches = true
+				break
+			}
+		}
+		if !hasRequiredScope {
+			scopeMatches = true
+		}
+		if !scopeMatches ||
+			((verifiedMethod == model.SecureVerificationMethodPassword ||
+				verifiedMethod == model.SecureVerificationMethodOAuth) && !hasRequiredScope) {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "需要对应操作的安全验证",
@@ -112,23 +127,31 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if verifiedMethod == secureVerificationMethodPassword {
-			requiredScope := ""
-			if len(requiredScopes) > 0 {
-				requiredScope = requiredScopes[0]
-			}
-			verifiedScope, _ := session.Get(secureVerificationScopeSessionKey).(string)
-			if requiredScope == "" || verifiedScope != requiredScope {
+		if verifiedMethod == model.SecureVerificationMethodOAuth &&
+			verifiedScope == model.SecureVerificationScopeOAuthReauthentication {
+			allowed, err := model.CanUseOAuthReauthentication(userId)
+			if err != nil {
+				common.SysError(fmt.Sprintf("failed to validate OAuth reauthentication grant for user %d: %v", userId, err))
+				clearSecureVerificationSession(session)
 				c.JSON(http.StatusForbidden, gin.H{
 					"success": false,
-					"message": "需要对应操作的安全验证",
+					"message": "验证状态异常，请重新验证",
+					"code":    "VERIFICATION_INVALID",
+				})
+				c.Abort()
+				return
+			}
+			if !allowed {
+				clearSecureVerificationSession(session)
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": "请使用现有密码、2FA 或 Passkey 重新验证",
 					"code":    "VERIFICATION_REQUIRED",
 				})
 				c.Abort()
 				return
 			}
 		}
-
 		c.Next()
 	}
 }
@@ -185,7 +208,7 @@ func OptionalSecureVerification() gin.HandlerFunc {
 			return
 		}
 		verifiedMethod, ok := session.Get(secureVerificationMethodSessionKey).(string)
-		if !ok || verifiedMethod == "" || verifiedMethod == secureVerificationMethodPassword {
+		if !ok || !isStrongSecureVerificationMethod(verifiedMethod) {
 			c.Set("secure_verified", false)
 			c.Next()
 			return
@@ -195,6 +218,18 @@ func OptionalSecureVerification() gin.HandlerFunc {
 		c.Set("secure_verified_at", verifiedAt)
 		c.Next()
 	}
+}
+
+func isSupportedSecureVerificationMethod(method string) bool {
+	return method == model.SecureVerificationMethod2FA ||
+		method == model.SecureVerificationMethodPasskey ||
+		method == model.SecureVerificationMethodPassword ||
+		method == model.SecureVerificationMethodOAuth
+}
+
+func isStrongSecureVerificationMethod(method string) bool {
+	return method == model.SecureVerificationMethod2FA ||
+		method == model.SecureVerificationMethodPasskey
 }
 
 // ClearSecureVerification 清除安全验证状态

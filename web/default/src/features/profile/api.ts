@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { api, type ApiRequestConfig } from '@/lib/api'
+import { api, sensitiveActionConfig } from '@/lib/api'
 import { selfCustomOAuthUnbindPath, type CustomOAuthBinding } from '@/lib/oauth'
 import { getTurnstileHeaders } from '@/features/auth/lib/turnstile-request'
 import type {
@@ -28,11 +28,6 @@ import type {
   CheckinStatusResponse,
   CheckinResponse,
 } from './types'
-
-const sensitiveActionConfig: ApiRequestConfig = {
-  skipBusinessError: true,
-  skipErrorHandler: true,
-}
 
 // ============================================================================
 // User Profile APIs
@@ -138,6 +133,47 @@ export async function bindEmail(
  */
 export async function bindWeChat(code: string): Promise<ApiResponse> {
   const res = await api.get(`/api/oauth/wechat/bind?code=${code}`)
+  return res.data
+}
+
+export interface TelegramAuthorizationPayload {
+  id: number
+  first_name?: string
+  last_name?: string
+  username?: string
+  photo_url?: string
+  auth_date: number
+  hash: string
+}
+
+export async function createTelegramBindState(): Promise<
+  ApiResponse<{ state: string }>
+> {
+  const res = await api.post<ApiResponse<{ state: string }>>(
+    '/api/oauth/telegram/bind/state',
+    undefined,
+    sensitiveActionConfig
+  )
+  return res.data
+}
+
+export async function bindTelegramAccount(
+  payload: TelegramAuthorizationPayload & { state: string }
+): Promise<ApiResponse> {
+  const res = await api.post<ApiResponse>(
+    '/api/oauth/telegram/bind',
+    payload,
+    sensitiveActionConfig
+  )
+  return res.data
+}
+
+export async function revokeOtherSessions(): Promise<ApiResponse> {
+  const res = await api.post<ApiResponse>(
+    '/api/user/sessions/revoke',
+    undefined,
+    sensitiveActionConfig
+  )
   return res.data
 }
 

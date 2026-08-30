@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 export type VerificationMethod = '2fa' | 'passkey' | 'password'
-export type VerificationScope = 'access_token' | 'account_delete'
+export type VerificationScope =
+  | 'access_token'
+  | 'account_delete'
+  | 'credentials'
+  | 'api_token'
+  | 'passkey_register'
 
 export interface VerificationMethods {
   has2FA: boolean
@@ -44,6 +49,8 @@ export interface UseSecureVerificationOptions {
 
 export interface StartVerificationOptions {
   preferredMethod?: VerificationMethod
+  allowedMethods?: VerificationMethod[]
+  forceVerification?: boolean
   title?: string
   description?: string
   scope?: VerificationScope

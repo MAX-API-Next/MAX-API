@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -241,6 +242,197 @@ func TestPostTextConsumeQuotaUsesFallbackForNilUsageWithEstimate(t *testing.T) {
 	require.NotNil(t, log)
 	require.Equal(t, fallbackQuota, log.Quota)
 	require.Equal(t, 20, log.PromptTokens)
+}
+
+func TestSettleAndRecordConsumeLeavesUsageProjectionPendingWhenFinalChargeExceedsWallet(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 121, 122, 123
+	const preConsumedQuota, actualQuota = 100, 200
+
+	seedUser(t, userID, preConsumedQuota)
+	seedToken(t, tokenID, userID, "final-charge-insufficient-token", preConsumedQuota)
+	seedChannel(t, channelID)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("token_quota", int64(preConsumedQuota))
+	info := &relaycommon.RelayInfo{
+		RequestId:       "final-charge-insufficient-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "final-charge-insufficient-token",
+		OriginModelName: "final-charge-insufficient-model",
+		UsingGroup:      "default",
+		ForcePreConsume: true,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+	}
+
+	session, apiErr := NewBillingSession(ctx, info, preConsumedQuota)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId: channelID,
+		ModelName: "final-charge-insufficient-model",
+		TokenId:   tokenID,
+		Group:     "default",
+		Quota:     actualQuota,
+		Content:   "final charge exceeds remaining wallet",
+	})
+
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Zero(t, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+	assert.Zero(t, countLogs(t))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey("final-charge-insufficient-request")).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	assert.Contains(t, settlement.LastError, "user quota is not enough")
+}
+
+func TestSettleAndRecordConsumeProjectsExplicitZeroFinalQuota(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 124, 125, 126
+	const initialQuota, preConsumedQuota = 1_000, 100
+
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, "zero-final-quota-token", initialQuota)
+	seedChannel(t, channelID)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set(common.RequestIdKey, "zero-final-quota-request")
+	ctx.Set("token_quota", int64(initialQuota))
+	info := &relaycommon.RelayInfo{
+		RequestId:       "zero-final-quota-request",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "zero-final-quota-token",
+		OriginModelName: "zero-final-quota-model",
+		UsingGroup:      "default",
+		ForcePreConsume: true,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+	}
+
+	session, apiErr := NewBillingSession(ctx, info, preConsumedQuota)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	info.Billing = session
+
+	settleAndRecordConsume(ctx, info, true, model.RecordConsumeLogParams{
+		ChannelId:    channelID,
+		PromptTokens: 1,
+		ModelName:    "zero-final-quota-model",
+		TokenId:      tokenID,
+		Group:        "default",
+		Quota:        0,
+		Content:      "billable usage rounded to zero quota",
+	})
+
+	assert.EqualValues(t, initialQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialQuota, getTokenRemainQuota(t, tokenID))
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Equal(t, 1, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+	assert.Equal(t, int64(1), countLogs(t))
+	log := getLastLog(t)
+	assert.Zero(t, log.Quota)
+	assert.Equal(t, 1, log.PromptTokens)
+	assert.Equal(t, "zero-final-quota-request", log.RequestId)
+}
+
+func TestPostTextConsumeQuotaDoesNotProjectUsageWhenFinalizeSettlementFails(t *testing.T) {
+	truncate(t)
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	ctx.Set(common.RequestIdKey, "failed-finalize-text-request")
+
+	const userID, tokenID, channelID = 103, 203, 303
+	seedUser(t, userID, 15)
+	seedToken(t, tokenID, userID, "failed-finalize-text-token", 100)
+	seedChannel(t, channelID)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RequestId:               "failed-finalize-text-request",
+		UserId:                  userID,
+		TokenId:                 tokenID,
+		TokenKey:                "failed-finalize-text-token",
+		OriginModelName:         "test-model",
+		StartTime:               time.Now(),
+		UserSetting:             dto.UserSetting{BillingPreference: "wallet_only"},
+		FinalRequestRelayFormat: types.RelayFormatOpenAI,
+		UsingGroup:              "default",
+		ChannelMeta:             &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	session, apiErr := NewBillingSession(ctx, relayInfo, 10)
+	require.Nil(t, apiErr)
+	relayInfo.Billing = session
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{
+		PromptTokens:     10,
+		CompletionTokens: 10,
+		TotalTokens:      20,
+	}, nil)
+
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+	var user model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&user, userID).Error)
+	assert.Zero(t, user.UsedQuota)
+	assert.Zero(t, user.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	assert.Zero(t, channel.UsedQuota)
+	assert.Zero(t, countLogs(t))
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey("failed-finalize-text-request")).First(&settlement).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
+	assert.NotEmpty(t, settlement.EffectPayload)
+	assert.Empty(t, settlement.EffectStatus)
+
+	// Manual review/reconciliation makes the missing funding available and
+	// requeues the durable settlement. Its effect must then project exactly once.
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("quota", 15).Error)
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("id = ?", settlement.ID).
+		Updates(map[string]interface{}{"status": model.BillingSettlementStatusPending, "next_attempt": time.Now().Unix()}).Error)
+	model.ProcessPendingBillingSettlementsOnce()
+
+	assert.EqualValues(t, 5, getUserQuota(t, userID))
+	var projectedUser model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&projectedUser, userID).Error)
+	assert.EqualValues(t, 20, projectedUser.UsedQuota)
+	assert.Equal(t, 1, projectedUser.RequestCount)
+	var projectedChannel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&projectedChannel, channelID).Error)
+	assert.EqualValues(t, 20, projectedChannel.UsedQuota)
+	assert.Equal(t, int64(1), countLogs(t))
+	log := getLastLog(t)
+	assert.Equal(t, 20, log.Quota)
+	assert.Equal(t, 10, log.PromptTokens)
+	assert.Equal(t, 10, log.CompletionTokens)
+	assert.Equal(t, "failed-finalize-text-request", log.RequestId)
+
+	model.ProcessPendingBillingSettlementsOnce()
+	var replayedUser model.User
+	require.NoError(t, model.DB.Select("used_quota").First(&replayedUser, userID).Error)
+	assert.EqualValues(t, 20, replayedUser.UsedQuota)
+	assert.Equal(t, int64(1), countLogs(t))
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {

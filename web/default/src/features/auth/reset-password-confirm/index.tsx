@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { CheckIcon, CopyIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -37,13 +37,21 @@ export type ResetPasswordSearchParams = {
 
 type ResetPasswordConfirmProps = ResetPasswordSearchParams
 
-export function ResetPasswordConfirm({
-  email,
-  token,
-}: ResetPasswordConfirmProps) {
+interface ResetPasswordResponse {
+  success: boolean
+  data: string
+  message?: string
+  api_tokens_revoked?: boolean
+}
+
+export function ResetPasswordConfirm(
+  props: ResetPasswordConfirmProps
+): ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [newPassword, setNewPassword] = useState('')
+  const [apiTokensRevoked, setApiTokensRevoked] = useState(false)
+  const [autoCopied, setAutoCopied] = useState(false)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const {
@@ -52,10 +60,10 @@ export function ResetPasswordConfirm({
     start: startCountdown,
   } = useCountdown({ initialSeconds: 30 })
 
-  const isValidResetLink = Boolean(email && token)
+  const isValidResetLink = Boolean(props.email && props.token)
 
-  async function handleSubmit() {
-    if (!isValidResetLink || !email || !token) {
+  async function handleSubmit(): Promise<void> {
+    if (!isValidResetLink || !props.email || !props.token) {
       toast.error(t('Invalid reset link, please request a new password reset'))
       return
     }
@@ -63,14 +71,18 @@ export function ResetPasswordConfirm({
     startCountdown()
     setLoading(true)
     try {
-      const res = await api.post('/api/user/reset', { email, token }, {
-        skipBusinessError: true,
-      } as Record<string, unknown>)
+      const res = await api.post<ResetPasswordResponse>(
+        '/api/user/reset',
+        { email: props.email, token: props.token },
+        { skipBusinessError: true }
+      )
 
       if (res?.data?.success) {
         const password = res.data.data
         setNewPassword(password)
+        setApiTokensRevoked(res.data.api_tokens_revoked === true)
         const copySuccess = await copyToClipboard(password)
+        setAutoCopied(copySuccess)
         if (copySuccess) {
           toast.success(
             t('Password reset and copied to clipboard: {{password}}', {
@@ -80,6 +92,8 @@ export function ResetPasswordConfirm({
         } else {
           toast.success(t('Password reset: {{password}}', { password }))
         }
+      } else {
+        toast.error(res?.data?.message || t('Reset failed'))
       }
     } catch {
       // Errors handled by global interceptor
@@ -88,7 +102,7 @@ export function ResetPasswordConfirm({
     }
   }
 
-  async function handleCopy() {
+  async function handleCopy(): Promise<void> {
     if (!newPassword) return
 
     const copySuccess = await copyToClipboard(newPassword)
@@ -131,38 +145,50 @@ export function ResetPasswordConfirm({
             <Input
               id='email'
               type='email'
-              value={email || ''}
+              value={props.email || ''}
               disabled
               placeholder={t('Waiting for email...')}
             />
           </div>
 
           {newPassword && (
-            <div className='space-y-2'>
-              <Label htmlFor='password'>{t('New password')}</Label>
-              <div className='flex gap-2'>
-                <Input
-                  id='password'
-                  value={newPassword}
-                  disabled
-                  className='font-mono'
-                />
-                <Button
-                  type='button'
-                  size='icon'
-                  variant='outline'
-                  onClick={handleCopy}
-                >
-                  {copied ? (
-                    <CheckIcon className='h-4 w-4' />
-                  ) : (
-                    <CopyIcon className='h-4 w-4' />
-                  )}
-                </Button>
+            <div className='space-y-3'>
+              <div className='space-y-2'>
+                <Label htmlFor='password'>{t('New password')}</Label>
+                <div className='flex gap-2'>
+                  <Input
+                    id='password'
+                    value={newPassword}
+                    disabled
+                    className='font-mono'
+                  />
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='outline'
+                    aria-label={t('Copy password')}
+                    onClick={handleCopy}
+                  >
+                    {copied ? (
+                      <CheckIcon aria-hidden='true' className='h-4 w-4' />
+                    ) : (
+                      <CopyIcon aria-hidden='true' className='h-4 w-4' />
+                    )}
+                  </Button>
+                </div>
+                {(autoCopied || copied) && (
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Password has been copied to clipboard')}
+                  </p>
+                )}
               </div>
-              <p className='text-muted-foreground text-xs'>
-                {t('Password has been copied to clipboard')}
-              </p>
+              {apiTokensRevoked && (
+                <Alert role='status'>
+                  <AlertDescription>
+                    {t('auth.resetPasswordConfirm.apiTokensRevoked')}
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
           )}
 

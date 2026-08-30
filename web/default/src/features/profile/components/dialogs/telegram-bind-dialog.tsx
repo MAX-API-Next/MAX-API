@@ -16,9 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { Send } from 'lucide-react'
+import type { ReactElement } from 'react'
+import { RefreshCw, Send } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -26,6 +29,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Spinner } from '@/components/ui/spinner'
+import { useTelegramLoginWidget } from '../../hooks/use-telegram-login-widget'
 
 // ============================================================================
 // Telegram Bind Dialog Component
@@ -38,14 +43,20 @@ interface TelegramBindDialogProps {
   onSuccess: () => void
 }
 
-export function TelegramBindDialog({
-  open,
-  onOpenChange,
-  botName,
-}: TelegramBindDialogProps) {
+export function TelegramBindDialog(
+  props: TelegramBindDialogProps
+): ReactElement {
   const { t } = useTranslation()
+  const { widgetContainerRef, status, errorMessage, retry, handleOpenChange } =
+    useTelegramLoginWidget({
+      open: props.open,
+      onOpenChange: props.onOpenChange,
+      botName: props.botName,
+      onSuccess: props.onSuccess,
+    })
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={props.open} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
           <DialogTitle>{t('Bind Telegram Account')}</DialogTitle>
@@ -54,25 +65,30 @@ export function TelegramBindDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className='space-y-4 py-4'>
+        <div className='flex flex-col gap-4 py-4'>
           <Alert>
-            <Send className='h-4 w-4' />
+            <Send aria-hidden='true' />
             <AlertDescription>
               {t(
-                'You will be redirected to Telegram to complete the binding process.'
+                'Telegram will ask you to confirm the account before it is bound.'
               )}
             </AlertDescription>
           </Alert>
 
-          <div className='flex flex-col items-center justify-center gap-4 rounded-lg border p-6'>
-            <div className='flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900'>
-              <Send className='h-6 w-6 text-blue-600 dark:text-blue-400' />
+          <div className='flex min-h-56 flex-col items-center justify-center gap-4 rounded-lg border p-6'>
+            <div className='bg-muted flex size-12 items-center justify-center rounded-xl'>
+              <Send
+                className='text-muted-foreground size-6'
+                aria-hidden='true'
+              />
             </div>
 
             <div className='text-center'>
               <p className='text-muted-foreground text-sm'>
                 {t('Bot:')}{' '}
-                <span className='font-mono font-semibold'>@{botName}</span>
+                <span className='font-mono font-semibold'>
+                  @{props.botName.replace(/^@/, '')}
+                </span>
               </p>
               <p className='text-muted-foreground mt-1 text-xs'>
                 {t(
@@ -81,13 +97,45 @@ export function TelegramBindDialog({
               </p>
             </div>
 
-            {/* Telegram Login Widget will be injected here by react-telegram-login */}
-            <div id='telegram-login-widget' className='flex justify-center'>
-              {/* This would require the react-telegram-login library */}
-              <div className='text-muted-foreground rounded-lg border border-dashed px-6 py-3 text-sm'>
-                {t('Telegram Login Widget')}
+            {(status === 'loading' || status === 'binding') && (
+              <div className='text-muted-foreground flex items-center gap-2 text-sm'>
+                <Spinner />
+                {status === 'binding'
+                  ? t('Binding Telegram account...')
+                  : t('Preparing Telegram authorization...')}
               </div>
-            </div>
+            )}
+
+            {status === 'error' && (
+              <div className='flex max-w-sm flex-col items-center gap-3 text-center'>
+                <p className='text-destructive text-sm' role='alert'>
+                  {errorMessage}
+                </p>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={retry}
+                >
+                  <RefreshCw data-icon='inline-start' aria-hidden='true' />
+                  {t('Retry')}
+                </Button>
+              </div>
+            )}
+
+            <div
+              ref={widgetContainerRef}
+              className={cn(
+                'min-h-10 justify-center',
+                status === 'ready' ? 'flex' : 'hidden'
+              )}
+            />
+
+            {status === 'idle' && (
+              <Button type='button' variant='outline' onClick={retry}>
+                {t('Start Telegram authorization')}
+              </Button>
+            )}
           </div>
 
           <p className='text-muted-foreground text-center text-xs'>

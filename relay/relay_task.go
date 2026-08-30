@@ -66,9 +66,12 @@ func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) 
 	task.Action = info.Action
 }
 
-func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.RelayInfo) (*model.Task, *dto.TaskError) {
+func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.RelayInfo, preConsumedQuota int) (*model.Task, *dto.TaskError) {
 	if info == nil || info.TaskRelayInfo == nil {
 		return nil, service.TaskErrorWrapperLocal(errors.New("task relay metadata is unavailable"), "persist_task_failed", http.StatusInternalServerError)
+	}
+	if preConsumedQuota < 0 {
+		return nil, service.TaskErrorWrapperLocal(errors.New("pre-consumed quota cannot be negative"), "persist_task_failed", http.StatusInternalServerError)
 	}
 	if info.PersistedTaskID > 0 {
 		var task model.Task
@@ -82,7 +85,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 		task.Properties = fresh.Properties
 		task.PrivateData.Key = fresh.PrivateData.Key
 		task.PrivateData.AwaitingUpstreamID = true
-		task.Quota = info.PriceData.Quota
+		task.Quota = preConsumedQuota
 		populateTaskBillingMetadata(&task, info)
 		if err := task.Update(); err != nil {
 			return nil, TaskPersistenceError(err, "update_persisted_task_failed", "failed to update persisted task")
@@ -91,7 +94,7 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 	}
 
 	task := model.InitTask(platform, info)
-	task.Quota = info.PriceData.Quota
+	task.Quota = preConsumedQuota
 	task.PrivateData.AwaitingUpstreamID = true
 	populateTaskBillingMetadata(task, info)
 	if err := task.Insert(); err != nil {
@@ -104,6 +107,36 @@ func ensureTaskPlaceholder(platform constant.TaskPlatform, info *relaycommon.Rel
 func TaskPersistenceError(err error, code string, safeMessage string) *dto.TaskError {
 	common.SysLog(fmt.Sprintf("%s: %s", code, err.Error()))
 	return service.TaskErrorWrapperLocal(errors.New(safeMessage), code, http.StatusInternalServerError)
+}
+
+func reserveTaskQuota(c *gin.Context, info *relaycommon.RelayInfo, targetQuota int) (int, *dto.TaskError) {
+	if info == nil {
+		return 0, service.TaskErrorWrapperLocal(errors.New("task relay metadata is unavailable"), "reserve_task_quota_failed", http.StatusInternalServerError)
+	}
+	if !info.PriceData.FreeModel {
+		if info.Billing == nil {
+			info.ForcePreConsume = true
+			if apiErr := service.PreConsumeBilling(c, targetQuota, info); apiErr != nil {
+				return 0, service.TaskErrorFromAPIError(apiErr)
+			}
+		} else if reserveErr := info.Billing.Reserve(targetQuota); reserveErr != nil {
+			return 0, service.TaskErrorWrapperLocal(reserveErr, "reserve_task_quota_failed", http.StatusForbidden)
+		}
+	}
+	if info.Billing != nil {
+		// A free retry still owns any reservation from an earlier paid attempt
+		// until the upstream accepts it. Keep that reservation on the task
+		// placeholder, then settle the successful free result to quota zero;
+		// failed attempts may continue to another paid channel.
+		return info.Billing.GetPreConsumedQuota(), nil
+	}
+	if info.PriceData.FreeModel {
+		// No Billing session means this attempt did not reserve any quota. Keep
+		// the placeholder at zero even if a future estimator accidentally
+		// supplies a non-zero target for a free route.
+		return 0, nil
+	}
+	return targetQuota, nil
 }
 
 type taskBillingEstimator interface {
@@ -303,14 +336,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
+	// Keep the raw estimate for final settlement. The configured value is an
+	// admission reservation only and must not become the task's final charge.
+	taskEstimateQuota := info.PriceData.Quota
+	preConsumedQuota := taskEstimateQuota
+	if !info.PriceData.FreeModel && info.PriceData.GroupRatioInfo.GroupRatio > 0 {
+		preConsumedQuota, err = helper.ApplyPreConsumedQuotaFloor(taskEstimateQuota, true)
+		if err != nil {
+			return nil, service.TaskErrorWrapper(err, "pre_consume_quota_error", http.StatusBadRequest)
 		}
 	}
-	task, taskErr := ensureTaskPlaceholder(platform, info)
+	info.PriceData.QuotaToPreConsume = preConsumedQuota
+
+	// 7. 预扣费。重试可能因路由/分组变化得到更高的目标额度，必须通过
+	// BillingSession.Reserve 幂等补足，不能继续沿用较小的首次预留。
+	actualReservedQuota, reservationErr := reserveTaskQuota(c, info, preConsumedQuota)
+	if reservationErr != nil {
+		return nil, reservationErr
+	}
+	task, taskErr := ensureTaskPlaceholder(platform, info, actualReservedQuota)
 	if taskErr != nil {
 		return nil, taskErr
 	}
@@ -355,11 +399,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
-	finalQuota := info.PriceData.Quota
+	finalQuota := taskEstimateQuota
 	if !taskBillingOverride {
 		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
 			// 基于调整后的 ratios 重新计算 quota
-			finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
+			finalQuota = recalcQuotaFromRatios(info, taskEstimateQuota, adjustedRatios)
 			info.PriceData.OtherRatios = adjustedRatios
 			info.PriceData.Quota = finalQuota
 		}
@@ -369,7 +413,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	task.PrivateData.UpstreamTaskID = upstreamTaskID
 	task.PrivateData.AwaitingUpstreamID = false
-	task.Quota = finalQuota
+	// Keep the persisted task at the actual reservation until the durable
+	// request-finalize operation applies the funding delta and task quota in one
+	// transaction. Writing finalQuota here would make an unpaid target look
+	// settled and would break settlement recovery's task-quota CAS.
+	task.Quota = actualReservedQuota
 	task.Data = taskData
 	populateTaskBillingMetadata(task, info)
 
@@ -482,10 +530,12 @@ func buildTaskSubmitRequestBody(c *gin.Context, info *relaycommon.RelayInfo, ada
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
-// 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
-func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) int {
-	// 从 PriceData 获取不含 OtherRatios 的基础价格
-	baseQuota := float64(info.PriceData.Quota)
+// estimatedQuota 是应用原始 OtherRatios 后、预扣下限前的估算额度。
+// 先还原不含 OtherRatios 的基础额度，再应用上游返回的新倍率。
+func recalcQuotaFromRatios(info *relaycommon.RelayInfo, estimatedQuota int, ratios map[string]float64) int {
+	// estimatedQuota includes the ratios used for the original reservation.
+	// Remove those ratios before applying the upstream-adjusted values.
+	baseQuota := float64(estimatedQuota)
 	// 先除掉原有的 OtherRatios 恢复基础额度
 	for _, ra := range info.PriceData.OtherRatios {
 		if ra != 1.0 && ra > 0 {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -39,7 +40,134 @@ type BillingSession struct {
 	refunded                bool  // Refund 已调用
 	refundInFlight          bool
 	settleInFlight          bool
+	fundingOutcomeUnknown   bool
 	mu                      sync.Mutex
+}
+
+// ErrBillingFundingOutcomeUnknown means a non-durable funding mutation did
+// not return a fully confirmed result. Such a mutation must not be retried
+// blindly because the provider may already have committed it.
+var ErrBillingFundingOutcomeUnknown = errors.New("billing funding settlement outcome is unknown")
+
+// ErrBillingSettlementEffectNotDurable means no idempotent settlement record
+// can own the usage/log projection. The settlement remains failed; callers must
+// not mistake it for a durable pending effect or project successful usage.
+var ErrBillingSettlementEffectNotDurable = errors.New("billing settlement effect requires a durable funding source and request id")
+
+var errBillingSettlementEffectNotOwned = errors.New("billing settlement record does not own the requested effect")
+
+const billingSettlementBacklogNotificationInterval = 15 * time.Minute
+
+var billingSettlementBacklogAlertState struct {
+	sync.Mutex
+	active          bool
+	lastCount       int64
+	oldestCreatedAt int64
+	lastNotifiedAt  time.Time
+}
+
+var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
+var billingFundingOutcomeUnknownAlertNotificationSender = enqueueSmartOpsAlertNotification
+
+func init() {
+	model.SetBillingSettlementBacklogObserver(observeBillingSettlementBacklog)
+}
+
+func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, observedAt time.Time) {
+	if observedAt.IsZero() {
+		observedAt = time.Now()
+	}
+
+	billingSettlementBacklogAlertState.Lock()
+	wasActive := billingSettlementBacklogAlertState.active
+	previousCount := billingSettlementBacklogAlertState.lastCount
+	previousOldestCreatedAt := billingSettlementBacklogAlertState.oldestCreatedAt
+	if stats.Count <= 0 {
+		billingSettlementBacklogAlertState.active = false
+		billingSettlementBacklogAlertState.lastCount = 0
+		billingSettlementBacklogAlertState.oldestCreatedAt = 0
+		billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+		billingSettlementBacklogAlertState.Unlock()
+		if wasActive {
+			billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
+				Key:          "billing_settlement_backlog",
+				Status:       smartOpsAlertStatusResolved,
+				Severity:     smartOpsAlertSeverityWarning,
+				Component:    "billing",
+				Node:         smartOpsAlertNodeName(),
+				CurrentValue: 0,
+				Threshold:    0,
+				ObservedAt:   observedAt,
+				Message:      fmt.Sprintf("未完成的正向最终计费对账已清空，此前共 %d 条。", previousCount),
+			})
+		}
+		return
+	}
+
+	oldestAge := time.Duration(0)
+	if stats.OldestCreatedAt > 0 {
+		oldestAge = observedAt.Sub(time.Unix(stats.OldestCreatedAt, 0))
+		if oldestAge < 0 {
+			oldestAge = 0
+		}
+	}
+	shouldNotify := !wasActive ||
+		stats.Count != previousCount ||
+		stats.OldestCreatedAt != previousOldestCreatedAt ||
+		billingSettlementBacklogAlertState.lastNotifiedAt.IsZero() ||
+		observedAt.Sub(billingSettlementBacklogAlertState.lastNotifiedAt) >= billingSettlementBacklogNotificationInterval
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = stats.Count
+	billingSettlementBacklogAlertState.oldestCreatedAt = stats.OldestCreatedAt
+	if shouldNotify {
+		billingSettlementBacklogAlertState.lastNotifiedAt = observedAt
+	}
+	billingSettlementBacklogAlertState.Unlock()
+	if !shouldNotify {
+		return
+	}
+
+	billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
+		Key:          "billing_settlement_backlog",
+		Status:       smartOpsAlertStatusFiring,
+		Severity:     smartOpsAlertSeverityWarning,
+		Component:    "billing",
+		Node:         smartOpsAlertNodeName(),
+		CurrentValue: float64(stats.Count),
+		Threshold:    oldestAge.Seconds(),
+		ObservedAt:   observedAt,
+		Message: fmt.Sprintf(
+			"存在 %d 条未完成的正向最终计费对账，最早已等待 %s。相关用户的新付费请求会被阻止，请尽快处理 pending/manual 记录。",
+			stats.Count,
+			oldestAge.Round(time.Second),
+		),
+	})
+}
+
+func (s *BillingSession) notifyFundingOutcomeUnknown(requested, applied int64) {
+	userID := 0
+	tokenID := 0
+	if s.relayInfo != nil {
+		userID = s.relayInfo.UserId
+		tokenID = s.relayInfo.TokenId
+	}
+	billingFundingOutcomeUnknownAlertNotificationSender(SmartOpsAlert{
+		Key:          "billing_funding_outcome_unknown",
+		Status:       smartOpsAlertStatusFiring,
+		Severity:     smartOpsAlertSeverityWarning,
+		Component:    "billing",
+		Node:         smartOpsAlertNodeName(),
+		CurrentValue: float64(requested),
+		Threshold:    float64(applied),
+		ObservedAt:   time.Now(),
+		Message: fmt.Sprintf(
+			"计费资金变更结果不明确（userId=%d, tokenId=%d, requested=%d, applied=%d）。系统已停止自动重试，请立即人工核对。",
+			userID,
+			tokenID,
+			requested,
+			applied,
+		),
+	})
 }
 
 type SettlementPreparer interface {
@@ -56,6 +184,11 @@ var _ RefundSettlementPreparer = (*BillingSession)(nil)
 
 type billingSettleIntent struct {
 	input model.BillingSettlementInput
+}
+
+type fundingOutcomeUnknownNotification struct {
+	requested int64
+	applied   int64
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -78,6 +211,11 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 			return nil
 		} else {
 			lastErr = err
+			if errors.Is(err, ErrBillingFundingOutcomeUnknown) ||
+				errors.Is(err, ErrBillingSettlementEffectNotDurable) ||
+				errors.Is(err, errBillingSettlementEffectNotOwned) {
+				return err
+			}
 		}
 		if attempt < maxAttempts-1 {
 			time.Sleep(time.Duration(attempt+1) * 20 * time.Millisecond)
@@ -95,10 +233,19 @@ func (s *BillingSession) settleAttempt(actualQuota int, effect *model.BillingSet
 }
 
 func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.BillingSettlementEffect) (*billingSettleIntent, bool, error) {
+	var notification *fundingOutcomeUnknownNotification
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() {
+		s.mu.Unlock()
+		if notification != nil {
+			s.notifyFundingOutcomeUnknown(notification.requested, notification.applied)
+		}
+	}()
 	if s.settled || s.refunded {
 		return nil, false, nil
+	}
+	if s.fundingOutcomeUnknown {
+		return nil, false, ErrBillingFundingOutcomeUnknown
 	}
 	if s.refundInFlight {
 		return nil, false, errors.New("billing refund is already in progress")
@@ -107,18 +254,32 @@ func (s *BillingSession) beginSettleAttempt(actualQuota int, effect *model.Billi
 		return nil, false, errors.New("billing settlement is already in progress")
 	}
 	delta := actualQuota - s.preConsumedQuota
+	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
+		if delta == 0 && effect == nil {
+			// A persisted zero-delta record still owns settlement completion and
+			// must be confirmed; no record means there is nothing left to apply.
+			_, found, lookupErr := model.GetBillingSettlementStatus(input.OperationKey)
+			if lookupErr != nil {
+				return nil, false, lookupErr
+			}
+			if !found {
+				s.settled = true
+				return nil, false, nil
+			}
+		}
+		s.settleInFlight = true
+		return &billingSettleIntent{input: *input}, true, nil
+	}
 	if delta == 0 && effect == nil {
 		s.settled = true
 		return nil, false, nil
 	}
-	if input, ok := s.prepareDurableSettlementLocked(actualQuota, effect); ok {
-		s.settleInFlight = true
-		return &billingSettleIntent{input: *input}, true, nil
-	}
 	if effect != nil {
-		return nil, false, errors.New("billing settlement effects require a durable funding source and request id")
+		return nil, false, ErrBillingSettlementEffectNotDurable
 	}
-	return nil, false, s.settleNonDurableLocked(delta)
+	settleErr, outcomeNotification := s.settleNonDurableLocked(delta)
+	notification = outcomeNotification
+	return nil, false, settleErr
 }
 
 func (s *BillingSession) applyDurableSettleIntent(intent *billingSettleIntent) error {
@@ -130,7 +291,14 @@ func (s *BillingSession) applyDurableSettleIntent(intent *billingSettleIntent) e
 
 	var effectErr error
 	if intent.input.Effect != nil {
-		effectErr = model.ProcessBillingSettlementEffect(intent.input.OperationKey)
+		ownsEffect, ownershipErr := model.BillingSettlementOwnsEffect(intent.input.OperationKey)
+		if ownershipErr != nil {
+			effectErr = ownershipErr
+		} else if !ownsEffect {
+			effectErr = errBillingSettlementEffectNotOwned
+		} else {
+			effectErr = model.ProcessBillingSettlementEffect(intent.input.OperationKey)
+		}
 	}
 	s.finishDurableSettleIntent(true, applied)
 	return effectErr
@@ -151,12 +319,22 @@ func (s *BillingSession) finishDurableSettleIntent(applied bool, appliedDelta in
 	s.settled = true
 }
 
-func (s *BillingSession) settleNonDurableLocked(delta int) error {
+func (s *BillingSession) settleNonDurableLocked(delta int) (error, *fundingOutcomeUnknownNotification) {
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
 	if !s.fundingSettled {
 		applied, err := s.funding.Settle(delta)
-		if err != nil {
-			return err
+		if err != nil || applied != int64(delta) {
+			// FundingSource has no durable idempotency contract. Treat both an
+			// error and a short/over-applied result as outcome unknown: the
+			// mutation may have committed and must never be repeated blindly.
+			s.fundingSettled = true
+			s.appliedFundingDelta = applied
+			s.fundingOutcomeUnknown = true
+			notification := &fundingOutcomeUnknownNotification{requested: int64(delta), applied: applied}
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err), notification
+			}
+			return fmt.Errorf("%w: requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, delta, applied), notification
 		}
 		s.appliedFundingDelta = applied
 		s.fundingSettled = true
@@ -168,20 +346,22 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 		needed := int64(delta) - s.appliedFundingDelta
 		if needed != 0 {
 			applied, err := s.funding.Settle(int(needed))
-			if err != nil {
-				// The operation outcome is ambiguous. Do not issue another funding
-				// mutation automatically; later attempts may only retry the token.
-				s.compensationFailed = true
-				s.fundingReconcilePending = false
-				return err
-			}
 			s.appliedFundingDelta += applied
-			if applied != needed {
-				return fmt.Errorf("funding reconciliation incomplete: needed=%d applied=%d", needed, applied)
+			if err != nil || applied != needed {
+				// The funding source has no durable idempotency contract. A
+				// failed or partial reconciliation may already have committed;
+				// do not repeat it or proceed with the token leg.
+				s.fundingOutcomeUnknown = true
+				s.fundingReconcilePending = false
+				notification := &fundingOutcomeUnknownNotification{requested: needed, applied: applied}
+				if err != nil {
+					return fmt.Errorf("%w: %v", ErrBillingFundingOutcomeUnknown, err), notification
+				}
+				return fmt.Errorf("%w: reconciliation requested=%d applied=%d", ErrBillingFundingOutcomeUnknown, needed, applied), notification
 			}
 		}
 		if s.appliedFundingDelta != int64(delta) {
-			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta)
+			return fmt.Errorf("funding reconciliation incomplete: target=%d applied=%d", delta, s.appliedFundingDelta), nil
 		}
 		s.fundingReconcilePending = false
 	}
@@ -194,10 +374,11 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
 		}
 		if tokenErr != nil {
+			var notification *fundingOutcomeUnknownNotification
 			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
 				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
 			if s.compensationFailed {
-				return tokenErr
+				return tokenErr, nil
 			}
 			if s.appliedFundingDelta == 0 {
 				s.fundingSettled = false
@@ -206,15 +387,20 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 				compensated, compensationErr := s.funding.Settle(-int(committed))
 				if compensationErr != nil {
 					// A funding error may be an ambiguous commit. Retain the target
-					// delta and never repeat this non-idempotent compensation.
+					// delta and never repeat this non-idempotent compensation or
+					// continue with the token leg.
 					s.compensationFailed = true
+					s.fundingOutcomeUnknown = true
+					notification = &fundingOutcomeUnknownNotification{requested: -committed, applied: compensated}
 					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("error compensating funding after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d): %v",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated, compensationErr))
 				} else if compensated != -committed {
 					s.appliedFundingDelta = committed + compensated
 					s.compensationFailed = false
-					s.fundingReconcilePending = true
+					s.fundingOutcomeUnknown = true
+					notification = &fundingOutcomeUnknownNotification{requested: -committed, applied: compensated}
+					s.fundingReconcilePending = false
 					common.SysLog(fmt.Sprintf("incomplete funding compensation after token settlement failure (userId=%d, tokenId=%d, delta=%d, applied=%d, compensated=%d)",
 						s.relayInfo.UserId, s.relayInfo.TokenId, delta, committed, compensated))
 				} else {
@@ -224,7 +410,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 					s.fundingReconcilePending = false
 				}
 			}
-			return tokenErr
+			return tokenErr, notification
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
@@ -234,7 +420,7 @@ func (s *BillingSession) settleNonDurableLocked(delta int) error {
 	s.compensationFailed = false
 	s.fundingReconcilePending = false
 	s.settled = true
-	return nil
+	return nil, nil
 }
 
 // PrepareSettlement returns the exact durable request-finalize intent without
@@ -273,8 +459,8 @@ func (s *BillingSession) prepareDurableSettlementLocked(actualQuota int, effect 
 	if s.relayInfo.IsPlayground {
 		tokenDelta = 0
 	}
-	return &model.BillingSettlementInput{
-		OperationKey:                    "request:" + s.relayInfo.RequestId + ":finalize",
+	input := &model.BillingSettlementInput{
+		OperationKey:                    model.BillingRequestFinalizeOperationKey(s.relayInfo.RequestId),
 		Source:                          source,
 		UserID:                          userID,
 		SubscriptionID:                  subscriptionID,
@@ -284,7 +470,13 @@ func (s *BillingSession) prepareDurableSettlementLocked(actualQuota int, effect 
 		TokenDelta:                      tokenDelta,
 		SubscriptionPreConsumeRequestID: subscriptionPreConsumeRequestID(s.funding),
 		Effect:                          effect,
-	}, true
+	}
+	if s.relayInfo.TaskRelayInfo != nil && s.relayInfo.TaskRelayInfo.PersistedTaskID > 0 {
+		input.TaskID = s.relayInfo.TaskRelayInfo.PersistedTaskID
+		input.TaskQuota = int64(s.preConsumedQuota)
+		input.TaskQuotaTarget = int64(actualQuota)
+	}
+	return input, true
 }
 
 func durableFundingIdentity(funding FundingSource) (source string, userID int, subscriptionID int, ok bool) {
@@ -343,7 +535,7 @@ func (s *BillingSession) refundSettlementInputLocked() (*model.BillingSettlement
 		return nil, fmt.Errorf("billing refund skipped for non-durable funding source (userId=%d, requestId=%s)", s.relayInfo.UserId, requestID)
 	}
 	return &model.BillingSettlementInput{
-		OperationKey:                    "request:" + requestID + ":finalize",
+		OperationKey:                    model.BillingRequestFinalizeOperationKey(requestID),
 		Source:                          source,
 		UserID:                          userID,
 		SubscriptionID:                  subscriptionID,
@@ -453,6 +645,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.fundingOutcomeUnknown {
+		return ErrBillingFundingOutcomeUnknown
+	}
 	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
@@ -737,6 +932,17 @@ func (s *BillingSession) syncRelayInfo() {
 func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.MaxAPIError) {
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if blocked, err := model.HasUnresolvedPositiveFinalizeSettlement(relayInfo.UserId); err != nil {
+		return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	} else if blocked {
+		return nil, types.NewErrorWithStatusCode(
+			errors.New(i18n.Translate(relayInfo.UserSetting.Language, i18n.MsgBillingReconciliationPending)),
+			types.ErrorCodeBillingReconciliationPending,
+			http.StatusForbidden,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
