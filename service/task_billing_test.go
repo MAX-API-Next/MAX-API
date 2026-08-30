@@ -943,6 +943,91 @@ func TestMidjourneyTerminalCallbackWaitsForSubmissionSettlement(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusSuccess, reloadedBilling.Status)
 }
 
+func TestMidjourneyMergedFailureWaitsForSubmissionSettlement(t *testing.T) {
+	for index, settlementStatus := range []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+	} {
+		t.Run(settlementStatus, func(t *testing.T) {
+			truncate(t)
+			userID := 706 + index
+			channelID := 708 + index
+			now := time.Now().Unix()
+			seedUser(t, userID, 900)
+
+			legacy := &model.Midjourney{
+				UserId: userID, ChannelId: channelID,
+				MjId:   "provider-mj-merged-failure-" + settlementStatus,
+				Status: "IN_PROGRESS", Progress: "50%", FailReason: "stored provider failure",
+				Code: 1, Quota: 100,
+			}
+			require.NoError(t, model.DB.Create(legacy).Error)
+
+			billingTask := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+			billingTask.Platform = constant.TaskPlatformMidjourney
+			billingTask.Status = model.TaskStatusInProgress
+			billingTask.Progress = "50%"
+			billingTask.PrivateData.BillingRequestId = "mj-merged-failure-" + settlementStatus
+			persistTask(t, billingTask)
+			require.NoError(t, model.DB.Create(&model.MidjourneyBillingClaim{
+				ChannelID: channelID, MjID: legacy.MjId, UserID: userID,
+				BillingTaskID: billingTask.ID, BillingRequestID: billingTask.PrivateData.BillingRequestId,
+				CreatedAt: now,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.BillingSettlement{
+				OperationKey: model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId),
+				Source:       model.BillingSettlementSourceWallet, UserID: userID,
+				Status: settlementStatus, CreatedAt: now, UpdatedAt: now, Revision: 1,
+			}).Error)
+
+			response := dto.MidjourneyDto{
+				MjId: legacy.MjId, Status: "IN_PROGRESS", Progress: "50%",
+			}
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), legacy, response))
+
+			var blockedLegacy model.Midjourney
+			require.NoError(t, model.DB.First(&blockedLegacy, legacy.Id).Error)
+			assert.Equal(t, "IN_PROGRESS", blockedLegacy.Status)
+			assert.Equal(t, "50%", blockedLegacy.Progress)
+			assert.Equal(t, "stored provider failure", blockedLegacy.FailReason)
+			var blockedBilling model.Task
+			require.NoError(t, model.DB.First(&blockedBilling, billingTask.ID).Error)
+			assert.EqualValues(t, model.TaskStatusInProgress, blockedBilling.Status)
+			assert.Equal(t, 100, blockedBilling.Quota)
+			assert.EqualValues(t, 900, getUserQuota(t, userID))
+			var refundCount int64
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.Zero(t, refundCount)
+
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(billingTask.PrivateData.BillingRequestId)).
+				Update("status", model.BillingSettlementStatusApplied).Error)
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &blockedLegacy, response))
+
+			require.NoError(t, model.DB.First(&blockedLegacy, legacy.Id).Error)
+			assert.Equal(t, "FAILURE", blockedLegacy.Status)
+			assert.Equal(t, "100%", blockedLegacy.Progress)
+			require.NoError(t, model.DB.First(&blockedBilling, billingTask.ID).Error)
+			assert.EqualValues(t, model.TaskStatusFailure, blockedBilling.Status)
+			assert.Zero(t, blockedBilling.Quota)
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+
+			require.NoError(t, UpdateMidjourneyTaskFromResponse(context.Background(), &blockedLegacy, response))
+			assert.EqualValues(t, 1000, getUserQuota(t, userID))
+			require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+				Where("operation_key = ?", fmt.Sprintf("task:%d:refund", billingTask.ID)).
+				Count(&refundCount).Error)
+			assert.EqualValues(t, 1, refundCount)
+		})
+	}
+}
+
 // ===========================================================================
 // RecalculateTaskQuota tests
 // ===========================================================================

@@ -81,6 +81,20 @@ func TestReserveTaskQuotaPreservesPaidReservationUntilFreeRetrySettlement(t *tes
 	assert.Zero(t, info.Billing.GetPreConsumedQuota())
 }
 
+func TestReserveTaskQuotaReturnsZeroForUnreservedFreeTask(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		PriceData: types.PriceData{
+			FreeModel: true,
+		},
+	}
+
+	reserved, taskErr := reserveTaskQuota(nil, info, 250)
+
+	require.Nil(t, taskErr)
+	assert.Zero(t, reserved)
+	assert.Nil(t, info.Billing)
+}
+
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
 	t.Helper()
 	original := task_billing_setting.GetRateCardsCopy()

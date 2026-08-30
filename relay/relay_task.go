@@ -130,6 +130,12 @@ func reserveTaskQuota(c *gin.Context, info *relaycommon.RelayInfo, targetQuota i
 		// failed attempts may continue to another paid channel.
 		return info.Billing.GetPreConsumedQuota(), nil
 	}
+	if info.PriceData.FreeModel {
+		// No Billing session means this attempt did not reserve any quota. Keep
+		// the placeholder at zero even if a future estimator accidentally
+		// supplies a non-zero target for a free route.
+		return 0, nil
+	}
 	return targetQuota, nil
 }
 

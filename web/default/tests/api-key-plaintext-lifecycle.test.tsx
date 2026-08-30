@@ -202,7 +202,7 @@ function wrapper(props: ApiKeysProviderWrapperProps): ReactElement {
   return <ApiKeysProvider>{props.children}</ApiKeysProvider>
 }
 
-beforeAll(async () => {
+beforeAll(async (): Promise<void> => {
   await testEnv.setup()
   window.requestAnimationFrame = globalThis.requestAnimationFrame
   window.cancelAnimationFrame = globalThis.cancelAnimationFrame
@@ -213,7 +213,7 @@ beforeAll(async () => {
   })
 })
 
-beforeEach(() => {
+beforeEach((): void => {
   fetchTokenKey.mockClear()
   fetchTokenKeysBatch.mockClear()
   copyToClipboard.mockClear()
@@ -227,15 +227,15 @@ beforeEach(() => {
   rejectTokenKeysBatchRequest = undefined
 })
 
-afterEach(async () => {
+afterEach(async (): Promise<void> => {
   cleanup()
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
 
-afterAll(() => testEnv.teardown())
+afterAll((): void => testEnv.teardown())
 
 describe('API key plaintext lifecycle', () => {
-  test('treats declined batch verification as cancellation and clears loading state', async () => {
+  test('treats declined batch verification as cancellation and clears loading state', async (): Promise<void> => {
     verificationResult.declined = true
     const { result } = renderHook(() => useApiKeys(), { wrapper })
 
@@ -249,7 +249,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[208], undefined)
   })
 
-  test('treats declined single-key verification as cancellation without an error toast', async () => {
+  test('treats declined single-key verification as cancellation without an error toast', async (): Promise<void> => {
     verificationResult.declined = true
     const { result } = renderHook(() => useApiKeys(), { wrapper })
 
@@ -262,7 +262,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[209], undefined)
   })
 
-  test('stops copy cleanly when API key verification is declined', async () => {
+  test('stops copy cleanly when API key verification is declined', async (): Promise<void> => {
     verificationResult.declined = true
     const view = render(
       <ApiKeysProvider>
@@ -306,7 +306,7 @@ describe('API key plaintext lifecycle', () => {
     })
   })
 
-  test('reports batch reveal failures and clears every loading state', async () => {
+  test('reports batch reveal failures and clears every loading state', async (): Promise<void> => {
     fetchTokenKeysBatch.mockImplementationOnce(
       () =>
         new Promise((_, reject) => {
@@ -336,7 +336,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[202], undefined)
   })
 
-  test('reports single-key reveal failures with the generic fallback', async () => {
+  test('reports single-key reveal failures with the generic fallback', async (): Promise<void> => {
     fetchTokenKey.mockImplementationOnce(async () => {
       throw new Error('single key request failed')
     })
@@ -351,7 +351,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[203], undefined)
   })
 
-  test('does not duplicate batch errors already reported by verification', async () => {
+  test('does not duplicate batch errors already reported by verification', async (): Promise<void> => {
     const verificationError = new Error('batch verification failed')
     markSecureVerificationErrorReported(verificationError)
     fetchTokenKeysBatch.mockImplementationOnce(async () => {
@@ -368,7 +368,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[206], undefined)
   })
 
-  test('does not duplicate single-key errors already reported by verification', async () => {
+  test('does not duplicate single-key errors already reported by verification', async (): Promise<void> => {
     const verificationError = new Error('verification failed')
     markSecureVerificationErrorReported(verificationError)
     fetchTokenKey.mockImplementationOnce(async () => {
@@ -384,7 +384,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.loadingKeys[204], undefined)
   })
 
-  test('does not cache a key that resolves after its reveal popover closes', async () => {
+  test('does not cache a key that resolves after its reveal popover closes', async (): Promise<void> => {
     const { result } = renderHook(() => useApiKeys(), { wrapper })
 
     let request: Promise<string | null> | undefined
@@ -406,7 +406,7 @@ describe('API key plaintext lifecycle', () => {
     assert.equal(result.current.resolvedKeys[101], undefined)
   })
 
-  test('reports clipboard failures without marking the API key as copied', async () => {
+  test('reports clipboard failures without marking the API key as copied', async (): Promise<void> => {
     fetchTokenKey.mockImplementationOnce(async () => ({
       success: true,
       data: { key: 'plaintext-copy-key' },
@@ -448,7 +448,7 @@ describe('API key plaintext lifecycle', () => {
     })
   })
 
-  test('finalizes a partially successful batch when a later create throws', async () => {
+  test('finalizes a partially successful batch when a later create throws', async (): Promise<void> => {
     createApiKey
       .mockImplementationOnce(async () => ({ success: true }))
       .mockImplementationOnce(async () => {
