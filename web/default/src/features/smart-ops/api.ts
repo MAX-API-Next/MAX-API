@@ -20,8 +20,8 @@ import { api } from '@/lib/api'
 import { MAX_PERFORMANCE_LIMIT } from './lib/filters'
 import type {
   BillingSettlementReconciliationResponse,
-	BillingSettlementMutationResponse,
-	BillingSettlementReviewRequest,
+  BillingSettlementMutationResponse,
+  BillingSettlementReviewRequest,
   ChannelPerformanceData,
   ChannelPerformanceQuery,
   ChannelPerformanceResponse,

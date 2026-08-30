@@ -59,22 +59,23 @@ export type BillingSettlementReconciliationItem = {
   next_attempt: number
   created_at: number
   updated_at: number
-	reconciliation_reviewed_at: number
-	reconciliation_reviewed_by: number
-	reconciliation_review_note: string
-	user_blocking_override: boolean | null
-	blocks_user: boolean
+  reconciliation_reviewed_at: number
+  reconciliation_reviewed_by: number
+  reconciliation_review_note: string
+  user_blocking_override: boolean | null
+  record_blocks_user: boolean
+  blocks_user: boolean
 }
 
 export type BillingSettlementReconciliationData = {
   total_count: number
   pending_count: number
   manual_count: number
-	open_alert_count: number
-	reviewed_count: number
-	blocking_record_count: number
+  open_alert_count: number
+  reviewed_count: number
+  blocking_record_count: number
   blocked_user_count: number
-	block_user_by_default: boolean
+  block_user_by_default: boolean
   oldest_created_at: number
   truncated: boolean
   generated_at: number

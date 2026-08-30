@@ -18,11 +18,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
-import { fireEvent, waitFor, within } from '@testing-library/react'
+import { waitFor, within } from '@testing-library/react'
 import assert from 'node:assert/strict'
-import { after, before, describe, test } from 'node:test'
+import { after, describe, test } from 'node:test'
 import { api } from '@/lib/api'
-import { ActiveAlerts } from './alerts'
 
 const LOAD_ERROR_KEY = 'We could not load active alerts.'
 const testEnv = createReactTestEnvironment({
@@ -36,7 +35,8 @@ const testEnv = createReactTestEnvironment({
   },
 })
 
-before(() => testEnv.setup())
+await testEnv.setup()
+const { ActiveAlerts } = await import('./alerts')
 
 after(() => testEnv.teardown())
 
@@ -129,17 +129,17 @@ describe('SmartOps active alerts', () => {
           : {
               success: true,
               data: [
-          {
-            key: 'system_memory',
-            status: 'firing',
-            severity: 'warning',
-            component: 'system',
-            node: 'node-fr',
-            current_value: 95.25,
-            threshold: 90,
-            observed_at: '2026-08-22T08:00:00Z',
-            message: 'Memory usage exceeded the threshold',
-          },
+                {
+                  key: 'system_memory',
+                  status: 'firing',
+                  severity: 'warning',
+                  component: 'system',
+                  node: 'node-fr',
+                  current_value: 95.25,
+                  threshold: 90,
+                  observed_at: '2026-08-22T08:00:00Z',
+                  message: 'Memory usage exceeded the threshold',
+                },
               ],
             },
     })) as typeof api.get
@@ -206,7 +206,8 @@ describe('SmartOps active alerts', () => {
                   reconciliation_reviewed_at: 0,
                   reconciliation_reviewed_by: 0,
                   reconciliation_review_note: '',
-                  user_blocking_override: null,
+                  user_blocking_override: false,
+                  record_blocks_user: false,
                   blocks_user: true,
                 },
               ],
@@ -254,7 +255,27 @@ describe('SmartOps active alerts', () => {
         assert.ok(text.includes('Blocked users: 9'))
         assert.ok(text.includes('request:billing-request-71:finalize'))
         assert.ok(text.includes('user quota is not enough'))
+        assert.ok(text.includes('User blocked'))
+        assert.ok(text.includes('Record policy: allow'))
       })
+      const reviewButton = within(view.container).getByRole('button', {
+        name: 'Review and close',
+      })
+      await view.click(reviewButton)
+      let dialog: HTMLElement | undefined
+      await waitFor(() => {
+        dialog = within(document.body).getByRole('dialog', {
+          name: 'Review billing reconciliation',
+        })
+      })
+      assert.ok(dialog)
+      assert.equal(
+        within(dialog)
+          .getByRole('button', { name: 'Allow user to continue' })
+          .getAttribute('aria-pressed'),
+        'true'
+      )
+      await view.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     } finally {
       api.get = originalGet
       queryClient.clear()
@@ -312,12 +333,13 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('loads reconciliation without an active alert and submits administrator controls', async () => {
+  test('loads reviewed reconciliation without an active alert and submits administrator controls', async () => {
     const originalGet = api.get
     const originalPut = api.put
     const originalPost = api.post
     const writes: Array<{ method: string; url: string; data: unknown }> = []
     let reconciliationRequests = 0
+    let blockUserByDefault = true
     api.get = (async (url) => {
       if (url === '/api/smart-ops/billing-settlements') {
         reconciliationRequests += 1
@@ -328,9 +350,11 @@ describe('SmartOps active alerts', () => {
               ...emptyReconciliationData(),
               total_count: 1,
               pending_count: 1,
-              open_alert_count: 1,
-              blocking_record_count: 1,
-              blocked_user_count: 1,
+              open_alert_count: 0,
+              reviewed_count: 1,
+              blocking_record_count: 0,
+              blocked_user_count: 0,
+              block_user_by_default: blockUserByDefault,
               items: [
                 {
                   id: 91,
@@ -350,11 +374,12 @@ describe('SmartOps active alerts', () => {
                   next_attempt: 1788106500,
                   created_at: 1786032544,
                   updated_at: 1786032544,
-                  reconciliation_reviewed_at: 0,
-                  reconciliation_reviewed_by: 0,
-                  reconciliation_review_note: '',
-                  user_blocking_override: null,
-                  blocks_user: true,
+                  reconciliation_reviewed_at: 1788106400,
+                  reconciliation_reviewed_by: 7,
+                  reconciliation_review_note: '🙂🙂🙂',
+                  user_blocking_override: false,
+                  record_blocks_user: false,
+                  blocks_user: false,
                 },
               ],
             },
@@ -365,6 +390,8 @@ describe('SmartOps active alerts', () => {
     }) as typeof api.get
     api.put = (async (url, data) => {
       writes.push({ method: 'PUT', url: String(url), data })
+      blockUserByDefault = (data as { block_user_by_default: boolean })
+        .block_user_by_default
       return { data: { success: true } }
     }) as typeof api.put
     api.post = (async (url, data) => {
@@ -384,7 +411,9 @@ describe('SmartOps active alerts', () => {
       let reviewButton: HTMLElement | undefined
       await waitFor(() => {
         const screen = within(view.container)
-        assert.ok((view.container.textContent ?? '').includes('No active alerts.'))
+        assert.ok(
+          (view.container.textContent ?? '').includes('No active alerts.')
+        )
         assert.ok(
           (view.container.textContent ?? '').includes(
             'request:billing-request-91:finalize'
@@ -394,7 +423,7 @@ describe('SmartOps active alerts', () => {
           name: 'Block affected users by default',
         })
         reviewButton = screen.getByRole('button', {
-          name: 'Review and close',
+          name: 'Edit review',
         })
       })
 
@@ -410,21 +439,26 @@ describe('SmartOps active alerts', () => {
       })
 
       reviewButton = within(view.container).getByRole('button', {
-        name: 'Review and close',
+        name: 'Edit review',
       })
-      fireEvent.click(reviewButton)
-      const dialog = within(document.body).getByRole('dialog')
-      const allowButton = within(dialog).getByRole('button', {
-        name: 'Allow user to continue',
+      await view.click(reviewButton)
+      let dialog: HTMLElement | undefined
+      await waitFor(() => {
+        dialog = within(document.body).getByRole('dialog')
       })
-      await view.click(allowButton)
-      fireEvent.change(
-        within(dialog).getByRole('textbox', { name: 'Review note' }),
-        { target: { value: 'Matched provider invoice and usage logs' } }
+      assert.ok(dialog)
+      const noteInput = within(dialog).getByRole('textbox', {
+        name: 'Review note',
+      }) as HTMLTextAreaElement
+      assert.equal(noteInput.value, '🙂🙂🙂')
+      assert.ok((dialog.textContent ?? '').includes('3 / 1000 characters'))
+      const closeAlertButton = within(dialog).getByRole('button', {
+        name: 'Save review',
+      })
+      await waitFor(() =>
+        assert.equal(closeAlertButton.hasAttribute('disabled'), false)
       )
-      await view.click(
-        within(dialog).getByRole('button', { name: 'Close alert' })
-      )
+      await view.click(closeAlertButton)
 
       await waitFor(() => {
         assert.deepEqual(writes[1], {
@@ -432,7 +466,7 @@ describe('SmartOps active alerts', () => {
           url: '/api/smart-ops/billing-settlements/91/review',
           data: {
             block_user: false,
-            note: 'Matched provider invoice and usage logs',
+            note: '🙂🙂🙂',
           },
         })
         assert.ok(reconciliationRequests > 1)

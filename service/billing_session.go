@@ -74,6 +74,10 @@ func init() {
 }
 
 func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, observedAt time.Time) {
+	updateBillingSettlementBacklogAlert(stats, observedAt, true)
+}
+
+func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogStats, observedAt time.Time, notify bool) {
 	if observedAt.IsZero() {
 		observedAt = time.Now()
 	}
@@ -97,10 +101,13 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 			CurrentValue: 0,
 			Threshold:    0,
 			ObservedAt:   observedAt,
-			Message:      fmt.Sprintf("未完成的正向最终计费对账已清空，此前共 %d 条。", previousCount),
+			Message: fmt.Sprintf(
+				"尚未核对的正向最终计费告警已全部关闭，此前共 %d 条。财务结算记录仍可能保持 pending/manual，请继续在对账列表中处理。",
+				previousCount,
+			),
 		}
 		projectSmartOpsActiveAlert(resolvedAlert)
-		if wasActive {
+		if wasActive && notify {
 			billingSettlementBacklogAlertNotificationSender(resolvedAlert)
 		}
 		return
@@ -121,7 +128,7 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 	billingSettlementBacklogAlertState.active = true
 	billingSettlementBacklogAlertState.lastCount = stats.Count
 	billingSettlementBacklogAlertState.oldestCreatedAt = stats.OldestCreatedAt
-	if shouldNotify {
+	if shouldNotify && notify {
 		billingSettlementBacklogAlertState.lastNotifiedAt = observedAt
 	}
 	billingSettlementBacklogAlertState.Unlock()
@@ -141,9 +148,18 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 		),
 	}
 	projectSmartOpsActiveAlert(alert)
-	if shouldNotify {
+	if shouldNotify && notify {
 		billingSettlementBacklogAlertNotificationSender(alert)
 	}
+}
+
+func refreshBillingSettlementBacklogAfterReview() {
+	stats, err := model.GetUnresolvedPositiveFinalizeSettlementStats()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to refresh billing settlement backlog after administrator review: %s", err.Error()))
+		return
+	}
+	updateBillingSettlementBacklogAlert(stats, time.Now(), false)
 }
 
 func (s *BillingSession) notifyFundingOutcomeUnknown(requested, applied int64) {

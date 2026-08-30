@@ -205,6 +205,7 @@ type BillingSettlementReconciliationItem struct {
 	ReconciliationReviewedBy int    `json:"reconciliation_reviewed_by"`
 	ReconciliationReviewNote string `json:"reconciliation_review_note"`
 	UserBlockingOverride     *bool  `json:"user_blocking_override"`
+	RecordBlocksUser         bool   `json:"record_blocks_user"`
 	BlocksUser               bool   `json:"blocks_user"`
 }
 
@@ -335,13 +336,6 @@ func observeBillingSettlementBacklog(observedAt time.Time) {
 	}
 }
 
-// ObserveBillingSettlementBacklogNow refreshes the read-only operational
-// projection after an administrator review. It never retries or mutates a
-// settlement or any financial balance.
-func ObserveBillingSettlementBacklogNow() {
-	observeBillingSettlementBacklog(time.Now())
-}
-
 // GetUnresolvedPositiveFinalizeSettlementStats returns the count and oldest
 // creation time for open (not yet reviewed) positive request-finalize alerts.
 // Reviewed rows remain unresolved financial records and are still returned by
@@ -431,6 +425,7 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			data.Truncated = true
 			items = items[:limit]
 		}
+		displayedUserIDs := make([]int, 0, len(items))
 		for index := range items {
 			items[index].LastError = common.SanitizePersistedLogContent(
 				common.MaskSensitiveInfo(items[index].LastError),
@@ -438,10 +433,29 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			items[index].ReconciliationReviewNote = common.SanitizePersistedLogContent(
 				common.MaskSensitiveInfo(items[index].ReconciliationReviewNote),
 			)
-			items[index].BlocksUser = billingSettlementBlocksUser(
+			items[index].RecordBlocksUser = billingSettlementBlocksUser(
 				items[index].UserBlockingOverride,
 				data.BlockUserByDefault,
 			)
+			if items[index].UserID > 0 {
+				displayedUserIDs = append(displayedUserIDs, items[index].UserID)
+			}
+		}
+		blockedUsers := make(map[int]struct{})
+		if len(displayedUserIDs) > 0 {
+			blockedUserIDs := make([]int, 0, len(displayedUserIDs))
+			if err := blockingPositiveFinalizeSettlementScope(tx, data.BlockUserByDefault).
+				Where("user_id IN ?", displayedUserIDs).
+				Distinct("user_id").
+				Pluck("user_id", &blockedUserIDs).Error; err != nil {
+				return err
+			}
+			for _, userID := range blockedUserIDs {
+				blockedUsers[userID] = struct{}{}
+			}
+		}
+		for index := range items {
+			_, items[index].BlocksUser = blockedUsers[items[index].UserID]
 		}
 		data.Items = items
 		return nil
@@ -504,8 +518,6 @@ func billingSettlementReviewUpdates(reviewerID int, blockUser bool, note string,
 		"reconciliation_reviewed_by": reviewerID,
 		"reconciliation_review_note": note,
 		"user_blocking_override":     blockUser,
-		"updated_at":                 reviewedAt.Unix(),
-		"revision":                   gorm.Expr("revision + ?", 1),
 	}
 }
 
@@ -530,7 +542,7 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 	reviewedAt := time.Now()
 	result := unresolvedPositiveFinalizeSettlementScope(DB).
 		Where("id = ?", id).
-		Updates(billingSettlementReviewUpdates(reviewerID, blockUser, note, reviewedAt))
+		UpdateColumns(billingSettlementReviewUpdates(reviewerID, blockUser, note, reviewedAt))
 	if result.Error != nil {
 		return BillingSettlement{}, result.Error
 	}

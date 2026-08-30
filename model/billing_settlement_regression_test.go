@@ -183,6 +183,16 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 			UserID: 953, FundingDelta: 12, TokenDelta: 12, Status: BillingSettlementStatusPending,
 			UserBlockingOverride: &allow, CreatedAt: now - 10, UpdatedAt: now, Revision: 1,
 		},
+		{
+			OperationKey: "request:force-allow-shared-user:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 954, FundingDelta: 13, TokenDelta: 13, Status: BillingSettlementStatusPending,
+			UserBlockingOverride: &allow, CreatedAt: now - 5, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:force-block-shared-user:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 954, FundingDelta: 14, TokenDelta: 14, Status: BillingSettlementStatusManual,
+			UserBlockingOverride: &block, CreatedAt: now - 1, UpdatedAt: now, Revision: 1,
+		},
 	}
 	require.NoError(t, DB.Create(&records).Error)
 
@@ -195,6 +205,9 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 	blocked, err = HasUnresolvedPositiveFinalizeSettlement(953)
 	require.NoError(t, err)
 	assert.False(t, blocked, "an explicit per-record allow must remain non-blocking")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(954)
+	require.NoError(t, err)
+	assert.True(t, blocked, "any blocking record must keep the same user blocked")
 
 	reviewed, err := ReviewBillingSettlement(records[0].ID, 7001, false, "Verified provider usage against the invoice")
 	require.NoError(t, err)
@@ -210,32 +223,47 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 	assert.Equal(t, "Verified provider usage against the invoice", reviewed.ReconciliationReviewNote)
 	require.NotNil(t, reviewed.UserBlockingOverride)
 	assert.False(t, *reviewed.UserBlockingOverride, "explicit false must be durably persisted")
+	assert.Equal(t, records[0].UpdatedAt, reviewed.UpdatedAt, "review metadata must not replace the financial update timestamp")
+	assert.Equal(t, records[0].Revision, reviewed.Revision, "review metadata must not advance the financial settlement revision")
 
 	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, stats.Count, "reviewed records must leave the open-alert projection")
+	assert.EqualValues(t, 4, stats.Count, "reviewed records must leave the open-alert projection")
 
 	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, reconciliation.TotalCount, "review does not complete or delete a settlement")
-	assert.EqualValues(t, 2, reconciliation.OpenAlertCount)
+	assert.EqualValues(t, 5, reconciliation.TotalCount, "review does not complete or delete a settlement")
+	assert.EqualValues(t, 4, reconciliation.OpenAlertCount)
 	assert.EqualValues(t, 1, reconciliation.ReviewedCount)
-	assert.EqualValues(t, 1, reconciliation.BlockingRecordCount)
-	assert.EqualValues(t, 1, reconciliation.BlockedUserCount)
+	assert.EqualValues(t, 2, reconciliation.BlockingRecordCount)
+	assert.EqualValues(t, 2, reconciliation.BlockedUserCount)
 	assert.False(t, reconciliation.BlockUserByDefault)
-	require.Len(t, reconciliation.Items, 3)
+	require.Len(t, reconciliation.Items, 5)
 
 	var reviewedItem *BillingSettlementReconciliationItem
+	var sharedAllowItem *BillingSettlementReconciliationItem
+	var sharedBlockItem *BillingSettlementReconciliationItem
 	for index := range reconciliation.Items {
-		if reconciliation.Items[index].ID == records[0].ID {
+		switch reconciliation.Items[index].ID {
+		case records[0].ID:
 			reviewedItem = &reconciliation.Items[index]
-			break
+		case records[3].ID:
+			sharedAllowItem = &reconciliation.Items[index]
+		case records[4].ID:
+			sharedBlockItem = &reconciliation.Items[index]
 		}
 	}
 	require.NotNil(t, reviewedItem)
+	assert.False(t, reviewedItem.RecordBlocksUser)
 	assert.False(t, reviewedItem.BlocksUser)
 	assert.Equal(t, 7001, reviewedItem.ReconciliationReviewedBy)
 	assert.Equal(t, "Verified provider usage against the invoice", reviewedItem.ReconciliationReviewNote)
+	require.NotNil(t, sharedAllowItem)
+	assert.False(t, sharedAllowItem.RecordBlocksUser, "the row-level decision must remain allow")
+	assert.True(t, sharedAllowItem.BlocksUser, "the user remains blocked by another unresolved record")
+	require.NotNil(t, sharedBlockItem)
+	assert.True(t, sharedBlockItem.RecordBlocksUser)
+	assert.True(t, sharedBlockItem.BlocksUser)
 }
 
 func TestReviewBillingSettlementRejectsAlreadyAppliedRecord(t *testing.T) {

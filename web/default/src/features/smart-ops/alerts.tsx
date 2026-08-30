@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState, type ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import {
@@ -75,10 +75,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from '@/components/ui/toggle-group'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import {
@@ -283,7 +280,7 @@ interface BillingSettlementEvidenceProps {
 }
 
 interface SettlementReviewDialogProps {
-  item: BillingSettlementReconciliationItem | null
+  item: BillingSettlementReconciliationItem
   open: boolean
   onOpenChange: (open: boolean) => void
   onReviewed: () => Promise<void>
@@ -311,26 +308,23 @@ function SettlementReviewDialog(
   props: SettlementReviewDialogProps
 ): ReactElement {
   const { t } = useTranslation()
-  const [decision, setDecision] = useState<'block' | 'allow'>('block')
-  const [note, setNote] = useState('')
+  const [decision, setDecision] = useState<'block' | 'allow'>(
+    props.item.record_blocks_user ? 'block' : 'allow'
+  )
+  const [note, setNote] = useState(props.item.reconciliation_review_note || '')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!props.open || !props.item) return
-    setDecision(props.item.blocks_user ? 'block' : 'allow')
-    setNote(props.item.reconciliation_review_note || '')
-  }, [props.item, props.open])
-
-  const noteLength = note.trim().length
+  const trimmedNote = note.trim()
+  const noteLength = Array.from(trimmedNote).length
   const noteInvalid = noteLength > 0 && (noteLength < 3 || noteLength > 1000)
 
   const handleSubmit = async () => {
-    if (!props.item || noteLength < 3 || noteLength > 1000) return
+    if (noteLength < 3 || noteLength > 1000) return
     setSaving(true)
     try {
       const response = await reviewBillingSettlement(props.item.id, {
         block_user: decision === 'block',
-        note: note.trim(),
+        note: trimmedNote,
       })
       if (!response.success) {
         throw new Error(response.message || t('Failed to save review.'))
@@ -346,11 +340,16 @@ function SettlementReviewDialog(
   }
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!saving) props.onOpenChange(open)
+      }}
+    >
       <DialogContent className='sm:max-w-lg'>
         <DialogHeader>
           <DialogTitle>
-            {props.item?.reconciliation_reviewed_at
+            {props.item.reconciliation_reviewed_at
               ? t('Edit reconciliation review')
               : t('Review billing reconciliation')}
           </DialogTitle>
@@ -409,7 +408,6 @@ function SettlementReviewDialog(
               value={note}
               onChange={(event) => setNote(event.target.value)}
               rows={5}
-              maxLength={1000}
               aria-invalid={noteInvalid || undefined}
               placeholder={t(
                 'Record the evidence checked, the conclusion, and any follow-up action.'
@@ -447,7 +445,7 @@ function SettlementReviewDialog(
                 aria-hidden='true'
               />
             )}
-            {props.item?.reconciliation_reviewed_at
+            {props.item.reconciliation_reviewed_at
               ? t('Save review')
               : t('Close alert')}
           </Button>
@@ -463,32 +461,29 @@ function BillingSettlementEvidence(
   const { t, i18n } = useTranslation()
   const [selectedItem, setSelectedItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
-  const [policyValue, setPolicyValue] = useState(
-    props.data?.block_user_by_default ?? true
-  )
+  const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const [policySaving, setPolicySaving] = useState(false)
-
-  useEffect(() => {
-    if (props.data) setPolicyValue(props.data.block_user_by_default)
-  }, [props.data])
+  const policyValue =
+    policyOverride ?? props.data?.block_user_by_default ?? true
 
   const handlePolicyChange = async (checked: boolean) => {
-    const previous = policyValue
-    setPolicyValue(checked)
+    setPolicyOverride(checked)
     setPolicySaving(true)
     try {
       const response = await updateBillingSettlementBlockingPolicy(checked)
       if (!response.success) {
-        throw new Error(response.message || t('Failed to update blocking policy.'))
+        throw new Error(
+          response.message || t('Failed to update blocking policy.')
+        )
       }
       toast.success(t('Default user-blocking policy updated.'))
       await props.onChanged()
     } catch (error) {
-      setPolicyValue(previous)
       toast.error(
         mutationErrorMessage(error, t('Failed to update blocking policy.'))
       )
     } finally {
+      setPolicyOverride(null)
       setPolicySaving(false)
     }
   }
@@ -641,9 +636,7 @@ function BillingSettlementEvidence(
                       <div className='flex flex-col items-start gap-1'>
                         <Badge
                           variant={
-                            item.status === 'manual'
-                              ? 'destructive'
-                              : 'outline'
+                            item.status === 'manual' ? 'destructive' : 'outline'
                           }
                         >
                           {item.status === 'manual'
@@ -664,13 +657,22 @@ function BillingSettlementEvidence(
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant={item.blocks_user ? 'destructive' : 'secondary'}
-                      >
-                        {item.blocks_user
-                          ? t('User blocked')
-                          : t('User allowed')}
-                      </Badge>
+                      <div className='flex flex-col items-start gap-1'>
+                        <Badge
+                          variant={
+                            item.blocks_user ? 'destructive' : 'secondary'
+                          }
+                        >
+                          {item.blocks_user
+                            ? t('User blocked')
+                            : t('User allowed')}
+                        </Badge>
+                        <span className='text-muted-foreground text-xs'>
+                          {item.record_blocks_user
+                            ? t('Record policy: block')
+                            : t('Record policy: allow')}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className='whitespace-normal'>
                       <div className='flex max-w-48 flex-col gap-0.5 font-mono text-xs'>
@@ -796,14 +798,17 @@ function BillingSettlementEvidence(
           time: formatTimestampToDate(props.data.generated_at),
         })}
       </p>
-      <SettlementReviewDialog
-        item={selectedItem}
-        open={selectedItem !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedItem(null)
-        }}
-        onReviewed={props.onChanged}
-      />
+      {selectedItem && (
+        <SettlementReviewDialog
+          key={`${selectedItem.id}:${selectedItem.reconciliation_reviewed_at}`}
+          item={selectedItem}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSelectedItem(null)
+          }}
+          onReviewed={props.onChanged}
+        />
+      )}
     </section>
   )
 }
@@ -908,9 +913,9 @@ export function ActiveAlerts(): ReactElement {
           <div className='flex flex-col gap-4 p-4 sm:p-5'>
             {loading ? (
               <div className='flex flex-col gap-2'>
-              {Array.from({ length: 3 }).map((_, index) => (
-                <Skeleton key={index} className='h-10 w-full rounded-md' />
-              ))}
+                {Array.from({ length: 3 }).map((_, index) => (
+                  <Skeleton key={index} className='h-10 w-full rounded-md' />
+                ))}
               </div>
             ) : alertsQuery.isError ? (
               <ErrorState

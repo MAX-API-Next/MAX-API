@@ -379,7 +379,7 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser *bool, note str
 	if err != nil {
 		return model.BillingSettlement{}, err
 	}
-	model.ObserveBillingSettlementBacklogNow()
+	refreshBillingSettlementBacklogAfterReview()
 	return record, nil
 }
 

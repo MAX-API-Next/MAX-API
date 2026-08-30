@@ -113,7 +113,64 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	require.Len(t, alerts, 4)
 	assert.Equal(t, smartOpsAlertStatusResolved, alerts[3].Status)
 	assert.Contains(t, alerts[3].Message, "此前共 3 条")
+	assert.Contains(t, alerts[3].Message, "尚未核对")
+	assert.Contains(t, alerts[3].Message, "pending/manual")
+	assert.NotContains(t, alerts[3].Message, "未完成的正向最终计费对账已清空")
 	assert.Empty(t, GetSmartOpsAlerts())
+}
+
+func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	smartOpsAlertMonitor.Lock()
+	originalActiveAlerts := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
+	billingSettlementBacklogAlertState.Lock()
+	originalState := struct {
+		active          bool
+		lastCount       int64
+		oldestCreatedAt int64
+		lastNotifiedAt  time.Time
+	}{
+		active:          billingSettlementBacklogAlertState.active,
+		lastCount:       billingSettlementBacklogAlertState.lastCount,
+		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
+		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+	}
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = 48
+	billingSettlementBacklogAlertState.oldestCreatedAt = time.Now().Add(-time.Hour).Unix()
+	billingSettlementBacklogAlertState.lastNotifiedAt = time.Now()
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActiveAlerts
+		smartOpsAlertMonitor.Unlock()
+		billingSettlementBacklogAlertState.Lock()
+		billingSettlementBacklogAlertState.active = originalState.active
+		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
+		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
+		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.Unlock()
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+	now := time.Now()
+	stats := model.BillingSettlementBacklogStats{
+		Count:           47,
+		OldestCreatedAt: now.Add(-time.Hour).Unix(),
+	}
+
+	updateBillingSettlementBacklogAlert(stats, now, false)
+
+	assert.Empty(t, alerts, "administrator review must not broadcast a new firing notification")
+	activeAlerts := GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, float64(47), activeAlerts[0].CurrentValue)
 }
 
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }
