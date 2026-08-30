@@ -108,6 +108,7 @@ func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T)
 
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
 	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
 	constant.TaskTimeoutMinutes = 1
 	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
@@ -139,6 +140,7 @@ func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T)
 
 func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
 	const userID = 711
 	seedUser(t, userID, 80)
 	originalTimeout := constant.TaskTimeoutMinutes
@@ -204,6 +206,7 @@ func TestSweepTimedOutTaskWaitsForSubmissionSettlement(t *testing.T) {
 
 func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
 	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
 	constant.TaskTimeoutMinutes = 1
 	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
@@ -253,21 +256,14 @@ func TestSweepTimedOutTasksScansPastPendingSettlementPage(t *testing.T) {
 
 func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
 	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
 	originalTimeout := constant.TaskTimeoutMinutes
 	originalScanBudget := timedOutTaskScanBudget
 	constant.TaskTimeoutMinutes = 1
 	timedOutTaskScanBudget = 2
-	timedOutTaskSweepCursor.Lock()
-	timedOutTaskSweepCursor.afterSubmitTime = 0
-	timedOutTaskSweepCursor.afterID = 0
-	timedOutTaskSweepCursor.Unlock()
 	t.Cleanup(func() {
 		constant.TaskTimeoutMinutes = originalTimeout
 		timedOutTaskScanBudget = originalScanBudget
-		timedOutTaskSweepCursor.Lock()
-		timedOutTaskSweepCursor.afterSubmitTime = 0
-		timedOutTaskSweepCursor.afterID = 0
-		timedOutTaskSweepCursor.Unlock()
 	})
 
 	now := time.Now().Unix()
@@ -307,6 +303,18 @@ func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
 	sweepTimedOutTasks(context.Background())
 	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+}
+
+func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		timedOutTaskSweepCursor.Lock()
+		timedOutTaskSweepCursor.afterSubmitTime = 0
+		timedOutTaskSweepCursor.afterID = 0
+		timedOutTaskSweepCursor.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
 }
 
 // ---------------------------------------------------------------------------

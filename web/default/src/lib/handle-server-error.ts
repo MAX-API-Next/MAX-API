@@ -51,11 +51,15 @@ export function resolveServerErrorMessage(
   fallback: string,
   contentNotFound: string
 ): string {
-  const isContentNotFound =
-    error !== null &&
-    typeof error === 'object' &&
-    'status' in error &&
-    Number(error.status) === 204
+  const status =
+    error instanceof AxiosError
+      ? (error.response?.status ?? error.status)
+      : error !== null && typeof error === 'object' && 'status' in error
+        ? error.status
+        : undefined
+  const isContentNotFound = Number(status) === 204
+
+  if (isContentNotFound) return contentNotFound
 
   if (error instanceof AxiosError) {
     const responseTitle = getAxiosResponseText(error, 'title')
@@ -64,10 +68,10 @@ export function resolveServerErrorMessage(
     const responseMessage = getAxiosResponseText(error, 'message')
     if (responseMessage) return responseMessage
 
-    return isContentNotFound ? contentNotFound : fallback
+    return fallback
   }
 
-  return isContentNotFound ? contentNotFound : fallback
+  return fallback
 }
 
 export function getSafeErrorDebugInfo(error: unknown): SafeErrorDebugInfo {

@@ -409,6 +409,22 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 				resolvedTokenKey = token.Key
 			}
 		}
+		if input.TaskID > 0 {
+			var task Task
+			taskErr := withRowLock(tx).
+				Select("quota").
+				Where("id = ?", input.TaskID).
+				First(&task).Error
+			if taskErr != nil {
+				if errors.Is(taskErr, gorm.ErrRecordNotFound) {
+					return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+				}
+				return taskErr
+			}
+			if int64(task.Quota) != input.TaskQuota {
+				return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+			}
+		}
 
 		var applyErr error
 		appliedFundingDelta, applyErr = applyFundingDeltaTx(tx, input)
@@ -425,16 +441,18 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 			appliedTokenDelta = effectiveTokenDelta
 		}
 
-		if input.TaskID > 0 && input.TaskQuotaTarget != input.TaskQuota {
+		if input.TaskID > 0 {
 			appliedTaskQuotaTarget := input.TaskQuota + appliedFundingDelta
-			result := tx.Model(&Task{}).
-				Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
-				Update("quota", appliedTaskQuotaTarget)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+			if appliedTaskQuotaTarget != input.TaskQuota {
+				result := tx.Model(&Task{}).
+					Where("id = ? AND quota = ?", input.TaskID, input.TaskQuota).
+					Update("quota", appliedTaskQuotaTarget)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return permanentBillingSettlement(fmt.Errorf("%w: task_id=%d expected_quota=%d", ErrBillingSettlementTaskConflict, input.TaskID, input.TaskQuota))
+				}
 			}
 		}
 

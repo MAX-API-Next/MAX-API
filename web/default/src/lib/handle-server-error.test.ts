@@ -131,4 +131,24 @@ describe('resolveServerErrorMessage', (): void => {
       'Content not found.'
     )
   })
+
+  test('preserves the content-not-found message for an Axios 204 response', (): void => {
+    const error = new AxiosError('no content', 'ERR_BAD_REQUEST')
+    error.response = {
+      status: 204,
+      statusText: 'No Content',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: { message: 'unexpected response message' },
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Content not found.'
+    )
+  })
 })

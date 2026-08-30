@@ -147,6 +147,54 @@ func TestNonPasswordVerificationIsRestrictedToMatchingScope(t *testing.T) {
 	require.Contains(t, deleteRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }
 
+func TestSecureVerificationIgnoresEmptyScopeEntries(t *testing.T) {
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-empty-scope-test"))))
+	router.GET("/seed", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set(SecureVerificationSessionKey, time.Now().Unix())
+		session.Set(secureVerificationUserSessionKey, 1001)
+		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodPasskey)
+		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeAccessToken)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	setUser := func(c *gin.Context) {
+		c.Set("id", 1001)
+		c.Next()
+	}
+	router.GET(
+		"/access-token",
+		setUser,
+		SecureVerificationRequired("", model.SecureVerificationScopeAccessToken),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+	router.GET(
+		"/credentials",
+		setUser,
+		SecureVerificationRequired("", model.SecureVerificationScopeCredentials),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+
+	seedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(seedRecorder, httptest.NewRequest(http.MethodGet, "/seed", nil))
+	require.Equal(t, http.StatusNoContent, seedRecorder.Code)
+	perform := func(path string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		for _, sessionCookie := range seedRecorder.Result().Cookies() {
+			request.AddCookie(sessionCookie)
+		}
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	require.Equal(t, http.StatusNoContent, perform("/access-token").Code)
+	credentialsRecorder := perform("/credentials")
+	require.Equal(t, http.StatusForbidden, credentialsRecorder.Code)
+	require.Contains(t, credentialsRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+}
+
 func TestPasskeyDeletionRequiresCredentialVerificationScope(t *testing.T) {
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-passkey-delete-scope-test"))))

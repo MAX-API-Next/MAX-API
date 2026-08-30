@@ -468,6 +468,31 @@ func TestBillingSettlementTaskConflictRollsBackAllLedgerLegs(t *testing.T) {
 	assert.Equal(t, BillingSettlementStatusManual, settlement.Status)
 }
 
+func TestBillingSettlementZeroDeltaTaskConflictIsRejected(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 912, Username: "zero-delta-task-conflict-user", Quota: 100, Status: common.UserStatusEnabled}
+	task := Task{ID: 913, TaskID: "zero-delta-task-conflict", UserId: user.Id, Quota: 20, Status: TaskStatusSubmitted}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&task).Error)
+
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey:    "regression:zero-delta-task-conflict",
+		Source:          BillingSettlementSourceWallet,
+		UserID:          user.Id,
+		TaskID:          task.ID,
+		TaskQuota:       10,
+		TaskQuotaTarget: 10,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrBillingSettlementTaskConflict)
+	assert.EqualValues(t, 20, getRegressionTaskQuota(t, task.ID))
+	assert.EqualValues(t, 100, getRegressionUserQuota(t, user.Id))
+
+	var settlement BillingSettlement
+	require.NoError(t, DB.Where("operation_key = ?", "regression:zero-delta-task-conflict").First(&settlement).Error)
+	assert.Equal(t, BillingSettlementStatusManual, settlement.Status)
+}
+
 func TestSubscriptionSettlementRefusesCrossResetPeriodReplay(t *testing.T) {
 	setupUserUpdateTestState(t)
 	user := User{Id: 912, Username: "subscription-period-user", Quota: 0, Status: common.UserStatusEnabled}
@@ -962,6 +987,7 @@ func TestPasskeyAuthenticationUpdateKeysMatchSchema(t *testing.T) {
 
 func TestTimedOutTaskCursorRemainsGroupedWithStatusPredicate(t *testing.T) {
 	truncateTables(t)
+	require.True(t, DB.Migrator().HasIndex(&Task{}, "idx_task_timeout_cursor"))
 	const submitTime = int64(100)
 	tasks := []Task{
 		{ID: 401, TaskID: "cursor-unfinished", Status: TaskStatusInProgress, SubmitTime: submitTime},
