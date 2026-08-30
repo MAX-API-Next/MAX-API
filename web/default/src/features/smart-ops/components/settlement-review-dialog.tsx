@@ -67,7 +67,7 @@ export function SettlementReviewDialog(
 
   const trimmedNote = note.trim()
   const noteLength = Array.from(trimmedNote).length
-  const noteInvalid = noteLength > 0 && (noteLength < 3 || noteLength > 1000)
+  const noteInvalid = noteLength < 3 || noteLength > 1000
 
   const reviewMutation = useMutation({
     mutationKey: ['smart-ops', 'billing-settlement-review', props.item.id],

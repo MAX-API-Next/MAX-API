@@ -55,6 +55,7 @@ import {
   SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
   SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
 } from './lib/query-keys'
+import { isBillingSettlementReconciliationData } from './lib/reconciliation-validation'
 import type {
   BillingSettlementReconciliationData,
   SmartOpsAlert,
@@ -228,8 +229,7 @@ export function ActiveAlerts(): ReactElement {
       const response = await getBillingSettlementReconciliation()
       if (
         !response.success ||
-        !response.data ||
-        !Array.isArray(response.data.items)
+        !isBillingSettlementReconciliationData(response.data)
       ) {
         throw new Error(response.message || reconciliationErrorMessage)
       }

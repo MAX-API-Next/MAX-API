@@ -362,19 +362,29 @@ func UpdateBillingSettlementBlockingPolicy(blockUserByDefault bool) error {
 	)
 }
 
+func validateBillingSettlementReviewNote(note string) error {
+	noteLength := len([]rune(note))
+	if noteLength < 3 || noteLength > 1000 {
+		return fmt.Errorf(
+			"%w: note must contain between 3 and 1000 characters",
+			ErrInvalidBillingSettlementReconciliationReview,
+		)
+	}
+	return nil
+}
+
 func ReviewBillingSettlement(id int64, reviewerID int, blockUser *bool, note string) (model.BillingSettlement, error) {
 	if id <= 0 || reviewerID <= 0 || blockUser == nil {
 		return model.BillingSettlement{}, ErrInvalidBillingSettlementReconciliationReview
 	}
 	note = strings.TrimSpace(note)
-	noteLength := len([]rune(note))
-	if noteLength < 3 || noteLength > 1000 {
-		return model.BillingSettlement{}, fmt.Errorf(
-			"%w: note must contain between 3 and 1000 characters",
-			ErrInvalidBillingSettlementReconciliationReview,
-		)
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return model.BillingSettlement{}, err
 	}
-	note = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(note))
+	note = strings.TrimSpace(common.SanitizePersistedLogContent(common.MaskSensitiveInfo(note)))
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return model.BillingSettlement{}, err
+	}
 	record, err := model.ReviewBillingSettlement(id, reviewerID, *blockUser, note)
 	if err != nil {
 		return model.BillingSettlement{}, err

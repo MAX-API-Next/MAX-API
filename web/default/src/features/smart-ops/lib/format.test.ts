@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import fr from '@/i18n/locales/fr.json'
+import ja from '@/i18n/locales/ja.json'
 import ru from '@/i18n/locales/ru.json'
+import vi from '@/i18n/locales/vi.json'
+import zh from '@/i18n/locales/zh.json'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
@@ -98,5 +101,35 @@ describe('formatLocalizedCount', () => {
       ),
       'Проверено записей: 5'
     )
+  })
+
+  test('keeps reconciliation terminology localized and consistent', (): void => {
+    const reviewSummaryKey =
+      'Review and close operational alerts without changing the underlying pending or manual financial settlement.'
+    const emptyStateKey = 'No unresolved reconciliation records.'
+    const blockingPolicyKey = 'Block affected users by default'
+    const userAccessKey = 'User access while unresolved'
+    const closeAlertKey =
+      'Closing this alert records an administrator review only. It does not mark the settlement as applied or change any balance.'
+    const positiveSettlementKey =
+      'When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.'
+
+    assert.doesNotMatch(ru.translation[reviewSummaryKey], /pending|manual/i)
+    assert.doesNotMatch(
+      ja.translation[reviewSummaryKey],
+      /決済|pending|manual/i
+    )
+    assert.equal(fr.translation['Token #{{id}}'], 'Jeton n° {{id}}')
+    assert.equal(
+      fr.translation['Administrator review'],
+      'Examen par l’administrateur'
+    )
+    assert.doesNotMatch(fr.translation['Administrator review'], /vérification/i)
+    assert.equal(fr.translation.Reviewed, 'Examiné')
+    assert.doesNotMatch(ru.translation[closeAlertKey], /\bapplied\b/i)
+    assert.match(vi.translation[positiveSettlementKey], /có số tiền dương/)
+    assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
+    assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')
+    assert.equal(zh.translation[userAccessKey], '未解决期间的用户访问权限')
   })
 })

@@ -5557,14 +5557,14 @@
     "Reviewed record: {{count}}": "Đã kiểm tra bản ghi: {{count}}",
     "Reviewed records: {{count}}": "Đã kiểm tra bản ghi: {{count}}",
     "Save review": "Lưu kết quả kiểm tra",
-    "There are no pending or manual positive final settlements requiring operator review.": "Không có quyết toán cuối dương đang chờ hoặc xử lý thủ công nào cần quản trị viên kiểm tra.",
+    "There are no pending or manual positive final settlements requiring operator review.": "Không có quyết toán cuối có số tiền dương nào đang chờ hoặc xử lý thủ công cần quản trị viên kiểm tra.",
     "This choice affects only new paid-request admission while the financial settlement remains pending or manual.": "Lựa chọn này chỉ ảnh hưởng đến việc tiếp nhận yêu cầu trả phí mới trong khi quyết toán tài chính vẫn ở trạng thái đang chờ hoặc xử lý thủ công.",
     "This process is not currently reporting sustained host pressure or an open billing reconciliation alert.": "Tiến trình này hiện không báo cáo áp lực máy chủ kéo dài hoặc cảnh báo đối soát tính phí đang mở.",
     "User access": "Quyền truy cập của người dùng",
     "User access while unresolved": "Quyền truy cập khi chưa xử lý xong",
     "User allowed": "Người dùng được phép tiếp tục",
     "User blocked": "Người dùng bị chặn",
-    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "Khi bật, các quyết toán cuối dương chưa xử lý sẽ chặn yêu cầu trả phí mới trừ khi bản ghi đã kiểm tra cho phép rõ ràng người dùng tiếp tục.",
+    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "Khi bật, các quyết toán cuối có số tiền dương chưa xử lý sẽ chặn yêu cầu trả phí mới trừ khi bản ghi đã kiểm tra cho phép rõ ràng người dùng tiếp tục.",
     "{{count}} / 1000 character": "{{count}} / 1000 ký tự",
     "{{count}} / 1000 characters": "{{count}} / 1000 ký tự"
   }

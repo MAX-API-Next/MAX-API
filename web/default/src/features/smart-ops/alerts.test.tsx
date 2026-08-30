@@ -271,6 +271,21 @@ describe('SmartOps active alerts', () => {
         })
       })
       assert.ok(dialog)
+      const noteInput = within(dialog).getByRole('textbox', {
+        name: 'Review note',
+      })
+      assert.equal(noteInput.getAttribute('aria-invalid'), 'true')
+      assert.ok(
+        (dialog.textContent ?? '').includes(
+          'Review note must contain between 3 and 1000 characters.'
+        )
+      )
+      assert.equal(
+        within(dialog)
+          .getByRole('button', { name: 'Close alert' })
+          .hasAttribute('disabled'),
+        true
+      )
       assert.equal(
         within(dialog)
           .getByRole('button', { name: 'Allow user to continue' })
@@ -335,12 +350,15 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('routes malformed reconciliation payloads to the existing error state', async () => {
+  test('routes malformed reconciliation payloads to the existing error state', async (): Promise<void> => {
     const originalGet = api.get
-    api.get = (async (url) => ({
+    api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
-          ? { success: true, data: { total_count: 0 } }
+          ? {
+              success: true,
+              data: { ...emptyReconciliationData(), items: [null] },
+            }
           : { success: true, data: [] },
     })) as typeof api.get
 

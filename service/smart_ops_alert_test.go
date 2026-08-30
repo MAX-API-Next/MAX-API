@@ -162,6 +162,9 @@ func TestBillingSettlementReviewRequiresExplicitPolicyAndReason(t *testing.T) {
 	block := false
 	_, err = ReviewBillingSettlement(1, 2, &block, "x")
 	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+
+	_, err = ReviewBillingSettlement(1, 2, &block, "\x01\x02\x03")
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
 }
 
 func TestSmartOpsAlertNotifyTypeSeparatesNodes(t *testing.T) {
