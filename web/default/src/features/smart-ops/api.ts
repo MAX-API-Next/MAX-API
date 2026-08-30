@@ -19,6 +19,9 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { api } from '@/lib/api'
 import { MAX_PERFORMANCE_LIMIT } from './lib/filters'
 import type {
+  BillingSettlementReconciliationResponse,
+	BillingSettlementMutationResponse,
+	BillingSettlementReviewRequest,
   ChannelPerformanceData,
   ChannelPerformanceQuery,
   ChannelPerformanceResponse,
@@ -33,6 +36,36 @@ import type {
 export async function getSmartOpsAlerts(): Promise<SmartOpsAlertsResponse> {
   const response = await api.get<SmartOpsAlertsResponse>(
     '/api/smart-ops/alerts'
+  )
+  return response.data
+}
+
+export async function getBillingSettlementReconciliation(): Promise<BillingSettlementReconciliationResponse> {
+  const response = await api.get<BillingSettlementReconciliationResponse>(
+    '/api/smart-ops/billing-settlements'
+  )
+  return response.data
+}
+
+export async function updateBillingSettlementBlockingPolicy(
+  blockUserByDefault: boolean
+): Promise<BillingSettlementMutationResponse> {
+  const response = await api.put<BillingSettlementMutationResponse>(
+    '/api/smart-ops/billing-settlements/blocking-policy',
+    { block_user_by_default: blockUserByDefault },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function reviewBillingSettlement(
+  id: number,
+  request: BillingSettlementReviewRequest
+): Promise<BillingSettlementMutationResponse> {
+  const response = await api.post<BillingSettlementMutationResponse>(
+    `/api/smart-ops/billing-settlements/${id}/review`,
+    request,
+    { skipBusinessError: true, skipErrorHandler: true }
   )
   return response.data
 }

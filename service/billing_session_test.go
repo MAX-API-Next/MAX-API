@@ -41,6 +41,10 @@ type uncertainFundingSource struct {
 
 func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	originalSender := billingSettlementBacklogAlertNotificationSender
+	smartOpsAlertMonitor.Lock()
+	originalActiveAlerts := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
 	billingSettlementBacklogAlertState.Lock()
 	originalState := struct {
 		active          bool
@@ -60,6 +64,9 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertNotificationSender = originalSender
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActiveAlerts
+		smartOpsAlertMonitor.Unlock()
 		billingSettlementBacklogAlertState.Lock()
 		billingSettlementBacklogAlertState.active = originalState.active
 		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
@@ -83,6 +90,10 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	assert.Equal(t, (2 * time.Hour).Seconds(), alerts[0].Threshold)
 	assert.Contains(t, alerts[0].Message, "2 条")
 	assert.Contains(t, alerts[0].Message, "2h0m0s")
+	activeAlerts := GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, "billing_settlement_backlog", activeAlerts[0].Key)
+	assert.Equal(t, float64(2), activeAlerts[0].CurrentValue)
 
 	observeBillingSettlementBacklog(stats, now.Add(time.Minute))
 	require.Len(t, alerts, 1, "an unchanged backlog must be deduplicated inside the reminder interval")
@@ -91,6 +102,9 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute))
 	require.Len(t, alerts, 2)
 	assert.Equal(t, float64(3), alerts[1].CurrentValue)
+	activeAlerts = GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, float64(3), activeAlerts[0].CurrentValue)
 
 	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute+billingSettlementBacklogNotificationInterval))
 	require.Len(t, alerts, 3, "a persistent backlog must produce an age reminder")
@@ -99,6 +113,7 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	require.Len(t, alerts, 4)
 	assert.Equal(t, smartOpsAlertStatusResolved, alerts[3].Status)
 	assert.Contains(t, alerts[3].Message, "此前共 3 条")
+	assert.Empty(t, GetSmartOpsAlerts())
 }
 
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }

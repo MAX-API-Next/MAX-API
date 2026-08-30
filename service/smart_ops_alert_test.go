@@ -123,6 +123,47 @@ func TestEvaluateSmartOpsSystemAlertsDoesNotResolveFromInvalidProbe(t *testing.T
 	require.Len(t, GetSmartOpsAlerts(), 1, "an unknown sample must preserve the active incident")
 }
 
+func TestDisablingSystemMonitoringPreservesBillingAlerts(t *testing.T) {
+	smartOpsAlertMonitor.Lock()
+	originalStates := smartOpsAlertMonitor.states
+	originalActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.states = make(map[string]*smartOpsAlertState)
+	smartOpsAlertMonitor.active = map[string]SmartOpsAlert{
+		"billing_settlement_backlog": {
+			Key:       "billing_settlement_backlog",
+			Status:    smartOpsAlertStatusFiring,
+			Component: "billing",
+		},
+	}
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.states = originalStates
+		smartOpsAlertMonitor.active = originalActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	evaluateSmartOpsSystemAlerts(common.SystemStatus{}, common.PerformanceMonitorConfig{Enabled: false}, time.Now())
+
+	alerts := GetSmartOpsAlerts()
+	require.Len(t, alerts, 1)
+	require.Equal(t, "billing_settlement_backlog", alerts[0].Key)
+}
+
+func TestBillingSettlementReconciliationRejectsUnboundedLimit(t *testing.T) {
+	_, err := GetBillingSettlementReconciliation(201)
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationQuery)
+}
+
+func TestBillingSettlementReviewRequiresExplicitPolicyAndReason(t *testing.T) {
+	_, err := ReviewBillingSettlement(1, 2, nil, "verified")
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+
+	block := false
+	_, err = ReviewBillingSettlement(1, 2, &block, "x")
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+}
+
 func TestSmartOpsAlertNotifyTypeSeparatesNodes(t *testing.T) {
 	alert := SmartOpsAlert{Key: "system_cpu", Node: "node-a", Status: smartOpsAlertStatusFiring}
 	nodeAType := smartOpsAlertNotifyType(alert)
