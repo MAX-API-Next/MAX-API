@@ -400,6 +400,22 @@ test('reports ordinary Passkey removal failures through the shared handler', asy
   assert.equal(result.current.removing, false)
 })
 
+test('reports Passkey status failures through the shared handler', async () => {
+  const statusError = new Error('status transport failed')
+  getPasskeyStatus.mockImplementationOnce(async () => {
+    throw statusError
+  })
+
+  const { result } = renderHook(() => usePasskeyManagement())
+  await waitFor(() => assert.equal(result.current.loading, false))
+
+  assert.equal(result.current.status, null)
+  assert.deepEqual(handleServerError.mock.calls[0], [statusError, {
+    fallback: 'Failed to load Passkey status',
+  }])
+  assert.equal(toastError.mock.calls.length, 0)
+})
+
 test('reports ordinary Passkey registration failures through the shared handler', async () => {
   const registrationError = new Error('registration transport failed')
   beginPasskeyRegistration.mockImplementationOnce(async () => {

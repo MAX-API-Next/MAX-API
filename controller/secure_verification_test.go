@@ -422,7 +422,7 @@ func TestResetPasswordReportsRevokedApiTokens(t *testing.T) {
 	require.True(t, response.Success)
 	require.NotEmpty(t, response.Data)
 	require.True(t, response.ApiTokensRevoked)
-	require.Contains(t, response.Message, "所有现有 API Token 已被撤销")
+	require.Contains(t, response.Message, "所有现有 API 令牌已被撤销")
 	require.NotContains(t, response.Message, "如有需要")
 
 	var token model.Token

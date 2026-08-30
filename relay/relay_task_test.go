@@ -44,7 +44,7 @@ func (b *recordingTaskReservationBilling) Reserve(targetQuota int) error {
 	return nil
 }
 
-func TestReserveTaskQuotaUsesActualReservationAndExtendsRetries(t *testing.T) {
+func TestReserveTaskQuotaExtendsExistingReservationToActualTarget(t *testing.T) {
 	billing := &recordingTaskReservationBilling{preConsumed: 100}
 	info := &relaycommon.RelayInfo{
 		Billing: billing,

@@ -61,10 +61,10 @@ export function usePasskeyManagement(
         setStatus(null)
         toast.error(res.message || i18next.t('Failed to load Passkey status'))
       }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[Passkey] Failed to fetch status', error)
-      toast.error(i18next.t('Failed to load Passkey status'))
+    } catch (error: unknown) {
+      handleServerError(error, {
+        fallback: i18next.t('Failed to load Passkey status'),
+      })
       setStatus(null)
     } finally {
       setLoading(false)

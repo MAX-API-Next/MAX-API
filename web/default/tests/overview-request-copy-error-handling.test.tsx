@@ -18,7 +18,12 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { ReactElement, ReactNode } from 'react'
 import { createReactTestEnvironment } from '@/test/react'
-import { api } from '@/lib/api'
+import {
+  api,
+  disable2FA,
+  regenerate2FABackupCodes,
+  sensitiveActionConfig,
+} from '@/lib/api'
 import { markSecureVerificationErrorReported } from '@/lib/secure-verification'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
@@ -59,26 +64,43 @@ type VerificationMethodsResponse =
     }
 
 let verificationError = new Error('request failed')
-const withApiTokenVerification = mock(async () => {
-  throw verificationError
-})
+const withApiTokenVerification = mock(
+  async <T,>(_apiCall: () => Promise<T>): Promise<T | null> => {
+    throw verificationError
+  }
+)
 const useApiTokenVerification = mock(
-  (_description?: string) => withApiTokenVerification
+  (_description?: string): typeof withApiTokenVerification =>
+    withApiTokenVerification
 )
 const handleServerError = mock(
-  (_error: unknown, _options?: { fallback?: string }) => undefined
+  (_error: unknown, _options?: { fallback?: string }): void => undefined
 )
-const navigate = mock(() => undefined)
-const copyToClipboard = mock(async () => true)
-const toastError = mock(() => undefined)
-const toastSuccess = mock(() => undefined)
-const resetPasswordPost = mock(async () => ({
-  data: {
-    success: true,
-    data: 'NewPassword123',
-    api_tokens_revoked: true,
-  },
-}))
+const navigate = mock((_options?: unknown): void => undefined)
+const copyToClipboard = mock(
+  async (_text: string): Promise<boolean> => true
+)
+const toastError = mock((_message: string): void => undefined)
+const toastSuccess = mock((_message: string): void => undefined)
+const resetPasswordPost = mock(
+  async (
+    _url?: string,
+    _data?: unknown,
+    _config?: unknown
+  ): Promise<{
+    data: {
+      success: true
+      data: string
+      api_tokens_revoked: true
+    }
+  }> => ({
+    data: {
+      success: true,
+      data: 'NewPassword123',
+      api_tokens_revoked: true,
+    },
+  })
+)
 const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
 type LinkProps = {
@@ -379,5 +401,41 @@ test('preserves a successful response with no available methods', async (): Prom
     assert.equal(consoleError.mock.calls.length, 0)
   } finally {
     api.get = originalGet
+  }
+})
+
+test('uses the sensitive action request contract for remaining 2FA mutations', async (): Promise<void> => {
+  const originalPost = api.post
+  const post = mock(
+    async (
+      url: string,
+      _data?: unknown,
+      _config?: unknown
+    ): Promise<{
+      data:
+        | { success: true }
+        | { success: true; data: { backup_codes: string[] } }
+    }> => {
+      if (url.endsWith('/backup_codes')) {
+        return {
+          data: { success: true, data: { backup_codes: ['BACKUP-CODE'] } },
+        }
+      }
+      return { data: { success: true } }
+    }
+  )
+  api.post = post as typeof api.post
+  try {
+    assert.deepEqual(await disable2FA('123456'), { success: true })
+    assert.deepEqual(await regenerate2FABackupCodes('123456'), {
+      success: true,
+      data: { backup_codes: ['BACKUP-CODE'] },
+    })
+    assert.equal(post.mock.calls[0]?.[0], '/api/user/2fa/disable')
+    assert.equal(post.mock.calls[1]?.[0], '/api/user/2fa/backup_codes')
+    assert.equal(post.mock.calls[0]?.[2], sensitiveActionConfig)
+    assert.equal(post.mock.calls[1]?.[2], sensitiveActionConfig)
+  } finally {
+    api.post = originalPost
   }
 })

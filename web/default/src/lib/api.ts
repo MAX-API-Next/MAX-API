@@ -254,6 +254,12 @@ export interface TwoFAActionResponse {
   message?: string
 }
 
+export interface TwoFABackupCodesResponse extends TwoFAActionResponse {
+  data?: {
+    backup_codes: string[]
+  }
+}
+
 export interface TwoFAStatusResponse {
   success: boolean
   message?: string
@@ -291,13 +297,23 @@ export async function enable2FA(code: string): Promise<TwoFAActionResponse> {
 }
 
 // Disable 2FA with verification code
-export async function disable2FA(code: string) {
-  const res = await api.post('/api/user/2fa/disable', { code })
+export async function disable2FA(code: string): Promise<TwoFAActionResponse> {
+  const res = await api.post<TwoFAActionResponse>(
+    '/api/user/2fa/disable',
+    { code },
+    sensitiveActionConfig
+  )
   return res.data
 }
 
 // Regenerate 2FA backup codes
-export async function regenerate2FABackupCodes(code: string) {
-  const res = await api.post('/api/user/2fa/backup_codes', { code })
+export async function regenerate2FABackupCodes(
+  code: string
+): Promise<TwoFABackupCodesResponse> {
+  const res = await api.post<TwoFABackupCodesResponse>(
+    '/api/user/2fa/backup_codes',
+    { code },
+    sensitiveActionConfig
+  )
   return res.data
 }
