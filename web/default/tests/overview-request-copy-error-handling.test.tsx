@@ -125,7 +125,9 @@ const { checkVerificationMethods } = await import(
 )
 const testEnv = createReactTestEnvironment()
 
-beforeAll((): void => testEnv.setup())
+beforeAll(async (): Promise<void> => {
+  await testEnv.setup()
+})
 beforeEach((): void => {
   verificationError = new Error('request failed')
   withApiTokenVerification.mockClear()

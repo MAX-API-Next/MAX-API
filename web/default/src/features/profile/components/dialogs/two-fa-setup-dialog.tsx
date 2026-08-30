@@ -282,15 +282,6 @@ export function TwoFASetupDialog({
         </div>
       )
     }
-    if (!setupData) {
-      return (
-        <div className='flex justify-center py-8'>
-          <div className='text-muted-foreground'>
-            {t('Failed to load setup data')}
-          </div>
-        </div>
-      )
-    }
     return null
   }
 

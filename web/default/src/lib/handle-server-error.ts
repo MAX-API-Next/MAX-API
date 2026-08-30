@@ -51,12 +51,12 @@ export function resolveServerErrorMessage(
   fallback: string,
   contentNotFound: string
 ): string {
-  const status =
-    error instanceof AxiosError
-      ? (error.response?.status ?? error.status)
-      : error !== null && typeof error === 'object' && 'status' in error
-        ? error.status
-        : undefined
+  let status: unknown
+  if (error instanceof AxiosError) {
+    status = error.response?.status ?? error.status
+  } else if (error !== null && typeof error === 'object' && 'status' in error) {
+    status = error.status
+  }
   const isContentNotFound = Number(status) === 204
 
   if (isContentNotFound) return contentNotFound

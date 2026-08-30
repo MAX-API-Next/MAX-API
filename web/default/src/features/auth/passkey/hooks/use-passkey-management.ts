@@ -149,7 +149,7 @@ export function usePasskeyManagement(
     }
   }, [supported, fetchStatus])
 
-  const remove = useCallback(async () => {
+  const remove = useCallback(async (): Promise<boolean> => {
     setRemoving(true)
     try {
       const res = await deletePasskey()
