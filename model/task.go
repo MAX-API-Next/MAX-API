@@ -46,7 +46,7 @@ const (
 )
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT;index:idx_task_timeout_cursor,priority:2"`
+	ID         int64                 `json:"id" gorm:"primaryKey;index:idx_task_timeout_cursor,priority:2"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
 	UpdatedAt  int64                 `json:"updated_at"`
 	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id

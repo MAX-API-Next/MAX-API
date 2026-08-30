@@ -607,7 +607,7 @@ func RelayTask(c *gin.Context) {
 		if taskErr != nil {
 			upstreamAmbiguous := relayInfo.UpstreamTaskResponseReceived || relayInfo.UpstreamTaskOutcomeUnknown
 			upstreamPersisted := result != nil && result.Task != nil
-			if relayInfo.Billing != nil && !upstreamAmbiguous && !settlementIntentPersisted {
+			if relayInfo.Billing != nil && !upstreamAmbiguous && !settlementIntentPersisted && taskErr.Code != taskResponseWriteFailedCode {
 				relayInfo.Billing.Refund(c)
 			}
 			if relayInfo.PersistedTaskID > 0 {
@@ -750,12 +750,17 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
+const taskResponseWriteFailedCode = "write_task_response_failed"
+
 // shouldMarkTaskSubmitNeedsReview keeps an upstream-accepted task pollable
 // when its durable finalize intent already exists. The settlement runner owns
 // recovery in that state; converting the task to FAILURE would permanently
 // remove it from normal polling.
 func shouldMarkTaskSubmitNeedsReview(taskErr *dto.TaskError, upstreamPersisted, settlementIntentPersisted bool) bool {
 	if taskErr == nil {
+		return false
+	}
+	if taskErr.Code == taskResponseWriteFailedCode {
 		return false
 	}
 	return taskErr.Code != constant.MjBillingSettlementPending || !upstreamPersisted || !settlementIntentPersisted
@@ -790,6 +795,14 @@ func finalizeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo, re
 	if writeResponse != nil {
 		if writeErr := writeResponse(); writeErr != nil {
 			common.SysError("write task response error: " + writeErr.Error())
+			return &dto.TaskError{
+				Code:       taskResponseWriteFailedCode,
+				Message:    "任务已提交并完成结算，但响应写入失败；请勿重复提交，可使用 task_id 查询任务",
+				Data:       map[string]string{"task_id": result.Task.TaskID},
+				StatusCode: http.StatusConflict,
+				LocalError: true,
+				Error:      writeErr,
+			}
 		}
 	}
 	return nil

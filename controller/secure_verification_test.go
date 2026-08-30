@@ -604,6 +604,20 @@ func (s *failingTaskBillingSettler) NeedsRefund() bool        { return true }
 func (s *failingTaskBillingSettler) GetPreConsumedQuota() int { return 10 }
 func (s *failingTaskBillingSettler) Reserve(int) error        { return nil }
 
+type successfulTaskBillingSettler struct {
+	settleCalls int
+	refundCalls int
+}
+
+func (s *successfulTaskBillingSettler) Settle(int) error {
+	s.settleCalls++
+	return nil
+}
+func (s *successfulTaskBillingSettler) Refund(*gin.Context)      { s.refundCalls++ }
+func (s *successfulTaskBillingSettler) NeedsRefund() bool        { return true }
+func (s *successfulTaskBillingSettler) GetPreConsumedQuota() int { return 10 }
+func (s *successfulTaskBillingSettler) Reserve(int) error        { return nil }
+
 type recordingSelectedGroupBillingSettler struct {
 	preConsumed int
 	reserves    []int
@@ -658,6 +672,50 @@ func TestPendingTaskSettlementDoesNotMarkAcceptedTaskAsManualFailure(t *testing.
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, false, true))
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, false))
 	assert.True(t, shouldMarkTaskSubmitNeedsReview(&dto.TaskError{Code: "persist_task_failed"}, true, true))
+}
+
+func TestFinalizeTaskSubmissionReportsCommittedResponseWriteFailure(t *testing.T) {
+	setupUserSettingControllerTestDB(t)
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	settler := &successfulTaskBillingSettler{}
+	info := &relaycommon.RelayInfo{
+		UserId:        81,
+		TokenId:       82,
+		Billing:       settler,
+		ChannelMeta:   &relaycommon.ChannelMeta{},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "submit"},
+	}
+	result := &relay.TaskSubmitResult{
+		Quota: 20,
+		Task:  &model.Task{TaskID: "task-response-write-failed"},
+	}
+
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() { common.LogConsumeEnabled = oldLogConsumeEnabled })
+
+	writeErr := errors.New("client connection closed")
+	taskErr := finalizeTaskSubmission(c, info, result, "", func() error {
+		return writeErr
+	})
+
+	require.NotNil(t, taskErr)
+	assert.Equal(t, "write_task_response_failed", taskErr.Code)
+	assert.Equal(t, http.StatusConflict, taskErr.StatusCode)
+	assert.True(t, taskErr.LocalError)
+	assert.ErrorIs(t, taskErr.Error, writeErr)
+	assert.Equal(t, map[string]string{"task_id": "task-response-write-failed"}, taskErr.Data)
+	assert.False(t, shouldRetryTaskRelay(c, 1, taskErr, 1))
+	assert.False(t, shouldMarkTaskSubmitNeedsReview(taskErr, true, true))
+	assert.Equal(t, 1, settler.settleCalls)
+	assert.Zero(t, settler.refundCalls)
+
+	respondTaskError(c, taskErr)
+	assert.Equal(t, http.StatusConflict, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"code":"write_task_response_failed"`)
+	assert.Contains(t, recorder.Body.String(), `"task_id":"task-response-write-failed"`)
 }
 
 func TestMidjourneyRelayErrorStatusCodeReportsSettlementPendingAsConflict(t *testing.T) {

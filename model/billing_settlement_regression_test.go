@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/base64"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +14,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
+
+func TestTaskSchemaUsesPortableAutoIncrementPrimaryKeyAndTimeoutCursorIndex(t *testing.T) {
+	parsed, err := schema.Parse(&Task{}, &sync.Map{}, schema.NamingStrategy{})
+	require.NoError(t, err)
+
+	id := parsed.LookUpField("ID")
+	require.NotNil(t, id)
+	assert.True(t, id.PrimaryKey)
+	assert.True(t, id.AutoIncrement)
+
+	index, ok := parsed.ParseIndexes()["idx_task_timeout_cursor"]
+	require.True(t, ok)
+	require.Len(t, index.Fields, 2)
+	assert.Equal(t, "submit_time", index.Fields[0].DBName)
+	assert.Equal(t, "id", index.Fields[1].DBName)
+}
+
+func TestTaskSQLiteCreateGeneratesID(t *testing.T) {
+	truncateTables(t)
+	task := &Task{TaskID: "portable-auto-increment", Status: TaskStatusNotStart}
+
+	require.NoError(t, DB.Create(task).Error)
+	assert.Positive(t, task.ID)
+}
 
 func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testing.T) {
 	setupUserUpdateTestState(t)
