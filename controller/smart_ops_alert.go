@@ -88,9 +88,10 @@ func ReviewBillingSettlement(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": message})
 		return
 	}
-	recordManageAuditFor(c, record.UserID, "billing.reconciliation_review", map[string]interface{}{
-		"settlement_id": record.ID,
-		"block_user":    *request.BlockUser,
+	recordManageAudit(c, "billing.reconciliation_review", map[string]interface{}{
+		"settlement_id":  record.ID,
+		"target_user_id": record.UserID,
+		"block_user":     *request.BlockUser,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

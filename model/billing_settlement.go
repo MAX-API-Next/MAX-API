@@ -521,6 +521,14 @@ func billingSettlementReviewUpdates(reviewerID int, blockUser bool, note string,
 	}
 }
 
+func billingSettlementReviewMatches(record BillingSettlement, reviewerID int, blockUser bool, note string, reviewedAt int64) bool {
+	return record.ReconciliationReviewedAt == reviewedAt &&
+		record.ReconciliationReviewedBy == reviewerID &&
+		record.ReconciliationReviewNote == note &&
+		record.UserBlockingOverride != nil &&
+		*record.UserBlockingOverride == blockUser
+}
+
 // ReviewBillingSettlement records an administrator's alert disposition without
 // changing settlement status, balances, applied deltas, or effect state.
 func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note string) (BillingSettlement, error) {
@@ -547,7 +555,20 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 		return BillingSettlement{}, result.Error
 	}
 	if result.RowsAffected != 1 {
-		return BillingSettlement{}, ErrBillingSettlementReviewConflict
+		var matching BillingSettlement
+		err := unresolvedPositiveFinalizeSettlementScope(DB).
+			Where("id = ?", id).
+			First(&matching).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return BillingSettlement{}, ErrBillingSettlementReviewConflict
+			}
+			return BillingSettlement{}, err
+		}
+		if !billingSettlementReviewMatches(matching, reviewerID, blockUser, note, reviewedAt.Unix()) {
+			return BillingSettlement{}, ErrBillingSettlementReviewConflict
+		}
+		return matching, nil
 	}
 	if err := DB.First(&record, id).Error; err != nil {
 		return BillingSettlement{}, err

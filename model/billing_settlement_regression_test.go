@@ -285,6 +285,36 @@ func TestReviewBillingSettlementRejectsAlreadyAppliedRecord(t *testing.T) {
 	assert.Empty(t, stored.ReconciliationReviewNote)
 }
 
+func TestReviewBillingSettlementAcceptsMatchingUpdateWhenDriverReportsZeroRows(t *testing.T) {
+	setupUserUpdateTestState(t)
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:review-same-value:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 955, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+		Status: BillingSettlementStatusPending, CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	callbackName := "test:billing-settlement-review-zero-rows"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Name == "BillingSettlement" {
+			tx.RowsAffected = 0
+		}
+	}))
+	t.Cleanup(func() {
+		_ = DB.Callback().Update().Remove(callbackName)
+	})
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 7004, false, "Verified duplicate review submission")
+
+	require.NoError(t, err)
+	assert.Equal(t, record.ID, reviewed.ID)
+	assert.Equal(t, 7004, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Verified duplicate review submission", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.False(t, *reviewed.UserBlockingOverride)
+}
+
 func TestBillingSettlementReviewUpdateMapUsesSchemaColumns(t *testing.T) {
 	parsed, err := schema.Parse(&BillingSettlement{}, &sync.Map{}, schema.NamingStrategy{})
 	require.NoError(t, err)

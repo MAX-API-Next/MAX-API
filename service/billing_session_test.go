@@ -51,16 +51,19 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 		lastCount       int64
 		oldestCreatedAt int64
 		lastNotifiedAt  time.Time
+		lastObservedAt  time.Time
 	}{
 		active:          billingSettlementBacklogAlertState.active,
 		lastCount:       billingSettlementBacklogAlertState.lastCount,
 		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
 		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
 	}
 	billingSettlementBacklogAlertState.active = false
 	billingSettlementBacklogAlertState.lastCount = 0
 	billingSettlementBacklogAlertState.oldestCreatedAt = 0
 	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+	billingSettlementBacklogAlertState.lastObservedAt = time.Time{}
 	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertNotificationSender = originalSender
@@ -72,6 +75,7 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
 		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
 		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
 		billingSettlementBacklogAlertState.Unlock()
 	})
 
@@ -131,16 +135,20 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 		lastCount       int64
 		oldestCreatedAt int64
 		lastNotifiedAt  time.Time
+		lastObservedAt  time.Time
 	}{
 		active:          billingSettlementBacklogAlertState.active,
 		lastCount:       billingSettlementBacklogAlertState.lastCount,
 		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
 		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
 	}
+	now := time.Unix(40_000, 0)
 	billingSettlementBacklogAlertState.active = true
 	billingSettlementBacklogAlertState.lastCount = 48
-	billingSettlementBacklogAlertState.oldestCreatedAt = time.Now().Add(-time.Hour).Unix()
-	billingSettlementBacklogAlertState.lastNotifiedAt = time.Now()
+	billingSettlementBacklogAlertState.oldestCreatedAt = now.Add(-time.Hour).Unix()
+	billingSettlementBacklogAlertState.lastNotifiedAt = now.Add(-time.Minute)
+	billingSettlementBacklogAlertState.lastObservedAt = now.Add(-time.Second)
 	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertNotificationSender = originalSender
@@ -152,6 +160,7 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
 		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
 		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
 		billingSettlementBacklogAlertState.Unlock()
 	})
 
@@ -159,7 +168,6 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
 		alerts = append(alerts, alert)
 	}
-	now := time.Now()
 	stats := model.BillingSettlementBacklogStats{
 		Count:           47,
 		OldestCreatedAt: now.Add(-time.Hour).Unix(),
@@ -171,6 +179,62 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 	activeAlerts := GetSmartOpsAlerts()
 	require.Len(t, activeAlerts, 1)
 	assert.Equal(t, float64(47), activeAlerts[0].CurrentValue)
+}
+
+func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *testing.T) {
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	smartOpsAlertMonitor.Lock()
+	originalActiveAlerts := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
+	billingSettlementBacklogAlertState.Lock()
+	originalState := struct {
+		active          bool
+		lastCount       int64
+		oldestCreatedAt int64
+		lastNotifiedAt  time.Time
+		lastObservedAt  time.Time
+	}{
+		active:          billingSettlementBacklogAlertState.active,
+		lastCount:       billingSettlementBacklogAlertState.lastCount,
+		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
+		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
+	}
+	base := time.Unix(50_000, 0)
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = 48
+	billingSettlementBacklogAlertState.oldestCreatedAt = base.Add(-time.Hour).Unix()
+	billingSettlementBacklogAlertState.lastNotifiedAt = base.Add(-time.Minute)
+	billingSettlementBacklogAlertState.lastObservedAt = base.Add(-time.Minute)
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActiveAlerts
+		smartOpsAlertMonitor.Unlock()
+		billingSettlementBacklogAlertState.Lock()
+		billingSettlementBacklogAlertState.active = originalState.active
+		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
+		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
+		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
+		billingSettlementBacklogAlertState.Unlock()
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+
+	updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{}, base, false)
+	updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{
+		Count:           48,
+		OldestCreatedAt: base.Add(-time.Hour).Unix(),
+	}, base.Add(-time.Second), true)
+
+	assert.Empty(t, alerts, "a stale periodic snapshot must not broadcast after an administrator refresh")
+	assert.Empty(t, GetSmartOpsAlerts(), "a stale periodic snapshot must not reactivate the closed alert")
 }
 
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }

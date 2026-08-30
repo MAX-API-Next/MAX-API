@@ -64,6 +64,7 @@ var billingSettlementBacklogAlertState struct {
 	lastCount       int64
 	oldestCreatedAt int64
 	lastNotifiedAt  time.Time
+	lastObservedAt  time.Time
 }
 
 var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
@@ -83,6 +84,12 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 	}
 
 	billingSettlementBacklogAlertState.Lock()
+	if !billingSettlementBacklogAlertState.lastObservedAt.IsZero() &&
+		!observedAt.After(billingSettlementBacklogAlertState.lastObservedAt) {
+		billingSettlementBacklogAlertState.Unlock()
+		return
+	}
+	billingSettlementBacklogAlertState.lastObservedAt = observedAt
 	wasActive := billingSettlementBacklogAlertState.active
 	previousCount := billingSettlementBacklogAlertState.lastCount
 	previousOldestCreatedAt := billingSettlementBacklogAlertState.oldestCreatedAt

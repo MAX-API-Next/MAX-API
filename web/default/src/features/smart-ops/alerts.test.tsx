@@ -21,7 +21,9 @@ import { createReactTestEnvironment } from '@/test/react'
 import { waitFor, within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
+import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import type { BillingSettlementReconciliationData } from './types'
 
 const LOAD_ERROR_KEY = 'We could not load active alerts.'
 const testEnv = createReactTestEnvironment({
@@ -49,7 +51,7 @@ function createQueryClient(): QueryClient {
   })
 }
 
-function emptyReconciliationData() {
+function emptyReconciliationData(): BillingSettlementReconciliationData {
   return {
     total_count: 0,
     pending_count: 0,
@@ -334,6 +336,12 @@ describe('SmartOps active alerts', () => {
   })
 
   test('loads reviewed reconciliation without an active alert and submits administrator controls', async () => {
+    const originalUser = useAuthStore.getState().auth.user
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'root',
+      role: 100,
+    })
     const originalGet = api.get
     const originalPut = api.put
     const originalPost = api.post
@@ -458,6 +466,7 @@ describe('SmartOps active alerts', () => {
       await waitFor(() =>
         assert.equal(closeAlertButton.hasAttribute('disabled'), false)
       )
+      const reconciliationRequestsBeforeReview = reconciliationRequests
       await view.click(closeAlertButton)
 
       await waitFor(() => {
@@ -469,14 +478,67 @@ describe('SmartOps active alerts', () => {
             note: '🙂🙂🙂',
           },
         })
-        assert.ok(reconciliationRequests > 1)
+        assert.ok(reconciliationRequests > reconciliationRequestsBeforeReview)
       })
     } finally {
       api.get = originalGet
       api.put = originalPut
       api.post = originalPost
-      queryClient.clear()
       await view.unmount()
+      queryClient.clear()
+      useAuthStore.getState().auth.setUser(originalUser)
+    }
+  })
+
+  test('keeps the global blocking policy read only for non-root administrators', async () => {
+    const originalUser = useAuthStore.getState().auth.user
+    useAuthStore.getState().auth.setUser({
+      id: 2,
+      username: 'admin',
+      role: 10,
+    })
+    const originalGet = api.get
+    const originalPut = api.put
+    let policyWrites = 0
+    api.get = (async (url) => ({
+      data:
+        url === '/api/smart-ops/billing-settlements'
+          ? { success: true, data: emptyReconciliationData() }
+          : { success: true, data: [] },
+    })) as typeof api.get
+    api.put = (async () => {
+      policyWrites += 1
+      return { data: { success: true } }
+    }) as typeof api.put
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      let policySwitch: HTMLElement | undefined
+      await waitFor(() => {
+        policySwitch = within(view.container).getByRole('switch', {
+          name: 'Block affected users by default',
+        })
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'Only root administrators can change the default blocking policy.'
+          )
+        )
+      })
+      assert.ok(policySwitch)
+      assert.equal(policySwitch.hasAttribute('data-disabled'), true)
+      assert.equal(policyWrites, 0)
+    } finally {
+      api.get = originalGet
+      api.put = originalPut
+      await view.unmount()
+      queryClient.clear()
+      useAuthStore.getState().auth.setUser(originalUser)
     }
   })
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
@@ -138,6 +139,123 @@ func TestHealthRoutesAreRegistered(t *testing.T) {
 	for path, registered := range expected {
 		require.Truef(t, registered, "expected GET %s route to be registered", path)
 	}
+}
+
+func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testRun := atomic.AddInt32(&universalVerifyRateLimitTestRun, 1)
+
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldGlobalAPIRateLimitEnable := common.GlobalApiRateLimitEnable
+	oldCriticalRateLimitEnable := common.CriticalRateLimitEnable
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.GlobalApiRateLimitEnable = false
+	common.CriticalRateLimitEnable = false
+
+	dsn := fmt.Sprintf("file:billing_policy_root_%d?mode=memory&cache=shared", testRun)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Option{}, &model.Log{}))
+	model.DB = db
+	model.LOG_DB = db
+
+	key := billing_reconciliation_setting.OptionKeyBlockUserByDefault
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	originalPolicy, policyExisted := common.OptionMap[key]
+	common.OptionMap[key] = "true"
+	common.OptionMapRWMutex.Unlock()
+
+	admin := model.User{
+		Id: 1500000 + int(testRun), Username: fmt.Sprintf("billing-policy-admin-%d", testRun),
+		AffCode:  fmt.Sprintf("billing-policy-admin-aff-%d", testRun),
+		Password: "hashed-password", Role: common.RoleAdminUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	root := model.User{
+		Id: admin.Id + 1, Username: fmt.Sprintf("billing-policy-root-%d", testRun),
+		AffCode:  fmt.Sprintf("billing-policy-root-aff-%d", testRun),
+		Password: "hashed-password", Role: common.RoleRootUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+	require.NoError(t, db.Create(&root).Error)
+
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.GlobalApiRateLimitEnable = oldGlobalAPIRateLimitEnable
+		common.CriticalRateLimitEnable = oldCriticalRateLimitEnable
+		common.OptionMapRWMutex.Lock()
+		if policyExisted {
+			common.OptionMap[key] = originalPolicy
+		} else {
+			delete(common.OptionMap, key)
+		}
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("billing-policy-root-session"))))
+	engine.GET("/test/login/:id", func(c *gin.Context) {
+		id := admin.Id
+		user := admin
+		if c.Param("id") == fmt.Sprintf("%d", root.Id) {
+			id = root.Id
+			user = root
+		}
+		session := sessions.Default(c)
+		session.Set("id", id)
+		session.Set("username", user.Username)
+		session.Set("role", user.Role)
+		session.Set("status", user.Status)
+		session.Set("group", user.Group)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+
+	login := func(userID int) []*http.Cookie {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/test/login/%d", userID), nil))
+		require.Equal(t, http.StatusNoContent, recorder.Code)
+		return recorder.Result().Cookies()
+	}
+	updatePolicy := func(cookies []*http.Cookie) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPut,
+			"/api/smart-ops/billing-settlements/blocking-policy",
+			strings.NewReader(`{"block_user_by_default":false}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		for _, sessionCookie := range cookies {
+			request.AddCookie(sessionCookie)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	adminResponse := updatePolicy(login(admin.Id))
+	require.Equal(t, http.StatusOK, adminResponse.Code)
+	require.Contains(t, adminResponse.Body.String(), `"success":false`)
+	require.True(t, billing_reconciliation_setting.BlockUserByDefault())
+
+	rootResponse := updatePolicy(login(root.Id))
+	require.Equal(t, http.StatusOK, rootResponse.Code)
+	require.Contains(t, rootResponse.Body.String(), `"success":true`)
+	require.False(t, billing_reconciliation_setting.BlockUserByDefault())
 }
 
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {

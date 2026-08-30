@@ -16,9 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import fr from '@/i18n/locales/fr.json'
+import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { formatLegacyLatency } from './format'
+import { formatLegacyLatency, formatLocalizedCount } from './format'
 
 describe('formatLegacyLatency', () => {
   test('keeps a recorded zero-second average distinct from missing data', () => {
@@ -29,5 +31,38 @@ describe('formatLegacyLatency', () => {
   test('uses the shared latency format for positive values', () => {
     assert.equal(formatLegacyLatency(500), '500ms')
     assert.equal(formatLegacyLatency(1_500), '1.50s')
+  })
+})
+
+describe('formatLocalizedCount', () => {
+  test('uses singular and plural French labels from the shared locale catalog', async () => {
+    const instance = i18next.createInstance()
+    await instance.init({
+      lng: 'fr',
+      fallbackLng: 'en',
+      resources: { fr },
+      interpolation: { escapeValue: false },
+    })
+
+    assert.equal(
+      formatLocalizedCount(
+        1,
+        'fr',
+        instance.t,
+        '{{count}} attempt',
+        '{{count}} attempts'
+      ),
+      '1 tentative'
+    )
+    assert.equal(
+      formatLocalizedCount(
+        2,
+        'fr',
+        instance.t,
+        '{{count}} attempt',
+        '{{count}} attempts'
+      ),
+      '2 tentatives'
+    )
   })
 })
