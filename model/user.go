@@ -680,6 +680,34 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	return &user, err
 }
 
+func CanUseOAuthReauthentication(userID int) (bool, error) {
+	user, err := GetUserById(userID, true)
+	if err != nil {
+		return false, err
+	}
+	if user.Password != "" {
+		return false, nil
+	}
+
+	twoFA, err := GetTwoFAByUserId(userID)
+	if err != nil {
+		return false, err
+	}
+	if twoFA != nil && twoFA.IsEnabled {
+		return false, nil
+	}
+
+	_, err = GetPasskeyByUserID(userID)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, ErrPasskeyNotFound):
+		return true, nil
+	default:
+		return false, err
+	}
+}
+
 func GetUserIdByAffCode(affCode string) (int, error) {
 	if affCode == "" {
 		return 0, errors.New("affCode 为空！")

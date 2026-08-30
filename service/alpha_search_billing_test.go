@@ -70,7 +70,7 @@ func TestPrepareTieredAlphaSearchBillingAppliesFloorAfterSurcharge(t *testing.T)
 	originalQuotaPerUnit := common.QuotaPerUnit
 	originalPreConsumedQuota := common.PreConsumedQuota
 	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
-	originalToolPrice := toolPrices.Prices[dto.BuildInToolWebSearchPreview]
+	originalToolPrice, hadOriginalToolPrice := toolPrices.Prices[dto.BuildInToolWebSearchPreview]
 	common.QuotaPerUnit = 500_000
 	common.PreConsumedQuota = 20_000
 	toolPrices.Prices[dto.BuildInToolWebSearchPreview] = 10
@@ -78,7 +78,11 @@ func TestPrepareTieredAlphaSearchBillingAppliesFloorAfterSurcharge(t *testing.T)
 	t.Cleanup(func() {
 		common.QuotaPerUnit = originalQuotaPerUnit
 		common.PreConsumedQuota = originalPreConsumedQuota
-		toolPrices.Prices[dto.BuildInToolWebSearchPreview] = originalToolPrice
+		if hadOriginalToolPrice {
+			toolPrices.Prices[dto.BuildInToolWebSearchPreview] = originalToolPrice
+		} else {
+			delete(toolPrices.Prices, dto.BuildInToolWebSearchPreview)
+		}
 		operation_setting.RebuildToolPriceIndex()
 	})
 

@@ -196,7 +196,11 @@ export function TwoFASetupDialog({
         return
       }
       if (!response.success || !response.data) {
-        throw new Error(response.message || t('Failed to setup 2FA'))
+        toast.error(response.message || t('Failed to setup 2FA'))
+        shouldMarkSetupAttempted = false
+        setSetupAttempted(false)
+        onOpenChange(false)
+        return
       }
       setSetupData(response.data)
       setStep(0)

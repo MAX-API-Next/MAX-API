@@ -233,6 +233,30 @@ func TestPasskeyDeletionRequiresCredentialVerificationScope(t *testing.T) {
 }
 
 func TestOAuthVerificationIsRestrictedToNarrowReauthenticationScope(t *testing.T) {
+	oldDB := model.DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TwoFA{}, &model.PasskeyCredential{}))
+	user := model.User{
+		Id: 1001, Username: "oauth-scope-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	t.Cleanup(func() {
+		model.DB = oldDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
 	router := gin.New()
 	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secure-verification-oauth-scope-test"))))
 	router.GET("/seed", func(c *gin.Context) {
@@ -303,6 +327,11 @@ func TestOAuthVerificationIsRestrictedToNarrowReauthenticationScope(t *testing.T
 	unscopedRecorder := perform("/unscoped")
 	require.Equal(t, http.StatusForbidden, unscopedRecorder.Code)
 	require.Contains(t, unscopedRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.Id).UpdateColumn("password", "new-password-hash").Error)
+	revokedGrantRecorder := perform("/passkey-register")
+	require.Equal(t, http.StatusForbidden, revokedGrantRecorder.Code)
+	require.Contains(t, revokedGrantRecorder.Body.String(), `"code":"VERIFICATION_REQUIRED"`)
 }
 
 func TestSecureVerificationRejectsLoginMethodMarker(t *testing.T) {

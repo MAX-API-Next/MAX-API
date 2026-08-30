@@ -151,10 +151,15 @@ func setupLogin(user *model.User, c *gin.Context) {
 	session.Delete(secureVerificationScopeSessionKey)
 	session.Delete(PasskeyReadySessionKey)
 	if isOAuthCredentialReauthentication(loginMethod) {
-		session.Set(SecureVerificationSessionKey, time.Now().Unix())
-		session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
-		session.Set(secureVerificationUserSessionKey, user.Id)
-		session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeOAuthReauthentication)
+		allowed, grantErr := model.CanUseOAuthReauthentication(user.Id)
+		if grantErr != nil {
+			common.SysError(fmt.Sprintf("failed to evaluate OAuth reauthentication grant for user %d: %v", user.Id, grantErr))
+		} else if allowed {
+			session.Set(SecureVerificationSessionKey, time.Now().Unix())
+			session.Set(secureVerificationMethodSessionKey, model.SecureVerificationMethodOAuth)
+			session.Set(secureVerificationUserSessionKey, user.Id)
+			session.Set(secureVerificationScopeSessionKey, model.SecureVerificationScopeOAuthReauthentication)
+		}
 	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)

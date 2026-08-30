@@ -253,7 +253,7 @@ func TestSetupLoginClearsPreviousSecureVerification(t *testing.T) {
 
 func TestOAuthLoginCreatesNarrowReauthenticationScope(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.TwoFA{}, &model.PasskeyCredential{}))
 
 	user := model.User{
 		Id:          1004,
@@ -303,6 +303,50 @@ func TestOAuthLoginCreatesNarrowReauthenticationScope(t *testing.T) {
 	require.Equal(t, model.SecureVerificationMethodOAuth, verificationSession.VerifiedMethod)
 	require.Equal(t, user.Id, verificationSession.VerifiedUserID)
 	require.Equal(t, model.SecureVerificationScopeOAuthReauthentication, verificationSession.VerifiedScope)
+}
+
+func TestOAuthLoginDoesNotGrantReauthenticationWhenCredentialsExist(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.TwoFA{}, &model.PasskeyCredential{}))
+
+	user := model.User{
+		Id:          1006,
+		Username:    "oauth-existing-credential-user",
+		Password:    "existing-password-hash",
+		DisplayName: "OAuth Existing Credential User",
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+		Group:       "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("oauth-existing-credential-test"))))
+	router.GET("/api/oauth/:provider", func(c *gin.Context) {
+		setupLogin(&user, c)
+	})
+	router.GET("/verification-session", func(c *gin.Context) {
+		session := sessions.Default(c)
+		c.JSON(http.StatusOK, gin.H{
+			"verified_at":     session.Get(SecureVerificationSessionKey),
+			"verified_method": session.Get(secureVerificationMethodSessionKey),
+			"verified_scope":  session.Get(secureVerificationScopeSessionKey),
+		})
+	})
+
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/api/oauth/github", nil))
+	require.Equal(t, http.StatusOK, loginRecorder.Code)
+
+	inspectRecorder := httptest.NewRecorder()
+	inspectRequest := httptest.NewRequest(http.MethodGet, "/verification-session", nil)
+	for _, sessionCookie := range loginRecorder.Result().Cookies() {
+		inspectRequest.AddCookie(sessionCookie)
+	}
+	router.ServeHTTP(inspectRecorder, inspectRequest)
+
+	require.Equal(t, http.StatusOK, inspectRecorder.Code)
+	require.JSONEq(t, `{"verified_at":null,"verified_method":null,"verified_scope":null}`, inspectRecorder.Body.String())
 }
 
 func TestTelegramLoginDoesNotCreateSecureVerificationGrant(t *testing.T) {

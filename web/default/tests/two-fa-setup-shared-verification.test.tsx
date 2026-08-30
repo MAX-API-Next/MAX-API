@@ -29,7 +29,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, mock, test } from 'bun:test
 import assert from 'node:assert/strict'
 import type { ReactElement, ReactNode } from 'react'
 
-const setup2FA = mock(async () => ({
+interface Setup2FAResult {
+  success: boolean
+  message?: string
+  data?: {
+    qr_code_data: string
+    secret: string
+    backup_codes: string[]
+  }
+}
+
+const setup2FA = mock(async (): Promise<Setup2FAResult> => ({
   success: true,
   data: {
     qr_code_data: 'otpauth://totp/MAX-API:test',
@@ -53,6 +63,7 @@ const withVerification = mock(
   <T,>(apiCall: () => Promise<T>, _options?: VerificationOptions) => apiCall()
 )
 const handleServerError = mock(() => undefined)
+const toastError = mock(() => undefined)
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -64,7 +75,7 @@ mock.module('i18next', () => ({
 
 mock.module('sonner', () => ({
   toast: {
-    error: mock(() => undefined),
+    error: toastError,
     success: mock(() => undefined),
   },
 }))
@@ -181,6 +192,7 @@ beforeEach(() => {
   }))
   withVerification.mockClear()
   handleServerError.mockClear()
+  toastError.mockClear()
 })
 afterEach(() => cleanup())
 afterAll(() => testEnv.teardown())
@@ -264,6 +276,27 @@ test('reports setup failures with the server error message path', async () => {
     error,
     { fallback: 'Failed to setup 2FA' },
   ])
+})
+
+test('preserves the server message for 2FA setup business failures', async () => {
+  const onOpenChange = mock(() => undefined)
+  setup2FA.mockImplementationOnce(async () => ({
+    success: false,
+    message: 'The setup request has expired',
+  }))
+
+  render(
+    <TwoFASetupDialog
+      open
+      onOpenChange={onOpenChange}
+      onSuccess={mock(() => undefined)}
+    />
+  )
+
+  await waitFor(() => assert.equal(toastError.mock.calls.length, 1))
+  assert.deepEqual(toastError.mock.calls[0], ['The setup request has expired'])
+  assert.equal(handleServerError.mock.calls.length, 0)
+  assert.deepEqual(onOpenChange.mock.calls[0], [false])
 })
 
 test('keeps the setup state reset when verification is cancelled', async () => {

@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -124,6 +126,31 @@ func SecureVerificationRequired(requiredScopes ...string) gin.HandlerFunc {
 			})
 			c.Abort()
 			return
+		}
+		if verifiedMethod == model.SecureVerificationMethodOAuth &&
+			verifiedScope == model.SecureVerificationScopeOAuthReauthentication {
+			allowed, err := model.CanUseOAuthReauthentication(userId)
+			if err != nil {
+				common.SysError(fmt.Sprintf("failed to validate OAuth reauthentication grant for user %d: %v", userId, err))
+				clearSecureVerificationSession(session)
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": "验证状态异常，请重新验证",
+					"code":    "VERIFICATION_INVALID",
+				})
+				c.Abort()
+				return
+			}
+			if !allowed {
+				clearSecureVerificationSession(session)
+				c.JSON(http.StatusForbidden, gin.H{
+					"success": false,
+					"message": "请使用现有密码、2FA 或 Passkey 重新验证",
+					"code":    "VERIFICATION_REQUIRED",
+				})
+				c.Abort()
+				return
+			}
 		}
 		c.Next()
 	}

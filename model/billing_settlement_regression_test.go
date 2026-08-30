@@ -1112,3 +1112,43 @@ func TestTelegramBindingStateIsUserBoundAndConsumedOnce(t *testing.T) {
 	require.Equal(t, "123456", stored.TelegramId)
 	require.EqualValues(t, 1, stored.SessionGeneration)
 }
+
+func TestOAuthReauthenticationBootstrapRequiresNoExistingCredentials(t *testing.T) {
+	setupSecurityCredentialTestState(t)
+
+	users := []User{
+		{Id: 8841, Username: "oauth-bootstrap-user", AffCode: "oauth-bootstrap", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8842, Username: "oauth-password-user", Password: "existing-password-hash", AffCode: "oauth-password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8843, Username: "oauth-two-fa-user", AffCode: "oauth-two-fa", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 8844, Username: "oauth-passkey-user", AffCode: "oauth-passkey", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+	}
+	require.NoError(t, DB.Create(&users).Error)
+	require.NoError(t, DB.Create(&TwoFA{
+		UserId:    users[2].Id,
+		Secret:    "oauth-reauth-test-secret",
+		IsEnabled: true,
+	}).Error)
+	require.NoError(t, DB.Create(&PasskeyCredential{
+		UserID:       users[3].Id,
+		CredentialID: "oauth-reauth-credential-id",
+		PublicKey:    "oauth-reauth-public-key",
+	}).Error)
+
+	tests := []struct {
+		name    string
+		userID  int
+		allowed bool
+	}{
+		{name: "oauth only", userID: users[0].Id, allowed: true},
+		{name: "password", userID: users[1].Id, allowed: false},
+		{name: "enabled 2FA", userID: users[2].Id, allowed: false},
+		{name: "Passkey", userID: users[3].Id, allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			allowed, err := CanUseOAuthReauthentication(test.userID)
+			require.NoError(t, err)
+			require.Equal(t, test.allowed, allowed)
+		})
+	}
+}

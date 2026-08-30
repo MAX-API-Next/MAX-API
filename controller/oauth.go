@@ -56,7 +56,7 @@ func providerParams(name string) map[string]any {
 
 func supportsOAuthState(provider string, intent string) bool {
 	if provider == "telegram" {
-		return intent == model.AuthFlowIntentLogin
+		return common.TelegramOAuthEnabled && intent == model.AuthFlowIntentLogin
 	}
 	return oauth.GetProvider(provider) != nil
 }

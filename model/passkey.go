@@ -27,7 +27,7 @@ type PasskeyCredential struct {
 	CredentialID    string         `json:"credential_id" gorm:"type:varchar(512);uniqueIndex;not null"` // base64 encoded
 	PublicKey       string         `json:"public_key" gorm:"type:text;not null"`                        // base64 encoded
 	AttestationType string         `json:"attestation_type" gorm:"type:varchar(255)"`
-	AAGUID          string         `json:"aaguid" gorm:"type:varchar(512)"` // base64 encoded
+	AAGUID          string         `json:"aaguid" gorm:"column:aa_guid;type:varchar(512)"` // base64 encoded
 	SignCount       uint32         `json:"sign_count" gorm:"default:0"`
 	CloneWarning    bool           `json:"clone_warning"`
 	UserPresent     bool           `json:"user_present"`
