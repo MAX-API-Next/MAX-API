@@ -50,6 +50,9 @@ const handleServerError = mock(
   (_error: unknown, _options?: { fallback?: string }) => undefined
 )
 let passkeyEnabled = false
+let passkeyRegistering = false
+let passkeyRemoving = false
+let passkeySupported = true
 
 interface DialogPartProps {
   children?: ReactNode
@@ -112,9 +115,9 @@ mock.module('../src/features/auth/passkey', () => ({
   usePasskeyManagement: () => ({
     status: null,
     loading: false,
-    registering: false,
-    removing: false,
-    supported: true,
+    registering: passkeyRegistering,
+    removing: passkeyRemoving,
+    supported: passkeySupported,
     enabled: passkeyEnabled,
     lastUsed: null,
     register,
@@ -139,6 +142,9 @@ beforeAll(async (): Promise<void> => {
 })
 beforeEach(() => {
   passkeyEnabled = false
+  passkeyRegistering = false
+  passkeyRemoving = false
+  passkeySupported = true
   withVerification.mockClear()
   withVerification.mockImplementation(async () => {
     throw new Error('verification method lookup failed')
@@ -233,4 +239,34 @@ test('routes restricted Passkey removal through the shared verification gate', a
       'Confirm your identity before removing this Passkey from your account.',
   })
   assert.equal(remove.mock.calls.length, 0)
+})
+
+test('hides decorative Passkey icons from assistive technology', () => {
+  passkeySupported = false
+  const unsupportedView = render(<PasskeyCard loading={false} />)
+  const unsupportedIcons = unsupportedView.container.querySelectorAll('svg')
+  assert.ok(unsupportedIcons.length >= 2)
+  unsupportedIcons.forEach((icon) =>
+    assert.equal(icon.getAttribute('aria-hidden'), 'true')
+  )
+  unsupportedView.unmount()
+
+  passkeySupported = true
+  passkeyRegistering = true
+  const registeringView = render(<PasskeyCard loading={false} />)
+  const registeringIcons = registeringView.container.querySelectorAll('svg')
+  assert.ok(registeringIcons.length >= 2)
+  registeringIcons.forEach((icon) =>
+    assert.equal(icon.getAttribute('aria-hidden'), 'true')
+  )
+  registeringView.unmount()
+
+  passkeyRegistering = false
+  passkeyEnabled = true
+  const enabledView = render(<PasskeyCard loading={false} />)
+  const enabledIcons = enabledView.container.querySelectorAll('svg')
+  assert.ok(enabledIcons.length >= 2)
+  enabledIcons.forEach((icon) =>
+    assert.equal(icon.getAttribute('aria-hidden'), 'true')
+  )
 })

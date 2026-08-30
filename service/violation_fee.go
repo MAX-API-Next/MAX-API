@@ -170,19 +170,13 @@ func chargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	}
 	effect := newConsumeBillingSettlementEffect(relayInfo, logParams, requestID, upstreamRequestID, true)
 
-	if settler, ok := relayInfo.Billing.(interface {
-		SettleWithEffect(int, *model.BillingSettlementEffect) error
-	}); ok {
-		if err := settler.SettleWithEffect(feeQuota, effect); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("violation fee settlement remains pending/manual: %s", err.Error()))
-			return violationFeeChargeResult{applicable: true}
-		}
-		return violationFeeChargeResult{applicable: true, settled: true}
-	}
-
-	if err := SettleBilling(ctx, relayInfo, feeQuota); err != nil {
+	effectHandled, err := SettleBillingWithEffect(ctx, relayInfo, feeQuota, effect)
+	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("violation fee settlement remains pending/manual: %s", err.Error()))
 		return violationFeeChargeResult{applicable: true}
+	}
+	if effectHandled {
+		return violationFeeChargeResult{applicable: true, settled: true}
 	}
 	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
 	model.UpdateChannelUsedQuota(relayInfo.ChannelId, feeQuota)

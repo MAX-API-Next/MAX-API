@@ -701,7 +701,7 @@ func recordTaskBillingLog(operationKey string, params RecordTaskBillingLogParams
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := params.TokenName
 	if params.TokenId > 0 {
-		if token, err := GetTokenById(params.TokenId); err == nil {
+		if token, err := GetTokenById(params.TokenId); err == nil && token.Name != "" {
 			tokenName = token.Name
 		}
 	}

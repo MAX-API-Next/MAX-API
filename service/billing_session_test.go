@@ -1092,6 +1092,76 @@ func TestViolationFeeSettlesOriginalSubscriptionPreConsume(t *testing.T) {
 	require.Zero(t, legacyCount)
 }
 
+func TestViolationFeeProjectsLocallyWhenExistingSettlementHasNoEffect(t *testing.T) {
+	truncate(t)
+	originalLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = true
+	t.Cleanup(func() { common.LogConsumeEnabled = originalLogConsumeEnabled })
+
+	const userID, tokenID, channelID = 835, 836, 837
+	const requestID = "violation-effectless-request"
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "violation-effectless-token", 100)
+	seedChannel(t, channelID)
+
+	oldQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 100
+	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+	feeQuota := calcViolationFeeQuota(0.05, 1)
+	operationKey := model.BillingRequestFinalizeOperationKey(requestID)
+	_, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		TokenKey:     "violation-effectless-token",
+		FundingDelta: int64(feeQuota),
+		TokenDelta:   int64(feeQuota),
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 100-feeQuota, getUserQuota(t, userID))
+	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
+
+	ctx, _ := gin.CreateTestContext(nil)
+	ctx.Set(common.RequestIdKey, "violation-effectless-client-request")
+	ctx.Set(common.UpstreamRequestIdKey, "violation-effectless-upstream-request")
+	info := &relaycommon.RelayInfo{
+		RequestId: requestID, UserId: userID,
+		TokenId: tokenID, TokenKey: "violation-effectless-token",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		OriginModelName: "grok-effectless-test", UsingGroup: "default",
+		BillingSource: BillingSourceWallet,
+		StartTime:     time.Now(),
+	}
+	info.PriceData.GroupRatioInfo.GroupRatio = 1
+	info.Billing = &BillingSession{
+		relayInfo: info,
+		funding:   &WalletFunding{userId: userID},
+	}
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New(CSAMViolationMarker), types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+
+	HandleFailedBilling(ctx, info, NormalizeViolationFeeError(apiErr))
+	HandleFailedBilling(ctx, info, NormalizeViolationFeeError(apiErr))
+
+	require.EqualValues(t, 100-feeQuota, getUserQuota(t, userID))
+	require.EqualValues(t, 100-feeQuota, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, int64(1), countLogs(t))
+	log := getLastLog(t)
+	require.Equal(t, feeQuota, log.Quota)
+	require.Equal(t, "violation-effectless-client-request", log.RequestId)
+	require.Equal(t, "violation-effectless-upstream-request", log.UpstreamRequestId)
+	var storedUser model.User
+	require.NoError(t, model.DB.Select("used_quota", "request_count").First(&storedUser, userID).Error)
+	require.EqualValues(t, feeQuota, storedUser.UsedQuota)
+	require.Equal(t, 1, storedUser.RequestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.Select("used_quota").First(&channel, channelID).Error)
+	require.EqualValues(t, feeQuota, channel.UsedQuota)
+}
+
 type compensationFailingFundingSource struct {
 	deltas []int
 }

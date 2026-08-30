@@ -1119,6 +1119,54 @@ func TestBillingSettlementEffectReplayPrefersCurrentTokenName(t *testing.T) {
 	require.Equal(t, "current-token-name", log.TokenName)
 }
 
+func TestBillingSettlementEffectReplayPreservesRequestTokenNameWhenCurrentNameEmpty(t *testing.T) {
+	const (
+		userID  = 7013
+		tokenID = 7014
+	)
+	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+	require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+	require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)
+		require.NoError(t, DB.Where("1 = 1").Delete(&Token{}).Error)
+		require.NoError(t, DB.Where("id = ?", userID).Delete(&User{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&BillingLogReceipt{}).Error)
+		require.NoError(t, LOG_DB.Where("1 = 1").Delete(&Log{}).Error)
+	})
+
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "empty-token-name-user", AffCode: "empty-token-name-user-aff",
+		Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Token{
+		Id: tokenID, UserId: userID, Name: "", Key: "empty-name-token-key",
+		Status: common.TokenStatusEnabled,
+	}).Error)
+	const operationKey = "request:settlement-empty-current-token-name"
+	_, _, err := ApplyBillingSettlementOnce(BillingSettlementInput{
+		OperationKey: operationKey,
+		Source:       BillingSettlementSourceWallet,
+		UserID:       userID,
+		Effect: &BillingSettlementEffect{
+			LogType:       LogTypeConsume,
+			Content:       "settlement empty token name fallback",
+			TokenID:       tokenID,
+			TokenName:     "request-time-token-name",
+			Quota:         1,
+			QuotaIsActual: true,
+			RequestID:     "settlement-empty-token-name-request",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, ProcessBillingSettlementEffect(operationKey))
+
+	var log Log
+	require.NoError(t, LOG_DB.Where("request_id = ?", "settlement-empty-token-name-request").First(&log).Error)
+	require.Equal(t, "request-time-token-name", log.TokenName)
+}
+
 func TestBillingSettlementEffectRejectsNegativeUsageProjection(t *testing.T) {
 	const userID = 7021
 	require.NoError(t, DB.Where("1 = 1").Delete(&BillingSettlement{}).Error)

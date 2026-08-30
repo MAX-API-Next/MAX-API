@@ -187,7 +187,7 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
           <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between xl:flex-col 2xl:flex-row'>
             <div className='flex items-start gap-4'>
               <div className='bg-muted rounded-md p-2'>
-                <KeyRound className='h-5 w-5' />
+                <KeyRound aria-hidden='true' className='h-5 w-5' />
               </div>
               <div className='space-y-1'>
                 <div className='flex flex-wrap items-center gap-2'>
@@ -220,7 +220,10 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
                 disabled={!supported || registering}
               >
                 {registering && (
-                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                  <Loader2
+                    aria-hidden='true'
+                    className='mr-2 h-4 w-4 animate-spin'
+                  />
                 )}
                 {t('Enable Passkey')}
               </Button>
@@ -240,9 +243,15 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
                   }
                 >
                   {removing ? (
-                    <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                    <Loader2
+                      aria-hidden='true'
+                      className='mr-2 h-4 w-4 animate-spin'
+                    />
                   ) : (
-                    <AlertTriangle className='mr-2 h-4 w-4' />
+                    <AlertTriangle
+                      aria-hidden='true'
+                      className='mr-2 h-4 w-4'
+                    />
                   )}
                   {t('Remove Passkey')}
                 </AlertDialogTrigger>
@@ -277,7 +286,10 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
 
           {showUnsupportedNotice && (
             <div className='bg-muted/60 text-muted-foreground flex items-start gap-3 rounded-md p-4 text-sm'>
-              <ShieldAlert className='mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500' />
+              <ShieldAlert
+                aria-hidden='true'
+                className='mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500'
+              />
               <div>
                 <p className='text-foreground font-medium'>
                   {t('Passkey not supported on this device')}
