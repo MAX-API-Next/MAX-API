@@ -167,6 +167,27 @@ func TestBillingSessionFailsClosedAfterUncertainNonDurableFundingSettlement(t *t
 	}
 }
 
+func TestBillingSessionReturnsNonDurableEffectErrorWithoutRetryWrapping(t *testing.T) {
+	funding := &recordingFundingSource{}
+	session := &BillingSession{
+		relayInfo: &relaycommon.RelayInfo{
+			RequestId: "non-durable-effect-request",
+			UserId:    103,
+			TokenId:   104,
+			TokenKey:  "non-durable-effect-token",
+		},
+		funding:          funding,
+		preConsumedQuota: 10,
+	}
+
+	err := session.SettleWithEffect(15, &model.BillingSettlementEffect{})
+
+	require.ErrorIs(t, err, ErrBillingSettlementEffectNotDurable)
+	require.Equal(t, ErrBillingSettlementEffectNotDurable, err)
+	assert.Empty(t, funding.deltas)
+	assert.False(t, session.settled)
+}
+
 type recordingBillingSettler struct {
 	preConsumed int
 	reserves    []int

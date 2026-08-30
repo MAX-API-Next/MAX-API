@@ -212,6 +212,7 @@ func (s *BillingSession) settleWithEffect(actualQuota int, effect *model.Billing
 		} else {
 			lastErr = err
 			if errors.Is(err, ErrBillingFundingOutcomeUnknown) ||
+				errors.Is(err, ErrBillingSettlementEffectNotDurable) ||
 				errors.Is(err, errBillingSettlementEffectNotOwned) {
 				return err
 			}

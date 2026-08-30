@@ -510,6 +510,8 @@ func TestPrepareTieredBillingForSelectedGroupFreeToPaidAppliesPreConsumedQuota(t
 	require.Equal(t, configured, relayInfo.FinalPreConsumedQuota)
 	require.Equal(t, configured, relayInfo.Billing.GetPreConsumedQuota())
 	require.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	require.EqualValues(t, initialQuota-configured, getUserQuota(t, userID))
+	require.Equal(t, initialQuota-configured, getTokenRemainQuota(t, tokenID))
 }
 
 func TestPrepareTieredBillingForSelectedGroupFreeToPaidRequiresContext(t *testing.T) {
