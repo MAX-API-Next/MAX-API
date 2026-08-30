@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +236,107 @@ func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *te
 
 	assert.Empty(t, alerts, "a stale periodic snapshot must not broadcast after an administrator refresh")
 	assert.Empty(t, GetSmartOpsAlerts(), "a stale periodic snapshot must not reactivate the closed alert")
+}
+
+func TestBillingSettlementBacklogProjectionPreservesNewestObservation(t *testing.T) {
+	originalProjector := billingSettlementBacklogAlertProjector
+	smartOpsAlertMonitor.Lock()
+	originalActiveAlerts := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
+	billingSettlementBacklogAlertState.Lock()
+	originalState := struct {
+		active          bool
+		lastCount       int64
+		oldestCreatedAt int64
+		lastNotifiedAt  time.Time
+		lastObservedAt  time.Time
+	}{
+		active:          billingSettlementBacklogAlertState.active,
+		lastCount:       billingSettlementBacklogAlertState.lastCount,
+		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
+		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
+	}
+	billingSettlementBacklogAlertState.active = false
+	billingSettlementBacklogAlertState.lastCount = 0
+	billingSettlementBacklogAlertState.oldestCreatedAt = 0
+	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+	billingSettlementBacklogAlertState.lastObservedAt = time.Time{}
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertProjector = originalProjector
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActiveAlerts
+		smartOpsAlertMonitor.Unlock()
+		billingSettlementBacklogAlertState.Lock()
+		billingSettlementBacklogAlertState.active = originalState.active
+		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
+		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
+		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
+		billingSettlementBacklogAlertState.Unlock()
+	})
+
+	olderObservedAt := time.Unix(60_000, 0)
+	newerObservedAt := olderObservedAt.Add(time.Second)
+	olderProjectionStarted := make(chan struct{})
+	releaseOlderProjection := make(chan struct{})
+	newerProjectionStarted := make(chan struct{}, 1)
+	var olderProjectionOnce sync.Once
+	billingSettlementBacklogAlertProjector = func(alert SmartOpsAlert) {
+		if alert.Status == smartOpsAlertStatusFiring && alert.ObservedAt.Equal(olderObservedAt) {
+			olderProjectionOnce.Do(func() { close(olderProjectionStarted) })
+			<-releaseOlderProjection
+		}
+		if alert.Status == smartOpsAlertStatusResolved && alert.ObservedAt.Equal(newerObservedAt) {
+			select {
+			case newerProjectionStarted <- struct{}{}:
+			default:
+			}
+		}
+		projectSmartOpsActiveAlert(alert)
+	}
+
+	olderDone := make(chan struct{})
+	go func() {
+		defer close(olderDone)
+		updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{
+			Count:           48,
+			OldestCreatedAt: olderObservedAt.Add(-time.Hour).Unix(),
+		}, olderObservedAt, false)
+	}()
+	select {
+	case <-olderProjectionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older observation did not reach the projection seam")
+	}
+
+	newerDone := make(chan struct{})
+	go func() {
+		defer close(newerDone)
+		updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{}, newerObservedAt, false)
+	}()
+	select {
+	case <-newerProjectionStarted:
+		// The unfixed implementation lets the newer observation overtake the
+		// older projection, which leaves the stale firing alert as the final state.
+	case <-time.After(100 * time.Millisecond):
+		// The fixed implementation serializes observation state and projection.
+	}
+	close(releaseOlderProjection)
+	for name, done := range map[string]<-chan struct{}{
+		"older observation": olderDone,
+		"newer observation": newerDone,
+	} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not complete", name)
+		}
+	}
+
+	assert.Empty(t, GetSmartOpsAlerts(), "the newest resolved observation must remain authoritative")
 }
 
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }

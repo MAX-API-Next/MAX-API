@@ -5555,7 +5555,7 @@
     "Review note must contain between 3 and 1000 characters.": "Review note must contain between 3 and 1000 characters.",
     "Reviewed": "Reviewed",
     "Reviewed record: {{count}}": "Reviewed record: {{count}}",
-    "Reviewed: {{count}}": "Reviewed: {{count}}",
+    "Reviewed records: {{count}}": "Reviewed records: {{count}}",
     "Save review": "Save review",
     "There are no pending or manual positive final settlements requiring operator review.": "There are no pending or manual positive final settlements requiring operator review.",
     "This choice affects only new paid-request admission while the financial settlement remains pending or manual.": "This choice affects only new paid-request admission while the financial settlement remains pending or manual.",

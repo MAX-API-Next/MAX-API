@@ -359,7 +359,7 @@ describe('SmartOps active alerts', () => {
               total_count: 1,
               pending_count: 1,
               open_alert_count: 0,
-              reviewed_count: 1,
+              reviewed_count: 2,
               blocking_record_count: 0,
               blocked_user_count: 0,
               block_user_by_default: blockUserByDefault,
@@ -426,6 +426,9 @@ describe('SmartOps active alerts', () => {
           (view.container.textContent ?? '').includes(
             'request:billing-request-91:finalize'
           )
+        )
+        assert.ok(
+          (view.container.textContent ?? '').includes('Reviewed records: 2')
         )
         policySwitch = screen.getByRole('switch', {
           name: 'Block affected users by default',

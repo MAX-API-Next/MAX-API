@@ -68,6 +68,7 @@ var billingSettlementBacklogAlertState struct {
 }
 
 var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
+var billingSettlementBacklogAlertProjector = projectSmartOpsActiveAlert
 var billingFundingOutcomeUnknownAlertNotificationSender = enqueueSmartOpsAlertNotification
 
 func init() {
@@ -98,7 +99,6 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 		billingSettlementBacklogAlertState.lastCount = 0
 		billingSettlementBacklogAlertState.oldestCreatedAt = 0
 		billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
-		billingSettlementBacklogAlertState.Unlock()
 		resolvedAlert := SmartOpsAlert{
 			Key:          "billing_settlement_backlog",
 			Status:       smartOpsAlertStatusResolved,
@@ -113,7 +113,8 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 				previousCount,
 			),
 		}
-		projectSmartOpsActiveAlert(resolvedAlert)
+		billingSettlementBacklogAlertProjector(resolvedAlert)
+		billingSettlementBacklogAlertState.Unlock()
 		if wasActive && notify {
 			billingSettlementBacklogAlertNotificationSender(resolvedAlert)
 		}
@@ -138,7 +139,6 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 	if shouldNotify && notify {
 		billingSettlementBacklogAlertState.lastNotifiedAt = observedAt
 	}
-	billingSettlementBacklogAlertState.Unlock()
 	alert := SmartOpsAlert{
 		Key:          "billing_settlement_backlog",
 		Status:       smartOpsAlertStatusFiring,
@@ -154,7 +154,8 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 			oldestAge.Round(time.Second),
 		),
 	}
-	projectSmartOpsActiveAlert(alert)
+	billingSettlementBacklogAlertProjector(alert)
+	billingSettlementBacklogAlertState.Unlock()
 	if shouldNotify && notify {
 		billingSettlementBacklogAlertNotificationSender(alert)
 	}
