@@ -74,6 +74,66 @@ describe('resolveServerErrorMessage', (): void => {
     )
   })
 
+  test('ignores a whitespace-only Axios response message', (): void => {
+    const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
+    error.response = {
+      status: 500,
+      statusText: 'Internal Server Error',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: { message: '\n\t' },
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Verification unavailable'
+    )
+  })
+
+  test('ignores a whitespace-only Axios response title', (): void => {
+    const error = new AxiosError('request failed', 'ERR_BAD_REQUEST')
+    error.response = {
+      status: 500,
+      statusText: 'Internal Server Error',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: { title: '   ' },
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Verification unavailable'
+    )
+  })
+
+  test('ignores a non-object Axios response body', (): void => {
+    const error = new AxiosError('request failed', 'ERR_BAD_RESPONSE')
+    error.response = {
+      status: 502,
+      statusText: 'Bad Gateway',
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+      data: '<html>502 Bad Gateway</html>',
+    }
+
+    assert.equal(
+      resolveServerErrorMessage(
+        error,
+        'Verification unavailable',
+        'Content not found.'
+      ),
+      'Verification unavailable'
+    )
+  })
+
   test('uses the localized fallback for Axios transport failures', (): void => {
     const error = new AxiosError('Network Error', 'ERR_NETWORK')
 
