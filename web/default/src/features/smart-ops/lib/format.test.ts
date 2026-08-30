@@ -17,10 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import fr from '@/i18n/locales/fr.json'
+import ru from '@/i18n/locales/ru.json'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { formatLegacyLatency, formatLocalizedCount } from './format'
+import {
+  formatDurationSeconds,
+  formatLegacyLatency,
+  formatLocalizedCount,
+} from './format'
 
 describe('formatLegacyLatency', () => {
   test('keeps a recorded zero-second average distinct from missing data', () => {
@@ -63,6 +68,35 @@ describe('formatLocalizedCount', () => {
         '{{count}} attempts'
       ),
       '2 tentatives'
+    )
+  })
+
+  test('uses count-neutral Russian labels across one, few, and many values', async () => {
+    const instance = i18next.createInstance()
+    await instance.init({
+      lng: 'ru',
+      fallbackLng: 'en',
+      resources: { ru },
+      interpolation: { escapeValue: false },
+    })
+
+    assert.equal(
+      formatDurationSeconds(90_061, 'ru', instance.t),
+      'Дни: 1 Часы: 1'
+    )
+    assert.equal(
+      formatDurationSeconds(180_122, 'ru', instance.t),
+      'Дни: 2 Часы: 2'
+    )
+    assert.equal(
+      formatLocalizedCount(
+        5,
+        'ru',
+        instance.t,
+        'Reviewed record: {{count}}',
+        'Reviewed records: {{count}}'
+      ),
+      'Проверено записей: 5'
     )
   })
 })

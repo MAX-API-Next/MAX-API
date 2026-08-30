@@ -5559,7 +5559,7 @@
     "Save review": "保存核对",
     "There are no pending or manual positive final settlements requiring operator review.": "没有需要管理员核对的待处理或人工处理正向最终结算。",
     "This choice affects only new paid-request admission while the financial settlement remains pending or manual.": "此选择只影响财务结算保持待处理或人工处理期间的新付费请求准入。",
-    "This process is not currently reporting sustained host pressure or an open billing reconciliation alert.": "当前进程未报告持续的主机资源压力或开放的计费对账告警。",
+    "This process is not currently reporting sustained host pressure or an open billing reconciliation alert.": "当前进程未报告持续的主机资源压力或未关闭的计费对账告警。",
     "User access": "用户使用状态",
     "User access while unresolved": "未解决期间的用户使用",
     "User allowed": "用户可继续使用",

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useState, type ReactElement } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -36,6 +37,10 @@ import { Switch } from '@/components/ui/switch'
 import { updateBillingSettlementBlockingPolicy } from '../api'
 import { formatCount, formatLocalizedCount } from '../lib/format'
 import { mutationErrorMessage } from '../lib/mutation-error'
+import {
+  SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+  SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+} from '../lib/query-keys'
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
@@ -49,7 +54,6 @@ interface BillingSettlementEvidenceProps {
   error: Error | null
   loading: boolean
   onRetry: () => void
-  onChanged: () => Promise<void>
 }
 
 export function BillingSettlementEvidence(
@@ -59,33 +63,47 @@ export function BillingSettlementEvidence(
   const [selectedItem, setSelectedItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
-  const [policySaving, setPolicySaving] = useState(false)
+  const queryClient = useQueryClient()
   const policyValue =
     policyOverride ?? props.data?.block_user_by_default ?? true
 
-  const handlePolicyChange = async (checked: boolean) => {
-    setPolicyOverride(checked)
-    setPolicySaving(true)
-    try {
+  const policyMutation = useMutation({
+    mutationKey: ['smart-ops', 'billing-settlement-blocking-policy'],
+    mutationFn: async (checked: boolean) => {
       const response = await updateBillingSettlementBlockingPolicy(checked)
       if (!response.success) {
         throw new Error(
           response.message || t('Failed to update blocking policy.')
         )
       }
+    },
+    onSuccess: async () => {
       toast.success(t('Default user-blocking policy updated.'))
-      await props.onChanged()
-    } catch (error) {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
       handleServerError(error, {
         fallback: mutationErrorMessage(
           error,
           t('Failed to update blocking policy.')
         ),
       })
-    } finally {
+    },
+    onSettled: () => {
       setPolicyOverride(null)
-      setPolicySaving(false)
-    }
+    },
+  })
+
+  const handlePolicyChange = (checked: boolean) => {
+    setPolicyOverride(checked)
+    policyMutation.mutate(checked)
   }
 
   if (props.loading) {
@@ -203,8 +221,8 @@ export function BillingSettlementEvidence(
         <Switch
           id='billing-reconciliation-block-user-default'
           checked={policyValue}
-          onCheckedChange={(checked) => void handlePolicyChange(checked)}
-          disabled={policySaving || !props.canUpdateBlockingPolicy}
+          onCheckedChange={handlePolicyChange}
+          disabled={policyMutation.isPending || !props.canUpdateBlockingPolicy}
           aria-label={t('Block affected users by default')}
         />
       </Field>
@@ -252,7 +270,6 @@ export function BillingSettlementEvidence(
           onOpenChange={(open) => {
             if (!open) setSelectedItem(null)
           }}
-          onReviewed={props.onChanged}
         />
       )}
     </section>

@@ -335,6 +335,37 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('routes malformed reconciliation payloads to the existing error state', async () => {
+    const originalGet = api.get
+    api.get = (async (url) => ({
+      data:
+        url === '/api/smart-ops/billing-settlements'
+          ? { success: true, data: { total_count: 0 } }
+          : { success: true, data: [] },
+    })) as typeof api.get
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      await waitFor(() => {
+        const text = view.container.textContent ?? ''
+        assert.ok(
+          text.includes('We could not load billing reconciliation details.')
+        )
+        assert.ok(!text.includes('No unresolved reconciliation records.'))
+      })
+    } finally {
+      api.get = originalGet
+      queryClient.clear()
+      await view.unmount()
+    }
+  })
+
   test('loads reviewed reconciliation without an active alert and submits administrator controls', async () => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({

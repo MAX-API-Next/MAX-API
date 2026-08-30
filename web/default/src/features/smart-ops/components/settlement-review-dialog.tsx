@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { useState, type ReactElement } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, LockKeyhole, LockOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -42,13 +43,16 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { reviewBillingSettlement } from '../api'
 import { formatLocalizedCount } from '../lib/format'
 import { mutationErrorMessage } from '../lib/mutation-error'
+import {
+  SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+  SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+} from '../lib/query-keys'
 import type { BillingSettlementReconciliationItem } from '../types'
 
 interface SettlementReviewDialogProps {
   item: BillingSettlementReconciliationItem
   open: boolean
   onOpenChange: (open: boolean) => void
-  onReviewed: () => Promise<void>
 }
 
 export function SettlementReviewDialog(
@@ -59,16 +63,15 @@ export function SettlementReviewDialog(
     props.item.record_blocks_user ? 'block' : 'allow'
   )
   const [note, setNote] = useState(props.item.reconciliation_review_note || '')
-  const [saving, setSaving] = useState(false)
+  const queryClient = useQueryClient()
 
   const trimmedNote = note.trim()
   const noteLength = Array.from(trimmedNote).length
   const noteInvalid = noteLength > 0 && (noteLength < 3 || noteLength > 1000)
 
-  const handleSubmit = async () => {
-    if (noteLength < 3 || noteLength > 1000) return
-    setSaving(true)
-    try {
+  const reviewMutation = useMutation({
+    mutationKey: ['smart-ops', 'billing-settlement-review', props.item.id],
+    mutationFn: async () => {
       const response = await reviewBillingSettlement(props.item.id, {
         block_user: decision === 'block',
         note: trimmedNote,
@@ -76,23 +79,36 @@ export function SettlementReviewDialog(
       if (!response.success) {
         throw new Error(response.message || t('Failed to save review.'))
       }
+    },
+    onSuccess: async () => {
       toast.success(t('Billing reconciliation alert closed.'))
       props.onOpenChange(false)
-      await props.onReviewed()
-    } catch (error) {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
       handleServerError(error, {
         fallback: mutationErrorMessage(error, t('Failed to save review.')),
       })
-    } finally {
-      setSaving(false)
-    }
+    },
+  })
+
+  const handleSubmit = () => {
+    if (noteLength < 3 || noteLength > 1000) return
+    reviewMutation.mutate()
   }
 
   return (
     <Dialog
       open={props.open}
       onOpenChange={(open) => {
-        if (!saving) props.onOpenChange(open)
+        if (!reviewMutation.isPending) props.onOpenChange(open)
       }}
     >
       <DialogContent className='sm:max-w-lg'>
@@ -184,16 +200,18 @@ export function SettlementReviewDialog(
             type='button'
             variant='outline'
             onClick={() => props.onOpenChange(false)}
-            disabled={saving}
+            disabled={reviewMutation.isPending}
           >
             {t('Cancel')}
           </Button>
           <Button
             type='button'
-            onClick={() => void handleSubmit()}
-            disabled={saving || noteLength < 3 || noteLength > 1000}
+            onClick={handleSubmit}
+            disabled={
+              reviewMutation.isPending || noteLength < 3 || noteLength > 1000
+            }
           >
-            {saving && (
+            {reviewMutation.isPending && (
               <Loader2
                 data-icon='inline-start'
                 className='animate-spin'

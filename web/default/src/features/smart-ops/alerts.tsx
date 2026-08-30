@@ -51,6 +51,10 @@ import {
   formatAlertThreshold,
   getObservedAtMilliseconds,
 } from './lib/format'
+import {
+  SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+  SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+} from './lib/query-keys'
 import type {
   BillingSettlementReconciliationData,
   SmartOpsAlert,
@@ -202,7 +206,7 @@ export function ActiveAlerts(): ReactElement {
     'We could not load billing reconciliation details.'
   )
   const alertsQuery = useQuery({
-    queryKey: ['smart-ops', 'active-alerts', loadErrorMessage],
+    queryKey: [...SMART_OPS_ACTIVE_ALERTS_QUERY_KEY, loadErrorMessage],
     queryFn: async (): Promise<SmartOpsAlert[]> => {
       const response = await getSmartOpsAlerts()
       if (!response.success || !Array.isArray(response.data)) {
@@ -217,13 +221,16 @@ export function ActiveAlerts(): ReactElement {
   const alerts = alertsQuery.data ?? []
   const reconciliationQuery = useQuery({
     queryKey: [
-      'smart-ops',
-      'billing-settlement-reconciliation',
+      ...SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
       reconciliationErrorMessage,
     ],
     queryFn: async (): Promise<BillingSettlementReconciliationData> => {
       const response = await getBillingSettlementReconciliation()
-      if (!response.success || !response.data) {
+      if (
+        !response.success ||
+        !response.data ||
+        !Array.isArray(response.data.items)
+      ) {
         throw new Error(response.message || reconciliationErrorMessage)
       }
       return response.data
@@ -311,12 +318,6 @@ export function ActiveAlerts(): ReactElement {
               }
               loading={reconciliationQuery.isLoading}
               onRetry={() => void reconciliationQuery.refetch()}
-              onChanged={async () => {
-                await Promise.all([
-                  alertsQuery.refetch(),
-                  reconciliationQuery.refetch(),
-                ])
-              }}
             />
           </div>
         </section>
