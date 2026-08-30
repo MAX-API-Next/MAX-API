@@ -98,6 +98,9 @@ func (t *TwoFA) Delete() error {
 	if t.Id == 0 {
 		return errors.New("2FA记录ID不能为空")
 	}
+	if t.UserId <= 0 {
+		return errors.New("2FA用户ID不能为空")
+	}
 
 	// 使用事务确保原子性
 	return DB.Transaction(func(tx *gorm.DB) error {

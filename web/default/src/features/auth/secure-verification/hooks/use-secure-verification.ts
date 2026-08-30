@@ -341,12 +341,12 @@ export function useSecureVerification(
    * method discovery, the original action, and the post-verification retry.
    */
   const withVerification = useCallback(
-    async <T>(
+    <T>(
       apiCall: () => Promise<T>,
       config: StartVerificationOptions = {}
     ): Promise<T | null> => {
       const attemptId = beginVerificationAttempt()
-      if (attemptId === null) return null
+      if (attemptId === null) return Promise.resolve(null)
       const continuation = new Promise<T | null>((resolve, reject) => {
         pendingVerificationRef.current = {
           attemptId,
@@ -354,6 +354,10 @@ export function useSecureVerification(
           reject,
         }
       })
+      // Keep the original promise and rejection contract for awaiting callers,
+      // while ensuring fire-and-forget UI effects do not produce an unhandled
+      // rejection after the shared flow has already reported the failure.
+      void continuation.catch(() => undefined)
 
       void (async (): Promise<void> => {
         if (config.forceVerification) {
@@ -401,7 +405,7 @@ export function useSecureVerification(
         }
       })()
 
-      return await continuation
+      return continuation
     },
     [
       beginVerificationAttempt,

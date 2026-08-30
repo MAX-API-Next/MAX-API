@@ -530,6 +530,38 @@ describe('useSecureVerification', () => {
     assert.equal(toastError.mock.calls.length, 0)
   })
 
+  test('observes a fire-and-forget verification rejection after reporting it', async () => {
+    const discoveryError = new Error('background method discovery unavailable')
+    checkVerificationMethods.mockImplementationOnce(async () => {
+      throw discoveryError
+    })
+    const apiCall = mock(async () => {
+      throw verificationRequiredError
+    })
+    const unhandledRejections: unknown[] = []
+    const recordUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    process.on('unhandledRejection', recordUnhandledRejection)
+    try {
+      const { result } = renderHook(() => useSecureVerification())
+
+      act(() => {
+        void result.current.withVerification(apiCall, {
+          scope: 'access_token',
+        })
+      })
+
+      await waitFor(() => assert.equal(handleServerError.mock.calls.length, 1))
+      await flushMacrotask()
+      await flushMacrotask()
+      assert.deepEqual(unhandledRejections, [])
+      assert.equal(wasSecureVerificationErrorReported(discoveryError), true)
+    } finally {
+      process.off('unhandledRejection', recordUnhandledRejection)
+    }
+  })
+
   test('reports a protected action retry failure through the shared handler', async () => {
     const retryError = new Error('protected action retry failed')
     let callCount = 0

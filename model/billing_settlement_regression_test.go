@@ -873,6 +873,8 @@ func TestBackupCodeMutationsRequireCredentialOwner(t *testing.T) {
 	setupSecurityCredentialTestState(t)
 	const missingUserID = 8899
 
+	require.EqualError(t, (&TwoFA{Id: 1}).Delete(), "2FA用户ID不能为空")
+	require.EqualError(t, (&TwoFA{Id: 1, UserId: -1}).Delete(), "2FA用户ID不能为空")
 	require.ErrorIs(t, CreateBackupCodes(missingUserID, []string{"ABCD-EFGH"}), gorm.ErrRecordNotFound)
 	require.ErrorIs(t, (&TwoFA{Id: 1, UserId: missingUserID}).Delete(), gorm.ErrRecordNotFound)
 }

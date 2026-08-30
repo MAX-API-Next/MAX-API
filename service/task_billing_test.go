@@ -83,6 +83,7 @@ func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T)
 	ctx, _ := gin.CreateTestContext(nil)
 	ctx.Set(common.RequestIdKey, "task-client-request")
 	ctx.Set(common.UpstreamRequestIdKey, "task-upstream-request")
+	ctx.Set("token_name", "request-time-task-token")
 	info := &relaycommon.RelayInfo{
 		RequestId:       "task-relay-fallback-request",
 		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 91},
@@ -102,6 +103,7 @@ func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T)
 	assert.EqualValues(t, 123, effect.Quota)
 	assert.Equal(t, "task-client-request", effect.RequestID)
 	assert.Equal(t, "task-upstream-request", effect.UpstreamRequestID)
+	assert.Equal(t, "request-time-task-token", effect.TokenName)
 	assert.GreaterOrEqual(t, effect.UseTimeSeconds, 3)
 	assert.True(t, effect.IsStream)
 }

@@ -71,6 +71,10 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 	if !info.StartTime.IsZero() {
 		useTimeSeconds = int(time.Since(info.StartTime).Seconds())
 	}
+	tokenName := ""
+	if c != nil {
+		tokenName = c.GetString("token_name")
+	}
 	requestID, upstreamRequestID := billingEffectRequestIDs(c, info)
 	return newConsumeBillingSettlementEffect(info, model.RecordConsumeLogParams{
 		ChannelId:      info.ChannelId,
@@ -78,6 +82,7 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 		Quota:          quota,
 		Content:        logContent,
 		TokenId:        info.TokenId,
+		TokenName:      tokenName,
 		UseTimeSeconds: useTimeSeconds,
 		IsStream:       info.IsStream,
 		Group:          info.UsingGroup,

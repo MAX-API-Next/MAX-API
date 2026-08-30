@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
 import { LayoutProvider } from '@/context/layout-provider'
@@ -29,7 +29,7 @@ import { AppHeader } from './app-header'
 import { AppSidebar } from './app-sidebar'
 
 type AuthenticatedLayoutProps = {
-  children?: React.ReactNode
+  children?: ReactNode
 }
 
 export function AuthenticatedLayout(

@@ -405,7 +405,7 @@ export function ApiKeysMutateDrawer(
   return (
     <Sheet
       open={props.open}
-      onOpenChange={(v) => {
+      onOpenChange={(v: boolean): void => {
         props.onOpenChange(v)
         if (!v) {
           setEditingLegacyRouting(false)
