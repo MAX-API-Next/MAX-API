@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/glebarez/sqlite"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/stretchr/testify/assert"
@@ -969,9 +970,26 @@ func TestTimedOutTaskCursorRemainsGroupedWithStatusPredicate(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&tasks).Error)
 
-	got := GetTimedOutUnfinishedTasksAfter(200, submitTime, 400, 10)
+	got, err := GetTimedOutUnfinishedTasksAfter(200, submitTime, 400, 10)
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, "cursor-unfinished", got[0].TaskID)
+}
+
+func TestTimedOutTaskCursorReturnsQueryError(t *testing.T) {
+	failingDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := failingDB.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	originalDB := DB
+	DB = failingDB
+	t.Cleanup(func() { DB = originalDB })
+
+	tasks, queryErr := GetTimedOutUnfinishedTasksAfter(200, 0, 0, 10)
+	require.Error(t, queryErr)
+	require.Nil(t, tasks)
 }
 
 func TestPasskeyValidatedCredentialStateIsPersisted(t *testing.T) {

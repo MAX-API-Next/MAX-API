@@ -159,6 +159,17 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
       : t('Not used yet')
 
   const showUnsupportedNotice = !supported && !enabled
+  let backupLabel = t('No backup')
+  let backupVariant: 'success' | 'warning' | 'neutral' = 'neutral'
+  if (status?.backup_eligible) {
+    if (status.backup_state) {
+      backupLabel = t('Backed up')
+      backupVariant = 'success'
+    } else {
+      backupLabel = t('Not backed up')
+      backupVariant = 'warning'
+    }
+  }
 
   return (
     <Card className='gap-0 overflow-hidden py-0'>
@@ -189,20 +200,8 @@ export function PasskeyCard(props: PasskeyCardProps): ReactElement {
                   />
                   {status?.backup_eligible !== undefined && (
                     <StatusBadge
-                      label={
-                        status.backup_eligible
-                          ? status.backup_state
-                            ? t('Backed up')
-                            : t('Not backed up')
-                          : t('No backup')
-                      }
-                      variant={
-                        status.backup_eligible
-                          ? status.backup_state
-                            ? 'success'
-                            : 'warning'
-                          : 'neutral'
-                      }
+                      label={backupLabel}
+                      variant={backupVariant}
                       showDot
                       copyable={false}
                     />

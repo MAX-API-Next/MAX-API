@@ -290,7 +290,7 @@ func TestSettleAndRecordConsumeLeavesUsageProjectionPendingWhenFinalChargeExceed
 	assert.Zero(t, countLogs(t))
 
 	var settlement model.BillingSettlement
-	require.NoError(t, model.DB.Where("operation_key = ?", "request:final-charge-insufficient-request:finalize").First(&settlement).Error)
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey("final-charge-insufficient-request")).First(&settlement).Error)
 	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
 	assert.Contains(t, settlement.LastError, "user quota is not enough")
 }
@@ -400,7 +400,7 @@ func TestPostTextConsumeQuotaDoesNotProjectUsageWhenFinalizeSettlementFails(t *t
 	assert.Zero(t, countLogs(t))
 
 	var settlement model.BillingSettlement
-	require.NoError(t, model.DB.Where("operation_key = ?", "request:failed-finalize-text-request:finalize").First(&settlement).Error)
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey("failed-finalize-text-request")).First(&settlement).Error)
 	assert.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
 	assert.NotEmpty(t, settlement.EffectPayload)
 	assert.Empty(t, settlement.EffectStatus)

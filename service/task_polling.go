@@ -71,7 +71,11 @@ func sweepTimedOutTasks(ctx context.Context) {
 		if scanBudget < queryLimit {
 			queryLimit = scanBudget
 		}
-		tasks := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, queryLimit)
+		tasks, queryErr := model.GetTimedOutUnfinishedTasksAfter(cutoff, afterSubmitTime, afterID, queryLimit)
+		if queryErr != nil {
+			logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks query error after cursor (%d, %d): %v", afterSubmitTime, afterID, queryErr))
+			break
+		}
 		if len(tasks) == 0 {
 			afterSubmitTime = 0
 			afterID = 0

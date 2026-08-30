@@ -70,6 +70,7 @@ const handleServerError = mock(
 )
 const navigate = mock(() => undefined)
 const copyToClipboard = mock(async () => true)
+const toastError = mock(() => undefined)
 const toastSuccess = mock(() => undefined)
 const resetPasswordPost = mock(async () => ({
   data: {
@@ -100,7 +101,7 @@ mock.module('@tanstack/react-router', () => ({
 
 mock.module('sonner', () => ({
   toast: {
-    error: mock(() => undefined),
+    error: toastError,
     success: toastSuccess,
   },
 }))
@@ -132,6 +133,7 @@ beforeEach((): void => {
   handleServerError.mockClear()
   navigate.mockClear()
   copyToClipboard.mockClear()
+  toastError.mockClear()
   toastSuccess.mockClear()
   resetPasswordPost.mockClear()
   consoleError.mockClear()
@@ -267,6 +269,38 @@ test('does not claim the reset password was copied when clipboard access fails',
         'Password reset: {{password}}'
       )
     })
+  } finally {
+    api.post = originalPost
+  }
+})
+
+test('shows the server message when password reset returns a business failure', async (): Promise<void> => {
+  const failingResetPasswordPost = mock(async () => ({
+    data: {
+      success: false,
+      data: '',
+      message: 'Reset link expired',
+    },
+  }))
+  const originalPost = api.post
+  api.post = failingResetPasswordPost as typeof api.post
+  try {
+    const view = render(
+      <ResetPasswordConfirm
+        email='recovery@example.com'
+        token='expired-recovery-token'
+      />
+    )
+
+    fireEvent.click(
+      view.getByRole('button', {
+        name: 'auth.resetPasswordConfirm.confirm',
+      })
+    )
+
+    await waitFor(() => assert.equal(toastError.mock.calls.length, 1))
+    assert.equal(toastError.mock.calls[0]?.[0], 'Reset link expired')
+    assert.equal(copyToClipboard.mock.calls.length, 0)
   } finally {
     api.post = originalPost
   }

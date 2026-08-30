@@ -1010,6 +1010,7 @@ func TestBillingSettlementEffectReplayExportsTokenUsage(t *testing.T) {
 	require.Equal(t, BillingSettlementEffectApplied, settlement.EffectStatus)
 
 	var exportedTokenUsed int
+	require.Len(t, CacheQuotaData, 1)
 	for _, quotaData := range CacheQuotaData {
 		exportedTokenUsed = quotaData.TokenUsed
 	}

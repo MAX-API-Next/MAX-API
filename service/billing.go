@@ -213,6 +213,10 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		logger.LogError(logCtx, "error settling billing: relayInfo is nil")
 		return
 	}
+	if params.Other == nil {
+		params.Other = make(map[string]interface{})
+	}
+	appendBillingInfo(relayInfo, params.Other)
 	requestID, upstreamRequestID := billingEffectRequestIDs(ctx, relayInfo)
 	effect := newConsumeBillingSettlementEffect(relayInfo, params, requestID, upstreamRequestID, shouldUpdateUsage)
 
@@ -224,9 +228,7 @@ func settleAndRecordConsume(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	if effectHandled {
 		return
 	}
-	if params.Other == nil {
-		params.Other = make(map[string]interface{})
-	}
+	// Refresh post-settlement subscription fields for the local projection path.
 	appendBillingInfo(relayInfo, params.Other)
 	if shouldUpdateUsage {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, params.Quota)

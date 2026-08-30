@@ -40,6 +40,7 @@ type ResetPasswordConfirmProps = ResetPasswordSearchParams
 interface ResetPasswordResponse {
   success: boolean
   data: string
+  message?: string
   api_tokens_revoked?: boolean
 }
 
@@ -91,6 +92,8 @@ export function ResetPasswordConfirm(
         } else {
           toast.success(t('Password reset: {{password}}', { password }))
         }
+      } else {
+        toast.error(res?.data?.message || t('Reset failed'))
       }
     } catch {
       // Errors handled by global interceptor

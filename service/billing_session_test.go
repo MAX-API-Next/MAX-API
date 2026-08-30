@@ -241,6 +241,30 @@ func TestSettleAndRecordConsumeCarriesZeroUsageLogInDurableEffect(t *testing.T) 
 	assert.Equal(t, "zero-usage-upstream-request", settler.effect.UpstreamRequestID)
 }
 
+func TestSettleAndRecordConsumeAddsBillingMetadataBeforeDurableEffect(t *testing.T) {
+	settler := &recordingEffectBillingSettler{}
+	info := &relaycommon.RelayInfo{
+		Billing:                               settler,
+		BillingSource:                         BillingSourceSubscription,
+		SubscriptionId:                        701,
+		SubscriptionPlanId:                    702,
+		SubscriptionPreConsumed:               10,
+		SubscriptionAmountTotal:               100,
+		SubscriptionAmountUsedAfterPreConsume: 10,
+		UserSetting: dto.UserSetting{
+			BillingPreference: "subscription_first",
+		},
+	}
+
+	settleAndRecordConsume(nil, info, false, model.RecordConsumeLogParams{})
+
+	require.NotNil(t, settler.effect)
+	require.NotNil(t, settler.effect.Other)
+	assert.Equal(t, BillingSourceSubscription, settler.effect.Other["billing_source"])
+	assert.Equal(t, "subscription_first", settler.effect.Other["billing_preference"])
+	assert.Equal(t, 702, settler.effect.Other["subscription_plan_id"])
+}
+
 func TestSettleBillingWithEffectDoesNotClaimPrePersistenceFailure(t *testing.T) {
 	settler := &recordingEffectBillingSettler{err: ErrBillingSettlementEffectNotDurable}
 	info := &relaycommon.RelayInfo{Billing: settler}
