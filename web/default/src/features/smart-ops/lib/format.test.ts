@@ -147,6 +147,18 @@ describe('formatLocalizedCount', () => {
       'Ручная обработка: {{count}}'
     )
     assert.equal(ru.translation['Open alert'], 'Открыть оповещение')
+    assert.equal(
+      ru.translation['Open alert: {{count}}'],
+      'Открытое оповещение: {{count}}'
+    )
+    assert.equal(
+      vi.translation['Administrator controls'],
+      'Kiểm soát dành cho quản trị viên'
+    )
+    assert.equal(
+      vi.translation['Billing reconciliation controls'],
+      'Kiểm soát đối soát tính phí'
+    )
     assert.match(vi.translation[positiveSettlementKey], /có số tiền dương/)
     assert.match(vi.translation[rootPolicyKey], /quản trị viên Root/)
     assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')

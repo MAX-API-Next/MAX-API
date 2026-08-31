@@ -5543,7 +5543,7 @@
     "Not reviewed": "Не проверено",
     "Only root administrators can change the default blocking policy.": "Изменять политику блокировки по умолчанию могут только администраторы Root.",
     "Open alert": "Открыть оповещение",
-    "Open alert: {{count}}": "Открытых оповещений: {{count}}",
+    "Open alert: {{count}}": "Открытое оповещение: {{count}}",
     "Open alerts: {{count}}": "Открытых оповещений: {{count}}",
     "Record policy: allow": "Политика записи: разрешить",
     "Record policy: block": "Политика записи: блокировать",
