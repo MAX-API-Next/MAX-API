@@ -121,6 +121,8 @@ describe('formatLocalizedCount', () => {
     const emptyStateKey = 'No unresolved reconciliation records.'
     const blockingPolicyKey = 'Block affected users by default'
     const userAccessKey = 'User access while unresolved'
+    const rootPolicyKey =
+      'Only root administrators can change the default blocking policy.'
     const closeAlertKey =
       'Closing this alert records an administrator review only. It does not mark the settlement as applied or change any balance.'
     const positiveSettlementKey =
@@ -145,6 +147,7 @@ describe('formatLocalizedCount', () => {
     )
     assert.equal(ru.translation['Open alert'], 'Открыть оповещение')
     assert.match(vi.translation[positiveSettlementKey], /có số tiền dương/)
+    assert.match(vi.translation[rootPolicyKey], /quản trị viên Root/)
     assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
     assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')
     assert.equal(zh.translation[userAccessKey], '未解决期间的用户访问权限')
