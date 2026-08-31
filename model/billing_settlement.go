@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -549,11 +550,15 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 		}
 		seen[target.ID] = struct{}{}
 	}
+	sortedTargets := append([]BillingSettlementReviewTarget(nil), targets...)
+	sort.Slice(sortedTargets, func(i, j int) bool {
+		return sortedTargets[i].ID < sortedTargets[j].ID
+	})
 
 	reviewed := make([]BillingSettlement, 0, len(targets))
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		reviewedAt := time.Now()
-		for _, target := range targets {
+		for _, target := range sortedTargets {
 			result := openPositiveFinalizeSettlementAlertScope(tx).
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
 				UpdateColumns(billingSettlementReviewUpdates(reviewerID, false, "", reviewedAt))

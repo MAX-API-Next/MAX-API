@@ -79,13 +79,13 @@ export function BillingSettlementTable(
     props.selectedIDs.has(item.id)
   )
 
-  const toggleAll = (checked: boolean) => {
+  const toggleAll = (checked: boolean): void => {
     props.onSelectedIDsChange(
       checked ? new Set(props.items.map((item) => item.id)) : new Set()
     )
   }
 
-  const toggleItem = (id: number, checked: boolean) => {
+  const toggleItem = (id: number, checked: boolean): void => {
     const next = new Set(props.selectedIDs)
     if (checked) next.add(id)
     else next.delete(id)

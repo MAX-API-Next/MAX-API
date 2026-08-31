@@ -172,6 +172,22 @@ describe('formatLocalizedCount', () => {
       'Cảnh báo đối soát tính phí đang mở'
     )
     assert.equal(
+      ja.translation['Open billing reconciliation alerts'],
+      '未対応の請求照合アラート'
+    )
+    assert.equal(
+      ru.translation['Open billing reconciliation alerts'],
+      'Открытые оповещения о сверке биллинга'
+    )
+    assert.doesNotMatch(
+      ja.translation['Billing reconciliation alerts closed: {{count}}'],
+      /課金照合/
+    )
+    assert.doesNotMatch(
+      ru.translation['Billing reconciliation alerts closed: {{count}}'],
+      /сверк[аеи] расчётов/i
+    )
+    assert.equal(
       zh.translation['No open reconciliation alerts.'],
       '没有未关闭的对账告警。'
     )

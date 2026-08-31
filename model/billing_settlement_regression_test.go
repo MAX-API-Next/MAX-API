@@ -324,14 +324,18 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&records).Error)
 
-	reviewed, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{
-		{ID: records[0].ID, Revision: records[0].Revision},
+	targets := []BillingSettlementReviewTarget{
 		{ID: records[1].ID, Revision: records[1].Revision},
-	}, 7002)
+		{ID: records[0].ID, Revision: records[0].Revision},
+	}
+	reviewed, err := ReviewBillingSettlements(targets, 7002)
 
 	require.NoError(t, err)
 	require.Len(t, reviewed, 2)
+	assert.Equal(t, records[1].ID, targets[0].ID, "sorting must not mutate the caller's target order")
+	assert.Equal(t, records[0].ID, targets[1].ID)
 	for index := range reviewed {
+		assert.Equal(t, records[index].ID, reviewed[index].ID, "settlement locks must be acquired in ascending ID order")
 		assert.Positive(t, reviewed[index].ReconciliationReviewedAt)
 		assert.Equal(t, 7002, reviewed[index].ReconciliationReviewedBy)
 		assert.Empty(t, reviewed[index].ReconciliationReviewNote)

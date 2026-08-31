@@ -146,7 +146,7 @@ export function BillingSettlementEvidence(
     },
   })
 
-  const reviewItems = (items: BillingSettlementReconciliationItem[]) => {
+  const reviewItems = (items: BillingSettlementReconciliationItem[]): void => {
     if (items.length > 0 && !reviewMutation.isPending) {
       reviewMutation.mutate(items)
     }
