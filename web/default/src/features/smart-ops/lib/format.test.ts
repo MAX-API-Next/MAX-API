@@ -28,6 +28,7 @@ import {
   formatDurationSeconds,
   formatLegacyLatency,
   formatLocalizedCount,
+  formatPercent,
 } from './format'
 
 describe('formatLegacyLatency', () => {
@@ -39,6 +40,13 @@ describe('formatLegacyLatency', () => {
   test('uses the shared latency format for positive values', () => {
     assert.equal(formatLegacyLatency(500), '500ms')
     assert.equal(formatLegacyLatency(1_500), '1.50s')
+  })
+})
+
+describe('formatPercent', () => {
+  test('uses locale-aware percent symbols and spacing', () => {
+    assert.equal(formatPercent(12.3, 'en-US'), '12.3%')
+    assert.equal(formatPercent(12.3, 'fr-FR'), '12,3\u00a0%')
   })
 })
 
@@ -131,6 +139,11 @@ describe('formatLocalizedCount', () => {
     assert.doesNotMatch(fr.translation['Administrator review'], /vérification/i)
     assert.equal(fr.translation.Reviewed, 'Examiné')
     assert.doesNotMatch(ru.translation[closeAlertKey], /\bapplied\b/i)
+    assert.equal(
+      ru.translation['Manual: {{count}}'],
+      'Ручная обработка: {{count}}'
+    )
+    assert.equal(ru.translation['Open alert'], 'Открыть оповещение')
     assert.match(vi.translation[positiveSettlementKey], /có số tiền dương/)
     assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
     assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')

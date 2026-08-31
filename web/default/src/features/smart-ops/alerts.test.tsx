@@ -155,7 +155,7 @@ describe('SmartOps active alerts', () => {
 
     try {
       await waitFor(() => {
-        assert.ok((view.container.textContent ?? '').includes('95,3%'))
+        assert.ok((view.container.textContent ?? '').includes('95,3\u00a0%'))
       })
     } finally {
       api.get = originalGet

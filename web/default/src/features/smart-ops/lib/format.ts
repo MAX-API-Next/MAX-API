@@ -37,10 +37,11 @@ export function formatLegacyLatency(
 }
 
 export function formatPercent(value: number, locale: string): string {
-  return `${new Intl.NumberFormat(locale, {
+  return new Intl.NumberFormat(locale, {
+    style: 'percent',
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
-  }).format(value)}%`
+  }).format(value / 100)
 }
 
 export function formatCount(value: number, locale: string): string {

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -34,6 +35,7 @@ func UpdateBillingSettlementBlockingPolicy(c *gin.Context) {
 		return
 	}
 	if err := service.UpdateBillingSettlementBlockingPolicy(*request.BlockUserByDefault); err != nil {
+		common.SysError(fmt.Sprintf("failed to update billing reconciliation blocking policy: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "failed to update billing reconciliation blocking policy",
@@ -84,6 +86,9 @@ func ReviewBillingSettlement(c *gin.Context) {
 		case errors.Is(err, model.ErrBillingSettlementReviewConflict):
 			status = http.StatusConflict
 			message = "billing settlement is no longer pending manual reconciliation"
+		}
+		if status == http.StatusInternalServerError {
+			common.SysError(fmt.Sprintf("failed to review billing settlement %d: %v", id, err))
 		}
 		c.JSON(status, gin.H{"success": false, "message": message})
 		return

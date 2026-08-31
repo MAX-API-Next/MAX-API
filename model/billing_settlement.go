@@ -239,7 +239,7 @@ func openPositiveFinalizeSettlementAlertScope(db *gorm.DB) *gorm.DB {
 func blockingPositiveFinalizeSettlementScope(db *gorm.DB, blockUserByDefault bool) *gorm.DB {
 	scope := unresolvedPositiveFinalizeSettlementScope(db)
 	if blockUserByDefault {
-		return scope.Where("user_blocking_override IS NULL OR user_blocking_override = ?", true)
+		return scope.Where("(user_blocking_override IS NULL OR user_blocking_override = ?)", true)
 	}
 	return scope.Where("user_blocking_override = ?", true)
 }
@@ -995,12 +995,25 @@ func markBillingSettlementFailure(operationKey string, cause error) {
 	if cause != nil {
 		lastError = cause.Error()
 	}
-	if err := DB.Model(&BillingSettlement{}).Where("id = ? AND status = ?", record.ID, BillingSettlementStatusPending).Updates(map[string]interface{}{
-		"attempts": attempts, "last_error": lastError,
-		"status": status, "next_attempt": nextAttempt,
-		"updated_at": time.Now().Unix(), "revision": gorm.Expr("revision + ?", 1),
-	}).Error; err != nil {
+	if err := DB.Model(&BillingSettlement{}).
+		Where("id = ? AND status = ?", record.ID, BillingSettlementStatusPending).
+		Updates(billingSettlementFailureUpdates(attempts, lastError, status, nextAttempt, time.Now().Unix())).Error; err != nil {
 		common.SysLog("failed to reschedule billing settlement: " + err.Error())
+	}
+}
+
+func billingSettlementFailureUpdates(attempts int, lastError string, status string, nextAttempt int64, updatedAt int64) map[string]interface{} {
+	return map[string]interface{}{
+		"attempts":                   attempts,
+		"last_error":                 lastError,
+		"status":                     status,
+		"next_attempt":               nextAttempt,
+		"updated_at":                 updatedAt,
+		"revision":                   gorm.Expr("revision + ?", 1),
+		"reconciliation_reviewed_at": 0,
+		"reconciliation_reviewed_by": 0,
+		"reconciliation_review_note": "",
+		"user_blocking_override":     nil,
 	}
 }
 

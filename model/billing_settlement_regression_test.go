@@ -266,6 +266,76 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 	assert.True(t, sharedBlockItem.BlocksUser)
 }
 
+func TestBillingSettlementBlockingScopeDoesNotLeakAcrossUsers(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	block := true
+	record := BillingSettlement{
+		OperationKey: "request:cross-user-blocking:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 961, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		UserBlockingOverride: &block, CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(), Revision: 1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(962)
+	require.NoError(t, err)
+	assert.False(t, blocked, "another user's explicit block must not leak across the user_id predicate")
+}
+
+func TestBillingSettlementFailureReopensReviewedRecord(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	now := time.Now().Unix()
+	allow := false
+	record := BillingSettlement{
+		OperationKey: "request:reviewed-retry-failure:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 963, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+		Status: BillingSettlementStatusPending, Attempts: 1, LastError: "previous failure", NextAttempt: now - 1,
+		ReconciliationReviewedAt: now - 60, ReconciliationReviewedBy: 7005,
+		ReconciliationReviewNote: "Reviewed previous failure evidence", UserBlockingOverride: &allow,
+		CreatedAt: now - 120, UpdatedAt: now - 60, Revision: 7,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count)
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "the reviewed allow decision is active before new evidence arrives")
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("new retry failure"))
+
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, 2, stored.Attempts)
+	assert.Equal(t, "new retry failure", stored.LastError)
+	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
+	assert.GreaterOrEqual(t, stored.NextAttempt, now)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+	assert.Nil(t, stored.UserBlockingOverride)
+	assert.EqualValues(t, 10, stored.FundingDelta)
+	assert.EqualValues(t, 2, stored.AppliedFundingDelta)
+	assert.EqualValues(t, 10, stored.TokenDelta)
+	assert.EqualValues(t, 2, stored.AppliedTokenDelta)
+	assert.EqualValues(t, 8, stored.Revision)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, stats.Count, "new failure evidence must reopen the operational alert")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.True(t, blocked, "reopened records must inherit the fail-closed global policy")
+}
+
 func TestReviewBillingSettlementRejectsAlreadyAppliedRecord(t *testing.T) {
 	setupUserUpdateTestState(t)
 	now := time.Now().Unix()
@@ -319,9 +389,14 @@ func TestBillingSettlementReviewUpdateMapUsesSchemaColumns(t *testing.T) {
 	parsed, err := schema.Parse(&BillingSettlement{}, &sync.Map{}, schema.NamingStrategy{})
 	require.NoError(t, err)
 
-	updates := billingSettlementReviewUpdates(7003, false, "reviewed", time.Unix(123, 0))
-	for key := range updates {
-		assert.NotNilf(t, parsed.LookUpField(key), "review update key %q must map to a BillingSettlement column", key)
+	updateMaps := []map[string]interface{}{
+		billingSettlementReviewUpdates(7003, false, "reviewed", time.Unix(123, 0)),
+		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusPending, 456, 123),
+	}
+	for _, updates := range updateMaps {
+		for key := range updates {
+			assert.NotNilf(t, parsed.LookUpField(key), "billing settlement update key %q must map to a BillingSettlement column", key)
+		}
 	}
 }
 
