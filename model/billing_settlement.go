@@ -529,6 +529,21 @@ func billingSettlementReviewMatches(record BillingSettlement, reviewerID int, bl
 		*record.UserBlockingOverride == blockUser
 }
 
+func billingSettlementReviewSnapshotScope(db *gorm.DB, record BillingSettlement) *gorm.DB {
+	scope := db.Where(
+		"id = ? AND revision = ? AND reconciliation_reviewed_at = ? AND reconciliation_reviewed_by = ? AND reconciliation_review_note = ?",
+		record.ID,
+		record.Revision,
+		record.ReconciliationReviewedAt,
+		record.ReconciliationReviewedBy,
+		record.ReconciliationReviewNote,
+	)
+	if record.UserBlockingOverride == nil {
+		return scope.Where("user_blocking_override IS NULL")
+	}
+	return scope.Where("user_blocking_override = ?", *record.UserBlockingOverride)
+}
+
 // ReviewBillingSettlement records an administrator's alert disposition without
 // changing settlement status, balances, applied deltas, or effect state.
 func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note string) (BillingSettlement, error) {
@@ -540,7 +555,15 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 	}
 
 	var record BillingSettlement
-	if err := DB.Select("id", "user_id").First(&record, id).Error; err != nil {
+	if err := DB.Select(
+		"id",
+		"user_id",
+		"revision",
+		"reconciliation_reviewed_at",
+		"reconciliation_reviewed_by",
+		"reconciliation_review_note",
+		"user_blocking_override",
+	).First(&record, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return BillingSettlement{}, ErrBillingSettlementReviewConflict
 		}
@@ -548,8 +571,10 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 	}
 
 	reviewedAt := time.Now()
-	result := unresolvedPositiveFinalizeSettlementScope(DB).
-		Where("id = ?", id).
+	result := billingSettlementReviewSnapshotScope(
+		unresolvedPositiveFinalizeSettlementScope(DB),
+		record,
+	).
 		UpdateColumns(billingSettlementReviewUpdates(reviewerID, blockUser, note, reviewedAt))
 	if result.Error != nil {
 		return BillingSettlement{}, result.Error
