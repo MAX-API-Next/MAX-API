@@ -531,13 +531,17 @@ func billingSettlementReviewMatches(record BillingSettlement, reviewerID int, bl
 
 func billingSettlementReviewSnapshotScope(db *gorm.DB, record BillingSettlement) *gorm.DB {
 	scope := db.Where(
-		"id = ? AND revision = ? AND reconciliation_reviewed_at = ? AND reconciliation_reviewed_by = ? AND reconciliation_review_note = ?",
+		"id = ? AND revision = ? AND reconciliation_reviewed_at = ? AND reconciliation_reviewed_by = ?",
 		record.ID,
 		record.Revision,
 		record.ReconciliationReviewedAt,
 		record.ReconciliationReviewedBy,
-		record.ReconciliationReviewNote,
 	)
+	if record.ReconciliationReviewNote == "" {
+		scope = scope.Where("(reconciliation_review_note = ? OR reconciliation_review_note IS NULL)", "")
+	} else {
+		scope = scope.Where("reconciliation_review_note = ?", record.ReconciliationReviewNote)
+	}
 	if record.UserBlockingOverride == nil {
 		return scope.Where("user_blocking_override IS NULL")
 	}

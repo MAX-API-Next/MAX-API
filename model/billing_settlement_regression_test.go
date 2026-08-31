@@ -422,6 +422,30 @@ func TestReviewBillingSettlementAllowsEditingCurrentReview(t *testing.T) {
 	assert.EqualValues(t, record.Revision, reviewed.Revision, "review metadata must remain independent from financial revision")
 }
 
+func TestReviewBillingSettlementAcceptsLegacyNullReviewNote(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:legacy-null-review-note:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 966, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		CreatedAt: now - 60, UpdatedAt: now - 30, Revision: 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+	require.NoError(t, DB.Exec(
+		"UPDATE billing_settlements SET reconciliation_review_note = NULL WHERE id = ?",
+		record.ID,
+	).Error)
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 7009, false, "Reviewed legacy reconciliation record")
+
+	require.NoError(t, err)
+	assert.Equal(t, 7009, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Reviewed legacy reconciliation record", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.False(t, *reviewed.UserBlockingOverride)
+}
+
 func TestReviewBillingSettlementAcceptsMatchingUpdateWhenDriverReportsZeroRows(t *testing.T) {
 	setupUserUpdateTestState(t)
 	now := time.Now().Unix()
