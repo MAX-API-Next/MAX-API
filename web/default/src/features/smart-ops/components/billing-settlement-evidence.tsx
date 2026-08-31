@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, type ReactElement } from 'react'
+import { useMemo, useState, type ReactElement } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -65,6 +65,21 @@ export function BillingSettlementEvidence(
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
+  const reconciliationItems = props.data?.items
+  const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
+    const currentRevisions = new Map(
+      reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
+    )
+    const targets = Array.from(selectedTargets.values()).filter(
+      (target) => currentRevisions.get(target.id) === target.revision
+    )
+    return {
+      activeSelectedTargets: targets,
+      activeSelectedTargetMap: new Map(
+        targets.map((target) => [target.id, target])
+      ),
+    }
+  }, [reconciliationItems, selectedTargets])
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const queryClient = useQueryClient()
   const policyValue =
@@ -195,16 +210,6 @@ export function BillingSettlementEvidence(
   if (!props.data) {
     return <></>
   }
-
-  const currentRevisions = new Map(
-    props.data.items.map((item) => [item.id, item.revision])
-  )
-  const activeSelectedTargets = Array.from(selectedTargets.values()).filter(
-    (target) => currentRevisions.get(target.id) === target.revision
-  )
-  const activeSelectedTargetMap = new Map(
-    activeSelectedTargets.map((target) => [target.id, target])
-  )
 
   return (
     <section

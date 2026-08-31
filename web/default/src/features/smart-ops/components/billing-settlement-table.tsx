@@ -35,6 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useBillingSettlementSelection } from '../hooks/use-billing-settlement-selection'
 import { formatLocalizedCount } from '../lib/format'
 import type {
   BillingSettlementReconciliationItem,
@@ -77,37 +78,12 @@ export function BillingSettlementTable(
   props: BillingSettlementTableProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
-  const isSelected = (item: BillingSettlementReconciliationItem): boolean =>
-    props.selectedTargets.get(item.id)?.revision === item.revision
-  const allSelected =
-    props.items.length > 0 && props.items.every((item) => isSelected(item))
-  const someSelected = props.items.some((item) => isSelected(item))
-
-  const toggleAll = (checked: boolean): void => {
-    props.onSelectedTargetsChange(
-      checked
-        ? new Map(
-            props.items.map((item) => [
-              item.id,
-              { id: item.id, revision: item.revision },
-            ])
-          )
-        : new Map()
-    )
-  }
-
-  const toggleItem = (
-    item: BillingSettlementReconciliationItem,
-    checked: boolean
-  ): void => {
-    const next = new Map(props.selectedTargets)
-    if (checked) {
-      next.set(item.id, { id: item.id, revision: item.revision })
-    } else {
-      next.delete(item.id)
-    }
-    props.onSelectedTargetsChange(next)
-  }
+  const { allSelected, someSelected, isSelected, toggleAll, toggleItem } =
+    useBillingSettlementSelection({
+      items: props.items,
+      selectedTargets: props.selectedTargets,
+      onSelectedTargetsChange: props.onSelectedTargetsChange,
+    })
 
   return (
     <div className='overflow-x-auto rounded-md border'>

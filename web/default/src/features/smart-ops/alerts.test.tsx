@@ -503,9 +503,17 @@ describe('SmartOps active alerts', () => {
 
       assert.ok(closeSelectedButton)
       assert.equal(closeSelectedButton.hasAttribute('disabled'), true)
+      const firstRowSelection = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 91',
+      })
+      await view.click(firstRowSelection)
       const selectAll = within(view.container).getByRole('checkbox', {
         name: 'Select all billing reconciliation alerts',
       })
+      assert.equal(selectAll.hasAttribute('data-indeterminate'), true)
+      assert.ok(
+        selectAll.querySelector('[data-checkbox-indicator="indeterminate"]')
+      )
       await view.click(selectAll)
       closeSelectedButton = within(view.container).getByRole('button', {
         name: 'Review and close selected (2)',
