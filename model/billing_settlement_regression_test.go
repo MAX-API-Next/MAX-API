@@ -328,7 +328,7 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(_ *gorm.DB) {
 		queryCount++
 	}))
-	t.Cleanup(func() { DB.Callback().Query().Remove(callbackName) })
+	t.Cleanup(func() { _ = DB.Callback().Query().Remove(callbackName) })
 
 	targets := []BillingSettlementReviewTarget{
 		{ID: records[1].ID, Revision: records[1].Revision},
@@ -411,7 +411,7 @@ func TestReviewBillingSettlementsRollsBackWhenBatchReadFails(t *testing.T) {
 	callbackName := "test:batch-review-read-failure"
 	readErr := errors.New("forced batch review read failure")
 	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		tx.AddError(readErr)
+		_ = tx.AddError(readErr)
 	}))
 	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{{
 		ID: record.ID, Revision: record.Revision,

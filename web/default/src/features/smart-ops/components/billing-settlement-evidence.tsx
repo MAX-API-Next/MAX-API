@@ -111,7 +111,9 @@ export function BillingSettlementEvidence(
 
   const reviewMutation = useMutation({
     mutationKey: ['smart-ops', 'billing-settlement-reviews'],
-    mutationFn: async (targets: BillingSettlementReviewTarget[]) => {
+    mutationFn: async (
+      targets: BillingSettlementReviewTarget[]
+    ): Promise<number> => {
       const response = await reviewBillingSettlements({ items: targets })
       if (!response.success) {
         throw new Error(
@@ -120,7 +122,7 @@ export function BillingSettlementEvidence(
       }
       return targets.length
     },
-    onSuccess: async (count) => {
+    onSuccess: async (count: number): Promise<void> => {
       setSelectedTargets(new Map())
       toast.success(
         t('Billing reconciliation alerts closed: {{count}}', { count })
