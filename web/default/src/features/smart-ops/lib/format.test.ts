@@ -165,7 +165,11 @@ describe('formatLocalizedCount', () => {
     )
     assert.equal(
       vi.translation['Pending settlements: {{count}}'],
-      'Quyết toán đang chờ: {{count}}'
+      'Quyết toán đang chờ xử lý: {{count}}'
+    )
+    assert.equal(
+      vi.translation['Manual settlements: {{count}}'],
+      'Quyết toán thủ công: {{count}}'
     )
     assert.equal(
       zh.translation['Pending settlements: {{count}}'],
