@@ -5564,7 +5564,7 @@
     "User access while unresolved": "Доступ пользователя до разрешения ситуации",
     "User allowed": "Пользователю разрешён доступ",
     "User blocked": "Пользователь заблокирован",
-    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "Если параметр включён, неразрешённые положительные окончательные расчёты блокируют новые платные запросы, если только проверенная запись явно не разрешает пользователю продолжить работу.",
+    "When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.": "Если параметр включён, новые платные запросы остаются заблокированными, пока хотя бы одна неразрешённая запись положительного окончательного расчёта продолжает блокировать пользователя. Разрешение по одной проверенной записи не отменяет другие блокирующие записи.",
     "{{count}} / 1000 character": "Символы: {{count}} / 1000",
     "{{count}} / 1000 characters": "Символы: {{count}} / 1000"
   }

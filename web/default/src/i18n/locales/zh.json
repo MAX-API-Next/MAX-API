@@ -5564,7 +5564,7 @@
     "User access while unresolved": "未解决期间的用户访问权限",
     "User allowed": "用户可继续使用",
     "User blocked": "用户已被阻止",
-    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "启用后，未解决的正向最终结算会阻止新的付费请求，除非已核对记录明确允许用户继续。",
+    "When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.": "启用后，只要仍有任何未解决的正向最终结算记录阻止该用户，新的付费请求就会继续被阻止。允许某一条已核对记录不会覆盖其他阻塞记录。",
     "{{count}} / 1000 character": "{{count}} / 1000 个字符",
     "{{count}} / 1000 characters": "{{count}} / 1000 个字符"
   }

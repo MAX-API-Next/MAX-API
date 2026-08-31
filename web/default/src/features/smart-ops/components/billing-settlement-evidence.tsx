@@ -207,7 +207,7 @@ export function BillingSettlementEvidence(
           <FieldTitle>{t('Block affected users by default')}</FieldTitle>
           <FieldDescription>
             {t(
-              'When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.'
+              'When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.'
             )}
           </FieldDescription>
           {!props.canUpdateBlockingPolicy && (

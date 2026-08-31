@@ -5564,7 +5564,7 @@
     "User access while unresolved": "Accès utilisateur tant que le règlement n’est pas résolu",
     "User allowed": "Utilisateur autorisé",
     "User blocked": "Utilisateur bloqué",
-    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "Lorsque cette option est activée, les règlements finaux positifs non résolus bloquent les nouvelles requêtes payantes, sauf si un enregistrement examiné autorise explicitement l’utilisateur à continuer.",
+    "When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.": "Lorsque cette option est activée, les nouvelles requêtes payantes restent bloquées tant qu’au moins un enregistrement de règlement final positif non résolu bloque encore l’utilisateur. Autoriser un enregistrement examiné ne neutralise pas les autres enregistrements bloquants.",
     "{{count}} / 1000 character": "{{count}} / 1000 caractère",
     "{{count}} / 1000 characters": "{{count}} / 1000 caractères"
   }

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import en from '@/i18n/locales/en.json'
 import fr from '@/i18n/locales/fr.json'
 import ja from '@/i18n/locales/ja.json'
 import ru from '@/i18n/locales/ru.json'
@@ -127,7 +128,11 @@ describe('formatLocalizedCount', () => {
     const closeAlertKey =
       'Closing this alert records an administrator review only. It does not mark the settlement as applied or change any balance.'
     const positiveSettlementKey =
+      'When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.'
+    const oldPositiveSettlementKey =
       'When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.'
+    const paidAdmissionKey =
+      'This choice affects only new paid-request admission while the financial settlement remains pending or manual.'
 
     assert.doesNotMatch(ru.translation[reviewSummaryKey], /pending|manual/i)
     assert.doesNotMatch(
@@ -159,7 +164,25 @@ describe('formatLocalizedCount', () => {
       vi.translation['Billing reconciliation controls'],
       'Kiểm soát đối soát tính phí'
     )
-    assert.match(vi.translation[positiveSettlementKey], /có số tiền dương/)
+    assert.equal(
+      vi.translation['Attempts / next retry'],
+      'Số lần thử / lần thử lại tiếp theo'
+    )
+    assert.equal(
+      vi.translation[paidAdmissionKey],
+      'Lựa chọn này chỉ ảnh hưởng đến việc tiếp nhận yêu cầu có tính phí mới trong khi quyết toán tài chính vẫn ở trạng thái đang chờ hoặc xử lý thủ công.'
+    )
+    assert.equal(
+      vi.translation[positiveSettlementKey],
+      'Khi bật, các yêu cầu có tính phí mới vẫn bị chặn chừng nào còn bất kỳ bản ghi quyết toán cuối có số tiền dương chưa xử lý nào chặn người dùng. Việc cho phép một bản ghi đã kiểm tra không vô hiệu hóa các bản ghi chặn khác.'
+    )
+    assert.equal(en.translation[positiveSettlementKey], positiveSettlementKey)
+    assert.equal(en.translation[oldPositiveSettlementKey], undefined)
+    assert.equal(fr.translation[oldPositiveSettlementKey], undefined)
+    assert.equal(ja.translation[oldPositiveSettlementKey], undefined)
+    assert.equal(ru.translation[oldPositiveSettlementKey], undefined)
+    assert.equal(vi.translation[oldPositiveSettlementKey], undefined)
+    assert.equal(zh.translation[oldPositiveSettlementKey], undefined)
     assert.match(vi.translation[rootPolicyKey], /quản trị viên Root/)
     assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
     assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')

@@ -5564,7 +5564,7 @@
     "User access while unresolved": "未解決中のユーザーアクセス",
     "User allowed": "ユーザーは利用可能",
     "User blocked": "ユーザーはブロック中",
-    "When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.": "有効にすると、未解決の正の最終精算は新規有料リクエストをブロックします。ただし、確認済みレコードがユーザーの継続を明示的に許可している場合を除きます。",
+    "When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.": "有効にすると、未解決の正の最終精算レコードが1件でもユーザーをブロックしている間、新規有料リクエストは引き続きブロックされます。1件の確認済みレコードを許可しても、他のブロック対象レコードを上書きしません。",
     "{{count}} / 1000 character": "{{count}} / 1000 文字",
     "{{count}} / 1000 characters": "{{count}} / 1000 文字"
   }
