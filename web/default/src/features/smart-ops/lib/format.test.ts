@@ -177,12 +177,12 @@ describe('formatLocalizedCount', () => {
       'Khi bật, các yêu cầu có tính phí mới vẫn bị chặn chừng nào còn bất kỳ bản ghi quyết toán cuối có số tiền dương chưa xử lý nào chặn người dùng. Việc cho phép một bản ghi đã kiểm tra không vô hiệu hóa các bản ghi chặn khác.'
     )
     assert.equal(en.translation[positiveSettlementKey], positiveSettlementKey)
-    assert.equal(en.translation[oldPositiveSettlementKey], undefined)
-    assert.equal(fr.translation[oldPositiveSettlementKey], undefined)
-    assert.equal(ja.translation[oldPositiveSettlementKey], undefined)
-    assert.equal(ru.translation[oldPositiveSettlementKey], undefined)
-    assert.equal(vi.translation[oldPositiveSettlementKey], undefined)
-    assert.equal(zh.translation[oldPositiveSettlementKey], undefined)
+    for (const locale of [en, fr, ja, ru, vi, zh]) {
+      assert.equal(
+        Object.hasOwn(locale.translation, oldPositiveSettlementKey),
+        false
+      )
+    }
     assert.match(vi.translation[rootPolicyKey], /quản trị viên Root/)
     assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
     assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')
