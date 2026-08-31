@@ -538,6 +538,127 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('clears a selected alert when refresh changes its financial revision', async (): Promise<void> => {
+    const originalGet = api.get
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    let revision = 4
+    api.get = (async (url: string): Promise<unknown> => {
+      if (url !== '/api/smart-ops/billing-settlements') {
+        return { data: { success: true, data: [] } }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            ...emptyReconciliationData(),
+            total_count: 1,
+            pending_count: 1,
+            open_alert_count: 1,
+            items: [
+              {
+                id: 91,
+                revision,
+                operation_key: 'request:billing-request-91:finalize',
+                status: 'pending',
+                source: 'wallet',
+                user_id: 51,
+                subscription_id: 0,
+                token_id: 0,
+                task_id: 0,
+                funding_delta: 100,
+                applied_funding_delta: 0,
+                token_delta: 100,
+                applied_token_delta: 0,
+                attempts: 2,
+                last_error: 'quota changed',
+                next_attempt: 1788106500,
+                created_at: 1786032544,
+                updated_at: 1786032544,
+                reconciliation_reviewed_at: 0,
+                reconciliation_reviewed_by: 0,
+                reconciliation_review_note: '',
+                user_blocking_override: null,
+                record_blocks_user: false,
+                blocks_user: false,
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return { data: { success: true } }
+    }) as typeof api.post
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      let rowSelection: HTMLElement | undefined
+      await waitFor(() => {
+        rowSelection = within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 91',
+        })
+      })
+      assert.ok(rowSelection)
+      await view.click(rowSelection)
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Review and close selected (1)',
+          })
+        )
+      })
+
+      revision = 6
+      await queryClient.invalidateQueries()
+      await waitFor(() => {
+        const closeSelectedButton = within(view.container).getByRole('button', {
+          name: 'Review and close selected (0)',
+        })
+        assert.equal(closeSelectedButton.hasAttribute('disabled'), true)
+        assert.equal(
+          within(view.container)
+            .getByRole('checkbox', {
+              name: 'Select billing reconciliation alert 91',
+            })
+            .getAttribute('data-checked'),
+          null
+        )
+      })
+      assert.equal(writes.length, 0)
+
+      rowSelection = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 91',
+      })
+      await view.click(rowSelection)
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Review and close selected (1)',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes, [
+          {
+            url: '/api/smart-ops/billing-settlements/reviews',
+            data: { items: [{ id: 91, revision: 6 }] },
+          },
+        ])
+      })
+    } finally {
+      api.get = originalGet
+      api.post = originalPost
+      await view.unmount()
+      queryClient.clear()
+    }
+  })
+
   test('keeps the global blocking policy read only for non-root administrators', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({

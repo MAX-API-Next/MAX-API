@@ -558,6 +558,7 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 	reviewed := make([]BillingSettlement, 0, len(targets))
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		reviewedAt := time.Now()
+		updatedIDs := make([]int64, 0, len(sortedTargets))
 		for _, target := range sortedTargets {
 			result := openPositiveFinalizeSettlementAlertScope(tx).
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
@@ -568,12 +569,13 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 			if result.RowsAffected != 1 {
 				return ErrBillingSettlementReviewConflict
 			}
-
-			var record BillingSettlement
-			if err := tx.First(&record, target.ID).Error; err != nil {
-				return err
-			}
-			reviewed = append(reviewed, record)
+			updatedIDs = append(updatedIDs, target.ID)
+		}
+		if err := tx.Where("id IN ?", updatedIDs).Order("id ASC").Find(&reviewed).Error; err != nil {
+			return err
+		}
+		if len(reviewed) != len(updatedIDs) {
+			return gorm.ErrRecordNotFound
 		}
 		return nil
 	})

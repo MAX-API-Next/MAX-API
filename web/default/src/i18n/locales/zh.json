@@ -5550,7 +5550,7 @@
     "Open alert: {{count}}": "未关闭告警：{{count}}",
     "Open alerts: {{count}}": "未关闭告警：{{count}}",
     "Open billing reconciliation alerts": "未关闭的计费对账告警",
-    "Open manual settlements: {{count}}": "未关闭的需人工处理结算：{{count}}",
+    "Open manual settlements: {{count}}": "未关闭的需人工处理的结算：{{count}}",
     "Open pending settlements: {{count}}": "未关闭的待结算：{{count}}",
     "Record policy: allow": "记录策略：允许",
     "Record policy: block": "记录策略：阻止",

@@ -46,7 +46,7 @@ import {
 } from '../lib/query-keys'
 import type {
   BillingSettlementReconciliationData,
-  BillingSettlementReconciliationItem,
+  BillingSettlementReviewTarget,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
 
@@ -62,7 +62,9 @@ export function BillingSettlementEvidence(
   props: BillingSettlementEvidenceProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
-  const [selectedIDs, setSelectedIDs] = useState<Set<number>>(() => new Set())
+  const [selectedTargets, setSelectedTargets] = useState<
+    Map<number, BillingSettlementReviewTarget>
+  >(() => new Map())
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const queryClient = useQueryClient()
   const policyValue =
@@ -109,19 +111,17 @@ export function BillingSettlementEvidence(
 
   const reviewMutation = useMutation({
     mutationKey: ['smart-ops', 'billing-settlement-reviews'],
-    mutationFn: async (items: BillingSettlementReconciliationItem[]) => {
-      const response = await reviewBillingSettlements({
-        items: items.map((item) => ({ id: item.id, revision: item.revision })),
-      })
+    mutationFn: async (targets: BillingSettlementReviewTarget[]) => {
+      const response = await reviewBillingSettlements({ items: targets })
       if (!response.success) {
         throw new Error(
           response.message || t('Failed to close reconciliation alerts.')
         )
       }
-      return items.length
+      return targets.length
     },
     onSuccess: async (count) => {
-      setSelectedIDs(new Set())
+      setSelectedTargets(new Map())
       toast.success(
         t('Billing reconciliation alerts closed: {{count}}', { count })
       )
@@ -146,10 +146,16 @@ export function BillingSettlementEvidence(
     },
   })
 
-  const reviewItems = (items: BillingSettlementReconciliationItem[]): void => {
-    if (items.length > 0 && !reviewMutation.isPending) {
-      reviewMutation.mutate(items)
+  const reviewTargets = (targets: BillingSettlementReviewTarget[]): void => {
+    if (targets.length > 0 && !reviewMutation.isPending) {
+      reviewMutation.mutate(targets)
     }
+  }
+
+  const replaceSelectedTargets = (
+    targets: Map<number, BillingSettlementReviewTarget>
+  ): void => {
+    setSelectedTargets(targets)
   }
 
   if (props.loading) {
@@ -188,8 +194,14 @@ export function BillingSettlementEvidence(
     return <></>
   }
 
-  const selectedItems = props.data.items.filter((item) =>
-    selectedIDs.has(item.id)
+  const currentRevisions = new Map(
+    props.data.items.map((item) => [item.id, item.revision])
+  )
+  const activeSelectedTargets = Array.from(selectedTargets.values()).filter(
+    (target) => currentRevisions.get(target.id) === target.revision
+  )
+  const activeSelectedTargetMap = new Map(
+    activeSelectedTargets.map((target) => [target.id, target])
   )
 
   return (
@@ -283,14 +295,16 @@ export function BillingSettlementEvidence(
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <span className='text-muted-foreground text-xs'>
               {t('Selected alerts: {{count}}', {
-                count: formatCount(selectedItems.length, i18n.language),
+                count: formatCount(activeSelectedTargets.length, i18n.language),
               })}
             </span>
             <Button
               type='button'
               size='sm'
-              onClick={() => reviewItems(selectedItems)}
-              disabled={selectedItems.length === 0 || reviewMutation.isPending}
+              onClick={() => reviewTargets(activeSelectedTargets)}
+              disabled={
+                activeSelectedTargets.length === 0 || reviewMutation.isPending
+              }
             >
               {reviewMutation.isPending && (
                 <Loader2
@@ -300,16 +314,16 @@ export function BillingSettlementEvidence(
                 />
               )}
               {t('Review and close selected ({{count}})', {
-                count: formatCount(selectedItems.length, i18n.language),
+                count: formatCount(activeSelectedTargets.length, i18n.language),
               })}
             </Button>
           </div>
           <BillingSettlementTable
             items={props.data.items}
-            selectedIDs={selectedIDs}
+            selectedTargets={activeSelectedTargetMap}
             reviewPending={reviewMutation.isPending}
-            onSelectedIDsChange={setSelectedIDs}
-            onReviewItems={reviewItems}
+            onSelectedTargetsChange={replaceSelectedTargets}
+            onReviewTargets={reviewTargets}
           />
         </div>
       )}

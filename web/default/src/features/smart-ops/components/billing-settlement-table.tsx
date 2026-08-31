@@ -36,7 +36,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatLocalizedCount } from '../lib/format'
-import type { BillingSettlementReconciliationItem } from '../types'
+import type {
+  BillingSettlementReconciliationItem,
+  BillingSettlementReviewTarget,
+} from '../types'
 
 const FUNDING_SOURCE_LABEL: Record<string, string> = {
   wallet: 'Wallet',
@@ -62,34 +65,48 @@ function settlementReferences(
 
 interface BillingSettlementTableProps {
   items: BillingSettlementReconciliationItem[]
-  selectedIDs: ReadonlySet<number>
+  selectedTargets: ReadonlyMap<number, BillingSettlementReviewTarget>
   reviewPending: boolean
-  onSelectedIDsChange: (ids: Set<number>) => void
-  onReviewItems: (items: BillingSettlementReconciliationItem[]) => void
+  onSelectedTargetsChange: (
+    targets: Map<number, BillingSettlementReviewTarget>
+  ) => void
+  onReviewTargets: (targets: BillingSettlementReviewTarget[]) => void
 }
 
 export function BillingSettlementTable(
   props: BillingSettlementTableProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
+  const isSelected = (item: BillingSettlementReconciliationItem): boolean =>
+    props.selectedTargets.get(item.id)?.revision === item.revision
   const allSelected =
-    props.items.length > 0 &&
-    props.items.every((item) => props.selectedIDs.has(item.id))
-  const someSelected = props.items.some((item) =>
-    props.selectedIDs.has(item.id)
-  )
+    props.items.length > 0 && props.items.every((item) => isSelected(item))
+  const someSelected = props.items.some((item) => isSelected(item))
 
   const toggleAll = (checked: boolean): void => {
-    props.onSelectedIDsChange(
-      checked ? new Set(props.items.map((item) => item.id)) : new Set()
+    props.onSelectedTargetsChange(
+      checked
+        ? new Map(
+            props.items.map((item) => [
+              item.id,
+              { id: item.id, revision: item.revision },
+            ])
+          )
+        : new Map()
     )
   }
 
-  const toggleItem = (id: number, checked: boolean): void => {
-    const next = new Set(props.selectedIDs)
-    if (checked) next.add(id)
-    else next.delete(id)
-    props.onSelectedIDsChange(next)
+  const toggleItem = (
+    item: BillingSettlementReconciliationItem,
+    checked: boolean
+  ): void => {
+    const next = new Map(props.selectedTargets)
+    if (checked) {
+      next.set(item.id, { id: item.id, revision: item.revision })
+    } else {
+      next.delete(item.id)
+    }
+    props.onSelectedTargetsChange(next)
   }
 
   return (
@@ -129,9 +146,9 @@ export function BillingSettlementTable(
               <TableRow key={item.id}>
                 <TableCell>
                   <Checkbox
-                    checked={props.selectedIDs.has(item.id)}
+                    checked={isSelected(item)}
                     onCheckedChange={(checked) =>
-                      toggleItem(item.id, checked === true)
+                      toggleItem(item, checked === true)
                     }
                     disabled={props.reviewPending}
                     aria-label={t(
@@ -234,7 +251,11 @@ export function BillingSettlementTable(
                     type='button'
                     variant='outline'
                     size='sm'
-                    onClick={() => props.onReviewItems([item])}
+                    onClick={() =>
+                      props.onReviewTargets([
+                        { id: item.id, revision: item.revision },
+                      ])
+                    }
                     disabled={props.reviewPending}
                   >
                     {t('Review and close')}

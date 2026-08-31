@@ -149,7 +149,7 @@ describe('formatLocalizedCount', () => {
     )
     assert.equal(
       zh.translation['Open manual settlements: {{count}}'],
-      '未关闭的需人工处理结算：{{count}}'
+      '未关闭的需人工处理的结算：{{count}}'
     )
     assert.doesNotMatch(
       zh.translation['Open pending settlements: {{count}}'],

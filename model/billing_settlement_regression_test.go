@@ -323,6 +323,12 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 		},
 	}
 	require.NoError(t, DB.Create(&records).Error)
+	queryCount := 0
+	callbackName := "test:batch-review-single-read"
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(_ *gorm.DB) {
+		queryCount++
+	}))
+	t.Cleanup(func() { DB.Callback().Query().Remove(callbackName) })
 
 	targets := []BillingSettlementReviewTarget{
 		{ID: records[1].ID, Revision: records[1].Revision},
@@ -332,6 +338,7 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, reviewed, 2)
+	assert.Equal(t, 1, queryCount, "reviewed settlements must be read back in one query")
 	assert.Equal(t, records[1].ID, targets[0].ID, "sorting must not mutate the caller's target order")
 	assert.Equal(t, records[0].ID, targets[1].ID)
 	for index := range reviewed {
@@ -388,6 +395,35 @@ func TestReviewBillingSettlementsRejectsStaleBatchWithoutPartialClose(t *testing
 		assert.Zero(t, record.ReconciliationReviewedBy)
 		assert.Nil(t, record.UserBlockingOverride)
 	}
+}
+
+func TestReviewBillingSettlementsRollsBackWhenBatchReadFails(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:batch-review-read-failure:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 977, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		CreatedAt: now - 10, UpdatedAt: now - 5, Revision: 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	callbackName := "test:batch-review-read-failure"
+	readErr := errors.New("forced batch review read failure")
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		tx.AddError(readErr)
+	}))
+	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{{
+		ID: record.ID, Revision: record.Revision,
+	}}, 7004)
+	require.NoError(t, DB.Callback().Query().Remove(callbackName))
+
+	assert.ErrorIs(t, err, readErr)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Nil(t, stored.UserBlockingOverride)
 }
 
 func TestBillingSettlementBlockingScopeDoesNotLeakAcrossUsers(t *testing.T) {

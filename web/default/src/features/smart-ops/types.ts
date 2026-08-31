@@ -90,11 +90,13 @@ export type BillingSettlementMutationResponse = {
   data?: Record<string, unknown>
 }
 
+export type BillingSettlementReviewTarget = {
+  id: number
+  revision: number
+}
+
 export type BillingSettlementReviewRequest = {
-  items: Array<{
-    id: number
-    revision: number
-  }>
+  items: BillingSettlementReviewTarget[]
 }
 
 export type BillingSettlementReconciliationResponse = {
