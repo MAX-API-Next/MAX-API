@@ -234,6 +234,9 @@ func SetApiRouter(router *gin.Engine) {
 		smartOpsRoute.Use(middleware.AdminAuth())
 		{
 			smartOpsRoute.GET("/alerts", controller.GetSmartOpsAlerts)
+			smartOpsRoute.GET("/billing-settlements", middleware.DisableCache(), controller.GetBillingSettlementReconciliation)
+			smartOpsRoute.PUT("/billing-settlements/blocking-policy", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.UpdateBillingSettlementBlockingPolicy)
+			smartOpsRoute.POST("/billing-settlements/:id/review", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.ReviewBillingSettlement)
 			smartOpsRoute.GET("/channel-performance", controller.GetChannelPerformance)
 			smartOpsRoute.GET("/channel-performance/detail", controller.GetChannelPerformanceDetail)
 			smartOpsRoute.GET("/model-performance", controller.GetModelPerformance)

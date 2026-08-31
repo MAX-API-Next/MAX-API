@@ -64,9 +64,11 @@ var billingSettlementBacklogAlertState struct {
 	lastCount       int64
 	oldestCreatedAt int64
 	lastNotifiedAt  time.Time
+	lastObservedAt  time.Time
 }
 
 var billingSettlementBacklogAlertNotificationSender = enqueueSmartOpsAlertNotification
+var billingSettlementBacklogAlertProjector = projectSmartOpsActiveAlert
 var billingFundingOutcomeUnknownAlertNotificationSender = enqueueSmartOpsAlertNotification
 
 func init() {
@@ -74,11 +76,21 @@ func init() {
 }
 
 func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, observedAt time.Time) {
+	updateBillingSettlementBacklogAlert(stats, observedAt, true)
+}
+
+func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogStats, observedAt time.Time, notify bool) {
 	if observedAt.IsZero() {
 		observedAt = time.Now()
 	}
 
 	billingSettlementBacklogAlertState.Lock()
+	if !billingSettlementBacklogAlertState.lastObservedAt.IsZero() &&
+		!observedAt.After(billingSettlementBacklogAlertState.lastObservedAt) {
+		billingSettlementBacklogAlertState.Unlock()
+		return
+	}
+	billingSettlementBacklogAlertState.lastObservedAt = observedAt
 	wasActive := billingSettlementBacklogAlertState.active
 	previousCount := billingSettlementBacklogAlertState.lastCount
 	previousOldestCreatedAt := billingSettlementBacklogAlertState.oldestCreatedAt
@@ -87,19 +99,24 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 		billingSettlementBacklogAlertState.lastCount = 0
 		billingSettlementBacklogAlertState.oldestCreatedAt = 0
 		billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+		resolvedAlert := SmartOpsAlert{
+			Key:          "billing_settlement_backlog",
+			Status:       smartOpsAlertStatusResolved,
+			Severity:     smartOpsAlertSeverityWarning,
+			Component:    "billing",
+			Node:         smartOpsAlertNodeName(),
+			CurrentValue: 0,
+			Threshold:    0,
+			ObservedAt:   observedAt,
+			Message: fmt.Sprintf(
+				"尚未核对的正向最终计费告警已全部关闭，此前共 %d 条。财务结算记录仍可能保持 pending/manual，请继续在对账列表中处理。",
+				previousCount,
+			),
+		}
+		billingSettlementBacklogAlertProjector(resolvedAlert)
 		billingSettlementBacklogAlertState.Unlock()
-		if wasActive {
-			billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
-				Key:          "billing_settlement_backlog",
-				Status:       smartOpsAlertStatusResolved,
-				Severity:     smartOpsAlertSeverityWarning,
-				Component:    "billing",
-				Node:         smartOpsAlertNodeName(),
-				CurrentValue: 0,
-				Threshold:    0,
-				ObservedAt:   observedAt,
-				Message:      fmt.Sprintf("未完成的正向最终计费对账已清空，此前共 %d 条。", previousCount),
-			})
+		if wasActive && notify {
+			billingSettlementBacklogAlertNotificationSender(resolvedAlert)
 		}
 		return
 	}
@@ -119,15 +136,10 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 	billingSettlementBacklogAlertState.active = true
 	billingSettlementBacklogAlertState.lastCount = stats.Count
 	billingSettlementBacklogAlertState.oldestCreatedAt = stats.OldestCreatedAt
-	if shouldNotify {
+	if shouldNotify && notify {
 		billingSettlementBacklogAlertState.lastNotifiedAt = observedAt
 	}
-	billingSettlementBacklogAlertState.Unlock()
-	if !shouldNotify {
-		return
-	}
-
-	billingSettlementBacklogAlertNotificationSender(SmartOpsAlert{
+	alert := SmartOpsAlert{
 		Key:          "billing_settlement_backlog",
 		Status:       smartOpsAlertStatusFiring,
 		Severity:     smartOpsAlertSeverityWarning,
@@ -137,11 +149,25 @@ func observeBillingSettlementBacklog(stats model.BillingSettlementBacklogStats, 
 		Threshold:    oldestAge.Seconds(),
 		ObservedAt:   observedAt,
 		Message: fmt.Sprintf(
-			"存在 %d 条未完成的正向最终计费对账，最早已等待 %s。相关用户的新付费请求会被阻止，请尽快处理 pending/manual 记录。",
+			"存在 %d 条尚未核对的正向最终计费对账，最早已等待 %s。是否阻止相关用户的新付费请求由管理员配置和单条核对策略决定，请尽快处理 pending/manual 记录。",
 			stats.Count,
 			oldestAge.Round(time.Second),
 		),
-	})
+	}
+	billingSettlementBacklogAlertProjector(alert)
+	billingSettlementBacklogAlertState.Unlock()
+	if shouldNotify && notify {
+		billingSettlementBacklogAlertNotificationSender(alert)
+	}
+}
+
+func refreshBillingSettlementBacklogAfterReview() {
+	stats, err := model.GetUnresolvedPositiveFinalizeSettlementStats()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to refresh billing settlement backlog after administrator review: %s", err.Error()))
+		return
+	}
+	updateBillingSettlementBacklogAlert(stats, time.Now(), false)
 }
 
 func (s *BillingSession) notifyFundingOutcomeUnknown(requested, applied int64) {

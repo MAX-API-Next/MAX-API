@@ -20,7 +20,9 @@ import type { ReactElement } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { RefreshCw, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -42,27 +44,30 @@ import {
 } from '@/components/ui/table'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
-import { getSmartOpsAlerts } from './api'
-import type { SmartOpsAlert } from './types'
+import { getBillingSettlementReconciliation, getSmartOpsAlerts } from './api'
+import { BillingSettlementEvidence } from './components/billing-settlement-evidence'
+import {
+  formatAlertCurrentValue,
+  formatAlertThreshold,
+  getObservedAtMilliseconds,
+} from './lib/format'
+import {
+  SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+  SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+} from './lib/query-keys'
+import { isBillingSettlementReconciliationData } from './lib/reconciliation-validation'
+import type {
+  BillingSettlementReconciliationData,
+  SmartOpsAlert,
+} from './types'
 
-const ALERT_POLL_INTERVAL_MS = 5000
+const ALERT_POLL_INTERVAL_MS = 30000
 
 const RESOURCE_LABEL: Record<string, string> = {
   system_cpu: 'CPU usage',
   system_memory: 'Memory usage',
   system_disk: 'Disk usage',
-}
-
-function formatPercent(value: number, locale: string): string {
-  return `${new Intl.NumberFormat(locale, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(value)}%`
-}
-
-function getObservedAtMilliseconds(alert: SmartOpsAlert): number | undefined {
-  const timestamp = Date.parse(alert.observed_at)
-  return Number.isNaN(timestamp) ? undefined : timestamp
+  billing_settlement_backlog: 'Billing reconciliation backlog',
 }
 
 interface ActiveAlertsTableProps {
@@ -74,7 +79,7 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
 
   return (
     <div className='overflow-x-auto rounded-md border'>
-      <Table className='min-w-[760px]'>
+      <Table className='min-w-[820px]'>
         <TableHeader>
           <TableRow className='bg-muted/40 hover:bg-muted/40'>
             <TableHead className='h-9 px-4 text-xs'>{t('Resource')}</TableHead>
@@ -84,7 +89,7 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
               {t('Current Value')}
             </TableHead>
             <TableHead className='h-9 text-right text-xs'>
-              {t('Threshold')}
+              {t('Threshold / Oldest wait')}
             </TableHead>
             <TableHead className='h-9 pr-4 text-right text-xs'>
               {t('Observed')}
@@ -96,8 +101,8 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
             const observedAt = getObservedAtMilliseconds(alert)
             return (
               <TableRow key={`${alert.node ?? 'unknown'}:${alert.key}`}>
-                <TableCell className='px-4 py-3'>
-                  <div className='flex flex-col gap-0.5'>
+                <TableCell className='px-4 py-3 whitespace-normal'>
+                  <div className='flex max-w-md flex-col gap-0.5'>
                     <span className='text-sm font-medium'>
                       {t(RESOURCE_LABEL[alert.key] ?? alert.key)}
                     </span>
@@ -113,10 +118,10 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
                   {alert.node || t('Unknown')}
                 </TableCell>
                 <TableCell className='py-3 text-right font-mono text-sm tabular-nums'>
-                  {formatPercent(alert.current_value, i18n.language)}
+                  {formatAlertCurrentValue(alert, i18n.language, t)}
                 </TableCell>
                 <TableCell className='py-3 text-right font-mono text-sm tabular-nums'>
-                  {formatPercent(alert.threshold, i18n.language)}
+                  {formatAlertThreshold(alert, i18n.language, t)}
                 </TableCell>
                 <TableCell
                   className='text-muted-foreground py-3 pr-4 text-right text-xs whitespace-nowrap'
@@ -137,11 +142,72 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
   )
 }
 
+interface ActiveAlertsContentProps {
+  alerts: SmartOpsAlert[]
+  error: unknown
+  isError: boolean
+  loadErrorMessage: string
+  loading: boolean
+  onRetry: () => void
+}
+
+function ActiveAlertsContent(props: ActiveAlertsContentProps): ReactElement {
+  const { t } = useTranslation()
+
+  if (props.loading) {
+    return (
+      <div className='flex flex-col gap-2'>
+        {Array.from({ length: 3 }).map((_, index) => (
+          <Skeleton key={index} className='h-10 w-full rounded-md' />
+        ))}
+      </div>
+    )
+  }
+
+  if (props.isError) {
+    return (
+      <ErrorState
+        title={props.loadErrorMessage}
+        description={
+          props.error instanceof Error ? props.error.message : undefined
+        }
+        onRetry={props.onRetry}
+        className='min-h-[200px]'
+      />
+    )
+  }
+
+  if (props.alerts.length === 0) {
+    return (
+      <Empty className='min-h-[200px] rounded-md border'>
+        <EmptyHeader>
+          <EmptyMedia variant='icon'>
+            <ShieldCheck aria-hidden='true' />
+          </EmptyMedia>
+          <EmptyTitle>{t('No active alerts.')}</EmptyTitle>
+          <EmptyDescription>
+            {t(
+              'This process is not currently reporting sustained host pressure or an open billing reconciliation alert.'
+            )}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return <ActiveAlertsTable alerts={props.alerts} />
+}
+
 export function ActiveAlerts(): ReactElement {
   const { t } = useTranslation()
+  const userRole = useAuthStore((state) => state.auth.user?.role)
+  const canUpdateBlockingPolicy = userRole === ROLE.SUPER_ADMIN
   const loadErrorMessage = t('We could not load active alerts.')
+  const reconciliationErrorMessage = t(
+    'We could not load billing reconciliation details.'
+  )
   const alertsQuery = useQuery({
-    queryKey: ['smart-ops', 'active-alerts', loadErrorMessage],
+    queryKey: [...SMART_OPS_ACTIVE_ALERTS_QUERY_KEY, loadErrorMessage],
     queryFn: async (): Promise<SmartOpsAlert[]> => {
       const response = await getSmartOpsAlerts()
       if (!response.success || !Array.isArray(response.data)) {
@@ -154,8 +220,28 @@ export function ActiveAlerts(): ReactElement {
   })
 
   const alerts = alertsQuery.data ?? []
+  const reconciliationQuery = useQuery({
+    queryKey: [
+      ...SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+      reconciliationErrorMessage,
+    ],
+    queryFn: async (): Promise<BillingSettlementReconciliationData> => {
+      const response = await getBillingSettlementReconciliation()
+      if (
+        !response.success ||
+        !isBillingSettlementReconciliationData(response.data)
+      ) {
+        throw new Error(response.message || reconciliationErrorMessage)
+      }
+      return response.data
+    },
+    retry: false,
+    refetchInterval: ALERT_POLL_INTERVAL_MS,
+  })
+
   const loading = alertsQuery.isLoading
-  const refreshing = alertsQuery.isFetching && !loading
+  const refreshing =
+    (alertsQuery.isFetching && !loading) || reconciliationQuery.isFetching
 
   return (
     <SectionPageLayout>
@@ -163,7 +249,7 @@ export function ActiveAlerts(): ReactElement {
         <span className='inline-flex min-w-0 items-center gap-2'>
           <span className='truncate'>{t('Active Alerts')}</span>
           <Badge variant='outline' className='shrink-0'>
-            {t('Read only')}
+            {t('Administrator controls')}
           </Badge>
         </span>
       </SectionPageLayout.Title>
@@ -187,7 +273,7 @@ export function ActiveAlerts(): ReactElement {
                 </div>
                 <p className='text-muted-foreground mt-0.5 text-xs'>
                   {t(
-                    'SmartOps reports sustained host pressure here for manual investigation and repair.'
+                    'SmartOps reports sustained host pressure and billing reconciliation backlogs here for manual investigation.'
                   )}
                 </p>
               </div>
@@ -196,8 +282,13 @@ export function ActiveAlerts(): ReactElement {
               type='button'
               variant='outline'
               size='sm'
-              onClick={() => void alertsQuery.refetch()}
-              disabled={alertsQuery.isFetching}
+              onClick={() => {
+                void alertsQuery.refetch()
+                void reconciliationQuery.refetch()
+              }}
+              disabled={
+                alertsQuery.isFetching || reconciliationQuery.isFetching
+              }
             >
               <RefreshCw
                 data-icon='inline-start'
@@ -208,42 +299,27 @@ export function ActiveAlerts(): ReactElement {
             </Button>
           </div>
 
-          {loading ? (
-            <div className='flex flex-col gap-2 p-4 sm:p-5'>
-              {Array.from({ length: 3 }).map((_, index) => (
-                <Skeleton key={index} className='h-10 w-full rounded-md' />
-              ))}
-            </div>
-          ) : alertsQuery.isError ? (
-            <ErrorState
-              title={loadErrorMessage}
-              description={
-                alertsQuery.error instanceof Error
-                  ? alertsQuery.error.message
-                  : undefined
-              }
+          <div className='flex flex-col gap-4 p-4 sm:p-5'>
+            <ActiveAlertsContent
+              alerts={alerts}
+              error={alertsQuery.error}
+              isError={alertsQuery.isError}
+              loadErrorMessage={loadErrorMessage}
+              loading={loading}
               onRetry={() => void alertsQuery.refetch()}
-              className='min-h-[240px]'
             />
-          ) : alerts.length === 0 ? (
-            <Empty className='min-h-[240px] rounded-none border-0'>
-              <EmptyHeader>
-                <EmptyMedia variant='icon'>
-                  <ShieldCheck aria-hidden='true' />
-                </EmptyMedia>
-                <EmptyTitle>{t('No active alerts.')}</EmptyTitle>
-                <EmptyDescription>
-                  {t(
-                    'This process is not currently reporting a sustained CPU, memory, or disk alert.'
-                  )}
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className='p-4 sm:p-5'>
-              <ActiveAlertsTable alerts={alerts} />
-            </div>
-          )}
+            <BillingSettlementEvidence
+              canUpdateBlockingPolicy={canUpdateBlockingPolicy}
+              data={reconciliationQuery.data}
+              error={
+                reconciliationQuery.error instanceof Error
+                  ? reconciliationQuery.error
+                  : null
+              }
+              loading={reconciliationQuery.isLoading}
+              onRetry={() => void reconciliationQuery.refetch()}
+            />
+          </div>
         </section>
       </SectionPageLayout.Content>
     </SectionPageLayout>

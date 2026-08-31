@@ -2,16 +2,23 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
 )
+
+var ErrInvalidBillingSettlementReconciliationQuery = errors.New("invalid billing settlement reconciliation query")
+var ErrInvalidBillingSettlementReconciliationReview = errors.New("invalid billing settlement reconciliation review")
 
 const (
 	smartOpsAlertStatusFiring    = "firing"
@@ -30,8 +37,8 @@ var smartOpsAlertRetryDelays = []time.Duration{
 }
 
 // SmartOpsAlert is the read-only incident projection exposed to administrators.
-// It intentionally contains only resource metadata and never includes secrets,
-// request bodies, channel keys, or billing data.
+// It intentionally excludes secrets, request bodies, channel keys, and
+// mutation controls. Component-specific values retain their own units.
 type SmartOpsAlert struct {
 	Key          string    `json:"key"`
 	Status       string    `json:"status"`
@@ -154,7 +161,10 @@ func StartSmartOpsAlertMonitor() {
 	smartOpsAlertMonitor.cancel = cancel
 	smartOpsAlertMonitor.done = done
 	smartOpsAlertMonitor.states = make(map[string]*smartOpsAlertState)
-	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	if smartOpsAlertMonitor.active == nil {
+		smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	}
+	clearSmartOpsSystemAlertsLocked()
 	go func() {
 		defer close(done)
 		runSmartOpsAlertMonitor(ctx)
@@ -206,7 +216,7 @@ func evaluateSmartOpsSystemAlerts(status common.SystemStatus, config common.Perf
 		for _, state := range smartOpsAlertMonitor.states {
 			state.suppress(status.ObservedAt)
 		}
-		clear(smartOpsAlertMonitor.active)
+		clearSmartOpsSystemAlertsLocked()
 		smartOpsAlertMonitor.Unlock()
 		return
 	}
@@ -282,6 +292,25 @@ func evaluateSmartOpsSystemAlerts(status common.SystemStatus, config common.Perf
 	}
 }
 
+func clearSmartOpsSystemAlertsLocked() {
+	for _, definition := range smartOpsAlertDefinitions {
+		delete(smartOpsAlertMonitor.active, definition.key)
+	}
+}
+
+func projectSmartOpsActiveAlert(alert SmartOpsAlert) {
+	smartOpsAlertMonitor.Lock()
+	defer smartOpsAlertMonitor.Unlock()
+	if smartOpsAlertMonitor.active == nil {
+		smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	}
+	if alert.Status == smartOpsAlertStatusResolved {
+		delete(smartOpsAlertMonitor.active, alert.Key)
+		return
+	}
+	smartOpsAlertMonitor.active[alert.Key] = alert
+}
+
 func formatSmartOpsAlertMessage(label string, event *smartOpsAlertEvent) string {
 	if event.Status == smartOpsAlertStatusResolved {
 		return fmt.Sprintf("%s 已恢复：当前 %.1f%%，阈值 %.1f%%", label, event.CurrentValue, event.Threshold)
@@ -309,6 +338,59 @@ func GetSmartOpsAlerts() []SmartOpsAlert {
 	}
 	sort.Slice(alerts, func(i, j int) bool { return alerts[i].Key < alerts[j].Key })
 	return alerts
+}
+
+// GetBillingSettlementReconciliation returns bounded, read-only settlement
+// evidence for administrators. It never retries or mutates financial state.
+func GetBillingSettlementReconciliation(limit int) (model.BillingSettlementReconciliationData, error) {
+	if limit == 0 {
+		limit = 100
+	}
+	if limit < 1 || limit > 200 {
+		return model.BillingSettlementReconciliationData{}, fmt.Errorf(
+			"%w: limit must be between 1 and 200",
+			ErrInvalidBillingSettlementReconciliationQuery,
+		)
+	}
+	return model.GetUnresolvedPositiveFinalizeSettlements(limit)
+}
+
+func UpdateBillingSettlementBlockingPolicy(blockUserByDefault bool) error {
+	return model.UpdateOption(
+		billing_reconciliation_setting.OptionKeyBlockUserByDefault,
+		strconv.FormatBool(blockUserByDefault),
+	)
+}
+
+func validateBillingSettlementReviewNote(note string) error {
+	noteLength := len([]rune(note))
+	if noteLength < 3 || noteLength > 1000 {
+		return fmt.Errorf(
+			"%w: note must contain between 3 and 1000 characters",
+			ErrInvalidBillingSettlementReconciliationReview,
+		)
+	}
+	return nil
+}
+
+func ReviewBillingSettlement(id int64, reviewerID int, blockUser *bool, note string) (model.BillingSettlement, error) {
+	if id <= 0 || reviewerID <= 0 || blockUser == nil {
+		return model.BillingSettlement{}, ErrInvalidBillingSettlementReconciliationReview
+	}
+	note = strings.TrimSpace(note)
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return model.BillingSettlement{}, err
+	}
+	note = strings.TrimSpace(common.SanitizePersistedLogContent(common.MaskSensitiveInfo(note)))
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return model.BillingSettlement{}, err
+	}
+	record, err := model.ReviewBillingSettlement(id, reviewerID, *blockUser, note)
+	if err != nil {
+		return model.BillingSettlement{}, err
+	}
+	refreshBillingSettlementBacklogAfterReview()
+	return record, nil
 }
 
 type smartOpsAlertRecipient struct {

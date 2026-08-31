@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -84,8 +86,10 @@ func TestConcurrentBillingPreConsumeSelectionAllowsOnlyOneFundingSource(t *testi
 
 func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
 	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_admission"))
 	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_status_funding"))
+	require.True(t, DB.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_reconciliation"))
 
 	const blockingUserID = 941
 	const nonBlockingUserID = 942
@@ -95,7 +99,8 @@ func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 		{
 			OperationKey: "request:pending-finalize:finalize", Source: BillingSettlementSourceWallet,
 			UserID: blockingUserID, FundingDelta: 10, TokenDelta: 10,
-			Status: BillingSettlementStatusPending, NextAttempt: now, CreatedAt: oldest, UpdatedAt: now, Revision: 1,
+			Status: BillingSettlementStatusPending, LastError: "upstream https://api.example.com/v1?api_key=secret failed",
+			NextAttempt: now, CreatedAt: oldest, UpdatedAt: now, Revision: 1,
 		},
 		{
 			OperationKey: "request:manual-finalize:finalize", Source: BillingSettlementSourceWallet,
@@ -129,11 +134,431 @@ func TestHasUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	assert.EqualValues(t, 2, stats.Count)
 	assert.Equal(t, oldest, stats.OldestCreatedAt)
 
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, reconciliation.TotalCount)
+	assert.EqualValues(t, 1, reconciliation.PendingCount)
+	assert.EqualValues(t, 1, reconciliation.ManualCount)
+	assert.EqualValues(t, 2, reconciliation.OpenAlertCount)
+	assert.Zero(t, reconciliation.ReviewedCount)
+	assert.EqualValues(t, 2, reconciliation.BlockingRecordCount)
+	assert.EqualValues(t, 1, reconciliation.BlockedUserCount)
+	assert.True(t, reconciliation.BlockUserByDefault)
+	assert.Equal(t, oldest, reconciliation.OldestCreatedAt)
+	assert.True(t, reconciliation.Truncated)
+	require.Len(t, reconciliation.Items, 1)
+	assert.Equal(t, "request:pending-finalize:finalize", reconciliation.Items[0].OperationKey)
+	assert.Equal(t, BillingSettlementStatusPending, reconciliation.Items[0].Status)
+	assert.EqualValues(t, 10, reconciliation.Items[0].FundingDelta)
+	assert.NotContains(t, reconciliation.Items[0].LastError, "api.example.com")
+	assert.NotContains(t, reconciliation.Items[0].LastError, "secret")
+	assert.Contains(t, reconciliation.Items[0].LastError, "***")
+
 	require.NoError(t, DB.Where("user_id = ?", blockingUserID).Delete(&BillingSettlement{}).Error)
 	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
 	require.NoError(t, err)
 	assert.Zero(t, stats.Count)
 	assert.Zero(t, stats.OldestCreatedAt)
+}
+
+func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialState(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, false)
+
+	now := time.Now().Unix()
+	block := true
+	allow := false
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:inherit-policy:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 951, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+			Status: BillingSettlementStatusPending, CreatedAt: now - 30, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:force-block:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 952, FundingDelta: 11, TokenDelta: 11, Status: BillingSettlementStatusManual,
+			UserBlockingOverride: &block, CreatedAt: now - 20, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:force-allow:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 953, FundingDelta: 12, TokenDelta: 12, Status: BillingSettlementStatusPending,
+			UserBlockingOverride: &allow, CreatedAt: now - 10, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:force-allow-shared-user:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 954, FundingDelta: 13, TokenDelta: 13, Status: BillingSettlementStatusPending,
+			UserBlockingOverride: &allow, CreatedAt: now - 5, UpdatedAt: now, Revision: 1,
+		},
+		{
+			OperationKey: "request:force-block-shared-user:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 954, FundingDelta: 14, TokenDelta: 14, Status: BillingSettlementStatusManual,
+			UserBlockingOverride: &block, CreatedAt: now - 1, UpdatedAt: now, Revision: 1,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(951)
+	require.NoError(t, err)
+	assert.False(t, blocked, "nil override must inherit the disabled global policy")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(952)
+	require.NoError(t, err)
+	assert.True(t, blocked, "an explicit per-record block must override the global policy")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(953)
+	require.NoError(t, err)
+	assert.False(t, blocked, "an explicit per-record allow must remain non-blocking")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(954)
+	require.NoError(t, err)
+	assert.True(t, blocked, "any blocking record must keep the same user blocked")
+
+	reviewed, err := ReviewBillingSettlement(records[0].ID, 7001, false, "Verified provider usage against the invoice")
+	require.NoError(t, err)
+	assert.Equal(t, records[0].ID, reviewed.ID)
+	assert.Equal(t, records[0].UserID, reviewed.UserID)
+	assert.Equal(t, BillingSettlementStatusPending, reviewed.Status)
+	assert.EqualValues(t, 10, reviewed.FundingDelta)
+	assert.EqualValues(t, 2, reviewed.AppliedFundingDelta)
+	assert.EqualValues(t, 10, reviewed.TokenDelta)
+	assert.EqualValues(t, 2, reviewed.AppliedTokenDelta)
+	assert.Positive(t, reviewed.ReconciliationReviewedAt)
+	assert.Equal(t, 7001, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Verified provider usage against the invoice", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.False(t, *reviewed.UserBlockingOverride, "explicit false must be durably persisted")
+	assert.Equal(t, records[0].UpdatedAt, reviewed.UpdatedAt, "review metadata must not replace the financial update timestamp")
+	assert.Equal(t, records[0].Revision, reviewed.Revision, "review metadata must not advance the financial settlement revision")
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 4, stats.Count, "reviewed records must leave the open-alert projection")
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 5, reconciliation.TotalCount, "review does not complete or delete a settlement")
+	assert.EqualValues(t, 4, reconciliation.OpenAlertCount)
+	assert.EqualValues(t, 1, reconciliation.ReviewedCount)
+	assert.EqualValues(t, 2, reconciliation.BlockingRecordCount)
+	assert.EqualValues(t, 2, reconciliation.BlockedUserCount)
+	assert.False(t, reconciliation.BlockUserByDefault)
+	require.Len(t, reconciliation.Items, 5)
+
+	var reviewedItem *BillingSettlementReconciliationItem
+	var sharedAllowItem *BillingSettlementReconciliationItem
+	var sharedBlockItem *BillingSettlementReconciliationItem
+	for index := range reconciliation.Items {
+		switch reconciliation.Items[index].ID {
+		case records[0].ID:
+			reviewedItem = &reconciliation.Items[index]
+		case records[3].ID:
+			sharedAllowItem = &reconciliation.Items[index]
+		case records[4].ID:
+			sharedBlockItem = &reconciliation.Items[index]
+		}
+	}
+	require.NotNil(t, reviewedItem)
+	assert.False(t, reviewedItem.RecordBlocksUser)
+	assert.False(t, reviewedItem.BlocksUser)
+	assert.Equal(t, 7001, reviewedItem.ReconciliationReviewedBy)
+	assert.Equal(t, "Verified provider usage against the invoice", reviewedItem.ReconciliationReviewNote)
+	require.NotNil(t, sharedAllowItem)
+	assert.False(t, sharedAllowItem.RecordBlocksUser, "the row-level decision must remain allow")
+	assert.True(t, sharedAllowItem.BlocksUser, "the user remains blocked by another unresolved record")
+	require.NotNil(t, sharedBlockItem)
+	assert.True(t, sharedBlockItem.RecordBlocksUser)
+	assert.True(t, sharedBlockItem.BlocksUser)
+}
+
+func TestBillingSettlementBlockingScopeDoesNotLeakAcrossUsers(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	block := true
+	record := BillingSettlement{
+		OperationKey: "request:cross-user-blocking:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 961, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		UserBlockingOverride: &block, CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(), Revision: 1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(962)
+	require.NoError(t, err)
+	assert.False(t, blocked, "another user's explicit block must not leak across the user_id predicate")
+}
+
+func TestBillingSettlementFailureReopensReviewedRecord(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	now := time.Now().Unix()
+	allow := false
+	record := BillingSettlement{
+		OperationKey: "request:reviewed-retry-failure:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 963, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+		Status: BillingSettlementStatusPending, Attempts: 1, LastError: "previous failure", NextAttempt: now - 1,
+		ReconciliationReviewedAt: now - 60, ReconciliationReviewedBy: 7005,
+		ReconciliationReviewNote: "Reviewed previous failure evidence", UserBlockingOverride: &allow,
+		CreatedAt: now - 120, UpdatedAt: now - 60, Revision: 7,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count)
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "the reviewed allow decision is active before new evidence arrives")
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("previous failure"))
+
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, 2, stored.Attempts)
+	assert.Equal(t, "previous failure", stored.LastError)
+	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
+	assert.EqualValues(t, record.ReconciliationReviewedAt, stored.ReconciliationReviewedAt)
+	assert.Equal(t, record.ReconciliationReviewedBy, stored.ReconciliationReviewedBy)
+	assert.Equal(t, record.ReconciliationReviewNote, stored.ReconciliationReviewNote)
+	require.NotNil(t, stored.UserBlockingOverride)
+	assert.False(t, *stored.UserBlockingOverride)
+	assert.EqualValues(t, 8, stored.Revision)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count, "unchanged failure evidence must preserve the administrator review")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "unchanged failure evidence must preserve the explicit allow decision")
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("new retry failure"))
+
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, 3, stored.Attempts)
+	assert.Equal(t, "new retry failure", stored.LastError)
+	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
+	assert.GreaterOrEqual(t, stored.NextAttempt, now)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+	assert.Nil(t, stored.UserBlockingOverride)
+	assert.EqualValues(t, 10, stored.FundingDelta)
+	assert.EqualValues(t, 2, stored.AppliedFundingDelta)
+	assert.EqualValues(t, 10, stored.TokenDelta)
+	assert.EqualValues(t, 2, stored.AppliedTokenDelta)
+	assert.EqualValues(t, 9, stored.Revision)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, stats.Count, "new failure evidence must reopen the operational alert")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.True(t, blocked, "reopened records must inherit the fail-closed global policy")
+}
+
+func TestBillingSettlementFailureReopensReviewedRecordWhenStatusBecomesManual(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	allow := false
+	record := BillingSettlement{
+		OperationKey: "request:reviewed-status-change:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 967, FundingDelta: 10, TokenDelta: 10,
+		Status: BillingSettlementStatusPending, Attempts: 1, LastError: "unchanged failure",
+		ManualOnFailure: true, ReconciliationReviewedAt: now - 60, ReconciliationReviewedBy: 7008,
+		ReconciliationReviewNote: "Reviewed while retry remained pending", UserBlockingOverride: &allow,
+		CreatedAt: now - 120, UpdatedAt: now - 60, Revision: 3,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("unchanged failure"))
+
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
+	assert.Equal(t, "unchanged failure", stored.LastError)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+	assert.Nil(t, stored.UserBlockingOverride)
+	assert.EqualValues(t, 4, stored.Revision)
+}
+
+func TestReviewBillingSettlementRejectsAlreadyAppliedRecord(t *testing.T) {
+	setupUserUpdateTestState(t)
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:review-race:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 954, FundingDelta: 10, AppliedFundingDelta: 10, TokenDelta: 10, AppliedTokenDelta: 10,
+		Status: BillingSettlementStatusApplied, CreatedAt: now, UpdatedAt: now, Revision: 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	_, err := ReviewBillingSettlement(record.ID, 7002, false, "Already reconciled elsewhere")
+
+	assert.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+}
+
+func TestReviewBillingSettlementRejectsStaleFailureEvidence(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:stale-review-race:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 964, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		Attempts: 1, LastError: "previous failure", NextAttempt: now - 1,
+		CreatedAt: now - 60, UpdatedAt: now - 30, Revision: 4,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	callbackName := "test:billing-settlement-review-stale-failure"
+	var failureInjected atomic.Bool
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Name == "BillingSettlement" && failureInjected.CompareAndSwap(false, true) {
+			markBillingSettlementFailure(record.OperationKey, errors.New("new failure evidence"))
+		}
+	}))
+	t.Cleanup(func() {
+		_ = DB.Callback().Query().Remove(callbackName)
+	})
+
+	_, err := ReviewBillingSettlement(record.ID, 7006, false, "Reviewed superseded evidence")
+
+	assert.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, 2, stored.Attempts)
+	assert.Equal(t, "new failure evidence", stored.LastError)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+	assert.Nil(t, stored.UserBlockingOverride)
+	assert.EqualValues(t, 5, stored.Revision)
+
+	stats, statsErr := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, statsErr)
+	assert.EqualValues(t, 1, stats.Count, "the newer failure must remain visible for administrator review")
+}
+
+func TestReviewBillingSettlementAllowsEditingCurrentReview(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	allow := false
+	record := BillingSettlement{
+		OperationKey: "request:edit-current-review:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 965, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		ReconciliationReviewedAt: now - 60, ReconciliationReviewedBy: 7007,
+		ReconciliationReviewNote: "Initial review", UserBlockingOverride: &allow,
+		CreatedAt: now - 120, UpdatedAt: now - 60, Revision: 3,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 7008, true, "Updated review after checking more evidence")
+
+	require.NoError(t, err)
+	assert.Equal(t, 7008, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Updated review after checking more evidence", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.True(t, *reviewed.UserBlockingOverride)
+	assert.EqualValues(t, record.Revision, reviewed.Revision, "review metadata must remain independent from financial revision")
+}
+
+func TestReviewBillingSettlementAcceptsLegacyNullReviewNote(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:legacy-null-review-note:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 966, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		CreatedAt: now - 60, UpdatedAt: now - 30, Revision: 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+	require.NoError(t, DB.Exec(
+		"UPDATE billing_settlements SET reconciliation_review_note = NULL WHERE id = ?",
+		record.ID,
+	).Error)
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 7009, false, "Reviewed legacy reconciliation record")
+
+	require.NoError(t, err)
+	assert.Equal(t, 7009, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Reviewed legacy reconciliation record", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.False(t, *reviewed.UserBlockingOverride)
+}
+
+func TestReviewBillingSettlementAcceptsMatchingUpdateWhenDriverReportsZeroRows(t *testing.T) {
+	setupUserUpdateTestState(t)
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:review-same-value:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 955, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+		Status: BillingSettlementStatusPending, CreatedAt: now, UpdatedAt: now, Revision: 1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	callbackName := "test:billing-settlement-review-zero-rows"
+	require.NoError(t, DB.Callback().Update().After("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Name == "BillingSettlement" {
+			tx.RowsAffected = 0
+		}
+	}))
+	t.Cleanup(func() {
+		_ = DB.Callback().Update().Remove(callbackName)
+	})
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 7004, false, "Verified duplicate review submission")
+
+	require.NoError(t, err)
+	assert.Equal(t, record.ID, reviewed.ID)
+	assert.Equal(t, 7004, reviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Verified duplicate review submission", reviewed.ReconciliationReviewNote)
+	require.NotNil(t, reviewed.UserBlockingOverride)
+	assert.False(t, *reviewed.UserBlockingOverride)
+}
+
+func TestBillingSettlementReviewUpdateMapUsesSchemaColumns(t *testing.T) {
+	parsed, err := schema.Parse(&BillingSettlement{}, &sync.Map{}, schema.NamingStrategy{})
+	require.NoError(t, err)
+
+	updateMaps := []map[string]interface{}{
+		billingSettlementReviewUpdates(7003, false, "reviewed", time.Unix(123, 0)),
+		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusPending, 456, 123, false),
+		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusManual, 0, 123, true),
+	}
+	for _, updates := range updateMaps {
+		for key := range updates {
+			assert.NotNilf(t, parsed.LookUpField(key), "billing settlement update key %q must map to a BillingSettlement column", key)
+		}
+	}
+}
+
+func setBillingReconciliationBlockDefaultForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	key := billing_reconciliation_setting.OptionKeyBlockUserByDefault
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	original, existed := common.OptionMap[key]
+	common.OptionMap[key] = map[bool]string{true: "true", false: "false"}[enabled]
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if existed {
+			common.OptionMap[key] = original
+		} else {
+			delete(common.OptionMap, key)
+		}
+	})
 }
 
 func TestBillingRequestFinalizeOperationKey(t *testing.T) {

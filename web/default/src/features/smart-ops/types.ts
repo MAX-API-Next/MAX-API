@@ -41,6 +41,64 @@ export type SmartOpsAlertsResponse = {
   data: SmartOpsAlert[]
 }
 
+export type BillingSettlementReconciliationItem = {
+  id: number
+  operation_key: string
+  status: 'pending' | 'manual'
+  source: 'wallet' | 'subscription'
+  user_id: number
+  subscription_id: number
+  token_id: number
+  task_id: number
+  funding_delta: number
+  applied_funding_delta: number
+  token_delta: number
+  applied_token_delta: number
+  attempts: number
+  last_error: string
+  next_attempt: number
+  created_at: number
+  updated_at: number
+  reconciliation_reviewed_at: number
+  reconciliation_reviewed_by: number
+  reconciliation_review_note: string
+  user_blocking_override: boolean | null
+  record_blocks_user: boolean
+  blocks_user: boolean
+}
+
+export type BillingSettlementReconciliationData = {
+  total_count: number
+  pending_count: number
+  manual_count: number
+  open_alert_count: number
+  reviewed_count: number
+  blocking_record_count: number
+  blocked_user_count: number
+  block_user_by_default: boolean
+  oldest_created_at: number
+  truncated: boolean
+  generated_at: number
+  items: BillingSettlementReconciliationItem[]
+}
+
+export type BillingSettlementMutationResponse = {
+  success: boolean
+  message?: string
+  data?: Record<string, unknown>
+}
+
+export type BillingSettlementReviewRequest = {
+  block_user: boolean
+  note: string
+}
+
+export type BillingSettlementReconciliationResponse = {
+  success: boolean
+  message?: string
+  data: BillingSettlementReconciliationData
+}
+
 export type ChannelPerformanceQuery = {
   hours: number
   channelId?: number

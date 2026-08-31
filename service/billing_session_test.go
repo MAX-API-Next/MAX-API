@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,33 +40,55 @@ type uncertainFundingSource struct {
 	err     error
 }
 
-func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
-	originalSender := billingSettlementBacklogAlertNotificationSender
+func isolateBillingSettlementBacklogState(t *testing.T) {
+	t.Helper()
+
+	smartOpsAlertMonitor.Lock()
+	originalActiveAlerts := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
+
 	billingSettlementBacklogAlertState.Lock()
 	originalState := struct {
 		active          bool
 		lastCount       int64
 		oldestCreatedAt int64
 		lastNotifiedAt  time.Time
+		lastObservedAt  time.Time
 	}{
 		active:          billingSettlementBacklogAlertState.active,
 		lastCount:       billingSettlementBacklogAlertState.lastCount,
 		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
 		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
+		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
 	}
 	billingSettlementBacklogAlertState.active = false
 	billingSettlementBacklogAlertState.lastCount = 0
 	billingSettlementBacklogAlertState.oldestCreatedAt = 0
 	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
+	billingSettlementBacklogAlertState.lastObservedAt = time.Time{}
 	billingSettlementBacklogAlertState.Unlock()
+
 	t.Cleanup(func() {
-		billingSettlementBacklogAlertNotificationSender = originalSender
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActiveAlerts
+		smartOpsAlertMonitor.Unlock()
+
 		billingSettlementBacklogAlertState.Lock()
 		billingSettlementBacklogAlertState.active = originalState.active
 		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
 		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
 		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
+		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
 		billingSettlementBacklogAlertState.Unlock()
+	})
+}
+
+func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
 	})
 
 	var alerts []SmartOpsAlert
@@ -83,6 +106,10 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	assert.Equal(t, (2 * time.Hour).Seconds(), alerts[0].Threshold)
 	assert.Contains(t, alerts[0].Message, "2 条")
 	assert.Contains(t, alerts[0].Message, "2h0m0s")
+	activeAlerts := GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, "billing_settlement_backlog", activeAlerts[0].Key)
+	assert.Equal(t, float64(2), activeAlerts[0].CurrentValue)
 
 	observeBillingSettlementBacklog(stats, now.Add(time.Minute))
 	require.Len(t, alerts, 1, "an unchanged backlog must be deduplicated inside the reminder interval")
@@ -91,6 +118,9 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute))
 	require.Len(t, alerts, 2)
 	assert.Equal(t, float64(3), alerts[1].CurrentValue)
+	activeAlerts = GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, float64(3), activeAlerts[0].CurrentValue)
 
 	observeBillingSettlementBacklog(stats, now.Add(2*time.Minute+billingSettlementBacklogNotificationInterval))
 	require.Len(t, alerts, 3, "a persistent backlog must produce an age reminder")
@@ -99,6 +129,140 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	require.Len(t, alerts, 4)
 	assert.Equal(t, smartOpsAlertStatusResolved, alerts[3].Status)
 	assert.Contains(t, alerts[3].Message, "此前共 3 条")
+	assert.Contains(t, alerts[3].Message, "尚未核对")
+	assert.Contains(t, alerts[3].Message, "pending/manual")
+	assert.NotContains(t, alerts[3].Message, "未完成的正向最终计费对账已清空")
+	assert.Empty(t, GetSmartOpsAlerts())
+}
+
+func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	billingSettlementBacklogAlertState.Lock()
+	now := time.Unix(40_000, 0)
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = 48
+	billingSettlementBacklogAlertState.oldestCreatedAt = now.Add(-time.Hour).Unix()
+	billingSettlementBacklogAlertState.lastNotifiedAt = now.Add(-time.Minute)
+	billingSettlementBacklogAlertState.lastObservedAt = now.Add(-time.Second)
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+	stats := model.BillingSettlementBacklogStats{
+		Count:           47,
+		OldestCreatedAt: now.Add(-time.Hour).Unix(),
+	}
+
+	updateBillingSettlementBacklogAlert(stats, now, false)
+
+	assert.Empty(t, alerts, "administrator review must not broadcast a new firing notification")
+	activeAlerts := GetSmartOpsAlerts()
+	require.Len(t, activeAlerts, 1)
+	assert.Equal(t, float64(47), activeAlerts[0].CurrentValue)
+}
+
+func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	billingSettlementBacklogAlertState.Lock()
+	base := time.Unix(50_000, 0)
+	billingSettlementBacklogAlertState.active = true
+	billingSettlementBacklogAlertState.lastCount = 48
+	billingSettlementBacklogAlertState.oldestCreatedAt = base.Add(-time.Hour).Unix()
+	billingSettlementBacklogAlertState.lastNotifiedAt = base.Add(-time.Minute)
+	billingSettlementBacklogAlertState.lastObservedAt = base.Add(-time.Minute)
+	billingSettlementBacklogAlertState.Unlock()
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
+	})
+
+	var alerts []SmartOpsAlert
+	billingSettlementBacklogAlertNotificationSender = func(alert SmartOpsAlert) {
+		alerts = append(alerts, alert)
+	}
+
+	updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{}, base, false)
+	updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{
+		Count:           48,
+		OldestCreatedAt: base.Add(-time.Hour).Unix(),
+	}, base.Add(-time.Second), true)
+
+	assert.Empty(t, alerts, "a stale periodic snapshot must not broadcast after an administrator refresh")
+	assert.Empty(t, GetSmartOpsAlerts(), "a stale periodic snapshot must not reactivate the closed alert")
+}
+
+func TestBillingSettlementBacklogProjectionPreservesNewestObservation(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
+	originalProjector := billingSettlementBacklogAlertProjector
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertProjector = originalProjector
+	})
+
+	olderObservedAt := time.Unix(60_000, 0)
+	newerObservedAt := olderObservedAt.Add(time.Second)
+	olderProjectionStarted := make(chan struct{})
+	releaseOlderProjection := make(chan struct{})
+	newerProjectionStarted := make(chan struct{}, 1)
+	var olderProjectionOnce sync.Once
+	billingSettlementBacklogAlertProjector = func(alert SmartOpsAlert) {
+		if alert.Status == smartOpsAlertStatusFiring && alert.ObservedAt.Equal(olderObservedAt) {
+			olderProjectionOnce.Do(func() { close(olderProjectionStarted) })
+			<-releaseOlderProjection
+		}
+		if alert.Status == smartOpsAlertStatusResolved && alert.ObservedAt.Equal(newerObservedAt) {
+			select {
+			case newerProjectionStarted <- struct{}{}:
+			default:
+			}
+		}
+		projectSmartOpsActiveAlert(alert)
+	}
+
+	olderDone := make(chan struct{})
+	go func() {
+		defer close(olderDone)
+		updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{
+			Count:           48,
+			OldestCreatedAt: olderObservedAt.Add(-time.Hour).Unix(),
+		}, olderObservedAt, false)
+	}()
+	select {
+	case <-olderProjectionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older observation did not reach the projection seam")
+	}
+
+	newerDone := make(chan struct{})
+	go func() {
+		defer close(newerDone)
+		updateBillingSettlementBacklogAlert(model.BillingSettlementBacklogStats{}, newerObservedAt, false)
+	}()
+	select {
+	case <-newerProjectionStarted:
+		// The unfixed implementation lets the newer observation overtake the
+		// older projection, which leaves the stale firing alert as the final state.
+	case <-time.After(100 * time.Millisecond):
+		// The fixed implementation serializes observation state and projection.
+	}
+	close(releaseOlderProjection)
+	for name, done := range map[string]<-chan struct{}{
+		"older observation": olderDone,
+		"newer observation": newerDone,
+	} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not complete", name)
+		}
+	}
+
+	assert.Empty(t, GetSmartOpsAlerts(), "the newest resolved observation must remain authoritative")
 }
 
 func (f *uncertainFundingSource) Source() string       { return BillingSourceWallet }
