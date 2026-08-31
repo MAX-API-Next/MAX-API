@@ -40,12 +40,14 @@ type uncertainFundingSource struct {
 	err     error
 }
 
-func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
-	originalSender := billingSettlementBacklogAlertNotificationSender
+func isolateBillingSettlementBacklogState(t *testing.T) {
+	t.Helper()
+
 	smartOpsAlertMonitor.Lock()
 	originalActiveAlerts := smartOpsAlertMonitor.active
 	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
 	smartOpsAlertMonitor.Unlock()
+
 	billingSettlementBacklogAlertState.Lock()
 	originalState := struct {
 		active          bool
@@ -66,11 +68,12 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
 	billingSettlementBacklogAlertState.lastObservedAt = time.Time{}
 	billingSettlementBacklogAlertState.Unlock()
+
 	t.Cleanup(func() {
-		billingSettlementBacklogAlertNotificationSender = originalSender
 		smartOpsAlertMonitor.Lock()
 		smartOpsAlertMonitor.active = originalActiveAlerts
 		smartOpsAlertMonitor.Unlock()
+
 		billingSettlementBacklogAlertState.Lock()
 		billingSettlementBacklogAlertState.active = originalState.active
 		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
@@ -78,6 +81,14 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
 		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
 		billingSettlementBacklogAlertState.Unlock()
+	})
+}
+
+func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
+	originalSender := billingSettlementBacklogAlertNotificationSender
+	t.Cleanup(func() {
+		billingSettlementBacklogAlertNotificationSender = originalSender
 	})
 
 	var alerts []SmartOpsAlert
@@ -125,25 +136,9 @@ func TestBillingSettlementBacklogAlertReportsCountAgeAndRecovery(t *testing.T) {
 }
 
 func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
 	originalSender := billingSettlementBacklogAlertNotificationSender
-	smartOpsAlertMonitor.Lock()
-	originalActiveAlerts := smartOpsAlertMonitor.active
-	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
-	smartOpsAlertMonitor.Unlock()
 	billingSettlementBacklogAlertState.Lock()
-	originalState := struct {
-		active          bool
-		lastCount       int64
-		oldestCreatedAt int64
-		lastNotifiedAt  time.Time
-		lastObservedAt  time.Time
-	}{
-		active:          billingSettlementBacklogAlertState.active,
-		lastCount:       billingSettlementBacklogAlertState.lastCount,
-		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
-		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
-		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
-	}
 	now := time.Unix(40_000, 0)
 	billingSettlementBacklogAlertState.active = true
 	billingSettlementBacklogAlertState.lastCount = 48
@@ -153,16 +148,6 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertNotificationSender = originalSender
-		smartOpsAlertMonitor.Lock()
-		smartOpsAlertMonitor.active = originalActiveAlerts
-		smartOpsAlertMonitor.Unlock()
-		billingSettlementBacklogAlertState.Lock()
-		billingSettlementBacklogAlertState.active = originalState.active
-		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
-		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
-		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
-		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
-		billingSettlementBacklogAlertState.Unlock()
 	})
 
 	var alerts []SmartOpsAlert
@@ -183,25 +168,9 @@ func TestBillingSettlementBacklogReviewRefreshDoesNotBroadcast(t *testing.T) {
 }
 
 func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
 	originalSender := billingSettlementBacklogAlertNotificationSender
-	smartOpsAlertMonitor.Lock()
-	originalActiveAlerts := smartOpsAlertMonitor.active
-	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
-	smartOpsAlertMonitor.Unlock()
 	billingSettlementBacklogAlertState.Lock()
-	originalState := struct {
-		active          bool
-		lastCount       int64
-		oldestCreatedAt int64
-		lastNotifiedAt  time.Time
-		lastObservedAt  time.Time
-	}{
-		active:          billingSettlementBacklogAlertState.active,
-		lastCount:       billingSettlementBacklogAlertState.lastCount,
-		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
-		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
-		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
-	}
 	base := time.Unix(50_000, 0)
 	billingSettlementBacklogAlertState.active = true
 	billingSettlementBacklogAlertState.lastCount = 48
@@ -211,16 +180,6 @@ func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *te
 	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertNotificationSender = originalSender
-		smartOpsAlertMonitor.Lock()
-		smartOpsAlertMonitor.active = originalActiveAlerts
-		smartOpsAlertMonitor.Unlock()
-		billingSettlementBacklogAlertState.Lock()
-		billingSettlementBacklogAlertState.active = originalState.active
-		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
-		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
-		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
-		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
-		billingSettlementBacklogAlertState.Unlock()
 	})
 
 	var alerts []SmartOpsAlert
@@ -239,43 +198,10 @@ func TestBillingSettlementBacklogReviewRefreshRejectsOlderPeriodicSnapshot(t *te
 }
 
 func TestBillingSettlementBacklogProjectionPreservesNewestObservation(t *testing.T) {
+	isolateBillingSettlementBacklogState(t)
 	originalProjector := billingSettlementBacklogAlertProjector
-	smartOpsAlertMonitor.Lock()
-	originalActiveAlerts := smartOpsAlertMonitor.active
-	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
-	smartOpsAlertMonitor.Unlock()
-	billingSettlementBacklogAlertState.Lock()
-	originalState := struct {
-		active          bool
-		lastCount       int64
-		oldestCreatedAt int64
-		lastNotifiedAt  time.Time
-		lastObservedAt  time.Time
-	}{
-		active:          billingSettlementBacklogAlertState.active,
-		lastCount:       billingSettlementBacklogAlertState.lastCount,
-		oldestCreatedAt: billingSettlementBacklogAlertState.oldestCreatedAt,
-		lastNotifiedAt:  billingSettlementBacklogAlertState.lastNotifiedAt,
-		lastObservedAt:  billingSettlementBacklogAlertState.lastObservedAt,
-	}
-	billingSettlementBacklogAlertState.active = false
-	billingSettlementBacklogAlertState.lastCount = 0
-	billingSettlementBacklogAlertState.oldestCreatedAt = 0
-	billingSettlementBacklogAlertState.lastNotifiedAt = time.Time{}
-	billingSettlementBacklogAlertState.lastObservedAt = time.Time{}
-	billingSettlementBacklogAlertState.Unlock()
 	t.Cleanup(func() {
 		billingSettlementBacklogAlertProjector = originalProjector
-		smartOpsAlertMonitor.Lock()
-		smartOpsAlertMonitor.active = originalActiveAlerts
-		smartOpsAlertMonitor.Unlock()
-		billingSettlementBacklogAlertState.Lock()
-		billingSettlementBacklogAlertState.active = originalState.active
-		billingSettlementBacklogAlertState.lastCount = originalState.lastCount
-		billingSettlementBacklogAlertState.oldestCreatedAt = originalState.oldestCreatedAt
-		billingSettlementBacklogAlertState.lastNotifiedAt = originalState.lastNotifiedAt
-		billingSettlementBacklogAlertState.lastObservedAt = originalState.lastObservedAt
-		billingSettlementBacklogAlertState.Unlock()
 	})
 
 	olderObservedAt := time.Unix(60_000, 0)

@@ -397,7 +397,7 @@ describe('SmartOps active alerts', () => {
     const writes: Array<{ method: string; url: string; data: unknown }> = []
     let reconciliationRequests = 0
     let blockUserByDefault = true
-    api.get = (async (url) => {
+    api.get = (async (url: string): Promise<unknown> => {
       if (url === '/api/smart-ops/billing-settlements') {
         reconciliationRequests += 1
         return {
@@ -445,13 +445,13 @@ describe('SmartOps active alerts', () => {
       }
       return { data: { success: true, data: [] } }
     }) as typeof api.get
-    api.put = (async (url, data) => {
+    api.put = (async (url: string, data: unknown): Promise<unknown> => {
       writes.push({ method: 'PUT', url: String(url), data })
       blockUserByDefault = (data as { block_user_by_default: boolean })
         .block_user_by_default
       return { data: { success: true } }
     }) as typeof api.put
-    api.post = (async (url, data) => {
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
       writes.push({ method: 'POST', url: String(url), data })
       return { data: { success: true } }
     }) as typeof api.post
@@ -552,7 +552,7 @@ describe('SmartOps active alerts', () => {
     const originalGet = api.get
     const originalPut = api.put
     let policyWrites = 0
-    api.get = (async (url) => ({
+    api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
           ? { success: true, data: emptyReconciliationData() }
