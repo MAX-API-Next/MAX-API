@@ -175,11 +175,11 @@ describe('SmartOps active alerts', () => {
           data: {
             success: true,
             data: {
-              total_count: 48,
-              pending_count: 17,
-              manual_count: 31,
-              open_alert_count: 1,
-              reviewed_count: 47,
+              total_count: 51,
+              pending_count: 1,
+              manual_count: 50,
+              open_alert_count: 24,
+              reviewed_count: 27,
               blocking_record_count: 1,
               blocked_user_count: 9,
               block_user_by_default: true,
@@ -227,7 +227,7 @@ describe('SmartOps active alerts', () => {
               severity: 'warning',
               component: 'billing',
               node: 'XG',
-              current_value: 48,
+              current_value: 24,
               threshold: 2121911,
               observed_at: '2026-08-30T16:14:15Z',
               message: 'billing backlog',
@@ -250,10 +250,13 @@ describe('SmartOps active alerts', () => {
         assert.ok(urls.includes('/api/smart-ops/alerts'))
         assert.ok(urls.includes('/api/smart-ops/billing-settlements'))
         assert.ok(text.includes('Billing reconciliation backlog'))
-        assert.ok(text.includes('48 records'))
+        assert.ok(text.includes('24 records'))
         assert.ok(!text.includes('4,800.0%'))
-        assert.ok(text.includes('Pending: 17'))
-        assert.ok(text.includes('Manual: 31'))
+        assert.ok(text.includes('Open alerts: 24'))
+        assert.ok(text.includes('Reviewed records: 27'))
+        assert.ok(text.includes('Pending settlements: 1'))
+        assert.ok(text.includes('Manual settlements: 50'))
+        assert.ok(!text.includes('Pending: 1'))
         assert.ok(text.includes('Blocked users: 9'))
         assert.ok(text.includes('request:billing-request-71:finalize'))
         assert.ok(text.includes('user quota is not enough'))

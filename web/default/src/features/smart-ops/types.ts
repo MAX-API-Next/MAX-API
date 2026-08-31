@@ -69,8 +69,10 @@ export type BillingSettlementReconciliationItem = {
 
 export type BillingSettlementReconciliationData = {
   total_count: number
+  // Financial settlement states; these are not administrator-review counts.
   pending_count: number
   manual_count: number
+  // Administrator-review states for the same unresolved settlement records.
   open_alert_count: number
   reviewed_count: number
   blocking_record_count: number

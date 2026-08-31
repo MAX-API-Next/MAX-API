@@ -181,12 +181,12 @@ export function BillingSettlementEvidence(
             )}
           </Badge>
           <Badge variant='outline'>
-            {t('Pending: {{count}}', {
+            {t('Pending settlements: {{count}}', {
               count: formatCount(props.data.pending_count, i18n.language),
             })}
           </Badge>
           <Badge variant='outline'>
-            {t('Manual: {{count}}', {
+            {t('Manual settlements: {{count}}', {
               count: formatCount(props.data.manual_count, i18n.language),
             })}
           </Badge>

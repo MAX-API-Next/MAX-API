@@ -210,9 +210,12 @@ type BillingSettlementReconciliationItem struct {
 }
 
 type BillingSettlementReconciliationData struct {
-	TotalCount          int64                                 `json:"total_count"`
-	PendingCount        int64                                 `json:"pending_count"`
-	ManualCount         int64                                 `json:"manual_count"`
+	TotalCount int64 `json:"total_count"`
+	// PendingCount and ManualCount classify unresolved financial settlement
+	// states. They are independent from the administrator-review counts below.
+	PendingCount int64 `json:"pending_count"`
+	ManualCount  int64 `json:"manual_count"`
+	// OpenAlertCount and ReviewedCount classify administrator-review state.
 	OpenAlertCount      int64                                 `json:"open_alert_count"`
 	ReviewedCount       int64                                 `json:"reviewed_count"`
 	BlockingRecordCount int64                                 `json:"blocking_record_count"`

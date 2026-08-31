@@ -8,22 +8,27 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDefaultBlockingPolicyIsRegisteredFailClosed(t *testing.T) {
+func TestDefaultBlockingPolicyAllowsPaidRequests(t *testing.T) {
 	registered := config.GlobalConfig.ExportAllConfigs()
 
-	assert.Equal(t, "true", registered[OptionKeyBlockUserByDefault])
+	assert.Equal(t, "false", registered[OptionKeyBlockUserByDefault])
 
 	restoreOptionMap := replaceOptionMapForTest(map[string]string{})
 	t.Cleanup(restoreOptionMap)
-	assert.True(t, BlockUserByDefault())
+	assert.False(t, BlockUserByDefault())
 }
 
 func TestBlockUserByDefaultParsesRuntimeOptionFailClosed(t *testing.T) {
 	restoreOptionMap := replaceOptionMapForTest(map[string]string{
-		OptionKeyBlockUserByDefault: "false",
+		OptionKeyBlockUserByDefault: "true",
 	})
 	t.Cleanup(restoreOptionMap)
 
+	assert.True(t, BlockUserByDefault())
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[OptionKeyBlockUserByDefault] = "false"
+	common.OptionMapRWMutex.Unlock()
 	assert.False(t, BlockUserByDefault())
 
 	common.OptionMapRWMutex.Lock()

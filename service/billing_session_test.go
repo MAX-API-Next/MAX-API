@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	miniredis "github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -38,6 +39,31 @@ type uncertainFundingSource struct {
 	deltas  []int
 	applied int64
 	err     error
+}
+
+func setBillingReconciliationBlockDefaultForTest(t *testing.T, enabled bool) {
+	t.Helper()
+	key := billing_reconciliation_setting.OptionKeyBlockUserByDefault
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	original, existed := common.OptionMap[key]
+	if enabled {
+		common.OptionMap[key] = "true"
+	} else {
+		common.OptionMap[key] = "false"
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if existed {
+			common.OptionMap[key] = original
+		} else {
+			delete(common.OptionMap, key)
+		}
+	})
 }
 
 func isolateBillingSettlementBacklogState(t *testing.T) {
@@ -879,6 +905,7 @@ func TestBillingSessionWalletPreConsumeUsesDurableRequestIdentity(t *testing.T) 
 func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing.T) {
 	require.NoError(t, i18n.Init())
 	truncate(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
 	const userID, tokenID = 851, 852
 	seedUser(t, userID, 100)
 	seedToken(t, tokenID, userID, "unresolved-finalize-token", 100)
@@ -925,9 +952,48 @@ func TestNewBillingSessionRejectsUnresolvedPositiveFinalizeSettlement(t *testing
 	assert.EqualValues(t, 100, getTokenRemainQuota(t, tokenID))
 }
 
+func TestNewBillingSessionAllowsUnresolvedPositiveFinalizeSettlementWhenPolicyIsDisabled(t *testing.T) {
+	truncate(t)
+	setBillingReconciliationBlockDefaultForTest(t, false)
+	const userID, tokenID = 855, 856
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "allowed-unresolved-finalize-token", 100)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: "request:allowed-unresolved-finalize:finalize",
+		Source:       model.BillingSettlementSourceWallet,
+		UserID:       userID,
+		TokenID:      tokenID,
+		FundingDelta: 10,
+		TokenDelta:   10,
+		Status:       model.BillingSettlementStatusManual,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	session, apiErr := NewBillingSession(ctx, &relaycommon.RelayInfo{
+		RequestId:       "allowed-after-unresolved-finalize",
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "allowed-unresolved-finalize-token",
+		OriginModelName: "allowed-finalize-model",
+		UserSetting: dto.UserSetting{
+			BillingPreference: "wallet_only",
+		},
+	}, 10)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	assert.EqualValues(t, 90, getUserQuota(t, userID))
+	assert.EqualValues(t, 90, getTokenRemainQuota(t, tokenID))
+}
+
 func TestInsufficientFinalizeBlocksFurtherBillingSessions(t *testing.T) {
 	require.NoError(t, i18n.Init())
 	truncate(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
 	const userID, tokenID = 853, 854
 	seedUser(t, userID, 15)
 	seedToken(t, tokenID, userID, "insufficient-finalize-token", 100)

@@ -152,8 +152,24 @@ describe('formatLocalizedCount', () => {
     assert.equal(fr.translation.Reviewed, 'Examiné')
     assert.doesNotMatch(ru.translation[closeAlertKey], /\bapplied\b/i)
     assert.equal(
-      ru.translation['Manual: {{count}}'],
-      'Ручная обработка: {{count}}'
+      ru.translation['Manual settlements: {{count}}'],
+      'Расчёты на ручной обработке: {{count}}'
+    )
+    assert.equal(
+      ru.translation['Pending settlements: {{count}}'],
+      'Расчёты в ожидании повтора: {{count}}'
+    )
+    assert.equal(
+      zh.translation['Pending settlements: {{count}}'],
+      '待重试结算：{{count}}'
+    )
+    assert.equal(
+      zh.translation['Manual settlements: {{count}}'],
+      '需人工处理的结算：{{count}}'
+    )
+    assert.doesNotMatch(
+      zh.translation['Pending settlements: {{count}}'],
+      /^待处理/
     )
     assert.equal(ru.translation['Open alert'], 'Открытое оповещение')
     assert.equal(
