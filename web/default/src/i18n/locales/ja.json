@@ -25,7 +25,7 @@
     "Manual settlements: {{count}}": "手動処理の精算：{{count}}",
     "No error detail": "エラー詳細なし",
     "Outstanding funding": "未処理の資金差額",
-    "Pending settlements: {{count}}": "再試行待ちの精算：{{count}}",
+    "Pending settlements: {{count}}": "保留中の精算：{{count}}",
     "References": "関連情報",
     "Showing the oldest {{count}} records; the summary covers all {{total}} unresolved records.": "最も古い {{count}} 件を表示しています。概要には未解決の全 {{total}} 件が含まれます。",
     "SmartOps reports sustained host pressure and billing reconciliation backlogs here for manual investigation.": "SmartOps は、継続的なホスト負荷と請求照合の滞留を手動調査用にここへ報告します。",

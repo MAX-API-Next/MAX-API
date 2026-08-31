@@ -25,7 +25,7 @@
     "Manual settlements: {{count}}": "Расчёты на ручной обработке: {{count}}",
     "No error detail": "Нет сведений об ошибке",
     "Outstanding funding": "Неприменённая сумма",
-    "Pending settlements: {{count}}": "Расчёты в ожидании повтора: {{count}}",
+    "Pending settlements: {{count}}": "Расчёты в ожидании: {{count}}",
     "References": "Связанные объекты",
     "Showing the oldest {{count}} records; the summary covers all {{total}} unresolved records.": "Показаны {{count}} самых старых записей; сводка охватывает все {{total}} неразрешённых записей.",
     "SmartOps reports sustained host pressure and billing reconciliation backlogs here for manual investigation.": "SmartOps сообщает здесь о длительной нагрузке на узел и очередях сверки биллинга для ручной диагностики.",

@@ -25,7 +25,7 @@
     "Manual settlements: {{count}}": "需人工处理的结算：{{count}}",
     "No error detail": "无错误详情",
     "Outstanding funding": "未完成资金差额",
-    "Pending settlements: {{count}}": "待重试结算：{{count}}",
+    "Pending settlements: {{count}}": "待结算：{{count}}",
     "References": "关联对象",
     "Showing the oldest {{count}} records; the summary covers all {{total}} unresolved records.": "当前展示最早的 {{count}} 条记录；摘要覆盖全部 {{total}} 条未解决记录。",
     "SmartOps reports sustained host pressure and billing reconciliation backlogs here for manual investigation.": "SmartOps 会在此报告持续的主机资源压力和计费对账积压，供管理员人工排查。",

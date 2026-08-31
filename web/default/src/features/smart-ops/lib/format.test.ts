@@ -157,11 +157,19 @@ describe('formatLocalizedCount', () => {
     )
     assert.equal(
       ru.translation['Pending settlements: {{count}}'],
-      'Расчёты в ожидании повтора: {{count}}'
+      'Расчёты в ожидании: {{count}}'
+    )
+    assert.equal(
+      ja.translation['Pending settlements: {{count}}'],
+      '保留中の精算：{{count}}'
+    )
+    assert.equal(
+      vi.translation['Pending settlements: {{count}}'],
+      'Quyết toán đang chờ: {{count}}'
     )
     assert.equal(
       zh.translation['Pending settlements: {{count}}'],
-      '待重试结算：{{count}}'
+      '待结算：{{count}}'
     )
     assert.equal(
       zh.translation['Manual settlements: {{count}}'],
@@ -169,7 +177,19 @@ describe('formatLocalizedCount', () => {
     )
     assert.doesNotMatch(
       zh.translation['Pending settlements: {{count}}'],
-      /^待处理/
+      /重试|处理/
+    )
+    assert.doesNotMatch(
+      ja.translation['Pending settlements: {{count}}'],
+      /再試行/
+    )
+    assert.doesNotMatch(
+      ru.translation['Pending settlements: {{count}}'],
+      /повтор/i
+    )
+    assert.doesNotMatch(
+      vi.translation['Pending settlements: {{count}}'],
+      /thử lại/i
     )
     assert.equal(ru.translation['Open alert'], 'Открытое оповещение')
     assert.equal(
