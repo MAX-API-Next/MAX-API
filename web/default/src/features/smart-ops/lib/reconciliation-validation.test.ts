@@ -79,4 +79,37 @@ describe('isBillingSettlementReconciliationData', () => {
     assert.equal(isBillingSettlementReconciliationData(nullItemData), false)
     assert.equal(isBillingSettlementReconciliationData(incompleteItem), false)
   })
+
+  test('preserves enum, nullable boolean, and finite-number boundaries', (): void => {
+    const item = validData().items[0]
+
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, status: 'applied' }],
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, user_blocking_override: 'false' }],
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        generated_at: Number.POSITIVE_INFINITY,
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, funding_delta: Number.NaN }],
+      }),
+      false
+    )
+  })
 })

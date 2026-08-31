@@ -24,7 +24,7 @@
     "Manual review": "Examen manuel",
     "Manual: {{count}}": "Manuel : {{count}}",
     "No error detail": "Aucun détail d’erreur",
-    "Outstanding funding": "Financement restant",
+    "Outstanding funding": "Financement en attente",
     "Pending: {{count}}": "En attente : {{count}}",
     "References": "Références",
     "Showing the oldest {{count}} records; the summary covers all {{total}} unresolved records.": "Affichage des {{count}} enregistrements les plus anciens ; le résumé couvre les {{total}} enregistrements non résolus.",

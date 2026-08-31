@@ -144,6 +144,10 @@ describe('formatLocalizedCount', () => {
       fr.translation['Administrator review'],
       'Examen par l’administrateur'
     )
+    assert.equal(
+      fr.translation['Outstanding funding'],
+      'Financement en attente'
+    )
     assert.doesNotMatch(fr.translation['Administrator review'], /vérification/i)
     assert.equal(fr.translation.Reviewed, 'Examiné')
     assert.doesNotMatch(ru.translation[closeAlertKey], /\bapplied\b/i)

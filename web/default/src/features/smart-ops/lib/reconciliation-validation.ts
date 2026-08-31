@@ -16,92 +16,57 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { z } from 'zod'
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
 } from '../types'
 
-const ITEM_NUMBER_FIELDS = [
-  'id',
-  'user_id',
-  'subscription_id',
-  'token_id',
-  'task_id',
-  'funding_delta',
-  'applied_funding_delta',
-  'token_delta',
-  'applied_token_delta',
-  'attempts',
-  'next_attempt',
-  'created_at',
-  'updated_at',
-  'reconciliation_reviewed_at',
-  'reconciliation_reviewed_by',
-] as const
+const billingSettlementReconciliationItemSchema: z.ZodType<BillingSettlementReconciliationItem> =
+  z.object({
+    id: z.number(),
+    operation_key: z.string(),
+    status: z.enum(['pending', 'manual']),
+    source: z.enum(['wallet', 'subscription']),
+    user_id: z.number(),
+    subscription_id: z.number(),
+    token_id: z.number(),
+    task_id: z.number(),
+    funding_delta: z.number(),
+    applied_funding_delta: z.number(),
+    token_delta: z.number(),
+    applied_token_delta: z.number(),
+    attempts: z.number(),
+    last_error: z.string(),
+    next_attempt: z.number(),
+    created_at: z.number(),
+    updated_at: z.number(),
+    reconciliation_reviewed_at: z.number(),
+    reconciliation_reviewed_by: z.number(),
+    reconciliation_review_note: z.string(),
+    user_blocking_override: z.boolean().nullable(),
+    record_blocks_user: z.boolean(),
+    blocks_user: z.boolean(),
+  })
 
-const ITEM_STRING_FIELDS = [
-  'operation_key',
-  'last_error',
-  'reconciliation_review_note',
-] as const
-
-const DATA_NUMBER_FIELDS = [
-  'total_count',
-  'pending_count',
-  'manual_count',
-  'open_alert_count',
-  'reviewed_count',
-  'blocking_record_count',
-  'blocked_user_count',
-  'oldest_created_at',
-  'generated_at',
-] as const
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function hasFiniteNumberFields(
-  value: Record<string, unknown>,
-  fields: readonly string[]
-): boolean {
-  return fields.every((field) => Number.isFinite(value[field]))
-}
-
-function hasStringFields(
-  value: Record<string, unknown>,
-  fields: readonly string[]
-): boolean {
-  return fields.every((field) => typeof value[field] === 'string')
-}
-
-function isBillingSettlementReconciliationItem(
-  value: unknown
-): value is BillingSettlementReconciliationItem {
-  if (!isRecord(value)) return false
-
-  return (
-    hasFiniteNumberFields(value, ITEM_NUMBER_FIELDS) &&
-    hasStringFields(value, ITEM_STRING_FIELDS) &&
-    (value.status === 'pending' || value.status === 'manual') &&
-    (value.source === 'wallet' || value.source === 'subscription') &&
-    (value.user_blocking_override === null ||
-      typeof value.user_blocking_override === 'boolean') &&
-    typeof value.record_blocks_user === 'boolean' &&
-    typeof value.blocks_user === 'boolean'
-  )
-}
+const billingSettlementReconciliationDataSchema: z.ZodType<BillingSettlementReconciliationData> =
+  z.object({
+    total_count: z.number(),
+    pending_count: z.number(),
+    manual_count: z.number(),
+    open_alert_count: z.number(),
+    reviewed_count: z.number(),
+    blocking_record_count: z.number(),
+    blocked_user_count: z.number(),
+    block_user_by_default: z.boolean(),
+    oldest_created_at: z.number(),
+    truncated: z.boolean(),
+    generated_at: z.number(),
+    items: z.array(billingSettlementReconciliationItemSchema),
+  })
 
 export function isBillingSettlementReconciliationData(
   value: unknown
 ): value is BillingSettlementReconciliationData {
-  if (!isRecord(value)) return false
-
-  return (
-    hasFiniteNumberFields(value, DATA_NUMBER_FIELDS) &&
-    typeof value.block_user_by_default === 'boolean' &&
-    typeof value.truncated === 'boolean' &&
-    Array.isArray(value.items) &&
-    value.items.every(isBillingSettlementReconciliationItem)
-  )
+  return billingSettlementReconciliationDataSchema.safeParse(value).success
 }
