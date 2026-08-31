@@ -27,9 +27,12 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     typeof error.response.data === 'object' &&
     error.response.data !== null &&
     'message' in error.response.data &&
-    typeof error.response.data.message === 'string'
+    typeof error.response.data.message === 'string' &&
+    error.response.data.message.trim().length > 0
   ) {
     return error.response.data.message
   }
-  return error instanceof Error ? error.message : fallback
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : fallback
 }

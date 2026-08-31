@@ -311,11 +311,31 @@ func TestBillingSettlementFailureReopensReviewedRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, blocked, "the reviewed allow decision is active before new evidence arrives")
 
-	markBillingSettlementFailure(record.OperationKey, errors.New("new retry failure"))
+	markBillingSettlementFailure(record.OperationKey, errors.New("previous failure"))
 
 	var stored BillingSettlement
 	require.NoError(t, DB.First(&stored, record.ID).Error)
 	assert.Equal(t, 2, stored.Attempts)
+	assert.Equal(t, "previous failure", stored.LastError)
+	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
+	assert.EqualValues(t, record.ReconciliationReviewedAt, stored.ReconciliationReviewedAt)
+	assert.Equal(t, record.ReconciliationReviewedBy, stored.ReconciliationReviewedBy)
+	assert.Equal(t, record.ReconciliationReviewNote, stored.ReconciliationReviewNote)
+	require.NotNil(t, stored.UserBlockingOverride)
+	assert.False(t, *stored.UserBlockingOverride)
+	assert.EqualValues(t, 8, stored.Revision)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count, "unchanged failure evidence must preserve the administrator review")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "unchanged failure evidence must preserve the explicit allow decision")
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("new retry failure"))
+
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, 3, stored.Attempts)
 	assert.Equal(t, "new retry failure", stored.LastError)
 	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
 	assert.GreaterOrEqual(t, stored.NextAttempt, now)
@@ -327,7 +347,7 @@ func TestBillingSettlementFailureReopensReviewedRecord(t *testing.T) {
 	assert.EqualValues(t, 2, stored.AppliedFundingDelta)
 	assert.EqualValues(t, 10, stored.TokenDelta)
 	assert.EqualValues(t, 2, stored.AppliedTokenDelta)
-	assert.EqualValues(t, 8, stored.Revision)
+	assert.EqualValues(t, 9, stored.Revision)
 
 	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
 	require.NoError(t, err)
@@ -335,6 +355,34 @@ func TestBillingSettlementFailureReopensReviewedRecord(t *testing.T) {
 	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
 	require.NoError(t, err)
 	assert.True(t, blocked, "reopened records must inherit the fail-closed global policy")
+}
+
+func TestBillingSettlementFailureReopensReviewedRecordWhenStatusBecomesManual(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	allow := false
+	record := BillingSettlement{
+		OperationKey: "request:reviewed-status-change:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 967, FundingDelta: 10, TokenDelta: 10,
+		Status: BillingSettlementStatusPending, Attempts: 1, LastError: "unchanged failure",
+		ManualOnFailure: true, ReconciliationReviewedAt: now - 60, ReconciliationReviewedBy: 7008,
+		ReconciliationReviewNote: "Reviewed while retry remained pending", UserBlockingOverride: &allow,
+		CreatedAt: now - 120, UpdatedAt: now - 60, Revision: 3,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("unchanged failure"))
+
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
+	assert.Equal(t, "unchanged failure", stored.LastError)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Empty(t, stored.ReconciliationReviewNote)
+	assert.Nil(t, stored.UserBlockingOverride)
+	assert.EqualValues(t, 4, stored.Revision)
 }
 
 func TestReviewBillingSettlementRejectsAlreadyAppliedRecord(t *testing.T) {
@@ -482,7 +530,8 @@ func TestBillingSettlementReviewUpdateMapUsesSchemaColumns(t *testing.T) {
 
 	updateMaps := []map[string]interface{}{
 		billingSettlementReviewUpdates(7003, false, "reviewed", time.Unix(123, 0)),
-		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusPending, 456, 123),
+		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusPending, 456, 123, false),
+		billingSettlementFailureUpdates(2, "failed", BillingSettlementStatusManual, 0, 123, true),
 	}
 	for _, updates := range updateMaps {
 		for key := range updates {
