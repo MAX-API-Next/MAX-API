@@ -155,7 +155,7 @@ describe('formatLocalizedCount', () => {
       ru.translation['Manual: {{count}}'],
       'Ручная обработка: {{count}}'
     )
-    assert.equal(ru.translation['Open alert'], 'Открыть оповещение')
+    assert.equal(ru.translation['Open alert'], 'Открытое оповещение')
     assert.equal(
       ru.translation['Open alert: {{count}}'],
       'Открытое оповещение: {{count}}'
