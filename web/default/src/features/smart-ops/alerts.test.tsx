@@ -69,10 +69,10 @@ function emptyReconciliationData(): BillingSettlementReconciliationData {
 }
 
 describe('SmartOps active alerts', () => {
-  test('polls the administrator alert endpoint and renders active host pressure', async () => {
+  test('polls the administrator alert endpoint and renders active host pressure', async (): Promise<void> => {
     const originalGet = api.get
     const urls: string[] = []
-    api.get = (async (url) => {
+    api.get = (async (url: string): Promise<unknown> => {
       urls.push(String(url))
       if (url === '/api/smart-ops/billing-settlements') {
         return { data: { success: true, data: emptyReconciliationData() } }
@@ -121,10 +121,10 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('formats percentages with the active locale', async () => {
+  test('formats percentages with the active locale', async (): Promise<void> => {
     const originalGet = api.get
     await testEnv.i18n.changeLanguage('fr')
-    api.get = (async (url) => ({
+    api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
           ? { success: true, data: emptyReconciliationData() }
@@ -165,10 +165,10 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('renders billing backlog values and read-only reconciliation evidence', async () => {
+  test('renders billing backlog values and read-only reconciliation evidence', async (): Promise<void> => {
     const originalGet = api.get
     const urls: string[] = []
-    api.get = (async (url) => {
+    api.get = (async (url: string): Promise<unknown> => {
       urls.push(String(url))
       if (url === '/api/smart-ops/billing-settlements') {
         return {
@@ -300,9 +300,9 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('keeps the billing alert visible when reconciliation details fail', async () => {
+  test('keeps the billing alert visible when reconciliation details fail', async (): Promise<void> => {
     const originalGet = api.get
-    api.get = (async (url) => {
+    api.get = (async (url: string): Promise<unknown> => {
       if (url === '/api/smart-ops/billing-settlements') {
         throw new Error('temporary reconciliation projection failure')
       }
@@ -384,7 +384,7 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('loads reviewed reconciliation without an active alert and submits administrator controls', async () => {
+  test('loads reviewed reconciliation without an active alert and submits administrator controls', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({
       id: 1,
@@ -542,7 +542,7 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('keeps the global blocking policy read only for non-root administrators', async () => {
+  test('keeps the global blocking policy read only for non-root administrators', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({
       id: 2,
@@ -558,7 +558,7 @@ describe('SmartOps active alerts', () => {
           ? { success: true, data: emptyReconciliationData() }
           : { success: true, data: [] },
     })) as typeof api.get
-    api.put = (async () => {
+    api.put = (async (): Promise<unknown> => {
       policyWrites += 1
       return { data: { success: true } }
     }) as typeof api.put
@@ -594,9 +594,9 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('shows a healthy empty state when no incident is active', async () => {
+  test('shows a healthy empty state when no incident is active', async (): Promise<void> => {
     const originalGet = api.get
-    api.get = (async (url) => ({
+    api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
           ? { success: true, data: emptyReconciliationData() }
@@ -623,10 +623,10 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('shows a localized fallback for an unsuccessful response', async () => {
+  test('shows a localized fallback for an unsuccessful response', async (): Promise<void> => {
     const originalGet = api.get
     await testEnv.i18n.changeLanguage('fr')
-    api.get = (async (url) => ({
+    api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
           ? { success: true, data: emptyReconciliationData() }
@@ -654,10 +654,10 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('shows a retryable error state when the alert endpoint fails', async () => {
+  test('shows a retryable error state when the alert endpoint fails', async (): Promise<void> => {
     const originalGet = api.get
     let requestCount = 0
-    api.get = (async (url) => {
+    api.get = (async (url: string): Promise<unknown> => {
       if (url === '/api/smart-ops/billing-settlements') {
         return { data: { success: true, data: emptyReconciliationData() } }
       }

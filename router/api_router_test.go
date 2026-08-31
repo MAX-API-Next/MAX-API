@@ -151,6 +151,14 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	oldMemoryCacheEnabled := common.MemoryCacheEnabled
 	oldGlobalAPIRateLimitEnable := common.GlobalApiRateLimitEnable
 	oldCriticalRateLimitEnable := common.CriticalRateLimitEnable
+	t.Cleanup(func() {
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.GlobalApiRateLimitEnable = oldGlobalAPIRateLimitEnable
+		common.CriticalRateLimitEnable = oldCriticalRateLimitEnable
+	})
 	common.RedisEnabled = false
 	common.MemoryCacheEnabled = false
 	common.GlobalApiRateLimitEnable = false
@@ -159,6 +167,11 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	dsn := fmt.Sprintf("file:billing_policy_root_%d?mode=memory&cache=shared", testRun)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Option{}, &model.Log{}))
 	model.DB = db
 	model.LOG_DB = db
@@ -171,6 +184,15 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	originalPolicy, policyExisted := common.OptionMap[key]
 	common.OptionMap[key] = "true"
 	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if policyExisted {
+			common.OptionMap[key] = originalPolicy
+		} else {
+			delete(common.OptionMap, key)
+		}
+	})
 
 	admin := model.User{
 		Id: 1500000 + int(testRun), Username: fmt.Sprintf("billing-policy-admin-%d", testRun),
@@ -186,25 +208,6 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&admin).Error)
 	require.NoError(t, db.Create(&root).Error)
-
-	t.Cleanup(func() {
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
-		model.DB = oldDB
-		model.LOG_DB = oldLogDB
-		common.RedisEnabled = oldRedisEnabled
-		common.MemoryCacheEnabled = oldMemoryCacheEnabled
-		common.GlobalApiRateLimitEnable = oldGlobalAPIRateLimitEnable
-		common.CriticalRateLimitEnable = oldCriticalRateLimitEnable
-		common.OptionMapRWMutex.Lock()
-		if policyExisted {
-			common.OptionMap[key] = originalPolicy
-		} else {
-			delete(common.OptionMap, key)
-		}
-		common.OptionMapRWMutex.Unlock()
-	})
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("billing-policy-root-session"))))
