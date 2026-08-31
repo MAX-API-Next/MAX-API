@@ -18,7 +18,6 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import type { ReactElement } from 'react'
 import type { TFunction } from 'i18next'
-import { Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   formatQuota,
@@ -27,6 +26,7 @@ import {
 } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -62,21 +62,52 @@ function settlementReferences(
 
 interface BillingSettlementTableProps {
   items: BillingSettlementReconciliationItem[]
-  onSelectItem: (item: BillingSettlementReconciliationItem) => void
+  selectedIDs: ReadonlySet<number>
+  reviewPending: boolean
+  onSelectedIDsChange: (ids: Set<number>) => void
+  onReviewItems: (items: BillingSettlementReconciliationItem[]) => void
 }
 
 export function BillingSettlementTable(
   props: BillingSettlementTableProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
+  const allSelected =
+    props.items.length > 0 &&
+    props.items.every((item) => props.selectedIDs.has(item.id))
+  const someSelected = props.items.some((item) =>
+    props.selectedIDs.has(item.id)
+  )
+
+  const toggleAll = (checked: boolean) => {
+    props.onSelectedIDsChange(
+      checked ? new Set(props.items.map((item) => item.id)) : new Set()
+    )
+  }
+
+  const toggleItem = (id: number, checked: boolean) => {
+    const next = new Set(props.selectedIDs)
+    if (checked) next.add(id)
+    else next.delete(id)
+    props.onSelectedIDsChange(next)
+  }
 
   return (
     <div className='overflow-x-auto rounded-md border'>
-      <Table className='min-w-[1580px]'>
+      <Table className='min-w-[1450px]'>
         <TableHeader>
           <TableRow className='bg-muted/40 hover:bg-muted/40'>
+            <TableHead className='w-10'>
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected && !allSelected}
+                onCheckedChange={(checked) => toggleAll(checked === true)}
+                disabled={props.reviewPending}
+                aria-label={t('Select all billing reconciliation alerts')}
+              />
+            </TableHead>
             <TableHead>{t('Operation')}</TableHead>
-            <TableHead>{t('Financial / alert status')}</TableHead>
+            <TableHead>{t('Financial status')}</TableHead>
             <TableHead>{t('User access')}</TableHead>
             <TableHead>{t('References')}</TableHead>
             <TableHead>{t('Funding source')}</TableHead>
@@ -85,7 +116,6 @@ export function BillingSettlementTable(
             </TableHead>
             <TableHead>{t('Attempts / next retry')}</TableHead>
             <TableHead>{t('Last error')}</TableHead>
-            <TableHead>{t('Administrator review')}</TableHead>
             <TableHead>{t('Created')}</TableHead>
             <TableHead className='text-right'>{t('Actions')}</TableHead>
           </TableRow>
@@ -97,6 +127,21 @@ export function BillingSettlementTable(
             const references = settlementReferences(item, t)
             return (
               <TableRow key={item.id}>
+                <TableCell>
+                  <Checkbox
+                    checked={props.selectedIDs.has(item.id)}
+                    onCheckedChange={(checked) =>
+                      toggleItem(item.id, checked === true)
+                    }
+                    disabled={props.reviewPending}
+                    aria-label={t(
+                      'Select billing reconciliation alert {{id}}',
+                      {
+                        id: item.id,
+                      }
+                    )}
+                  />
+                </TableCell>
                 <TableCell className='max-w-72 whitespace-normal'>
                   <span className='font-mono text-xs break-all'>
                     {item.operation_key}
@@ -111,17 +156,7 @@ export function BillingSettlementTable(
                     >
                       {item.status === 'manual' ? t('Manual') : t('Pending')}
                     </Badge>
-                    <Badge
-                      variant={
-                        item.reconciliation_reviewed_at > 0
-                          ? 'secondary'
-                          : 'destructive'
-                      }
-                    >
-                      {item.reconciliation_reviewed_at > 0
-                        ? t('Reviewed')
-                        : t('Open alert')}
-                    </Badge>
+                    <Badge variant='destructive'>{t('Open alert')}</Badge>
                   </div>
                 </TableCell>
                 <TableCell>
@@ -184,39 +219,6 @@ export function BillingSettlementTable(
                     {item.last_error || t('No error detail')}
                   </span>
                 </TableCell>
-                <TableCell className='max-w-72 whitespace-normal'>
-                  {item.reconciliation_reviewed_at > 0 ? (
-                    <div className='flex flex-col gap-0.5 text-xs'>
-                      <span>
-                        {t('Administrator #{{id}}', {
-                          id: item.reconciliation_reviewed_by,
-                        })}
-                      </span>
-                      <span
-                        className='text-muted-foreground'
-                        title={formatTimestampToDate(
-                          item.reconciliation_reviewed_at
-                        )}
-                      >
-                        {formatTimestampRelative(
-                          item.reconciliation_reviewed_at,
-                          'seconds',
-                          i18n.language
-                        )}
-                      </span>
-                      <span
-                        className='text-muted-foreground line-clamp-3'
-                        title={item.reconciliation_review_note}
-                      >
-                        {item.reconciliation_review_note}
-                      </span>
-                    </div>
-                  ) : (
-                    <span className='text-muted-foreground text-xs'>
-                      {t('Not reviewed')}
-                    </span>
-                  )}
-                </TableCell>
                 <TableCell
                   className='text-muted-foreground text-xs'
                   title={formatTimestampToDate(item.created_at)}
@@ -232,14 +234,10 @@ export function BillingSettlementTable(
                     type='button'
                     variant='outline'
                     size='sm'
-                    onClick={() => props.onSelectItem(item)}
+                    onClick={() => props.onReviewItems([item])}
+                    disabled={props.reviewPending}
                   >
-                    {item.reconciliation_reviewed_at > 0 && (
-                      <Pencil data-icon='inline-start' aria-hidden='true' />
-                    )}
-                    {item.reconciliation_reviewed_at > 0
-                      ? t('Edit review')
-                      : t('Review and close')}
+                    {t('Review and close')}
                   </Button>
                 </TableCell>
               </TableRow>

@@ -25,6 +25,7 @@ import type {
 const billingSettlementReconciliationItemSchema: z.ZodType<BillingSettlementReconciliationItem> =
   z.object({
     id: z.number(),
+    revision: z.number(),
     operation_key: z.string(),
     status: z.enum(['pending', 'manual']),
     source: z.enum(['wallet', 'subscription']),
@@ -55,7 +56,6 @@ const billingSettlementReconciliationDataSchema: z.ZodType<BillingSettlementReco
     pending_count: z.number(),
     manual_count: z.number(),
     open_alert_count: z.number(),
-    reviewed_count: z.number(),
     blocking_record_count: z.number(),
     blocked_user_count: z.number(),
     block_user_by_default: z.boolean(),

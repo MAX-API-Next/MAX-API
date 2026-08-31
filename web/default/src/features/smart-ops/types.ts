@@ -43,6 +43,7 @@ export type SmartOpsAlertsResponse = {
 
 export type BillingSettlementReconciliationItem = {
   id: number
+  revision: number
   operation_key: string
   status: 'pending' | 'manual'
   source: 'wallet' | 'subscription'
@@ -68,13 +69,12 @@ export type BillingSettlementReconciliationItem = {
 }
 
 export type BillingSettlementReconciliationData = {
+  // Counts and items cover open administrator alerts only. Reviewed financial
+  // records remain durable in the backend but are excluded from this view.
   total_count: number
-  // Financial settlement states; these are not administrator-review counts.
   pending_count: number
   manual_count: number
-  // Administrator-review states for the same unresolved settlement records.
   open_alert_count: number
-  reviewed_count: number
   blocking_record_count: number
   blocked_user_count: number
   block_user_by_default: boolean
@@ -91,8 +91,10 @@ export type BillingSettlementMutationResponse = {
 }
 
 export type BillingSettlementReviewRequest = {
-  block_user: boolean
-  note: string
+  items: Array<{
+    id: number
+    revision: number
+  }>
 }
 
 export type BillingSettlementReconciliationResponse = {

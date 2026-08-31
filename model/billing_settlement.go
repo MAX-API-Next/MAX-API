@@ -185,6 +185,7 @@ type BillingSettlementBacklogStats struct {
 // other secret-bearing fields.
 type BillingSettlementReconciliationItem struct {
 	ID                       int64  `json:"id"`
+	Revision                 int64  `json:"revision"`
 	OperationKey             string `json:"operation_key"`
 	Status                   string `json:"status"`
 	Source                   string `json:"source"`
@@ -211,12 +212,17 @@ type BillingSettlementReconciliationItem struct {
 
 type BillingSettlementReconciliationData struct {
 	TotalCount int64 `json:"total_count"`
-	// PendingCount and ManualCount classify unresolved financial settlement
-	// states. They are independent from the administrator-review counts below.
+	// PendingCount and ManualCount classify financial states among currently
+	// open administrator alerts. Reviewed records are retained for durable
+	// financial recovery and leave this projection unless an administrator
+	// explicitly chose to keep the affected user blocked.
 	PendingCount int64 `json:"pending_count"`
 	ManualCount  int64 `json:"manual_count"`
-	// OpenAlertCount and ReviewedCount classify administrator-review state.
-	OpenAlertCount      int64                                 `json:"open_alert_count"`
+	// OpenAlertCount is retained as an explicit operational label for clients;
+	// it equals TotalCount because this projection contains open alerts only.
+	OpenAlertCount int64 `json:"open_alert_count"`
+	// ReviewedCount is retained for API compatibility. Closed alerts are no
+	// longer part of this active projection, so the value is always zero.
 	ReviewedCount       int64                                 `json:"reviewed_count"`
 	BlockingRecordCount int64                                 `json:"blocking_record_count"`
 	BlockedUserCount    int64                                 `json:"blocked_user_count"`
@@ -236,11 +242,11 @@ func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
 
 func openPositiveFinalizeSettlementAlertScope(db *gorm.DB) *gorm.DB {
 	return unresolvedPositiveFinalizeSettlementScope(db).
-		Where("reconciliation_reviewed_at = ?", 0)
+		Where("(reconciliation_reviewed_at = ? OR user_blocking_override = ?)", 0, true)
 }
 
 func blockingPositiveFinalizeSettlementScope(db *gorm.DB, blockUserByDefault bool) *gorm.DB {
-	scope := unresolvedPositiveFinalizeSettlementScope(db)
+	scope := openPositiveFinalizeSettlementAlertScope(db)
 	if blockUserByDefault {
 		return scope.Where("(user_blocking_override IS NULL OR user_blocking_override = ?)", true)
 	}
@@ -340,9 +346,10 @@ func observeBillingSettlementBacklog(observedAt time.Time) {
 }
 
 // GetUnresolvedPositiveFinalizeSettlementStats returns the count and oldest
-// creation time for open (not yet reviewed) positive request-finalize alerts.
-// Reviewed rows remain unresolved financial records and are still returned by
-// the reconciliation list until the settlement itself reaches applied.
+// creation time for open positive request-finalize alerts. Reviewed rows
+// remain durable financial records and leave this operational projection
+// unless an administrator explicitly keeps the affected user blocked or new
+// failure evidence reopens them.
 func GetUnresolvedPositiveFinalizeSettlementStats() (BillingSettlementBacklogStats, error) {
 	if DB == nil {
 		return BillingSettlementBacklogStats{}, errors.New("database is not initialized")
@@ -351,8 +358,10 @@ func GetUnresolvedPositiveFinalizeSettlementStats() (BillingSettlementBacklogSta
 }
 
 // GetUnresolvedPositiveFinalizeSettlements returns bounded, read-only evidence
-// for operators. It never retries, updates, deletes, or otherwise mutates a
-// settlement record or any financial balance.
+// for open operator alerts. Reviewed rows remain durable financial records and
+// are excluded after closure unless an administrator explicitly keeps the
+// affected user blocked. This function never retries, updates, deletes, or
+// otherwise mutates a settlement record or any financial balance.
 func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementReconciliationData, error) {
 	if DB == nil {
 		return BillingSettlementReconciliationData{}, errors.New("database is not initialized")
@@ -377,28 +386,25 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		})
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		stats, err := getAllUnresolvedPositiveFinalizeSettlementStatsDB(tx)
+		stats, err := getOpenPositiveFinalizeSettlementAlertStatsDB(tx)
 		if err != nil {
 			return err
 		}
 		data.TotalCount = stats.Count
 		data.OldestCreatedAt = stats.OldestCreatedAt
 
-		if err := unresolvedPositiveFinalizeSettlementScope(tx).
+		if err := openPositiveFinalizeSettlementAlertScope(tx).
 			Where("status = ?", BillingSettlementStatusPending).
 			Count(&data.PendingCount).Error; err != nil {
 			return err
 		}
-		if err := unresolvedPositiveFinalizeSettlementScope(tx).
+		if err := openPositiveFinalizeSettlementAlertScope(tx).
 			Where("status = ?", BillingSettlementStatusManual).
 			Count(&data.ManualCount).Error; err != nil {
 			return err
 		}
-		if err := openPositiveFinalizeSettlementAlertScope(tx).
-			Count(&data.OpenAlertCount).Error; err != nil {
-			return err
-		}
-		data.ReviewedCount = data.TotalCount - data.OpenAlertCount
+		data.OpenAlertCount = data.TotalCount
+		data.ReviewedCount = 0
 		blockingScope := blockingPositiveFinalizeSettlementScope(tx, data.BlockUserByDefault)
 		if err := blockingScope.Count(&data.BlockingRecordCount).Error; err != nil {
 			return err
@@ -410,14 +416,13 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		}
 
 		items := make([]BillingSettlementReconciliationItem, 0, limit+1)
-		if err := unresolvedPositiveFinalizeSettlementScope(tx).
+		if err := openPositiveFinalizeSettlementAlertScope(tx).
 			Select(
-				"id", "operation_key", "status", "source", "user_id", "subscription_id", "token_id", "task_id",
+				"id", "revision", "operation_key", "status", "source", "user_id", "subscription_id", "token_id", "task_id",
 				"funding_delta", "applied_funding_delta", "token_delta", "applied_token_delta", "attempts", "last_error",
 				"next_attempt", "created_at", "updated_at", "reconciliation_reviewed_at", "reconciliation_reviewed_by",
 				"reconciliation_review_note", "user_blocking_override",
 			).
-			Order("reconciliation_reviewed_at ASC").
 			Order("created_at ASC").
 			Order("id ASC").
 			Limit(limit + 1).
@@ -464,14 +469,6 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		return nil
 	}, transactionOptions...)
 	return data, err
-}
-
-func getAllUnresolvedPositiveFinalizeSettlementStatsDB(db *gorm.DB) (BillingSettlementBacklogStats, error) {
-	var stats BillingSettlementBacklogStats
-	err := unresolvedPositiveFinalizeSettlementScope(db).
-		Select("COUNT(*) AS record_count, COALESCE(MIN(created_at), 0) AS oldest_created_at").
-		Scan(&stats).Error
-	return stats, err
 }
 
 func getOpenPositiveFinalizeSettlementAlertStatsDB(db *gorm.DB) (BillingSettlementBacklogStats, error) {
@@ -522,6 +519,63 @@ func billingSettlementReviewUpdates(reviewerID int, blockUser bool, note string,
 		"reconciliation_review_note": note,
 		"user_blocking_override":     blockUser,
 	}
+}
+
+// BillingSettlementReviewTarget identifies the exact financial snapshot an
+// administrator intends to acknowledge and close.
+type BillingSettlementReviewTarget struct {
+	ID       int64 `json:"id"`
+	Revision int64 `json:"revision"`
+}
+
+// ReviewBillingSettlements atomically acknowledges a bounded set of current
+// alert snapshots. It records administrator review metadata and explicitly
+// allows the affected records, but never changes settlement status, balances,
+// applied deltas, effect state, updated_at, or financial revision.
+func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerID int) ([]BillingSettlement, error) {
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if reviewerID <= 0 || len(targets) == 0 || len(targets) > 200 {
+		return nil, ErrBillingSettlementReviewConflict
+	}
+	seen := make(map[int64]struct{}, len(targets))
+	for _, target := range targets {
+		if target.ID <= 0 || target.Revision <= 0 {
+			return nil, ErrBillingSettlementReviewConflict
+		}
+		if _, exists := seen[target.ID]; exists {
+			return nil, ErrBillingSettlementReviewConflict
+		}
+		seen[target.ID] = struct{}{}
+	}
+
+	reviewed := make([]BillingSettlement, 0, len(targets))
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		reviewedAt := time.Now()
+		for _, target := range targets {
+			result := openPositiveFinalizeSettlementAlertScope(tx).
+				Where("id = ? AND revision = ?", target.ID, target.Revision).
+				UpdateColumns(billingSettlementReviewUpdates(reviewerID, false, "", reviewedAt))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrBillingSettlementReviewConflict
+			}
+
+			var record BillingSettlement
+			if err := tx.First(&record, target.ID).Error; err != nil {
+				return err
+			}
+			reviewed = append(reviewed, record)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return reviewed, nil
 }
 
 func billingSettlementReviewMatches(record BillingSettlement, reviewerID int, blockUser bool, note string, reviewedAt int64) bool {

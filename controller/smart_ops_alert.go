@@ -58,6 +58,59 @@ type billingSettlementReviewRequest struct {
 	Note      string `json:"note"`
 }
 
+type billingSettlementBatchReviewRequest struct {
+	Items []model.BillingSettlementReviewTarget `json:"items"`
+}
+
+// ReviewBillingSettlements closes a bounded set of current reconciliation
+// alerts after the administrator acknowledges them.
+func ReviewBillingSettlements(c *gin.Context) {
+	var request billingSettlementBatchReviewRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid billing settlement batch review request",
+		})
+		return
+	}
+	records, err := service.ReviewBillingSettlements(request.Items, c.GetInt("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "failed to review billing settlements"
+		switch {
+		case errors.Is(err, service.ErrInvalidBillingSettlementReconciliationReview):
+			status = http.StatusBadRequest
+			message = err.Error()
+		case errors.Is(err, model.ErrBillingSettlementReviewConflict):
+			status = http.StatusConflict
+			message = "one or more billing settlement alerts changed; refresh and review again"
+		}
+		if status == http.StatusInternalServerError {
+			common.SysError(fmt.Sprintf("failed to review billing settlements: %v", err))
+		}
+		c.JSON(status, gin.H{"success": false, "message": message})
+		return
+	}
+	settlementIDs := make([]int64, 0, len(records))
+	targetUserIDs := make([]int, 0, len(records))
+	for _, record := range records {
+		settlementIDs = append(settlementIDs, record.ID)
+		targetUserIDs = append(targetUserIDs, record.UserID)
+	}
+	recordManageAudit(c, "billing.reconciliation_review_batch", map[string]interface{}{
+		"count":           len(records),
+		"settlement_ids":  settlementIDs,
+		"target_user_ids": targetUserIDs,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"reviewed_count": len(records),
+			"settlement_ids": settlementIDs,
+		},
+	})
+}
+
 func ReviewBillingSettlement(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import en from '@/i18n/locales/en.json'
 import fr from '@/i18n/locales/fr.json'
 import ja from '@/i18n/locales/ja.json'
 import ru from '@/i18n/locales/ru.json'
@@ -116,121 +115,70 @@ describe('formatLocalizedCount', () => {
     )
   })
 
-  test('keeps reconciliation terminology localized and consistent', (): void => {
+  test('keeps active reconciliation terminology localized and consistent', (): void => {
     const reviewSummaryKey =
-      'Review and close operational alerts without changing the underlying pending or manual financial settlement.'
-    const emptyStateKey = 'No unresolved reconciliation records.'
+      'Select one or more alerts and close them with one click. The underlying financial settlement record remains available for safe retry and audit.'
+    const selectionKey = 'Review and close selected ({{count}})'
     const blockingPolicyKey = 'Block affected users by default'
-    const userAccessHeadingKey = 'User access'
-    const userAccessKey = 'User access while unresolved'
-    const rootPolicyKey =
-      'Only root administrators can change the default blocking policy.'
-    const closeAlertKey =
-      'Closing this alert records an administrator review only. It does not mark the settlement as applied or change any balance.'
-    const positiveSettlementKey =
-      'When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.'
-    const oldPositiveSettlementKey =
-      'When enabled, unresolved positive final settlements block new paid requests unless a reviewed record explicitly allows the user to continue.'
-    const paidAdmissionKey =
-      'This choice affects only new paid-request admission while the financial settlement remains pending or manual.'
 
     assert.doesNotMatch(ru.translation[reviewSummaryKey], /pending|manual/i)
-    assert.doesNotMatch(
-      ja.translation[reviewSummaryKey],
-      /決済|pending|manual/i
-    )
-    assert.equal(fr.translation['Token #{{id}}'], 'Jeton n° {{id}}')
+    assert.doesNotMatch(ja.translation[reviewSummaryKey], /pending|manual/i)
     assert.equal(
-      fr.translation['Administrator review'],
-      'Examen par l’administrateur'
+      ru.translation['Open manual settlements: {{count}}'],
+      'Открытые расчёты на ручной обработке: {{count}}'
     )
     assert.equal(
-      fr.translation['Outstanding funding'],
-      'Financement en attente'
-    )
-    assert.doesNotMatch(fr.translation['Administrator review'], /vérification/i)
-    assert.equal(fr.translation.Reviewed, 'Examiné')
-    assert.doesNotMatch(ru.translation[closeAlertKey], /\bapplied\b/i)
-    assert.equal(
-      ru.translation['Manual settlements: {{count}}'],
-      'Расчёты на ручной обработке: {{count}}'
+      ru.translation['Open pending settlements: {{count}}'],
+      'Открытые расчёты в ожидании: {{count}}'
     )
     assert.equal(
-      ru.translation['Pending settlements: {{count}}'],
-      'Расчёты в ожидании: {{count}}'
+      ja.translation['Open pending settlements: {{count}}'],
+      '未対応の保留中精算：{{count}}件'
     )
     assert.equal(
-      ja.translation['Pending settlements: {{count}}'],
-      '保留中の精算：{{count}}'
+      vi.translation['Open pending settlements: {{count}}'],
+      'Quyết toán đang chờ có cảnh báo mở: {{count}}'
     )
     assert.equal(
-      vi.translation['Pending settlements: {{count}}'],
-      'Quyết toán đang chờ xử lý: {{count}}'
+      vi.translation['Open manual settlements: {{count}}'],
+      'Quyết toán thủ công có cảnh báo mở: {{count}}'
     )
     assert.equal(
-      vi.translation['Manual settlements: {{count}}'],
-      'Quyết toán thủ công: {{count}}'
+      zh.translation['Open pending settlements: {{count}}'],
+      '未关闭的待结算：{{count}}'
     )
     assert.equal(
-      zh.translation['Pending settlements: {{count}}'],
-      '待结算：{{count}}'
-    )
-    assert.equal(
-      zh.translation['Manual settlements: {{count}}'],
-      '需人工处理的结算：{{count}}'
+      zh.translation['Open manual settlements: {{count}}'],
+      '未关闭的需人工处理结算：{{count}}'
     )
     assert.doesNotMatch(
-      zh.translation['Pending settlements: {{count}}'],
+      zh.translation['Open pending settlements: {{count}}'],
       /重试|处理/
     )
     assert.doesNotMatch(
-      ja.translation['Pending settlements: {{count}}'],
+      ja.translation['Open pending settlements: {{count}}'],
       /再試行/
     )
     assert.doesNotMatch(
-      ru.translation['Pending settlements: {{count}}'],
+      ru.translation['Open pending settlements: {{count}}'],
       /повтор/i
     )
     assert.doesNotMatch(
-      vi.translation['Pending settlements: {{count}}'],
+      vi.translation['Open pending settlements: {{count}}'],
       /thử lại/i
     )
-    assert.equal(ru.translation['Open alert'], 'Открытое оповещение')
     assert.equal(
-      ru.translation['Open alert: {{count}}'],
-      'Открытое оповещение: {{count}}'
+      vi.translation['Open billing reconciliation alerts'],
+      'Cảnh báo đối soát tính phí đang mở'
     )
     assert.equal(
-      vi.translation['Administrator controls'],
-      'Kiểm soát dành cho quản trị viên'
+      zh.translation['No open reconciliation alerts.'],
+      '没有未关闭的对账告警。'
     )
-    assert.equal(
-      vi.translation['Billing reconciliation controls'],
-      'Kiểm soát đối soát tính phí'
-    )
-    assert.equal(
-      vi.translation['Attempts / next retry'],
-      'Số lần thử / lần thử lại tiếp theo'
-    )
-    assert.equal(
-      vi.translation[paidAdmissionKey],
-      'Lựa chọn này chỉ ảnh hưởng đến việc tiếp nhận yêu cầu có tính phí mới trong khi quyết toán tài chính vẫn ở trạng thái đang chờ hoặc xử lý thủ công.'
-    )
-    assert.equal(
-      vi.translation[positiveSettlementKey],
-      'Khi bật, các yêu cầu có tính phí mới vẫn bị chặn chừng nào còn bất kỳ bản ghi quyết toán cuối có số tiền dương chưa xử lý nào chặn người dùng. Việc cho phép một bản ghi đã kiểm tra không vô hiệu hóa các bản ghi chặn khác.'
-    )
-    assert.equal(en.translation[positiveSettlementKey], positiveSettlementKey)
-    for (const locale of [en, fr, ja, ru, vi, zh]) {
-      assert.equal(
-        Object.hasOwn(locale.translation, oldPositiveSettlementKey),
-        false
-      )
-    }
-    assert.match(vi.translation[rootPolicyKey], /quản trị viên Root/)
-    assert.equal(zh.translation[emptyStateKey], '没有未解决的对账记录。')
     assert.equal(zh.translation[blockingPolicyKey], '默认阻止受影响用户')
-    assert.equal(zh.translation[userAccessHeadingKey], '用户访问状态')
-    assert.equal(zh.translation[userAccessKey], '未解决期间的用户访问权限')
+    assert.equal(
+      zh.translation[selectionKey],
+      '核对并关闭所选告警（{{count}}）'
+    )
   })
 })

@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useState, type ReactElement } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatTimestampToDate } from '@/lib/format'
@@ -34,7 +34,10 @@ import {
 } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { updateBillingSettlementBlockingPolicy } from '../api'
+import {
+  reviewBillingSettlements,
+  updateBillingSettlementBlockingPolicy,
+} from '../api'
 import { formatCount, formatLocalizedCount } from '../lib/format'
 import { mutationErrorMessage } from '../lib/mutation-error'
 import {
@@ -46,7 +49,6 @@ import type {
   BillingSettlementReconciliationItem,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
-import { SettlementReviewDialog } from './settlement-review-dialog'
 
 interface BillingSettlementEvidenceProps {
   canUpdateBlockingPolicy: boolean
@@ -60,12 +62,11 @@ export function BillingSettlementEvidence(
   props: BillingSettlementEvidenceProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
-  const [selectedItem, setSelectedItem] =
-    useState<BillingSettlementReconciliationItem | null>(null)
+  const [selectedIDs, setSelectedIDs] = useState<Set<number>>(() => new Set())
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const queryClient = useQueryClient()
   const policyValue =
-    policyOverride ?? props.data?.block_user_by_default ?? true
+    policyOverride ?? props.data?.block_user_by_default ?? false
 
   const policyMutation = useMutation({
     mutationKey: ['smart-ops', 'billing-settlement-blocking-policy'],
@@ -106,6 +107,51 @@ export function BillingSettlementEvidence(
     policyMutation.mutate(checked)
   }
 
+  const reviewMutation = useMutation({
+    mutationKey: ['smart-ops', 'billing-settlement-reviews'],
+    mutationFn: async (items: BillingSettlementReconciliationItem[]) => {
+      const response = await reviewBillingSettlements({
+        items: items.map((item) => ({ id: item.id, revision: item.revision })),
+      })
+      if (!response.success) {
+        throw new Error(
+          response.message || t('Failed to close reconciliation alerts.')
+        )
+      }
+      return items.length
+    },
+    onSuccess: async (count) => {
+      setSelectedIDs(new Set())
+      toast.success(
+        t('Billing reconciliation alerts closed: {{count}}', { count })
+      )
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
+      handleServerError(error, {
+        fallback: mutationErrorMessage(
+          error,
+          t('Failed to close reconciliation alerts.')
+        ),
+      })
+    },
+  })
+
+  const reviewItems = (items: BillingSettlementReconciliationItem[]) => {
+    if (items.length > 0 && !reviewMutation.isPending) {
+      reviewMutation.mutate(items)
+    }
+  }
+
   if (props.loading) {
     return (
       <div className='flex flex-col gap-2 border-t pt-4'>
@@ -142,6 +188,10 @@ export function BillingSettlementEvidence(
     return <></>
   }
 
+  const selectedItems = props.data.items.filter((item) =>
+    selectedIDs.has(item.id)
+  )
+
   return (
     <section
       aria-labelledby='billing-reconciliation-heading'
@@ -153,11 +203,11 @@ export function BillingSettlementEvidence(
             id='billing-reconciliation-heading'
             className='text-sm font-semibold'
           >
-            {t('Billing reconciliation controls')}
+            {t('Open billing reconciliation alerts')}
           </h4>
           <p className='text-muted-foreground mt-0.5 text-xs'>
             {t(
-              'Review and close operational alerts without changing the underlying pending or manual financial settlement.'
+              'Select one or more alerts and close them with one click. The underlying financial settlement record remains available for safe retry and audit.'
             )}
           </p>
         </div>
@@ -172,21 +222,12 @@ export function BillingSettlementEvidence(
             )}
           </Badge>
           <Badge variant='outline'>
-            {formatLocalizedCount(
-              props.data.reviewed_count,
-              i18n.language,
-              t,
-              'Reviewed record: {{count}}',
-              'Reviewed records: {{count}}'
-            )}
-          </Badge>
-          <Badge variant='outline'>
-            {t('Pending settlements: {{count}}', {
+            {t('Open pending settlements: {{count}}', {
               count: formatCount(props.data.pending_count, i18n.language),
             })}
           </Badge>
           <Badge variant='outline'>
-            {t('Manual settlements: {{count}}', {
+            {t('Open manual settlements: {{count}}', {
               count: formatCount(props.data.manual_count, i18n.language),
             })}
           </Badge>
@@ -230,25 +271,54 @@ export function BillingSettlementEvidence(
       {props.data.items.length === 0 ? (
         <Alert>
           <CheckCircle2 aria-hidden='true' />
-          <AlertTitle>{t('No unresolved reconciliation records.')}</AlertTitle>
+          <AlertTitle>{t('No open reconciliation alerts.')}</AlertTitle>
           <AlertDescription>
             {t(
-              'There are no pending or manual positive final settlements requiring operator review.'
+              'There are no pending or manual positive final settlements waiting for administrator review.'
             )}
           </AlertDescription>
         </Alert>
       ) : (
-        <BillingSettlementTable
-          items={props.data.items}
-          onSelectItem={setSelectedItem}
-        />
+        <div className='flex flex-col gap-2'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <span className='text-muted-foreground text-xs'>
+              {t('Selected alerts: {{count}}', {
+                count: formatCount(selectedItems.length, i18n.language),
+              })}
+            </span>
+            <Button
+              type='button'
+              size='sm'
+              onClick={() => reviewItems(selectedItems)}
+              disabled={selectedItems.length === 0 || reviewMutation.isPending}
+            >
+              {reviewMutation.isPending && (
+                <Loader2
+                  data-icon='inline-start'
+                  className='animate-spin'
+                  aria-hidden='true'
+                />
+              )}
+              {t('Review and close selected ({{count}})', {
+                count: formatCount(selectedItems.length, i18n.language),
+              })}
+            </Button>
+          </div>
+          <BillingSettlementTable
+            items={props.data.items}
+            selectedIDs={selectedIDs}
+            reviewPending={reviewMutation.isPending}
+            onSelectedIDsChange={setSelectedIDs}
+            onReviewItems={reviewItems}
+          />
+        </div>
       )}
 
       {props.data.truncated && (
         <Alert>
           <AlertDescription>
             {t(
-              'Showing the oldest {{count}} records; the summary covers all {{total}} unresolved records.',
+              'Showing the oldest {{count}} alerts; the summary covers all {{total}} open alerts.',
               {
                 count: formatCount(props.data.items.length, i18n.language),
                 total: formatCount(props.data.total_count, i18n.language),
@@ -262,16 +332,6 @@ export function BillingSettlementEvidence(
           time: formatTimestampToDate(props.data.generated_at),
         })}
       </p>
-      {selectedItem && (
-        <SettlementReviewDialog
-          key={`${selectedItem.id}:${selectedItem.reconciliation_reviewed_at}`}
-          item={selectedItem}
-          open
-          onOpenChange={(open) => {
-            if (!open) setSelectedItem(null)
-          }}
-        />
-      )}
     </section>
   )
 }
