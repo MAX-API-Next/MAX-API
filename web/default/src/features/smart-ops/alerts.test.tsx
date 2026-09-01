@@ -57,7 +57,6 @@ function emptyReconciliationData(): BillingSettlementReconciliationData {
     pending_count: 0,
     manual_count: 0,
     open_alert_count: 0,
-    reviewed_count: 0,
     blocking_record_count: 0,
     blocked_user_count: 0,
     block_user_by_default: true,
@@ -175,11 +174,10 @@ describe('SmartOps active alerts', () => {
           data: {
             success: true,
             data: {
-              total_count: 48,
-              pending_count: 17,
-              manual_count: 31,
-              open_alert_count: 1,
-              reviewed_count: 47,
+              total_count: 24,
+              pending_count: 1,
+              manual_count: 23,
+              open_alert_count: 24,
               blocking_record_count: 1,
               blocked_user_count: 9,
               block_user_by_default: true,
@@ -189,6 +187,7 @@ describe('SmartOps active alerts', () => {
               items: [
                 {
                   id: 71,
+                  revision: 3,
                   operation_key: 'request:billing-request-71:finalize',
                   status: 'manual',
                   source: 'wallet',
@@ -227,7 +226,7 @@ describe('SmartOps active alerts', () => {
               severity: 'warning',
               component: 'billing',
               node: 'XG',
-              current_value: 48,
+              current_value: 24,
               threshold: 2121911,
               observed_at: '2026-08-30T16:14:15Z',
               message: 'billing backlog',
@@ -250,10 +249,14 @@ describe('SmartOps active alerts', () => {
         assert.ok(urls.includes('/api/smart-ops/alerts'))
         assert.ok(urls.includes('/api/smart-ops/billing-settlements'))
         assert.ok(text.includes('Billing reconciliation backlog'))
-        assert.ok(text.includes('48 records'))
+        assert.ok(text.includes('24 records'))
         assert.ok(!text.includes('4,800.0%'))
-        assert.ok(text.includes('Pending: 17'))
-        assert.ok(text.includes('Manual: 31'))
+        assert.ok(text.includes('Open alerts: 24'))
+        assert.ok(!text.includes('Reviewed records'))
+        assert.ok(text.includes('Open pending settlements: 1'))
+        assert.ok(text.includes('Open manual settlements: 23'))
+        assert.ok(!text.includes('Manual settlements: 50'))
+        assert.ok(!text.includes('Pending: 1'))
         assert.ok(text.includes('Blocked users: 9'))
         assert.ok(text.includes('request:billing-request-71:finalize'))
         assert.ok(text.includes('user quota is not enough'))
@@ -263,36 +266,9 @@ describe('SmartOps active alerts', () => {
       const reviewButton = within(view.container).getByRole('button', {
         name: 'Review and close',
       })
-      await view.click(reviewButton)
-      let dialog: HTMLElement | undefined
-      await waitFor(() => {
-        dialog = within(document.body).getByRole('dialog', {
-          name: 'Review billing reconciliation',
-        })
-      })
-      assert.ok(dialog)
-      const noteInput = within(dialog).getByRole('textbox', {
-        name: 'Review note',
-      })
-      assert.equal(noteInput.getAttribute('aria-invalid'), 'true')
-      assert.ok(
-        (dialog.textContent ?? '').includes(
-          'Review note must contain between 3 and 1000 characters.'
-        )
-      )
-      assert.equal(
-        within(dialog)
-          .getByRole('button', { name: 'Close alert' })
-          .hasAttribute('disabled'),
-        true
-      )
-      assert.equal(
-        within(dialog)
-          .getByRole('button', { name: 'Allow user to continue' })
-          .getAttribute('aria-pressed'),
-        'true'
-      )
-      await view.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+      assert.equal(reviewButton.hasAttribute('disabled'), false)
+      assert.equal(within(view.container).queryByRole('textbox'), null)
+      assert.equal(within(document.body).queryByRole('dialog'), null)
     } finally {
       api.get = originalGet
       queryClient.clear()
@@ -384,7 +360,7 @@ describe('SmartOps active alerts', () => {
     }
   })
 
-  test('loads reviewed reconciliation without an active alert and submits administrator controls', async (): Promise<void> => {
+  test('batch closes selected active reconciliation alerts without requesting notes', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({
       id: 1,
@@ -405,10 +381,10 @@ describe('SmartOps active alerts', () => {
             success: true,
             data: {
               ...emptyReconciliationData(),
-              total_count: 1,
+              total_count: 2,
               pending_count: 1,
-              open_alert_count: 0,
-              reviewed_count: 2,
+              manual_count: 1,
+              open_alert_count: 2,
               blocking_record_count: 0,
               blocked_user_count: 0,
               block_user_by_default: blockUserByDefault,
@@ -431,12 +407,39 @@ describe('SmartOps active alerts', () => {
                   next_attempt: 1788106500,
                   created_at: 1786032544,
                   updated_at: 1786032544,
-                  reconciliation_reviewed_at: 1788106400,
-                  reconciliation_reviewed_by: 7,
-                  reconciliation_review_note: '🙂🙂🙂',
-                  user_blocking_override: false,
-                  record_blocks_user: false,
-                  blocks_user: false,
+                  revision: 4,
+                  reconciliation_reviewed_at: 0,
+                  reconciliation_reviewed_by: 0,
+                  reconciliation_review_note: '',
+                  user_blocking_override: null,
+                  record_blocks_user: true,
+                  blocks_user: true,
+                },
+                {
+                  id: 92,
+                  operation_key: 'request:billing-request-92:finalize',
+                  status: 'manual',
+                  source: 'wallet',
+                  user_id: 52,
+                  subscription_id: 0,
+                  token_id: 0,
+                  task_id: 0,
+                  funding_delta: 200,
+                  applied_funding_delta: 0,
+                  token_delta: 200,
+                  applied_token_delta: 0,
+                  attempts: 3,
+                  last_error: 'manual reconciliation required',
+                  next_attempt: 0,
+                  created_at: 1786032545,
+                  updated_at: 1786032545,
+                  revision: 5,
+                  reconciliation_reviewed_at: 0,
+                  reconciliation_reviewed_by: 0,
+                  reconciliation_review_note: '',
+                  user_blocking_override: null,
+                  record_blocks_user: true,
+                  blocks_user: true,
                 },
               ],
             },
@@ -465,7 +468,7 @@ describe('SmartOps active alerts', () => {
 
     try {
       let policySwitch: HTMLElement | undefined
-      let reviewButton: HTMLElement | undefined
+      let closeSelectedButton: HTMLElement | undefined
       await waitFor(() => {
         const screen = within(view.container)
         assert.ok(
@@ -477,13 +480,13 @@ describe('SmartOps active alerts', () => {
           )
         )
         assert.ok(
-          (view.container.textContent ?? '').includes('Reviewed records: 2')
+          !(view.container.textContent ?? '').includes('Reviewed records')
         )
         policySwitch = screen.getByRole('switch', {
           name: 'Block affected users by default',
         })
-        reviewButton = screen.getByRole('button', {
-          name: 'Edit review',
+        closeSelectedButton = screen.getByRole('button', {
+          name: 'Review and close selected (0)',
         })
       })
 
@@ -498,36 +501,37 @@ describe('SmartOps active alerts', () => {
         assert.ok(reconciliationRequests > 1)
       })
 
-      reviewButton = within(view.container).getByRole('button', {
-        name: 'Edit review',
+      assert.ok(closeSelectedButton)
+      assert.equal(closeSelectedButton.hasAttribute('disabled'), true)
+      const firstRowSelection = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 91',
       })
-      await view.click(reviewButton)
-      let dialog: HTMLElement | undefined
-      await waitFor(() => {
-        dialog = within(document.body).getByRole('dialog')
+      await view.click(firstRowSelection)
+      const selectAll = within(view.container).getByRole('checkbox', {
+        name: 'Select all billing reconciliation alerts',
       })
-      assert.ok(dialog)
-      const noteInput = within(dialog).getByRole('textbox', {
-        name: 'Review note',
-      }) as HTMLTextAreaElement
-      assert.equal(noteInput.value, '🙂🙂🙂')
-      assert.ok((dialog.textContent ?? '').includes('3 / 1000 characters'))
-      const closeAlertButton = within(dialog).getByRole('button', {
-        name: 'Save review',
-      })
-      await waitFor(() =>
-        assert.equal(closeAlertButton.hasAttribute('disabled'), false)
+      assert.equal(selectAll.hasAttribute('data-indeterminate'), true)
+      assert.ok(
+        selectAll.querySelector('[data-checkbox-indicator="indeterminate"]')
       )
+      await view.click(selectAll)
+      closeSelectedButton = within(view.container).getByRole('button', {
+        name: 'Review and close selected (2)',
+      })
+      assert.equal(closeSelectedButton.hasAttribute('disabled'), false)
+      assert.equal(within(view.container).queryByRole('textbox'), null)
       const reconciliationRequestsBeforeReview = reconciliationRequests
-      await view.click(closeAlertButton)
+      await view.click(closeSelectedButton)
 
       await waitFor(() => {
         assert.deepEqual(writes[1], {
           method: 'POST',
-          url: '/api/smart-ops/billing-settlements/91/review',
+          url: '/api/smart-ops/billing-settlements/reviews',
           data: {
-            block_user: false,
-            note: '🙂🙂🙂',
+            items: [
+              { id: 91, revision: 4 },
+              { id: 92, revision: 5 },
+            ],
           },
         })
         assert.ok(reconciliationRequests > reconciliationRequestsBeforeReview)
@@ -539,6 +543,127 @@ describe('SmartOps active alerts', () => {
       await view.unmount()
       queryClient.clear()
       useAuthStore.getState().auth.setUser(originalUser)
+    }
+  })
+
+  test('clears a selected alert when refresh changes its financial revision', async (): Promise<void> => {
+    const originalGet = api.get
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    let revision = 4
+    api.get = (async (url: string): Promise<unknown> => {
+      if (url !== '/api/smart-ops/billing-settlements') {
+        return { data: { success: true, data: [] } }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            ...emptyReconciliationData(),
+            total_count: 1,
+            pending_count: 1,
+            open_alert_count: 1,
+            items: [
+              {
+                id: 91,
+                revision,
+                operation_key: 'request:billing-request-91:finalize',
+                status: 'pending',
+                source: 'wallet',
+                user_id: 51,
+                subscription_id: 0,
+                token_id: 0,
+                task_id: 0,
+                funding_delta: 100,
+                applied_funding_delta: 0,
+                token_delta: 100,
+                applied_token_delta: 0,
+                attempts: 2,
+                last_error: 'quota changed',
+                next_attempt: 1788106500,
+                created_at: 1786032544,
+                updated_at: 1786032544,
+                reconciliation_reviewed_at: 0,
+                reconciliation_reviewed_by: 0,
+                reconciliation_review_note: '',
+                user_blocking_override: null,
+                record_blocks_user: false,
+                blocks_user: false,
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return { data: { success: true } }
+    }) as typeof api.post
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      let rowSelection: HTMLElement | undefined
+      await waitFor(() => {
+        rowSelection = within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 91',
+        })
+      })
+      assert.ok(rowSelection)
+      await view.click(rowSelection)
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Review and close selected (1)',
+          })
+        )
+      })
+
+      revision = 6
+      await queryClient.invalidateQueries()
+      await waitFor(() => {
+        const closeSelectedButton = within(view.container).getByRole('button', {
+          name: 'Review and close selected (0)',
+        })
+        assert.equal(closeSelectedButton.hasAttribute('disabled'), true)
+        assert.equal(
+          within(view.container)
+            .getByRole('checkbox', {
+              name: 'Select billing reconciliation alert 91',
+            })
+            .getAttribute('data-checked'),
+          null
+        )
+      })
+      assert.equal(writes.length, 0)
+
+      rowSelection = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 91',
+      })
+      await view.click(rowSelection)
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Review and close selected (1)',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes, [
+          {
+            url: '/api/smart-ops/billing-settlements/reviews',
+            data: { items: [{ id: 91, revision: 6 }] },
+          },
+        ])
+      })
+    } finally {
+      api.get = originalGet
+      api.post = originalPost
+      await view.unmount()
+      queryClient.clear()
     }
   })
 

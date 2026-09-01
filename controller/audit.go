@@ -33,6 +33,7 @@ var auditContentTemplates = map[string]string{
 	"option.reset_ratio":    "Reset model ratio settings",
 	"billing.reconciliation_blocking_policy_update": "Updated billing reconciliation default user-blocking policy to ${block_user_by_default}",
 	"billing.reconciliation_review":                 "Reviewed billing settlement ${settlement_id} (block user: ${block_user})",
+	"billing.reconciliation_review_batch":           "Reviewed and closed ${count} billing reconciliation alerts",
 
 	"channel.create":              "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":              "Updated channel ${name} (ID: ${id})",

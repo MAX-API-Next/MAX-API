@@ -19,7 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 'use client'
 
 import { Checkbox as CheckboxPrimitive } from '@base-ui/react/checkbox'
-import { Tick02Icon } from '@hugeicons/core-free-icons'
+import { MinusSignIcon, Tick02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { cn } from '@/lib/utils'
 
@@ -28,7 +28,7 @@ function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
     <CheckboxPrimitive.Root
       data-slot='checkbox'
       className={cn(
-        'peer border-input focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:aria-checked:border-primary dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground dark:data-checked:bg-primary relative flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors outline-none group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:ring-3',
+        'peer border-input focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:aria-checked:border-primary dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground data-indeterminate:border-primary data-indeterminate:bg-primary data-indeterminate:text-primary-foreground dark:data-checked:bg-primary dark:data-indeterminate:bg-primary group relative flex size-4 shrink-0 items-center justify-center rounded-sm border transition-colors outline-none group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:ring-3',
         className
       )}
       {...props}
@@ -37,7 +37,18 @@ function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
         data-slot='checkbox-indicator'
         className='grid place-content-center text-current transition-none [&>svg]:size-3.5'
       >
-        <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} />
+        <HugeiconsIcon
+          icon={Tick02Icon}
+          strokeWidth={2}
+          className='group-data-[indeterminate]:hidden'
+          data-checkbox-indicator='checked'
+        />
+        <HugeiconsIcon
+          icon={MinusSignIcon}
+          strokeWidth={2}
+          className='hidden group-data-[indeterminate]:block'
+          data-checkbox-indicator='indeterminate'
+        />
       </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
   )

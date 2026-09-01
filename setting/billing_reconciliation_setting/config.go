@@ -14,7 +14,7 @@ type BillingReconciliationSetting struct {
 }
 
 var billingReconciliationSetting = BillingReconciliationSetting{
-	BlockUserByDefault: true,
+	BlockUserByDefault: false,
 }
 
 func init() {
@@ -22,14 +22,15 @@ func init() {
 }
 
 // BlockUserByDefault returns the persisted admission policy. Reading through
-// OptionMap keeps the hot path synchronized with runtime option updates while
-// retaining a fail-closed default before options are initialized.
+// OptionMap keeps the hot path synchronized with runtime option updates. New
+// installations allow paid requests by default; malformed persisted values
+// still fail closed instead of silently weakening an explicit policy.
 func BlockUserByDefault() bool {
 	common.OptionMapRWMutex.RLock()
 	raw, ok := common.OptionMap[OptionKeyBlockUserByDefault]
 	common.OptionMapRWMutex.RUnlock()
 	if !ok {
-		return true
+		return false
 	}
 	enabled, err := strconv.ParseBool(raw)
 	if err != nil {

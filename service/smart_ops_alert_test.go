@@ -7,6 +7,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -164,6 +165,20 @@ func TestBillingSettlementReviewRequiresExplicitPolicyAndReason(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
 
 	_, err = ReviewBillingSettlement(1, 2, &block, "\x01\x02\x03")
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+}
+
+func TestBillingSettlementBatchReviewValidatesVersionedTargets(t *testing.T) {
+	_, err := ReviewBillingSettlements(nil, 2)
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+
+	_, err = ReviewBillingSettlements([]model.BillingSettlementReviewTarget{{ID: 1, Revision: 1}}, 0)
+	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
+
+	_, err = ReviewBillingSettlements([]model.BillingSettlementReviewTarget{
+		{ID: 1, Revision: 1},
+		{ID: 1, Revision: 1},
+	}, 2)
 	require.ErrorIs(t, err, ErrInvalidBillingSettlementReconciliationReview)
 }
 

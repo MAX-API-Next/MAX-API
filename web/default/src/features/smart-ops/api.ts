@@ -58,12 +58,11 @@ export async function updateBillingSettlementBlockingPolicy(
   return response.data
 }
 
-export async function reviewBillingSettlement(
-  id: number,
+export async function reviewBillingSettlements(
   request: BillingSettlementReviewRequest
 ): Promise<BillingSettlementMutationResponse> {
   const response = await api.post<BillingSettlementMutationResponse>(
-    `/api/smart-ops/billing-settlements/${id}/review`,
+    '/api/smart-ops/billing-settlements/reviews',
     request,
     { skipBusinessError: true, skipErrorHandler: true }
   )

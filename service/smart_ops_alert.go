@@ -340,8 +340,8 @@ func GetSmartOpsAlerts() []SmartOpsAlert {
 	return alerts
 }
 
-// GetBillingSettlementReconciliation returns bounded, read-only settlement
-// evidence for administrators. It never retries or mutates financial state.
+// GetBillingSettlementReconciliation returns bounded, read-only evidence for
+// open administrator alerts. It never retries or mutates financial state.
 func GetBillingSettlementReconciliation(limit int) (model.BillingSettlementReconciliationData, error) {
 	if limit == 0 {
 		limit = 100
@@ -391,6 +391,30 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser *bool, note str
 	}
 	refreshBillingSettlementBacklogAfterReview()
 	return record, nil
+}
+
+// ReviewBillingSettlements validates and atomically closes current billing
+// reconciliation alerts without changing their financial settlement state.
+func ReviewBillingSettlements(targets []model.BillingSettlementReviewTarget, reviewerID int) ([]model.BillingSettlement, error) {
+	if reviewerID <= 0 || len(targets) == 0 || len(targets) > 200 {
+		return nil, ErrInvalidBillingSettlementReconciliationReview
+	}
+	seen := make(map[int64]struct{}, len(targets))
+	for _, target := range targets {
+		if target.ID <= 0 || target.Revision <= 0 {
+			return nil, ErrInvalidBillingSettlementReconciliationReview
+		}
+		if _, exists := seen[target.ID]; exists {
+			return nil, ErrInvalidBillingSettlementReconciliationReview
+		}
+		seen[target.ID] = struct{}{}
+	}
+	records, err := model.ReviewBillingSettlements(targets, reviewerID)
+	if err != nil {
+		return nil, err
+	}
+	refreshBillingSettlementBacklogAfterReview()
+	return records, nil
 }
 
 type smartOpsAlertRecipient struct {

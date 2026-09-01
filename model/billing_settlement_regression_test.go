@@ -233,38 +233,197 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 
 	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
 	require.NoError(t, err)
-	assert.EqualValues(t, 5, reconciliation.TotalCount, "review does not complete or delete a settlement")
+	assert.EqualValues(t, 4, reconciliation.TotalCount, "reviewed settlements must leave the active alert projection")
 	assert.EqualValues(t, 4, reconciliation.OpenAlertCount)
-	assert.EqualValues(t, 1, reconciliation.ReviewedCount)
+	assert.Zero(t, reconciliation.ReviewedCount)
 	assert.EqualValues(t, 2, reconciliation.BlockingRecordCount)
 	assert.EqualValues(t, 2, reconciliation.BlockedUserCount)
 	assert.False(t, reconciliation.BlockUserByDefault)
-	require.Len(t, reconciliation.Items, 5)
+	require.Len(t, reconciliation.Items, 4)
 
-	var reviewedItem *BillingSettlementReconciliationItem
 	var sharedAllowItem *BillingSettlementReconciliationItem
 	var sharedBlockItem *BillingSettlementReconciliationItem
 	for index := range reconciliation.Items {
 		switch reconciliation.Items[index].ID {
-		case records[0].ID:
-			reviewedItem = &reconciliation.Items[index]
 		case records[3].ID:
 			sharedAllowItem = &reconciliation.Items[index]
 		case records[4].ID:
 			sharedBlockItem = &reconciliation.Items[index]
 		}
 	}
-	require.NotNil(t, reviewedItem)
-	assert.False(t, reviewedItem.RecordBlocksUser)
-	assert.False(t, reviewedItem.BlocksUser)
-	assert.Equal(t, 7001, reviewedItem.ReconciliationReviewedBy)
-	assert.Equal(t, "Verified provider usage against the invoice", reviewedItem.ReconciliationReviewNote)
+	var durableReviewed BillingSettlement
+	require.NoError(t, DB.First(&durableReviewed, records[0].ID).Error)
+	assert.Equal(t, BillingSettlementStatusPending, durableReviewed.Status)
+	assert.Equal(t, 7001, durableReviewed.ReconciliationReviewedBy)
+	assert.Equal(t, "Verified provider usage against the invoice", durableReviewed.ReconciliationReviewNote)
 	require.NotNil(t, sharedAllowItem)
 	assert.False(t, sharedAllowItem.RecordBlocksUser, "the row-level decision must remain allow")
 	assert.True(t, sharedAllowItem.BlocksUser, "the user remains blocked by another unresolved record")
 	require.NotNil(t, sharedBlockItem)
 	assert.True(t, sharedBlockItem.RecordBlocksUser)
 	assert.True(t, sharedBlockItem.BlocksUser)
+}
+
+func TestBillingSettlementReconciliationProjectsOnlyOpenAlerts(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, false)
+
+	now := time.Now().Unix()
+	allow := false
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:open-pending-alert:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 970, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+			CreatedAt: now - 30, UpdatedAt: now - 20, Revision: 2,
+		},
+		{
+			OperationKey: "request:open-manual-alert:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 971, FundingDelta: 11, TokenDelta: 11, Status: BillingSettlementStatusManual,
+			CreatedAt: now - 20, UpdatedAt: now - 10, Revision: 3,
+		},
+		{
+			OperationKey: "request:closed-manual-alert:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 972, FundingDelta: 12, TokenDelta: 12, Status: BillingSettlementStatusManual,
+			ReconciliationReviewedAt: now - 5, ReconciliationReviewedBy: 7001,
+			UserBlockingOverride: &allow, CreatedAt: now - 10, UpdatedAt: now - 5, Revision: 4,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, reconciliation.TotalCount)
+	assert.EqualValues(t, 1, reconciliation.PendingCount)
+	assert.EqualValues(t, 1, reconciliation.ManualCount)
+	assert.EqualValues(t, 2, reconciliation.OpenAlertCount)
+	assert.Zero(t, reconciliation.ReviewedCount)
+	assert.Equal(t, records[0].CreatedAt, reconciliation.OldestCreatedAt)
+	require.Len(t, reconciliation.Items, 2)
+	assert.Equal(t, records[0].ID, reconciliation.Items[0].ID)
+	assert.Equal(t, records[0].Revision, reconciliation.Items[0].Revision)
+	assert.Equal(t, records[1].ID, reconciliation.Items[1].ID)
+	assert.Equal(t, records[1].Revision, reconciliation.Items[1].Revision)
+}
+
+func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:batch-review-first:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 973, FundingDelta: 10, AppliedFundingDelta: 2, TokenDelta: 10, AppliedTokenDelta: 2,
+			Status: BillingSettlementStatusPending, CreatedAt: now - 20, UpdatedAt: now - 10, Revision: 2,
+		},
+		{
+			OperationKey: "request:batch-review-second:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 974, FundingDelta: 11, TokenDelta: 11, Status: BillingSettlementStatusManual,
+			CreatedAt: now - 10, UpdatedAt: now - 5, Revision: 3,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+	queryCount := 0
+	callbackName := "test:batch-review-single-read"
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(_ *gorm.DB) {
+		queryCount++
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Query().Remove(callbackName) })
+
+	targets := []BillingSettlementReviewTarget{
+		{ID: records[1].ID, Revision: records[1].Revision},
+		{ID: records[0].ID, Revision: records[0].Revision},
+	}
+	reviewed, err := ReviewBillingSettlements(targets, 7002)
+
+	require.NoError(t, err)
+	require.Len(t, reviewed, 2)
+	assert.Equal(t, 1, queryCount, "reviewed settlements must be read back in one query")
+	assert.Equal(t, records[1].ID, targets[0].ID, "sorting must not mutate the caller's target order")
+	assert.Equal(t, records[0].ID, targets[1].ID)
+	for index := range reviewed {
+		assert.Equal(t, records[index].ID, reviewed[index].ID, "settlement locks must be acquired in ascending ID order")
+		assert.Positive(t, reviewed[index].ReconciliationReviewedAt)
+		assert.Equal(t, 7002, reviewed[index].ReconciliationReviewedBy)
+		assert.Empty(t, reviewed[index].ReconciliationReviewNote)
+		require.NotNil(t, reviewed[index].UserBlockingOverride)
+		assert.False(t, *reviewed[index].UserBlockingOverride)
+		assert.Equal(t, records[index].Status, reviewed[index].Status)
+		assert.Equal(t, records[index].FundingDelta, reviewed[index].FundingDelta)
+		assert.Equal(t, records[index].AppliedFundingDelta, reviewed[index].AppliedFundingDelta)
+		assert.Equal(t, records[index].TokenDelta, reviewed[index].TokenDelta)
+		assert.Equal(t, records[index].AppliedTokenDelta, reviewed[index].AppliedTokenDelta)
+		assert.Equal(t, records[index].UpdatedAt, reviewed[index].UpdatedAt)
+		assert.Equal(t, records[index].Revision, reviewed[index].Revision)
+	}
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	assert.Zero(t, reconciliation.TotalCount)
+	assert.Empty(t, reconciliation.Items)
+}
+
+func TestReviewBillingSettlementsRejectsStaleBatchWithoutPartialClose(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	records := []BillingSettlement{
+		{
+			OperationKey: "request:batch-review-current:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 975, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+			CreatedAt: now - 20, UpdatedAt: now - 10, Revision: 2,
+		},
+		{
+			OperationKey: "request:batch-review-stale:finalize", Source: BillingSettlementSourceWallet,
+			UserID: 976, FundingDelta: 11, TokenDelta: 11, Status: BillingSettlementStatusManual,
+			CreatedAt: now - 10, UpdatedAt: now - 5, Revision: 3,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{
+		{ID: records[0].ID, Revision: records[0].Revision},
+		{ID: records[1].ID, Revision: records[1].Revision - 1},
+	}, 7003)
+
+	assert.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+	var stored []BillingSettlement
+	require.NoError(t, DB.Where("id IN ?", []int64{records[0].ID, records[1].ID}).Order("id ASC").Find(&stored).Error)
+	require.Len(t, stored, 2)
+	for _, record := range stored {
+		assert.Zero(t, record.ReconciliationReviewedAt)
+		assert.Zero(t, record.ReconciliationReviewedBy)
+		assert.Nil(t, record.UserBlockingOverride)
+	}
+}
+
+func TestReviewBillingSettlementsRollsBackWhenBatchReadFails(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: "request:batch-review-read-failure:finalize", Source: BillingSettlementSourceWallet,
+		UserID: 977, FundingDelta: 10, TokenDelta: 10, Status: BillingSettlementStatusPending,
+		CreatedAt: now - 10, UpdatedAt: now - 5, Revision: 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	callbackName := "test:batch-review-read-failure"
+	readErr := errors.New("forced batch review read failure")
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		_ = tx.AddError(readErr)
+	}))
+	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{{
+		ID: record.ID, Revision: record.Revision,
+	}}, 7004)
+	require.NoError(t, DB.Callback().Query().Remove(callbackName))
+
+	assert.ErrorIs(t, err, readErr)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Zero(t, stored.ReconciliationReviewedBy)
+	assert.Nil(t, stored.UserBlockingOverride)
 }
 
 func TestBillingSettlementBlockingScopeDoesNotLeakAcrossUsers(t *testing.T) {
@@ -448,6 +607,7 @@ func TestReviewBillingSettlementRejectsStaleFailureEvidence(t *testing.T) {
 
 func TestReviewBillingSettlementAllowsEditingCurrentReview(t *testing.T) {
 	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, false)
 
 	now := time.Now().Unix()
 	allow := false
@@ -468,6 +628,35 @@ func TestReviewBillingSettlementAllowsEditingCurrentReview(t *testing.T) {
 	require.NotNil(t, reviewed.UserBlockingOverride)
 	assert.True(t, *reviewed.UserBlockingOverride)
 	assert.EqualValues(t, record.Revision, reviewed.Revision, "review metadata must remain independent from financial revision")
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, stats.Count, "a reviewed record explicitly kept blocking must remain an open alert")
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.True(t, blocked, "the legacy continue-blocking disposition must still affect admission")
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	require.Len(t, reconciliation.Items, 1)
+	assert.Equal(t, record.ID, reconciliation.Items[0].ID)
+	assert.True(t, reconciliation.Items[0].RecordBlocksUser)
+
+	closed, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{{
+		ID:       record.ID,
+		Revision: record.Revision,
+	}}, 7009)
+	require.NoError(t, err)
+	require.Len(t, closed, 1)
+	require.NotNil(t, closed[0].UserBlockingOverride)
+	assert.False(t, *closed[0].UserBlockingOverride)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count, "one-click review must close a legacy continue-blocking alert")
+	blocked, err = HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked)
 }
 
 func TestReviewBillingSettlementAcceptsLegacyNullReviewNote(t *testing.T) {

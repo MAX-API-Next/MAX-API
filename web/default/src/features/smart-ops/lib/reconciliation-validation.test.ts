@@ -27,7 +27,6 @@ function validData(): BillingSettlementReconciliationData {
     pending_count: 1,
     manual_count: 0,
     open_alert_count: 1,
-    reviewed_count: 0,
     blocking_record_count: 1,
     blocked_user_count: 1,
     block_user_by_default: true,
@@ -37,6 +36,7 @@ function validData(): BillingSettlementReconciliationData {
     items: [
       {
         id: 3,
+        revision: 1,
         operation_key: 'request:validation:finalize',
         status: 'pending',
         source: 'wallet',
