@@ -182,7 +182,7 @@ docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 
 > [!TIP]
 > 生產環境建議使用正式版。Preview 版本用於測試和灰度驗證，升級前請備份資料庫並準備回復方案。
-
+>
 > [!WARNING]
 > SQLite 適合本機體驗、開發和小規模測試。正式環境建議使用仍在供應商安全支援週期內的 MySQL（建議 8.4 LTS）或 PostgreSQL（建議 14+），並設定 Redis、HTTPS、備份和復原方案。專案相容性下限仍為 MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6，但不建議將其用於生產環境。
 
@@ -291,7 +291,9 @@ MAX API 將繼續以 **AI Models and Agents governance** 為核心，從統一�
 
 MAX API 不是基礎模型，也不宣稱目前已經實現 AGI 或自治運維。路線圖中的長期能力只有在證據、權限、預算、審批和回復邊界完善後才會逐步驗證。
 
-## 🚢 生產部署
+## 🚢 Preview 部署
+
+以下步驟用於 Preview 版本的測試和灰度驗證。生產環境請改用正式版，並沿用相同的驗證和回復流程。
 
 建議使用 Docker Compose：
 
@@ -314,11 +316,11 @@ docker compose up -d
 | 資料庫 | 使用仍在供應商安全支援週期內的 MySQL（建議 8.4 LTS）或 PostgreSQL（建議 14+），並設定備份與復原 |
 | 快取 | 單機可使用記憶體快取，多節點部署建議使用 Redis |
 | 入口 | 設定 HTTPS 反向代理、請求大小限制和可信任網路策略 |
-| 金鑰 | 明確設定隨機 `SESSION_SECRET`；Redis/多節點場景統一 `CRYPTO_SECRET` |
+| 金鑰 | 明確設定隨機 `SESSION_SECRET`；`CRYPTO_SECRET` 為可選覆寫項，未設定時回退到 `SESSION_SECRET`，如單獨設定則需在 Redis/多節點場景統一 |
 | 節點 | 每個節點設定穩定且唯一的 `NODE_NAME` |
 | 日誌 | 依合規和運維需要設定 `LOG_SQL_DSN`、清理與保留策略 |
 
-多節點必須統一 `SESSION_SECRET` 和 `CRYPTO_SECRET`，並為每個節點使用不同的 `NODE_NAME`。獨立日誌庫使用 `LOG_SQL_DSN`；錯誤效能統計需要按需啟用 `ERROR_LOG_ENABLED`。完整環境變數和原始碼建置說明請見[詳細文件](https://docs.max-api.ai)。
+多節點必須統一 `SESSION_SECRET`，並為每個節點使用不同的 `NODE_NAME`。`CRYPTO_SECRET` 為可選覆寫項，未設定時使用 `SESSION_SECRET`；如明確設定，所有節點必須使用相同值。獨立日誌庫使用 `LOG_SQL_DSN`；錯誤效能統計需要按需啟用 `ERROR_LOG_ENABLED`。完整環境變數和原始碼建置說明請見[詳細文件](https://docs.max-api.ai)。
 
 ## 🤝 專案來源、致謝與二次開發
 

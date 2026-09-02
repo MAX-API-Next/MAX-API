@@ -180,7 +180,7 @@ Ouvrez ensuite <http://localhost:3000>, puis :
 
 > [!TIP]
 > Utilisez les versions stables en production. Les versions Preview sont destinées aux tests et à la validation progressive. Sauvegardez la base et préparez un rollback avant toute mise à niveau.
-
+>
 > [!WARNING]
 > SQLite convient à l'évaluation locale, au développement et aux tests de petite taille. En production, utilisez des versions de MySQL ou PostgreSQL toujours couvertes par le support de sécurité du fournisseur (MySQL 8.4 LTS et PostgreSQL 14+ recommandés), avec Redis, HTTPS, sauvegardes et procédures de reprise. Les minimums de compatibilité restent MySQL ≥ 5.7.8 et PostgreSQL ≥ 9.6, mais ces versions ne sont pas recommandées en production.
 
@@ -289,7 +289,9 @@ MAX API continuera de placer **AI Models and Agents governance** au cœur du pro
 
 MAX API n'est pas un modèle de fondation et ne prétend pas avoir déjà atteint l'AGI ni l'exploitation autonome. Les capacités de long terme ne seront validées progressivement qu'après mise en place des frontières d'Evidence, de permissions, de budget, d'approbation et de rollback.
 
-## 🚢 Déploiement en production
+## 🚢 Déploiement Preview
+
+Les étapes suivantes servent aux tests et à la validation progressive de la version Preview. Pour la production, utilisez une version stable et conservez la même procédure de vérification et de retour arrière.
 
 Docker Compose est recommandé :
 
@@ -312,11 +314,11 @@ docker compose up -d
 | Base de données | Utiliser une version de MySQL ou PostgreSQL toujours couverte par le support de sécurité du fournisseur (MySQL 8.4 LTS et PostgreSQL 14+ recommandés), avec sauvegarde et reprise configurées |
 | Cache | Le cache mémoire convient à un nœud ; Redis est recommandé pour plusieurs nœuds |
 | Point d'entrée | Configurer un reverse proxy HTTPS, des limites de taille et une politique de réseau de confiance |
-| Secrets | Définir explicitement un `SESSION_SECRET` aléatoire ; partager le même `CRYPTO_SECRET` avec Redis ou plusieurs nœuds |
+| Secrets | Définir explicitement un `SESSION_SECRET` aléatoire ; `CRYPTO_SECRET` est une surcharge facultative qui reprend `SESSION_SECRET` s'il est absent et doit être partagé entre Redis ou plusieurs nœuds lorsqu'il est défini |
 | Nœuds | Donner à chaque nœud un `NODE_NAME` stable et unique |
 | Journaux | Configurer `LOG_SQL_DSN`, nettoyage et rétention selon les exigences de conformité et d'exploitation |
 
-Les déploiements multi-nœuds doivent partager `SESSION_SECRET` et `CRYPTO_SECRET`, tout en utilisant un `NODE_NAME` différent par nœud. Utilisez `LOG_SQL_DSN` pour une base de journaux séparée et activez `ERROR_LOG_ENABLED` lorsque les statistiques de performance des erreurs sont nécessaires. Consultez la [documentation](https://docs.max-api.ai) pour toutes les variables d'environnement et les instructions de build depuis les sources.
+Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilisant un `NODE_NAME` différent par nœud. `CRYPTO_SECRET` est une surcharge facultative qui reprend `SESSION_SECRET` s'il est absent ; s'il est défini explicitement, utilisez la même valeur sur chaque nœud. Utilisez `LOG_SQL_DSN` pour une base de journaux séparée et activez `ERROR_LOG_ENABLED` lorsque les statistiques de performance des erreurs sont nécessaires. Consultez la [documentation](https://docs.max-api.ai) pour toutes les variables d'environnement et les instructions de build depuis les sources.
 
 ## 🤝 Origines du projet, remerciements et développements dérivés
 

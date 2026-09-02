@@ -248,7 +248,7 @@ export function useTableUrlState(
 
   const onGlobalFilterInputChange: OnChangeFn<string> | undefined =
     globalFilterEnabled
-      ? (updater) => {
+      ? (updater): void => {
           const next =
             typeof updater === 'function'
               ? updater(globalFilterInput ?? '')

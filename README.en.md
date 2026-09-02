@@ -180,7 +180,7 @@ Open <http://localhost:3000>, then:
 
 > [!TIP]
 > Use stable releases in production. Preview releases are intended for testing and staged validation. Back up the database and prepare a rollback plan before upgrading.
-
+>
 > [!WARNING]
 > SQLite is suitable for local evaluation, development, and small-scale tests. For production, use MySQL or PostgreSQL versions that remain within the vendor's security-support lifecycle (MySQL 8.4 LTS and PostgreSQL 14+ are recommended), together with Redis, HTTPS, backups, and recovery procedures. Compatibility minimums remain MySQL ≥ 5.7.8 and PostgreSQL ≥ 9.6, but those versions are not recommended for production.
 
@@ -289,7 +289,9 @@ MAX API will continue to make **AI Models and Agents governance** its core. Star
 
 MAX API is not a foundation model and does not claim to have already achieved AGI or autonomous operations. Long-term capabilities will be validated gradually only after Evidence, permission, budget, approval, and rollback boundaries are in place.
 
-## 🚢 Production deployment
+## 🚢 Preview deployment
+
+The following steps are for Preview testing and staged validation. For production, use a stable release and keep the same verification and rollback process.
 
 Docker Compose is recommended:
 
@@ -312,11 +314,11 @@ docker compose up -d
 | Database | Use a MySQL or PostgreSQL release still covered by vendor security support (MySQL 8.4 LTS and PostgreSQL 14+ recommended), with backup and recovery configured |
 | Cache | In-memory cache is suitable for one node; Redis is recommended for multiple nodes |
 | Entry point | Configure an HTTPS reverse proxy, request-size limits, and trusted-network policy |
-| Secrets | Set a random `SESSION_SECRET` explicitly; use the same `CRYPTO_SECRET` across Redis/multi-node deployments |
+| Secrets | Set a random `SESSION_SECRET` explicitly; `CRYPTO_SECRET` is an optional override that falls back to `SESSION_SECRET` when unset, and must be shared across Redis/multi-node deployments when set |
 | Nodes | Give every node a stable and unique `NODE_NAME` |
 | Logging | Configure `LOG_SQL_DSN`, cleanup, and retention based on compliance and operational requirements |
 
-Multi-node deployments must share `SESSION_SECRET` and `CRYPTO_SECRET` while using a different `NODE_NAME` for each node. Use `LOG_SQL_DSN` for a separate log database and enable `ERROR_LOG_ENABLED` when error-performance statistics are needed. See the [documentation](https://docs.max-api.ai) for complete environment variables and source-build instructions.
+Multi-node deployments must share `SESSION_SECRET` while using a different `NODE_NAME` for each node. `CRYPTO_SECRET` is an optional override that falls back to `SESSION_SECRET` when unset; if explicitly set, use the same value on every node. Use `LOG_SQL_DSN` for a separate log database and enable `ERROR_LOG_ENABLED` when error-performance statistics are needed. See the [documentation](https://docs.max-api.ai) for complete environment variables and source-build instructions.
 
 ## 🤝 Project origins, acknowledgements, and derivative use
 
