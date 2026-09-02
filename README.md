@@ -246,8 +246,7 @@ docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 
 覆盖 OpenAI、Claude、Gemini、Azure、AWS Bedrock、Vertex AI、Ollama 及多种国内模型平台，也可治理 Codex、Dify、RAGFlow 和多模态任务服务。具体支持范围以当前版本和渠道类型为准。
 
-<details>
-<summary><strong>系统工作方式与技术栈</strong></summary>
+### 系统工作方式与技术栈
 
 ![MAX API 系统架构图](./docs/images/MAX-API架构图.png)
 
@@ -262,8 +261,6 @@ docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 ```
 
 后端使用 Go、Gin 和 GORM，前端使用 React 19、TypeScript、Base UI 与 Tailwind CSS，数据层兼容 SQLite、MySQL 和 PostgreSQL，并可使用 Redis 与独立日志库。供应商协议适配位于独立 Relay/Channel 层，计费与结算集中在统一服务边界中，管理端通过 SmartOps 展示只读观测和受限治理入口。
-
-</details>
 
 ## 🛡️ 治理与运营
 

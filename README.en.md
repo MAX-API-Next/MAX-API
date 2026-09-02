@@ -244,8 +244,7 @@ The value of this stage is to complete the loop of seeing problems, notifying ad
 
 Coverage includes OpenAI, Claude, Gemini, Azure, AWS Bedrock, Vertex AI, Ollama, and multiple domestic model platforms. MAX API can also govern Codex, Dify, RAGFlow, and multimodal task services. Exact support depends on the current release and channel type.
 
-<details>
-<summary><strong>System flow and technology stack</strong></summary>
+### System flow and technology stack
 
 ![MAX API system architecture](./docs/images/MAX-API架构图.png)
 
@@ -260,8 +259,6 @@ Application / SDK / Agent
 ```
 
 The backend uses Go, Gin, and GORM. The frontend uses React 19, TypeScript, Base UI, and Tailwind CSS. The data layer supports SQLite, MySQL, and PostgreSQL, with optional Redis and a separate log database. Provider protocol adapters live in a dedicated Relay/Channel layer, billing and settlement remain inside a unified service boundary, and SmartOps presents read-only observation and constrained governance entry points.
-
-</details>
 
 ## 🛡️ Governance and operations
 

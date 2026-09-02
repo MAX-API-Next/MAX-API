@@ -244,8 +244,7 @@ docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 
 OpenAI、Claude、Gemini、Azure、AWS Bedrock、Vertex AI、Ollama、および複数の中国系モデルプラットフォームをカバーします。Codex、Dify、RAGFlow、マルチモーダルタスクサービスのガバナンスにも利用できます。正確な対応範囲は現在のバージョンとチャネル種別に依存します。
 
-<details>
-<summary><strong>システムフローと技術スタック</strong></summary>
+### システムフローと技術スタック
 
 ![MAX API システムアーキテクチャ](./docs/images/MAX-API架构图.png)
 
@@ -260,8 +259,6 @@ Application / SDK / Agent
 ```
 
 バックエンドは Go、Gin、GORM、フロントエンドは React 19、TypeScript、Base UI、Tailwind CSS を使用します。データ層は SQLite、MySQL、PostgreSQL に対応し、必要に応じて Redis と独立ログデータベースを利用できます。プロバイダープロトコルアダプターは専用の Relay/Channel 層にあり、課金と精算は統一サービス境界に集約され、SmartOps は読み取り専用の観測と制限されたガバナンス入口を提供します。
-
-</details>
 
 ## 🛡️ ガバナンスと運用
 

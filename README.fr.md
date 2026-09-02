@@ -244,8 +244,7 @@ Cette étape ferme d'abord la boucle « voir le problème, notifier l'administra
 
 La couverture inclut OpenAI, Claude, Gemini, Azure, AWS Bedrock, Vertex AI, Ollama et plusieurs plateformes de modèles chinoises. MAX API peut également gouverner Codex, Dify, RAGFlow et des services de tâches multimodales. Le périmètre exact dépend de la version et du type de canal.
 
-<details>
-<summary><strong>Flux système et stack technique</strong></summary>
+### Flux système et stack technique
 
 ![Architecture système MAX API](./docs/images/MAX-API架构图.png)
 
@@ -260,8 +259,6 @@ Application / SDK / Agent
 ```
 
 Le backend utilise Go, Gin et GORM. Le frontend utilise React 19, TypeScript, Base UI et Tailwind CSS. La couche de données prend en charge SQLite, MySQL et PostgreSQL, avec Redis et une base de journaux séparée en option. Les adaptateurs fournisseurs vivent dans une couche Relay/Channel dédiée, la facturation et le règlement restent dans une frontière de service unifiée, et SmartOps expose des observations en lecture seule avec des entrées de gouvernance limitées.
-
-</details>
 
 ## 🛡️ Gouvernance et exploitation
 
