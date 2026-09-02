@@ -101,7 +101,7 @@ type UseTableUrlStateReturn = {
   onGlobalFilterInputChange?: OnChangeFn<string>
   /** Commit the draft filter and optionally update related search fields. */
   applyGlobalFilter?: (additionalSearch?: SearchRecord) => void
-  resetGlobalFilter?: () => void
+  resetGlobalFilter?: (additionalSearch?: SearchRecord) => void
   // Column filters
   columnFilters: ColumnFiltersState
   onColumnFiltersChange: OnChangeFn<ColumnFiltersState>
@@ -219,7 +219,7 @@ export function useTableUrlState(
   }, [globalFilterEnabled, urlGlobalFilter])
 
   const commitGlobalFilter = useCallback(
-    (next: string, additionalSearch: SearchRecord = {}) => {
+    (next: string, additionalSearch: SearchRecord = {}): void => {
       const value = trimGlobal ? next.trim() : next
       setGlobalFilter(value)
       setGlobalFilterInput(value)
@@ -261,14 +261,19 @@ export function useTableUrlState(
         }
       : undefined
 
-  const applyGlobalFilter =
+  const applyGlobalFilter:
+    | ((additionalSearch?: SearchRecord) => void)
+    | undefined =
     globalFilterEnabled && globalFilterMode === 'submit'
-      ? (additionalSearch?: SearchRecord) =>
+      ? (additionalSearch?: SearchRecord): void =>
           commitGlobalFilter(globalFilterInput ?? '', additionalSearch)
       : undefined
 
-  const resetGlobalFilter = globalFilterEnabled
-    ? () => commitGlobalFilter('')
+  const resetGlobalFilter:
+    | ((additionalSearch?: SearchRecord) => void)
+    | undefined = globalFilterEnabled
+    ? (additionalSearch?: SearchRecord): void =>
+        commitGlobalFilter('', additionalSearch)
     : undefined
 
   const onColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {

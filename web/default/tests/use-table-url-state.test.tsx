@@ -111,4 +111,27 @@ describe('useTableUrlState submit-mode global filter', () => {
       assert.equal(result.current.globalFilterInput, 'after')
     })
   })
+
+  test('clears related submitted filters when resetting the global filter', () => {
+    const navigate = mock<NavigateFn>(() => undefined)
+    const { result } = renderHook(() =>
+      useTableUrlState({
+        search: { filter: 'alice', token: 'secret', page: 2 },
+        navigate,
+        globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
+      })
+    )
+
+    act(() => result.current.resetGlobalFilter?.({ token: undefined }))
+
+    assert.equal(navigate.mock.calls.length, 1)
+    const search = navigate.mock.calls[0]?.[0].search
+    assert.equal(typeof search, 'function')
+    if (typeof search === 'function') {
+      const next = search({ filter: 'alice', token: 'secret', page: 2 })
+      assert.equal(next.filter, undefined)
+      assert.equal(next.token, undefined)
+      assert.equal(next.page, undefined)
+    }
+  })
 })

@@ -135,14 +135,14 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   /**
    * Update the search draft without fetching.
    */
-  const handleSearchInput = useCallback((newKeyword: string) => {
+  const handleSearchInput = useCallback((newKeyword: string): void => {
     setKeywordInput(newKeyword)
   }, [])
 
   /**
    * Commit the search draft and fetch the first page.
    */
-  const handleSearch = useCallback(() => {
+  const handleSearch = useCallback((): void => {
     setKeyword((previousKeyword) => {
       const nextKeyword = keywordInput.trim()
       return previousKeyword === nextKeyword ? previousKeyword : nextKeyword

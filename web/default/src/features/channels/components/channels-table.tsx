@@ -137,18 +137,18 @@ export function ChannelsTable() {
     setModelFilterInput(modelFilterFromUrl)
   }, [modelFilterFromUrl])
 
-  const handleModelFilterChange = (value: string) => {
+  const handleModelFilterChange = (value: string): void => {
     setModelFilterInput(value)
   }
 
-  const handleSearch = () => {
+  const handleSearch = (): void => {
     const modelFilter = modelFilterInput.trim()
     applyGlobalFilter?.({ model: modelFilter || undefined })
   }
 
-  const handleReset = () => {
+  const handleReset = (): void => {
     setModelFilterInput('')
-    resetGlobalFilter?.()
+    resetGlobalFilter?.({ model: undefined })
   }
 
   const modelFilter = modelFilterFromUrl

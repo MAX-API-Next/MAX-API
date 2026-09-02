@@ -1,8 +1,8 @@
+# MAX API
+
 <div align="center">
 
 ![MAX API](./web/default/public/logo.png)
-
-# MAX API
 
 **面向 AGI 应用时代的 AI Models 与 Agents 治理、智能运维和开放协作基础设施**
 
@@ -108,7 +108,7 @@ MAX API 不只是一个代码仓库，也是一项面向 AI Models、Agents、Ag
 
 </details>
 
-配套生态：[max-api-key-tool](https://github.com/MAX-API-Next/MAX-API-key-tool)（Key 额度查询工具） · [max-api-horizon](https://github.com/MAX-API-Next/MAX-API-horizon)（MAX API 高性能优化版）。
+配套文档：[MAX-API-Docs](https://github.com/MAX-API-Next/MAX-API-Docs)（部署、配置与使用说明）。
 
 欢迎模型厂商、Agent/工作流项目、开源社区、研究者和企业工程团队开展技术共建。正式合作、联合发布或机构名义使用应经过双方明确授权。
 
@@ -180,9 +180,9 @@ docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -
 
 > [!TIP]
 > 生产环境建议使用正式版。Preview 版本用于测试和灰度验证，升级前请备份数据库并准备回滚方案。
-
+>
 > [!WARNING]
-> SQLite 适合本地体验、开发和小规模测试。正式环境建议使用 MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，并配置 Redis、HTTPS、备份和恢复方案。
+> SQLite 适合本地体验、开发和小规模测试。正式环境建议使用仍在供应商安全支持周期内的 MySQL（建议 8.4 LTS）或 PostgreSQL（建议 14+），并配置 Redis、HTTPS、备份和恢复方案。项目兼容性下限仍为 MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6，但不建议将其用于生产。
 
 ## ✨ 当前能力
 
@@ -297,8 +297,12 @@ MAX API 不是基础模型，也不宣称当前已经实现 AGI 或自治运维�
 推荐使用 Docker Compose：
 
 ```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
+MAX_API_VERSION=v2.0.0-smartops.pre1
+MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
+
+test "$(git rev-parse HEAD)" = "$MAX_API_COMMIT"
 
 # 修改 docker-compose.yml 中的数据库、Redis 密码和密钥
 docker compose up -d
@@ -308,7 +312,7 @@ docker compose up -d
 
 | 组件 | 建议 |
 |---|---|
-| 数据库 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，并配置备份与恢复 |
+| 数据库 | 使用仍在供应商安全支持周期内的 MySQL（建议 8.4 LTS）或 PostgreSQL（建议 14+），并配置备份与恢复 |
 | 缓存 | 单机可使用内存缓存，多节点部署建议使用 Redis |
 | 入口 | 配置 HTTPS 反向代理、请求大小限制和可信网络策略 |
 | 密钥 | 显式配置随机 `SESSION_SECRET`；Redis/多节点场景统一 `CRYPTO_SECRET` |

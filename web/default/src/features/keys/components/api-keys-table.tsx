@@ -226,14 +226,14 @@ export function ApiKeysTable() {
     setTokenFilterInput(tokenFilterFromUrl)
   }, [tokenFilterFromUrl])
 
-  const handleSearch = () => {
+  const handleSearch = (): void => {
     const tokenFilter = tokenFilterInput.trim()
     applyGlobalFilter?.({ token: tokenFilter || undefined })
   }
 
-  const handleReset = () => {
+  const handleReset = (): void => {
     setTokenFilterInput('')
-    resetGlobalFilter?.()
+    resetGlobalFilter?.({ token: undefined })
   }
 
   const tokenFilter = tokenFilterFromUrl
