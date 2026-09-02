@@ -1,10 +1,14 @@
-﻿<div align="center">
-
-![max-api](/web/default/public/logo.png)
-
 # MAX API
 
-🍥 **Gouvernance des modèles IA, AgentOps et infrastructure de services pour applications AGI**
+<div align="center">
+
+![MAX API](./web/default/public/logo.png)
+
+**AI Models and Agents governance, exploitation intelligente et collaboration ouverte pour l'ère des applications AGI**
+
+**MAX API 2.0 : entrer dans l'ère de l'exploitation intelligente · évoluer d'une passerelle de modèles unifiée vers une infrastructure native de gouvernance et d'exploitation AGI**
+
+[Consulter les notes de version MAX API 2.0 Preview](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -15,668 +19,324 @@
 </p>
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/MAX-API-Next/MAX-API/main/LICENSE"><img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="license"></a><!--
-  --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest"><img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release"></a><!--
-  --><a href="https://hub.docker.com/r/cscitechtop/max-api"><img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker"></a><!--
-  --><a href="https://goreportcard.com/report/github.com/MAX-API-Next/MAX-API"><img src="https://goreportcard.com/badge/github.com/MAX-API-Next/MAX-API" alt="GoReportCard"></a>
+  <a href="https://raw.githubusercontent.com/MAX-API-Next/MAX-API/main/LICENSE">
+    <img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="licence">
+  </a><!--
+  --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
+    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="version">
+  </a><!--
+  --><a href="https://hub.docker.com/r/cscitechtop/max-api">
+    <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
+  </a><!--
+  --><a href="https://goreportcard.com/report/github.com/MAX-API-Next/MAX-API">
+    <img src="https://goreportcard.com/badge/github.com/MAX-API-Next/MAX-API" alt="GoReportCard">
+  </a>
 </p>
 
 <p align="center">
-  <a href="#-positionnement-du-projet">Positionnement</a> •
-  <a href="#-canaux-de-publication">Canaux de publication</a> •
-  <a href="#-cadre-de-gouvernance">Gouvernance</a> •
-  <a href="#-cas-dusage">Cas d'usage</a> •
+  <a href="https://github.com/MAX-API-Next/MAX-API"><strong>⭐ Ajouter une Star</strong></a> •
+  <a href="#-rejoindre-la-communauté-max-api-next"><strong>💬 Rejoindre la communauté</strong></a> •
+  <a href="https://docs.max-api.ai"><strong>📚 Documentation</strong></a> •
+  <a href="https://github.com/MAX-API-Next/MAX-API/releases"><strong>🚀 Versions</strong></a>
+</p>
+
+<p align="center">
+  <a href="#-rejoindre-la-communauté-max-api-next">Communauté</a> •
   <a href="#-démarrage-rapide">Démarrage</a> •
-  <a href="#-capacités-clés">Capacités</a> •
-  <a href="#-configuration-de-gouvernance">Configuration</a> •
-  <a href="#-vue-densemble-de-larchitecture">Architecture</a> •
-  <a href="#-prise-en-charge-des-modèles-et-interfaces-ia">Modèles & API</a> •
-  <a href="#-déploiement">Déploiement</a> •
-  <a href="#-faq">FAQ</a> •
-  <a href="#-licence">Licence</a>
+  <a href="#-pourquoi-max-api">Pourquoi MAX API</a> •
+  <a href="#-orientation-technique-pour-lagi">Orientation AGI</a> •
+  <a href="#-capacités-actuelles">Capacités</a> •
+  <a href="#-centre-dexploitation-intelligente">SmartOps</a> •
+  <a href="#-déploiement-en-production">Déploiement</a>
 </p>
 
 </div>
 
 ---
 
-## 📝 Description du projet
+MAX API se place entre les applications, les Agents et les services de modèles en amont. Il sert de passerelle de modèles unifiée, de plan de contrôle de gouvernance et de point d'entrée pour l'exploitation. La communauté MAX-API-Next développe le projet autour de l'ingénierie AGI concrète et accueille les développeurs, chercheurs, équipes d'ingénierie en entreprise, passionnés de technologie dans les universités et contributeurs open source. Notre objectif est de construire les fondations dont les applications AGI ont réellement besoin : accès aux modèles, permissions, maîtrise des coûts, Evidence, exploitation intelligente et contrôles de sécurité.
 
-MAX API est un projet d'infrastructure pour la gouvernance des modèles IA, l'AgentOps et les services applicatifs. Il est initié, maintenu et exploité sur le long terme par des passionnés d'AGI issus d'organismes de recherche et d'universités. Il fournit aux développeurs, chercheurs, équipes et organisations une couche de service stable et réutilisable. Le projet se concentre sur les problèmes d'exploitation qui apparaissent lorsque les applications IA passent en production : multiplication des modèles, évolution fréquente des API amont, chaînes d'appels Agent plus longues, pression accrue sur les coûts et l'audit. MAX API fournit une couche unifiée d'accès, d'authentification, de routage, de facturation, d'observabilité et de gouvernance entre applications, Agents, utilisateurs, organisations et fournisseurs de modèles.
+Dans le domaine de l'AGI, nous voulons **livrer en continu des technologies avancées et vérifiables, transformer les problèmes réels de production en capacités d'ingénierie ouvertes et bâtir une communauté de recherche et de contribution.**
 
-En pratique, MAX API n'est pas seulement un proxy de requêtes. C'est une passerelle exploitable pour applications AI-ready et charges Agent, qui regroupe normalisation des protocoles, différences fournisseurs, pics de trafic, longs flux streaming, gros corps de requête, cache multi-nœud, audit des coûts et observabilité des performances dans une même frontière de gouvernance.
+## 🌐 Rejoindre la communauté MAX-API-Next
 
-Axes d'investissement continus :
+MAX API est plus qu'un dépôt de code. C'est une collaboration ouverte de long terme autour des AI Models, Agents, AgentOps et de l'ingénierie AGI. Que vous exploitiez une passerelle de modèles, développiez des Agents, adaptiez de nouveaux modèles, travailliez sur l'évaluation et la gouvernance, ou amélioriez la documentation et les traductions, vous êtes les bienvenus.
 
-- **Gouvernance des modèles IA** : suivi continu des mises à jour de modèles, des changements d'API, des différences de paramètres, des règles de prix et des protocoles de tâches chez OpenAI, Azure OpenAI, AWS Bedrock, Vertex AI, Ollama, ainsi que chez DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, SiliconFlow et d'autres plateformes. Le projet suit aussi Dify, RAGFlow, Kling, Seedance et d'autres écosystèmes applicatifs ou multimodaux.
-- **Gouvernance AI Agent / AgentOps** : amélioration de la gouvernance des jetons, du contrôle d'accès aux modèles, du traçage des appels, de l'attribution des coûts, du diagnostic d'erreurs et de l'audit des journaux pour les Agents, workflows et appels d'outils.
-- **Gouvernance de configuration des canaux** : matrice de capacités et validation de configuration lors de la création ou modification des canaux, avec affichage de `chat/completions`, `responses`, `embeddings`, `rerank`, `video tasks`, découverte de modèles, et alertes sur Base URL, JSON, région Vertex AI, identifiants Codex ou placeholders de tâches vidéo.
-- **Optimisation opérationnelle et gouvernance des coûts** : routage, retry, limitation, préfacturation, remboursement en cas d'échec, observabilité, statistiques de coûts et analyse d'exploitation. Les scénarios token peuvent utiliser la facturation par expression et les scénarios de tâches asynchrones peuvent utiliser des rate-cards paramétrées.
+**Rejoignez la communauté pour suivre les versions, les évolutions de modèles et de protocoles, les pratiques de déploiement, les pistes de diagnostic et les possibilités de contribution.**
+
+<p align="center">
+  <strong>Groupe QQ : 950126533</strong> •
+  <strong>Groupe WeChat : recherchez MAX-API</strong>
+</p>
+
+| Point d'entrée | Utilité |
+|---|---|
+| [MAX-API-Next sur GitHub](https://github.com/MAX-API-Next) | Suivre les projets communautaires, les orientations techniques et la collaboration ouverte |
+| [Issues MAX API](https://github.com/MAX-API-Next/MAX-API/issues) | Signaler un problème reproductible, proposer une amélioration ou partager un changement de compatibilité |
+| [Versions MAX API](https://github.com/MAX-API-Next/MAX-API/releases) | Suivre les versions stables et Preview |
+| [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | Rechercher et comprendre rapidement le code |
+| Coopération technique et écosystème | Contacter `maxapi@max-api.ai` |
+
+### Profils de contributeurs recherchés
+
+- **Contributeurs modèles et protocoles** : adaptation de nouveaux modèles et fournisseurs, Reasoning, appels d'outils et protocoles de tâches multimodales.
+- **Développeurs d'Agents et d'applications** : pratiques d'intégration et de gouvernance pour Dify, RAGFlow, Codex, MCP, workflows et Agents de recherche.
+- **Ingénieurs fiabilité et sécurité** : tests multi-bases, reprise des tâches asynchrones, sécurité des règlements, cohérence du cache et frontières de permissions.
+- **Contributeurs documentation et communauté** : guides de déploiement, FAQ, exemples, traductions, expériences reproductibles et accueil des nouveaux contributeurs.
+- **Chercheurs et développeurs d'évaluations** : Evidence, Evaluators, Detectors, Runbooks et architectures d'autonomie contrôlée.
+
+<details>
+<summary><strong>Voir les axes de collaboration, les principes et les façons de participer</strong></summary>
+
+| Axe | Contributions possibles |
+|---|---|
+| Écosystème modèles et fournisseurs | Adaptateurs modèles/protocoles, tests de compatibilité, changements de listes et de dépréciation, modèles de canaux |
+| AgentOps et gouvernance des applications AGI | Exemples d'intégration Agent, frontières de jetons et de permissions, gouvernance des coûts, pratiques d'exploitation |
+| SmartOps et Evidence | Incidents anonymisés, définitions de métriques, règles d'alerte, qualité des données, méthodes de diagnostic et d'évaluation |
+| Fiabilité, facturation et sécurité | Règlement idempotent, reprise asynchrone, régressions multi-bases, cohérence du cache, vérification des opérations à risque |
+| Documentation, tutoriels et localisation | Déploiement, architecture, FAQ, cas d'usage, traductions et guides de contribution |
+
+Fournissez si possible une reproduction minimale, la version, l'environnement, des journaux anonymisés ou des preuves de test. Les changements de protocole, de base de données ou de contrat utilisateur doivent décrire la compatibilité, la migration et le rollback. Ne soumettez pas de véritables clés API, données clients, enregistrements bruts de paiement, journaux privés ou données non autorisées. Les contributions touchant aux fonds, à la sécurité, aux secrets, aux données de production ou à l'exécution automatisée exigent des tests plus stricts, une revue indépendante et un responsable clairement identifié.
+
+Vous pouvez commencer par :
+
+1. Signaler un problème reproductible, une différence de protocole ou un changement de compatibilité d'un modèle.
+2. Ajouter à une issue un test en échec, un cas multi-base, une régression frontend ou une Evidence anonymisée.
+3. Améliorer la configuration des modèles/canaux, le déploiement, les FAQ, l'architecture ou les traductions.
+4. Partager des pratiques anonymisées d'intégration Agent, de gouvernance des coûts, de SmartOps ou de déploiement privé.
+5. Proposer un Evaluator, Detector, Runbook ou une architecture d'autonomie contrôlée avec des frontières de capacité et de risque explicites.
+
+</details>
+
+Documentation associée : [MAX-API-Docs](https://github.com/MAX-API-Next/MAX-API-Docs) (guides de déploiement, de configuration et d'utilisation).
+
+Les fournisseurs de modèles, projets Agent/workflow, communautés open source, chercheurs et équipes d'ingénierie sont invités à collaborer. Les partenariats formels, annonces conjointes ou usages du nom d'une institution nécessitent l'autorisation explicite des deux parties.
 
 > [!IMPORTANT]
-> - Lors de la fourniture de services publics d'IA générative, les utilisateurs doivent respecter les obligations réglementaires applicables et gérer eux-mêmes les déclarations, licences, sécurité de contenu, vérification d'identité, conservation des journaux, fiscalité, paiement et autorisations amont requises dans leur juridiction.
-> - Les capacités sensibles comme l'audit des journaux et la conservation de contenu ne doivent être activées qu'avec une base légale, une information claire, une isolation des permissions et des mesures de sécurité des données.
-> - MAX API fournit une couche de gouvernance de passerelle pour les charges de travail de modèles et d'Agents. Il ne fournit pas de comptes amont, de clés API, d'entraînement de modèles de base, et ne remplace pas Dify, LangChain, MCP Server ni les frameworks d'orchestration d'Agents.
+> Lors de la fourniture au public de services d'IA générative, les opérateurs sont responsables des autorisations amont, déclarations ou licences, de la sécurité des contenus, de la vérification d'identité, de la conservation des journaux, de la fiscalité, des paiements, des conditions utilisateur et de toute obligation applicable dans leur juridiction. L'audit des journaux et la conservation de contenu ne doivent être activés qu'avec une base légale, une information claire, une isolation des permissions et des mesures adaptées de sécurité des données.
 
----
+<img width="1902" height="1031" alt="Console d'administration MAX API" src="https://github.com/user-attachments/assets/fa481602-1e75-4326-9275-3c8271d01f5b" />
 
-## 🚦 Canaux de publication
+## 🧠 Orientation technique pour l'AGI
 
-Les versions actuelles de MAX API sont divisées entre versions stables et versions Preview. Les versions Preview exposent plus tôt les nouvelles capacités et corrections afin que la communauté et les opérateurs puissent valider la compatibilité, la stabilité et la sécurité en environnement réel. Une version stable est publiée après 1 semaine de fonctionnement stable de la Preview correspondante, afin de réduire les risques de mise à niveau en production et d'améliorer la sécurité et la fiabilité du système.
+Les applications AGI ne dépendront pas éternellement d'un seul modèle, d'un seul protocole ou de requêtes ponctuelles. Elles nécessitent raisonnement multi-modèles, appels d'outils, tâches multimodales, exécutions longues, contraintes de coûts, Evidence de production et gestion récupérable des échecs. MAX API part de ces problèmes d'ingénierie vérifiables pour construire une fondation d'AI Models and Agents governance.
 
-Pour la production, privilégiez les versions stables. Utilisez les versions Preview dans des environnements de test ou de canary lorsque vous devez valider à l'avance de nouvelles fonctionnalités, corrections ou évolutions de compatibilité, avec sauvegarde de base de données et plan de rollback avant mise à niveau.
+| Orientation technique | Fondations actuelles | Valeur pour les applications AGI |
+|---|---|---|
+| Accès multi-modèles et multi-protocoles | OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime, protocoles multimodaux et tâches asynchrones | Offre aux applications et Agents un point d'entrée relativement stable malgré l'évolution de l'écosystème |
+| Compatibilité du raisonnement et du contexte d'outils | Reasoning Effort, définitions d'outils, Tool Calls, association des réponses d'outils et conversion de contexte multi-tour | Réduit la perte d'informations de raisonnement et de sémantique des outils lors d'un changement de fournisseur |
+| Plan de contrôle de gouvernance | Utilisateurs, jetons, périmètres de modèles, groupes, routage, limites, quotas, prix et permissions administrateur | Crée des frontières distinctes d'identité, d'accès et de budget pour chaque Agent, environnement et tâche |
+| Facturation récupérable et cycle de vie des tâches | Préfacturation, règlement final, enregistrements idempotents, remboursement des échecs, polling asynchrone et états de rapprochement manuel | Évite doublons de débit, remboursements erronés et résultats intraçables pendant les longues tâches, retries et fenêtres d'échec |
+| Evidence et exploitation intelligente | Journaux, erreurs, retries, buckets de performance, alertes actives, performance canal/modèle et preuves de règlement | Fonde diagnostic, évaluation et futures recommandations d'Agents sur des faits traçables plutôt que sur les seuls prompts |
+| Sécurité et gouvernance organisationnelle | Passkeys, 2FA, revérification par périmètre, révocation de session, audit et limitation des opérations sensibles | Maintient une responsabilité explicite autour des configurations, secrets et opérations à risque |
+| Autonomie contrôlée et évolution d'ingénierie | **Vision long terme** : Policy, Budget, Approval, Shadow, Canary, Rollback et Coding Workspaces isolés | Exige que l'automatisation soit évaluée, contrainte et auditée avant toute action de production à faible risque |
 
----
+### Principes techniques
 
-## 🎯 Positionnement du projet
+- **Evidence before Action** : établir des faits vérifiables avant tout diagnostic, recommandation ou action automatisée.
+- **Governance before Autonomy** : identité, permissions, budgets, approbation, audit et rollback doivent précéder l'autonomie.
+- **One Billing Truth** : facturation, quota et règlement de production conservent une source de vérité unique ; Agents et plugins ne créent pas une seconde comptabilité.
+- **Compatibility by Design** : continuer à prendre en charge SQLite, MySQL, PostgreSQL, plusieurs protocoles fournisseurs et des contrats applicatifs portables.
+- **Open Collaboration, Safe Boundaries** : ouvrir les adaptateurs, tests, documents, évaluations et conceptions de gouvernance, tout en maintenant les opérations de production, financières, de secrets et de publication sous approbation explicite.
 
-À l'ère des applications AGI, MAX API se concentre sur une infrastructure ouverte de gouvernance des modèles IA et des AI Agents, afin de construire une couche de service, de gouvernance et d'exploitation permettant aux développeurs et organisations d'exécuter durablement applications IA et charges Agent :
+### Points forts techniques de MAX API 2.0
 
-- **Plan de gouvernance des modèles** : gestion unifiée des entrées de modèles, canaux, fournisseurs, protocoles, mappings, règles tarifaires, protocoles de tâches et interfaces multimodales.
-- **Plan de contrôle AgentOps** : ne remplace pas les frameworks d'orchestration Agent ; fournit au niveau passerelle la gouvernance des jetons, le contrôle d'accès aux modèles, les journaux d'appel, le suivi des coûts, le diagnostic d'anomalies et l'analyse opérationnelle.
-- **Plan de configuration des canaux** : réduit les risques de mauvaise configuration grâce aux matrices de capacités, validations de formulaires, découverte de modèles et modèles de protocole.
-- **Couche d'adaptation protocoles/fournisseurs** : suit les API officielles internationales, les plateformes de modèles chinoises et les API OpenAI-compatible / non standard, puis les normalise en interfaces applicatives stables.
-- **Gouvernance coût, quota et fiabilité** : routage de canaux, distribution pondérée, retry, limitation, préfacturation, remboursement d'échec, facturation par expression, prix fixes, rate-cards de tâches, multiplicateurs et statistiques d'usage.
-- **Gouvernance performance et scalabilité** : cache Redis / mémoire, limitation des requêtes modèles, timeouts streaming, tampons pour grandes réponses, limites de corps de requête, cache disque, profiling Pyroscope et arrêt gracieux pour les déploiements mono ou multi-nœuds.
-- **Couche d'exploitation et d'audit organisationnelle** : utilisateurs, groupes, déploiement privé, rétention des données, audit et optimisation continue.
-- **Modèles de gouvernance réutilisables** : capitalisation des templates de canaux, protocoles de tâches, configurations de prix, pratiques de déploiement et retours d'exploitation.
+- **Evidence-driven SmartOps** : regroupe alertes de ressources, performance canal/modèle, états de qualité des données et preuves de règlement dans un même point d'entrée, tout en conservant la frontière entre revue humaine et état financier réel.
+- **Évolution continue pour les protocoles de modèles avancés** : améliore Reasoning, clés de cache, paramètres de pénalité, définitions d'outils et Tool Context multi-tour pour Responses, Claude Messages, Gemini et Ollama.
+- **Sémantique récupérable de facturation et de tâches asynchrones** : règlement idempotent, effets persistants, identifiants de tâche et états pending/manual explicites empêchent les retries de créer doublons, remboursements incorrects ou pertes de tâche.
+- **Revérification par périmètre pour les opérations à risque** : Passkeys, 2FA, Telegram, API Tokens et révocation de session utilisent une scope-bound step-up verification ; `session_generation` invalide rapidement les anciennes sessions.
+- **Compatibilité multi-base et validation continue** : les chemins de données essentiels prennent en charge SQLite, MySQL et PostgreSQL ; tests Go, tests frontend Bun, vérification TypeScript, règle du wrapper JSON et synchronisation du miroir de tests constituent les barrières de publication.
 
----
+## 💡 Pourquoi MAX API
 
-## 🧠 Cadre de gouvernance
+| Dimension | Connexion directe à plusieurs fournisseurs | Avec MAX API |
+|---|---|---|
+| Intégration applicative | Maintenir des SDK, protocoles, authentifications et formats d'erreur distincts | Utiliser un point d'entrée applicatif relativement stable |
+| Changement de modèle | Modifier le code, les secrets et la configuration de déploiement | Ajuster les canaux, mappings, groupes et règles de routage |
+| Disponibilité | Chaque application gère ses retries et pannes amont | Centraliser poids, priorités, retries et bascules |
+| Permissions et secrets | Secrets dispersés dans les applications et variables d'environnement | Gérer jetons, périmètres de modèles, quotas et expirations au même endroit |
+| Comptabilité des coûts | Factures fournisseurs dispersées et difficiles à attribuer | Suivre l'usage par utilisateur, jeton, modèle, canal et groupe |
+| Diagnostic | Journaux fragmentés entre fournisseurs | Observer requêtes, erreurs, retries et latence au niveau de la passerelle |
 
-MAX API place l'exécution des modèles IA et des AI Agents dans un cadre configurable, observable, calculable et auditable.
-
-| Objet gouverné | Capacités MAX API | Objectif |
-|----------|-------------------|------|
-| Actifs modèles | Listes de modèles, mappings, groupes, restrictions, règles de prix et gestion multimodale | Savoir quels modèles existent, qui peut les utiliser, comment ils sont facturés et comment les basculer |
-| Canaux amont | Fournisseurs, poids, groupes, état, clés, Base URL, overrides de chemins, matrice de capacités, validation, découverte et retry | Réduire les risques d'indisponibilité, hausse de prix, limites, erreurs de configuration ou changements d'API |
-| Formats de protocole | OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime, protocole vidéo générique et conversions | Donner aux applications des interfaces stables plutôt que les exposer aux différences de fournisseurs |
-| Jetons Agent | API Key, groupes de jetons, périmètre de modèles, quotas, expiration et contrôle d'accès | Fournir aux Agents et workflows des identifiants indépendants, révocables et limitables |
-| Usage et coûts | Journaux, statistiques, facturation par expression, JSON par paliers, rate-card de tâches, préfacturation et remboursements | Attribuer les coûts par utilisateur, groupe, jeton, modèle, canal et nœud |
-| Tâches asynchrones | Soumission, polling, mapping d'état, proxy de résultat et facturation de tâches vidéo | Gouverner les tâches multimodales longues, multi-états et multi-fournisseurs |
-| Audit et sécurité | Audit admin, journaux d'erreurs, limites de requêtes, timeout streaming, login et permissions | Fournir une frontière d'audit contrôlée en déploiement privé et contexte conforme |
-| Exploitation organisationnelle | Utilisateurs, groupes, solde, paiement, paramètres système, tableaux de bord et configuration ops | Soutenir l'exploitation continue d'équipes, institutions, entreprises ou communautés |
-
----
-
-## 🧩 Cas d'usage
-
-- **Plateforme interne de gouvernance des modèles IA** : gestion centralisée des utilisateurs, jetons, modèles, canaux, groupes, permissions, prix et factures.
-- **Socle d'exécution et de gouvernance Agent** : passerelle de modèles, isolation des jetons, contrôle des coûts, observabilité, diagnostic et audit pour Agents, workflows et outils.
-- **Centre d'adaptation modèles chinois et multi-fournisseurs** : suivi des API et prix, réduction du coût d'adaptation via configuration de canaux, mappings, overrides de chemins et templates de protocole.
-- **Plateforme de gouvernance multimodale** : accès unifié au texte, image, vidéo, audio, embeddings, rerank et temps réel, avec gestion d'état, proxy de résultat et facturation pour les tâches asynchrones.
-- **Comptabilité des coûts modèles et Agents** : quotas, calcul de coûts, statistiques de facturation et analyse par utilisateur, jeton, modèle, canal et groupe.
-- **Environnement privé et conforme** : pour les équipes ou organisations qui doivent maîtriser clés, données, permissions, journaux, audit et stratégie tarifaire.
-
----
+En une phrase : **les fournisseurs livrent les modèles, les frameworks Agent orchestrent l'application et MAX API unifie l'accès tout en faisant respecter les frontières de gouvernance.**
 
 ## 🚀 Démarrage rapide
 
-SQLite est utilisé par défaut ; aucun service de base de données externe n'est requis pour un essai local.
-
-> [!WARNING]
-> SQLite est réservé à l'évaluation locale, au développement et aux tests à petite échelle. Son utilisation est déconseillée en production : les requêtes concurrentes, les déploiements multi-instances, les volumes importants de journaux ou de données d'usage, les migrations, les opérations de sauvegarde/restauration et les transactions longues peuvent provoquer des contentions de verrouillage, des écritures bloquées, des migrations lentes ou en échec, ainsi que des problèmes de disponibilité ou de maintenance des données. En production, utilisez MySQL ≥ 5.7.8 ou PostgreSQL ≥ 9.6 avec un plan fiable de sauvegarde et de restauration.
+L'expérience locale utilise SQLite par défaut et ne nécessite que Docker :
 
 ```bash
-# 1. Récupérer l'image
 docker pull cscitechtop/max-api:latest
 
-# 2. Lancer le service et persister les données dans ./data
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-
-# 3. Ouvrir la console
-# Navigateur : http://localhost:3000
+docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data cscitechtop/max-api:latest
 ```
 
-Pour la production, utilisez Docker Compose et configurez explicitement base de données, Redis, secret de session, secret de chiffrement et répertoire de journaux.
-
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
-
-# Modifier docker-compose.yml selon les mots de passe et variables nécessaires
-docker compose up -d
-```
-
-> [!WARNING]
-> Si vous exploitez ce projet comme service public d'IA générative ou service API, finalisez d'abord les autorisations amont, obligations réglementaires, sécurité de contenu, vérification d'identité, conservation des journaux, fiscalité, paiement et conditions utilisateur.
-
----
-
-## ✨ Capacités clés
-
-### Gouvernance des modèles IA
-
-| Capacité | Description |
-|------|------|
-| Entrée modèle unifiée | Prend en charge OpenAI-compatible, Responses, Claude Messages, Gemini, Realtime et d'autres protocoles via une passerelle unique |
-| Pool multi-fournisseurs | OpenAI, Azure, Claude, Gemini, AWS Bedrock, Vertex AI, Ollama, et suivi/adaptation de DeepSeek, Qwen, Zhipu GLM, Kimi, Doubao, Hunyuan, ERNIE, iFlytek Spark, MiniMax, 01.AI, SiliconFlow, etc. |
-| Adaptation de l'écosystème amont | Gouvernance des interfaces Codex, Dify, RAGFlow, Kling, Seedance et autres plateformes applicatives, Agent ou multimodales |
-| Mapping et périmètre d'accès | Listes de modèles par canal, mappings, groupes utilisateur, groupes de jetons et restrictions de modèles |
-| Matrice de capacités des canaux | Affiche `chat/completions`, `responses`, `Claude Messages`, `Gemini native`, `embeddings`, `images`, `audio`, `rerank`, `video tasks`, `model discovery` |
-| Validation des canaux | Vérifie API Key, modèles, Base URL, configuration JSON, région Vertex AI, identifiants Codex, découverte de modèles et placeholders vidéo |
-| Gouvernance multimodale | Chat, image, vidéo, audio, embeddings, rerank, temps réel, et gestion des tâches asynchrones vidéo |
-| Protocole vidéo générique | Configure soumission, requête, progression, mapping d'état, erreur et chemins de résultats ; le passthrough et les réécritures du corps utilisent les paramètres de canal existants ; chemins par défaut `/v1/videos/create` et `/v1/videos/{task_id}` |
-| Conversion protocolaire et amonts personnalisés | Conversions OpenAI Compatible, Responses, Chat Completions, Claude Messages, Gemini, ainsi que URL amont autorisées, overrides et règles de parsing de tâches |
-
-### Gouvernance AI Agent / AgentOps
-
-| Capacité | Description |
-|------|------|
-| Isolation des jetons Agent | Créer des API Key indépendantes pour Agents, workflows, plugins, appels d'outils ou utilisateurs |
-| Contrôle d'accès modèle | Contrôler modèles, canaux et quota par utilisateur, jeton, groupe, restriction de modèle et politique de canal |
-| Observabilité de chaîne d'appels | Journaux, statistiques, canal touché, latence, erreurs et retries pour diagnostiquer les Agents |
-| Attribution des coûts | Statistiques par modèle, canal, utilisateur, groupe, jeton et nœud |
-| Audit administrateur | Audit côté admin en déploiement privé ; les API de journaux utilisateur filtrent les champs réservés aux administrateurs |
-| Tableau de bord ops | Analyses, gestion utilisateurs, gestion canaux, paramètres système et analyse d'exploitation |
-
-### Gouvernance des coûts, de la facturation et de la fiabilité
-
-**Expressions de prix des modèles**
-
-- **Une expression = une règle complète de tarification token** : paliers, cache hit, tokens image/audio, remises horaires et majorations dynamiques peuvent être décrits en une ligne.
-- **Le prix correspond au prix réel** : les coefficients peuvent représenter directement des dollars par million de tokens ; `p * 2.5` signifie 2,5 USD par million de tokens d'entrée. Le mode multiplicateur historique reste compatible.
-- **Édition visuelle + brute** : saisie guidée ou édition directe de l'expression, avec modèles prédéfinis.
-- **Maintenance JSON unifiée** : `Tiered billing JSON` maintient plusieurs `{ enabled, expr }` et met à jour `billing_mode` et `billing_expr` de manière atomique.
-- **Normalisation automatique des tokens** : sépare cache, image, audio et autres sous-catégories pour éviter la double facturation.
-
-**Facturation des tâches et fiabilité**
-
-- Rate-card paramétrée pour tâches asynchrones vidéo, avec prix selon modèle, `vendor`, durée, qualité, audio, entrée vidéo, etc. `task_billing_setting.rate_cards` peut séparer Sora, Veo, Seedance, Kling et autres fournisseurs.
-- Compatible avec facturation à l'usage, par appel, cache hit, multiplicateurs de modèle, groupe et canal.
-- Préfacturation, remboursement d'échec, traitement d'exceptions et journaux de consommation.
-- Routage pondéré, retry, contournement des canaux désactivés et routage par modèle.
-- Cache Redis et mémoire pour déploiement mono ou multi-nœud.
-
-### Gouvernance performance et scalabilité
-
-| Capacité | Description |
-|------|------|
-| Cache et extension multi-nœud | Déploiement mono-nœud avec cache mémoire, multi-nœud avec Redis ; les caches utilisateur, jeton, affinité de canal et quota réduisent les lectures répétées en base, tandis que `SESSION_SECRET`, `CRYPTO_SECRET` et `NODE_NAME` gardent sessions, chiffrement et attribution des journaux cohérents |
-| Limitation et protection de capacité | Limites globales API / Web, limites d'endpoints critiques, recherche, requêtes modèles et quotas par groupe ; compteurs via Redis ou mémoire |
-| Streaming et grandes requêtes | `STREAMING_TIMEOUT`, `STREAM_SCANNER_MAX_BUFFER_MB`, `MAX_REQUEST_BODY_MB`, `MAX_FILE_DOWNLOAD_MB` contrôlent longs flux, grandes lignes SSE, corps décompressés et téléchargements distants |
-| Réglage des connexions relais | `RELAY_TIMEOUT`, `RELAY_IDLE_CONN_TIMEOUT`, `RELAY_MAX_IDLE_CONNS` et `RELAY_MAX_IDLE_CONNS_PER_HOST` configurent timeouts et pool HTTP amont |
-| Cache disque et observabilité | Les paramètres de performance peuvent activer le cache disque pour grands corps, définir seuil et capacité ; les endpoints ops peuvent inspecter / nettoyer ce cache, et Pyroscope collecte CPU, mémoire, goroutines, mutex et block profiles |
-| Arrêt gracieux et persistance | `SHUTDOWN_TIMEOUT_SECONDS` et `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS` aident à fermer HTTP et sauvegarder le cache quota avant sortie quand c'est possible |
-
-### Sécurité et gestion d'organisation
-
-- JWT, WebAuthn/Passkeys, OAuth, OIDC, Telegram, Discord, LinuxDO et autres méthodes de connexion.
-- Contrôle des administrateurs, utilisateurs, groupes, jetons et accès modèles.
-- Limites de taille de requête, timeout streaming, journaux d'erreurs et health checks.
-- Secret de session, secret de chiffrement et cache Redis partagé en multi-nœud.
-
----
-
-## 🆚 Pourquoi utiliser une passerelle
-
-| Dimension | SDK / API officiels en direct | Via la passerelle MAX API |
-|------|------------------------|-------------------|
-| Accès modèles | Un SDK, une auth et des paramètres par fournisseur | Entrée unique, intégration unique, réutilisation multi-modèles |
-| Gouvernance modèles | Modèles, prix, permissions et canaux dispersés | Gestion unifiée des modèles, canaux, mappings, groupes, quotas et prix |
-| Accès Agent | Les Agents détiennent directement les clés amont | Jetons indépendants avec limites de modèles, quota, expiration et groupe |
-| Différences de protocole | L'application adapte Claude, Gemini, Responses, etc. | La passerelle convertit les protocoles et adapte les fournisseurs |
-| Échecs | Retry, fallback et normalisation d'erreurs côté application | Retry de canaux, routage pondéré et traitement d'erreurs intégrés |
-| Performance et extension | L'application gère timeouts, limites, pools de connexions et cache | La passerelle centralise timeouts streaming, limites de requêtes, cache Redis / mémoire, réglage de pool et observabilité |
-| Coûts | Factures dispersées, attribution difficile | Quotas, facturation, statistiques et journaux unifiés par jeton et modèle |
-| Audit | Journaux applicatifs dispersés | Entrée d'audit admin unifiée, filtrage des champs admin pour utilisateurs |
-| Privé | Clés, journaux et stratégie tarifaire dispersés | Auto-hébergement et contrôle des clés, données, journaux et politiques |
-
----
-
-## 🧭 Vue d'ensemble de l'architecture
-
-MAX API utilise une architecture en couches : les requêtes des applications, SDK ou Agents entrent par une interface unifiée, passent par routeur, middleware, contrôleurs et services métier, puis sont adaptées par la couche relay vers le fournisseur amont. La couche données et cache assure persistance et accélération pour gouvernance de modèles, jetons Agent, facturation, journaux, audit et état des tâches.
-
-```mermaid
-flowchart LR
-  Client[Client / SDK / Agent] --> Router[Router<br/>Routage]
-  Router --> MW[Middleware<br/>Auth · Limite · Dispatch · Logs]
-  MW --> Ctrl[Controller<br/>Handlers]
-  Ctrl --> Svc[Service<br/>Gouvernance modèles · AgentOps · Audit facturation]
-  Svc --> Relay[Relay<br/>Proxy / Conversion]
-  Relay --> Adapters[Adaptateurs de canaux<br/>OpenAI · Claude · Gemini · Plateformes chinoises · Amonts personnalisés]
-  Adapters --> Upstream[(Services de modèles amont)]
-  Svc --> Model[Model<br/>GORM]
-  Model --> DB[(SQLite · MySQL · PostgreSQL)]
-  Svc --> Cache[(Redis · Cache mémoire)]
-```
-
-### Structure des répertoires
-
-| Répertoire | Rôle |
-|------|------|
-| `router/` | Routage HTTP : API, relay, dashboard et web |
-| `controller/` | Handlers, parsing des paramètres, entrées métier authentifiées et réponses |
-| `service/` | Logique métier : modèles, AgentOps, journaux, facturation, audit, tâches, canaux et configuration |
-| `model/` | Modèles de données et accès DB via GORM, compatible SQLite, MySQL, PostgreSQL |
-| `relay/` | Relay API IA, conversion de protocoles et adaptation fournisseur |
-| `relay/channel/` | Adaptateurs openai, claude, gemini, aws, etc. |
-| `middleware/` | Auth, limitation, CORS, logs, distribution de requêtes et contexte |
-| `setting/` | Prix modèles, facturation tâches, opérations, système, sécurité et performance |
-| `common/` | Utilitaires JSON, chiffrement, Redis, limitation et variables d'environnement |
-| `dto/` / `types/` | Types de requêtes, réponses, erreurs et formats relay |
-| `constant/` | Types d'API, types de canaux et clés de contexte |
-| `i18n/` / `oauth/` / `pkg/` | i18n backend, OAuth et packages internes |
-| `web/` | Conteneur du frontend ; thème par défaut dans `web/default/` |
-
-### Stack technique
-
-| Couche | Technologie |
-|------|------|
-| Backend | Go 1.25+, Gin, GORM v2 |
-| Frontend | React 19, TypeScript, Rsbuild, Base UI, Tailwind CSS |
-| Gestion de paquets | Bun workspace |
-| Base de données | SQLite / MySQL ≥ 5.7.8 / PostgreSQL ≥ 9.6 |
-| Cache | Redis + cache mémoire |
-| Authentification | JWT, WebAuthn/Passkeys, OAuth, OIDC |
-
----
-
-## 🤖 Prise en charge des modèles et interfaces IA
-
-> Les modèles réellement disponibles dépendent de vos autorisations amont, de la configuration des canaux, des mappings et du support fournisseur. MAX API gouverne ces capacités, mais ne fournit pas les services de modèles amont.
-
-| Type | Description |
-|------|------|
-| OpenAI-Compatible | Chat Completions, Embeddings, Images, Audio et interfaces compatibles |
-| OpenAI Responses | Requêtes Responses, relay et conversion compatible Responses ↔ Chat Completions |
-| Claude Messages | Conversion Claude Messages ↔ format OpenAI-compatible |
-| Google Gemini | Chat, texte et conversion compatible `/v1/responses` |
-| Azure OpenAI | Azure OpenAI et Realtime |
-| AWS Bedrock | Accès Bedrock Runtime |
-| Plateformes et applications amont | AWS, Azure, Vertex, Ollama, Codex, Dify, RAGFlow, Kling, Seedance, etc. |
-| Modèles et plateformes chinoises | DeepSeek, Qwen / Alibaba Cloud Model Studio, Zhipu GLM, Kimi, Doubao / Volcano Engine, Tencent Hunyuan, Baidu ERNIE / Qianfan, iFlytek Spark, MiniMax, 01.AI, SiliconFlow, etc. |
-| `rerank` | Modèles Cohere, Jina et autres pour RAG et chaînes de recherche Agent |
-| Midjourney / Suno / Dify | Adaptateurs image, musique et workflow |
-| API de tâches vidéo | `/v1/videos/create`, `/v1/videos/{task_id}` : soumission, passthrough du corps ou overrides de paramètres, polling, mapping d'état, proxy de résultat et facturation paramétrée |
-| Amonts personnalisés | URL autorisées, règles d'adaptation, conversion Responses / Chat, overrides, mapping d'état, chemin d'erreur et parsing de résultat |
-
-### Interfaces principales
-
-<details>
-<summary>Voir les catégories</summary>
-
-- Chat : `/v1/chat/completions`
-- Responses : `/v1/responses`
-- Images : `/v1/images/*`
-- Audio : `/v1/audio/*`
-- Vidéo : `/v1/videos/*`
-- Embeddings : `/v1/embeddings`
-- Rerank : `/v1/rerank`
-- Realtime : interface compatible OpenAI Realtime
-- Claude Messages : entrée native Claude
-- Gemini : entrée format Google Gemini
-
-</details>
-
-### Prise en charge de Reasoning Effort
-
-<details>
-<summary>Voir des exemples de noms de modèles</summary>
-
-- `o3-mini-high`, `o3-mini-medium`, `o3-mini-low`
-- `gpt-5-high`, `gpt-5-medium`, `gpt-5-low`
-- `claude-3-7-sonnet-20250219-thinking`
-- `gemini-2.5-flash-thinking`, `gemini-2.5-flash-nothinking`, `gemini-2.5-pro-thinking`, `gemini-2.5-pro-thinking-128`
-- Les suffixes `-low`, `-medium`, `-high` peuvent aussi contrôler l'effort de raisonnement Gemini.
-
-</details>
-
----
-
-## 🔧 Configuration de gouvernance
-
-### Configuration initiale recommandée
-
-1. Après le déploiement, ouvrez la console et créez ou confirmez le compte administrateur.
-2. Configurez paramètres système, inscription, méthodes de connexion et limites de sécurité.
-3. Ajoutez les canaux amont avec API Key autorisée, Base URL, modèles, mappings et paramètres.
-4. Configurez groupes utilisateurs, groupes de jetons, restrictions de modèles, quotas et règles de prix.
-5. Créez des jetons indépendants pour applications, Agents ou workflows avec périmètre et quota.
-6. Configurez retry, journaux, cache et statistiques de consommation.
-7. Pour l'audit de contenu côté admin, activez « System Settings → Security & Limits → Log Audit » en contexte conforme, et vérifiez que « Record quota usage (Log Maintenance) » est activé.
-
-### Matrice de capacités et validation des canaux
-
-À la création ou modification d'un canal, le système affiche une matrice de capacités et des résultats de validation. Les noms techniques restent en anglais (`chat/completions`, `responses`, `embeddings`, `rerank`, `video tasks`) et les descriptions expliquent les usages.
-
-La validation couvre notamment : API Key manquante, liste de modèles vide, Base URL ou configuration requise absente, Base URL terminée par `/v1`, JSON non objet, région Vertex AI sans `default`, clé de service invalide, identifiants Codex incomplets, découverte de modèles non supportée, ou chemin de requête vidéo sans `{task_id}`, `{operation_name}` ou `{upstream_task_id}`.
-
-### Protocole générique de tâches vidéo
-
-Les fournisseurs vidéo diffèrent souvent par chemins, task ID, état, progression, erreurs et URL de résultat. MAX API généralise cette capacité aux canaux OpenAI, Ali, Gemini, MiniMax, Vertex AI, VolcEngine, Kling, Jimeng, Vidu, Doubao Video, Sora, etc.
-
-- **Override de chemins uniquement** : configurer `submit_path` et `query_path` tout en conservant le parseur officiel du canal.
-- **Parsing complet** : définir `task_protocol = "generic_video_task"` et configurer task ID, état, progression, URL de résultat, erreur et mapping d'état.
-- **Traitement du corps** : le protocole vidéo générique ne définit plus de mode de génération du corps séparé. Utilisez `Pass Through Body` au niveau du canal pour transmettre le JSON client tel quel, et `Param Override` pour les réécritures, valeurs par défaut ou coordinations de headers.
-
-Chemins par défaut :
-
-```json
-{
-  "task_protocol": "generic_video_task",
-  "task_protocol_config": {
-    "submit_path": "/v1/videos/create",
-    "query_path": "/v1/videos/{task_id}",
-    "task_id_path": "task_id",
-    "status_path": "status",
-    "progress_path": "progress",
-    "result_url_paths": ["result.primary_url", "result.urls.0", "data.result.primary_url", "url", "video_url", "download_url"],
-    "error_message_path": "error_message",
-    "status_map": { "queued": "QUEUED", "running": "IN_PROGRESS", "succeeded": "SUCCESS", "failed": "FAILURE" }
-  }
-}
-```
-
-Les chemins de requête prennent en charge `{task_id}`, `{operation_name}` et `{upstream_task_id}`. `{operation_name}` peut conserver des chemins multi-segments pour Gemini / Vertex. Le contenu vidéo peut être proxyfié via `/v1/videos/{task_id}/content` afin de masquer le domaine amont, avec authentification, protection SSRF et ports autorisés.
-
-### Maintenance JSON de la facturation
-
-- **Tiered billing JSON** : maintient plusieurs règles `{ enabled, expr }` et synchronise `billing_mode` / `billing_expr`.
-- **Task rate-card JSON** : maintient `task_billing_setting.rate_cards` pour les tâches asynchrones, avec partition `vendor` pour Sora, Veo, Seedance, Kling, etc.
-
-Les modèles vidéo comme Seedance 2.0 peuvent utiliser la résolution, l'entrée vidéo et d'autres paramètres de requête dans les multiplicateurs ou les rate-cards. Avec le passthrough ou les overrides de paramètres, gardez les champs finaux envoyés en amont alignés avec les champs de facturation.
-
-```json
-{
-  "model-name": {
-    "enabled": true,
-    "expr": "len <= 200000 ? tier(\"standard\", p * 3 + c * 15) : tier(\"long_context\", p * 6 + c * 22.5)"
-  }
-}
-```
-
-```json
-{
-  "vendor/model-name": {
-    "vendor": "kling",
-    "unit": "second",
-    "quantity_field": "duration",
-    "default_quantity": 5,
-    "strict": true,
-    "defaults": { "quality": "std", "has_audio": "false" },
-    "rows": [{ "id": "std_no_audio", "match": { "quality": "std", "has_audio": "false" }, "unit_price": 0.6 }]
-  }
-}
-```
-
-### Entrées d'exploitation courantes
-
-| Fonction | Description |
-|------|------|
-| Gestion des canaux | Fournisseurs, mappings, poids, clés, chemins, état, matrice et validation |
-| Modèles et prix | Modèles, prix, expressions, JSON par paliers, rate-cards et affichage |
-| Gestion des jetons | Jetons pour applications, Agents, workflows, outils ou utilisateurs |
-| Gestion utilisateurs | Utilisateurs, groupes, soldes, permissions et états |
-| Journaux d'usage | Appels, consommation, latence, erreurs, canaux et audit visible admin |
-| Paramètres système | Sécurité, audit, prix, tâches, opérations, logs, paiement et site |
-| Tableau de bord | Requêtes, usage modèles, consommation, état canaux et coûts des jetons Agent |
-
----
-
-## 🚢 Déploiement
-
-### Exigences
-
-| Composant | Exigence |
-|------|------|
-| Moteur conteneur | Docker / Docker Compose |
-| Base locale | SQLite, uniquement pour l'évaluation locale, le développement ou les tests à petite échelle ; monter `/data` avec Docker |
-| Base de production | MySQL ≥ 5.7.8 ou PostgreSQL ≥ 9.6 avec un plan fiable de sauvegarde et de restauration |
-| Cache | Mémoire en mono-nœud, Redis recommandé en multi-nœud |
-| Build frontend | Bun workspace, conserver `web/package.json` et `web/bun.lock` |
-| Build source | Utiliser la version de Go déclarée dans `go.mod` (actuellement Go 1.25.1+) avec `go.sum` ; après une mise à jour de dépendances ou de sécurité, exécuter `go mod download`, `go mod verify`, puis reconstruire |
-
-### Variables d'environnement recommandées
-
-<details>
-<summary>Voir les variables courantes</summary>
-
-| Variable | Description | Défaut |
-|--------|------|--------|
-| `SESSION_SECRET` | Secret de session, requis en multi-nœud | - |
-| `CRYPTO_SECRET` | Secret de chiffrement, requis avec Redis ou multi-nœud | - |
-| `SQL_DSN` | Chaîne de connexion DB | - |
-| `REDIS_CONN_STRING` | Chaîne Redis | - |
-| `STREAMING_TIMEOUT` | Timeout streaming en secondes | `300` |
-| `STREAM_SCANNER_MAX_BUFFER_MB` | Buffer max par ligne pour streaming | `64` |
-| `MAX_REQUEST_BODY_MB` | Taille max du body décompressé | `32` |
-| `AZURE_DEFAULT_API_VERSION` | Version API Azure par défaut | `2025-04-01-preview` |
-| `ERROR_LOG_ENABLED` | Activation des journaux d'erreurs | `false` |
-| `NODE_NAME` | Nom du nœud pour logs multi-nœuds et attribution des règlements de tâches asynchrones | - |
-| `PYROSCOPE_URL` | URL Pyroscope | - |
-| `PYROSCOPE_APP_NAME` | Nom d'application Pyroscope | `max-api` |
-| `PYROSCOPE_BASIC_AUTH_USER` | Utilisateur Basic Auth | - |
-| `PYROSCOPE_BASIC_AUTH_PASSWORD` | Mot de passe Basic Auth | - |
-| `PYROSCOPE_MUTEX_RATE` | Taux mutex | `5` |
-| `PYROSCOPE_BLOCK_RATE` | Taux block | `5` |
-| `HOSTNAME` | Label hôte | `max-api` |
-
-</details>
-
-### Docker Compose
-
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
-# Modifier mots de passe, secrets et proxy HTTPS selon besoin
-docker compose up -d
-```
-
-### Docker
-
-```bash
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-```
-
-```bash
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(mysql:3306)/max-api" \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-```
-
-### Construire depuis les sources
-
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
-docker build -t cscitechtop/max-api:latest .
-```
-
-> [!NOTE]
-> `Dockerfile` télécharge les modules Go pendant la construction de l'image. Pour une construction locale ou après une mise à jour de dépendances / sécurité, conservez `go.mod` et `go.sum` ensemble, exécutez `go mod download && go mod verify`, puis reconstruisez le binaire ou l'image ; utilisez `docker build --pull --no-cache -t cscitechtop/max-api:latest .` lorsque les images de base doivent être rafraîchies.
+Ouvrez ensuite <http://localhost:3000>, puis :
+
+1. Créez ou confirmez le compte administrateur.
+2. Ajoutez un canal amont et une clé API que vous êtes légalement autorisé à utiliser.
+3. Créez un jeton d'accès et pointez la Base URL de votre application vers MAX API.
 
 > [!TIP]
-> Le frontend utilise Bun workspace. Conservez `web/package.json`, `web/bun.lock` et `web/default/package.json`, sinon les dépendances `catalog:` ne seront pas résolues.
-
-### Notes multi-nœuds
+> Utilisez les versions stables en production. Les versions Preview sont destinées aux tests et à la validation progressive. Sauvegardez la base et préparez un rollback avant toute mise à niveau.
 
 > [!WARNING]
-> - Tous les nœuds doivent partager `SESSION_SECRET`.
-> - Avec Redis partagé, tous les nœuds doivent partager `CRYPTO_SECRET`.
-> - Définissez un `NODE_NAME` stable pour identifier les nœuds dans les logs, l'audit et les règlements de tâches asynchrones.
-> - En production, utilisez DB externe, Redis externe, HTTPS et sauvegardes fiables.
+> SQLite convient à l'évaluation locale, au développement et aux tests de petite taille. En production, utilisez des versions de MySQL ou PostgreSQL toujours couvertes par le support de sécurité du fournisseur (MySQL 8.4 LTS et PostgreSQL 14+ recommandés), avec Redis, HTTPS, sauvegardes et procédures de reprise. Les minimums de compatibilité restent MySQL ≥ 5.7.8 et PostgreSQL ≥ 9.6, mais ces versions ne sont pas recommandées en production.
 
----
+## ✨ Capacités actuelles
 
-## 🗺️ Feuille de route
+Les capacités suivantes sont disponibles dans le système actuel :
 
-- **Approfondissement de la gouvernance des modèles** : catalogue, prix, permissions, mappings, tags de capacités et changements fournisseurs.
-- **Approfondissement AgentOps** : chaînes d'appels, attribution des coûts, diagnostic, outils et services MCP-style.
-- **Gouvernance multimodale** : facturation, limitation, suivi d'état et proxy de résultats pour image, vidéo, audio et temps réel.
-- **Conversions de protocoles** : OpenAI Compatible, Responses, Claude Messages, Gemini et autres.
-- **Suivi des modèles et plateformes chinoises** : API, prix, protocoles, canaux, prix et tâches réutilisables.
-- **Templates fournisseurs** : overrides, protocoles, mapping d'état, parsing d'erreurs et résultats.
-- **Audit et opérations** : chaînes de requêtes, coûts, erreurs, audit admin, rétention et rapports.
-- **Opérations organisationnelles** : multi-tenant, groupes, facturation, permissions, contrôle des risques et déploiement privé.
+| Capacité | Usage principal |
+|---|---|
+| Point d'entrée modèles unifié | Connecter OpenAI Compatible, Responses, Claude Messages, Gemini, Realtime et les interfaces de tâches multimodales |
+| Routage multi-fournisseurs | Gérer canaux, poids, priorités, groupes, mappings, retries et bascule entre fournisseurs |
+| Identité et contrôle d'accès | Gérer utilisateurs, jetons, périmètres de modèles, groupes, quotas, expiration, limitations et permissions administrateur |
+| Coûts et facturation | Multiplicateurs, prix fixes, facturation par expression, rate-cards de tâches asynchrones, préfacturation, règlement et remboursement d'échec |
+| Journaux et audit | Consulter usage, erreurs, retries et opérations d'administration par utilisateur, jeton, modèle, canal, groupe et nœud |
+| Centre d'exploitation intelligente | Examiner alertes actives, performance des canaux et modèles, informations système et Evidence de rapprochement des règlements |
+| Déploiement privé | SQLite, MySQL, PostgreSQL, Redis, plusieurs nœuds et base de journaux séparée |
+| Extensibilité amont | Adaptateurs de protocole, overrides de chemin, paramètre/Header, découverte de modèles et mappings d'état de tâche |
 
-Les demandes et suggestions sont bienvenues dans [GitHub Issues](https://github.com/MAX-API-Next/MAX-API/issues).
+### Cas d'usage
 
----
+- **Passerelle interne pour une équipe ou organisation** : gérer utilisateurs, jetons, modèles, fournisseurs, permissions et coûts au même endroit.
+- **Fondation d'exécution pour applications IA et Agents** : contrôle d'accès aux modèles, attribution des coûts et diagnostic pour applications, Agents et workflows.
+- **Résilience et migration multi-fournisseurs** : réduire la dépendance à un seul amont grâce aux mappings, routage pondéré, retries et bascule progressive.
+- **Gouvernance des tâches multimodales** : gérer images, audio, vidéo, embeddings, reranking et conversation temps réel.
+- **Exploitation privée et conforme** : conserver la maîtrise des secrets, données, journaux, audits, prix et environnements de déploiement.
 
-## ❓ FAQ
+## 🩺 Centre d'exploitation intelligente
 
-<details><summary><strong>MAX API fournit-il des services de modèles ou des clés API ?</strong></summary>
+**Le Centre d'exploitation intelligente est une évolution majeure de MAX API 2.0 et une étape clé entre la passerelle de modèles unifiée et une infrastructure native de gouvernance et d'exploitation AGI.**
 
-Non. MAX API est une couche de gouvernance de passerelle. Il ne fournit pas de comptes, clés, entraînement ou services de modèles amont.
+Il regroupe l'observation de production, les alertes de ressources, la performance des modèles et canaux, les informations système et le rapprochement des règlements de facturation dans une entrée administrateur unique. La capacité actuelle vise à voir les problèmes, préserver les preuves, notifier les administrateurs et permettre une revue contrôlée. Ce n'est pas un Agent autonome qui modifie automatiquement canaux, routage, soldes ou hôtes.
 
-</details>
+| Module | Contenu actuellement fourni |
+|---|---|
+| Alertes actives | Alertes dédupliquées lorsque CPU, mémoire ou disque du nœud courant reste au-dessus d'un seuil, avec notification de rétablissement ; réutilise la configuration Email, Webhook, Bark ou Gotify de l'administrateur |
+| Performance des canaux | Requêtes et erreurs, quota consommé, taux de succès estimé, latence des journaux, retries, latence de probe et dernière observation ; le détail montre les performances modèles/groupes des dernières 24 heures |
+| Performance des modèles | Nombre de canaux, requêtes et erreurs, quota consommé, taux de succès estimé, latence des journaux, débit et retries ; le détail fournit performances par groupe, tendances de latence et de disponibilité |
+| Rapprochement des règlements | Affiche les règlements finaux positifs `pending` / `manual`, fonds non réglés, retries et preuves d'erreur ; les root administrators configurent la politique de blocage utilisateur par défaut et les administrateurs examinent atomiquement des lots par `id + revision` puis ferment les alertes |
+| Informations système | Affiche les nœuds, instances actives, tâches système et informations associées ; ce module exige toujours le rôle super-administrateur |
 
-<details><summary><strong>Quel est le lien avec les frameworks Agent ?</strong></summary>
+La page des alertes actives lit l'état toutes les cinq secondes, mais ne déclenche ni nouvelle détection ni réparation. Les listes de canaux et modèles interrogent la dernière heure par défaut et acceptent une fenêtre personnalisée de `1–168` heures. Elles ne rescannent pas continuellement de grandes bases de journaux : la requête s'exécute uniquement avec « Appliquer les filtres » ou « Actualiser », et les détails sont chargés à la demande.
 
-MAX API ne remplace pas Dify, LangChain, MCP Server, moteurs de workflow ou applications Agent. Il se place entre eux et les modèles amont pour gérer accès, jetons, coûts, routage, logs et audit.
+Le rapprochement des règlements sépare strictement l'état de reprise financière de l'état d'alerte opérationnelle. « Examiner et fermer » enregistre la revue et ferme l'alerte courante ; l'action ne marque pas le règlement comme `applied` et ne change ni le solde, ni l'écart appliqué, ni l'état de l'effet. La revue en lot est liée à la révision financière courante. Si un enregistrement change après actualisation, l'ancienne sélection devient invalide afin d'empêcher une action fondée sur une preuve obsolète.
 
-</details>
+> [!NOTE]
+> Les vues de performance de production agrègent principalement les journaux Consume/Error et `perf_metrics`. Le taux de succès estimé n'est pas un taux complet de Relay Attempt ; débit et tendances sont des approximations par bucket. Lorsque les journaux sont désactivés, l'historique absent, la collecte arrêtée, la fenêtre vide ou la requête en échec, l'interface affiche l'état de qualité des données correspondant.
+>
+> Les alertes actives dépendent du suivi de performance et des seuils de ressources. Un seuil à `0` désactive l'alerte correspondante et deux échantillons valides consécutifs sont requis avant déclenchement. L'état et la file de notifications ne résident que dans la mémoire du processus courant : ils ne survivent pas au redémarrage et plusieurs nœuds ne les fusionnent pas en Incident multi-nœud. L'observation des canaux, modèles et du système reste en lecture seule. La revue de règlement ne met à jour que les métadonnées de revue et la politique de blocage utilisateur ; elle n'exécute aucun règlement financier. Le Centre d'exploitation intelligente ne teste, désactive, repondère, bascule ou répare jamais automatiquement.
 
-<details><summary><strong>Pourquoi parler de gouvernance de modèles IA ?</strong></summary>
+Cette étape ferme d'abord la boucle « voir le problème, notifier l'administrateur, présenter les preuves, permettre une revue contrôlée », puis prépare une base pour Evidence unifiée, Agents de diagnostic, Evaluators et automatisation contrôlée.
 
-Dans une organisation, un modèle implique fournisseur, prix, contexte, protocole, permissions, fiabilité et audit. MAX API unifie configuration, observation et calcul.
+## 🔌 Modèles, interfaces et extensibilité
 
-</details>
+> La disponibilité réelle dépend de vos autorisations amont, de la configuration des canaux, des mappings de modèles et du support fournisseur. MAX API gouverne ces capacités ; il ne fournit pas lui-même de service de modèles.
 
-<details><summary><strong>Quelles bases de données sont supportées ?</strong></summary>
+| Catégorie | Interface ou capacité |
+|---|---|
+| Interfaces générales | Chat Completions, Responses, Embeddings, Rerank, Images, Audio et Video |
+| Protocoles natifs et temps réel | Claude Messages, Google Gemini, OpenAI Realtime et entrées associées |
+| Raisonnement et appels d'outils | Reasoning Effort, outils fonctionnels, Tool Call IDs, noms d'outils et association multi-tour des réponses, avec conversion selon les capacités amont |
+| Tâches asynchrones | Soumission, polling, mapping d'état, proxy de résultat et facturation paramétrée |
+| Amonts personnalisés | Mappings de Base URL, chemin, paramètres, Header, champ d'état et champ de résultat |
 
-SQLite, MySQL ≥ 5.7.8 et PostgreSQL ≥ 9.6. SQLite convient aux essais ; MySQL ou PostgreSQL est recommandé en production.
+La couverture inclut OpenAI, Claude, Gemini, Azure, AWS Bedrock, Vertex AI, Ollama et plusieurs plateformes de modèles chinoises. MAX API peut également gouverner Codex, Dify, RAGFlow et des services de tâches multimodales. Le périmètre exact dépend de la version et du type de canal.
 
-</details>
+<details>
+<summary><strong>Flux système et stack technique</strong></summary>
 
-<details><summary><strong>Peut-on migrer depuis New API / One API ?</strong></summary>
+![Architecture système MAX API](./docs/images/MAX-API架构图.png)
 
-Les principales structures sont compatibles. Sauvegardez la base et vérifiez canaux, multiplicateurs, utilisateurs, jetons et journaux en environnement de test.
-
-</details>
-
-<details><summary><strong>Points d'attention en multi-nœud ?</strong></summary>
-
-Utilisez le même `SESSION_SECRET` partout ; avec Redis partagé, utilisez aussi le même `CRYPTO_SECRET`.
-
-</details>
-
-<details><summary><strong>Réponses image, streaming ou grosses réponses tronquées ?</strong></summary>
-
-Augmentez `STREAM_SCANNER_MAX_BUFFER_MB`.
-
-</details>
-
-<details><summary><strong>Requête trop grande avec 413 ?</strong></summary>
-
-Ajustez `MAX_REQUEST_BODY_MB`, calculé après décompression.
-
-</details>
-
-<details><summary><strong>Les utilisateurs voient-ils les contenus d'audit admin ?</strong></summary>
-
-Les API de journaux utilisateur filtrent les champs réservés admin. Les administrateurs système ou DB peuvent toujours accéder aux données, donc les permissions doivent être strictement contrôlées.
-
-</details>
-
-<details><summary><strong>Pourquoi Docker signale des dépendances `catalog:` non résolues ?</strong></summary>
-
-Le frontend utilise Bun workspace ; `catalog:` est défini dans `web/package.json`. Ne remplacez pas ce fichier par `web/default/package.json` et conservez `web/bun.lock`.
-
-</details>
-
----
-
-## 🔗 Projets connexes
-
-| Projet | Description |
-|------|------|
-| [One API](https://github.com/songquanpeng/one-api) | Licence MIT |
-| [New API](https://github.com/QuantumNous/new-api) | Licence AGPLv3 |
-| [Midjourney-Proxy](https://github.com/novicezk/midjourney-proxy) | Licence Apache-2.0 |
-| [Suno API](https://github.com/Suno-API/Suno-API) | Licence MIT |
-
-### Outils associés
-
-| Projet | Description |
-|------|------|
-| [max-api-key-tool](https://github.com/MAX-API-Next/MAX-API-key-tool) | Outil de consultation de quota de clés |
-| [max-api-horizon](https://github.com/MAX-API-Next/MAX-API-horizon) | Édition MAX API optimisée hautes performances |
-
----
-
-## 📚 Documentation et support
-
-| Ressource | Lien |
-|------|------|
-| Documentation officielle | [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) |
-| Signalement | [GitHub Issues](https://github.com/MAX-API-Next/MAX-API/issues) |
-| Dernières versions | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
-| DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
-
-### Développements dérivés et remerciements à la communauté
-
-Si vous développez une version dérivée de ce projet pour votre propre usage, vous pouvez afficher clairement la source du projet ou un remerciement à la communauté sur la page d'accueil, dans le pied de page ou sur la page « À propos », en choisissant l'une des options suivantes :
-
-- Ajouter le lien du projet : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- Remercier la communauté : [MAX-API-Next](https://github.com/MAX-API-Next)
-
-Exemple de code d'intégration frontend (React / Tailwind CSS ; conservez l'un ou l'autre élément selon vos besoins) :
-
-```tsx
-<p className='text-sm text-muted-foreground'>
-  Développé à partir de{' '}
-  <a
-    href='https://github.com/MAX-API-Next/MAX-API'
-    target='_blank'
-    rel='noopener noreferrer'
-    className='font-medium underline underline-offset-4'
-  >
-    MAX-API-Next/MAX-API
-  </a>{' '}
-  · Merci à la{' '}
-  <a
-    href='https://github.com/MAX-API-Next'
-    target='_blank'
-    rel='noopener noreferrer'
-    className='font-medium underline underline-offset-4'
-  >
-    communauté MAX-API-Next
-  </a>
-</p>
+```text
+Application / SDK / Agent
+  → Interface unifiée et authentification
+  → Permissions modèles, limites, budgets et contrôles de sécurité
+  → Sélection du canal, mapping et retry d'échec
+  → Adaptation du protocole amont
+  → Règlement récupérable, Evidence, journaux et audit
+  → Centre d'exploitation intelligente et gouvernance administrateur
 ```
 
-En respectant l'une des exigences d'affichage ci-dessus et en maintenant le lien clairement visible, vous obtenez automatiquement une licence commerciale temporaire pour ce projet, sans demande ni approbation supplémentaire. Cette licence n'est pas permanente et reste valable uniquement tant que l'exigence d'affichage est respectée. Sa période de validité et toute modification ultérieure sont régies par le dernier avis publié dans ce README ou par la communauté officielle.
+Le backend utilise Go, Gin et GORM. Le frontend utilise React 19, TypeScript, Base UI et Tailwind CSS. La couche de données prend en charge SQLite, MySQL et PostgreSQL, avec Redis et une base de journaux séparée en option. Les adaptateurs fournisseurs vivent dans une couche Relay/Channel dédiée, la facturation et le règlement restent dans une frontière de service unifiée, et SmartOps expose des observations en lecture seule avec des entrées de gouvernance limitées.
 
-Ce projet est développé à partir de [One API](https://github.com/songquanpeng/one-api) et de [New API](https://github.com/QuantumNous/new-api). À ce stade, MAX API s'appuie sur ces bases pour renforcer ses capacités de passerelle d'API d'IA et de gouvernance, enrichir ses fonctionnalités et corriger les anomalies. Toute utilisation commerciale doit également respecter la licence MIT de One API et la licence AGPLv3 de New API, conformément au fichier `LICENSE` actuellement publié par chaque projet en amont. La licence commerciale temporaire fournie par ce projet ne remplace ni ne supprime aucune obligation liée aux licences open source des projets en amont.
+</details>
 
-Si l'exigence d'affichage n'est plus respectée, ou si la licence temporaire expire, est modifiée ou prend fin par avis, vous devez respecter l'AGPLv3 ou obtenir une autorisation écrite distincte. Pour une licence commerciale à long terme, contactez : maxapi@max-api.ai.
+## 🛡️ Gouvernance et exploitation
 
-Contributions de code, documentation, expériences d'adaptation fournisseur et pratiques de déploiement sont bienvenues.
+Pour la production, configurez le système dans cet ordre :
 
----
+1. Configurer la connexion, les limites de sécurité et la politique d'inscription.
+2. Ajouter des canaux amont légalement autorisés et vérifier modèles, capacités et protocoles.
+3. Configurer groupes, jetons, périmètres de modèles, quotas et prix par équipe, activité ou environnement.
+4. Utiliser un jeton distinct par application, Agent ou environnement afin d'éviter le partage de secrets et l'ambiguïté d'attribution des coûts.
+5. Configurer retries, journaux et alertes, puis observer le système avec les tableaux de bord et le Centre d'exploitation intelligente.
+
+Pour la validation des capacités de canaux, la facturation par expression, les protocoles génériques de tâches, l'audit administrateur et les réglages de performance, consultez la [documentation](https://docs.max-api.ai).
+
+## 🧭 Feuille de route
+
+MAX API continuera de placer **AI Models and Agents governance** au cœur du projet. À partir de la passerelle unifiée, de l'exploitation intelligente et du règlement récupérable, il développera progressivement les capacités Evidence, évaluation, Policy et exécution contrôlée pour les applications AGI. L'objectif n'est pas de laisser un Agent sans frontières contrôler la production, mais de construire une boucle d'ingénierie vérifiable, approuvable, arrêtable et réversible.
+
+| Étape | État | Priorité |
+|---|---|---|
+| Passerelle unifiée et exploitation intelligente | **Disponible** | Accès, authentification, routage, facturation, journaux, alertes de ressources, performance canal/modèle, informations système et rapprochement des règlements |
+| Couche factuelle Evidence | **Développement proche** | Unifier requêtes de modèles, journaux système, métriques, Tasks, routage, Policies, règlements et événements d'audit derrière des interfaces Agent anonymisées, limitées et en lecture seule |
+| Évaluations ouvertes et modèles de gouvernance | **Planifié** | Construire avec la communauté des tests de compatibilité, incidents anonymisés, jeux d'évaluation, Runbooks, Detectors et modèles de gouvernance métier |
+| Exploitation autonome contrôlée | **Vision long terme** | Évaluer des actions automatisées à faible risque sous contraintes Policy, Budget, Approval, Shadow, Canary et Rollback |
+| Évolution contrôlée des capacités | **Vision long terme** | Générer, tester et revoir des améliorations candidates dans des Coding Workspaces isolés sans modifier directement la production |
+| Boucle d'ingénierie AGI | **Orientation long terme** | Relier Evidence, évaluation, politiques de gouvernance, approbation humaine et exécution réversible dans une boucle vérifiable |
+
+MAX API n'est pas un modèle de fondation et ne prétend pas avoir déjà atteint l'AGI ni l'exploitation autonome. Les capacités de long terme ne seront validées progressivement qu'après mise en place des frontières d'Evidence, de permissions, de budget, d'approbation et de rollback.
+
+## 🚢 Déploiement en production
+
+Docker Compose est recommandé :
+
+```bash
+MAX_API_VERSION=v2.0.0-smartops.pre1
+MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
+cd MAX-API
+
+test "$(git rev-parse HEAD)" = "$MAX_API_COMMIT"
+
+# Modifier les mots de passe de base de données et Redis, puis configurer les secrets dans docker-compose.yml
+docker compose up -d
+```
+
+### Vérifications de déploiement
+
+| Composant | Recommandation |
+|---|---|
+| Base de données | Utiliser une version de MySQL ou PostgreSQL toujours couverte par le support de sécurité du fournisseur (MySQL 8.4 LTS et PostgreSQL 14+ recommandés), avec sauvegarde et reprise configurées |
+| Cache | Le cache mémoire convient à un nœud ; Redis est recommandé pour plusieurs nœuds |
+| Point d'entrée | Configurer un reverse proxy HTTPS, des limites de taille et une politique de réseau de confiance |
+| Secrets | Définir explicitement un `SESSION_SECRET` aléatoire ; partager le même `CRYPTO_SECRET` avec Redis ou plusieurs nœuds |
+| Nœuds | Donner à chaque nœud un `NODE_NAME` stable et unique |
+| Journaux | Configurer `LOG_SQL_DSN`, nettoyage et rétention selon les exigences de conformité et d'exploitation |
+
+Les déploiements multi-nœuds doivent partager `SESSION_SECRET` et `CRYPTO_SECRET`, tout en utilisant un `NODE_NAME` différent par nœud. Utilisez `LOG_SQL_DSN` pour une base de journaux séparée et activez `ERROR_LOG_ENABLED` lorsque les statistiques de performance des erreurs sont nécessaires. Consultez la [documentation](https://docs.max-api.ai) pour toutes les variables d'environnement et les instructions de build depuis les sources.
+
+## 🤝 Origines du projet, remerciements et développements dérivés
+
+MAX API poursuit le travail open source de [One API](https://github.com/songquanpeng/one-api) et [New API](https://github.com/QuantumNous/new-api). Nous remercions les projets amont, leurs contributeurs et toutes les personnes qui apportent adaptateurs, tests, documentation, traductions et rapports d'incident.
+
+Si vous créez une version dérivée pour votre propre usage, vous êtes invités à conserver clairement visible, sur la page d'accueil, le pied de page ou la page À propos, soit la source du projet, soit un remerciement à la communauté :
+
+- Lien vers le projet : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- Remerciement à la communauté : [MAX-API-Next](https://github.com/MAX-API-Next)
+
+En respectant l'une de ces conditions d'affichage et en maintenant le lien clairement visible, vous recevez automatiquement une licence commerciale temporaire non perpétuelle, sans demande ni approbation séparée. Elle reste valide uniquement tant que la condition d'affichage est respectée ; les conditions les plus récentes sont celles du README officiel et des annonces de la communauté.
 
 ## 📜 Licence
 
-Ce projet est sous [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
+Ce projet est distribué sous la [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-Outre la licence AGPLv3 par défaut, les projets dérivés à usage propre qui respectent les conditions « Développements dérivés et remerciements à la communauté » ci-dessus reçoivent automatiquement la licence commerciale temporaire et non permanente qui y est décrite. Cette licence temporaire ne couvre que les ajouts et modifications que les responsables du projet MAX API sont en droit de concéder ; elle n'inclut ni ne remplace les licences des projets en amont tels que One API et New API.
+La licence commerciale temporaire couvre uniquement les ajouts et modifications que les responsables de MAX API ont le droit de licencier. Elle n'inclut, ne remplace et n'annule pas les obligations de licence de One API, New API ou d'autres projets amont. L'usage commercial doit également respecter la licence MIT de One API, la licence AGPLv3 de New API et les conditions de licence actuelles de chaque projet amont.
 
-Si vous modifiez le projet et le fournissez aux utilisateurs via le réseau, comprenez et respectez les obligations AGPLv3 de disponibilité du code source. Pour coopération commerciale, institutionnelle ou autres questions de licence : maxapi@max-api.ai.
-
----
-
-## 🌟 Historique des étoiles
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=MAX-API-Next/MAX-API&type=Date)](https://star-history.com/#MAX-API-Next/MAX-API&Date)
-
-</div>
+Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une licence commerciale de long terme, une coopération institutionnelle ou toute question de licence, contactez maxapi@max-api.ai.
 
 ---
 
@@ -684,9 +344,9 @@ Si vous modifiez le projet et le fournissez aux utilisateurs via le réseau, com
 
 ### 💖 Merci d'utiliser MAX API
 
-Si ce projet vous aide, pensez à lui donner une ⭐ Star.
+Si ce projet vous aide, pensez à lui attribuer une ⭐ Star, suivre les Releases, signaler une Issue reproductible ou rejoindre la communauté MAX-API-Next.
 
-**[Documentation officielle](https://github.com/MAX-API-Next/MAX-API)** • **[Issues](https://github.com/MAX-API-Next/MAX-API/issues)** • **[Releases](https://github.com/MAX-API-Next/MAX-API/releases)**
+**[Dépôt du projet](https://github.com/MAX-API-Next/MAX-API)** • **[Contribuer](https://github.com/MAX-API-Next/MAX-API/issues)** • **[Dernières versions](https://github.com/MAX-API-Next/MAX-API/releases)** • **[Communauté MAX-API-Next](https://github.com/MAX-API-Next)**
 
 <sub>Built with ❤️ by MAX-API-Next</sub>
 

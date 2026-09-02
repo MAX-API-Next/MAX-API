@@ -1,13 +1,17 @@
-﻿<div align="center">
-
-![max-api](/web/default/public/logo.png)
-
 # MAX API
 
-🍥 **AI 模型治理、AgentOps 與 AGI 應用服務基礎設施**
+<div align="center">
+
+![MAX API](./web/default/public/logo.png)
+
+**面向 AGI 應用時代的 AI Models and Agents governance、智慧運維與開放協作基礎設施**
+
+**MAX API 2.0：開啟智慧運維時代 · 從統一模型閘道走向 AGI 原生治理與營運**
+
+[查看 MAX API 2.0 Preview 發布說明](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
 
 <p align="center">
-  <a href="./README.zh_CN.md">簡體中文</a> |
+  <a href="./README.zh_CN.md">简体中文</a> |
   <strong>繁體中文</strong> |
   <a href="./README.en.md">English</a> |
   <a href="./README.fr.md">Français</a> |
@@ -30,736 +34,311 @@
 </p>
 
 <p align="center">
-  <a href="#-專案定位">專案定位</a> •
-  <a href="#-發布渠道">發布渠道</a> •
-  <a href="#-治理框架">治理框架</a> •
-  <a href="#-適用場景">適用場景</a> •
+  <a href="https://github.com/MAX-API-Next/MAX-API"><strong>⭐ Star 專案</strong></a> •
+  <a href="#-加入-max-api-next-社群"><strong>💬 加入社群</strong></a> •
+  <a href="https://docs.max-api.ai"><strong>📚 查看文件</strong></a> •
+  <a href="https://github.com/MAX-API-Next/MAX-API/releases"><strong>🚀 取得版本</strong></a>
+</p>
+
+<p align="center">
+  <a href="#-加入-max-api-next-社群">加入社群</a> •
   <a href="#-快速開始">快速開始</a> •
-  <a href="#-核心能力">核心能力</a> •
-  <a href="#-治理配置">治理配置</a> •
-  <a href="#-架構概覽">架構概覽</a> •
-  <a href="#-ai-模型與介面支持">模型與介面</a> •
-  <a href="#-部署">部署</a> •
-  <a href="#-常見問題">FAQ</a> •
-  <a href="#-許可證">許可證</a>
+  <a href="#-為什麼需要-max-api">為什麼需要</a> •
+  <a href="#-面向-agi-的技術方向">AGI 技術方向</a> •
+  <a href="#-目前能力">目前能力</a> •
+  <a href="#-智慧運維中心">智慧運維</a> •
+  <a href="#-生產部署">生產部署</a>
 </p>
 
 </div>
 
 ---
 
-## 📝 專案說明
+MAX API 位於應用程式、Agent 與上游模型服務之間，是統一的模型閘道、治理控制平面和營運入口。MAX-API-Next 社群圍繞 AGI 工程化持續建設本專案，並向開發者、研究者、企業工程團隊、大學技術愛好者與開源貢獻者開放協作。我們的目標是建設 AGI 應用真正需要的模型接入、權限、成本、Evidence、智慧運維和安全控制基礎。
 
-MAX API 是由來自科研機構和高校的 AGI 愛好者組織發起、維護和長期營運的 AI 模型治理、AgentOps 與應用服務基礎設施專案，面向開發者、研究者、團隊和組織提供穩定、可復用的服務層能力。專案關注 AI 應用落地后的持續營運問題：模型越來越多、供應商介面頻繁變化、Agent 調用鏈路變長、成本和審計壓力增加。MAX API 在應用、Agent、使用者、組織和上游模型服務之間提供統一的接入、鑒權、路由、計費、觀測和治理層，讓 AI 應用更穩定、更可控地運行。
+我們將在 AGI 領域：**持續交付先進且可驗證的技術、將真實生產問題沉澱為開放工程能力、建立能夠共同研究與貢獻的社群。**
 
-換句話說，MAX API 不只是請求轉發器，而是面向 AI-ready 應用和 Agent 工作負載的可營運網關：在統一模型協議與供應商差異的同時，把突發流量、長流式響應、大請求體、多節點緩存、成本審計和性能觀測放進同一套治理邊界。
+## 🌐 加入 MAX-API-Next 社群
 
-持續投入方向：
+MAX API 不只是一個程式碼倉庫，也是一項面向 AI Models、Agents、AgentOps 與 AGI 工程化的長期開放協作。無論你正在部署模型閘道、開發 Agent、適配新模型、研究評測與治理，或願意改善文件和國際化，都歡迎加入社群交流並參與共建。
 
-- **AI 模型治理**：持續跟蹤 OpenAI、Azure OpenAI、AWS Bedrock、Vertex AI、Ollama，以及 DeepSeek、通義千問 / 阿里云百煉、智譜 GLM、Kimi、豆包 / 火山引擎、騰訊混元、百度文心 / 千帆、訊飛星火、MiniMax、零一萬物、硅基流動等模型與平臺的模型更新、介面變化、參數差異、價格規則和任務協議；同時關注 Dify、RAGFlow、Kling、Seedance 等應用和多模態生態的接入形態，通過渠道、模型映射、協議轉換、路徑覆蓋和可配置任務協議，把分散模型能力納入統一治理。
-- **AI Agent 治理 / AgentOps**：圍繞 Agent、工作流和工具調用場景，持續完善令牌治理、模型訪問控制、調用追蹤、成本歸因、異常定位和日志審計，并為后續 MCP 風格工具 / 服務接入預留統一治理邊界，幫助 Agent 應用在真實業務中更可觀測、更可營運。
-- **渠道配置治理**：在渠道新建和編輯界面提供渠道能力矩陣與配置校驗，直觀展示 `chat/completions`、`responses`、`embeddings`、`rerank`、`video tasks`、模型發現等能力，并提前提示 Base URL、JSON 配置、Vertex AI 區域、Codex 憑證、視頻任務占位符等常見配置風險。
-- **營運優化與成本治理**：持續優化渠道路由、失敗重試、限流、預扣費、失敗退款、日志觀測、成本統計和運維分析；文本與多模態 token 場景可使用表達式計費和統一 JSON 配置，視頻等異步任務場景可使用參數化 rate-card，讓模型成本和 Agent 調用成本更直觀、可核算、可批量維護。
+**加入社群，你可以更快取得版本動態、模型與協定變化、部署經驗、問題排查線索和社群共建機會。**
+
+<p align="center">
+  <strong>QQ 群：950126533</strong> •
+  <strong>微信群：搜尋 MAX-API</strong>
+</p>
+
+| 社群入口 | 用途 |
+|---|---|
+| [MAX-API-Next GitHub](https://github.com/MAX-API-Next) | 關注社群專案、技術方向與開放協作 |
+| [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 提交可重現問題、需求建議與相容性變化 |
+| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 取得正式版與 Preview 版本動態 |
+| [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | 快速檢索與理解專案程式碼 |
+| 技術與生態合作 | 聯絡 `maxapi@max-api.ai` |
+
+### 我們正在尋找這些共建者
+
+- **模型與協定貢獻者**：適配新模型、新供應商、Reasoning、工具呼叫和多模態任務協定。
+- **Agent 與應用開發者**：分享 Dify、RAGFlow、Codex、MCP、工作流程和研究 Agent 的接入與治理實踐。
+- **可靠性與安全工程師**：完善跨資料庫測試、非同步任務復原、結算安全、快取一致性和權限邊界。
+- **文件與社群貢獻者**：改善部署教學、FAQ、案例、翻譯、可重現實驗和新貢獻者指引。
+- **研究者與評測開發者**：共建 Evidence、Evaluator、Detector、Runbook 和受控自治方案。
+
+<details>
+<summary><strong>查看共建方向、協作原則與參與方式</strong></summary>
+
+| 共建方向 | 適合的貢獻 |
+|---|---|
+| 模型與供應商生態 | 模型/協定適配、相容性測試、模型清單與棄用變化、渠道設定範本 |
+| AgentOps 與 AGI 應用治理 | Agent 接入範例、權杖與權限邊界、成本治理和運行實踐 |
+| SmartOps 與 Evidence | 脫敏故障樣本、指標口徑、告警規則、資料品質說明、診斷與評測方法 |
+| 可靠性、計費與安全 | 冪等結算、非同步任務復原、跨資料庫迴歸、快取一致性和高風險操作驗證 |
+| 文件、教學與國際化 | 部署教學、架構說明、FAQ、案例、翻譯和新貢獻者指引 |
+
+協作時請盡量提供最小重現、版本、環境、脫敏日誌或測試證據；協定、資料庫和使用者契約變更需要說明相容性、遷移與回復路徑。請勿提交真實 API Key、客戶資料、支付原始記錄、私人日誌或未經授權的資料。涉及資金、安全、金鑰、生產資料或自動執行的貢獻，需要更嚴格的測試、獨立審查和明確責任人。
+
+你可以從以下方式開始：
+
+1. 提交一個可重現的問題、協定差異或模型相容性變化。
+2. 為既有問題補充失敗測試、跨資料庫案例、前端迴歸或脫敏 Evidence。
+3. 完善模型/渠道設定、部署說明、FAQ、架構文件或多語言翻譯。
+4. 分享經過脫敏的 Agent 接入、成本治理、SmartOps 和私有化部署實踐。
+5. 提交 Evaluator、Detector、Runbook 或受控自治設計提案，並明確能力邊界與風險。
+
+</details>
+
+配套文件：[MAX-API-Docs](https://github.com/MAX-API-Next/MAX-API-Docs)（部署、設定與使用說明）。
+
+歡迎模型廠商、Agent/工作流程專案、開源社群、研究者和企業工程團隊展開技術共建。正式合作、聯合發布或以機構名義使用，應取得雙方明確授權。
 
 > [!IMPORTANT]
-> - 面向公眾提供生成式人工智能服務時，使用者應遵守[《生成式人工智能服務管理暫行辦法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)等監管要求，并自行完成所在司法轄區要求的備案、許可、內容安全、實名、日志留存、稅務、支付和上游授權等合規義務。
-> - 日志審計、內容留存等敏感能力應僅在具備合法依據、明確告知、權限隔離和資料安全措施的場景下啟用。
-> - MAX API 提供模型與 Agent 工作負載的網關治理層，不提供上游模型賬號、密鑰、基礎模型訓練能力，也不替代 Dify、LangChain、MCP Server 等 Agent 編排或應用開發框架。
+> 面向公眾提供生成式人工智慧服務時，使用者應自行完成所在司法管轄區要求的上游授權、備案許可、內容安全、實名、日誌留存、稅務、支付和使用者協議等合規義務。日誌稽核和內容留存僅應在具備合法依據、明確告知、權限隔離和資料安全措施的場景中啟用。
 
----
+<img width="1902" height="1031" alt="MAX API 管理控制台" src="https://github.com/user-attachments/assets/fa481602-1e75-4326-9275-3c8271d01f5b" />
 
-## 🚦 發布渠道
+## 🧠 面向 AGI 的技術方向
 
-MAX API 當前版本發布分為正式版和 Preview 預覽版。Preview 預覽版用於提前開放新能力和修復，便於社群與部署者在真實環境中驗證相容性、穩定性和安全性；正式版會在對應 Preview 預覽版穩定運行 1 週後發布，以降低生產環境升級風險，保障系統安全性和可靠性。
+AGI 應用不會長期依賴單一模型、單一協定或一次性請求。它們需要跨模型推理、工具呼叫、多模態任務、長時間運行、成本約束、生產 Evidence 和可復原的失敗處理。MAX API 選擇從這些可驗證的工程問題出發，建設 AI Models and Agents governance 基礎。
 
-生產環境建議優先使用正式版；需要提前驗證新功能、修復或相容性變化時，可在測試環境或灰度環境使用 Preview 預覽版，並在升級前做好資料庫備份和回滾預案。
+| 技術方向 | 目前基礎 | 對 AGI 應用的價值 |
+|---|---|---|
+| 多模型與多協定接入 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、多模態與非同步任務協定 | 讓應用和 Agent 面對相對穩定的入口，並能隨模型生態變化持續遷移 |
+| 推理與工具上下文相容 | Reasoning Effort、工具定義、Tool Call、工具回應關聯和多輪上下文轉換 | 減少跨供應商切換時推理資訊與工具呼叫語意遺失 |
+| 治理控制平面 | 使用者、權杖、模型範圍、分組、路由、限流、額度、價格和管理員權限 | 為不同 Agent、環境和任務建立獨立身分、存取邊界與預算邊界 |
+| 可復原計費與任務生命週期 | 預扣、最終結算、冪等記錄、失敗退款、非同步任務輪詢和人工對帳狀態 | 避免長任務、重試和異常時間窗造成重複扣費、錯誤退款或不可追溯結果 |
+| Evidence 與智慧運維 | 日誌、錯誤、重試、效能桶、活動告警、渠道/模型效能和結算證據 | 讓診斷、評測和未來 Agent 建議建立在可追溯事實上，而不是只依賴提示詞推斷 |
+| 安全與組織治理 | Passkey、2FA、分作用域重新驗證、工作階段撤銷、稽核和敏感操作限流 | 為高風險設定、憑證和營運操作保留明確責任邊界 |
+| 受控自治與工程進化 | **長期藍圖**：Policy、Budget、Approval、Shadow、Canary、Rollback、隔離 Coding Workspace | 讓自動化能力先被評測、約束和稽核，再逐步進入低風險生產動作 |
 
----
+### 技術原則
 
-## 🎯 專案定位
+- **Evidence before Action**：先建立可驗證事實，再進行診斷、建議或自動動作。
+- **Governance before Autonomy**：身分、權限、預算、審批、稽核和回復必須先於自治能力。
+- **One Billing Truth**：生產計費、額度與結算保持單一事實來源，不為 Agent 或外掛建立第二套帳務邏輯。
+- **Compatibility by Design**：持續支援 SQLite、MySQL、PostgreSQL、多供應商協定和可遷移的應用端契約。
+- **Open Collaboration, Safe Boundaries**：開放協定適配、測試、文件、評測和治理方案，高風險生產、資金、金鑰與發布動作仍由明確責任人審批。
 
-在 AGI 應用時代，MAX API 聚焦于開放的 AI 模型治理和 AI Agent 治理基礎設施，建設讓開發者和組織能夠穩定運行 AI 應用與 Agent 工作負載的服務、治理和營運層：
+### MAX API 2.0 技術亮點
 
-- **模型治理平面**：統一管理模型入口、渠道、供應商、協議格式、模型映射、價格規則、任務協議和多模態介面。
-- **AgentOps 控制平面**：不替代 Agent 編排框架，而是在網關層為 Agent 工作負載提供令牌治理、模型訪問控制、調用日志、成本追蹤、異常定位和營運分析。
-- **渠道配置平面**：通過能力矩陣、表單校驗、模型發現和協議模板，降低新增上游渠道、遷移供應商和維護非標準介面時的誤配置風險。
-- **協議與供應商適配層**：持續跟蹤海外官方介面、國產模型平臺介面（DeepSeek、通義、智譜、火山引擎、百度千帆等）以及各類 OpenAI 兼容 / 非標準介面的變化，并規范化為穩定的應用側介面。
-- **成本、額度與可靠性治理**：支持渠道路由、加權分發、失敗重試、限流、預扣費、失敗退款，以及表達式計費、固定價格、任務 rate-card、倍率計費和用量統計。
-- **性能與可擴展性治理**：通過 Redis / 內存緩存、模型請求限流、流式超時與大響應緩衝、請求體上限、磁盤緩存、Pyroscope 性能采樣和優雅關閉，支撐單機到多節點部署的穩定運行。
-- **組織級營運與審計層**：為團隊、研究機構、企業和社區服務提供使用者管理、分組管理、私有化部署、資料留存、審計和持續營運優化能力。
-- **可復用治理模板**：沉淀渠道模板、任務協議模板、價格配置、部署實踐和運維經驗，降低新模型、新供應商和新 Agent 場景的接入成本。
+- **Evidence-driven SmartOps**：將資源告警、渠道/模型效能、資料品質狀態和計費結算證據匯聚到統一運維入口，並保留人工審閱與真實財務狀態之間的邊界。
+- **面向先進模型協定持續演進**：增強 Responses、Claude Messages、Gemini 與 Ollama 的 Reasoning、快取鍵、懲罰參數、工具定義和多輪 Tool Context 相容。
+- **可復原的計費與非同步任務語意**：透過冪等 settlement、持久化 effect、任務 ID 和明確的 pending/manual 狀態，避免異常重試導致重複扣費、錯誤退款或任務遺失。
+- **高風險操作分作用域重新驗證**：Passkey、2FA、Telegram、API Token 與工作階段撤銷採用 scope-bound step-up verification，並透過 `session_generation` 及時撤銷舊工作階段。
+- **跨資料庫與持續驗證**：核心資料路徑相容 SQLite、MySQL 和 PostgreSQL；Go 測試、前端 Bun 測試、TypeScript 型別檢查、JSON 包裝規則和測試鏡像同步共同構成發布門檻。
 
----
+## 💡 為什麼需要 MAX API
 
-## 🧠 治理框架
+| 維度 | 直接連接多個供應商 | 使用 MAX API |
+|---|---|---|
+| 應用接入 | 分別維護 SDK、協定、鑑權和錯誤格式 | 應用端使用相對穩定的統一入口 |
+| 模型切換 | 修改程式碼、金鑰和部署設定 | 透過渠道、模型映射、分組和路由調整 |
+| 可用性 | 每個應用自行處理重試和上游故障 | 集中設定權重、優先級、失敗重試和切換 |
+| 權限與金鑰 | 憑證散落在應用和環境變數中 | 集中管理權杖、模型範圍、額度和有效期 |
+| 成本核算 | 多家帳單分散，難以歸因 | 按使用者、權杖、模型、渠道和分組統計 |
+| 故障排查 | 日誌分散，跨供應商定位困難 | 在閘道端統一觀察請求、錯誤、重試和耗時 |
 
-MAX API 的設計把 AI 模型和 AI Agent 的運行過程納入可配置、可觀測、可核算、可審計的治理框架。
-
-| 治理對象 | MAX API 提供的能力 | 目標 |
-|----------|-------------------|------|
-| 模型資產 | 模型列表、模型映射、模型分組、模型限制、價格規則和多模態介面管理 | 讓組織知道“有哪些模型、誰能用、怎么計費、如何切換” |
-| 上游渠道 | 供應商渠道、權重、分組、狀態、密鑰、Base URL、路徑覆蓋、能力矩陣、配置校驗、模型發現和失敗重試 | 降低單一供應商不可用、漲價、限流、誤配置或介面變化帶來的風險 |
-| 協議格式 | OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime、通用視頻任務協議等協議入口和轉換 | 讓應用側盡量面對穩定介面，而不是直接承擔各家協議差異 |
-| Agent 令牌 | API Key、令牌分組、模型范圍、額度限制、過期時間和訪問控制 | 為 Agent、工作流和工具調用分配獨立、可回收、可限額的訪問憑據 |
-| 用量與成本 | 請求日志、用量統計、表達式計費、分階段計費 JSON、任務 rate-card、預扣費和失敗退款 | 把模型調用成本拆到使用者、分組、令牌、模型、渠道和節點維度 |
-| 異步任務 | 視頻等任務提交、輪詢、狀態映射、結果代理和任務計費 | 統一治理長耗時、多狀態、多上游格式的多模態任務 |
-| 審計與安全 | 管理員側日志審計、錯誤日志、請求限制、流式超時、登錄與權限控制 | 在私有化部署和合規場景中提供可控的審計邊界，敏感內容審計集中放在安全與限制中管理 |
-| 組織營運 | 使用者、分組、余額、支付、系統設置、資料看板和運維配置 | 支撐團隊、研究機構、企業或社區服務的持續營運 |
-
----
-
-## 🧩 適用場景
-
-- **組織內部 AI 模型治理平臺**：統一管理使用者、令牌、模型、渠道、分組、權限、價格和賬單，避免每個團隊重復接入和維護上游服務。
-- **Agent 應用運行與治理底座**：為 Agent、工作流和工具調用應用提供穩定的模型網關、令牌隔離、成本控制、調用觀測、異常定位和審計基礎。
-- **國產模型與多供應商適配中心**：持續跟蹤國內外模型平臺介面和價格變化，通過渠道配置、模型映射、路徑覆蓋和協議模板降低適配成本。
-- **多模態任務治理平臺**：統一接入文本、圖像、視頻、音頻、嵌入、重排序、實時對話等介面，并對異步任務做狀態、結果代理和計費治理。
-- **模型成本與 Agent 成本核算平臺**：圍繞使用者、令牌、模型、渠道和分組進行額度分配、費用核算、賬單統計和成本分析。
-- **私有化與合規營運環境**：適合需要自主管理密鑰、資料、權限、日志、審計和計費策略的團隊或機構。
-
----
+一句話概括：**供應商負責提供模型，Agent 框架負責編排業務，MAX API 負責統一接入並守住治理邊界。**
 
 ## 🚀 快速開始
 
-默認使用 SQLite，本地體驗無需額外資料庫。
-
-> [!WARNING]
-> SQLite 僅適合本地體驗、開發和小規模測試。正式／生產環境不建議使用 SQLite：在併發請求、多實例部署、大量日志與用量資料、資料庫遷移、備份恢復或長事務場景下，可能出現鎖等待、寫入阻塞、遷移耗時或失敗，以及可用性和資料維護問題。正式環境請使用 MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，並配置可靠的備份與恢復方案。
+本機體驗預設使用 SQLite，只需 Docker：
 
 ```bash
-# 1. 拉取鏡像
 docker pull cscitechtop/max-api:latest
 
-# 2. 啟動服務，資料持久化到當前目錄 ./data
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-
-# 3. 訪問控制臺
-# 瀏覽器打開 http://localhost:3000
+docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data cscitechtop/max-api:latest
 ```
 
-生產部署建議使用 Docker Compose，并顯式配置資料庫、Redis、會話密鑰、加密密鑰和日志目錄。
+啟動後存取：<http://localhost:3000>
 
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
+接著完成三件事：
 
-# 按需修改 docker-compose.yml 中的資料庫、Redis 密碼和環境變量
-docker compose up -d
-```
-
-> [!WARNING]
-> 將本專案作為面向公眾的生成式 AI 服務或 API 服務營運時，應先完成上游授權、備案、內容安全、實名、日志留存、稅務、支付和使用者協議等合規事項。
-
----
-
-## ✨ 核心能力
-
-### AI 模型治理
-
-| 能力 | 說明 |
-|------|------|
-| 統一模型入口 | 支持 OpenAI 兼容介面、Responses、Claude Messages、Gemini、Realtime 等多種協議入口，應用側可通過統一網關訪問模型 |
-| 多供應商模型池 | 海外可接入 OpenAI、Azure、Claude、Gemini、AWS Bedrock、Vertex AI、Ollama；國產方向持續跟蹤并內置 DeepSeek、通義千問、智譜 GLM、Kimi、豆包、騰訊混元、文心、訊飛星火、MiniMax、零一萬物、硅基流動等渠道適配 |
-| 上游生態適配 | 支持 Codex、Dify、RAGFlow、Kling、Seedance 等應用、Agent 和多模態平臺相關介面的接入治理，便于把模型調用、工作流調用和異步任務納入統一網關 |
-| 模型映射與訪問范圍 | 支持按渠道配置模型列表、模型映射、使用者分組、令牌分組和模型限制，讓不同團隊、應用或 Agent 使用不同模型集合 |
-| 渠道能力矩陣 | 渠道編輯界面展示 `chat/completions`、`responses`、`Claude Messages`、`Gemini native`、`embeddings`、`images`、`audio`、`rerank`、`video tasks`、`model discovery` 等能力狀態，減少管理員對渠道能力的猜測 |
-| 渠道配置校驗 | 在保存前檢查 API Key、模型列表、Base URL、額外配置、JSON 對象、Vertex AI 區域、Codex 憑證、模型發現能力和視頻任務路徑占位符等常見問題 |
-| 多模態模型治理 | 支持聊天、圖像、視頻、音頻、嵌入、重排序、實時對話等場景，并對視頻等異步任務提供提交、輪詢、狀態映射和結果代理 |
-| 通用視頻任務協議 | 支持將不同視頻上游的任務提交、查詢、進度、狀態映射、錯誤消息和結果 URL 路徑統一配置到渠道中；請求體透傳和改寫復用渠道設置，默認路徑為 `/v1/videos/create` 與 `/v1/videos/{task_id}` |
-| 協議轉換與自定義上游 | 支持 OpenAI Compatible、Responses、Chat Completions、Claude Messages、Gemini 等格式之間的轉換與適配，也支持配置合法授權的上游地址、路徑覆蓋和任務協議解析規則 |
-
-### AI Agent 治理 / AgentOps
-
-| 能力 | 說明 |
-|------|------|
-| Agent 令牌隔離 | 可為 Agent、工作流、插件、工具調用或使用者創建獨立 API Key，并配置模型范圍、額度、過期時間和分組 |
-| 模型訪問控制 | 通過使用者、令牌、分組、模型限制和渠道策略控制 Agent 能調用哪些模型、走哪些渠道、消耗多少額度 |
-| 調用鏈路觀測 | 提供請求日志、用量統計、渠道命中、耗時、錯誤和重試信息，幫助定位 Agent 調用失敗、成本異常和上游波動 |
-| 成本歸因 | 支持按模型、渠道、使用者、分組、令牌和節點維度統計成本與用量，方便核算不同 Agent、業務線或部署節點成本 |
-| 管理員審計 | 私有部署場景可按合規要求啟用管理員側日志審計能力，普通使用者日志介面會過濾管理員專用審計字段 |
-| 營運看板 | 提供面向管理員的統計分析、使用者管理、渠道管理、系統設置和運維分析能力 |
-
-### 成本、計費與可靠性治理
-
-**模型價格表達式**
-
-- **一行表達式 = 一個 token 模型的完整計價規則**：階梯定價、緩存命中、圖像 / 音頻 token 分項、分時折扣、按請求頭或參數動態加價，全部寫在同一行，適合維護復雜模型價格。
-- **價格即真實價格**：系數直接填寫「美元 / 百萬 token」，`p * 2.5` 就是輸入每百萬 token 2.5 美元，適合按上游價格表維護成本；傳統倍率模式仍保持兼容。
-- **可視化 + 原始雙模式編輯**：既可逐項填價格、按檔位設條件，也可直接編輯表達式，并內置常見模型預設模板。
-- **統一 JSON 批量維護**：支持在一個 `Tiered billing JSON` 窗口中維護多個模型的分階段計費規則，保存時原子更新 `billing_mode` 與 `billing_expr`，避免手動維護多個配置項時出現不同步。
-- **自動 token 歸一**：按上游格式（OpenAI / Claude）和表達式實際用到的變量，自動從輸入/輸出中剝離緩存、圖像、音頻等子類別，避免重復計費；日志中可還原命中的計價檔位與明細。
-
-**任務計費、傳統計費與可靠性**
-
-- 支持視頻等異步任務的參數化 rate-card 計費，按模型、供應商、時長、質量、音頻、視頻輸入等字段匹配單價；可通過 `task_billing_setting.rate_cards` 的 JSON 窗口統一維護，并用 `vendor` 字段區分 Sora、Veo、Seedance、Kling 等供應商分區。
-- 兼容按量、按次、緩存命中等計費模式，以及模型倍率、分組倍率、渠道倍率。
-- 支持預扣費、失敗退款、異常處理和消費日志，適合長耗時 Agent 調用鏈路和異步多模態任務。
-- 支持渠道加權隨機、失敗重試、禁用渠道繞過和模型級路由，降低上游異常對應用和 Agent 的影響。
-- 支持 Redis 緩存與內存緩存，適配單機和多機部署。
-
-### 性能與可擴展性治理
-
-| 能力 | 說明 |
-|------|------|
-| 緩存與多節點擴展 | 單機可使用內存緩存，多機可接入 Redis；使用者、令牌、渠道親和、額度相關緩存減少重復資料庫訪問，并通過 `SESSION_SECRET`、`CRYPTO_SECRET`、`NODE_NAME` 保持會話、加密和日志歸屬一致 |
-| 請求限流與容量保護 | 支持全局 API / Web 限流、關鍵介面限流、搜索限流、模型請求限流和按分組配置的模型請求配額；可使用 Redis 或內存計數器 |
-| 流式與大請求控制 | 支持 `STREAMING_TIMEOUT`、`STREAM_SCANNER_MAX_BUFFER_MB`、`MAX_REQUEST_BODY_MB`、`MAX_FILE_DOWNLOAD_MB` 等配置，控制長流式響應、大行 SSE、解壓后請求體和遠程文件下載大小 |
-| 中繼連接調優 | 支持 `RELAY_TIMEOUT`、`RELAY_IDLE_CONN_TIMEOUT`、`RELAY_MAX_IDLE_CONNS`、`RELAY_MAX_IDLE_CONNS_PER_HOST` 配置上游 HTTP 連接池與超時策略 |
-| 磁盤緩存與性能觀測 | 系統性能設置可啟用大請求體磁盤緩存、配置緩存閾值和容量；運維介面可查看 / 清理磁盤緩存，并可通過 Pyroscope 采集 CPU、內存、goroutine、mutex 和 block profile |
-| 平滑退出與資料落盤 | 關閉進程時支持 `SHUTDOWN_TIMEOUT_SECONDS` 和 `QUOTA_DATA_CACHE_SAVE_TIMEOUT_SECONDS`，盡量在退出前完成 HTTP 關閉和額度緩存保存 |
-
-### 安全與組織管理
-
-- 支持 JWT、WebAuthn/Passkeys、OAuth、OIDC、Telegram、Discord、LinuxDO 等登錄方式。
-- 支持管理員、普通使用者、分組、令牌和模型訪問控制。
-- 支持請求體大小限制、流式超時控制、錯誤日志和運行狀態檢查。
-- 支持多機部署下的統一會話密鑰、加密密鑰和 Redis 共享緩存。
-
----
-
-## 🆚 為什麼使用網關
-
-| 維度 | 直連各家官方 SDK / API | 通過 MAX API 網關 |
-|------|------------------------|-------------------|
-| 模型接入 | 每家一套 SDK、鑒權和參數 | 統一模型入口，一次接入，多模型復用 |
-| 模型治理 | 模型清單、價格、權限和渠道分散在各平臺 | 統一管理模型、渠道、映射、分組、額度和價格規則 |
-| Agent 訪問 | Agent 直接持有上游 Key，難以回收和限額 | 為 Agent 分配獨立令牌，并限制模型、額度、過期時間和分組 |
-| 協議差異 | 應用自行適配 Claude、Gemini、Responses 等格式 | 網關統一做協議轉換和供應商適配 |
-| 失敗處理 | 應用自行實現重試、降級和錯誤歸一 | 渠道失敗自動重試、加權路由和錯誤處理 |
-| 性能與擴展 | 應用自行處理超時、限流、連接池和緩存 | 網關集中提供流式超時、請求限制、Redis / 內存緩存、連接池調優和性能觀測 |
-| 成本統計 | 各平臺賬單分散，難以按使用者或 Agent 核算 | 統一額度、計費、用量統計和消費日志，可按令牌和模型歸因 |
-| 審計邊界 | 應用側分散記錄，權限和留存策略不統一 | 管理員側統一審計入口，普通使用者日志過濾管理員專用字段 |
-| 私有化 | 密鑰、日志和計費策略分散 | 自托管，自主掌控密鑰、資料、日志和策略 |
-
----
-
-## 🧭 架構概覽
-
-MAX API 采用分層架構：應用、SDK 或 Agent 請求經統一入口進入，依次經過路由、中間件、控制器和業務服務層，最終由中繼層適配到對應上游供應商；資料層和緩存層為模型治理、Agent 令牌治理、計費、日志、審計和任務狀態提供持久化與加速能力。
-
-```mermaid
-flowchart LR
-  Client[客戶端 / SDK / Agent] --> Router[Router<br/>路由]
-  Router --> MW[Middleware<br/>鑒權 · 限流 · 分發 · 日志]
-  MW --> Ctrl[Controller<br/>請求處理器]
-  Ctrl --> Svc[Service<br/>模型治理 · AgentOps · 計費審計]
-  Svc --> Relay[Relay<br/>中繼 / 協議轉換]
-  Relay --> Adapters[Channel 適配器<br/>OpenAI · Claude · Gemini · 國產平臺 · 自定義上游]
-  Adapters --> Upstream[(上游模型服務)]
-  Svc --> Model[Model<br/>GORM]
-  Model --> DB[(SQLite · MySQL · PostgreSQL)]
-  Svc --> Cache[(Redis · 內存緩存)]
-```
-
-### 目錄結構
-
-| 目錄 | 職責 |
-|------|------|
-| `router/` | HTTP 路由，包含 API、relay、dashboard 和 web 入口 |
-| `controller/` | 請求處理器，負責參數解析、鑒權后的業務入口和響應封裝 |
-| `service/` | 業務邏輯，包含模型治理、AgentOps、日志、計費、審計、任務、渠道和系統配置等能力 |
-| `model/` | 資料模型與資料庫訪問，基于 GORM 兼容 SQLite、MySQL、PostgreSQL |
-| `relay/` | AI API 中繼、協議轉換和供應商適配 |
-| `relay/channel/` | 各供應商適配器，如 openai、claude、gemini、aws 等 |
-| `middleware/` | 鑒權、限流、CORS、日志、請求分發和上下文處理 |
-| `setting/` | 模型價格、任務計費、營運、系統、安全和性能配置 |
-| `common/` | JSON、加密、Redis、限流、環境變量等共享工具 |
-| `dto/` / `types/` | 請求、響應、錯誤和中繼格式類型定義 |
-| `constant/` | API 類型、渠道類型、上下文鍵等常量 |
-| `i18n/` / `oauth/` / `pkg/` | 后端國際化、OAuth 實現和內部包 |
-| `web/` | 前端主題容器，默認主題位于 `web/default/` |
-
-### 技術棧
-
-| 層 | 技術 |
-|------|------|
-| 后端 | Go 1.25+、Gin、GORM v2 |
-| 前端 | React 19、TypeScript、Rsbuild、Base UI、Tailwind CSS |
-| 包管理 | Bun workspace |
-| 資料庫 | SQLite / MySQL ≥ 5.7.8 / PostgreSQL ≥ 9.6 |
-| 緩存 | Redis + 內存緩存 |
-| 鑒權 | JWT、WebAuthn/Passkeys、OAuth、OIDC |
-
----
-
-## 🤖 AI 模型與介面支持
-
-> 實際可用模型取決于你的上游授權、渠道配置、模型映射和服務商支持情況。MAX API 的重點是把這些模型能力納入統一治理，而不是提供上游模型服務本身。
-
-| 類型 | 說明 |
-|------|------|
-| OpenAI-Compatible | Chat Completions、Embeddings、Images、Audio 等兼容介面，可作為多數應用和 Agent 的通用模型入口 |
-| OpenAI Responses | Responses 格式請求、中繼與 Responses ↔ Chat Completions 兼容轉換，適合逐步接入新的 OpenAI 應用協議 |
-| Claude Messages | Claude Messages 格式與 OpenAI 兼容格式轉換，降低應用側多協議維護成本 |
-| Google Gemini | Gemini 聊天、文本，以及 `/v1/responses` 兼容轉換能力 |
-| Azure OpenAI | Azure OpenAI 與 Realtime 相關介面 |
-| AWS Bedrock | Bedrock Runtime 相關模型接入 |
-| 上游平臺和應用生態 | AWS、Azure、Vertex、Ollama、Codex、Dify、RAGFlow、Kling、Seedance 等平臺或應用形態可按渠道能力接入治理 |
-| 國產模型與平臺 | 內置 DeepSeek、通義千問 / 阿里云百煉、智譜 GLM、Kimi、豆包 / 火山引擎、騰訊混元、百度文心 / 千帆、訊飛星火、MiniMax、零一萬物、硅基流動等適配器或兼容接入能力 |
-| `rerank` | Cohere、Jina 等重排序模型，可用于檢索增強和 Agent 檢索鏈路 |
-| Midjourney / Suno / Dify | 圖像、音樂、工作流等服務適配 |
-| 視頻任務介面 | 支持 `/v1/videos/create`、`/v1/videos/{task_id}` 等視頻生成任務的提交、請求體透傳或參數覆蓋、輪詢、狀態映射、結果代理和參數化任務計費 |
-| 自定義上游 | 支持配置合法授權的上游介面地址、協議適配規則、Responses / Chat 轉換、路徑覆蓋、狀態映射、錯誤消息路徑和任務結果解析 |
-
-### 支持的主要介面
-
-<details>
-<summary>查看介面類別</summary>
-
-- 聊天介面：`/v1/chat/completions`
-- 響應介面：`/v1/responses`
-- 圖像介面：`/v1/images/*`
-- 音頻介面：`/v1/audio/*`
-- 視頻介面：`/v1/videos/*`
-- 嵌入介面：`/v1/embeddings`
-- 重排序介面：`/v1/rerank`
-- 實時對話：OpenAI Realtime 兼容介面
-- Claude Messages：Claude 原生格式入口
-- Gemini：Google Gemini 格式入口
-
-</details>
-
-### Reasoning Effort 支持
-
-<details>
-<summary>查看示例模型命名</summary>
-
-**OpenAI 系列：**
-
-- `o3-mini-high`
-- `o3-mini-medium`
-- `o3-mini-low`
-- `gpt-5-high`
-- `gpt-5-medium`
-- `gpt-5-low`
-
-**Claude 思考模型：**
-
-- `claude-3-7-sonnet-20250219-thinking`
-
-**Gemini 系列：**
-
-- `gemini-2.5-flash-thinking`
-- `gemini-2.5-flash-nothinking`
-- `gemini-2.5-pro-thinking`
-- `gemini-2.5-pro-thinking-128`
-- 也可以在 Gemini 模型名后追加 `-low`、`-medium`、`-high` 來控制思考力度。
-
-</details>
-
----
-
-## 🔧 治理配置
-
-### 初始治理配置建議
-
-1. 部署完成后進入控制臺，創建或確認管理員賬號。
-2. 配置系統設置、使用者注冊策略、登錄方式和安全限制。
-3. 添加上游渠道，填寫合法授權的 API Key、Base URL、模型列表、模型映射和渠道設置。
-4. 根據組織結構配置使用者分組、令牌分組、模型限制、額度策略和價格規則，將模型能力納入訪問控制。
-5. 為應用、Agent 或工作流創建獨立令牌，按業務線、環境或風險級別配置模型范圍和額度。
-6. 在營運設置中配置失敗重試、日志記錄、緩存策略和消費統計。
-7. 如需管理員側內容審計，應在合規前提下進入“系統設置 → 安全與限制 → 日志審計”啟用，并確保“記錄配額使用量（日志維護）”已開啟。
-
-### 渠道能力矩陣與配置校驗
-
-渠道新建或編輯時，系統會根據渠道類型展示能力矩陣，并給出實時配置校驗結果。矩陣中的介面名稱保留原始技術表述，例如 `chat/completions`、`responses`、`embeddings`、`rerank`、`video tasks`，說明文字使用中文，便于管理員判斷當前渠道能承擔哪些模型和任務。
-
-配置校驗覆蓋以下常見問題：
-
-- 新建渠道缺少 API Key、模型列表為空、需要 Base URL 或額外配置但未填寫。
-- Base URL 誤填到 `/v1` 結尾，導致系統再次拼接上游路徑。
-- `setting`、`param_override`、`header_override`、`settings` 等字段不是 JSON 對象。
-- Vertex AI 區域配置缺少 `default`，或服務賬號密鑰不是有效 JSON。
-- Codex 渠道憑證缺少 `access_token` 或 `account_id`。
-- 當前渠道不支持模型發現，但開啟了上游模型檢查或自動同步。
-- 視頻任務查詢路徑缺少 `{task_id}`、`{operation_name}` 或 `{upstream_task_id}` 占位符。
-
-### 通用視頻任務協議
-
-視頻模型供應商的介面經常在路徑、任務 ID、狀態字段、進度字段、錯誤字段和結果 URL 字段上不一致。MAX API 將原先面向單一模型的任務協議能力擴展為通用視頻任務協議，適用于 OpenAI、Ali、Gemini、MiniMax、Vertex AI、VolcEngine、Kling、Jimeng、Vidu、Doubao Video、Sora 等視頻任務渠道。
-
-支持的配置層級：
-
-- **僅路徑覆蓋**：只配置 `submit_path` 和 `query_path`，系統仍使用對應渠道的官方響應解析邏輯，適合只改上游路徑的兼容渠道。
-- **完整協議解析**：設置 `task_protocol = "generic_video_task"`，同時配置任務 ID、狀態、進度、結果 URL、錯誤消息和狀態映射路徑，適合非標準視頻任務響應。
-- **請求體處理**：通用視頻任務協議不再單獨定義請求體生成模式。需要原樣透傳客戶端 JSON 時使用渠道設置里的 `Pass Through Body`；需要字段改寫、默認值或 header 聯動時使用已有的 `Param Override`。
-
-默認任務路徑：
-
-```json
-{
-  "task_protocol": "generic_video_task",
-  "task_protocol_config": {
-    "submit_path": "/v1/videos/create",
-    "query_path": "/v1/videos/{task_id}",
-    "task_id_path": "task_id",
-    "status_path": "status",
-    "progress_path": "progress",
-    "result_url_paths": [
-      "result.primary_url",
-      "result.urls.0",
-      "data.result.primary_url",
-      "url",
-      "video_url",
-      "download_url"
-    ],
-    "error_message_path": "error_message",
-    "status_map": {
-      "queued": "QUEUED",
-      "running": "IN_PROGRESS",
-      "succeeded": "SUCCESS",
-      "failed": "FAILURE"
-    }
-  }
-}
-```
-
-查詢路徑支持 `{task_id}`、`{operation_name}`、`{upstream_task_id}`。其中 `{operation_name}` 可保留多段路徑值，適合 Gemini / Vertex 風格的 operation 查詢介面。視頻內容可通過 `/v1/videos/{task_id}/content` 代理讀取；在需要隱藏上游資源域名的部署中，建議讓終端使用者訪問該內容代理地址，并配合鑒權、SSRF 防護和允許端口配置使用。
-
-### 計費 JSON 維護
-
-系統設置中的模型計費支持兩類 JSON 統一維護入口：
-
-- **分階段計費 JSON**：通過 `Tiered billing JSON` 統一維護多個模型的 `{ enabled, expr }` 配置，保存時同步更新 `billing_mode` 與 `billing_expr`。
-- **任務 rate-card JSON**：通過 `task_billing_setting.rate_cards` 統一維護異步任務計費規則，可按 `vendor` 分區維護 Sora、Veo、Seedance、Kling 等視頻模型的不同計費表。
-
-Seedance 2.0 等視頻模型可按分辨率、視頻輸入等請求參數參與倍率或 rate-card 計算；使用透傳或參數覆蓋時，應確保最終提交給上游的字段與計費字段保持一致。
-
-示例結構：
-
-```json
-{
-  "model-name": {
-    "enabled": true,
-    "expr": "len <= 200000 ? tier(\"standard\", p * 3 + c * 15) : tier(\"long_context\", p * 6 + c * 22.5)"
-  }
-}
-```
-
-任務 rate-card 可按請求參數匹配價格：
-
-```json
-{
-  "vendor/model-name": {
-    "vendor": "kling",
-    "unit": "second",
-    "quantity_field": "duration",
-    "default_quantity": 5,
-    "strict": true,
-    "defaults": {
-      "quality": "std",
-      "has_audio": "false"
-    },
-    "rows": [
-      {
-        "id": "std_no_audio",
-        "match": {
-          "quality": "std",
-          "has_audio": "false"
-        },
-        "unit_price": 0.6
-      }
-    ]
-  }
-}
-```
-
-### 常見運維入口
-
-| 功能 | 說明 |
-|------|------|
-| 渠道管理 | 配置上游供應商、模型映射、渠道權重、密鑰、協議路徑和狀態，并通過能力矩陣與配置校驗提前發現風險 |
-| 模型與價格 | 維護模型列表、模型價格、表達式計費、分階段計費 JSON、任務 rate-card JSON 和模型展示信息 |
-| 令牌管理 | 為應用、Agent、工作流、工具調用或使用者創建訪問令牌并限制模型與額度 |
-| 使用者管理 | 管理使用者、分組、余額、權限和狀態 |
-| 使用日志 | 查看調用記錄、消耗、耗時、錯誤、渠道命中和管理員可見的審計信息 |
-| 系統設置 | 管理安全限制、日志審計、模型定價、任務計費、營運策略、日志維護、支付和站點配置 |
-| 資料看板 | 查看整體請求量、模型用量、消費趨勢、渠道狀態和 Agent 令牌成本 |
-
----
-
-## 🚢 部署
-
-### 部署要求
-
-| 組件 | 要求 |
-|------|------|
-| 容器引擎 | Docker / Docker Compose |
-| 本地資料庫 | SQLite，僅用於本地體驗、開發或小規模測試；Docker 部署時需掛載 `/data` |
-| 正式環境資料庫 | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6，並配置可靠的備份與恢復方案 |
-| 緩存 | 單機可使用內存緩存，多機部署建議使用 Redis |
-| 前端構建 | 使用 Bun workspace，需保留 `web/package.json` 與 `web/bun.lock` |
-| 源碼構建 | 使用倉庫 `go.mod` 聲明的 Go 版本（目前 Go 1.25.1+）和 `go.sum`；依賴或安全更新後運行 `go mod download`、`go mod verify` 並重新構建 |
-
-### 推薦環境變量
-
-<details>
-<summary>查看常用環境變量</summary>
-
-| 變量名 | 說明 | 默認值 |
-|--------|------|--------|
-| `SESSION_SECRET` | 會話密鑰，多機部署必須設置 | - |
-| `CRYPTO_SECRET` | 加密密鑰，使用 Redis 或多機部署時必須設置 | - |
-| `SQL_DSN` | 資料庫連接字符串 | - |
-| `REDIS_CONN_STRING` | Redis 連接字符串 | - |
-| `STREAMING_TIMEOUT` | 流式響應超時時間，單位秒 | `300` |
-| `STREAM_SCANNER_MAX_BUFFER_MB` | 流式掃描器單行最大緩沖，圖像 base64 等大響應可適當調大 | `64` |
-| `MAX_REQUEST_BODY_MB` | 請求體最大大小，按解壓后大小計算，超出返回 `413` | `32` |
-| `AZURE_DEFAULT_API_VERSION` | Azure API 默認版本 | `2025-04-01-preview` |
-| `ERROR_LOG_ENABLED` | 錯誤日志開關 | `false` |
-| `NODE_NAME` | 節點名稱，多機部署時用于日志定位和異步任務結算歸屬 | - |
-| `PYROSCOPE_URL` | Pyroscope 服務地址 | - |
-| `PYROSCOPE_APP_NAME` | Pyroscope 應用名 | `max-api` |
-| `PYROSCOPE_BASIC_AUTH_USER` | Pyroscope Basic Auth 使用者名 | - |
-| `PYROSCOPE_BASIC_AUTH_PASSWORD` | Pyroscope Basic Auth 密碼 | - |
-| `PYROSCOPE_MUTEX_RATE` | Pyroscope mutex 采樣率 | `5` |
-| `PYROSCOPE_BLOCK_RATE` | Pyroscope block 采樣率 | `5` |
-| `HOSTNAME` | Pyroscope 標簽中的主機名 | `max-api` |
-
-</details>
-
-### Docker Compose
-
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
-
-# 修改 docker-compose.yml：
-# - 更換 PostgreSQL / MySQL / Redis 默認密碼
-# - 按需設置 SESSION_SECRET、CRYPTO_SECRET、NODE_NAME
-# - 生產環境建議配置反向代理與 HTTPS
-docker compose up -d
-```
-
-### Docker 命令
-
-**SQLite：**
-
-```bash
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-```
-
-**MySQL：**
-
-```bash
-docker run --name max-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(mysql:3306)/max-api" \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  cscitechtop/max-api:latest
-```
-
-### 從源碼構建鏡像
-
-```bash
-git clone https://github.com/MAX-API-Next/MAX-API.git
-cd MAX-API
-docker build -t cscitechtop/max-api:latest .
-```
-
-> [!NOTE]
-> `Dockerfile` 會在鏡像構建中下載 Go 模塊。宿主機直接構建或依賴 / 安全更新後，請保持 `go.mod` 與 `go.sum` 成對提交，先運行 `go mod download && go mod verify`，再重新構建二進制或鏡像；需要刷新基礎鏡像時可使用 `docker build --pull --no-cache -t cscitechtop/max-api:latest .`。
+1. 建立或確認管理員帳號。
+2. 新增一個具有合法授權的上游渠道和 API Key。
+3. 建立存取權杖，將應用中的 Base URL 指向 MAX API。
 
 > [!TIP]
-> 前端使用 Bun workspace。構建上下文中必須保留 `web/package.json`、`web/bun.lock` 和 `web/default/package.json`，否則 `catalog:` 依賴無法解析。
-
-### 多機部署注意事項
+> 生產環境建議使用正式版。Preview 版本用於測試和灰度驗證，升級前請備份資料庫並準備回復方案。
 
 > [!WARNING]
-> - 必須設置相同的 `SESSION_SECRET`，否則不同節點之間登錄狀態不一致。
-> - 使用共享 Redis 時必須設置相同的 `CRYPTO_SECRET`，否則加密資料無法解密。
-> - 多節點建議設置穩定的 `NODE_NAME`，便于在日志、審計信息和異步任務結算中定位來源節點。
-> - 生產環境應使用外部資料庫、外部 Redis、HTTPS 反向代理和可靠的備份策略。
+> SQLite 適合本機體驗、開發和小規模測試。正式環境建議使用仍在供應商安全支援週期內的 MySQL（建議 8.4 LTS）或 PostgreSQL（建議 14+），並設定 Redis、HTTPS、備份和復原方案。專案相容性下限仍為 MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6，但不建議將其用於生產環境。
 
----
+## ✨ 目前能力
 
-## 🗺️ 路線圖
+以下能力已在目前系統中提供：
 
-以下為方向性規劃，會根據維護節奏、真實場景和社區需求調整，不構成時間承諾。
+| 能力 | 主要用途 |
+|---|---|
+| 統一模型入口 | 接入 OpenAI Compatible、Responses、Claude Messages、Gemini、Realtime 和多模態任務介面 |
+| 多供應商路由 | 管理渠道、權重、優先級、分組、模型映射、失敗重試和跨供應商切換 |
+| 身分與存取控制 | 管理使用者、權杖、模型範圍、分組、額度、有效期、限流和管理員權限 |
+| 成本與計費 | 支援倍率、固定價格、表達式計費、非同步任務 rate-card、預扣費、結算和失敗退款 |
+| 日誌與稽核 | 按使用者、權杖、模型、渠道、分組和節點查看使用、錯誤、重試和管理操作 |
+| 智慧運維中心 | 集中查看活動告警、渠道效能、模型效能、系統資訊和計費結算對帳證據，協助管理員發現、定位和審閱生產問題 |
+| 私有化部署 | 支援 SQLite、MySQL、PostgreSQL、Redis、多節點和獨立日誌庫 |
+| 上游擴充 | 支援協定適配、路徑覆寫、參數/Header 覆寫、模型發現和任務狀態映射 |
 
-- **模型治理深化**：圍繞模型目錄、模型價格、模型權限、模型映射、模型能力標簽和供應商變更，持續增強治理能力。
-- **AgentOps 深化**：圍繞 Agent、工具調用、工作流和 MCP 風格工具 / 服務接入，持續優化調用鏈路、成本歸因、異常定位和治理能力。
-- **多模態任務治理**：增強圖像、視頻、音頻和實時交互任務的計費、限流、狀態追蹤和結果代理。
-- **協議轉換增強**：持續完善 OpenAI Compatible、Responses、Claude Messages、Gemini 等協議之間的轉換。
-- **國產模型與平臺跟蹤適配**：跟進國產模型、云平臺、價格規則和 API 協議變化，沉淀可復用的渠道、價格和任務協議配置。
-- **供應商適配模板化**：讓路徑覆蓋、任務協議、狀態映射、錯誤解析和結果解析更容易配置和復用。
-- **治理審計與營運優化**：完善請求鏈路、成本追蹤、錯誤分析、管理員審計、日志留存和運維報表。
-- **組織級營運能力**：增強多租戶、分組、賬單、權限、風控和私有化部署體驗。
+### 適用場景
 
-歡迎在 [GitHub Issues](https://github.com/MAX-API-Next/MAX-API/issues) 提出需求、問題和改進建議。
+- **團隊或組織內部模型閘道**：統一管理使用者、權杖、模型、供應商、權限和費用。
+- **AI 應用與 Agent 運行底座**：為應用、Agent 和工作流程提供模型存取控制、成本歸因與異常定位。
+- **多供應商容錯與遷移**：透過模型映射、加權路由、失敗重試和灰度切換降低單一上游風險。
+- **多模態任務治理**：統一管理圖像、音訊、影片、嵌入、重排序和即時對話介面。
+- **私有化與合規營運**：自主管理金鑰、資料、日誌、稽核、價格和部署環境。
 
----
+## 🩺 智慧運維中心
 
-## ❓ 常見問題
+**智慧運維中心是 MAX API 2.0 的重大更新，也是專案從統一模型閘道走向 AGI 原生治理與營運基礎設施的關鍵一步。**
 
-<details>
-<summary><strong>MAX API 會提供模型服務或 API Key 嗎？</strong></summary>
+它將生產觀測、資源告警、模型與渠道效能、系統資訊和計費結算對帳集中到統一管理員入口。目前能力強調「看見問題、保留證據、通知管理員、受控審閱」，並不是會自動修改渠道、路由、餘額或主機的自治 Agent。
 
-不會。MAX API 是模型與 Agent 工作負載的網關治理層，不提供上游模型賬號、API Key、基礎模型訓練能力或模型服務本身。使用者需要自行獲得合法授權的上游服務。
+| 模組 | 目前提供的內容 |
+|---|---|
+| 活動告警 | 對目前節點的 CPU、記憶體和磁碟持續超閾值進行去重告警，在復原時傳送復原通知；沿用管理員既有的 Email、Webhook、Bark 或 Gotify 設定 |
+| 渠道效能 | 查看請求與錯誤、消耗額度、估算成功率、日誌延遲、重試、探測延遲和最近觀測時間；詳細資訊可查看該渠道最近 24 小時的模型與分組表現 |
+| 模型效能 | 彙總所有模型的渠道數、請求與錯誤、消耗額度、估算成功率、日誌延遲、吞吐量和重試；詳細資訊提供各分組效能、延遲趨勢和可用率趨勢 |
+| 計費結算對帳 | 顯示 `pending` / `manual` 正向最終結算、未結資金、重試和錯誤證據；根管理員可設定預設使用者阻斷策略，管理員可按 `id + revision` 原子批次審閱並關閉告警 |
+| 系統資訊 | 查看節點、執行個體和系統任務等資訊；此模組仍要求超級管理員權限 |
 
-</details>
+活動告警頁面每 5 秒讀取一次目前告警狀態，但不會觸發新的檢測或修復動作。渠道與模型清單預設查詢最近 1 小時，管理員可以輸入 `1–168` 小時的自訂時間窗；它們不會自動反覆統計大型日誌庫，只有按一下「套用篩選」或「重新整理」時才執行查詢，詳細資料在開啟時按需載入。
 
-<details>
-<summary><strong>MAX API 和 Agent 框架是什么關系？</strong></summary>
+計費結算對帳將財務復原狀態與運維告警狀態嚴格分離：「審閱並關閉」只會記錄管理員審閱並關閉目前告警，不會將結算標記為 `applied`，不會修改餘額、已套用差額或 effect 狀態。批次審閱綁定目前財務 revision；重新整理後記錄發生變化時，舊選擇會自動失效，避免使用過期證據進行操作。
 
-MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或業務 Agent 應用。它位于這些應用與上游模型服務之間，負責模型接入、令牌隔離、成本核算、路由容災、日志觀測和管理員審計等治理能力。
+> [!NOTE]
+> 目前生產效能主要彙總既有 Consume/Error 日誌和 `perf_metrics`：估算成功率並非完整的 Relay Attempt 成功率，吞吐量與趨勢屬於效能桶級近似值。日誌關閉、歷史資料缺失、採集關閉、時間窗無樣本或查詢失敗時，頁面會顯示相應的資料品質狀態。
+>
+> 活動告警依賴效能監控和資源閾值設定；閾值設為 `0` 時代表關閉該資源告警，需要連續兩個有效樣本才會觸發。狀態與通知佇列只保存在目前處理程序記憶體中：處理程序重新啟動後不會保留，多節點也不會自動合併為跨節點 Incident。渠道、模型和系統觀測保持唯讀；結算審閱只更新審閱中繼資料與使用者阻斷策略，不執行資金結算。智慧運維中心不會自動測試、停用、調權、切換渠道或修復主機。
 
-</details>
+此階段的價值，是先完成「看見問題、通知管理員、提供證據、受控審閱」的閉環，為後續統一 Evidence、診斷 Agent、Evaluator 和受控自動化建立基礎。
 
-<details>
-<summary><strong>為什麼強調 AI 模型治理？</strong></summary>
+## 🔌 模型、介面與擴充
 
-在真實組織中，模型不只是一個 API 名稱，還涉及供應商、價格、上下文長度、協議格式、權限范圍、穩定性和審計邊界。MAX API 的價值在于把這些分散變量統一配置、統一觀察和統一核算。
+> 實際可用能力取決於你的上游授權、渠道設定、模型映射和供應商支援。MAX API 負責治理這些能力，不提供模型服務本身。
 
-</details>
+| 類別 | 介面或能力 |
+|---|---|
+| 通用模型介面 | Chat Completions、Responses、Embeddings、Rerank、Images、Audio、Video |
+| 原生與即時協定 | Claude Messages、Google Gemini、OpenAI Realtime 等入口 |
+| 推理與工具呼叫 | 支援 Reasoning Effort、函式工具、Tool Call ID、工具名稱和多輪工具回應關聯，並依不同上游能力進行協定轉換 |
+| 非同步任務 | 任務提交、輪詢、狀態映射、結果代理和參數化計費 |
+| 自訂上游 | Base URL、路徑、參數、Header、狀態欄位和結果欄位映射 |
 
-<details>
-<summary><strong>支持哪些資料庫？</strong></summary>
-
-支持 SQLite、MySQL ≥ 5.7.8 和 PostgreSQL ≥ 9.6。本地體驗可使用 SQLite；生產環境建議使用 MySQL 或 PostgreSQL，并做好備份。
-
-</details>
-
-<details>
-<summary><strong>能否從 New API / One API 遷移？</strong></summary>
-
-專案兼容 New API 與原版 One API 的主要資料結構，通常可以復用既有資料。遷移前仍建議備份資料庫，并在測試環境驗證渠道、倍率、使用者、令牌和日志資料。
-
-</details>
-
-<details>
-<summary><strong>多機部署需要注意什么？</strong></summary>
-
-必須統一 `SESSION_SECRET`。如果使用共享 Redis，也必須統一 `CRYPTO_SECRET`。否則可能出現登錄狀態不一致、緩存資料無法解密或任務狀態異常。
-
-</details>
+涵蓋 OpenAI、Claude、Gemini、Azure、AWS Bedrock、Vertex AI、Ollama 及多種中國模型平台，也可治理 Codex、Dify、RAGFlow 和多模態任務服務。具體支援範圍以目前版本和渠道類型為準。
 
 <details>
-<summary><strong>圖像生成、流式響應或大響應被截斷怎么辦？</strong></summary>
+<summary><strong>系統運作方式與技術堆疊</strong></summary>
 
-可調大 `STREAM_SCANNER_MAX_BUFFER_MB`。4K 圖像、base64 圖片、長流式響應等場景可能需要更大的掃描緩沖。
+![MAX API 系統架構圖](./docs/images/MAX-API架構圖.png)
 
-</details>
-
-<details>
-<summary><strong>請求體過大返回 413 怎么辦？</strong></summary>
-
-調整 `MAX_REQUEST_BODY_MB`。該限制按解壓后的請求體大小計算，用于防止超大請求或 zip bomb 導致內存暴漲。
-
-</details>
-
-<details>
-<summary><strong>使用者能看到管理員日志審計中的輸入輸出內容嗎？</strong></summary>
-
-正常使用者日志介面會過濾管理員專用字段，普通使用者無法在自助使用日志中看到管理員審計內容。資料庫管理員、系統管理員或擁有管理員日志介面權限的人仍可能訪問相關資料，因此應按合規要求嚴格控制權限。
-
-</details>
-
-<details>
-<summary><strong>為什麼 Docker 構建時提示 `catalog:` 依賴無法解析？</strong></summary>
-
-前端使用 Bun workspace，`catalog:` 依賴定義在 `web/package.json`。構建時不能用 `web/default/package.json` 覆蓋 workspace 根 `package.json`，并且需要保留 `web/bun.lock`。
-
-</details>
-
----
-
-## 🔗 相關專案
-
-| 專案 | 說明 |
-|------|------|
-| [One API](https://github.com/songquanpeng/one-api) | MIT 協議 |
-| [New API](https://github.com/QuantumNous/new-api) | AGPLv3 協議 |
-| [Midjourney-Proxy](https://github.com/novicezk/midjourney-proxy) | Apache-2.0 協議 |
-| [Suno API](https://github.com/Suno-API/Suno-API) | MIT 協議 |
-
-### 配套工具
-
-| 專案 | 說明 |
-|------|------|
-| [max-api-key-tool](https://github.com/MAX-API-Next/MAX-API-key-tool) | Key 額度查詢工具 |
-| [max-api-horizon](https://github.com/MAX-API-Next/MAX-API-horizon) | MAX API 高性能優化版 |
-
----
-
-## 📚 文檔與支持
-
-| 資源 | 鏈接 |
-|------|------|
-| 官方文檔 | [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) |
-| 問題反饋 | [GitHub Issues](https://github.com/MAX-API-Next/MAX-API/issues) |
-| 最新發布 | [Releases](https://github.com/MAX-API-Next/MAX-API/releases) |
-| DeepWiki | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) |
-
-### 二次開發與社群鳴謝
-
-如果你基於本專案進行二次開發且僅供自用，歡迎在專案首頁、頁尾或「關於」頁面等明顯位置，任選一種方式保留專案來源或社群鳴謝：
-
-- 加入專案網址：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- 鳴謝社群：[MAX-API-Next](https://github.com/MAX-API-Next)
-
-參考前端嵌入程式碼（React / Tailwind CSS，可按需保留其中一項）：
-
-```tsx
-<p className='text-sm text-muted-foreground'>
-  基於{' '}
-  <a
-    href='https://github.com/MAX-API-Next/MAX-API'
-    target='_blank'
-    rel='noopener noreferrer'
-    className='font-medium underline underline-offset-4'
-  >
-    MAX-API-Next/MAX-API
-  </a>{' '}
-  二次開發 · 感謝{' '}
-  <a
-    href='https://github.com/MAX-API-Next'
-    target='_blank'
-    rel='noopener noreferrer'
-    className='font-medium underline underline-offset-4'
-  >
-    MAX-API-Next 社群
-  </a>
-</p>
+```text
+應用 / SDK / Agent
+  → 統一介面與身分鑑權
+  → 模型權限、限流、預算和安全檢查
+  → 渠道選擇、映射與失敗重試
+  → 上游協定適配
+  → 可復原結算、Evidence、日誌和稽核
+  → 智慧運維中心與管理員治理
 ```
 
-滿足上述任一展示要求並保持連結清晰可見，即自動獲得本專案的臨時商用授權，無需另行申請或等待確認。該授權為非永久授權，僅在持續滿足展示要求期間有效；有效期及後續調整以專案方在本 README 或官方社群發布的最新說明為準。
+後端使用 Go、Gin 和 GORM，前端使用 React 19、TypeScript、Base UI 與 Tailwind CSS，資料層相容 SQLite、MySQL 和 PostgreSQL，並可使用 Redis 與獨立日誌庫。供應商協定適配位於獨立 Relay/Channel 層，計費與結算集中在統一服務邊界中，管理端透過 SmartOps 顯示唯讀觀測和受限治理入口。
 
-本專案基於 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 開發。現階段，MAX API 主要在上述專案基礎上持續強化 AI API 閘道與治理能力、擴充功能並修正問題。商業使用本專案時，還須分別遵守 One API 的 MIT 許可證與 New API 的 AGPLv3 許可證，具體以各上游專案的 `LICENSE` 檔案為準；本專案提供的臨時商用授權不替代、也不免除相關上游專案的開源許可義務。
+</details>
 
-如不再滿足展示要求，或臨時授權到期、被公告調整或終止，仍需按 AGPLv3 或專案方另行書面授權使用本專案。如需長期商用授權，請聯絡：maxapi@max-api.ai。
+## 🛡️ 治理與營運
 
-歡迎提交 Issue、改進文檔、補充供應商適配經驗、完善部署方案或貢獻代碼。
+生產環境建議依以下順序設定：
 
----
+1. 設定登入、安全限制和使用者註冊策略。
+2. 新增合法授權的上游渠道，確認模型、能力和協定設定。
+3. 按團隊、業務或環境設定分組、權杖、模型範圍、額度和價格。
+4. 為每個應用、Agent 或環境使用獨立權杖，避免共用憑證和成本歸屬。
+5. 設定重試、日誌與告警，透過資料看板和智慧運維中心持續觀察。
+
+渠道能力驗證、表達式計費、通用任務協定、管理員稽核和效能參數等進階設定，請查看[詳細文件](https://docs.max-api.ai)。
+
+## 🧭 演進路線
+
+MAX API 將繼續以 **AI Models and Agents governance** 為核心，從統一閘道、智慧運維和可復原結算出發，逐步建設面向 AGI 應用的 Evidence、評測、策略與受控執行能力。長期方向不是讓一個無邊界 Agent 接管生產系統，而是建立可驗證、可審批、可停止、可回復的工程閉環。
+
+| 階段 | 狀態 | 重點 |
+|---|---|---|
+| 統一閘道與智慧運維 | **目前已提供** | 接入、鑑權、路由、計費、日誌、資源告警、渠道/模型效能、系統資訊和計費結算對帳 |
+| Evidence 事實層 | **近期建設** | 統一模型請求、系統日誌、指標、Task、路由、策略、結算和稽核事件，向 Agent 提供脫敏、限權、唯讀介面 |
+| 開放評測與治理範本 | **規劃中** | 與社群沉澱模型/協定相容測試、匿名故障樣本、評測集、Runbook、Detector 和產業治理範本 |
+| 受控自治運維 | **長期藍圖** | 在 Policy、Budget、Approval、Shadow、Canary 和 Rollback 約束下評估低風險自動動作 |
+| 受控能力進化 | **長期藍圖** | 在隔離 Coding Workspace 中生成、測試和審閱候選改進，不直接修改生產系統 |
+| AGI 工程閉環 | **長期方向** | 將 Evidence、評測、治理策略、人工審批與可回復執行連接為可驗證閉環 |
+
+MAX API 不是基礎模型，也不宣稱目前已經實現 AGI 或自治運維。路線圖中的長期能力只有在證據、權限、預算、審批和回復邊界完善後才會逐步驗證。
+
+## 🚢 生產部署
+
+建議使用 Docker Compose：
+
+```bash
+MAX_API_VERSION=v2.0.0-smartops.pre1
+MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
+cd MAX-API
+
+test "$(git rev-parse HEAD)" = "$MAX_API_COMMIT"
+
+# 修改 docker-compose.yml 中的資料庫、Redis 密碼和金鑰
+docker compose up -d
+```
+
+### 部署檢查
+
+| 元件 | 建議 |
+|---|---|
+| 資料庫 | 使用仍在供應商安全支援週期內的 MySQL（建議 8.4 LTS）或 PostgreSQL（建議 14+），並設定備份與復原 |
+| 快取 | 單機可使用記憶體快取，多節點部署建議使用 Redis |
+| 入口 | 設定 HTTPS 反向代理、請求大小限制和可信任網路策略 |
+| 金鑰 | 明確設定隨機 `SESSION_SECRET`；Redis/多節點場景統一 `CRYPTO_SECRET` |
+| 節點 | 每個節點設定穩定且唯一的 `NODE_NAME` |
+| 日誌 | 依合規和運維需要設定 `LOG_SQL_DSN`、清理與保留策略 |
+
+多節點必須統一 `SESSION_SECRET` 和 `CRYPTO_SECRET`，並為每個節點使用不同的 `NODE_NAME`。獨立日誌庫使用 `LOG_SQL_DSN`；錯誤效能統計需要按需啟用 `ERROR_LOG_ENABLED`。完整環境變數和原始碼建置說明請見[詳細文件](https://docs.max-api.ai)。
+
+## 🤝 專案來源、致謝與二次開發
+
+MAX API 基於 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 的開源成果持續開發。感謝上游專案、貢獻者，以及所有參與協定適配、測試、文件、翻譯與問題回報的社群成員。
+
+如果你基於本專案進行二次開發且僅供自用，歡迎在專案首頁、頁尾或「關於」頁面等明顯位置，選擇一種方式保留專案來源或社群鳴謝：
+
+- 加入專案連結：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- 鳴謝社群：[MAX-API-Next](https://github.com/MAX-API-Next)
+
+滿足上述任一展示要求並保持連結清晰可見，即自動取得本專案的非永久臨時商用授權，無需另外申請或等待確認；該授權僅在持續滿足展示要求期間有效，最新條件以正式 README 與官方社群公告為準。
 
 ## 📜 許可證
 
-本專案采用 [GNU Affero 通用公共許可證 v3.0 (AGPLv3)](./LICENSE) 授權。
+本專案採用 [GNU Affero 通用公共許可證 v3.0（AGPLv3）](./LICENSE) 授權。
 
-除預設的 AGPLv3 授權外，符合上文「二次開發與社群鳴謝」條件的自用二開專案，可按該說明自動獲得非永久的臨時商用授權。該臨時授權僅涵蓋 MAX API 專案方有權授權的新增與修改部分，並不包含或代替 One API、New API 等上游專案的許可授權。
+臨時商用授權僅涵蓋 MAX API 專案方有權授權的新增與修改部分，不包含、取代或免除 One API、New API 等上游專案的許可義務。商業使用時，請同時遵守 One API 的 MIT 許可證、New API 的 AGPLv3 許可證及各上游專案的最新許可要求。
 
-如果你修改并通過網絡向使用者提供本專案服務，請理解并遵守 AGPLv3 對應源碼提供等義務。商業合作、機構合作或其他授權問題，請聯系：maxapi@max-api.ai。
-
----
-
-## 🌟 Star History
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=MAX-API-Next/MAX-API&type=Date)](https://star-history.com/#MAX-API-Next/MAX-API&Date)
-
-</div>
+如果你修改並透過網路向使用者提供本專案服務，請理解並遵守 AGPLv3 對應的原始碼提供等義務。長期商用授權、機構合作或其他授權問題，請聯絡：maxapi@max-api.ai。
 
 ---
 
@@ -767,9 +346,9 @@ MAX API 不替代 Dify、LangChain、MCP Server、工作流引擎或業務 Agent
 
 ### 💖 感謝使用 MAX API
 
-如果這個專案對你有幫助，歡迎給我們一個 ⭐ Star。
+如果這個專案對你有幫助，歡迎給我們一個 ⭐ Star、關注 Releases、提交可重現 Issue，或參與 MAX-API-Next 社群共建。
 
-**[官方文檔](https://github.com/MAX-API-Next/MAX-API)** • **[問題反饋](https://github.com/MAX-API-Next/MAX-API/issues)** • **[最新發布](https://github.com/MAX-API-Next/MAX-API/releases)**
+**[專案倉庫](https://github.com/MAX-API-Next/MAX-API)** • **[參與共建](https://github.com/MAX-API-Next/MAX-API/issues)** • **[最新發布](https://github.com/MAX-API-Next/MAX-API/releases)** • **[MAX-API-Next 社群](https://github.com/MAX-API-Next)**
 
 <sub>Built with ❤️ by MAX-API-Next</sub>
 
