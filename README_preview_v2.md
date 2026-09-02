@@ -8,7 +8,7 @@
 
 **MAX API 2.0：开启智能运维时代 · 从统一模型网关走向 AGI 原生治理与运营**
 
-[查看 MAX API 2.0 Preview 发布说明](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-preview.1)
+[查看 MAX API 2.0 Preview 发布说明](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
 
 <p align="center">
   <strong>简体中文</strong> |
