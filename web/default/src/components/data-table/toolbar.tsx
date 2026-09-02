@@ -98,6 +98,14 @@ export type DataTableToolbarProps<TData> = {
    */
   onSearch?: () => void
   /**
+   * Controlled value for a submit-mode global search input. When provided,
+   * typing updates this value without changing the table filter until
+   * {@link onSearch} is invoked.
+   */
+  searchValue?: string
+  /** Change handler for a controlled submit-mode global search input. */
+  onSearchValueChange?: (value: string) => void
+  /**
    * Loading state for the explicit Search button.
    */
   searchLoading?: boolean
@@ -144,6 +152,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   const isFiltered =
     props.table.getState().columnFilters.length > 0 ||
     !!props.table.getState().globalFilter ||
+    !!props.searchValue?.trim() ||
     !!props.hasAdditionalFilters
 
   const placeholder = props.searchPlaceholder ?? t('Filter...')
@@ -165,8 +174,25 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
   ) : (
     <Input
       placeholder={placeholder}
-      value={props.table.getState().globalFilter ?? ''}
-      onChange={(event) => props.table.setGlobalFilter(event.target.value)}
+      value={props.searchValue ?? props.table.getState().globalFilter ?? ''}
+      onChange={(event) => {
+        const value = event.target.value
+        if (props.onSearchValueChange) {
+          props.onSearchValueChange(value)
+        } else {
+          props.table.setGlobalFilter(value)
+        }
+      }}
+      onKeyDown={(event) => {
+        if (
+          event.key === 'Enter' &&
+          !event.nativeEvent.isComposing &&
+          props.onSearch
+        ) {
+          event.preventDefault()
+          props.onSearch()
+        }
+      }}
       className='w-full sm:w-[200px] lg:w-[240px]'
     />
   )
@@ -187,7 +213,11 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
 
   const handleReset = () => {
     props.table.resetColumnFilters()
-    props.table.setGlobalFilter('')
+    if (props.onSearchValueChange) {
+      props.onSearchValueChange('')
+    } else {
+      props.table.setGlobalFilter('')
+    }
     props.onReset?.()
   }
 

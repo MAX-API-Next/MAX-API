@@ -72,6 +72,10 @@ export function UsersTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -81,7 +85,7 @@ export function UsersTable() {
     search: route.useSearch(),
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
-    globalFilter: { enabled: true, key: 'filter' },
+    globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       {
@@ -226,6 +230,11 @@ export function UsersTable() {
       skeletonKeyPrefix='users-skeleton'
       toolbarProps={{
         searchPlaceholder: t('Filter by user ID, username, name or email...'),
+        onSearch: applyGlobalFilter,
+        searchValue: globalFilterInput,
+        onSearchValueChange: onGlobalFilterInputChange,
+        onReset: resetGlobalFilter,
+        searchLoading: isFetching,
         filters: [
           {
             columnId: 'status',

@@ -76,11 +76,13 @@ export function BillingHistoryDialog({
     page,
     pageSize,
     keyword,
+    keywordInput,
     loading,
     completing,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
+    handleSearchInput,
     handleSearch,
     handleCompleteOrder,
   } = useBillingHistory()
@@ -117,11 +119,26 @@ export function BillingHistoryDialog({
                 <Search className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
                 <Input
                   placeholder={t('Search by order number...')}
-                  value={keyword}
-                  onChange={(e) => handleSearch(e.target.value)}
+                  value={keywordInput}
+                  onChange={(e) => handleSearchInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      handleSearch()
+                    }
+                  }}
                   className='h-9 pl-10'
                 />
               </div>
+              <Button
+                type='button'
+                size='sm'
+                onClick={handleSearch}
+                disabled={loading}
+                className='h-9'
+              >
+                {t('Search')}
+              </Button>
               <Select
                 items={[
                   { value: '10', label: t('10 / page') },

@@ -30,7 +30,6 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { useDebounce } from '@/hooks'
 import { Database } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -199,6 +198,10 @@ export function ApiKeysTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -208,7 +211,7 @@ export function ApiKeysTable() {
     search: route.useSearch(),
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: 20 },
-    globalFilter: { enabled: true, key: 'filter' },
+    globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: '_tokenSearch', searchKey: 'token', type: 'string' },
@@ -218,22 +221,20 @@ export function ApiKeysTable() {
   const tokenFilterFromUrl =
     (columnFilters.find((f) => f.id === '_tokenSearch')?.value as string) || ''
   const [tokenFilterInput, setTokenFilterInput] = useState(tokenFilterFromUrl)
-  const debouncedTokenFilter = useDebounce(tokenFilterInput, 500)
 
   useEffect(() => {
     setTokenFilterInput(tokenFilterFromUrl)
   }, [tokenFilterFromUrl])
 
-  useEffect(() => {
-    if (debouncedTokenFilter !== tokenFilterFromUrl) {
-      onColumnFiltersChange((prev) => {
-        const filtered = prev.filter((f) => f.id !== '_tokenSearch')
-        return debouncedTokenFilter
-          ? [...filtered, { id: '_tokenSearch', value: debouncedTokenFilter }]
-          : filtered
-      })
-    }
-  }, [debouncedTokenFilter, tokenFilterFromUrl, onColumnFiltersChange])
+  const handleSearch = () => {
+    const tokenFilter = tokenFilterInput.trim()
+    applyGlobalFilter?.({ token: tokenFilter || undefined })
+  }
+
+  const handleReset = () => {
+    setTokenFilterInput('')
+    resetGlobalFilter?.()
+  }
 
   const tokenFilter = tokenFilterFromUrl
   const shouldSearch = Boolean(globalFilter?.trim() || tokenFilter.trim())
@@ -331,12 +332,24 @@ export function ApiKeysTable() {
       skeletonKeyPrefix='api-keys-skeleton'
       toolbarProps={{
         searchPlaceholder: t('Filter by name...'),
+        onSearch: handleSearch,
+        searchValue: globalFilterInput,
+        onSearchValueChange: onGlobalFilterInputChange,
+        onReset: handleReset,
+        hasAdditionalFilters: Boolean(tokenFilterInput.trim()),
+        searchLoading: isFetching,
         additionalSearch: (
           <Input
             placeholder={t('Filter by API key...')}
             aria-label={t('Filter by API key...')}
             value={tokenFilterInput}
             onChange={(e) => setTokenFilterInput(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                handleSearch()
+              }
+            }}
             className='w-full sm:w-50 lg:w-60'
           />
         ),

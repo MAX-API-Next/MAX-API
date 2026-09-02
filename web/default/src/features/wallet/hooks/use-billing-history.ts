@@ -48,6 +48,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const [page, setPage] = useState(initialPage)
   const [pageSize, setPageSize] = useState(initialPageSize)
   const [keyword, setKeyword] = useState('')
+  const [keywordInput, setKeywordInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
 
@@ -132,15 +133,28 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   }, [])
 
   /**
-   * Search by keyword
+   * Update the search draft without fetching.
    */
-  const handleSearch = useCallback((newKeyword: string) => {
-    setKeyword(newKeyword)
-    setPage(1) // Reset to first page when searching
+  const handleSearchInput = useCallback((newKeyword: string) => {
+    setKeywordInput(newKeyword)
   }, [])
+
+  /**
+   * Commit the search draft and fetch the first page.
+   */
+  const handleSearch = useCallback(() => {
+    setKeyword((previousKeyword) => {
+      const nextKeyword = keywordInput.trim()
+      return previousKeyword === nextKeyword ? previousKeyword : nextKeyword
+    })
+    setKeywordInput((value) => value.trim())
+    setPage(1)
+  }, [keywordInput])
 
   // Fetch data when dependencies change
   useEffect(() => {
+    // Fetching updates loading/data state in response to dependency changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchBillingHistory()
   }, [fetchBillingHistory])
 
@@ -150,11 +164,13 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     page,
     pageSize,
     keyword,
+    keywordInput,
     loading,
     completing,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
+    handleSearchInput,
     handleSearch,
     handleCompleteOrder,
     refresh: fetchBillingHistory,
