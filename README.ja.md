@@ -165,9 +165,11 @@ AGI アプリケーションは、単一モデル、単一プロトコル、単�
 ローカル環境ではデフォルトで SQLite を使用し、必要なのは Docker だけです：
 
 ```bash
-docker pull cscitechtop/max-api:latest
+MAX_API_IMAGE=cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
 
-docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data cscitechtop/max-api:latest
+docker pull "$MAX_API_IMAGE"
+
+docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data "$MAX_API_IMAGE"
 ```
 
 <http://localhost:3000> を開き、次の操作を行います：

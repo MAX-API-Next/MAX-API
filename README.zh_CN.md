@@ -165,9 +165,11 @@ AGI 应用不会长期依赖单一模型、单一协议或一次性请求。它�
 本地体验默认使用 SQLite，只需 Docker：
 
 ```bash
-docker pull cscitechtop/max-api:latest
+MAX_API_IMAGE=cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
 
-docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data cscitechtop/max-api:latest
+docker pull "$MAX_API_IMAGE"
+
+docker run --name max-api -d --restart always -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data "$MAX_API_IMAGE"
 ```
 
 启动后访问：<http://localhost:3000>

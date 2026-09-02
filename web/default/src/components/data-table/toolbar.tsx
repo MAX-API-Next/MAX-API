@@ -159,6 +159,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
 
   const searchInput = props.searchKey ? (
     <Input
+      aria-label={placeholder}
       placeholder={placeholder}
       value={
         (props.table.getColumn(props.searchKey)?.getFilterValue() as string) ??
@@ -173,6 +174,7 @@ export function DataTableToolbar<TData>(props: DataTableToolbarProps<TData>) {
     />
   ) : (
     <Input
+      aria-label={placeholder}
       placeholder={placeholder}
       value={props.searchValue ?? props.table.getState().globalFilter ?? ''}
       onChange={(event) => {

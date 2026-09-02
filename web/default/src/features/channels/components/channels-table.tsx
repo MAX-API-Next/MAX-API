@@ -401,6 +401,7 @@ export function ChannelsTable() {
         additionalSearch: (
           <Input
             placeholder={t('Filter by model...')}
+            aria-label={t('Filter by model...')}
             value={modelFilterInput}
             onChange={(e) => handleModelFilterChange(e.target.value)}
             onKeyDown={(event) => {
