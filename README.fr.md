@@ -324,27 +324,17 @@ docker compose up -d
 
 Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilisant un `NODE_NAME` différent par nœud. `CRYPTO_SECRET` est une surcharge facultative qui reprend `SESSION_SECRET` s'il est absent ; s'il est défini explicitement, utilisez la même valeur sur chaque nœud. Utilisez `LOG_SQL_DSN` pour une base de journaux séparée et activez `ERROR_LOG_ENABLED` lorsque les statistiques de performance des erreurs sont nécessaires. Consultez la [documentation](https://docs.max-api.ai) pour toutes les variables d'environnement et les instructions de build depuis les sources.
 
-## 🤝 Origines du projet, remerciements et développements dérivés
+## 🤝 Mentions légales et développements dérivés
 
-MAX API poursuit le travail open source de [One API](https://github.com/songquanpeng/one-api) et [New API](https://github.com/QuantumNous/new-api). Nous remercions les projets amont, leurs contributeurs et toutes les personnes qui apportent adaptateurs, tests, documentation, traductions et rapports d'incident.
+Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis. Ce README ne présente ni ne recommande de projets amont ; les fichiers juridiques du dépôt définissent les limites de licence applicables.
 
-Conformément au fichier [NOTICE](./NOTICE) et à la section 7 de l'AGPLv3, toute version modifiée qui présente une interface utilisateur doit conserver tous les éléments suivants dans un emplacement À propos, juridique, de pied de page ou d'attribution clairement visible :
-
-- Un lien vers le projet MAX API d'origine : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- L'attribution exacte du NOTICE de MAX API : `Frontend design and development by MAX API contributors.`
-- Un lien vers le projet amont New API : [QuantumNous/new-api](https://github.com/QuantumNous/new-api)
-- L'attribution exacte du NOTICE de New API : `Frontend design and development by New API contributors.`
-- Une mention explicite des modifications avec une date pertinente
-
-Un remerciement à la [communauté MAX-API-Next](https://github.com/MAX-API-Next) peut être ajouté, mais il ne remplace ni les liens obligatoires vers les projets, ni les attributions exactes, ni le marquage des modifications.
-
-Le respect continu de ces exigences d'affichage et du NOTICE accorde automatiquement une licence commerciale temporaire non perpétuelle, sans demande ni approbation séparée. Cette autorisation supplémentaire couvre uniquement les éléments que les responsables du projet MAX API ont le droit de licencier et ne dispense pas des obligations de l'AGPLv3, de One API, de New API ou des autres projets amont. Les conditions les plus récentes sont celles du README officiel et des annonces de la communauté.
+Pour une version dérivée à usage personnel, le respect des exigences d'affichage et d'attribution de NOTICE peut vous rendre éligible à la licence commerciale temporaire non perpétuelle annoncée par le projet, sans demande ni approbation séparée. Cette autorisation couvre uniquement les éléments que les responsables de MAX API ont le droit de licencier et ne remplace ni ne dispense d'aucune obligation amont applicable.
 
 ## 📜 Licence
 
 Ce projet est distribué sous la [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-La licence commerciale temporaire couvre uniquement les ajouts et modifications que les responsables de MAX API ont le droit de licencier. Elle n'inclut, ne remplace et n'annule pas les obligations de licence de One API, New API ou d'autres projets amont. L'usage commercial doit également respecter la licence MIT de One API, la licence AGPLv3 de New API et les conditions de licence actuelles de chaque projet amont.
+La licence commerciale temporaire couvre uniquement les ajouts et modifications que les responsables de MAX API ont le droit de licencier. Elle ne remplace ni ne dispense d'aucune obligation de licence amont applicable.
 
 Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une licence commerciale de long terme, une coopération institutionnelle ou toute question de licence, contactez maxapi@max-api.ai.
 
