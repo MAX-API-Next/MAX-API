@@ -324,27 +324,17 @@ docker compose up -d
 
 複数ノードでは `SESSION_SECRET` を共有し、各ノードに異なる `NODE_NAME` を設定する必要があります。`CRYPTO_SECRET` は任意の上書き値で、未設定時は `SESSION_SECRET` を使用します。明示的に設定する場合は、すべてのノードで同じ値を使用してください。独立ログデータベースには `LOG_SQL_DSN` を使用し、エラー性能統計が必要な場合は `ERROR_LOG_ENABLED` を有効にしてください。すべての環境変数とソースビルド手順は[詳細ドキュメント](https://docs.max-api.ai)を参照してください。
 
-## 🤝 プロジェクトの由来、謝辞、二次開発
+## 🤝 法的事項と二次開発
 
-MAX API は、[One API](https://github.com/songquanpeng/one-api) と [New API](https://github.com/QuantumNous/new-api) のオープンソース成果を基に開発を継続しています。上流プロジェクトと貢献者、プロトコル適応、テスト、ドキュメント、翻訳、Issue 報告に参加するすべてのコミュニティメンバーに感謝します。
+二次開発版を作成または配布する場合は、[NOTICE](./NOTICE) と [LICENSE](./LICENSE) を全文確認し、そこに定められた法的表示、帰属、原プロジェクトへのリンク、変更表示を保持してください。
 
-[NOTICE](./NOTICE) および AGPLv3 第 7 条に従い、ユーザーインターフェースを持つ変更版は、About、法的表示、フッター、または帰属表示の見やすい場所に、次のすべてを保持する必要があります：
-
-- MAX API の元プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- MAX API NOTICE の正確な帰属表示：`Frontend design and development by MAX API contributors.`
-- 上流 New API プロジェクトへのリンク：[QuantumNous/new-api](https://github.com/QuantumNous/new-api)
-- New API NOTICE の正確な帰属表示：`Frontend design and development by New API contributors.`
-- 変更したことを示す明確な表示と、関連する変更日
-
-[MAX-API-Next コミュニティ](https://github.com/MAX-API-Next)への謝辞は任意で追加できますが、必須のプロジェクトリンク、正確な帰属表示、変更表示の代わりにはなりません。
-
-これらの表示要件と NOTICE の要件を継続して満たすことで、別途申請や承認を待つことなく、非永続的な一時商用ライセンスが自動的に付与されます。この追加許諾は MAX API プロジェクト側がライセンスする権利を持つ部分だけを対象とし、AGPLv3、One API、New API、その他の上流プロジェクトのライセンス義務を免除しません。最新条件は正式 README と公式コミュニティの告知に従います。
+自分用の二次開発版については、NOTICE の表示・帰属要件を満たすことで、プロジェクトが告知する適用可能な非永続的な一時商用ライセンスの対象となる場合があります。別途申請や承認を待つ必要はありません。この許諾は MAX API プロジェクト側がライセンスする権利を持つ部分のみを対象とし、適用される上流の義務を置き換えたり免除したりしません。
 
 ## 📜 ライセンス
 
 本プロジェクトは [GNU Affero General Public License v3.0（AGPLv3）](./LICENSE) の下で提供されます。
 
-一時商用ライセンスが対象とするのは、MAX API プロジェクト側がライセンスする権利を持つ追加・変更部分のみです。One API、New API、その他の上流プロジェクトのライセンス義務を含めたり、置き換えたり、免除したりするものではありません。商用利用では、One API の MIT ライセンス、New API の AGPLv3 ライセンス、および各上流プロジェクトの最新条件にも従ってください。
+一時商用ライセンスが対象とするのは、MAX API プロジェクト側がライセンスする権利を持つ追加・変更部分のみです。適用される上流プロジェクトのライセンス義務を置き換えたり免除したりするものではありません。
 
 本プロジェクトを変更し、ネットワーク経由でユーザーへ提供する場合は、AGPLv3 のソースコード提供義務を理解し、遵守してください。長期商用ライセンス、機関との協力、その他のライセンスに関する問い合わせは maxapi@max-api.ai までご連絡ください。
 

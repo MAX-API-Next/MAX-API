@@ -324,27 +324,17 @@ docker compose up -d
 
 Multi-node deployments must share `SESSION_SECRET` while using a different `NODE_NAME` for each node. `CRYPTO_SECRET` is an optional override that falls back to `SESSION_SECRET` when unset; if explicitly set, use the same value on every node. Use `LOG_SQL_DSN` for a separate log database and enable `ERROR_LOG_ENABLED` when error-performance statistics are needed. See the [documentation](https://docs.max-api.ai) for complete environment variables and source-build instructions.
 
-## 🤝 Project origins, acknowledgements, and derivative use
+## 🤝 Legal notes and derivative use
 
-MAX API continues development from the open-source work of [One API](https://github.com/songquanpeng/one-api) and [New API](https://github.com/QuantumNous/new-api). We thank the upstream projects, their contributors, and everyone who contributes protocol adapters, tests, documentation, translations, and issue reports.
+If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there.
 
-Under [NOTICE](./NOTICE) and AGPLv3 Section 7, a modified version that presents a user interface must keep all of the following in a prominent, visible About, legal, footer, or attribution location:
-
-- A link to the original MAX API project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- The exact MAX API NOTICE attribution: `Frontend design and development by MAX API contributors.`
-- A link to the upstream New API project: [QuantumNous/new-api](https://github.com/QuantumNous/new-api)
-- The exact New API NOTICE attribution: `Frontend design and development by New API contributors.`
-- A prominent statement that the version was modified, including a relevant modification date
-
-An acknowledgement of the [MAX-API-Next community](https://github.com/MAX-API-Next) is welcome as an optional addition, but it does not replace the required project links, exact attributions, or change marking.
-
-Continuing to meet these display and NOTICE requirements automatically grants a non-perpetual temporary commercial license without a separate application or approval. This additional permission covers only material that the MAX API project maintainers have the right to license and does not waive AGPLv3 or the licensing obligations of One API, New API, or other upstream projects. The latest conditions are governed by the formal README and official community notices.
+For a self-use derivative, meeting the display and attribution requirements in NOTICE may qualify you for the applicable non-perpetual temporary commercial license announced by the project, without a separate application or approval. That permission covers only material the MAX API project maintainers have the right to license and does not replace or waive any applicable upstream obligations.
 
 ## 📜 License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-The temporary commercial license covers only additions and modifications that the MAX API project maintainers have the right to license. It does not include, replace, or waive the licensing obligations of One API, New API, or other upstream projects. Commercial use must also comply with the One API MIT License, the New API AGPLv3 License, and the latest license terms of each upstream project.
+The temporary commercial license covers only additions and modifications that the MAX API project maintainers have the right to license. It does not replace or waive any applicable upstream licensing obligations.
 
 If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source-availability obligations. For a long-term commercial license, institutional cooperation, or other licensing questions, contact maxapi@max-api.ai.
 

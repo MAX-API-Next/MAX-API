@@ -326,27 +326,17 @@ docker compose up -d
 
 多节点必须统一 `SESSION_SECRET`，并为每个节点使用不同的 `NODE_NAME`。`CRYPTO_SECRET` 为可选覆盖项，未设置时使用 `SESSION_SECRET`；如显式设置，则所有节点必须使用相同值。独立日志库使用 `LOG_SQL_DSN`；错误性能统计需要按需启用 `ERROR_LOG_ENABLED`。完整环境变量和源码构建说明见 [详细文档](https://docs.max-api.ai)。
 
-## 🤝 项目来源、致谢与二次开发
+## 🤝 法律说明与二次开发
 
-MAX API 基于 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 的开源成果持续开发。感谢上游项目、贡献者，以及所有参与协议适配、测试、文档、翻译与问题反馈的社区成员。
+如果你基于本项目进行二次开发或分发，请先完整阅读 [NOTICE](./NOTICE) 和 [LICENSE](./LICENSE)，并按其中要求保留法律声明、归属信息、原项目链接和修改标记。
 
-根据 [NOTICE](./NOTICE) 和 AGPLv3 第 7 节，包含用户界面的修改版本必须在显著可见的“关于”、法律声明、页脚或署名位置同时保留：
-
-- MAX API 原项目链接：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- MAX API NOTICE 中的原文署名：`Frontend design and development by MAX API contributors.`
-- New API 上游项目链接：[QuantumNous/new-api](https://github.com/QuantumNous/new-api)
-- New API NOTICE 中的原文署名：`Frontend design and development by New API contributors.`
-- 明确的修改声明及相关修改日期
-
-可以额外鸣谢 [MAX-API-Next 社区](https://github.com/MAX-API-Next)，但社区鸣谢不能替代上述必需的项目链接、原文署名和变更标记。
-
-持续满足上述展示与 NOTICE 要求，即自动获得本项目的非永久临时商用授权，无需另行申请或等待确认；该授权仅覆盖 MAX API 项目方有权授权的部分，不免除 AGPLv3 或 One API、New API 等上游项目的许可义务。最新条件以正式 README 与社区公告为准。
+如果你基于本项目进行二次开发并仅供自用，满足 NOTICE 中的展示与归属要求后，可按项目方最新公告获得适用的非永久临时商用授权，无需另行申请或等待确认。该授权仅覆盖 MAX API 项目方有权授权的部分，不替代或免除任何适用的上游许可义务。
 
 ## 📜 许可证
 
 本项目采用 [GNU Affero 通用公共许可证 v3.0（AGPLv3）](./LICENSE) 授权。
 
-临时商用授权仅覆盖 MAX API 项目方有权授权的新增与修改部分，不包含、替代或免除 One API、New API 等上游项目的许可义务。商业使用时，请同时遵守 One API 的 MIT 许可证、New API 的 AGPLv3 许可证及各上游项目的最新许可要求。
+临时商用授权仅覆盖 MAX API 项目方有权授权的新增与修改部分，不替代或免除任何适用的上游许可义务。
 
 如果你修改并通过网络向用户提供本项目服务，请理解并遵守 AGPLv3 对应的源码提供等义务。长期商用授权、机构合作或其他授权问题，请联系：maxapi@max-api.ai。
 
