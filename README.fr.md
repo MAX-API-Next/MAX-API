@@ -328,15 +328,11 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
 
-Pour une version dérivée à usage personnel, le respect des exigences d'affichage et d'attribution de NOTICE peut vous rendre éligible à la licence commerciale temporaire non perpétuelle annoncée par le projet, sans demande ni approbation séparée. Cette autorisation couvre uniquement les éléments que les responsables de MAX API ont le droit de licencier et ne remplace ni ne dispense d'aucune obligation amont applicable.
-
 ## 📜 Licence
 
 Ce projet est distribué sous la [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-La licence commerciale temporaire couvre uniquement les ajouts et modifications que les responsables de MAX API ont le droit de licencier. Elle ne remplace ni ne dispense d'aucune obligation de licence amont applicable.
-
-Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une licence commerciale de long terme, une coopération institutionnelle ou toute question de licence, contactez maxapi@max-api.ai.
+Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une coopération institutionnelle ou toute question de licence, contactez maxapi@max-api.ai.
 
 ---
 
