@@ -326,7 +326,7 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 ## 🤝 Legal notes and derivative use
 
-If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there. This README does not introduce or recommend upstream projects; the repository legal files define the applicable licensing boundaries.
+If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there.
 
 For a self-use derivative, meeting the display and attribution requirements in NOTICE may qualify you for the applicable non-perpetual temporary commercial license announced by the project, without a separate application or approval. That permission covers only material the MAX API project maintainers have the right to license and does not replace or waive any applicable upstream obligations.
 

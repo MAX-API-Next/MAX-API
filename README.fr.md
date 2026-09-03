@@ -326,7 +326,7 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 ## 🤝 Mentions légales et développements dérivés
 
-Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis. Ce README ne présente ni ne recommande de projets amont ; les fichiers juridiques du dépôt définissent les limites de licence applicables.
+Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
 
 Pour une version dérivée à usage personnel, le respect des exigences d'affichage et d'attribution de NOTICE peut vous rendre éligible à la licence commerciale temporaire non perpétuelle annoncée par le projet, sans demande ni approbation séparée. Cette autorisation couvre uniquement les éléments que les responsables de MAX API ont le droit de licencier et ne remplace ni ne dispense d'aucune obligation amont applicable.
 
