@@ -332,8 +332,10 @@ MAX API 基于 [One API](https://github.com/songquanpeng/one-api) 和 [New API](
 
 根据 [NOTICE](./NOTICE) 和 AGPLv3 第 7 节，包含用户界面的修改版本必须在显著可见的“关于”、法律声明、页脚或署名位置同时保留：
 
-- 原项目链接：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- NOTICE 中的原文署名：`Frontend design and development by MAX API contributors.`
+- MAX API 原项目链接：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- MAX API NOTICE 中的原文署名：`Frontend design and development by MAX API contributors.`
+- New API 上游项目链接：[QuantumNous/new-api](https://github.com/QuantumNous/new-api)
+- New API NOTICE 中的原文署名：`Frontend design and development by New API contributors.`
 - 明确的修改声明及相关修改日期
 
 可以额外鸣谢 [MAX-API-Next 社区](https://github.com/MAX-API-Next)，但社区鸣谢不能替代上述必需的项目链接、原文署名和变更标记。

@@ -328,13 +328,15 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 MAX API poursuit le travail open source de [One API](https://github.com/songquanpeng/one-api) et [New API](https://github.com/QuantumNous/new-api). Nous remercions les projets amont, leurs contributeurs et toutes les personnes qui apportent adaptateurs, tests, documentation, traductions et rapports d'incident.
 
-Conformément au fichier [NOTICE](./NOTICE) et à la section 7 de l'AGPLv3, toute version modifiée qui présente une interface utilisateur doit conserver les trois éléments suivants dans un emplacement À propos, juridique, de pied de page ou d'attribution clairement visible :
+Conformément au fichier [NOTICE](./NOTICE) et à la section 7 de l'AGPLv3, toute version modifiée qui présente une interface utilisateur doit conserver tous les éléments suivants dans un emplacement À propos, juridique, de pied de page ou d'attribution clairement visible :
 
-- Un lien vers le projet d'origine : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- L'attribution exacte du NOTICE : `Frontend design and development by MAX API contributors.`
+- Un lien vers le projet MAX API d'origine : [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- L'attribution exacte du NOTICE de MAX API : `Frontend design and development by MAX API contributors.`
+- Un lien vers le projet amont New API : [QuantumNous/new-api](https://github.com/QuantumNous/new-api)
+- L'attribution exacte du NOTICE de New API : `Frontend design and development by New API contributors.`
 - Une mention explicite des modifications avec une date pertinente
 
-Un remerciement à la [communauté MAX-API-Next](https://github.com/MAX-API-Next) peut être ajouté, mais il ne remplace ni le lien obligatoire vers le projet, ni l'attribution exacte, ni le marquage des modifications.
+Un remerciement à la [communauté MAX-API-Next](https://github.com/MAX-API-Next) peut être ajouté, mais il ne remplace ni les liens obligatoires vers les projets, ni les attributions exactes, ni le marquage des modifications.
 
 Le respect continu de ces exigences d'affichage et du NOTICE accorde automatiquement une licence commerciale temporaire non perpétuelle, sans demande ni approbation séparée. Cette autorisation supplémentaire couvre uniquement les éléments que les responsables du projet MAX API ont le droit de licencier et ne dispense pas des obligations de l'AGPLv3, de One API, de New API ou des autres projets amont. Les conditions les plus récentes sont celles du README officiel et des annonces de la communauté.
 

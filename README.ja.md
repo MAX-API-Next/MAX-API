@@ -330,8 +330,10 @@ MAX API は、[One API](https://github.com/songquanpeng/one-api) と [New API](h
 
 [NOTICE](./NOTICE) および AGPLv3 第 7 条に従い、ユーザーインターフェースを持つ変更版は、About、法的表示、フッター、または帰属表示の見やすい場所に、次のすべてを保持する必要があります：
 
-- 元プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- NOTICE の正確な帰属表示：`Frontend design and development by MAX API contributors.`
+- MAX API の元プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- MAX API NOTICE の正確な帰属表示：`Frontend design and development by MAX API contributors.`
+- 上流 New API プロジェクトへのリンク：[QuantumNous/new-api](https://github.com/QuantumNous/new-api)
+- New API NOTICE の正確な帰属表示：`Frontend design and development by New API contributors.`
 - 変更したことを示す明確な表示と、関連する変更日
 
 [MAX-API-Next コミュニティ](https://github.com/MAX-API-Next)への謝辞は任意で追加できますが、必須のプロジェクトリンク、正確な帰属表示、変更表示の代わりにはなりません。

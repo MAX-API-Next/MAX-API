@@ -330,11 +330,13 @@ MAX API continues development from the open-source work of [One API](https://git
 
 Under [NOTICE](./NOTICE) and AGPLv3 Section 7, a modified version that presents a user interface must keep all of the following in a prominent, visible About, legal, footer, or attribution location:
 
-- A link to the original project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- The exact NOTICE attribution: `Frontend design and development by MAX API contributors.`
+- A link to the original MAX API project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- The exact MAX API NOTICE attribution: `Frontend design and development by MAX API contributors.`
+- A link to the upstream New API project: [QuantumNous/new-api](https://github.com/QuantumNous/new-api)
+- The exact New API NOTICE attribution: `Frontend design and development by New API contributors.`
 - A prominent statement that the version was modified, including a relevant modification date
 
-An acknowledgement of the [MAX-API-Next community](https://github.com/MAX-API-Next) is welcome as an optional addition, but it does not replace the required project link, exact attribution, or change marking.
+An acknowledgement of the [MAX-API-Next community](https://github.com/MAX-API-Next) is welcome as an optional addition, but it does not replace the required project links, exact attributions, or change marking.
 
 Continuing to meet these display and NOTICE requirements automatically grants a non-perpetual temporary commercial license without a separate application or approval. This additional permission covers only material that the MAX API project maintainers have the right to license and does not waive AGPLv3 or the licensing obligations of One API, New API, or other upstream projects. The latest conditions are governed by the formal README and official community notices.
 
