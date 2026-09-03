@@ -301,7 +301,11 @@ MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 
-test "$(git rev-parse HEAD)" = "$MAX_API_COMMIT"
+actual_commit="$(git rev-parse HEAD)"
+if [ "$actual_commit" != "$MAX_API_COMMIT" ]; then
+  echo "Unexpected commit: $actual_commit" >&2
+  exit 1
+fi
 
 # Modifier les mots de passe de base de données et Redis, puis configurer les secrets dans docker-compose.yml
 docker compose up -d

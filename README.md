@@ -303,7 +303,11 @@ MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 
-test "$(git rev-parse HEAD)" = "$MAX_API_COMMIT"
+actual_commit="$(git rev-parse HEAD)"
+if [ "$actual_commit" != "$MAX_API_COMMIT" ]; then
+  echo "Unexpected commit: $actual_commit" >&2
+  exit 1
+fi
 
 # 修改 docker-compose.yml 中的数据库、Redis 密码和密钥
 docker compose up -d
