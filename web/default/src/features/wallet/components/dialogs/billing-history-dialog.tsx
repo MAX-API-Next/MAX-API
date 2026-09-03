@@ -119,6 +119,7 @@ export function BillingHistoryDialog({
                 <Search className='text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
                 <Input
                   placeholder={t('Search by order number...')}
+                  aria-label={t('Search by order number...')}
                   value={keywordInput}
                   onChange={(e) => handleSearchInput(e.target.value)}
                   onKeyDown={(e) => {

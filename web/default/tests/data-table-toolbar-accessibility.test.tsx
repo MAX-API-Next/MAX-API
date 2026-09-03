@@ -17,37 +17,36 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import assert from 'node:assert/strict'
-import { afterAll, beforeAll, describe, test } from 'bun:test'
+import { afterAll, afterEach, describe, test } from 'bun:test'
+import { I18nextProvider } from 'react-i18next'
 import { DataTableToolbar } from '../src/components/data-table/toolbar'
 import { createReactTestEnvironment } from '../src/test/react'
 
 const testEnv = createReactTestEnvironment()
+await testEnv.setup()
+const { cleanup, render, screen } = await import('@testing-library/react')
 
-beforeAll(async () => {
-  await testEnv.setup()
-})
+afterEach(() => cleanup())
 
 afterAll(() => testEnv.teardown())
 
 describe('DataTableToolbar accessibility', () => {
-  test('gives the submit-mode search input an accessible name', async () => {
-    const view = await testEnv.render(
-      <DataTableToolbar
-        table={{
-          getState: () => ({ columnFilters: [], globalFilter: '' }),
-        } as never}
-        onSearch={() => undefined}
-        searchPlaceholder='Search accounts'
-        searchValue=''
-        onSearchValueChange={() => undefined}
-        hideViewOptions
-      />
+  test('gives the submit-mode search input an accessible name', () => {
+    render(
+      <I18nextProvider i18n={testEnv.i18n}>
+        <DataTableToolbar
+          table={{
+            getState: () => ({ columnFilters: [], globalFilter: '' }),
+          } as never}
+          onSearch={() => undefined}
+          searchPlaceholder='Search accounts'
+          searchValue=''
+          onSearchValueChange={() => undefined}
+          hideViewOptions
+        />
+      </I18nextProvider>
     )
 
-    const input = view.container.querySelector('input')
-    assert.ok(input)
-    assert.equal(input.getAttribute('aria-label'), 'Search accounts')
-
-    await view.unmount()
+    assert.ok(screen.getByRole('textbox', { name: 'Search accounts' }))
   })
 })

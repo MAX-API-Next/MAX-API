@@ -47,7 +47,7 @@
   <a href="#-technical-direction-for-agi">AGI direction</a> •
   <a href="#-current-capabilities">Capabilities</a> •
   <a href="#-intelligent-operations-center">SmartOps</a> •
-  <a href="#-production-deployment">Deployment</a>
+  <a href="#-preview-deployment">Preview deployment</a>
 </p>
 
 </div>
@@ -328,12 +328,15 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 MAX API continues development from the open-source work of [One API](https://github.com/songquanpeng/one-api) and [New API](https://github.com/QuantumNous/new-api). We thank the upstream projects, their contributors, and everyone who contributes protocol adapters, tests, documentation, translations, and issue reports.
 
-If you build a derivative version of this project for your own use, you are welcome to keep either the project source or a community acknowledgement clearly visible on the homepage, in the footer, or on the About page:
+Under [NOTICE](./NOTICE) and AGPLv3 Section 7, a modified version that presents a user interface must keep all of the following in a prominent, visible About, legal, footer, or attribution location:
 
-- Link to the project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- Acknowledge the community: [MAX-API-Next](https://github.com/MAX-API-Next)
+- A link to the original project: [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- The exact NOTICE attribution: `Frontend design and development by MAX API contributors.`
+- A prominent statement that the version was modified, including a relevant modification date
 
-By meeting either display requirement above and keeping the link clearly visible, you automatically receive a non-perpetual temporary commercial license for this project, with no separate application or approval required. The license remains valid only while the display requirement continues to be met; the latest conditions are governed by the formal README and official community notices.
+An acknowledgement of the [MAX-API-Next community](https://github.com/MAX-API-Next) is welcome as an optional addition, but it does not replace the required project link, exact attribution, or change marking.
+
+Continuing to meet these display and NOTICE requirements automatically grants a non-perpetual temporary commercial license without a separate application or approval. This additional permission covers only material that the MAX API project maintainers have the right to license and does not waive AGPLv3 or the licensing obligations of One API, New API, or other upstream projects. The latest conditions are governed by the formal README and official community notices.
 
 ## 📜 License
 

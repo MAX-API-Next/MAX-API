@@ -47,7 +47,7 @@
   <a href="#-agi-に向けた技術方針">AGI 技術方針</a> •
   <a href="#-現在の機能">現在の機能</a> •
   <a href="#-インテリジェント運用センター">SmartOps</a> •
-  <a href="#-本番デプロイ">本番デプロイ</a>
+  <a href="#-preview-デプロイ">Preview デプロイ</a>
 </p>
 
 </div>
@@ -328,12 +328,15 @@ docker compose up -d
 
 MAX API は、[One API](https://github.com/songquanpeng/one-api) と [New API](https://github.com/QuantumNous/new-api) のオープンソース成果を基に開発を継続しています。上流プロジェクトと貢献者、プロトコル適応、テスト、ドキュメント、翻訳、Issue 報告に参加するすべてのコミュニティメンバーに感謝します。
 
-本プロジェクトを基に自分用の二次開発を行う場合は、ホームページ、フッター、「About」ページなどの見やすい場所に、次のいずれかの形でプロジェクトの出典またはコミュニティへの謝辞を表示してください：
+[NOTICE](./NOTICE) および AGPLv3 第 7 条に従い、ユーザーインターフェースを持つ変更版は、About、法的表示、フッター、または帰属表示の見やすい場所に、次のすべてを保持する必要があります：
 
-- プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- コミュニティへの謝辞：[MAX-API-Next](https://github.com/MAX-API-Next)
+- 元プロジェクトへのリンク：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- NOTICE の正確な帰属表示：`Frontend design and development by MAX API contributors.`
+- 変更したことを示す明確な表示と、関連する変更日
 
-上記いずれかの表示要件を満たし、リンクを明確に表示し続けることで、別途申請や承認を待つことなく、本プロジェクトの非永続的な一時商用ライセンスが自動的に付与されます。ライセンスは表示要件を満たしている期間のみ有効であり、最新条件は正式 README と公式コミュニティの告知に従います。
+[MAX-API-Next コミュニティ](https://github.com/MAX-API-Next)への謝辞は任意で追加できますが、必須のプロジェクトリンク、正確な帰属表示、変更表示の代わりにはなりません。
+
+これらの表示要件と NOTICE の要件を継続して満たすことで、別途申請や承認を待つことなく、非永続的な一時商用ライセンスが自動的に付与されます。この追加許諾は MAX API プロジェクト側がライセンスする権利を持つ部分だけを対象とし、AGPLv3、One API、New API、その他の上流プロジェクトのライセンス義務を免除しません。最新条件は正式 README と公式コミュニティの告知に従います。
 
 ## 📜 ライセンス
 

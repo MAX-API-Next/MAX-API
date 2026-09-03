@@ -46,7 +46,7 @@
      - `SESSION_SECRET`：会话密钥（**必填**，多机部署时必须一致）
      - `CRYPTO_SECRET`：可选的加密密钥覆盖项；未设置时回退使用 `SESSION_SECRET`，如单独设置则多机/Redis 节点必须一致
 5. 点击 **确认** 开始安装
-6. 等待安装完成后，访问 `http://您的服务器IP:3000` 即可使用
+6. 等待安装完成后，为站点配置 HTTPS 反向代理，再通过 `https://您的域名` 登录；`http://127.0.0.1:3000` 仅用于服务器本机检查，不应直接暴露到公网
 
 ### 方法二：使用 Docker Compose
 
@@ -57,7 +57,7 @@
 version: '3'
 services:
   max-api:
-    image: cscitechtop/max-api:latest
+    image: cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
     container_name: max-api
     restart: always
     ports:
@@ -125,8 +125,8 @@ volumes:
 ### Q4：如何更新版本？
 
 ```bash
-# 拉取最新镜像
-docker pull cscitechtop/max-api:latest
+# 拉取经过校验的固定镜像
+docker pull cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
 
 # 重启容器
 docker-compose down && docker-compose up -d

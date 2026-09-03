@@ -47,7 +47,7 @@
   <a href="#-面向-agi-的技術方向">AGI 技術方向</a> •
   <a href="#-目前能力">目前能力</a> •
   <a href="#-智慧運維中心">智慧運維</a> •
-  <a href="#-生產部署">生產部署</a>
+  <a href="#-preview-部署">Preview 部署</a>
 </p>
 
 </div>
@@ -330,12 +330,15 @@ docker compose up -d
 
 MAX API 基於 [One API](https://github.com/songquanpeng/one-api) 和 [New API](https://github.com/QuantumNous/new-api) 的開源成果持續開發。感謝上游專案、貢獻者，以及所有參與協定適配、測試、文件、翻譯與問題回報的社群成員。
 
-如果你基於本專案進行二次開發且僅供自用，歡迎在專案首頁、頁尾或「關於」頁面等明顯位置，選擇一種方式保留專案來源或社群鳴謝：
+根據 [NOTICE](./NOTICE) 與 AGPLv3 第 7 節，包含使用者介面的修改版本必須在清楚可見的「關於」、法律聲明、頁尾或署名位置同時保留：
 
-- 加入專案連結：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
-- 鳴謝社群：[MAX-API-Next](https://github.com/MAX-API-Next)
+- 原專案連結：[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API)
+- NOTICE 中的原文署名：`Frontend design and development by MAX API contributors.`
+- 明確的修改聲明及相關修改日期
 
-滿足上述任一展示要求並保持連結清晰可見，即自動取得本專案的非永久臨時商用授權，無需另外申請或等待確認；該授權僅在持續滿足展示要求期間有效，最新條件以正式 README 與官方社群公告為準。
+可以額外鳴謝 [MAX-API-Next 社群](https://github.com/MAX-API-Next)，但社群鳴謝不能取代上述必要的專案連結、原文署名和變更標記。
+
+持續滿足上述展示與 NOTICE 要求，即自動取得本專案的非永久臨時商用授權，無需另外申請或等待確認；該授權僅涵蓋 MAX API 專案方有權授權的部分，不免除 AGPLv3 或 One API、New API 等上游專案的許可義務。最新條件以正式 README 與官方社群公告為準。
 
 ## 📜 許可證
 
