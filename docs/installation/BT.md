@@ -41,12 +41,12 @@
 3. 点击 **安装**
 4. 配置以下基本选项：
    - **容器名称**：可自定义，默认为 `max-api`
-   - **端口映射**：默认为 `3000:3000`
+   - **端口映射**：设置为 `127.0.0.1:3000:3000`，仅允许服务器本机和反向代理访问
    - **环境变量**：
      - `SESSION_SECRET`：会话密钥（**必填**，多机部署时必须一致）
-     - `CRYPTO_SECRET`：加密密钥（使用 Redis 时必填）
+     - `CRYPTO_SECRET`：可选的加密密钥覆盖项；未设置时回退使用 `SESSION_SECRET`，如单独设置则多机/Redis 节点必须一致
 5. 点击 **确认** 开始安装
-6. 等待安装完成后，访问 `http://您的服务器IP:3000` 即可使用
+6. 等待安装完成后，为站点配置 HTTPS 反向代理，再通过 `https://您的域名` 登录；`http://127.0.0.1:3000` 仅用于服务器本机检查，不应直接暴露到公网
 
 ### 方法二：使用 Docker Compose
 
@@ -57,11 +57,11 @@
 version: '3'
 services:
   max-api:
-    image: cscitechtop/max-api:latest
+    image: cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
     container_name: max-api
     restart: always
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/data
     environment:
@@ -85,7 +85,7 @@ docker-compose up -d
 | 变量名                 | 说明                 | 是否必填   |
 | ------------------- | ------------------ | ------ |
 | `SESSION_SECRET`    | 会话密钥，多机部署必须一致      | **必填** |
-| `CRYPTO_SECRET`     | 加密密钥，使用 Redis 时必填  | 条件必填   |
+| `CRYPTO_SECRET`     | 可选的加密密钥覆盖项；未设置时回退使用 `SESSION_SECRET`，显式设置时多机/Redis 节点需一致 | 可选 |
 | `SQL_DSN`           | 数据库连接字符串（使用外部数据库时） | 可选     |
 | `REDIS_CONN_STRING` | Redis 连接字符串        | 可选     |
 
@@ -103,11 +103,11 @@ head -c 16 /dev/urandom | xxd -p
 
 ## 常见问题
 
-### Q1：无法访问 3000 端口？
+### Q1：无法通过 HTTPS 域名访问？
 
-1. 检查服务器防火墙是否开放 3000 端口
-2. 在宝塔面板 **安全** 中放行 3000 端口
-3. 检查云服务器安全组是否开放端口
+1. 在服务器本机执行 `curl http://127.0.0.1:3000`，确认 MAX API 容器正常响应
+2. 检查宝塔站点的 HTTPS 反向代理目标是否为 `http://127.0.0.1:3000`
+3. 检查域名解析、TLS 证书和 443 端口；不要在防火墙或云安全组中向公网开放 3000 端口
 
 ### Q2：登录后提示会话失效？
 
@@ -125,8 +125,8 @@ volumes:
 ### Q4：如何更新版本？
 
 ```bash
-# 拉取最新镜像
-docker pull cscitechtop/max-api:latest
+# 拉取经过校验的固定镜像
+docker pull cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
 
 # 重启容器
 docker-compose down && docker-compose up -d
@@ -148,4 +148,3 @@ docker-compose down && docker-compose up -d
 ![宝塔面板 Docker 安装](https://github.com/user-attachments/assets/7a6fc03e-c457-45e4-b8f9-184508fc26b0)
 
 > ⚠️ 注意：密钥为环境变量 `SESSION_SECRET`，请务必设置！
-

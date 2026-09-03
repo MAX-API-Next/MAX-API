@@ -16,13 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import {
-  useState,
-  useMemo,
-  useEffect,
-  useRef,
-  type CompositionEvent,
-} from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
@@ -35,7 +29,7 @@ import {
   type ExpandedState,
   type Row,
 } from '@tanstack/react-table'
-import { useDebounce, useMediaQuery } from '@/hooks'
+import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
@@ -98,6 +92,10 @@ export function ChannelsTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -110,7 +108,7 @@ export function ChannelsTable() {
       defaultPage: 1,
       defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
     },
-    globalFilter: { enabled: true, key: 'filter' },
+    globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'type', searchKey: 'type', type: 'array' },
@@ -122,59 +120,36 @@ export function ChannelsTable() {
   // Extract filters from column filters
   const statusFilter =
     (columnFilters.find((f) => f.id === 'status')?.value as string[]) || []
-  const typeFilter =
-    (columnFilters.find((f) => f.id === 'type')?.value as string[]) || []
+  const typeFilter = useMemo(
+    () => (columnFilters.find((f) => f.id === 'type')?.value as string[]) || [],
+    [columnFilters]
+  )
   const groupFilter =
     (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
   const modelFilterFromUrl =
     (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
 
-  // Local state for immediate input feedback
+  // Keep the model filter local until the toolbar Search action is submitted.
   const [modelFilterInput, setModelFilterInput] = useState(modelFilterFromUrl)
-  const [pendingModelFilter, setPendingModelFilter] =
-    useState(modelFilterFromUrl)
-  const isModelFilterComposingRef = useRef(false)
-  const debouncedModelFilter = useDebounce(pendingModelFilter, 500)
 
   // Sync local input with URL when URL changes (e.g., from back/forward navigation)
   useEffect(() => {
-    if (!isModelFilterComposingRef.current) {
-      setModelFilterInput(modelFilterFromUrl)
-    }
-    setPendingModelFilter(modelFilterFromUrl)
+    setModelFilterInput(modelFilterFromUrl)
   }, [modelFilterFromUrl])
 
-  const handleModelFilterChange = (value: string) => {
+  const handleModelFilterChange = (value: string): void => {
     setModelFilterInput(value)
-    if (!isModelFilterComposingRef.current) {
-      setPendingModelFilter(value)
-    }
   }
 
-  const handleModelFilterCompositionStart = () => {
-    isModelFilterComposingRef.current = true
+  const handleSearch = (): void => {
+    const modelFilter = modelFilterInput.trim()
+    applyGlobalFilter?.({ model: modelFilter || undefined })
   }
 
-  const handleModelFilterCompositionEnd = (
-    event: CompositionEvent<HTMLInputElement>
-  ) => {
-    isModelFilterComposingRef.current = false
-    const value = event.currentTarget.value
-    setModelFilterInput(value)
-    setPendingModelFilter(value)
+  const handleReset = (): void => {
+    setModelFilterInput('')
+    resetGlobalFilter?.({ model: undefined })
   }
-
-  // Update URL when debounced value changes
-  useEffect(() => {
-    if (debouncedModelFilter !== modelFilterFromUrl) {
-      onColumnFiltersChange((prev) => {
-        const filtered = prev.filter((f) => f.id !== 'model')
-        return debouncedModelFilter
-          ? [...filtered, { id: 'model', value: debouncedModelFilter }]
-          : filtered
-      })
-    }
-  }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
 
   const modelFilter = modelFilterFromUrl
 
@@ -417,13 +392,24 @@ export function ChannelsTable() {
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by name, ID, or key...'),
+        onSearch: handleSearch,
+        searchValue: globalFilterInput,
+        onSearchValueChange: onGlobalFilterInputChange,
+        onReset: handleReset,
+        hasAdditionalFilters: Boolean(modelFilterInput.trim()),
+        searchLoading: isFetching,
         additionalSearch: (
           <Input
             placeholder={t('Filter by model...')}
+            aria-label={t('Filter by model...')}
             value={modelFilterInput}
             onChange={(e) => handleModelFilterChange(e.target.value)}
-            onCompositionStart={handleModelFilterCompositionStart}
-            onCompositionEnd={handleModelFilterCompositionEnd}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                handleSearch()
+              }
+            }}
             className='w-full sm:w-[150px] lg:w-[180px]'
           />
         ),

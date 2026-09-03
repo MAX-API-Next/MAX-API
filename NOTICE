@@ -24,6 +24,31 @@ https://github.com/MAX-API-Next/MAX-API
 Modified versions must not misrepresent the origin of the software and must
 mark their changes in accordance with AGPLv3 Section 7(c).
 
+==== Preserved New API Upstream Notice ====
+
+new-api
+Copyright (c) QuantumNous and contributors.
+
+This project includes software derived from New API, which is licensed under
+the GNU Affero General Public License v3.0. The following additional terms from
+the New API NOTICE are preserved:
+
+Pursuant to Section 7(b) of the GNU Affero General Public License version 3,
+the following reasonable legal notice and author attribution must be preserved
+by modified versions in the Appropriate Legal Notices and in any prominent
+about, legal, footer, or attribution location presented by the user interface:
+
+"Frontend design and development by New API contributors."
+
+Modified versions that present a user interface must also preserve a visible
+link to the original project in a prominent about, legal, footer, or
+attribution location:
+
+https://github.com/QuantumNous/new-api
+
+Modified versions must not misrepresent the origin of the software and must
+mark their changes in accordance with AGPLv3 Section 7(c).
+
 ==== Third-Party Notices ====
 
 This product includes third-party open source software. Copyright notices and

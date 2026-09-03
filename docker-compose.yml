@@ -16,12 +16,12 @@ version: '3.4' # For compatibility with older Docker versions
 
 services:
   max-api:
-    image: cscitechtop/max-api:latest
+    image: cscitechtop/max-api:latest@sha256:006d5d86887a261baab4d71ec3797d429e3771a4836e5899734aee0e7f66f2ab
     container_name: max-api
     restart: always
     command: --log-dir /app/logs
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./data:/data
       - ./logs:/app/logs

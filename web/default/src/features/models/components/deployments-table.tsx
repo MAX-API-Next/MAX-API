@@ -61,6 +61,10 @@ export function DeploymentsTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -75,7 +79,7 @@ export function DeploymentsTable() {
       defaultPage: 1,
       defaultPageSize: isMobile ? 8 : 10,
     },
-    globalFilter: { enabled: true, key: 'dFilter' },
+    globalFilter: { enabled: true, key: 'dFilter', mode: 'submit' },
     columnFilters: [
       { columnId: 'status', searchKey: 'dStatus', type: 'array' },
     ],
@@ -243,6 +247,11 @@ export function DeploymentsTable() {
         applyHeaderSize
         toolbarProps={{
           searchPlaceholder: t('Search deployments...'),
+          onSearch: applyGlobalFilter,
+          searchValue: globalFilterInput,
+          onSearchValueChange: onGlobalFilterInputChange,
+          onReset: resetGlobalFilter,
+          searchLoading: isFetching,
           filters: [
             {
               columnId: 'status',

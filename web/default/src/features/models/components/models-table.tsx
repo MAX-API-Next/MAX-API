@@ -60,6 +60,10 @@ export function ModelsTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -72,7 +76,7 @@ export function ModelsTable() {
       defaultPage: 1,
       defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
     },
-    globalFilter: { enabled: true, key: 'filter' },
+    globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'vendor_id', searchKey: 'vendor', type: 'array' },
@@ -233,6 +237,11 @@ export function ModelsTable() {
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by model name...'),
+        onSearch: applyGlobalFilter,
+        searchValue: globalFilterInput,
+        onSearchValueChange: onGlobalFilterInputChange,
+        onReset: resetGlobalFilter,
+        searchLoading: isFetching,
         filters: [
           {
             columnId: 'status',

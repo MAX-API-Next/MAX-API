@@ -72,6 +72,10 @@ export function RedemptionsTable() {
   const {
     globalFilter,
     onGlobalFilterChange,
+    globalFilterInput,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
@@ -81,7 +85,7 @@ export function RedemptionsTable() {
     search: route.useSearch(),
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
-    globalFilter: { enabled: true, key: 'filter' },
+    globalFilter: { enabled: true, key: 'filter', mode: 'submit' },
     columnFilters: [{ columnId: 'status', searchKey: 'status', type: 'array' }],
   })
   const statusFilter =
@@ -199,6 +203,11 @@ export function RedemptionsTable() {
       skeletonKeyPrefix='redemptions-skeleton'
       toolbarProps={{
         searchPlaceholder: t('Filter by name or ID...'),
+        onSearch: applyGlobalFilter,
+        searchValue: globalFilterInput,
+        onSearchValueChange: onGlobalFilterInputChange,
+        onReset: resetGlobalFilter,
+        searchLoading: isFetching,
         filters: [
           {
             columnId: 'status',

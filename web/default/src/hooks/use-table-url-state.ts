@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   ColumnFiltersState,
   OnChangeFn,
@@ -24,6 +24,32 @@ import type {
 } from '@tanstack/react-table'
 
 type SearchRecord = Record<string, unknown>
+
+function areFilterValuesEqual(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false
+    return (
+      left.length === right.length &&
+      left.every((value, index) => areFilterValuesEqual(value, right[index]))
+    )
+  }
+
+  return Object.is(left, right)
+}
+
+function areColumnFiltersEqual(
+  left: ColumnFiltersState,
+  right: ColumnFiltersState
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (filter, index) =>
+        filter.id === right[index]?.id &&
+        areFilterValuesEqual(filter.value, right[index]?.value)
+    )
+  )
+}
 
 export type NavigateFn = (opts: {
   search:
@@ -46,6 +72,7 @@ type UseTableUrlStateParams = {
     enabled?: boolean
     key?: string
     trim?: boolean
+    mode?: 'instant' | 'submit'
   }
   columnFilters?: Array<
     | {
@@ -70,6 +97,11 @@ type UseTableUrlStateReturn = {
   // Global filter
   globalFilter?: string
   onGlobalFilterChange?: OnChangeFn<string>
+  globalFilterInput?: string
+  onGlobalFilterInputChange?: OnChangeFn<string>
+  /** Commit the draft filter and optionally update related search fields. */
+  applyGlobalFilter?: (additionalSearch?: SearchRecord) => void
+  resetGlobalFilter?: (additionalSearch?: SearchRecord) => void
   // Column filters
   columnFilters: ColumnFiltersState
   onColumnFiltersChange: OnChangeFn<ColumnFiltersState>
@@ -102,6 +134,7 @@ export function useTableUrlState(
   const globalFilterKey = globalFilterCfg?.key ?? ('filter' as string)
   const globalFilterEnabled = globalFilterCfg?.enabled ?? true
   const trimGlobal = globalFilterCfg?.trim ?? true
+  const globalFilterMode = globalFilterCfg?.mode ?? 'instant'
 
   // Build initial column filters from the current search params
   const initialColumnFilters: ColumnFiltersState = useMemo(() => {
@@ -130,7 +163,13 @@ export function useTableUrlState(
 
   // URL 为单一数据源：仅当 search（URL）变化时同步，避免依赖 initialColumnFilters 造成死循环（config 常为内联引用）
   useEffect(() => {
-    setColumnFilters(initialColumnFilters)
+    // This effect mirrors external URL navigation into the table's controlled state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setColumnFilters((previous) =>
+      areColumnFiltersEqual(previous, initialColumnFilters)
+        ? previous
+        : initialColumnFilters
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
@@ -156,11 +195,45 @@ export function useTableUrlState(
     })
   }
 
-  const [globalFilter, setGlobalFilter] = useState<string | undefined>(() => {
+  const urlGlobalFilter = useMemo(() => {
     if (!globalFilterEnabled) return undefined
     const raw = (search as SearchRecord)[globalFilterKey]
     return typeof raw === 'string' ? raw : ''
-  })
+  }, [globalFilterEnabled, globalFilterKey, search])
+
+  const [globalFilter, setGlobalFilter] = useState<string | undefined>(
+    urlGlobalFilter
+  )
+  const [globalFilterInput, setGlobalFilterInput] = useState<
+    string | undefined
+  >(urlGlobalFilter)
+
+  // Keep both committed and draft values aligned with external URL changes
+  // (for example browser back/forward navigation or a reset from another control).
+  useEffect(() => {
+    if (!globalFilterEnabled) return
+    // This effect mirrors external URL navigation into local input state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGlobalFilter(urlGlobalFilter ?? '')
+    setGlobalFilterInput(urlGlobalFilter ?? '')
+  }, [globalFilterEnabled, urlGlobalFilter])
+
+  const commitGlobalFilter = useCallback(
+    (next: string, additionalSearch: SearchRecord = {}): void => {
+      const value = trimGlobal ? next.trim() : next
+      setGlobalFilter(value)
+      setGlobalFilterInput(value)
+      navigate({
+        search: (prev) => ({
+          ...(prev as SearchRecord),
+          ...additionalSearch,
+          [pageKey]: undefined,
+          [globalFilterKey]: value ? value : undefined,
+        }),
+      })
+    },
+    [globalFilterKey, navigate, pageKey, trimGlobal]
+  )
 
   const onGlobalFilterChange: OnChangeFn<string> | undefined =
     globalFilterEnabled
@@ -169,17 +242,39 @@ export function useTableUrlState(
             typeof updater === 'function'
               ? updater(globalFilter ?? '')
               : updater
-          const value = trimGlobal ? next.trim() : next
-          setGlobalFilter(value)
-          navigate({
-            search: (prev) => ({
-              ...(prev as SearchRecord),
-              [pageKey]: undefined,
-              [globalFilterKey]: value ? value : undefined,
-            }),
-          })
+          commitGlobalFilter(next)
         }
       : undefined
+
+  const onGlobalFilterInputChange: OnChangeFn<string> | undefined =
+    globalFilterEnabled
+      ? (updater): void => {
+          const next =
+            typeof updater === 'function'
+              ? updater(globalFilterInput ?? '')
+              : updater
+          if (globalFilterMode === 'submit') {
+            setGlobalFilterInput(next)
+            return
+          }
+          commitGlobalFilter(next)
+        }
+      : undefined
+
+  const applyGlobalFilter:
+    | ((additionalSearch?: SearchRecord) => void)
+    | undefined =
+    globalFilterEnabled && globalFilterMode === 'submit'
+      ? (additionalSearch?: SearchRecord): void =>
+          commitGlobalFilter(globalFilterInput ?? '', additionalSearch)
+      : undefined
+
+  const resetGlobalFilter:
+    | ((additionalSearch?: SearchRecord) => void)
+    | undefined = globalFilterEnabled
+    ? (additionalSearch?: SearchRecord): void =>
+        commitGlobalFilter('', additionalSearch)
+    : undefined
 
   const onColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {
     const next =
@@ -233,6 +328,12 @@ export function useTableUrlState(
   return {
     globalFilter: globalFilterEnabled ? (globalFilter ?? '') : undefined,
     onGlobalFilterChange,
+    globalFilterInput: globalFilterEnabled
+      ? (globalFilterInput ?? '')
+      : undefined,
+    onGlobalFilterInputChange,
+    applyGlobalFilter,
+    resetGlobalFilter,
     columnFilters,
     onColumnFiltersChange,
     pagination,
