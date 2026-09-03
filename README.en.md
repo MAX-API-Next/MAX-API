@@ -328,15 +328,11 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there.
 
-For a self-use derivative, meeting the display and attribution requirements in NOTICE may qualify you for the applicable non-perpetual temporary commercial license announced by the project, without a separate application or approval. That permission covers only material the MAX API project maintainers have the right to license and does not replace or waive any applicable upstream obligations.
-
 ## 📜 License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-The temporary commercial license covers only additions and modifications that the MAX API project maintainers have the right to license. It does not replace or waive any applicable upstream licensing obligations.
-
-If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source-availability obligations. For a long-term commercial license, institutional cooperation, or other licensing questions, contact maxapi@max-api.ai.
+If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source-availability obligations. For institutional cooperation or other licensing questions, contact maxapi@max-api.ai.
 
 ---
 
