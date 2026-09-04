@@ -258,10 +258,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if callID == "" {
 			return true
 		}
-		if outputText.Len() > 0 {
-			// Prefer streaming assistant text over tool calls to match non-stream behavior.
-			return true
-		}
 		if !sendStartIfNeeded() {
 			return false
 		}
@@ -528,20 +524,21 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 						hasVisiblePayload = true
 					}
 				}
-				if !sawToolCall {
-					for _, out := range streamResp.Response.Output {
-						if out.Type != dto.BuildInCallFunctionCall && out.Type != dto.BuildInCallCustomToolCall {
-							continue
-						}
-						itemID := strings.TrimSpace(out.ID)
-						callID := strings.TrimSpace(out.CallId)
-						if callID == "" {
-							callID = itemID
-						}
-						if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
-							sr.Stop(streamErr)
-							return
-						}
+				for _, out := range streamResp.Response.Output {
+					if out.Type != dto.BuildInCallFunctionCall && out.Type != dto.BuildInCallCustomToolCall {
+						continue
+					}
+					itemID := strings.TrimSpace(out.ID)
+					callID := strings.TrimSpace(out.CallId)
+					if callID == "" {
+						callID = itemID
+					}
+					if _, alreadyEmitted := toolCallIndexByID[callID]; alreadyEmitted {
+						continue
+					}
+					if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
+						sr.Stop(streamErr)
+						return
 					}
 				}
 				if streamResp.Response.HasImageGenerationCall() {
@@ -567,7 +564,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					info.ClaudeConvertInfo.Usage = usage
 				}
 				finishReason := "stop"
-				if sawToolCall && outputText.Len() == 0 {
+				if sawToolCall {
 					finishReason = "tool_calls"
 				}
 				stop := helper.GenerateStopResponse(responseId, createAt, model, finishReason)
@@ -627,7 +624,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			info.ClaudeConvertInfo.Usage = usage
 		}
 		finishReason := "stop"
-		if sawToolCall && outputText.Len() == 0 {
+		if sawToolCall {
 			finishReason = "tool_calls"
 		}
 		stop := helper.GenerateStopResponse(responseId, createAt, model, finishReason)

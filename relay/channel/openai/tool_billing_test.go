@@ -147,6 +147,36 @@ func TestOaiResponsesToChatStreamHandlerDeduplicatesDoneAndCompleted(t *testing.
 	require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
 }
 
+func TestOaiResponsesToChatStreamHandlerReplaysToolCallAfterText(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:       types.RelayFormatOpenAI,
+		OriginModelName:   "gpt-test",
+		DisablePing:       true,
+		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
+		ToolUsage:         relaycommon.NewToolUsageLedger("gpt-test"),
+	}
+	info.ToolUsage.BeginAttempt(0)
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.completed","response":{"id":"resp-1","status":"completed","model":"gpt-test","output":[{"type":"message","id":"msg-1","status":"completed","content":[{"type":"output_text","text":"hello"}]},{"type":"custom_tool_call","id":"ct-1","call_id":"call-1","name":"lookup","input":"payload","status":"completed"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := OaiResponsesToChatStreamHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	output := recorder.Body.String()
+	require.Contains(t, output, `"arguments":"payload"`)
+	require.Contains(t, output, `"name":"lookup"`)
+	require.Contains(t, output, `"finish_reason":"tool_calls"`)
+}
+
 func TestOaiChatToResponsesHandlerRecordsConvertedToolCallOnce(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")

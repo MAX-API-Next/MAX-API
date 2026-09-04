@@ -127,6 +127,56 @@ func TestDowngradeUserGroupUsesExplicitSnapshotBeforePreviousGroup(t *testing.T)
 	assert.Equal(t, "default", stored.Group)
 }
 
+func TestAdminInvalidateUserSubscriptionUsesExplicitDowngradeWithoutUpgrade(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := &User{Id: 9833, Username: "subscription-cancel-explicit-downgrade", Group: "svip", Status: common.UserStatusEnabled}
+	sub := &UserSubscription{Id: 9834, UserId: user.Id, Status: "active", EndTime: now + 3600, DowngradeGroup: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	require.NoError(t, DB.Create(sub).Error)
+
+	message, err := AdminInvalidateUserSubscription(sub.Id)
+	require.NoError(t, err)
+	assert.Contains(t, message, "default")
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "default", stored.Group)
+}
+
+func TestAdminDeleteUserSubscriptionUsesExplicitDowngradeWithoutUpgrade(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := &User{Id: 9835, Username: "subscription-delete-explicit-downgrade", Group: "svip", Status: common.UserStatusEnabled}
+	sub := &UserSubscription{Id: 9836, UserId: user.Id, Status: "active", EndTime: now + 3600, DowngradeGroup: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	require.NoError(t, DB.Create(sub).Error)
+
+	message, err := AdminDeleteUserSubscription(sub.Id)
+	require.NoError(t, err)
+	assert.Contains(t, message, "default")
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "default", stored.Group)
+	assert.ErrorIs(t, DB.First(&UserSubscription{}, sub.Id).Error, gorm.ErrRecordNotFound)
+}
+
+func TestExpireDueSubscriptionsUsesExplicitDowngradeWithoutUpgrade(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	user := &User{Id: 9837, Username: "subscription-expiry-explicit-downgrade", Group: "svip", Status: common.UserStatusEnabled}
+	sub := &UserSubscription{Id: 9838, UserId: user.Id, Status: "active", EndTime: now - 1, DowngradeGroup: "default"}
+	require.NoError(t, DB.Create(user).Error)
+	require.NoError(t, DB.Create(sub).Error)
+
+	count, err := ExpireDueSubscriptions(10)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "default", stored.Group)
+	assert.Equal(t, "expired", getSubscriptionResetSub(t, sub.Id).Status)
+}
+
 func TestExpireDueSubscriptionsUsesExplicitDowngradeSnapshot(t *testing.T) {
 	truncateTables(t)
 	now := GetDBTimestamp()

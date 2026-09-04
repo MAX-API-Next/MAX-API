@@ -261,6 +261,9 @@ func (l *ToolUsageLedger) Snapshot() ToolUsageSnapshot {
 	counts := make(map[string]int)
 	if l.committed {
 		for _, record := range l.records {
+			if record.kind != ToolUsageKindCustom {
+				continue
+			}
 			counts[record.name]++
 		}
 	}

@@ -61,6 +61,33 @@ func TestToolUsageLedgerRecordsOnlyPricedCustomCalls(t *testing.T) {
 	}, snapshot.Items[0])
 }
 
+func TestToolUsageLedgerSnapshotExcludesBuiltInRecords(t *testing.T) {
+	replaceToolPricesForTest(t, map[string]float64{
+		"lookup":     5,
+		"web_search": 10,
+	})
+
+	ledger := NewToolUsageLedger("gpt-test")
+	ledger.BeginAttempt(0)
+	require.True(t, ledger.ObserveBuiltIn("web_search", ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "web-1",
+		Position: "output:0",
+	}))
+	require.True(t, ledger.ObserveCustom("lookup", ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "custom-1",
+		Position: "output:1",
+	}))
+	require.True(t, ledger.CommitAttempt(0))
+
+	require.Equal(t, []ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, ledger.Snapshot().Items)
+}
+
 func TestToolUsageLedgerDeduplicatesAliasesButCountsDistinctCalls(t *testing.T) {
 	replaceToolPricesForTest(t, map[string]float64{
 		"lookup": 5,

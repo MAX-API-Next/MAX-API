@@ -537,7 +537,7 @@ func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now
 	if target == "" {
 		// Legacy behavior only reverts when this subscription actually elevated
 		// the user. Keep that guard for manually changed user groups.
-		if currentGroup != upgradeGroup {
+		if upgradeGroup == "" || currentGroup != upgradeGroup {
 			return "", nil
 		}
 		target = strings.TrimSpace(sub.PrevUserGroup)
@@ -1272,7 +1272,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 			}
 			target := downgradeGroup
 			if target == "" {
-				if prevGroup == "" || currentGroup != upgradeGroup || currentGroup == prevGroup {
+				if prevGroup == "" || upgradeGroup == "" || currentGroup != upgradeGroup || currentGroup == prevGroup {
 					return nil
 				}
 				target = prevGroup
