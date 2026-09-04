@@ -8,7 +8,7 @@
 
 **MAX API 2.0 : entrer dans l'ère de l'exploitation intelligente · évoluer d'une passerelle de modèles unifiée vers une infrastructure native de gouvernance et d'exploitation AGI**
 
-[Consulter les notes de version MAX API 2.0 Preview](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
+[Consulter les notes de la dernière version stable](https://github.com/MAX-API-Next/MAX-API/releases/latest)
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -23,7 +23,7 @@
     <img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="licence">
   </a><!--
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
-    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="version">
+    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen" alt="version">
   </a><!--
   --><a href="https://hub.docker.com/r/cscitechtop/max-api">
     <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
@@ -47,7 +47,7 @@
   <a href="#-orientation-technique-pour-lagi">Orientation AGI</a> •
   <a href="#-capacités-actuelles">Capacités</a> •
   <a href="#-centre-dexploitation-intelligente">SmartOps</a> •
-  <a href="#-déploiement-preview">Déploiement Preview</a>
+  <a href="#-guide-de-déploiement">Guide de déploiement</a>
 </p>
 
 </div>
@@ -73,7 +73,7 @@ MAX API est plus qu'un dépôt de code. C'est une collaboration ouverte de long 
 |---|---|
 | [MAX-API-Next sur GitHub](https://github.com/MAX-API-Next) | Suivre les projets communautaires, les orientations techniques et la collaboration ouverte |
 | [Issues MAX API](https://github.com/MAX-API-Next/MAX-API/issues) | Signaler un problème reproductible, proposer une amélioration ou partager un changement de compatibilité |
-| [Versions MAX API](https://github.com/MAX-API-Next/MAX-API/releases) | Suivre les versions stables et Preview |
+| [Versions MAX API](https://github.com/MAX-API-Next/MAX-API/releases) | Suivre les mises à jour des versions stables |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | Rechercher et comprendre rapidement le code |
 | Coopération technique et écosystème | Contacter `maxapi@max-api.ai` |
 
@@ -179,7 +179,7 @@ Ouvrez ensuite <http://localhost:3000>, puis :
 3. Créez un jeton d'accès et pointez la Base URL de votre application vers MAX API.
 
 > [!TIP]
-> Utilisez les versions stables en production. Les versions Preview sont destinées aux tests et à la validation progressive. Sauvegardez la base et préparez un rollback avant toute mise à niveau.
+> Utilisez une version stable confirmée en production. Sauvegardez la base et préparez un rollback avant toute mise à niveau.
 >
 > [!WARNING]
 > SQLite convient à l'évaluation locale, au développement et aux tests de petite taille. En production, utilisez des versions de MySQL ou PostgreSQL toujours couvertes par le support de sécurité du fournisseur (MySQL 8.4 LTS et PostgreSQL 14+ recommandés), avec Redis, HTTPS, sauvegardes et procédures de reprise. Les minimums de compatibilité restent MySQL ≥ 5.7.8 et PostgreSQL ≥ 9.6, mais ces versions ne sont pas recommandées en production.
@@ -289,15 +289,15 @@ MAX API continuera de placer **AI Models and Agents governance** au cœur du pro
 
 MAX API n'est pas un modèle de fondation et ne prétend pas avoir déjà atteint l'AGI ni l'exploitation autonome. Les capacités de long terme ne seront validées progressivement qu'après mise en place des frontières d'Evidence, de permissions, de budget, d'approbation et de rollback.
 
-## 🚢 Déploiement Preview
+## 🚢 Guide de déploiement
 
-Les étapes suivantes servent aux tests et à la validation progressive de la version Preview. Pour la production, utilisez une version stable et conservez la même procédure de vérification et de retour arrière.
+Les étapes suivantes prennent une version stable comme exemple. Figez le tag et le commit utilisés, puis préparez la sauvegarde, la vérification et le retour arrière avant toute mise à niveau.
 
 Docker Compose est recommandé :
 
 ```bash
-MAX_API_VERSION=v2.0.0-smartops.pre1
-MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+MAX_API_VERSION=v1.0.5
+MAX_API_COMMIT=74a7ed3e4e2989c7e6f32b88a6b55e8446d2534e
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 

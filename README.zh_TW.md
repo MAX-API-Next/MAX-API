@@ -8,7 +8,7 @@
 
 **MAX API 2.0：開啟智慧運維時代 · 從統一模型閘道走向 AGI 原生治理與營運**
 
-[查看 MAX API 2.0 Preview 發布說明](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
+[查看最新正式版發布說明](https://github.com/MAX-API-Next/MAX-API/releases/latest)
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -23,7 +23,7 @@
     <img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="license">
   </a><!--
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
-    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release">
+    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen" alt="release">
   </a><!--
   --><a href="https://hub.docker.com/r/cscitechtop/max-api">
     <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
@@ -47,7 +47,7 @@
   <a href="#-面向-agi-的技術方向">AGI 技術方向</a> •
   <a href="#-目前能力">目前能力</a> •
   <a href="#-智慧運維中心">智慧運維</a> •
-  <a href="#-preview-部署">Preview 部署</a>
+  <a href="#-部署指南">部署指南</a>
 </p>
 
 </div>
@@ -73,7 +73,7 @@ MAX API 不只是一個程式碼倉庫，也是一項面向 AI Models、Agents�
 |---|---|
 | [MAX-API-Next GitHub](https://github.com/MAX-API-Next) | 關注社群專案、技術方向與開放協作 |
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 提交可重現問題、需求建議與相容性變化 |
-| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 取得正式版與 Preview 版本動態 |
+| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 取得正式版本發布動態 |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | 快速檢索與理解專案程式碼 |
 | 技術與生態合作 | 聯絡 `maxapi@max-api.ai` |
 
@@ -181,7 +181,7 @@ docker run --name max-api -d --restart always -p 127.0.0.1:3000:3000 -e TZ=Asia/
 3. 建立存取權杖，將應用中的 Base URL 指向 MAX API。
 
 > [!TIP]
-> 生產環境建議使用正式版。Preview 版本用於測試和灰度驗證，升級前請備份資料庫並準備回復方案。
+> 生產環境請固定使用已確認的正式版標籤，升級前請備份資料庫並準備回復方案。
 >
 > [!WARNING]
 > SQLite 適合本機體驗、開發和小規模測試。正式環境建議使用仍在供應商安全支援週期內的 MySQL（建議 8.4 LTS）或 PostgreSQL（建議 14+），並設定 Redis、HTTPS、備份和復原方案。專案相容性下限仍為 MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6，但不建議將其用於生產環境。
@@ -291,15 +291,15 @@ MAX API 將繼續以 **AI Models and Agents governance** 為核心，從統一�
 
 MAX API 不是基礎模型，也不宣稱目前已經實現 AGI 或自治運維。路線圖中的長期能力只有在證據、權限、預算、審批和回復邊界完善後才會逐步驗證。
 
-## 🚢 Preview 部署
+## 🚢 部署指南
 
-以下步驟用於 Preview 版本的測試和灰度驗證。生產環境請改用正式版，並沿用相同的驗證和回復流程。
+以下步驟以正式版為例。請固定版本標籤和對應提交，並在升級前完成備份、驗證和回復準備。
 
 建議使用 Docker Compose：
 
 ```bash
-MAX_API_VERSION=v2.0.0-smartops.pre1
-MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+MAX_API_VERSION=v1.0.5
+MAX_API_COMMIT=74a7ed3e4e2989c7e6f32b88a6b55e8446d2534e
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 

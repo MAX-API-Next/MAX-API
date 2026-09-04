@@ -8,7 +8,7 @@
 
 **MAX API 2.0: entering the intelligent operations era · evolving from a unified model gateway to AGI-native governance and operations**
 
-[View the MAX API 2.0 Preview release notes](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
+[View the latest stable release notes](https://github.com/MAX-API-Next/MAX-API/releases/latest)
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -23,7 +23,7 @@
     <img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="license">
   </a><!--
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
-    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release">
+    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen" alt="release">
   </a><!--
   --><a href="https://hub.docker.com/r/cscitechtop/max-api">
     <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
@@ -47,7 +47,7 @@
   <a href="#-technical-direction-for-agi">AGI direction</a> •
   <a href="#-current-capabilities">Capabilities</a> •
   <a href="#-intelligent-operations-center">SmartOps</a> •
-  <a href="#-preview-deployment">Preview deployment</a>
+  <a href="#-deployment-guide">Deployment guide</a>
 </p>
 
 </div>
@@ -73,7 +73,7 @@ MAX API is more than a code repository. It is a long-term open collaboration aro
 |---|---|
 | [MAX-API-Next on GitHub](https://github.com/MAX-API-Next) | Follow community projects, technical direction, and open collaboration |
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | Report reproducible problems, propose improvements, and share compatibility changes |
-| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | Follow stable and Preview releases |
+| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | Follow stable release updates |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | Search and understand the codebase quickly |
 | Technical and ecosystem cooperation | Contact `maxapi@max-api.ai` |
 
@@ -179,7 +179,7 @@ Open <http://localhost:3000>, then:
 3. Create an access token and point your application's Base URL to MAX API.
 
 > [!TIP]
-> Use stable releases in production. Preview releases are intended for testing and staged validation. Back up the database and prepare a rollback plan before upgrading.
+> Use a confirmed stable release tag in production. Back up the database and prepare a rollback plan before upgrading.
 >
 > [!WARNING]
 > SQLite is suitable for local evaluation, development, and small-scale tests. For production, use MySQL or PostgreSQL versions that remain within the vendor's security-support lifecycle (MySQL 8.4 LTS and PostgreSQL 14+ are recommended), together with Redis, HTTPS, backups, and recovery procedures. Compatibility minimums remain MySQL ≥ 5.7.8 and PostgreSQL ≥ 9.6, but those versions are not recommended for production.
@@ -289,15 +289,15 @@ MAX API will continue to make **AI Models and Agents governance** its core. Star
 
 MAX API is not a foundation model and does not claim to have already achieved AGI or autonomous operations. Long-term capabilities will be validated gradually only after Evidence, permission, budget, approval, and rollback boundaries are in place.
 
-## 🚢 Preview deployment
+## 🚢 Deployment guide
 
-The following steps are for Preview testing and staged validation. For production, use a stable release and keep the same verification and rollback process.
+The following steps use a stable release as an example. Pin the version tag and commit, and complete backup, verification, and rollback preparation before upgrading.
 
 Docker Compose is recommended:
 
 ```bash
-MAX_API_VERSION=v2.0.0-smartops.pre1
-MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+MAX_API_VERSION=v1.0.5
+MAX_API_COMMIT=74a7ed3e4e2989c7e6f32b88a6b55e8446d2534e
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 
