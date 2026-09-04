@@ -404,12 +404,16 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Input     string                   `json:"input,omitempty"`
 }
 
-// ArgumentsString returns function call arguments in the string form expected by Chat Completions.
+// ArgumentsString returns function arguments or custom-tool input in the string form expected by Chat Completions.
 func (r *ResponsesOutput) ArgumentsString() string {
 	if r == nil {
 		return ""
+	}
+	if r.Type == BuildInCallCustomToolCall {
+		return r.Input
 	}
 	return ResponsesArgumentsString(r.Arguments)
 }

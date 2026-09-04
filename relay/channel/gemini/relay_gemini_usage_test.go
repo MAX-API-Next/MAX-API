@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func setGeminiToolPricesForTest(t *testing.T, additions map[string]float64) {
 func newGeminiToolBillingContext(path string) (*gin.Context, *relaycommon.RelayInfo) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, nil)
 	ledger := relaycommon.NewToolUsageLedger("gemini-test")
 	ledger.BeginAttempt(0)
 	return c, &relaycommon.RelayInfo{

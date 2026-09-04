@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func setOpenAIToolPricesForTest(t *testing.T, additions map[string]float64) {
 func newOpenAIToolBillingContext(model string) (*gin.Context, *relaycommon.RelayInfo) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", nil)
 	ledger := relaycommon.NewToolUsageLedger(model)
 	ledger.BeginAttempt(0)
 	return c, &relaycommon.RelayInfo{
