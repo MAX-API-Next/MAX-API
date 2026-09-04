@@ -182,6 +182,8 @@ func TestOpenAIStreamChunkMayAffectToolBilling(t *testing.T) {
 		{name: "text delta with null finish", data: `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`, want: false},
 		{name: "tool fragment", data: `{"choices":[{"delta":{"tool_calls":[{"index":0}]},"finish_reason":null}]}`, want: true},
 		{name: "terminal choice", data: `{"choices":[{"delta":{},"finish_reason" : "length"}]}`, want: true},
+		{name: "second choice terminal", data: `{"choices":[{"delta":{},"finish_reason":null},{"delta":{},"finish_reason":"tool_calls"}]}`, want: true},
+		{name: "all choices open", data: `{"choices":[{"delta":{},"finish_reason":null},{"delta":{},"finish_reason":null}]}`, want: false},
 	}
 
 	for _, tt := range tests {

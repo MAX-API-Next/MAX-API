@@ -219,6 +219,52 @@ func TestOaiResponsesHandlerDoesNotBillDeclarationWithoutOutputCall(t *testing.T
 	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["function"].CallCount)
 }
 
+func TestOaiResponsesHandlerBillsOnlyKnownSuccessfulToolStatuses(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+
+	tests := []struct {
+		name     string
+		status   string
+		billable bool
+	}{
+		{name: "empty status", billable: true},
+		{name: "completed", status: "completed", billable: true},
+		{name: "in progress", status: "in_progress"},
+		{name: "queued", status: "queued"},
+		{name: "future status", status: "future_status"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, info := newOpenAIToolBillingContext("gpt-test")
+			payload := dto.OpenAIResponsesResponse{
+				Output: []dto.ResponsesOutput{{
+					Type:   dto.BuildInCallFunctionCall,
+					ID:     "fc-1",
+					CallId: "call-1",
+					Name:   "lookup",
+					Status: tt.status,
+				}},
+				Usage: detailedResponsesUsage(),
+			}
+			body, err := common.Marshal(payload)
+			require.NoError(t, err)
+
+			_, maxAPIError := OaiResponsesHandler(c, info, &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			})
+			require.Nil(t, maxAPIError)
+			require.True(t, info.CommitToolUsageAttempt())
+			if tt.billable {
+				require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
+			} else {
+				require.Empty(t, info.ToolUsageSnapshot().Items)
+			}
+		})
+	}
+}
+
 func TestOaiResponsesHandlerRecordsCustomToolCallOutput(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"code_exec": 6})
 	c, info := newOpenAIToolBillingContext("gpt-test")
@@ -381,6 +427,7 @@ func TestOaiResponsesStreamHandlerAllowsRetryWhenFirstEventIsError(t *testing.T)
 	}{
 		{name: "standard error", event: `{"type":"error","code":"server_error","message":"upstream failed"}`},
 		{name: "failed response", event: `{"type":"response.failed","response":{"id":"resp-1","status":"failed","error":{"message":"upstream failed"}}}`},
+		{name: "completed event with failed response", event: `{"type":"response.completed","response":{"id":"resp-1","status":"failed","error":{"message":"upstream failed"}}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -452,4 +499,33 @@ func TestOaiResponsesToChatStreamHandlerRejectsStandardErrorEvent(t *testing.T) 
 	require.Equal(t, "upstream failed", openAIError.Message)
 	require.Equal(t, "server_error", openAIError.Code)
 	require.Equal(t, "tool", openAIError.Param)
+}
+
+func TestOaiResponsesToChatStreamHandlerSkipsRetryAfterOpenAIOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-test",
+		DisablePing:     true,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"error","code":"server_error","message":"upstream failed"}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	_, maxAPIError := OaiResponsesToChatStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Greater(t, info.SendResponseCount, 0)
+	require.Contains(t, recorder.Body.String(), "hello")
 }

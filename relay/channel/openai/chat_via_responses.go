@@ -152,6 +152,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return true
 		}
 		if info.RelayFormat == types.RelayFormatOpenAI {
+			info.SendResponseCount++
 			if err := helper.ObjectData(c, chunk); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false

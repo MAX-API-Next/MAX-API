@@ -217,10 +217,10 @@ func observeResponsesToolOutput(info *relaycommon.RelayInfo, output *dto.Respons
 
 func isBillableResponsesToolStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "failed", "cancelled", "canceled", "incomplete", "partial":
-		return false
-	default:
+	case "", "completed":
 		return true
+	default:
+		return false
 	}
 }
 
@@ -287,7 +287,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		switch streamResponse.Type {
 		case "response.completed":
 			if streamResponse.Response != nil {
-				if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, true); terminalErr != nil {
+				if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, streamForwarded); terminalErr != nil {
 					terminalEventErr = terminalErr
 					break
 				}
