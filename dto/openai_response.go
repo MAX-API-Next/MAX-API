@@ -460,6 +460,9 @@ const (
 type ResponsesStreamResponse struct {
 	Type     string                   `json:"type"`
 	Response *OpenAIResponsesResponse `json:"response,omitempty"`
+	Code     any                      `json:"code,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+	Param    string                   `json:"param,omitempty"`
 	Delta    string                   `json:"delta,omitempty"`
 	Item     *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta

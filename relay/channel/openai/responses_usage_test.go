@@ -349,6 +349,31 @@ func TestOaiResponsesStreamHandlerRejectsFailedTerminalAfterToolEvent(t *testing
 	require.Empty(t, info.ToolUsageSnapshot().Items)
 }
 
+func TestOaiResponsesStreamHandlerRejectsStandardErrorAfterToolEvent(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc-1","call_id":"call-1","name":"lookup","status":"completed"}}`,
+		`data: {"type":"error","code":"server_error","message":"upstream failed","param":"tool"}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	_, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	openAIError := maxAPIError.ToOpenAIError()
+	require.Equal(t, "upstream failed", openAIError.Message)
+	require.Equal(t, "server_error", openAIError.Code)
+	require.Equal(t, "tool", openAIError.Param)
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
 func TestOaiResponsesToChatStreamHandlerPreservesMessageOnlyTerminalError(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")
@@ -367,4 +392,26 @@ func TestOaiResponsesToChatStreamHandlerPreservesMessageOnlyTerminalError(t *tes
 	require.NotNil(t, maxAPIError)
 	require.True(t, types.IsSkipRetryError(maxAPIError))
 	require.Equal(t, "upstream failed", maxAPIError.Error())
+}
+
+func TestOaiResponsesToChatStreamHandlerRejectsStandardErrorEvent(t *testing.T) {
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.SendResponseCount = 1
+
+	body := strings.Join([]string{
+		`data: {"type":"error","code":"server_error","message":"upstream failed","param":"tool"}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	_, maxAPIError := OaiResponsesToChatStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	openAIError := maxAPIError.ToOpenAIError()
+	require.Equal(t, "upstream failed", openAIError.Message)
+	require.Equal(t, "server_error", openAIError.Code)
+	require.Equal(t, "tool", openAIError.Param)
 }

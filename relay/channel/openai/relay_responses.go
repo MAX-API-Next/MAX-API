@@ -94,6 +94,21 @@ func responsesTerminalError(response *dto.OpenAIResponsesResponse, statusCode in
 }
 
 func responsesStreamTerminalError(streamResponse *dto.ResponsesStreamResponse, skipRetry bool) *types.MaxAPIError {
+	if streamResponse != nil && streamResponse.Type == "error" {
+		message := streamResponse.Message
+		if strings.TrimSpace(message) == "" {
+			message = "responses stream error: error"
+		}
+		oaiErr := types.OpenAIError{
+			Message: message,
+			Param:   streamResponse.Param,
+			Code:    streamResponse.Code,
+		}
+		if skipRetry {
+			return types.WithOpenAIError(oaiErr, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
+		}
+		return types.WithOpenAIError(oaiErr, http.StatusInternalServerError)
+	}
 	if streamResponse != nil && streamResponse.Response != nil {
 		if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, skipRetry); terminalErr != nil {
 			return terminalErr
@@ -303,7 +318,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					observeResponsesToolOutput(info, streamResponse.Item, streamResponse.OutputIndex)
 				}
 			}
-		case "response.error", "response.failed", "response.cancelled", "response.canceled":
+		case "error", "response.error", "response.failed", "response.cancelled", "response.canceled":
 			terminalEventErr = responsesStreamTerminalError(&streamResponse, true)
 		}
 

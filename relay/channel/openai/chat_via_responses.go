@@ -575,7 +575,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sentStop = true
 			}
 
-		case "response.error", "response.failed", "response.cancelled", "response.canceled":
+		case "error", "response.error", "response.failed", "response.cancelled", "response.canceled":
 			skipRetry := info.SendResponseCount > 0
 			streamErr = responsesStreamTerminalError(&streamResp, skipRetry)
 			sr.Stop(streamErr)
