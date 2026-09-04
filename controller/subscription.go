@@ -138,6 +138,37 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+func subscriptionPlanUpdateMap(plan model.SubscriptionPlan) map[string]interface{} {
+	updates := map[string]interface{}{
+		"title":                      plan.Title,
+		"subtitle":                   plan.Subtitle,
+		"price_amount":               plan.PriceAmount,
+		"currency":                   plan.Currency,
+		"duration_unit":              plan.DurationUnit,
+		"duration_value":             plan.DurationValue,
+		"custom_seconds":             plan.CustomSeconds,
+		"enabled":                    plan.Enabled,
+		"sort_order":                 plan.SortOrder,
+		"stripe_price_id":            plan.StripePriceId,
+		"creem_product_id":           plan.CreemProductId,
+		"waffo_pancake_product_id":   plan.WaffoPancakeProductId,
+		"max_purchase_per_user":      plan.MaxPurchasePerUser,
+		"total_amount":               plan.TotalAmount,
+		"upgrade_group":              plan.UpgradeGroup,
+		"downgrade_group":            plan.DowngradeGroup,
+		"quota_reset_period":         plan.QuotaResetPeriod,
+		"quota_reset_custom_seconds": plan.QuotaResetCustomSeconds,
+		"updated_at":                 common.GetTimestamp(),
+	}
+	if plan.AllowBalancePay != nil {
+		updates["allow_balance_pay"] = *plan.AllowBalancePay
+	}
+	if plan.AllowWalletOverflow != nil {
+		updates["allow_wallet_overflow"] = *plan.AllowWalletOverflow
+	}
+	return updates
+}
+
 func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
@@ -168,6 +199,9 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.AllowBalancePay == nil {
 		req.Plan.AllowBalancePay = common.GetPointer(true)
 	}
+	if req.Plan.AllowWalletOverflow == nil {
+		req.Plan.AllowWalletOverflow = common.GetPointer(true)
+	}
 	if req.Plan.DurationUnit == "" {
 		req.Plan.DurationUnit = model.SubscriptionDurationMonth
 	}
@@ -186,6 +220,13 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
+			return
+		}
+	}
+	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
+	if req.Plan.DowngradeGroup != "" {
+		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+			common.ApiErrorMsg(c, "降级分组不存在")
 			return
 		}
 	}
@@ -256,6 +297,13 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			return
 		}
 	}
+	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
+	if req.Plan.DowngradeGroup != "" {
+		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+			common.ApiErrorMsg(c, "降级分组不存在")
+			return
+		}
+	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
@@ -264,29 +312,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
-		updateMap := map[string]interface{}{
-			"title":                      req.Plan.Title,
-			"subtitle":                   req.Plan.Subtitle,
-			"price_amount":               req.Plan.PriceAmount,
-			"currency":                   req.Plan.Currency,
-			"duration_unit":              req.Plan.DurationUnit,
-			"duration_value":             req.Plan.DurationValue,
-			"custom_seconds":             req.Plan.CustomSeconds,
-			"enabled":                    req.Plan.Enabled,
-			"sort_order":                 req.Plan.SortOrder,
-			"stripe_price_id":            req.Plan.StripePriceId,
-			"creem_product_id":           req.Plan.CreemProductId,
-			"waffo_pancake_product_id":   req.Plan.WaffoPancakeProductId,
-			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
-			"total_amount":               req.Plan.TotalAmount,
-			"upgrade_group":              req.Plan.UpgradeGroup,
-			"quota_reset_period":         req.Plan.QuotaResetPeriod,
-			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
-			"updated_at":                 common.GetTimestamp(),
-		}
-		if req.Plan.AllowBalancePay != nil {
-			updateMap["allow_balance_pay"] = *req.Plan.AllowBalancePay
-		}
+		updateMap := subscriptionPlanUpdateMap(req.Plan)
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
 		}

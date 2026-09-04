@@ -988,6 +988,136 @@ func TestCalculateTextQuotaSummaryZeroTokensStillBillsToolSurcharge(t *testing.T
 	require.Equal(t, common.QuotaFromDecimal(summary.ToolCallSurchargeQuota), summary.Quota)
 }
 
+func TestCustomToolItemQuotaPreservesBillingExpression(t *testing.T) {
+	item := relaycommon.ToolUsageItem{Name: "lookup", CallCount: 3, PricePer1K: 2.5}
+	groupRatio := 1.25
+	expected := decimal.NewFromFloat(item.PricePer1K).
+		Mul(decimal.NewFromInt(int64(item.CallCount))).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(groupRatio)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+
+	require.True(t, expected.Equal(customToolItemQuota(item, groupRatio)))
+}
+
+func TestCalculateTextQuotaSummaryBillsFrozenCustomToolUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	setServiceToolPricesForTest(t, map[string]float64{"lookup": 5})
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+
+	ledger := relaycommon.NewToolUsageLedger("gpt-test")
+	ledger.BeginAttempt(0)
+	require.True(t, ledger.ObserveCustom("lookup", relaycommon.ToolCallIdentity{
+		Scope:    "openai-chat",
+		CallID:   "call-1",
+		Position: "choice:0:tool:0",
+	}))
+	require.True(t, ledger.CommitAttempt(0))
+
+	// A config reload after the request starts must not reprice the call.
+	toolPrices.Prices["lookup"] = 9
+	operation_setting.RebuildToolPriceIndex()
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-test",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ToolUsage: ledger,
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	expected := decimal.NewFromFloat(5.0 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+
+	require.Equal(t, 0, summary.TotalTokens)
+	require.True(t, expected.Equal(summary.ToolCallSurchargeQuota))
+	require.Equal(t, common.QuotaFromDecimal(expected), summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryBillsFrozenBuiltInToolPrices(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("claude_web_search_requests", 2)
+
+	setServiceToolPricesForTest(t, map[string]float64{
+		"web_search_preview:gpt-4o*": 7,
+		"web_search":                 11,
+		"file_search":                13,
+	})
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	ledger := relaycommon.NewToolUsageLedger("gpt-4o")
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+				dto.BuildInToolFileSearch:       {CallCount: 2},
+			},
+		},
+		ToolUsage: ledger,
+		StartTime: time.Now(),
+	}
+
+	// The request captures its price index before the admin reload below.
+	toolPrices.Prices["web_search_preview:gpt-4o*"] = 70
+	toolPrices.Prices["web_search"] = 110
+	toolPrices.Prices["file_search"] = 130
+	operation_setting.RebuildToolPriceIndex()
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	require.Equal(t, float64(7), summary.WebSearchPrice)
+	require.Equal(t, float64(11), summary.ClaudeWebSearchPrice)
+	require.Equal(t, float64(13), summary.FileSearchPrice)
+	require.Equal(t, 1, summary.WebSearchCallCount)
+	require.Equal(t, 2, summary.ClaudeWebSearchCallCount)
+	require.Equal(t, 2, summary.FileSearchCallCount)
+
+	expected := decimal.NewFromFloat(7 + 11*2 + 13*2).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	require.True(t, expected.Equal(summary.ToolCallSurchargeQuota))
+}
+
+func TestAlphaSearchPreConsumeQuotaUsesFrozenBuiltInToolPrice(t *testing.T) {
+	setServiceToolPricesForTest(t, map[string]float64{"web_search_preview": 7})
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	info := &relaycommon.RelayInfo{
+		RelayMode:       relayconstant.RelayModeAlphaSearch,
+		OriginModelName: "o1",
+		ToolUsage:       relaycommon.NewToolUsageLedger("o1"),
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+	}
+
+	preConsumed, err := AlphaSearchPreConsumeQuota(0, info, 1)
+	require.NoError(t, err)
+
+	toolPrices.Prices["web_search_preview"] = 70
+	operation_setting.RebuildToolPriceIndex()
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	summary := calculateTextQuotaSummary(ctx, info, &dto.Usage{})
+	require.Equal(t, preConsumed, summary.Quota)
+	require.Equal(t, float64(7), summary.WebSearchPrice)
+}
+
 func TestCalculateTextQuotaSummaryAlphaSearchKeepsFixedPriceWhenToolPriceIsZero(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

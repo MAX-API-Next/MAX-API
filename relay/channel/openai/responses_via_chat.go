@@ -35,6 +35,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	observeOpenAITextToolCalls(info, chatResp.Choices)
 
 	responseID := helper.GetResponseID(c)
 	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponse(&chatResp, responseID)
@@ -66,6 +67,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	responseID := helper.GetResponseID(c)
 	state := openaicompat.NewChatToResponsesStreamState(responseID, info.UpstreamModelName)
+	toolCallObserver := newOpenAIStreamToolCallObserver(info)
 	var streamErr *types.MaxAPIError
 
 	sendEvent := func(event openaicompat.ChatToResponsesStreamEvent) bool {
@@ -104,6 +106,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
+		toolCallObserver.Observe(&chunk)
 
 		events, err := openaicompat.ChatCompletionsStreamChunkToResponsesEvents(&chunk, state)
 		if err != nil {

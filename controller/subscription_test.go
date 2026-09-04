@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	appi18n "github.com/MAX-API-Next/MAX-API/i18n"
+	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm/schema"
 )
 
 type subscriptionAPIResponse struct {
@@ -81,4 +84,26 @@ func TestAdminResetPlanSubscriptionsRequiresPaymentCompliance(t *testing.T) {
 	response := decodeSubscriptionAPIResponse(t, recorder)
 	require.False(t, response.Success)
 	require.NotEmpty(t, response.Message)
+}
+
+func TestSubscriptionPlanUpdateMapUsesOnlyModelColumns(t *testing.T) {
+	parsed, err := schema.Parse(&model.SubscriptionPlan{}, &sync.Map{}, schema.NamingStrategy{})
+	require.NoError(t, err)
+	columns := make(map[string]struct{}, len(parsed.DBNames))
+	for _, name := range parsed.DBNames {
+		columns[name] = struct{}{}
+	}
+	allowBalance := false
+	allowWallet := false
+	updates := subscriptionPlanUpdateMap(model.SubscriptionPlan{
+		Title: "plan", AllowBalancePay: &allowBalance, AllowWalletOverflow: &allowWallet,
+		DowngradeGroup: "default",
+	})
+	for key := range updates {
+		if _, ok := columns[key]; !ok {
+			t.Fatalf("subscription plan update key %q is not a model column", key)
+		}
+	}
+	require.Contains(t, updates, "allow_wallet_overflow")
+	require.Contains(t, updates, "downgrade_group")
 }

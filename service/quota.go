@@ -286,6 +286,7 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+	relayInfo.CommitToolUsageAttempt()
 
 	var tieredUsedVars map[string]bool
 	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
@@ -313,6 +314,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	modelPrice := relayInfo.PriceData.ModelPrice
 	usePrice := relayInfo.PriceData.UsePrice
+	customToolUsage, customToolSurcharge := calculateCustomToolCallSurcharge(relayInfo, groupRatio)
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
@@ -344,15 +346,28 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
-	// record all the consume log even if quota is 0
-	shouldUpdateUsageStats := totalTokens != 0
+	// Record all consume logs, including tool-only requests with zero tokens.
+	shouldUpdateUsageStats := totalTokens != 0 || !customToolSurcharge.IsZero()
 	if totalTokens == 0 {
-		// in this case, must be some error happened
-		// we cannot just return, because we may have to return the pre-consumed quota
+		// Token usage is unavailable, so discard only the token-derived base.
+		// A completed, priced custom tool call remains independently billable.
 		quota = 0
-		logContent += "（可能是上游超时）"
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
-			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
+		if customToolSurcharge.IsZero() {
+			logContent += "（可能是上游超时）"
+			logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
+				"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
+		} else {
+			logContent += "（上游未返回 token 计费信息，仅结算已完成的自定义工具调用）"
+		}
+	}
+	if !customToolSurcharge.IsZero() {
+		composedQuota, surchargeClamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(quota)).Add(customToolSurcharge))
+		quota = composedQuota
+		noteQuotaClamp(relayInfo, surchargeClamp)
+		for _, item := range customToolUsage.Items {
+			cost := customToolItemQuota(item, groupRatio)
+			logContent += fmt.Sprintf(", Tool %q called %d time(s), cost %s", item.Name, item.CallCount, cost.String())
+		}
 	}
 	if fallbackQuota, ok := streamFallbackQuota(relayInfo, quota); ok {
 		quota = fallbackQuota
@@ -368,6 +383,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
+	}
+	if len(customToolUsage.Items) > 0 {
+		other["tool_calls"] = customToolUsage.Items
+		other["tool_price_version"] = customToolUsage.PriceVersion
+		other["tool_billing_model"] = customToolUsage.ModelName
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
 	settleAndRecordConsume(ctx, relayInfo, shouldUpdateUsageStats, model.RecordConsumeLogParams{

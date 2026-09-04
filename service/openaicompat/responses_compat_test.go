@@ -395,6 +395,49 @@ func TestResponsesResponseToChatCompletionsResponsePreservesUsageDetails(t *test
 	assert.Equal(t, usage.CompletionTokenDetails, resp.Usage.CompletionTokenDetails)
 }
 
+func TestResponsesResponseToChatCompletionsResponsePreservesCustomToolInput(t *testing.T) {
+	var upstream dto.OpenAIResponsesResponse
+	require.NoError(t, common.Unmarshal([]byte(`{
+		"id":"resp_custom",
+		"status":"completed",
+		"model":"gpt-test",
+		"output":[{
+			"type":"custom_tool_call",
+			"id":"ctc_1",
+			"call_id":"call_custom",
+			"name":"apply_patch",
+			"input":"*** Begin Patch\n*** End Patch"
+		}]
+	}`), &upstream))
+
+	got, _, err := ResponsesResponseToChatCompletionsResponse(&upstream, "chatcmpl_custom")
+	require.NoError(t, err)
+	require.Len(t, got.Choices, 1)
+	toolCalls := got.Choices[0].Message.ParseToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "call_custom", toolCalls[0].ID)
+	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
+	assert.Equal(t, "*** Begin Patch\n*** End Patch", toolCalls[0].Function.Arguments)
+}
+
+func TestResponsesStreamOutputItemPreservesCustomToolInput(t *testing.T) {
+	var event dto.ResponsesStreamResponse
+	require.NoError(t, common.Unmarshal([]byte(`{
+		"type":"response.output_item.done",
+		"output_index":0,
+		"item":{
+			"type":"custom_tool_call",
+			"id":"ctc_1",
+			"call_id":"call_custom",
+			"name":"apply_patch",
+			"input":"patch body"
+		}
+	}`), &event))
+
+	require.NotNil(t, event.Item)
+	assert.Equal(t, "patch body", event.Item.ArgumentsString())
+}
+
 func TestChatCompletionsStreamToResponsesEventsAggregatesUsage(t *testing.T) {
 	state := NewChatToResponsesStreamState("resp_1", "gpt-test")
 	state.Created = 123

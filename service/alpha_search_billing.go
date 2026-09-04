@@ -8,7 +8,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
-	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 
 	"github.com/shopspring/decimal"
 )
@@ -28,7 +27,7 @@ func AlphaSearchPreConsumeQuota(baseQuota int, info *relaycommon.RelayInfo, grou
 		return 0, fmt.Errorf("alpha search group ratio is invalid: %v", groupRatio)
 	}
 
-	pricePerThousand := operation_setting.GetToolPriceForModel(dto.BuildInToolWebSearchPreview, info.OriginModelName)
+	pricePerThousand := info.FrozenToolPrice(dto.BuildInToolWebSearchPreview)
 	if math.IsNaN(pricePerThousand) || math.IsInf(pricePerThousand, 0) || pricePerThousand < 0 {
 		return 0, fmt.Errorf("alpha search tool price is invalid: %v", pricePerThousand)
 	}

@@ -9,6 +9,8 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -16,6 +18,27 @@ import (
 
 func commonPointer[T any](value T) *T {
 	return &value
+}
+
+func setClaudeToolPricesForTest(t *testing.T, additions map[string]float64) {
+	t.Helper()
+	setting := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	original := make(map[string]float64, len(setting.Prices))
+	for name, price := range setting.Prices {
+		original[name] = price
+	}
+	setting.Prices = make(map[string]float64, len(original)+len(additions))
+	for name, price := range original {
+		setting.Prices[name] = price
+	}
+	for name, price := range additions {
+		setting.Prices[name] = price
+	}
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() {
+		setting.Prices = original
+		operation_setting.RebuildToolPriceIndex()
+	})
 }
 
 func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
@@ -55,6 +78,132 @@ func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
 	if claudeInfo.Model != "claude-3-5-sonnet" {
 		t.Errorf("Model = %s, want claude-3-5-sonnet", claudeInfo.Model)
 	}
+}
+
+func TestHandleClaudeResponseDataRecordsActualCustomToolUse(t *testing.T) {
+	setClaudeToolPricesForTest(t, map[string]float64{"lookup": 5})
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ledger := relaycommon.NewToolUsageLedger("claude-test")
+	ledger.BeginAttempt(0)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-test",
+		ToolUsage:       ledger,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	}
+	response := dto.ClaudeResponse{
+		Type:       "message",
+		StopReason: "tool_use",
+		Content: []dto.ClaudeMediaMessage{{
+			Type:  "tool_use",
+			Id:    "toolu-1",
+			Name:  "lookup",
+			Input: map[string]any{},
+		}},
+		Usage: &dto.ClaudeUsage{InputTokens: 10, OutputTokens: 2},
+	}
+	data, err := common.Marshal(response)
+	require.NoError(t, err)
+
+	maxErr := HandleClaudeResponseData(c, info, &ClaudeResponseInfo{Usage: &dto.Usage{}}, nil, data)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestHandleStreamResponseDataBillsCustomToolUseOnlyAfterToolUseTerminal(t *testing.T) {
+	setClaudeToolPricesForTest(t, map[string]float64{"lookup": 5})
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ledger := relaycommon.NewToolUsageLedger("claude-test")
+	ledger.BeginAttempt(0)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-test",
+		ToolUsage:       ledger,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	}
+	claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+	startData := `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu-1","name":"lookup","input":{}}}`
+	terminalData := `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}`
+
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, startData))
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, startData))
+	require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, terminalData))
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestHandleStreamResponseDataDoesNotBillIncompleteCustomToolUse(t *testing.T) {
+	setClaudeToolPricesForTest(t, map[string]float64{"lookup": 5})
+
+	tests := []struct {
+		name         string
+		terminalData string
+	}{
+		{name: "max tokens", terminalData: `{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":2}}`},
+		{name: "refusal", terminalData: `{"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":2}}`},
+		{name: "missing terminal"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ledger := relaycommon.NewToolUsageLedger("claude-test")
+			ledger.BeginAttempt(0)
+			info := &relaycommon.RelayInfo{
+				RelayFormat:     types.RelayFormatClaude,
+				OriginModelName: "claude-test",
+				ToolUsage:       ledger,
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+			}
+			claudeInfo := &ClaudeResponseInfo{Usage: &dto.Usage{}}
+
+			require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu-1","name":"lookup","input":{}}}`))
+			if tt.terminalData != "" {
+				require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, tt.terminalData))
+			}
+			HandleStreamFinalResponse(c, info, claudeInfo)
+			require.True(t, info.CommitToolUsageAttempt())
+			require.Empty(t, info.ToolUsageSnapshot().Items)
+		})
+	}
+}
+
+func TestHandleClaudeResponseDataDoesNotBillIncompleteCustomToolUse(t *testing.T) {
+	setClaudeToolPricesForTest(t, map[string]float64{"lookup": 5})
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ledger := relaycommon.NewToolUsageLedger("claude-test")
+	ledger.BeginAttempt(0)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-test",
+		ToolUsage:       ledger,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	}
+	response := dto.ClaudeResponse{
+		Type:       "message",
+		StopReason: "max_tokens",
+		Content: []dto.ClaudeMediaMessage{{
+			Type:  "tool_use",
+			Id:    "toolu-1",
+			Name:  "lookup",
+			Input: map[string]any{},
+		}},
+		Usage: &dto.ClaudeUsage{InputTokens: 10, OutputTokens: 2},
+	}
+	data, err := common.Marshal(response)
+	require.NoError(t, err)
+
+	maxErr := HandleClaudeResponseData(c, info, &ClaudeResponseInfo{Usage: &dto.Usage{}}, nil, data)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
 }
 
 func TestFormatClaudeResponseInfo_MessageDelta_FullUsage(t *testing.T) {

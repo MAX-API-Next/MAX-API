@@ -55,6 +55,7 @@ type textQuotaSummary struct {
 	FileSearchCallCount      int
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
+	CustomToolUsage          relaycommon.ToolUsageSnapshot
 	ToolCallSurchargeQuota   decimal.Decimal
 }
 
@@ -92,16 +93,43 @@ func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *d
 	return usage.ClaudeCacheCreation5mTokens > 0 || usage.ClaudeCacheCreation1hTokens > 0
 }
 
+func customToolItemQuota(item relaycommon.ToolUsageItem, groupRatio float64) decimal.Decimal {
+	return decimal.NewFromFloat(item.PricePer1K).
+		Mul(decimal.NewFromInt(int64(item.CallCount))).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(groupRatio)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+}
+
+func calculateCustomToolCallSurcharge(relayInfo *relaycommon.RelayInfo, groupRatio float64) (relaycommon.ToolUsageSnapshot, decimal.Decimal) {
+	if relayInfo == nil || relayInfo.PriceData.UsePrice {
+		return relaycommon.ToolUsageSnapshot{}, decimal.Zero
+	}
+	snapshot := relayInfo.ToolUsageSnapshot()
+	var surcharge decimal.Decimal
+	for _, item := range snapshot.Items {
+		if item.CallCount <= 0 || item.PricePer1K <= 0 {
+			continue
+		}
+		surcharge = surcharge.Add(customToolItemQuota(item, groupRatio))
+	}
+	return snapshot, surcharge
+}
+
 func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary) decimal.Decimal {
+	if relayInfo == nil || relayInfo.PriceData.UsePrice {
+		return decimal.Zero
+	}
 	dGroupRatio := decimal.NewFromFloat(summary.GroupRatio)
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	var surcharge decimal.Decimal
+	summary.CustomToolUsage, surcharge = calculateCustomToolCallSurcharge(relayInfo, summary.GroupRatio)
 
 	if relayInfo.ResponsesUsageInfo != nil {
 		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool.CallCount > 0 {
 			summary.WebSearchCallCount = webSearchTool.CallCount
-			summary.WebSearchPrice = operation_setting.GetToolPriceForModel("web_search_preview", summary.ModelName)
+			summary.WebSearchPrice = relayInfo.FrozenToolPrice("web_search_preview")
 			surcharge = surcharge.Add(decimal.NewFromFloat(summary.WebSearchPrice).
 				Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))).
 				Div(decimal.NewFromInt(1000)).
@@ -110,7 +138,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 		}
 	} else if strings.HasSuffix(summary.ModelName, "search-preview") {
 		summary.WebSearchCallCount = 1
-		summary.WebSearchPrice = operation_setting.GetToolPriceForModel("web_search_preview", summary.ModelName)
+		summary.WebSearchPrice = relayInfo.FrozenToolPrice("web_search_preview")
 		surcharge = surcharge.Add(decimal.NewFromFloat(summary.WebSearchPrice).
 			Div(decimal.NewFromInt(1000)).
 			Mul(dGroupRatio).
@@ -119,7 +147,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 
 	summary.ClaudeWebSearchCallCount = ctx.GetInt("claude_web_search_requests")
 	if summary.ClaudeWebSearchCallCount > 0 {
-		summary.ClaudeWebSearchPrice = operation_setting.GetToolPrice("web_search")
+		summary.ClaudeWebSearchPrice = relayInfo.FrozenToolPrice("web_search")
 		surcharge = surcharge.Add(decimal.NewFromFloat(summary.ClaudeWebSearchPrice).
 			Div(decimal.NewFromInt(1000)).
 			Mul(dGroupRatio).
@@ -130,7 +158,7 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	if relayInfo.ResponsesUsageInfo != nil {
 		if fileSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch]; exists && fileSearchTool.CallCount > 0 {
 			summary.FileSearchCallCount = fileSearchTool.CallCount
-			summary.FileSearchPrice = operation_setting.GetToolPrice("file_search")
+			summary.FileSearchPrice = relayInfo.FrozenToolPrice("file_search")
 			surcharge = surcharge.Add(decimal.NewFromFloat(summary.FileSearchPrice).
 				Mul(decimal.NewFromInt(int64(fileSearchTool.CallCount))).
 				Div(decimal.NewFromInt(1000)).
@@ -385,6 +413,7 @@ func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	relayInfo.CommitToolUsageAttempt()
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -426,6 +455,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 	if summary.ImageGenerationCallPrice > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
+	}
+
+	for _, item := range summary.CustomToolUsage.Items {
+		cost := customToolItemQuota(item, summary.GroupRatio)
+		extraContent = append(extraContent, fmt.Sprintf("Tool %q called %d time(s), cost %s", item.Name, item.CallCount, cost.String()))
 	}
 
 	shouldUpdateUsageStats := summary.hasBillableUsage(relayInfo)
@@ -498,6 +532,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.ImageGenerationCallPrice > 0 {
 		other["image_generation_call"] = true
 		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
+	}
+	if len(summary.CustomToolUsage.Items) > 0 {
+		other["tool_calls"] = summary.CustomToolUsage.Items
+		other["tool_price_version"] = summary.CustomToolUsage.PriceVersion
+		other["tool_billing_model"] = summary.CustomToolUsage.ModelName
 	}
 	if summary.CacheCreationTokens > 0 {
 		other["cache_creation_tokens"] = summary.CacheCreationTokens

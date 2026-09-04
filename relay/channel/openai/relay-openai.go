@@ -122,6 +122,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	toolCallObserver := newOpenAIStreamToolCallObserver(info)
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -140,6 +141,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
+			observeOpenAIStreamToolCalls(toolCallObserver, data)
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
@@ -228,6 +230,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.BuildTextResponseAuditContent(&simpleResponse))
 	}
+	observeOpenAITextToolCalls(info, simpleResponse.Choices)
 
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
@@ -298,6 +301,164 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &simpleResponse.Usage, nil
+}
+
+func observeOpenAITextToolCalls(info *relaycommon.RelayInfo, choices []dto.OpenAITextResponseChoice) {
+	if info == nil {
+		return
+	}
+	for _, choice := range choices {
+		if choice.FinishReason != constant.FinishReasonToolCalls {
+			continue
+		}
+		for toolIndex, toolCall := range choice.Message.ParseToolCalls() {
+			info.ObserveCustomToolCall(toolCall.Function.Name, relaycommon.ToolCallIdentity{
+				Scope:    "openai-chat",
+				CallID:   toolCall.ID,
+				Position: fmt.Sprintf("choice:%d:tool:%d", choice.Index, toolIndex),
+			})
+		}
+	}
+}
+
+type openAIStreamToolCallKey struct {
+	choiceIndex int
+	toolIndex   int
+}
+
+type openAIStreamToolCallIdentity struct {
+	name   string
+	callID string
+}
+
+type openAIStreamToolCallObserver struct {
+	info      *relaycommon.RelayInfo
+	pending   map[openAIStreamToolCallKey]openAIStreamToolCallIdentity
+	ambiguous map[openAIStreamToolCallKey]struct{}
+}
+
+func newOpenAIStreamToolCallObserver(info *relaycommon.RelayInfo) *openAIStreamToolCallObserver {
+	return &openAIStreamToolCallObserver{info: info}
+}
+
+func observeOpenAIStreamToolCalls(observer *openAIStreamToolCallObserver, data string) {
+	if observer == nil || data == "" || !openAIStreamChunkMayAffectToolBilling(data) {
+		return
+	}
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		return
+	}
+	observer.Observe(&streamResponse)
+}
+
+func openAIStreamChunkMayAffectToolBilling(data string) bool {
+	if strings.Contains(data, `"tool_calls"`) {
+		return true
+	}
+	const finishReasonKey = `"finish_reason"`
+	for searchFrom := 0; searchFrom < len(data); {
+		keyOffset := strings.Index(data[searchFrom:], finishReasonKey)
+		if keyOffset < 0 {
+			return false
+		}
+		valueOffset := searchFrom + keyOffset + len(finishReasonKey)
+		for valueOffset < len(data) && (data[valueOffset] == ' ' || data[valueOffset] == '\t' || data[valueOffset] == '\r' || data[valueOffset] == '\n' || data[valueOffset] == ':') {
+			valueOffset++
+		}
+		if valueOffset < len(data) && !strings.HasPrefix(data[valueOffset:], "null") {
+			return true
+		}
+		searchFrom = valueOffset + len("null")
+	}
+	return false
+}
+
+func (o *openAIStreamToolCallObserver) Observe(streamResponse *dto.ChatCompletionsStreamResponse) {
+	if o == nil || o.info == nil || streamResponse == nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		for position, toolCall := range choice.Delta.ToolCalls {
+			toolIndex := position
+			if toolCall.Index != nil {
+				toolIndex = *toolCall.Index
+			}
+			o.remember(openAIStreamToolCallKey{choiceIndex: choice.Index, toolIndex: toolIndex}, openAIStreamToolCallIdentity{
+				name:   strings.TrimSpace(toolCall.Function.Name),
+				callID: strings.TrimSpace(toolCall.ID),
+			})
+		}
+		if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
+			o.finishChoice(choice.Index, strings.TrimSpace(*choice.FinishReason))
+		}
+	}
+}
+
+func (o *openAIStreamToolCallObserver) remember(key openAIStreamToolCallKey, identity openAIStreamToolCallIdentity) {
+	if _, blocked := o.ambiguous[key]; blocked {
+		return
+	}
+	if o.pending == nil {
+		o.pending = make(map[openAIStreamToolCallKey]openAIStreamToolCallIdentity)
+	}
+	if pending, ok := o.pending[key]; ok {
+		merged, compatible := mergeOpenAIStreamToolCallIdentity(pending, identity)
+		if !compatible {
+			delete(o.pending, key)
+			if o.ambiguous == nil {
+				o.ambiguous = make(map[openAIStreamToolCallKey]struct{})
+			}
+			o.ambiguous[key] = struct{}{}
+			return
+		}
+		o.pending[key] = merged
+		return
+	}
+	if identity.name != "" || identity.callID != "" {
+		o.pending[key] = identity
+	}
+}
+
+func (o *openAIStreamToolCallObserver) finishChoice(choiceIndex int, finishReason string) {
+	completed := finishReason == constant.FinishReasonToolCalls
+	for key, identity := range o.pending {
+		if key.choiceIndex != choiceIndex {
+			continue
+		}
+		delete(o.pending, key)
+		_, blocked := o.ambiguous[key]
+		delete(o.ambiguous, key)
+		if !completed || blocked || identity.name == "" {
+			continue
+		}
+		o.info.ObserveCustomToolCall(identity.name, relaycommon.ToolCallIdentity{
+			Scope:    "openai-chat",
+			CallID:   identity.callID,
+			Position: fmt.Sprintf("choice:%d:tool:%d", key.choiceIndex, key.toolIndex),
+		})
+	}
+	for key := range o.ambiguous {
+		if key.choiceIndex == choiceIndex {
+			delete(o.ambiguous, key)
+		}
+	}
+}
+
+func mergeOpenAIStreamToolCallIdentity(first, second openAIStreamToolCallIdentity) (openAIStreamToolCallIdentity, bool) {
+	if first.name != "" && second.name != "" && first.name != second.name {
+		return openAIStreamToolCallIdentity{}, false
+	}
+	if first.callID != "" && second.callID != "" && first.callID != second.callID {
+		return openAIStreamToolCallIdentity{}, false
+	}
+	if first.name == "" {
+		first.name = second.name
+	}
+	if first.callID == "" {
+		first.callID = second.callID
+	}
+	return first, true
 }
 
 func streamTTSResponse(c *gin.Context, resp *http.Response) {

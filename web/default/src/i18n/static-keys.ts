@@ -300,6 +300,11 @@ export const STATIC_I18N_KEYS = [
   'Received',
   'Payment initiated',
   'Payment page opened',
+  'Allow wallet fallback after quota exhaustion',
+  'Downgrade Group',
+  'No Downgrade',
+  'Wallet fallback',
+  'Wallet fallback disabled',
 
   // Upstream model updates
   'Upstream Model Updates',

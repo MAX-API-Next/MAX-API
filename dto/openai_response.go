@@ -404,12 +404,16 @@ type ResponsesOutput struct {
 	CallId    string                   `json:"call_id,omitempty"`
 	Name      string                   `json:"name,omitempty"`
 	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Input     string                   `json:"input,omitempty"`
 }
 
-// ArgumentsString returns function call arguments in the string form expected by Chat Completions.
+// ArgumentsString returns function arguments or custom-tool input in the string form expected by Chat Completions.
 func (r *ResponsesOutput) ArgumentsString() string {
 	if r == nil {
 		return ""
+	}
+	if r.Type == BuildInCallCustomToolCall {
+		return r.Input
 	}
 	return ResponsesArgumentsString(r.Arguments)
 }
@@ -433,11 +437,18 @@ type ResponsesReasoningSummaryPart struct {
 
 const (
 	BuildInToolWebSearchPreview = "web_search_preview"
+	BuildInToolWebSearch        = "web_search"
 	BuildInToolFileSearch       = "file_search"
+	BuildInToolGoogleSearch     = "google_search"
+	BuildInToolImageGeneration  = "image_generation"
 )
 
 const (
-	BuildInCallWebSearchCall = "web_search_call"
+	BuildInCallWebSearchCall  = "web_search_call"
+	BuildInCallFileSearchCall = "file_search_call"
+	BuildInCallFunctionCall   = "function_call"
+	BuildInCallCustomToolCall = "custom_tool_call"
+	BuildInCallToolUse        = "tool_use"
 )
 
 const (
@@ -449,6 +460,9 @@ const (
 type ResponsesStreamResponse struct {
 	Type     string                   `json:"type"`
 	Response *OpenAIResponsesResponse `json:"response,omitempty"`
+	Code     any                      `json:"code,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+	Param    string                   `json:"param,omitempty"`
 	Delta    string                   `json:"delta,omitempty"`
 	Item     *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta

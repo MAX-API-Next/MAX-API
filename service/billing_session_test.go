@@ -1098,6 +1098,72 @@ func TestBillingSessionWalletFirstReplayCannotSwitchFromSubscriptionToWallet(t *
 	assert.EqualValues(t, 1, countSubscriptionPreConsumeRecords(t, "subscription-replay-request"))
 }
 
+func TestNewBillingSessionSubscriptionFirstHonorsWalletOverflowSnapshot(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subscriptionID = 824, 825, 826, 827
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "subscription-strict-token", 100)
+	allow := false
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: planID, Title: "strict-subscription-plan", Enabled: true,
+		TotalAmount: 5, AllowWalletOverflow: &allow,
+		QuotaResetPeriod: model.SubscriptionResetNever,
+	}).Error)
+	now := time.Now()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		AmountTotal: 5, AmountUsed: 5, Status: "active",
+		StartTime: now.Add(-time.Hour).Unix(), EndTime: now.Add(time.Hour).Unix(),
+		AllowWalletOverflow: false,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		RequestId: "subscription-strict-fallback", UserId: userID,
+		TokenId: tokenID, TokenKey: "subscription-strict-token",
+		OriginModelName: "subscription-strict-model",
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_first"},
+	}
+	session, apiErr := NewBillingSession(ctx, info, 10)
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	assert.EqualValues(t, 100, getUserQuota(t, userID))
+}
+
+func TestNewBillingSessionSubscriptionFirstAllowsWalletOverflowWhenAllSnapshotsAllow(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subscriptionID = 828, 829, 830, 831
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "subscription-allow-token", 100)
+	allow := true
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: planID, Title: "allow-subscription-plan", Enabled: true,
+		TotalAmount: 5, AllowWalletOverflow: &allow,
+		QuotaResetPeriod: model.SubscriptionResetNever,
+	}).Error)
+	now := time.Now()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		AmountTotal: 5, AmountUsed: 5, Status: "active",
+		StartTime: now.Add(-time.Hour).Unix(), EndTime: now.Add(time.Hour).Unix(),
+		AllowWalletOverflow: true,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		RequestId: "subscription-allow-fallback", UserId: userID,
+		TokenId: tokenID, TokenKey: "subscription-allow-token",
+		OriginModelName: "subscription-allow-model",
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_first"},
+	}
+	session, apiErr := NewBillingSession(ctx, info, 10)
+	require.Nil(t, apiErr)
+	require.NotNil(t, session)
+	assert.Equal(t, BillingSourceWallet, session.funding.Source())
+	assert.EqualValues(t, 90, getUserQuota(t, userID))
+}
+
 func TestSettleAndRecordConsumeLogsPostSettlementSubscriptionUsage(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID, planID, subscriptionID = 819, 820, 821, 822, 823
@@ -1197,6 +1263,7 @@ func seedBillingSubscription(t *testing.T, planID int, subscriptionID int, userI
 		Id: subscriptionID, UserId: userID, PlanId: planID,
 		AmountTotal: amountTotal, Status: "active",
 		StartTime: now.Add(-time.Hour).Unix(), EndTime: now.Add(time.Hour).Unix(),
+		AllowWalletOverflow: true,
 	}).Error)
 }
 
