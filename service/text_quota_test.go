@@ -988,6 +988,58 @@ func TestCalculateTextQuotaSummaryZeroTokensStillBillsToolSurcharge(t *testing.T
 	require.Equal(t, common.QuotaFromDecimal(summary.ToolCallSurchargeQuota), summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryBillsFrozenCustomToolUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	originalPrices := make(map[string]float64, len(toolPrices.Prices))
+	for key, value := range toolPrices.Prices {
+		originalPrices[key] = value
+	}
+	toolPrices.Prices = make(map[string]float64, len(originalPrices)+1)
+	for key, value := range originalPrices {
+		toolPrices.Prices[key] = value
+	}
+	toolPrices.Prices["lookup"] = 5
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() {
+		toolPrices.Prices = originalPrices
+		operation_setting.RebuildToolPriceIndex()
+	})
+
+	ledger := relaycommon.NewToolUsageLedger("gpt-test")
+	ledger.BeginAttempt(0)
+	require.True(t, ledger.ObserveCustom("lookup", relaycommon.ToolCallIdentity{
+		Scope:    "openai-chat",
+		CallID:   "call-1",
+		Position: "choice:0:tool:0",
+	}))
+	require.True(t, ledger.CommitAttempt(0))
+
+	// A config reload after the request starts must not reprice the call.
+	toolPrices.Prices["lookup"] = 9
+	operation_setting.RebuildToolPriceIndex()
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-test",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ToolUsage: ledger,
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	expected := decimal.NewFromFloat(5.0 / 1000).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+
+	require.Equal(t, 0, summary.TotalTokens)
+	require.True(t, expected.Equal(summary.ToolCallSurchargeQuota))
+	require.Equal(t, common.QuotaFromDecimal(expected), summary.Quota)
+}
+
 func TestCalculateTextQuotaSummaryAlphaSearchKeepsFixedPriceWhenToolPriceIsZero(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

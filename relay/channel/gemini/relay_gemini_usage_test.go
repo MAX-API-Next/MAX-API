@@ -11,10 +11,100 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func setGeminiToolPricesForTest(t *testing.T, additions map[string]float64) {
+	t.Helper()
+
+	setting := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	original := make(map[string]float64, len(setting.Prices))
+	for name, price := range setting.Prices {
+		original[name] = price
+	}
+	setting.Prices = make(map[string]float64, len(original)+len(additions))
+	for name, price := range original {
+		setting.Prices[name] = price
+	}
+	for name, price := range additions {
+		setting.Prices[name] = price
+	}
+	operation_setting.RebuildToolPriceIndex()
+
+	t.Cleanup(func() {
+		setting.Prices = original
+		operation_setting.RebuildToolPriceIndex()
+	})
+}
+
+func newGeminiToolBillingContext(path string) (*gin.Context, *relaycommon.RelayInfo) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+	ledger := relaycommon.NewToolUsageLedger("gemini-test")
+	ledger.BeginAttempt(0)
+	return c, &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gemini-test",
+		DisablePing:     true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-test",
+		},
+		ToolUsage: ledger,
+	}
+}
+
+func TestGeminiChatHandlerRecordsCompletedCustomFunctionCalls(t *testing.T) {
+	setGeminiToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newGeminiToolBillingContext("/v1/chat/completions")
+
+	payload := `{
+		"candidates":[{"index":0,"content":{"role":"model","parts":[
+			{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"}}},
+			{"functionCall":{"id":"call-2","name":"unpriced","args":{}}}
+		]}}],
+		"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}
+	}`
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(payload))}
+
+	_, maxErr := GeminiChatHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestGeminiStreamHandlerWaitsForCompletedFunctionCallAndDeduplicatesID(t *testing.T) {
+	setGeminiToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newGeminiToolBillingContext("/v1/chat/completions")
+
+	body := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"},"willContinue":true}}]}}]}`,
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"},"willContinue":false}}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"},"willContinue":false}}]}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
+		return true
+	})
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, info.ToolUsageSnapshot().Items)
+}
 
 func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	t.Parallel()

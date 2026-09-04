@@ -165,6 +165,7 @@ type RelayInfo struct {
 
 	PriceData   types.PriceData
 	TaskBilling *types.TaskBillingResult
+	ToolUsage   *ToolUsageLedger
 
 	// QuotaClamp is set when a quota conversion saturated at the int32 bound
 	// or fell back from NaN while computing this request's charge.
@@ -196,6 +197,19 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	if info.beginToolUsageAttempt() {
+		if info.ResponsesUsageInfo != nil {
+			for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+				if tool != nil {
+					tool.CallCount = 0
+				}
+			}
+		}
+		c.Set("claude_web_search_requests", 0)
+		c.Set("image_generation_call", false)
+		c.Set("image_generation_call_quality", "")
+		c.Set("image_generation_call_size", "")
+	}
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
@@ -503,9 +517,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	if reqId == "" {
 		reqId = common.GetTimeString() + common.GetRandomString(8)
 	}
+	originModelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffortFromRequest(request),
+		ToolUsage:       NewToolUsageLedger(originModelName),
 
 		RequestId:  reqId,
 		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -514,7 +530,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		UserQuota:  common.GetContextKeyInt64(c, constant.ContextKeyUserQuota),
 		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
-		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
+		OriginModelName: originModelName,
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),

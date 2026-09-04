@@ -1171,6 +1171,7 @@ func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, r
 	if response == nil {
 		return dto.Usage{}
 	}
+	observeGeminiFunctionCalls(info, response)
 	if metadata := response.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
 		usage := buildUsageFromGeminiMetadata(*metadata, info.GetEstimatePromptTokens())
 		patchGeminiZeroCompletionUsage(c, info, &usage, geminiResponseUsageText(response), geminiResponseInlineImageCount(response))
@@ -1182,6 +1183,24 @@ func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, r
 		return dto.Usage{}
 	}
 	return *usage
+}
+
+func observeGeminiFunctionCalls(info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) {
+	if info == nil || response == nil {
+		return
+	}
+	for _, candidate := range response.Candidates {
+		for partIndex, part := range candidate.Content.Parts {
+			if part.FunctionCall == nil || (part.FunctionCall.WillContinue != nil && *part.FunctionCall.WillContinue) {
+				continue
+			}
+			info.ObserveCustomToolCall(part.FunctionCall.FunctionName, relaycommon.ToolCallIdentity{
+				Scope:    "gemini",
+				CallID:   part.FunctionCall.ID,
+				Position: fmt.Sprintf("candidate:%d:part:%d", candidate.Index, partIndex),
+			})
+		}
+	}
 }
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
@@ -1489,6 +1508,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
 		}
+		observeGeminiFunctionCalls(info, &geminiResponse)
 
 		// 统计图片数量
 		for _, candidate := range geminiResponse.Candidates {

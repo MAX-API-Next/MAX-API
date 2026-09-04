@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -144,4 +146,205 @@ func TestOaiResponsesCompactionHandlerPreservesDetailedUsage(t *testing.T) {
 
 	require.Nil(t, maxAPIError)
 	assertDetailedResponsesUsage(t, usage)
+}
+
+func TestOaiResponsesHandlerBillsActualFunctionOutputNotToolDeclaration(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{
+		BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+			"function": {ToolName: "function"},
+		},
+	}
+	payload := dto.OpenAIResponsesResponse{
+		Tools: []map[string]any{{"type": "function", "name": "lookup"}},
+		Output: []dto.ResponsesOutput{{
+			Type:   "function_call",
+			ID:     "fc-1",
+			CallId: "call-1",
+			Name:   "lookup",
+			Status: "completed",
+		}},
+		Usage: detailedResponsesUsage(),
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	_, maxAPIError := OaiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, info.ToolUsageSnapshot().Items)
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["function"].CallCount)
+}
+
+func TestOaiResponsesHandlerDoesNotBillDeclarationWithoutOutputCall(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{
+		BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+			"function": {ToolName: "function"},
+		},
+	}
+	payload := dto.OpenAIResponsesResponse{
+		Tools: []map[string]any{{"type": "function", "name": "lookup"}},
+		Output: []dto.ResponsesOutput{{
+			Type: "message",
+			Role: "assistant",
+			Content: []dto.ResponsesOutputContent{{
+				Type: "output_text",
+				Text: "no tool needed",
+			}},
+		}},
+		Usage: detailedResponsesUsage(),
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	_, maxAPIError := OaiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["function"].CallCount)
+}
+
+func TestOaiResponsesHandlerRecordsCustomToolCallOutput(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"code_exec": 6})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	payload := dto.OpenAIResponsesResponse{
+		Status: []byte(`"completed"`),
+		Output: []dto.ResponsesOutput{{
+			Type:   dto.BuildInCallCustomToolCall,
+			ID:     "ct-1",
+			CallId: "call-1",
+			Name:   "code_exec",
+			Status: "completed",
+		}},
+		Usage: &dto.Usage{InputTokens: 1, OutputTokens: 1, TotalTokens: 2},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	_, maxAPIError := OaiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "code_exec",
+		CallCount:  1,
+		PricePer1K: 6,
+	}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiResponsesStreamHandlerDeduplicatesFunctionItemDoneAndCompleted(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	itemDone := dto.ResponsesStreamResponse{
+		Type:        dto.ResponsesOutputTypeItemDone,
+		OutputIndex: common.GetPointer(0),
+		Item: &dto.ResponsesOutput{
+			Type:   "function_call",
+			ID:     "fc-1",
+			CallId: "call-1",
+			Name:   "lookup",
+			Status: "completed",
+		},
+	}
+	completed := dto.ResponsesStreamResponse{
+		Type: "response.completed",
+		Response: &dto.OpenAIResponsesResponse{
+			Output: []dto.ResponsesOutput{{
+				Type:   "function_call",
+				ID:     "fc-1",
+				CallId: "call-1",
+				Name:   "lookup",
+				Status: "completed",
+			}},
+			Usage: detailedResponsesUsage(),
+		},
+	}
+	itemData, err := common.Marshal(itemDone)
+	require.NoError(t, err)
+	completedData, err := common.Marshal(completed)
+	require.NoError(t, err)
+	body := append([]byte("data: "), itemData...)
+	body = append(body, []byte("\ndata: ")...)
+	body = append(body, itemData...)
+	body = append(body, []byte("\ndata: ")...)
+	body = append(body, completedData...)
+	body = append(body, []byte("\ndata: [DONE]\n")...)
+
+	_, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiResponsesHandlerRejectsFailedTerminalStatusWithoutBillingTools(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	payload := dto.OpenAIResponsesResponse{
+		Status: []byte(`"failed"`),
+		Output: []dto.ResponsesOutput{{
+			Type:   dto.BuildInCallFunctionCall,
+			ID:     "fc-1",
+			CallId: "call-1",
+			Name:   "lookup",
+			Status: "completed",
+		}},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	_, maxAPIError := OaiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiResponsesStreamHandlerRejectsFailedTerminalAfterToolEvent(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc-1","call_id":"call-1","name":"lookup","status":"completed"}}`,
+		`data: {"type":"response.failed","response":{"id":"resp-1","status":"failed","error":{"type":"server_error","code":"server_error","message":"upstream failed"}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	_, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Empty(t, info.ToolUsageSnapshot().Items)
 }

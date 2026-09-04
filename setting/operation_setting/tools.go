@@ -66,11 +66,13 @@ type prefixEntry struct {
 }
 
 type toolPriceIndex struct {
+	version  uint64
 	defaults map[string]float64
 	prefixes map[string][]prefixEntry
 }
 
 var currentIndex atomic.Pointer[toolPriceIndex]
+var currentToolPriceVersion atomic.Uint64
 
 // RebuildToolPriceIndex rebuilds the lookup index from the current config.
 // Called on init and after config updates. Not on the billing hot path.
@@ -87,6 +89,7 @@ func RebuildToolPriceIndex() {
 	}
 
 	idx := &toolPriceIndex{
+		version:  currentToolPriceVersion.Add(1),
 		defaults: make(map[string]float64),
 		prefixes: make(map[string][]prefixEntry),
 	}
@@ -114,10 +117,38 @@ func RebuildToolPriceIndex() {
 	currentIndex.Store(idx)
 }
 
-// GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.
-// Lookup: longest prefix match → tool default → 0.
-func GetToolPriceForModel(toolName, modelName string) float64 {
-	idx := currentIndex.Load()
+// ToolPriceSnapshot is an immutable request-scoped view of tool prices. It
+// retains the exact index that was active when the request started so config
+// reloads cannot change the price of an in-flight tool call.
+type ToolPriceSnapshot struct {
+	modelName string
+	index     *toolPriceIndex
+}
+
+// CaptureToolPriceSnapshot freezes the current price index for one billing
+// model. Published indexes are immutable after currentIndex.Store.
+func CaptureToolPriceSnapshot(modelName string) ToolPriceSnapshot {
+	return ToolPriceSnapshot{
+		modelName: modelName,
+		index:     currentIndex.Load(),
+	}
+}
+
+// Version returns the monotonically increasing config generation captured by
+// this snapshot. Zero means the index was unavailable during early startup.
+func (s ToolPriceSnapshot) Version() uint64 {
+	if s.index == nil {
+		return 0
+	}
+	return s.index.version
+}
+
+// PriceFor returns the frozen price ($/1K calls) for a tool.
+func (s ToolPriceSnapshot) PriceFor(toolName string) float64 {
+	return lookupToolPrice(s.index, toolName, s.modelName)
+}
+
+func lookupToolPrice(idx *toolPriceIndex, toolName, modelName string) float64 {
 	if idx == nil {
 		if v, ok := defaultToolPrices[toolName]; ok {
 			return v
@@ -137,6 +168,12 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 		return p
 	}
 	return 0
+}
+
+// GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.
+// Lookup: longest prefix match → tool default → 0.
+func GetToolPriceForModel(toolName, modelName string) float64 {
+	return lookupToolPrice(currentIndex.Load(), toolName, modelName)
 }
 
 // GetToolPrice is a convenience wrapper when no model name is needed.

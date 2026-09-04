@@ -140,6 +140,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
+			observeOpenAIStreamToolCalls(info, data)
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
@@ -228,6 +229,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.BuildTextResponseAuditContent(&simpleResponse))
 	}
+	observeOpenAITextToolCalls(info, simpleResponse.Choices)
 
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
@@ -298,6 +300,44 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &simpleResponse.Usage, nil
+}
+
+func observeOpenAITextToolCalls(info *relaycommon.RelayInfo, choices []dto.OpenAITextResponseChoice) {
+	if info == nil {
+		return
+	}
+	for _, choice := range choices {
+		for toolIndex, toolCall := range choice.Message.ParseToolCalls() {
+			info.ObserveCustomToolCall(toolCall.Function.Name, relaycommon.ToolCallIdentity{
+				Scope:    "openai-chat",
+				CallID:   toolCall.ID,
+				Position: fmt.Sprintf("choice:%d:tool:%d", choice.Index, toolIndex),
+			})
+		}
+	}
+}
+
+func observeOpenAIStreamToolCalls(info *relaycommon.RelayInfo, data string) {
+	if info == nil || data == "" {
+		return
+	}
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		for position, toolCall := range choice.Delta.ToolCalls {
+			toolIndex := position
+			if toolCall.Index != nil {
+				toolIndex = *toolCall.Index
+			}
+			info.ObserveCustomToolCall(toolCall.Function.Name, relaycommon.ToolCallIdentity{
+				Scope:    "openai-chat",
+				CallID:   toolCall.ID,
+				Position: fmt.Sprintf("choice:%d:tool:%d", choice.Index, toolIndex),
+			})
+		}
+	}
 }
 
 func streamTTSResponse(c *gin.Context, resp *http.Response) {

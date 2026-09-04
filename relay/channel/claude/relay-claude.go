@@ -862,6 +862,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
+	observeClaudeToolUses(info, &claudeResponse)
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
@@ -984,6 +985,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.GetCacheCreation5mTokens()
 		claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.GetCacheCreation1hTokens()
 	}
+	observeClaudeToolUses(info, &claudeResponse)
 	var responseData []byte
 	var auditResponse *dto.OpenAITextResponse
 	switch info.RelayFormat {
@@ -1010,6 +1012,30 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	service.IOCopyBytesGracefully(c, httpResp, responseData)
 	return nil
+}
+
+func observeClaudeToolUses(info *relaycommon.RelayInfo, response *dto.ClaudeResponse) {
+	if info == nil || response == nil {
+		return
+	}
+	if response.Type == "content_block_start" && response.ContentBlock != nil && response.ContentBlock.Type == dto.BuildInCallToolUse {
+		info.ObserveCustomToolCall(response.ContentBlock.Name, relaycommon.ToolCallIdentity{
+			Scope:    "claude-messages",
+			CallID:   response.ContentBlock.Id,
+			Position: fmt.Sprintf("block:%d", response.GetIndex()),
+		})
+	}
+	for index := range response.Content {
+		block := &response.Content[index]
+		if block.Type != dto.BuildInCallToolUse {
+			continue
+		}
+		info.ObserveCustomToolCall(block.Name, relaycommon.ToolCallIdentity{
+			Scope:    "claude-messages",
+			CallID:   block.Id,
+			Position: fmt.Sprintf("block:%d", index),
+		})
+	}
 }
 
 func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.MaxAPIError) {

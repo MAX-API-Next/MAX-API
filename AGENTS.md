@@ -144,3 +144,33 @@ This includes investigation notes, review outputs, scratch plans, working drafts
 Do NOT place these files in the repository root, `docs/`, `.github/`, or source directories unless the content is explicitly intended to be public project documentation. `.tmp/` is ignored by Git; use it to prevent accidental publication of sensitive or internal process information to the open-source GitHub repository. If process documents are found outside `.tmp/`, move them into `.tmp/` before committing.
 
 Local agent workflow files, including `.agents/skills/` and `.agents/upstream-sync/`, are private project-maintenance material for this workspace and MUST NOT be committed to the public GitHub repository. Keep reusable private agent instructions there locally, or move public-safe documentation into normal project docs when it is intentionally meant to be open source.
+
+### Rule 9: Monitor Independent New API Upstream Modules and Plugins
+
+New API-derived capabilities that evolve outside MAX-API's normal dependency graph MUST be checked explicitly. This includes independent Go modules such as `relaykit`, bundled Task Plugins under `plugins/`, and their host-side plugin or protocol-conversion frameworks.
+
+Run the private upstream component check before any of the following work:
+
+- changing relay DTOs, protocol conversion, streaming conversion, usage normalization, or finish-reason mapping;
+- changing Task Plugin loading, routing, sandboxing, artifact handling, usage facts, or plugin billing integration;
+- preparing a release, performing an upstream feature/security comparison, or claiming parity with the latest New API;
+- adopting or upgrading an independent New API module or plugin.
+
+Required procedure:
+
+1. Read `.agents/upstream-sync/components.json` and `.agents/upstream-sync/new-api-sync.md`.
+2. Run `powershell -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1` from the repository root.
+3. Treat the ignored `new-api/new-api` source copy as reference material only. Its presence does not prove that it matches upstream HEAD.
+4. If the remote state cannot be verified, report `需要进一步验证`; do not describe the local copy as current.
+5. Detection is not acceptance: never automatically merge or wholesale copy an upstream change. Classify it as `pending`, `accepted`, `ported`, `skipped`, `superseded`, or `blocked`, with rationale.
+6. Advance the reviewed baseline only after the affected code and compatibility gates have been inspected and the relevant tests have passed. Merely detecting a newer commit MUST NOT advance the baseline.
+7. Keep generated comparison reports under `.tmp/`. Keep the reusable checker, component registry, and local sync state under `.agents/upstream-sync/`; these remain private and uncommitted under Rule 8.
+
+RelayKit-specific requirements:
+
+- Describe RelayKit accurately as an independent, full-matrix, auditable protocol-conversion module. MAX-API already has multiple conversion paths and `BillingUsage`; do not claim that MAX-API has no protocol conversion.
+- Review request, non-stream response, and streaming response conversion separately, including finalization behavior.
+- Verify explicit zero-value preservation, tool calls, multimodal input, reasoning content, finish reasons, and usage mapping.
+- Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
+- RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
+- If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
