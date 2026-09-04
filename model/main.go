@@ -753,13 +753,7 @@ func ensureUserSubscriptionPolicyColumns(tableExisted, walletColumnExisted, down
 		return nil
 	}
 	addColumn := func(name string, exists bool) error {
-		if exists {
-			return nil
-		}
-		if err := execSubscriptionPolicyColumnDDL("user_subscriptions", name); err != nil {
-			return fmt.Errorf("failed to add user_subscriptions.%s: %w", name, err)
-		}
-		return nil
+		return addSubscriptionPolicyColumn(&UserSubscription{}, "user_subscriptions", name, exists)
 	}
 	if err := addColumn("allow_wallet_overflow", walletColumnExisted); err != nil {
 		return err
@@ -772,18 +766,28 @@ func ensureSubscriptionPlanPolicyColumns(tableExisted, walletColumnExisted, down
 		return nil
 	}
 	addColumn := func(name string, exists bool) error {
-		if exists {
-			return nil
-		}
-		if err := execSubscriptionPolicyColumnDDL("subscription_plans", name); err != nil {
-			return fmt.Errorf("failed to add subscription_plans.%s: %w", name, err)
-		}
-		return nil
+		return addSubscriptionPolicyColumn(&SubscriptionPlan{}, "subscription_plans", name, exists)
 	}
 	if err := addColumn("allow_wallet_overflow", walletColumnExisted); err != nil {
 		return err
 	}
 	return addColumn("downgrade_group", downgradeColumnExisted)
+}
+
+func addSubscriptionPolicyColumn(modelValue any, tableName, columnName string, existed bool) error {
+	if existed {
+		return nil
+	}
+	if err := execSubscriptionPolicyColumnDDL(tableName, columnName); err != nil {
+		// Another application node can add the same column after this node's
+		// startup HasColumn snapshot. Suppress only that successful concurrent
+		// outcome; every other DDL failure keeps its original error context.
+		if DB.Migrator().HasColumn(modelValue, columnName) {
+			return nil
+		}
+		return fmt.Errorf("failed to add %s.%s: %w", tableName, columnName, err)
+	}
+	return nil
 }
 
 func execSubscriptionPolicyColumnDDL(tableName, columnName string) error {

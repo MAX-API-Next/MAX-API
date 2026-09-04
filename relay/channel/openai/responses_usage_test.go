@@ -349,6 +349,67 @@ func TestOaiResponsesStreamHandlerDeduplicatesFunctionItemDoneAndCompleted(t *te
 	}}, info.ToolUsageSnapshot().Items)
 }
 
+func TestOaiResponsesStreamHandlerCountsBuiltInToolsOnce(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{
+		dto.BuildInToolWebSearchPreview: 5,
+		dto.BuildInToolFileSearch:       7,
+	})
+
+	tests := []struct {
+		name     string
+		callType string
+		toolName string
+	}{
+		{name: "web search", callType: dto.BuildInCallWebSearchCall, toolName: dto.BuildInToolWebSearchPreview},
+		{name: "file search", callType: dto.BuildInCallFileSearchCall, toolName: dto.BuildInToolFileSearch},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, info := newOpenAIToolBillingContext("gpt-test")
+			info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{
+				BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+					tt.toolName: {ToolName: tt.toolName},
+				},
+			}
+			output := dto.ResponsesOutput{
+				Type:   tt.callType,
+				ID:     "tool-1",
+				Status: "completed",
+			}
+			itemDone := dto.ResponsesStreamResponse{
+				Type:        dto.ResponsesOutputTypeItemDone,
+				OutputIndex: common.GetPointer(0),
+				Item:        &output,
+			}
+			completed := dto.ResponsesStreamResponse{
+				Type: "response.completed",
+				Response: &dto.OpenAIResponsesResponse{
+					Output: []dto.ResponsesOutput{output},
+					Usage:  detailedResponsesUsage(),
+				},
+			}
+			itemData, err := common.Marshal(itemDone)
+			require.NoError(t, err)
+			completedData, err := common.Marshal(completed)
+			require.NoError(t, err)
+			body := append([]byte("data: "), itemData...)
+			body = append(body, []byte("\ndata: ")...)
+			body = append(body, itemData...)
+			body = append(body, []byte("\ndata: ")...)
+			body = append(body, completedData...)
+			body = append(body, []byte("\ndata: [DONE]\n")...)
+
+			_, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			})
+			require.Nil(t, maxAPIError)
+			require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[tt.toolName].CallCount)
+		})
+	}
+}
+
 func TestOaiResponsesHandlerRejectsFailedTerminalStatusWithoutBillingTools(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")

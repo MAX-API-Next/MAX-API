@@ -290,6 +290,21 @@ func (l *ToolUsageLedger) Snapshot() ToolUsageSnapshot {
 	}
 }
 
+func (l *ToolUsageLedger) currentBuiltInCallCounts() map[string]int {
+	counts := make(map[string]int)
+	if l == nil {
+		return counts
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, record := range l.records {
+		if record != nil && record.kind == ToolUsageKindBuiltIn {
+			counts[record.name]++
+		}
+	}
+	return counts
+}
+
 func (info *RelayInfo) beginToolUsageAttempt() bool {
 	if info == nil {
 		return false
@@ -319,7 +334,21 @@ func (info *RelayInfo) ObserveBuiltInToolCall(name string, identity ToolCallIden
 		info.ToolUsage = NewToolUsageLedger(info.OriginModelName)
 		info.ToolUsage.BeginAttempt(info.RetryIndex)
 	}
-	return info.ToolUsage.ObserveBuiltIn(name, identity)
+	accepted := info.ToolUsage.ObserveBuiltIn(name, identity)
+	if info.ResponsesUsageInfo != nil {
+		counts := info.ToolUsage.currentBuiltInCallCounts()
+		for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+			if tool != nil {
+				tool.CallCount = 0
+			}
+		}
+		for toolName, count := range counts {
+			if tool := info.ResponsesUsageInfo.BuiltInTools[toolName]; tool != nil {
+				tool.CallCount = count
+			}
+		}
+	}
+	return accepted
 }
 
 func (info *RelayInfo) CommitToolUsageAttempt() bool {

@@ -88,6 +88,45 @@ func TestToolUsageLedgerSnapshotExcludesBuiltInRecords(t *testing.T) {
 	}}, ledger.Snapshot().Items)
 }
 
+func TestRelayInfoBuiltInCountsFollowAttemptLedger(t *testing.T) {
+	replaceToolPricesForTest(t, map[string]float64{
+		"web_search_preview": 5,
+		"file_search":        7,
+	})
+
+	info := &RelayInfo{
+		OriginModelName: "gpt-test",
+		ResponsesUsageInfo: &ResponsesUsageInfo{BuiltInTools: map[string]*BuildInToolInfo{
+			"web_search_preview": {ToolName: "web_search_preview"},
+			"file_search":        {ToolName: "file_search"},
+		}},
+		ToolUsage: NewToolUsageLedger("gpt-test"),
+	}
+	info.ToolUsage.BeginAttempt(0)
+	identity := ToolCallIdentity{Scope: "openai-responses", CallID: "call-1", Position: "output:0"}
+
+	require.True(t, info.ObserveBuiltInToolCall("web_search_preview", identity))
+	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["web_search_preview"].CallCount)
+	require.False(t, info.ObserveBuiltInToolCall("web_search_preview", identity))
+	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["web_search_preview"].CallCount)
+
+	// Conflicting identities invalidate the previously accepted record, so the
+	// projected counter must fail closed instead of retaining a charge.
+	require.False(t, info.ObserveBuiltInToolCall("file_search", identity))
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["web_search_preview"].CallCount)
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["file_search"].CallCount)
+
+	info.RetryIndex = 1
+	info.ToolUsage.BeginAttempt(1)
+	require.True(t, info.ObserveBuiltInToolCall("file_search", ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "call-2",
+		Position: "output:1",
+	}))
+	require.Zero(t, info.ResponsesUsageInfo.BuiltInTools["web_search_preview"].CallCount)
+	require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["file_search"].CallCount)
+}
+
 func TestToolUsageLedgerDeduplicatesAliasesButCountsDistinctCalls(t *testing.T) {
 	replaceToolPricesForTest(t, map[string]float64{
 		"lookup": 5,

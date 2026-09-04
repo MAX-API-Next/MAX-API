@@ -169,3 +169,50 @@ func TestCalculateTextToolCallSurchargeSkipsPerRequestModels(t *testing.T) {
 	require.True(t, calculateTextToolCallSurcharge(ctx, info, &summary).IsZero())
 	require.Empty(t, summary.CustomToolUsage.Items)
 }
+
+func TestCalculateTextQuotaSummaryBillsProjectedResponsesBuiltInToolOnce(t *testing.T) {
+	setServiceToolPricesForTest(t, map[string]float64{
+		dto.BuildInToolWebSearchPreview: 5,
+		dto.BuildInToolFileSearch:       7,
+	})
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-test",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+			dto.BuildInToolWebSearchPreview: {ToolName: dto.BuildInToolWebSearchPreview},
+			dto.BuildInToolFileSearch:       {ToolName: dto.BuildInToolFileSearch},
+		}},
+		ToolUsage: relaycommon.NewToolUsageLedger("gpt-test"),
+		StartTime: time.Now(),
+	}
+	info.ToolUsage.BeginAttempt(0)
+	require.True(t, info.ObserveBuiltInToolCall(dto.BuildInToolWebSearchPreview, relaycommon.ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "web-1",
+		Position: "output:0",
+	}))
+	require.False(t, info.ObserveBuiltInToolCall(dto.BuildInToolWebSearchPreview, relaycommon.ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "web-1",
+		Position: "output:0",
+	}))
+	require.True(t, info.ObserveBuiltInToolCall(dto.BuildInToolFileSearch, relaycommon.ToolCallIdentity{
+		Scope:    "openai-responses",
+		CallID:   "file-1",
+		Position: "output:1",
+	}))
+
+	summary := calculateTextQuotaSummary(ctx, info, &dto.Usage{})
+	expected := decimal.NewFromFloat(5 + 7).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	require.Equal(t, 1, summary.WebSearchCallCount)
+	require.Equal(t, 1, summary.FileSearchCallCount)
+	require.True(t, expected.Equal(summary.ToolCallSurchargeQuota))
+}

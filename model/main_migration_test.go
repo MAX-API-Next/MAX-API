@@ -165,6 +165,50 @@ func TestSubscriptionPolicyMigrationUsesConfiguredDatabaseFlags(t *testing.T) {
 	assert.NotContains(t, tableSQL, "allow_wallet_overflow` numeric NOT NULL DEFAULT 1")
 }
 
+func TestSubscriptionPolicyColumnAddToleratesConcurrentCreate(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousSQLite := common.UsingSQLite
+	previousMySQL := common.UsingMySQL
+	previousPostgreSQL := common.UsingPostgreSQL
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+		common.UsingSQLite = previousSQLite
+		common.UsingMySQL = previousMySQL
+		common.UsingPostgreSQL = previousPostgreSQL
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	require.NoError(t, db.Exec(`CREATE TABLE user_subscriptions (
+		id integer primary key,
+		allow_wallet_overflow numeric NOT NULL DEFAULT 1,
+		downgrade_group varchar(64) NOT NULL DEFAULT ''
+	)`).Error)
+
+	// Simulate another node adding both columns after this node captured stale
+	// HasColumn=false values but before it executes the ALTER statements.
+	require.NoError(t, ensureUserSubscriptionPolicyColumns(true, false, false))
+
+	// The subscription_plans helper is used only on non-SQLite production paths.
+	// Select the MySQL branch while retaining the SQLite test driver so the same
+	// deterministic stale-check scenario exercises that path.
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	require.NoError(t, db.Exec(`CREATE TABLE subscription_plans (
+		id integer primary key,
+		allow_wallet_overflow boolean DEFAULT TRUE,
+		downgrade_group varchar(64) NOT NULL DEFAULT ''
+	)`).Error)
+	require.NoError(t, ensureSubscriptionPlanPolicyColumns(true, false, false))
+}
+
 func TestSubscriptionPolicyMigrationRejectsMissingDatabaseFlags(t *testing.T) {
 	previousDB := DB
 	previousSQLite := common.UsingSQLite
@@ -185,6 +229,9 @@ func TestSubscriptionPolicyMigrationRejectsMissingDatabaseFlags(t *testing.T) {
 	common.UsingPostgreSQL = false
 
 	err = execSubscriptionPolicyColumnDDL("user_subscriptions", "allow_wallet_overflow")
+	require.ErrorContains(t, err, "database dialect is not configured")
+	err = ensureUserSubscriptionPolicyColumns(true, false, true)
+	require.ErrorContains(t, err, "failed to add user_subscriptions.allow_wallet_overflow")
 	require.ErrorContains(t, err, "database dialect is not configured")
 }
 
