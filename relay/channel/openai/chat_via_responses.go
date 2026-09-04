@@ -577,22 +577,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.error", "response.failed", "response.cancelled", "response.canceled":
 			skipRetry := info.SendResponseCount > 0
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					if skipRetry {
-						streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
-					} else {
-						streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					}
-					sr.Stop(streamErr)
-					return
-				}
-			}
-			if skipRetry {
-				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
-			} else {
-				streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			}
+			streamErr = responsesStreamTerminalError(&streamResp, skipRetry)
 			sr.Stop(streamErr)
 			return
 

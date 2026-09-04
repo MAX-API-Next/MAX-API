@@ -752,12 +752,11 @@ func ensureUserSubscriptionPolicyColumns(tableExisted, walletColumnExisted, down
 	if DB == nil || !tableExisted {
 		return nil
 	}
-	dialect := strings.ToLower(DB.Dialector.Name())
 	addColumn := func(name string, exists bool) error {
 		if exists {
 			return nil
 		}
-		if err := execSubscriptionPolicyColumnDDL("user_subscriptions", name, dialect); err != nil {
+		if err := execSubscriptionPolicyColumnDDL("user_subscriptions", name); err != nil {
 			return fmt.Errorf("failed to add user_subscriptions.%s: %w", name, err)
 		}
 		return nil
@@ -772,12 +771,11 @@ func ensureSubscriptionPlanPolicyColumns(tableExisted, walletColumnExisted, down
 	if DB == nil || !tableExisted {
 		return nil
 	}
-	dialect := strings.ToLower(DB.Dialector.Name())
 	addColumn := func(name string, exists bool) error {
 		if exists {
 			return nil
 		}
-		if err := execSubscriptionPolicyColumnDDL("subscription_plans", name, dialect); err != nil {
+		if err := execSubscriptionPolicyColumnDDL("subscription_plans", name); err != nil {
 			return fmt.Errorf("failed to add subscription_plans.%s: %w", name, err)
 		}
 		return nil
@@ -788,20 +786,23 @@ func ensureSubscriptionPlanPolicyColumns(tableExisted, walletColumnExisted, down
 	return addColumn("downgrade_group", downgradeColumnExisted)
 }
 
-func execSubscriptionPolicyColumnDDL(tableName, columnName, dialect string) error {
+func execSubscriptionPolicyColumnDDL(tableName, columnName string) error {
+	if !common.UsingPostgreSQL && !common.UsingMySQL && !common.UsingSQLite {
+		return fmt.Errorf("database dialect is not configured for subscription policy column %s.%s", tableName, columnName)
+	}
 	switch tableName {
 	case "user_subscriptions":
 		switch columnName {
 		case "allow_wallet_overflow":
-			if dialect == "postgres" {
+			if common.UsingPostgreSQL {
 				return DB.Exec(`ALTER TABLE "user_subscriptions" ADD COLUMN "allow_wallet_overflow" boolean NOT NULL DEFAULT true`).Error
-			} else if dialect == "mysql" {
+			} else if common.UsingMySQL {
 				return DB.Exec("ALTER TABLE `user_subscriptions` ADD COLUMN `allow_wallet_overflow` boolean NOT NULL DEFAULT TRUE").Error
 			} else {
 				return DB.Exec("ALTER TABLE `user_subscriptions` ADD COLUMN `allow_wallet_overflow` numeric NOT NULL DEFAULT 1").Error
 			}
 		case "downgrade_group":
-			if dialect == "postgres" {
+			if common.UsingPostgreSQL {
 				return DB.Exec(`ALTER TABLE "user_subscriptions" ADD COLUMN "downgrade_group" varchar(64) NOT NULL DEFAULT ''`).Error
 			} else {
 				return DB.Exec("ALTER TABLE `user_subscriptions` ADD COLUMN `downgrade_group` varchar(64) NOT NULL DEFAULT ''").Error
@@ -810,22 +811,22 @@ func execSubscriptionPolicyColumnDDL(tableName, columnName, dialect string) erro
 	case "subscription_plans":
 		switch columnName {
 		case "allow_wallet_overflow":
-			if dialect == "postgres" {
+			if common.UsingPostgreSQL {
 				return DB.Exec(`ALTER TABLE "subscription_plans" ADD COLUMN "allow_wallet_overflow" boolean DEFAULT true`).Error
-			} else if dialect == "mysql" {
+			} else if common.UsingMySQL {
 				return DB.Exec("ALTER TABLE `subscription_plans` ADD COLUMN `allow_wallet_overflow` boolean DEFAULT TRUE").Error
 			} else {
 				return DB.Exec("ALTER TABLE `subscription_plans` ADD COLUMN `allow_wallet_overflow` numeric DEFAULT 1").Error
 			}
 		case "downgrade_group":
-			if dialect == "postgres" {
+			if common.UsingPostgreSQL {
 				return DB.Exec(`ALTER TABLE "subscription_plans" ADD COLUMN "downgrade_group" varchar(64) NOT NULL DEFAULT ''`).Error
 			} else {
 				return DB.Exec("ALTER TABLE `subscription_plans` ADD COLUMN `downgrade_group` varchar(64) NOT NULL DEFAULT ''").Error
 			}
 		}
 	}
-	return fmt.Errorf("unsupported subscription policy column %s.%s for dialect %s", tableName, columnName, dialect)
+	return fmt.Errorf("unsupported subscription policy column %s.%s", tableName, columnName)
 }
 
 func migrateUserSubscriptionPolicyDefaults(tableExisted, walletColumnExisted, downgradeColumnExisted bool) error {

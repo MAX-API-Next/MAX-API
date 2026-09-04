@@ -131,6 +131,63 @@ func TestUserSubscriptionPolicyMigrationAddsSafeDefaultsForLegacyRows(t *testing
 	assert.Equal(t, "", got.DowngradeGroup)
 }
 
+func TestSubscriptionPolicyMigrationUsesConfiguredDatabaseFlags(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousSQLite := common.UsingSQLite
+	previousMySQL := common.UsingMySQL
+	previousPostgreSQL := common.UsingPostgreSQL
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+		common.UsingSQLite = previousSQLite
+		common.UsingMySQL = previousMySQL
+		common.UsingPostgreSQL = previousPostgreSQL
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	// Deliberately keep the SQLite driver while selecting the configured MySQL
+	// branch. The migration must follow the project flags rather than infer a
+	// different dialect from DB.Dialector.Name().
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	common.UsingPostgreSQL = false
+	require.NoError(t, db.Exec(`CREATE TABLE user_subscriptions (id integer primary key)`).Error)
+	require.NoError(t, ensureUserSubscriptionPolicyColumns(true, false, false))
+	assert.True(t, db.Migrator().HasColumn("user_subscriptions", "allow_wallet_overflow"))
+	assert.True(t, db.Migrator().HasColumn("user_subscriptions", "downgrade_group"))
+	var tableSQL string
+	require.NoError(t, db.Raw(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_subscriptions'`).Scan(&tableSQL).Error)
+	assert.Contains(t, tableSQL, "allow_wallet_overflow` boolean NOT NULL DEFAULT TRUE")
+	assert.NotContains(t, tableSQL, "allow_wallet_overflow` numeric NOT NULL DEFAULT 1")
+}
+
+func TestSubscriptionPolicyMigrationRejectsMissingDatabaseFlags(t *testing.T) {
+	previousDB := DB
+	previousSQLite := common.UsingSQLite
+	previousMySQL := common.UsingMySQL
+	previousPostgreSQL := common.UsingPostgreSQL
+	t.Cleanup(func() {
+		DB = previousDB
+		common.UsingSQLite = previousSQLite
+		common.UsingMySQL = previousMySQL
+		common.UsingPostgreSQL = previousPostgreSQL
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = false
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+
+	err = execSubscriptionPolicyColumnDDL("user_subscriptions", "allow_wallet_overflow")
+	require.ErrorContains(t, err, "database dialect is not configured")
+}
+
 func TestSubscriptionPlanPolicyMigrationIsIdempotentOnSQLite(t *testing.T) {
 	previousDB := DB
 	previousLogDB := LOG_DB

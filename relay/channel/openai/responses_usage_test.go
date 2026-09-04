@@ -348,3 +348,23 @@ func TestOaiResponsesStreamHandlerRejectsFailedTerminalAfterToolEvent(t *testing
 	require.True(t, types.IsSkipRetryError(maxAPIError))
 	require.Empty(t, info.ToolUsageSnapshot().Items)
 }
+
+func TestOaiResponsesToChatStreamHandlerPreservesMessageOnlyTerminalError(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.SendResponseCount = 1
+
+	body := strings.Join([]string{
+		`data: {"type":"response.failed","response":{"id":"resp-1","status":"failed","error":{"message":"upstream failed"}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	_, maxAPIError := OaiResponsesToChatStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Equal(t, "upstream failed", maxAPIError.Error())
+}
