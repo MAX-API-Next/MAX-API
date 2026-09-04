@@ -8,7 +8,7 @@
 
 **MAX API 2.0：インテリジェント運用の時代へ · 統一モデルゲートウェイから AGI ネイティブなガバナンス／運用基盤へ**
 
-[MAX API 2.0 Preview リリースノートを見る](https://github.com/MAX-API-Next/MAX-API/releases/tag/v2.0.0-smartops.pre1)
+[最新の正式版リリースノートを見る](https://github.com/MAX-API-Next/MAX-API/releases/latest)
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -23,7 +23,7 @@
     <img src="https://img.shields.io/github/license/MAX-API-Next/MAX-API?color=brightgreen" alt="license">
   </a><!--
   --><a href="https://github.com/MAX-API-Next/MAX-API/releases/latest">
-    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen&include_prereleases" alt="release">
+    <img src="https://img.shields.io/github/v/release/MAX-API-Next/MAX-API?color=brightgreen" alt="release">
   </a><!--
   --><a href="https://hub.docker.com/r/cscitechtop/max-api">
     <img src="https://img.shields.io/badge/docker-dockerHub-blue" alt="docker">
@@ -47,7 +47,7 @@
   <a href="#-agi-に向けた技術方針">AGI 技術方針</a> •
   <a href="#-現在の機能">現在の機能</a> •
   <a href="#-インテリジェント運用センター">SmartOps</a> •
-  <a href="#-preview-デプロイ">Preview デプロイ</a>
+  <a href="#-デプロイガイド">デプロイガイド</a>
 </p>
 
 </div>
@@ -73,7 +73,7 @@ MAX API は単なるコードリポジトリではありません。AI Models、
 |---|---|
 | [MAX-API-Next GitHub](https://github.com/MAX-API-Next) | コミュニティプロジェクト、技術方針、オープンコラボレーションをフォロー |
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 再現可能な問題、改善提案、互換性の変化を共有 |
-| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 正式版と Preview 版の更新を確認 |
+| [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 正式版の更新を確認 |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | コードベースをすばやく検索・理解 |
 | 技術・エコシステム連携 | `maxapi@max-api.ai` まで連絡 |
 
@@ -179,7 +179,7 @@ docker run --name max-api -d --restart always -p 127.0.0.1:3000:3000 -e TZ=Asia/
 3. アクセストークンを作成し、アプリケーションの Base URL を MAX API に向ける。
 
 > [!TIP]
-> 本番環境では正式版を使用してください。Preview 版はテストと段階的検証向けです。アップグレード前にデータベースをバックアップし、ロールバック手順を準備してください。
+> 本番環境では確認済みの正式版タグを固定して使用してください。アップグレード前にデータベースをバックアップし、ロールバック手順を準備してください。
 >
 > [!WARNING]
 > SQLite はローカル評価、開発、小規模テスト向けです。本番環境では、ベンダーのセキュリティサポート期間内にある MySQL（8.4 LTS 推奨）または PostgreSQL（14+ 推奨）を使用し、Redis、HTTPS、バックアップ、復旧手順を構成してください。互換性の下限は MySQL ≥ 5.7.8、PostgreSQL ≥ 9.6 ですが、これらのバージョンを本番で使用することは推奨しません。
@@ -289,15 +289,15 @@ MAX API は今後も **AI Models and Agents governance** を中核とします�
 
 MAX API は基盤モデルではなく、現時点で AGI や自律運用を実現済みと主張しません。長期機能は Evidence、権限、予算、承認、ロールバックの境界が整った後にのみ段階的に検証します。
 
-## 🚢 Preview デプロイ
+## 🚢 デプロイガイド
 
-以下の手順は Preview 版のテストと段階的検証向けです。本番環境では正式版を使用し、同じ検証とロールバック手順を維持してください。
+以下の手順は正式版を例にしています。使用するバージョンタグとコミットを固定し、アップグレード前にバックアップ、検証、ロールバックの準備を完了してください。
 
 Docker Compose を推奨します：
 
 ```bash
-MAX_API_VERSION=v2.0.0-smartops.pre1
-MAX_API_COMMIT=b7096156549edc930ca244891afb1ba5632dbe8f
+MAX_API_VERSION=v1.0.5
+MAX_API_COMMIT=74a7ed3e4e2989c7e6f32b88a6b55e8446d2534e
 git clone --branch "$MAX_API_VERSION" --depth 1 https://github.com/MAX-API-Next/MAX-API.git
 cd MAX-API
 
