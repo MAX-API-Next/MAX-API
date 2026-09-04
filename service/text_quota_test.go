@@ -988,25 +988,24 @@ func TestCalculateTextQuotaSummaryZeroTokensStillBillsToolSurcharge(t *testing.T
 	require.Equal(t, common.QuotaFromDecimal(summary.ToolCallSurchargeQuota), summary.Quota)
 }
 
+func TestCustomToolItemQuotaPreservesBillingExpression(t *testing.T) {
+	item := relaycommon.ToolUsageItem{Name: "lookup", CallCount: 3, PricePer1K: 2.5}
+	groupRatio := 1.25
+	expected := decimal.NewFromFloat(item.PricePer1K).
+		Mul(decimal.NewFromInt(int64(item.CallCount))).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(groupRatio)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+
+	require.True(t, expected.Equal(customToolItemQuota(item, groupRatio)))
+}
+
 func TestCalculateTextQuotaSummaryBillsFrozenCustomToolUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 
+	setServiceToolPricesForTest(t, map[string]float64{"lookup": 5})
 	toolPrices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
-	originalPrices := make(map[string]float64, len(toolPrices.Prices))
-	for key, value := range toolPrices.Prices {
-		originalPrices[key] = value
-	}
-	toolPrices.Prices = make(map[string]float64, len(originalPrices)+1)
-	for key, value := range originalPrices {
-		toolPrices.Prices[key] = value
-	}
-	toolPrices.Prices["lookup"] = 5
-	operation_setting.RebuildToolPriceIndex()
-	t.Cleanup(func() {
-		toolPrices.Prices = originalPrices
-		operation_setting.RebuildToolPriceIndex()
-	})
 
 	ledger := relaycommon.NewToolUsageLedger("gpt-test")
 	ledger.BeginAttempt(0)

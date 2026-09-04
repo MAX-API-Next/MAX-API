@@ -93,23 +93,25 @@ func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *d
 	return usage.ClaudeCacheCreation5mTokens > 0 || usage.ClaudeCacheCreation1hTokens > 0
 }
 
+func customToolItemQuota(item relaycommon.ToolUsageItem, groupRatio float64) decimal.Decimal {
+	return decimal.NewFromFloat(item.PricePer1K).
+		Mul(decimal.NewFromInt(int64(item.CallCount))).
+		Div(decimal.NewFromInt(1000)).
+		Mul(decimal.NewFromFloat(groupRatio)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+}
+
 func calculateCustomToolCallSurcharge(relayInfo *relaycommon.RelayInfo, groupRatio float64) (relaycommon.ToolUsageSnapshot, decimal.Decimal) {
 	if relayInfo == nil || relayInfo.PriceData.UsePrice {
 		return relaycommon.ToolUsageSnapshot{}, decimal.Zero
 	}
 	snapshot := relayInfo.ToolUsageSnapshot()
-	dGroupRatio := decimal.NewFromFloat(groupRatio)
-	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 	var surcharge decimal.Decimal
 	for _, item := range snapshot.Items {
 		if item.CallCount <= 0 || item.PricePer1K <= 0 {
 			continue
 		}
-		surcharge = surcharge.Add(decimal.NewFromFloat(item.PricePer1K).
-			Mul(decimal.NewFromInt(int64(item.CallCount))).
-			Div(decimal.NewFromInt(1000)).
-			Mul(dGroupRatio).
-			Mul(dQuotaPerUnit))
+		surcharge = surcharge.Add(customToolItemQuota(item, groupRatio))
 	}
 	return snapshot, surcharge
 }
@@ -456,11 +458,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	for _, item := range summary.CustomToolUsage.Items {
-		cost := decimal.NewFromFloat(item.PricePer1K).
-			Mul(decimal.NewFromInt(int64(item.CallCount))).
-			Div(decimal.NewFromInt(1000)).
-			Mul(decimal.NewFromFloat(summary.GroupRatio)).
-			Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+		cost := customToolItemQuota(item, summary.GroupRatio)
 		extraContent = append(extraContent, fmt.Sprintf("Tool %q called %d time(s), cost %s", item.Name, item.CallCount, cost.String()))
 	}
 

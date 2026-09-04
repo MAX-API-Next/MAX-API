@@ -683,7 +683,7 @@ func RelayTask(c *gin.Context) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
-		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
+		result, taskErr = relayTaskSubmitAttempt(c, relayInfo, retryParam.GetRetry())
 		if taskErr == nil {
 			break
 		}
@@ -814,6 +814,11 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
 	}
 	c.JSON(taskErr.StatusCode, taskErr)
+}
+
+func relayTaskSubmitAttempt(c *gin.Context, relayInfo *relaycommon.RelayInfo, retryIndex int) (*relay.TaskSubmitResult, *dto.TaskError) {
+	relayInfo.RetryIndex = retryIndex
+	return relay.RelayTaskSubmit(c, relayInfo)
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {

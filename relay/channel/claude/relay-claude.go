@@ -645,6 +645,47 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+
+	pendingToolUses []claudePendingToolUse
+}
+
+type claudePendingToolUse struct {
+	name     string
+	identity relaycommon.ToolCallIdentity
+}
+
+func (info *ClaudeResponseInfo) rememberToolUse(response *dto.ClaudeResponse) {
+	if info == nil || response == nil || response.ContentBlock == nil || response.ContentBlock.Type != dto.BuildInCallToolUse {
+		return
+	}
+	info.pendingToolUses = append(info.pendingToolUses, claudePendingToolUse{
+		name: response.ContentBlock.Name,
+		identity: relaycommon.ToolCallIdentity{
+			Scope:    "claude-messages",
+			CallID:   response.ContentBlock.Id,
+			Position: fmt.Sprintf("block:%d", response.GetIndex()),
+		},
+	})
+}
+
+func (info *ClaudeResponseInfo) finishToolUses(relayInfo *relaycommon.RelayInfo, stopReason string) {
+	if info == nil {
+		return
+	}
+	pending := info.pendingToolUses
+	info.pendingToolUses = nil
+	if relayInfo == nil || !strings.EqualFold(strings.TrimSpace(stopReason), "tool_use") {
+		return
+	}
+	for _, toolUse := range pending {
+		relayInfo.ObserveCustomToolCall(toolUse.name, toolUse.identity)
+	}
+}
+
+func (info *ClaudeResponseInfo) discardPendingToolUses() {
+	if info != nil {
+		info.pendingToolUses = nil
+	}
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -862,7 +903,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
-	observeClaudeToolUses(info, &claudeResponse)
+	observeClaudeStreamToolUses(info, claudeInfo, &claudeResponse)
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
@@ -895,6 +936,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	defer claudeInfo.discardPendingToolUses()
 	if claudeInfo.Usage.PromptTokens == 0 {
 		//上游出错
 	}
@@ -943,6 +985,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
+	defer claudeInfo.discardPendingToolUses()
 	var err *types.MaxAPIError
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
@@ -1018,12 +1061,8 @@ func observeClaudeToolUses(info *relaycommon.RelayInfo, response *dto.ClaudeResp
 	if info == nil || response == nil {
 		return
 	}
-	if response.Type == "content_block_start" && response.ContentBlock != nil && response.ContentBlock.Type == dto.BuildInCallToolUse {
-		info.ObserveCustomToolCall(response.ContentBlock.Name, relaycommon.ToolCallIdentity{
-			Scope:    "claude-messages",
-			CallID:   response.ContentBlock.Id,
-			Position: fmt.Sprintf("block:%d", response.GetIndex()),
-		})
+	if !strings.EqualFold(strings.TrimSpace(response.StopReason), "tool_use") {
+		return
 	}
 	for index := range response.Content {
 		block := &response.Content[index]
@@ -1035,6 +1074,26 @@ func observeClaudeToolUses(info *relaycommon.RelayInfo, response *dto.ClaudeResp
 			CallID:   block.Id,
 			Position: fmt.Sprintf("block:%d", index),
 		})
+	}
+}
+
+func observeClaudeStreamToolUses(info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, response *dto.ClaudeResponse) {
+	if info == nil || claudeInfo == nil || response == nil {
+		return
+	}
+	if response.Type == "content_block_start" {
+		claudeInfo.rememberToolUse(response)
+		return
+	}
+	if response.Type != "message_delta" {
+		return
+	}
+	stopReason := response.StopReason
+	if response.Delta != nil && response.Delta.StopReason != nil {
+		stopReason = *response.Delta.StopReason
+	}
+	if strings.TrimSpace(stopReason) != "" {
+		claudeInfo.finishToolUses(info, stopReason)
 	}
 }
 

@@ -365,11 +365,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		quota = composedQuota
 		noteQuotaClamp(relayInfo, surchargeClamp)
 		for _, item := range customToolUsage.Items {
-			cost := decimal.NewFromFloat(item.PricePer1K).
-				Mul(decimal.NewFromInt(int64(item.CallCount))).
-				Div(decimal.NewFromInt(1000)).
-				Mul(decimal.NewFromFloat(groupRatio)).
-				Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+			cost := customToolItemQuota(item, groupRatio)
 			logContent += fmt.Sprintf(", Tool %q called %d time(s), cost %s", item.Name, item.CallCount, cost.String())
 		}
 	}

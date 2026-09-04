@@ -319,18 +319,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				}
 			}
 		case "error", "response.error", "response.failed", "response.cancelled", "response.canceled":
-			terminalEventErr = responsesStreamTerminalError(&streamResponse, true)
+			terminalEventErr = responsesStreamTerminalError(&streamResponse, streamForwarded)
 		}
 
 		if terminalEventErr != nil {
 			if streamForwarded {
 				sendResponsesStreamData(c, streamResponse, data)
-			} else {
-				pendingEvents = append(pendingEvents, pendingResponsesStreamEvent{
-					response: streamResponse,
-					data:     data,
-				})
-				flushPendingEvents()
 			}
 			streamErr = terminalEventErr
 			sr.Stop(streamErr)

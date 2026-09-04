@@ -374,6 +374,44 @@ func TestOaiResponsesStreamHandlerRejectsStandardErrorAfterToolEvent(t *testing.
 	require.Empty(t, info.ToolUsageSnapshot().Items)
 }
 
+func TestOaiResponsesStreamHandlerAllowsRetryWhenFirstEventIsError(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{name: "standard error", event: `{"type":"error","code":"server_error","message":"upstream failed"}`},
+		{name: "failed response", event: `{"type":"response.failed","response":{"id":"resp-1","status":"failed","error":{"message":"upstream failed"}}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			info := &relaycommon.RelayInfo{
+				RelayFormat:     types.RelayFormatOpenAIResponses,
+				OriginModelName: "gpt-test",
+				DisablePing:     true,
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
+			}
+			body := strings.Join([]string{
+				"data: " + tt.event,
+				`data: [DONE]`,
+				"",
+			}, "\n")
+
+			_, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			})
+			require.NotNil(t, maxAPIError)
+			require.False(t, types.IsSkipRetryError(maxAPIError))
+			require.Empty(t, recorder.Body.String())
+		})
+	}
+}
+
 func TestOaiResponsesToChatStreamHandlerPreservesMessageOnlyTerminalError(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")
