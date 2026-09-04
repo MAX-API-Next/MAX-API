@@ -303,6 +303,19 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	// Capture whether the policy columns existed before AutoMigrate so legacy
+	// rows can be initialized to the historical allow-wallet default instead of
+	// inheriting a bool zero value when the column is first introduced.
+	userSubscriptionsTableExisted := DB != nil && DB.Migrator().HasTable(&UserSubscription{})
+	userSubscriptionWalletColumnExisted := userSubscriptionsTableExisted && DB.Migrator().HasColumn(&UserSubscription{}, "allow_wallet_overflow")
+	userSubscriptionDowngradeColumnExisted := userSubscriptionsTableExisted && DB.Migrator().HasColumn(&UserSubscription{}, "downgrade_group")
+	planTableExisted := DB != nil && DB.Migrator().HasTable(&SubscriptionPlan{})
+	planWalletColumnExisted := planTableExisted && DB.Migrator().HasColumn(&SubscriptionPlan{}, "allow_wallet_overflow")
+	planDowngradeColumnExisted := planTableExisted && DB.Migrator().HasColumn(&SubscriptionPlan{}, "downgrade_group")
+	if err := ensureUserSubscriptionPolicyColumns(userSubscriptionsTableExisted, userSubscriptionWalletColumnExisted, userSubscriptionDowngradeColumnExisted); err != nil {
+		return err
+	}
+
 	// Migrate model_limits column from varchar to text for existing tables
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
@@ -355,6 +368,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateUserSubscriptionPolicyDefaults(userSubscriptionsTableExisted, userSubscriptionWalletColumnExisted, userSubscriptionDowngradeColumnExisted); err != nil {
+		return err
+	}
 	if err := migrateMetadataNameKeys(); err != nil {
 		return err
 	}
@@ -376,9 +392,15 @@ func migrateDB() error {
 			return err
 		}
 	} else {
+		if err := ensureSubscriptionPlanPolicyColumns(planTableExisted, planWalletColumnExisted, planDowngradeColumnExisted); err != nil {
+			return err
+		}
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := migrateSubscriptionPlanPolicyDefaults(planTableExisted, planWalletColumnExisted, planDowngradeColumnExisted); err != nil {
+		return err
 	}
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
@@ -726,6 +748,104 @@ type sqliteColumnDef struct {
 	DDL  string
 }
 
+func ensureUserSubscriptionPolicyColumns(tableExisted, walletColumnExisted, downgradeColumnExisted bool) error {
+	if DB == nil || !tableExisted {
+		return nil
+	}
+	dialect := strings.ToLower(DB.Dialector.Name())
+	addColumn := func(name, sqliteDDL, mysqlDDL, postgresDDL string, exists bool) error {
+		if exists {
+			return nil
+		}
+		ddl := sqliteDDL
+		switch dialect {
+		case "mysql":
+			ddl = mysqlDDL
+		case "postgres":
+			ddl = postgresDDL
+		}
+		if err := DB.Exec("ALTER TABLE " + quoteTableForDialect("user_subscriptions", dialect) + " ADD COLUMN " + ddl).Error; err != nil {
+			return fmt.Errorf("failed to add user_subscriptions.%s: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("allow_wallet_overflow", "`allow_wallet_overflow` numeric NOT NULL DEFAULT 1", "`allow_wallet_overflow` boolean NOT NULL DEFAULT TRUE", `"allow_wallet_overflow" boolean NOT NULL DEFAULT true`, walletColumnExisted); err != nil {
+		return err
+	}
+	return addColumn("downgrade_group", "`downgrade_group` varchar(64) NOT NULL DEFAULT ''", "`downgrade_group` varchar(64) NOT NULL DEFAULT ''", `"downgrade_group" varchar(64) NOT NULL DEFAULT ''`, downgradeColumnExisted)
+}
+
+func ensureSubscriptionPlanPolicyColumns(tableExisted, walletColumnExisted, downgradeColumnExisted bool) error {
+	if DB == nil || !tableExisted {
+		return nil
+	}
+	dialect := strings.ToLower(DB.Dialector.Name())
+	addColumn := func(name, sqliteDDL, mysqlDDL, postgresDDL string, exists bool) error {
+		if exists {
+			return nil
+		}
+		ddl := sqliteDDL
+		switch dialect {
+		case "mysql":
+			ddl = mysqlDDL
+		case "postgres":
+			ddl = postgresDDL
+		}
+		if err := DB.Exec("ALTER TABLE " + quoteTableForDialect("subscription_plans", dialect) + " ADD COLUMN " + ddl).Error; err != nil {
+			return fmt.Errorf("failed to add subscription_plans.%s: %w", name, err)
+		}
+		return nil
+	}
+	if err := addColumn("allow_wallet_overflow", "`allow_wallet_overflow` numeric DEFAULT 1", "`allow_wallet_overflow` boolean DEFAULT TRUE", `"allow_wallet_overflow" boolean DEFAULT true`, walletColumnExisted); err != nil {
+		return err
+	}
+	return addColumn("downgrade_group", "`downgrade_group` varchar(64) NOT NULL DEFAULT ''", "`downgrade_group` varchar(64) NOT NULL DEFAULT ''", `"downgrade_group" varchar(64) NOT NULL DEFAULT ''`, downgradeColumnExisted)
+}
+
+func quoteTableForDialect(tableName, dialect string) string {
+	if dialect == "postgres" {
+		return `"` + tableName + `"`
+	}
+	return "`" + tableName + "`"
+}
+
+func migrateUserSubscriptionPolicyDefaults(tableExisted, walletColumnExisted, downgradeColumnExisted bool) error {
+	if DB == nil || !DB.Migrator().HasTable(&UserSubscription{}) {
+		return nil
+	}
+	// A newly added bool column cannot distinguish legacy rows from an explicit
+	// false value after the fact. Initialize only rows that predate the column,
+	// and repair nullable legacy rows, preserving every persisted false value.
+	if !walletColumnExisted {
+		if tableExisted {
+			if err := DB.Model(&UserSubscription{}).Where("allow_wallet_overflow IS NULL").Update("allow_wallet_overflow", true).Error; err != nil {
+				return fmt.Errorf("failed to backfill user subscription wallet policy: %w", err)
+			}
+		}
+	} else if err := DB.Model(&UserSubscription{}).Where("allow_wallet_overflow IS NULL").Update("allow_wallet_overflow", true).Error; err != nil {
+		return fmt.Errorf("failed to repair user subscription wallet policy: %w", err)
+	}
+	if err := DB.Model(&UserSubscription{}).Where("downgrade_group IS NULL").Update("downgrade_group", "").Error; err != nil {
+		return fmt.Errorf("failed to backfill user subscription downgrade policy: %w", err)
+	}
+	return nil
+}
+
+func migrateSubscriptionPlanPolicyDefaults(tableExisted, walletColumnExisted, downgradeColumnExisted bool) error {
+	if DB == nil || !DB.Migrator().HasTable(&SubscriptionPlan{}) {
+		return nil
+	}
+	if walletColumnExisted || tableExisted {
+		if err := DB.Model(&SubscriptionPlan{}).Where("allow_wallet_overflow IS NULL").Update("allow_wallet_overflow", true).Error; err != nil {
+			return fmt.Errorf("failed to backfill subscription plan wallet policy: %w", err)
+		}
+	}
+	if err := DB.Model(&SubscriptionPlan{}).Where("downgrade_group IS NULL").Update("downgrade_group", "").Error; err != nil {
+		return fmt.Errorf("failed to backfill subscription plan downgrade policy: %w", err)
+	}
+	return nil
+}
+
 func ensureSubscriptionPlanTableSQLite() error {
 	if !common.UsingSQLite {
 		return nil
@@ -744,11 +864,13 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`enabled`" + ` numeric DEFAULT 1,
 ` + "`sort_order`" + ` integer DEFAULT 0,
 ` + "`allow_balance_pay`" + ` numeric DEFAULT 1,
+` + "`allow_wallet_overflow`" + ` numeric DEFAULT 1,
 ` + "`stripe_price_id`" + ` varchar(128) DEFAULT '',
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`waffo_pancake_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
 ` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
+` + "`downgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
@@ -779,11 +901,13 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "enabled", DDL: "`enabled` numeric DEFAULT 1"},
 		{Name: "sort_order", DDL: "`sort_order` integer DEFAULT 0"},
 		{Name: "allow_balance_pay", DDL: "`allow_balance_pay` numeric DEFAULT 1"},
+		{Name: "allow_wallet_overflow", DDL: "`allow_wallet_overflow` numeric DEFAULT 1"},
 		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "waffo_pancake_product_id", DDL: "`waffo_pancake_product_id` varchar(128) DEFAULT ''"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
 		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
+		{Name: "downgrade_group", DDL: "`downgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},

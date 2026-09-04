@@ -208,6 +208,18 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         size: 100,
       },
       {
+        id: 'allow_wallet_overflow',
+        meta: { label: t('Wallet fallback'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Wallet fallback')} />
+        ),
+        cell: ({ row }) =>
+          row.original.plan.allow_wallet_overflow === false
+            ? t('Disable')
+            : t('Enable'),
+        size: 110,
+      },
+      {
         id: 'actions',
         cell: ({ row }) => <DataTableRowActions row={row} />,
         size: 80,

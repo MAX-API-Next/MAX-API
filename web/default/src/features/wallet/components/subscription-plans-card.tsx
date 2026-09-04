@@ -534,6 +534,12 @@ export function SubscriptionPlansCard({
                 plan.upgrade_group
                   ? `${t('Upgrade Group')}: ${plan.upgrade_group}`
                   : null,
+                plan.downgrade_group
+                  ? `${t('Downgrade Group')}: ${plan.downgrade_group}`
+                  : null,
+                plan.allow_wallet_overflow === false
+                  ? t('Wallet fallback disabled')
+                  : null,
               ].filter(Boolean) as string[]
 
               return (

@@ -9,6 +9,8 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
@@ -100,4 +102,105 @@ func TestMigrateDBRunsCoreAutoMigrateBeforeSubscriptionPlanPriceMigrationFailure
 	if !db.Migrator().HasTable(&Channel{}) {
 		t.Fatal("expected core schema auto-migration to run before subscription price migration failure")
 	}
+}
+
+func TestUserSubscriptionPolicyMigrationAddsSafeDefaultsForLegacyRows(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	require.NoError(t, db.Exec(`CREATE TABLE user_subscriptions (id integer primary key, user_id integer, status varchar(32), end_time bigint, updated_at bigint)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO user_subscriptions (id, user_id, status, end_time) VALUES (1, 7, 'active', 9999999999)`).Error)
+
+	require.NoError(t, ensureUserSubscriptionPolicyColumns(true, false, false))
+	require.NoError(t, migrateUserSubscriptionPolicyDefaults(true, false, false))
+
+	var got struct {
+		AllowWalletOverflow bool   `gorm:"column:allow_wallet_overflow"`
+		DowngradeGroup      string `gorm:"column:downgrade_group"`
+	}
+	require.NoError(t, db.Table("user_subscriptions").First(&got, 1).Error)
+	assert.True(t, got.AllowWalletOverflow)
+	assert.Equal(t, "", got.DowngradeGroup)
+}
+
+func TestSubscriptionPlanPolicyMigrationIsIdempotentOnSQLite(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	previousSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+		common.UsingSQLite = previousSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = true
+	require.NoError(t, db.Exec(`CREATE TABLE subscription_plans (id integer primary key, title varchar(128) NOT NULL, price_amount decimal(10,6) NOT NULL)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO subscription_plans (id, title, price_amount) VALUES (1, 'legacy', 1)`).Error)
+
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, migrateSubscriptionPlanPolicyDefaults(true, false, false))
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, migrateSubscriptionPlanPolicyDefaults(true, true, true))
+
+	var got struct {
+		AllowWalletOverflow *bool  `gorm:"column:allow_wallet_overflow"`
+		DowngradeGroup      string `gorm:"column:downgrade_group"`
+	}
+	require.NoError(t, db.Table("subscription_plans").First(&got, 1).Error)
+	require.NotNil(t, got.AllowWalletOverflow)
+	assert.True(t, *got.AllowWalletOverflow)
+	assert.Equal(t, "", got.DowngradeGroup)
+}
+
+func TestUserSubscriptionPolicyMigrationPreservesExplicitFalse(t *testing.T) {
+	previousDB := DB
+	previousLogDB := LOG_DB
+	t.Cleanup(func() {
+		DB = previousDB
+		LOG_DB = previousLogDB
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	require.NoError(t, db.Exec(`CREATE TABLE user_subscriptions (
+		id integer primary key,
+		user_id integer,
+		status varchar(32),
+		end_time bigint,
+		allow_wallet_overflow numeric,
+		downgrade_group varchar(64),
+		updated_at bigint
+	)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO user_subscriptions (id, user_id, status, end_time, allow_wallet_overflow, downgrade_group) VALUES
+		(1, 7, 'active', 9999999999, 0, NULL),
+		(2, 8, 'active', 9999999999, NULL, 'vip')`).Error)
+
+	require.NoError(t, migrateUserSubscriptionPolicyDefaults(true, true, true))
+
+	var rows []struct {
+		AllowWalletOverflow *bool  `gorm:"column:allow_wallet_overflow"`
+		DowngradeGroup      string `gorm:"column:downgrade_group"`
+	}
+	require.NoError(t, db.Table("user_subscriptions").Order("id").Find(&rows).Error)
+	require.Len(t, rows, 2)
+	require.NotNil(t, rows[0].AllowWalletOverflow)
+	assert.False(t, *rows[0].AllowWalletOverflow)
+	assert.Equal(t, "", rows[0].DowngradeGroup)
+	require.NotNil(t, rows[1].AllowWalletOverflow)
+	assert.True(t, *rows[1].AllowWalletOverflow)
+	assert.Equal(t, "vip", rows[1].DowngradeGroup)
 }

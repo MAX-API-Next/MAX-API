@@ -1070,6 +1070,13 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, apiErr := trySubscription()
 		if apiErr != nil {
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				allowWalletOverflow, policyErr := model.UserActiveSubscriptionsAllowWalletOverflow(relayInfo.UserId)
+				if policyErr != nil {
+					return nil, types.NewError(policyErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+				}
+				if !allowWalletOverflow {
+					return nil, apiErr
+				}
 				return tryWallet(false)
 			}
 			return nil, apiErr
