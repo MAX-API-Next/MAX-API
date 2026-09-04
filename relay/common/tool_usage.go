@@ -77,6 +77,16 @@ func NewToolUsageLedger(modelName string) *ToolUsageLedger {
 	}
 }
 
+// PriceFor returns the request-start price for a tool. The underlying price
+// index is immutable, so config reloads cannot change an in-flight request's
+// billing decision.
+func (l *ToolUsageLedger) PriceFor(toolName string) float64 {
+	if l == nil {
+		return 0
+	}
+	return l.prices.PriceFor(toolName)
+}
+
 // BeginAttempt selects the active upstream attempt. Re-entering the same
 // attempt is a no-op so multiple response stages can share one ledger.
 func (l *ToolUsageLedger) BeginAttempt(attempt int) bool {
@@ -349,6 +359,21 @@ func (info *RelayInfo) ObserveBuiltInToolCall(name string, identity ToolCallIden
 		}
 	}
 	return accepted
+}
+
+// FrozenToolPrice returns the request-scoped price used by both pre-consume
+// and settlement paths. Normal relay requests initialize ToolUsage in
+// genBaseRelayInfo before any upstream work. The lazy fallback keeps
+// hand-built RelayInfo values used by legacy callers/tests compatible while
+// still freezing their first observed price for the remainder of the request.
+func (info *RelayInfo) FrozenToolPrice(toolName string) float64 {
+	if info == nil {
+		return 0
+	}
+	if info.ToolUsage == nil {
+		info.ToolUsage = NewToolUsageLedger(info.OriginModelName)
+	}
+	return info.ToolUsage.PriceFor(toolName)
 }
 
 func (info *RelayInfo) CommitToolUsageAttempt() bool {

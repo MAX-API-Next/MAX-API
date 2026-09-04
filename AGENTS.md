@@ -162,7 +162,7 @@ Required procedure:
 2. Run the checker from the repository root with the cross-platform `pwsh` executable when available:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
    On Windows hosts without `pwsh`, use the equivalent Windows PowerShell fallback:
-   `powershell -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
+   `powershell -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
 3. Treat the ignored `new-api/new-api` source copy as reference material only. Its presence does not prove that it matches upstream HEAD.
 4. If the remote state cannot be verified, report `需要进一步验证`; do not describe the local copy as current.
 5. Detection is not acceptance: never automatically merge or wholesale copy an upstream change. Classify it as `pending`, `accepted`, `ported`, `skipped`, `superseded`, or `blocked`, with rationale.
