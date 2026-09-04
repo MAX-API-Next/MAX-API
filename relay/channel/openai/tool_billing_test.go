@@ -86,6 +86,31 @@ func TestOpenaiHandlerRecordsActualCustomToolCalls(t *testing.T) {
 	}}, info.ToolUsageSnapshot().Items)
 }
 
+func TestOpenaiHandlerDoesNotRecordIncompleteCustomToolCalls(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	payload := `{
+		"id":"chatcmpl-1",
+		"object":"chat.completion",
+		"model":"gpt-test",
+		"choices":[{
+			"index":0,
+			"message":{"role":"assistant","content":"","tool_calls":[
+				{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}
+			]},
+			"finish_reason":"length"
+		}],
+		"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}
+	}`
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(payload))}
+
+	_, maxErr := OpenaiHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
 func TestOaiStreamHandlerDeduplicatesCustomToolCallChunks(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{
 		"lookup":   5,
@@ -110,6 +135,60 @@ func TestOaiStreamHandlerDeduplicatesCustomToolCallChunks(t *testing.T) {
 		{Name: "get_time", CallCount: 1, PricePer1K: 7},
 		{Name: "lookup", CallCount: 1, PricePer1K: 5},
 	}, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiStreamHandlerDoesNotRecordIncompleteCustomToolCall(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := OaiStreamHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiStreamHandlerDoesNotRecordUnterminatedCustomToolCall(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":null}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := OaiStreamHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
+func TestOpenAIStreamChunkMayAffectToolBilling(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "text delta with null finish", data: `{"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}`, want: false},
+		{name: "tool fragment", data: `{"choices":[{"delta":{"tool_calls":[{"index":0}]},"finish_reason":null}]}`, want: true},
+		{name: "terminal choice", data: `{"choices":[{"delta":{},"finish_reason" : "length"}]}`, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, openAIStreamChunkMayAffectToolBilling(tt.data))
+		})
+	}
 }
 
 func TestOaiResponsesToChatHandlerRecordsConvertedToolCallOnce(t *testing.T) {
@@ -154,11 +233,11 @@ func TestOaiResponsesToChatStreamHandlerReplaysToolCallAfterText(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", nil)
 	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatOpenAI,
-		OriginModelName:   "gpt-test",
-		DisablePing:       true,
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
-		ToolUsage:         relaycommon.NewToolUsageLedger("gpt-test"),
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-test",
+		DisablePing:     true,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
+		ToolUsage:       relaycommon.NewToolUsageLedger("gpt-test"),
 	}
 	info.ToolUsage.BeginAttempt(0)
 	body := strings.Join([]string{
@@ -195,6 +274,24 @@ func TestOaiChatToResponsesHandlerRecordsConvertedToolCallOnce(t *testing.T) {
 	require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
 }
 
+func TestOaiChatToResponsesHandlerDoesNotRecordIncompleteToolCall(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+
+	payload := `{
+		"id":"chatcmpl-1","object":"chat.completion","model":"gpt-test",
+		"choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"length"}],
+		"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+	}`
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(payload))}
+
+	_, maxErr := OaiChatToResponsesHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
 func TestOaiChatToResponsesStreamHandlerDeduplicatesToolFragments(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")
@@ -213,4 +310,24 @@ func TestOaiChatToResponsesStreamHandlerDeduplicatesToolFragments(t *testing.T) 
 	require.Nil(t, maxErr)
 	require.True(t, info.CommitToolUsageAttempt())
 	require.Equal(t, []relaycommon.ToolUsageItem{{Name: "lookup", CallCount: 1, PricePer1K: 5}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestOaiChatToResponsesStreamHandlerDoesNotRecordIncompleteToolCall(t *testing.T) {
+	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newOpenAIToolBillingContext("gpt-test")
+	info.RelayFormat = types.RelayFormatOpenAIResponses
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"lookup","arguments":""}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := OaiChatToResponsesStreamHandler(c, info, resp)
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
 }

@@ -67,6 +67,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	responseID := helper.GetResponseID(c)
 	state := openaicompat.NewChatToResponsesStreamState(responseID, info.UpstreamModelName)
+	toolCallObserver := newOpenAIStreamToolCallObserver(info)
 	var streamErr *types.MaxAPIError
 
 	sendEvent := func(event openaicompat.ChatToResponsesStreamEvent) bool {
@@ -105,7 +106,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
-		observeOpenAIStreamToolCalls(info, data)
+		toolCallObserver.Observe(&chunk)
 
 		events, err := openaicompat.ChatCompletionsStreamChunkToResponsesEvents(&chunk, state)
 		if err != nil {
