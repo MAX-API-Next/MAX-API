@@ -158,13 +158,15 @@ Run the private upstream component check before any of the following work:
 
 Required procedure:
 
-1. Read `.agents/upstream-sync/components.json` and `.agents/upstream-sync/new-api-sync.md`.
+1. Read `.agents/upstream-sync/components.json`, `.agents/upstream-sync/new-api-sync.md`, and the living implementation plan at `new-api/.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md`.
 2. Run `powershell -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1` from the repository root.
 3. Treat the ignored `new-api/new-api` source copy as reference material only. Its presence does not prove that it matches upstream HEAD.
 4. If the remote state cannot be verified, report `需要进一步验证`; do not describe the local copy as current.
 5. Detection is not acceptance: never automatically merge or wholesale copy an upstream change. Classify it as `pending`, `accepted`, `ported`, `skipped`, `superseded`, or `blocked`, with rationale.
 6. Advance the reviewed baseline only after the affected code and compatibility gates have been inspected and the relevant tests have passed. Merely detecting a newer commit MUST NOT advance the baseline.
 7. Keep generated comparison reports under `.tmp/`. Keep the reusable checker, component registry, and local sync state under `.agents/upstream-sync/`; these remain private and uncommitted under Rule 8.
+8. Before implementing a listed capability, update the living plan with the current MAX/upstream baselines, revalidated evidence, scope, dependency, license decision, risks, and test plan; mark the item `实施中`.
+9. After each related iteration, update the same plan with actual files and key logic, test results, residual verification gaps, upstream component status, delivery status, change log, and the next iteration entry. A code change is not complete until this plan update is performed.
 
 RelayKit-specific requirements:
 
@@ -174,3 +176,4 @@ RelayKit-specific requirements:
 - Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
 - RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
 - If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
+- If the living plan is missing in a fresh workspace, recreate it under `new-api/.tmp/` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
