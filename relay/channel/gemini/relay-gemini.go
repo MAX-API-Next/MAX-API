@@ -1186,21 +1186,106 @@ func buildUsageFromGeminiResponse(c *gin.Context, info *relaycommon.RelayInfo, r
 }
 
 func observeGeminiFunctionCalls(info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) {
-	if info == nil || response == nil {
+	newGeminiFunctionCallObserver(info).Observe(response)
+}
+
+type geminiFunctionCallIdentity struct {
+	name   string
+	callID string
+}
+
+type geminiFunctionCallObserver struct {
+	info      *relaycommon.RelayInfo
+	pending   map[string]geminiFunctionCallIdentity
+	ambiguous map[string]struct{}
+}
+
+func newGeminiFunctionCallObserver(info *relaycommon.RelayInfo) *geminiFunctionCallObserver {
+	return &geminiFunctionCallObserver{info: info}
+}
+
+func (o *geminiFunctionCallObserver) Observe(response *dto.GeminiChatResponse) {
+	if o == nil || o.info == nil || response == nil {
 		return
 	}
 	for _, candidate := range response.Candidates {
 		for partIndex, part := range candidate.Content.Parts {
-			if part.FunctionCall == nil || (part.FunctionCall.WillContinue != nil && *part.FunctionCall.WillContinue) {
+			if part.FunctionCall == nil {
 				continue
 			}
-			info.ObserveCustomToolCall(part.FunctionCall.FunctionName, relaycommon.ToolCallIdentity{
+			position := fmt.Sprintf("candidate:%d:part:%d", candidate.Index, partIndex)
+			identity := geminiFunctionCallIdentity{
+				name:   strings.TrimSpace(part.FunctionCall.FunctionName),
+				callID: strings.TrimSpace(part.FunctionCall.ID),
+			}
+			if part.FunctionCall.WillContinue != nil && *part.FunctionCall.WillContinue {
+				o.remember(position, identity)
+				continue
+			}
+			if _, blocked := o.ambiguous[position]; blocked {
+				delete(o.ambiguous, position)
+				delete(o.pending, position)
+				continue
+			}
+			if pending, ok := o.pending[position]; ok {
+				delete(o.pending, position)
+				var compatible bool
+				identity, compatible = mergeGeminiFunctionCallIdentity(pending, identity)
+				if !compatible {
+					continue
+				}
+			}
+			if identity.name == "" {
+				continue
+			}
+			o.info.ObserveCustomToolCall(identity.name, relaycommon.ToolCallIdentity{
 				Scope:    "gemini",
-				CallID:   part.FunctionCall.ID,
-				Position: fmt.Sprintf("candidate:%d:part:%d", candidate.Index, partIndex),
+				CallID:   identity.callID,
+				Position: position,
 			})
 		}
 	}
+}
+
+func (o *geminiFunctionCallObserver) remember(position string, identity geminiFunctionCallIdentity) {
+	if _, blocked := o.ambiguous[position]; blocked {
+		return
+	}
+	if o.pending == nil {
+		o.pending = make(map[string]geminiFunctionCallIdentity)
+	}
+	if pending, ok := o.pending[position]; ok {
+		merged, compatible := mergeGeminiFunctionCallIdentity(pending, identity)
+		if !compatible {
+			delete(o.pending, position)
+			if o.ambiguous == nil {
+				o.ambiguous = make(map[string]struct{})
+			}
+			o.ambiguous[position] = struct{}{}
+			return
+		}
+		o.pending[position] = merged
+		return
+	}
+	if identity.name != "" || identity.callID != "" {
+		o.pending[position] = identity
+	}
+}
+
+func mergeGeminiFunctionCallIdentity(first, second geminiFunctionCallIdentity) (geminiFunctionCallIdentity, bool) {
+	if first.name != "" && second.name != "" && first.name != second.name {
+		return geminiFunctionCallIdentity{}, false
+	}
+	if first.callID != "" && second.callID != "" && first.callID != second.callID {
+		return geminiFunctionCallIdentity{}, false
+	}
+	if first.name == "" {
+		first.name = second.name
+	}
+	if first.callID == "" {
+		first.callID = second.callID
+	}
+	return first, true
 }
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
@@ -1488,6 +1573,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var imageCount int
 	responseText := strings.Builder{}
 	auditText := strings.Builder{}
+	functionCallObserver := newGeminiFunctionCallObserver(info)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var geminiResponse dto.GeminiChatResponse
@@ -1508,7 +1594,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
 		}
-		observeGeminiFunctionCalls(info, &geminiResponse)
+		functionCallObserver.Observe(&geminiResponse)
 
 		// 统计图片数量
 		for _, candidate := range geminiResponse.Candidates {

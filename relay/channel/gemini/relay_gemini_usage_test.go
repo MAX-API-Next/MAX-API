@@ -107,6 +107,68 @@ func TestGeminiStreamHandlerWaitsForCompletedFunctionCallAndDeduplicatesID(t *te
 	}}, info.ToolUsageSnapshot().Items)
 }
 
+func TestGeminiStreamHandlerCarriesFunctionIdentityToEmptyCompletionChunk(t *testing.T) {
+	setGeminiToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newGeminiToolBillingContext("/v1/chat/completions")
+
+	body := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"},"willContinue":true}}]}}]}`,
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"willContinue":false}}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
+		return true
+	})
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Equal(t, []relaycommon.ToolUsageItem{{
+		Name:       "lookup",
+		CallCount:  1,
+		PricePer1K: 5,
+	}}, info.ToolUsageSnapshot().Items)
+}
+
+func TestGeminiStreamHandlerDoesNotBillUnterminatedFunctionCall(t *testing.T) {
+	setGeminiToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newGeminiToolBillingContext("/v1/chat/completions")
+
+	body := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{"q":"max"},"willContinue":true}}]}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
+		return true
+	})
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
+func TestGeminiStreamHandlerIgnoresEmptyCompletionWithoutPendingIdentity(t *testing.T) {
+	setGeminiToolPricesForTest(t, map[string]float64{"lookup": 5})
+	c, info := newGeminiToolBillingContext("/v1/chat/completions")
+
+	body := strings.Join([]string{
+		`data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"willContinue":false}}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
+
+	_, maxErr := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
+		return true
+	})
+	require.Nil(t, maxErr)
+	require.True(t, info.CommitToolUsageAttempt())
+	require.Empty(t, info.ToolUsageSnapshot().Items)
+}
+
 func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	t.Parallel()
 
