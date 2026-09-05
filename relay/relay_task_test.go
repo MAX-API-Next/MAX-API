@@ -51,6 +51,10 @@ func TestPopulateTaskBillingMetadataPersistsH3PlanSnapshot(t *testing.T) {
 	task := &model.Task{}
 	populateTaskBillingMetadata(task, info)
 	require.Equal(t, plan, task.PrivateData.BillingContext.TaskBillingPlan)
+	require.NotSame(t, plan, task.PrivateData.BillingContext.TaskBillingPlan)
+	plan.ReserveQuota = 999
+	require.EqualValues(t, 800, task.PrivateData.BillingContext.TaskBillingPlan.ReserveQuota)
+	plan.ReserveQuota = 800
 
 	data, err := common.Marshal(task.PrivateData)
 	require.NoError(t, err)

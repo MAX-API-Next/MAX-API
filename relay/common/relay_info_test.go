@@ -104,6 +104,11 @@ func TestTaskSubmitReqResolvedSeconds(t *testing.T) {
 	seconds, err = req.ResolvedSeconds()
 	require.NoError(t, err)
 	require.Equal(t, 10, seconds)
+
+	req = TaskSubmitReq{Duration: &duration, DurationSeconds: &durationSeconds, Seconds: "12"}
+	seconds, err = req.ResolvedSeconds()
+	require.NoError(t, err)
+	require.Equal(t, 8, seconds)
 }
 
 func TestTaskSubmitReqResolvedSecondsOrDefault(t *testing.T) {
