@@ -5594,7 +5594,7 @@
     "Actual": "Фактическое",
     "quota": "квота",
     "Not included": "Не включено",
-    "Estimated refund: {{count}} quota": "Расчётный возврат: {{count}} квоты",
+    "Estimated refund: {{count}} quota": "Расчётный возврат: {{count}} единиц квоты",
     "Additional quota required: {{count}}": "Требуется дополнительная квота: {{count}}",
     "Configuration hash": "Хеш конфигурации",
     "H3 billing preview failed": "Не удалось выполнить предпросмотр тарификации H3",

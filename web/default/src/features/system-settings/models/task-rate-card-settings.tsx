@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { FileJson } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -156,6 +156,63 @@ type VendorSummary = {
   models: string[]
 }
 
+type BillingExampleSectionProps = {
+  title: string
+  description: string
+  value: string
+  rows: number
+  onUseExample: () => void
+}
+
+const BillingExampleSection = memo(function BillingExampleSection(
+  props: BillingExampleSectionProps
+) {
+  const { t } = useTranslation()
+  const headingId = useId()
+
+  return (
+    <section className='space-y-2'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div>
+          <h3 id={headingId} className='text-sm font-medium'>
+            {t(props.title)}
+          </h3>
+          <p className='text-muted-foreground text-xs'>
+            {t(props.description)}
+          </p>
+        </div>
+        <div className='flex flex-wrap items-center gap-2'>
+          <CopyButton
+            value={props.value}
+            variant='outline'
+            size='sm'
+            iconClassName='mr-2 h-4 w-4'
+          >
+            <span>{t('Copy example')}</span>
+          </CopyButton>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={props.onUseExample}
+          >
+            <FileJson className='mr-2 h-4 w-4' />
+            {t('Use example')}
+          </Button>
+        </div>
+      </div>
+      <Textarea
+        aria-labelledby={headingId}
+        rows={props.rows}
+        value={props.value}
+        readOnly
+        spellCheck={false}
+        className='bg-muted/30 font-mono text-xs'
+      />
+    </section>
+  )
+})
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -243,6 +300,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
 }: TaskRateCardSettingsProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const currentRateCardHeadingId = useId()
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
@@ -382,91 +440,28 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         )}
       </section>
 
-      <section className='space-y-2'>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <div>
-            <h3 className='text-sm font-medium'>
-              {t('Kling billing example')}
-            </h3>
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Includes duration, quality, audio, and video-input pricing conditions.'
-              )}
-            </p>
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <CopyButton
-              value={KLING_RATE_CARD_EXAMPLE}
-              variant='outline'
-              size='sm'
-              iconClassName='mr-2 h-4 w-4'
-            >
-              <span>{t('Copy example')}</span>
-            </CopyButton>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() => handleUseExample(KLING_RATE_CARD_EXAMPLE)}
-            >
-              <FileJson className='mr-2 h-4 w-4' />
-              {t('Use example')}
-            </Button>
-          </div>
-        </div>
-        <Textarea
-          rows={12}
-          value={KLING_RATE_CARD_EXAMPLE}
-          readOnly
-          spellCheck={false}
-          className='bg-muted/30 font-mono text-xs'
-        />
-      </section>
+      <BillingExampleSection
+        title='Kling billing example'
+        description='Includes duration, quality, audio, and video-input pricing conditions.'
+        value={KLING_RATE_CARD_EXAMPLE}
+        rows={12}
+        onUseExample={() => handleUseExample(KLING_RATE_CARD_EXAMPLE)}
+      />
+
+      <BillingExampleSection
+        title='MiniMax billing example'
+        description='Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.'
+        value={MINIMAX_RATE_CARD_EXAMPLE}
+        rows={18}
+        onUseExample={() => handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)}
+      />
 
       <section className='space-y-2'>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <div>
-            <h3 className='text-sm font-medium'>
-              {t('MiniMax billing example')}
-            </h3>
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.'
-              )}
-            </p>
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <CopyButton
-              value={MINIMAX_RATE_CARD_EXAMPLE}
-              variant='outline'
-              size='sm'
-              iconClassName='mr-2 h-4 w-4'
-            >
-              <span>{t('Copy example')}</span>
-            </CopyButton>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() => handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)}
-            >
-              <FileJson className='mr-2 h-4 w-4' />
-              {t('Use example')}
-            </Button>
-          </div>
-        </div>
+        <h3 id={currentRateCardHeadingId} className='text-sm font-medium'>
+          {t('Current rate card JSON')}
+        </h3>
         <Textarea
-          rows={18}
-          value={MINIMAX_RATE_CARD_EXAMPLE}
-          readOnly
-          spellCheck={false}
-          className='bg-muted/30 font-mono text-xs'
-        />
-      </section>
-
-      <section className='space-y-2'>
-        <h3 className='text-sm font-medium'>{t('Current rate card JSON')}</h3>
-        <Textarea
+          aria-labelledby={currentRateCardHeadingId}
           rows={18}
           value={text}
           onChange={(event) => handleChange(event.target.value)}
