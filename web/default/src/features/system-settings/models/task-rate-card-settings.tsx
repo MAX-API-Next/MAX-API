@@ -32,13 +32,21 @@ const OPTION_KEY = 'task_billing_setting.rate_cards'
 
 const VENDOR_LABELS: Record<string, string> = {
   kling: 'Kling',
+  minimax: 'MiniMax',
   openai: 'OpenAI / Sora',
   google: 'Google / Veo',
   bytedance: 'ByteDance / Seedance',
   unclassified: 'Unclassified',
 }
 
-const VENDOR_ORDER = ['kling', 'openai', 'google', 'bytedance', 'unclassified']
+const VENDOR_ORDER = [
+  'kling',
+  'minimax',
+  'openai',
+  'google',
+  'bytedance',
+  'unclassified',
+]
 
 const KLING_RATE_CARD_EXAMPLE = JSON.stringify(
   {
@@ -108,6 +116,34 @@ const KLING_RATE_CARD_EXAMPLE = JSON.stringify(
   2
 )
 
+const MINIMAX_RATE_CARD_EXAMPLE = JSON.stringify(
+  {
+    'minimax/minimax-h3': {
+      vendor: 'minimax',
+      billing_type: 'minimax',
+      billing_config: {
+        schema_version: 1,
+        mode: 'bounded_actual',
+        currency: 'USD',
+        output_unit_price: {
+          '768P': '0.08',
+          '2K': '0.13',
+        },
+        input_video_unit_price: {
+          '768P': '0.08',
+          '2K': '0.13',
+        },
+        input_video_max_seconds: 15,
+        input_image_free_count: 5,
+        input_image_extra_unit_price: '0.04',
+        input_audio_unit_price: '0',
+      },
+    },
+  },
+  null,
+  2
+)
+
 type TaskRateCardSettingsProps = {
   defaultValue: string
 }
@@ -137,6 +173,7 @@ function inferVendor(model: string, card: Record<string, unknown>) {
 
   const normalizedModel = normalizeVendor(model)
   if (normalizedModel.includes('kling')) return 'kling'
+  if (normalizedModel.includes('minimax')) return 'minimax'
   if (normalizedModel.includes('sora') || normalizedModel.includes('openai')) {
     return 'openai'
   }
@@ -166,7 +203,7 @@ function sortVendors(a: VendorSummary, b: VendorSummary) {
 
 function buildVendorSummary(value: string): VendorSummary[] {
   const trimmed = value.trim()
-  let parsed: unknown = {}
+  let parsed: unknown
 
   try {
     parsed = trimmed ? JSON.parse(trimmed) : {}
@@ -232,11 +269,14 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
     [t]
   )
 
-  const handleUseExample = useCallback(() => {
-    setText(KLING_RATE_CARD_EXAMPLE)
-    setError('')
-    toast.success(t('Example loaded. Review prices before saving.'))
-  }, [t])
+  const handleUseExample = useCallback(
+    (example: string) => {
+      setText(example)
+      setError('')
+      toast.success(t('Example loaded. Review prices before saving.'))
+    },
+    [t]
+  )
 
   const handleSave = useCallback(async () => {
     if (error) {
@@ -367,7 +407,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               type='button'
               variant='outline'
               size='sm'
-              onClick={handleUseExample}
+              onClick={() => handleUseExample(KLING_RATE_CARD_EXAMPLE)}
             >
               <FileJson className='mr-2 h-4 w-4' />
               {t('Use example')}
@@ -377,6 +417,47 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         <Textarea
           rows={12}
           value={KLING_RATE_CARD_EXAMPLE}
+          readOnly
+          spellCheck={false}
+          className='bg-muted/30 font-mono text-xs'
+        />
+      </section>
+
+      <section className='space-y-2'>
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <div>
+            <h3 className='text-sm font-medium'>
+              {t('MiniMax billing example')}
+            </h3>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.'
+              )}
+            </p>
+          </div>
+          <div className='flex flex-wrap items-center gap-2'>
+            <CopyButton
+              value={MINIMAX_RATE_CARD_EXAMPLE}
+              variant='outline'
+              size='sm'
+              iconClassName='mr-2 h-4 w-4'
+            >
+              <span>{t('Copy example')}</span>
+            </CopyButton>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)}
+            >
+              <FileJson className='mr-2 h-4 w-4' />
+              {t('Use example')}
+            </Button>
+          </div>
+        </div>
+        <Textarea
+          rows={18}
+          value={MINIMAX_RATE_CARD_EXAMPLE}
           readOnly
           spellCheck={false}
           className='bg-muted/30 font-mono text-xs'

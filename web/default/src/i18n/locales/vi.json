@@ -2539,6 +2539,8 @@
     "Keys, users, groups, model scope, request logs, admin visibility, retention choices, and security limits need to stay observable and separated.": "Khóa, người dùng, nhóm, phạm vi mô hình, nhật ký yêu cầu, khả năng quan sát của quản trị viên, lựa chọn lưu giữ và giới hạn bảo mật cần luôn quan sát được và tách biệt.",
     "Kling": "Kling",
     "Kling billing example": "Ví dụ tính phí Kling",
+    "MiniMax billing example": "Ví dụ tính phí MiniMax",
+    "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Sử dụng cấu trúc billing_type và billing_config thống nhất cho video đầu ra, video đầu vào, hình ảnh và âm thanh.",
     "Knowledge Base ID *": "Mã số Cơ sở kiến thức *",
     "Knowledge cutoff": "Mốc dữ liệu",
     "Lake View": "Hồ nước",

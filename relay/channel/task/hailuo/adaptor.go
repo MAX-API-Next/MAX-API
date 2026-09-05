@@ -221,7 +221,11 @@ func (a *TaskAdaptor) BuildTaskBillingPlan(c *gin.Context, info *relaycommon.Rel
 	if info != nil {
 		groupRatio = info.PriceData.GroupRatioInfo.GroupRatio
 	}
-	return task_billing_setting.BuildH3BillingPlan(input, groupRatio)
+	models := []string{h3RequestModel(nil, info)}
+	if info != nil {
+		models = append(models, info.OriginModelName, info.UpstreamModelName)
+	}
+	return task_billing_setting.BuildH3BillingPlanForModels(input, groupRatio, models...)
 }
 
 func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {

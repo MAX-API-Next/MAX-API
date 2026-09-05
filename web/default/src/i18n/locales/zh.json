@@ -2539,6 +2539,8 @@
     "Keys, users, groups, model scope, request logs, admin visibility, retention choices, and security limits need to stay observable and separated.": "密钥、用户、分组、模型范围、请求日志、管理员可见性、留存选择和安全限制都需要保持可观测并相互隔离。",
     "Kling": "Kling / 可灵",
     "Kling billing example": "Kling 计费示例",
+    "MiniMax billing example": "MiniMax 计费示例",
+    "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "使用统一的 billing_type 和 billing_config 结构配置输出视频、输入视频、图片和音频。",
     "Knowledge Base ID *": "知识库 ID *",
     "Knowledge cutoff": "知识截止",
     "Lake View": "湖光",

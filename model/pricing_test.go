@@ -5,6 +5,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,4 +40,13 @@ func TestGetPricingEndpointTypesForAdvancedCustomAbilityUsesConfiguredRoutes(t *
 		constant.EndpointTypeOpenAIAlphaSearch,
 		constant.EndpointTypeOpenAIResponse,
 	}, endpointTypes)
+}
+
+func TestNewTaskRateCardPricingOmitsStructuredBillingCards(t *testing.T) {
+	pricing := newTaskRateCardPricing("minimax/minimax-h3", &task_billing_setting.RateCard{
+		Vendor:      "minimax",
+		BillingType: task_billing_setting.MinimaxBillingType,
+	})
+
+	require.Nil(t, pricing)
 }

@@ -26,7 +26,6 @@ import { TaskRateCardSettings } from '../models/task-rate-card-settings'
 import { TieredBillingSettings } from '../models/tiered-billing-settings'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
-import { H3BillingSettings } from './h3-billing-settings'
 
 const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
@@ -123,16 +122,6 @@ const BILLING_SECTIONS = [
     build: (settings: BillingSettings) => (
       <TaskRateCardSettings
         defaultValue={settings['task_billing_setting.rate_cards']}
-      />
-    ),
-  },
-  {
-    id: 'h3-billing',
-    titleKey: 'MiniMax-H3 Billing',
-    build: (settings: BillingSettings) => (
-      <H3BillingSettings
-        defaultValue={settings['task_billing_setting.h3_profiles']}
-        legacyRateCards={settings['task_billing_setting.rate_cards']}
       />
     ),
   },

@@ -196,7 +196,6 @@ export function ModelMutateDrawer({
       'billing_setting.billing_mode': '{}',
       'billing_setting.billing_expr': '{}',
       'task_billing_setting.rate_cards': '{}',
-      'task_billing_setting.h3_profiles': '{}',
       'tool_price_setting.prices': '{}',
       TopupGroupRatio: '',
       GroupRatio: '',

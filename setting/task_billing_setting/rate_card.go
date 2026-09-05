@@ -19,8 +19,12 @@ type RateCardRow struct {
 	UnitPrice float64           `json:"unit_price"`
 }
 
+const RateCardBillingTypeMinimax = "minimax"
+
 type RateCard struct {
 	Vendor          string            `json:"vendor,omitempty"`
+	BillingType     string            `json:"billing_type,omitempty"`
+	BillingConfig   map[string]any    `json:"billing_config,omitempty"`
 	Unit            string            `json:"unit,omitempty"`
 	QuantityField   string            `json:"quantity_field,omitempty"`
 	DefaultQuantity float64           `json:"default_quantity,omitempty"`
@@ -67,6 +71,12 @@ func HasRateCard(models ...string) bool {
 func Calculate(input types.TaskBillingInput, groupRatio float64) (*types.TaskBillingResult, error) {
 	card, key := findRateCard(input.Model, input.UpstreamModel)
 	if card == nil {
+		return nil, nil
+	}
+	// Structured provider rules are executed by their task planner after the
+	// adaptor has normalized provider-specific facts. They are not reducible to
+	// the single-quantity legacy rate-card calculator.
+	if card.BillingType != "" {
 		return nil, nil
 	}
 	fields := mergeFields(*card, input)
@@ -122,6 +132,28 @@ func validateRateCards(rateCards map[string]RateCard) error {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("rate card key cannot be empty")
 		}
+		if card.BillingType != "" {
+			if card.BillingType != RateCardBillingTypeMinimax {
+				return fmt.Errorf("rate card %s has unsupported billing_type %q", key, card.BillingType)
+			}
+			if len(card.BillingConfig) == 0 {
+				return fmt.Errorf("rate card %s billing_config is required", key)
+			}
+			if len(card.Rows) > 0 {
+				return fmt.Errorf("rate card %s structured billing cannot define rows", key)
+			}
+			billingConfig, err := decodeMinimaxBillingConfig(card.BillingConfig)
+			if err != nil {
+				return fmt.Errorf("rate card %s: %w", key, err)
+			}
+			if err := validateH3BillingConfig(key, billingConfig); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(card.BillingConfig) > 0 {
+			return fmt.Errorf("rate card %s billing_config requires billing_type", key)
+		}
 		if len(card.Rows) == 0 {
 			return fmt.Errorf("rate card %s has no rows", key)
 		}
@@ -171,9 +203,62 @@ func findRateCard(models ...string) (*RateCard, string) {
 			}
 			if matchPattern(key, model) {
 				card := rateCards[key]
+				if card.BillingType != "" && !isMinimaxH3Model(model) {
+					continue
+				}
 				return &card, key
 			}
 		}
+	}
+	// MiniMax-H3 uses a structured rule whose canonical rate-card key is not
+	// the upstream model name. Keep this alias narrow so another MiniMax task
+	// model cannot accidentally inherit the H3 pricing rule.
+	for _, model := range models {
+		if isMinimaxH3Model(model) {
+			return findMinimaxRateCard(models...)
+		}
+	}
+	return nil, ""
+}
+
+func findMinimaxRateCard(models ...string) (*RateCard, string) {
+	if taskBillingSetting.RateCards == nil {
+		return nil, ""
+	}
+	rateCards := taskBillingSetting.RateCards.ReadAll()
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if card, ok := rateCards[model]; ok && card.BillingType == MinimaxBillingType {
+			return &card, model
+		}
+	}
+
+	keys := make([]string, 0, len(rateCards))
+	for key := range rateCards {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		for _, key := range keys {
+			card := rateCards[key]
+			if card.BillingType == MinimaxBillingType && strings.Contains(key, "*") && matchPattern(key, model) {
+				return &card, key
+			}
+		}
+	}
+
+	if card, ok := rateCards[MinimaxBillingRuleKey]; ok && card.BillingType == MinimaxBillingType {
+		return &card, MinimaxBillingRuleKey
+	}
+	if card, ok := rateCards["minimax"]; ok && card.BillingType == MinimaxBillingType {
+		return &card, "minimax"
 	}
 	return nil, ""
 }
@@ -311,6 +396,7 @@ func cloneRateCards(src map[string]RateCard) map[string]RateCard {
 }
 
 func cloneRateCard(card RateCard) RateCard {
+	card.BillingConfig = cloneBillingConfig(card.BillingConfig)
 	card.Defaults = cloneStringMap(card.Defaults)
 	rows := make([]RateCardRow, len(card.Rows))
 	for i, row := range card.Rows {
@@ -319,6 +405,21 @@ func cloneRateCard(card RateCard) RateCard {
 	}
 	card.Rows = rows
 	return card
+}
+
+func cloneBillingConfig(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	data, err := common.Marshal(src)
+	if err != nil {
+		return src
+	}
+	var dst map[string]any
+	if err := common.Unmarshal(data, &dst); err != nil {
+		return src
+	}
+	return dst
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

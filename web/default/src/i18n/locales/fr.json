@@ -2539,6 +2539,8 @@
     "Keys, users, groups, model scope, request logs, admin visibility, retention choices, and security limits need to stay observable and separated.": "Les clés, utilisateurs, groupes, périmètres de modèles, logs de requêtes, visibilité administrateur, choix de rétention et limites de sécurité doivent rester observables et séparés.",
     "Kling": "Kling",
     "Kling billing example": "Exemple de facturation Kling",
+    "MiniMax billing example": "Exemple de facturation MiniMax",
+    "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Utilise la structure unifiée billing_type et billing_config pour la vidéo générée, la vidéo d'entrée, les images et l'audio.",
     "Knowledge Base ID *": "ID de la base de connaissances *",
     "Knowledge cutoff": "Date de coupure des connaissances",
     "Lake View": "Vue du lac",

@@ -12,9 +12,12 @@ import (
 )
 
 const (
-	H3BillingSource     = "minimax_hailuo"
-	H3BillingProfileKey = "minimax_h3_v2"
-	H3BillingMode       = types.TaskBillingPlanModeBoundedActual
+	H3BillingSource       = "minimax"
+	MinimaxBillingRuleKey = "minimax/minimax-h3"
+	MinimaxBillingType    = RateCardBillingTypeMinimax
+	LegacyH3BillingSource = "minimax_hailuo"
+	H3BillingProfileKey   = "minimax_h3_v2" // Deprecated legacy option key.
+	H3BillingMode         = types.TaskBillingPlanModeBoundedActual
 
 	H3MinOutputDurationSeconds int64 = 4
 	H3MaxOutputDurationSeconds int64 = 15
@@ -95,6 +98,41 @@ func defaultH3BillingProfiles() map[string]H3BillingConfig {
 	}
 }
 
+func defaultH3BillingConfig() H3BillingConfig {
+	return defaultH3BillingProfiles()[H3BillingProfileKey]
+}
+
+func encodeBillingConfig(config H3BillingConfig) map[string]any {
+	data, err := common.Marshal(config)
+	if err != nil {
+		return nil
+	}
+	var result map[string]any
+	if err := common.Unmarshal(data, &result); err != nil {
+		return nil
+	}
+	return result
+}
+
+func decodeMinimaxBillingConfig(raw map[string]any) (H3BillingConfig, error) {
+	if len(raw) == 0 {
+		return H3BillingConfig{}, fmt.Errorf("MiniMax billing_config cannot be empty")
+	}
+	data, err := common.Marshal(raw)
+	if err != nil {
+		return H3BillingConfig{}, fmt.Errorf("marshal MiniMax billing_config: %w", err)
+	}
+	var config H3BillingConfig
+	if err := common.Unmarshal(data, &config); err != nil {
+		return H3BillingConfig{}, fmt.Errorf("decode MiniMax billing_config: %w", err)
+	}
+	return config, nil
+}
+
+func isMinimaxH3Model(model string) bool {
+	return strings.EqualFold(strings.TrimSpace(model), "MiniMax-H3")
+}
+
 func newH3BillingProfileMap(profiles map[string]H3BillingConfig) *types.RWMap[string, H3BillingConfig] {
 	m := types.NewRWMap[string, H3BillingConfig]()
 	m.AddAll(profiles)
@@ -138,45 +176,52 @@ func ValidateH3ProfilesJSON(raw string) error {
 
 func validateH3Profiles(profiles map[string]H3BillingConfig) error {
 	for key, profile := range profiles {
-		if strings.TrimSpace(key) == "" {
-			return fmt.Errorf("H3 billing profile key cannot be empty")
-		}
-		if profile.SchemaVersion != 1 {
-			return fmt.Errorf("H3 billing profile %s has unsupported schema_version", key)
-		}
-		if profile.Mode != H3BillingMode {
-			return fmt.Errorf("H3 billing profile %s has unsupported mode", key)
-		}
-		if strings.TrimSpace(profile.Currency) == "" {
-			return fmt.Errorf("H3 billing profile %s currency cannot be empty", key)
-		}
-		if profile.InputVideoMaxSeconds <= 0 || profile.InputVideoMaxSeconds > 15 {
-			return fmt.Errorf("H3 billing profile %s input_video_max_seconds must be between 1 and 15", key)
-		}
-		if profile.InputImageFreeCount < 0 || profile.InputImageFreeCount > 9 {
-			return fmt.Errorf("H3 billing profile %s input_image_free_count must be between 0 and 9", key)
-		}
-		if err := validateResolutionPrices(key, "output_unit_price", profile.OutputUnitPrice); err != nil {
+		if err := validateH3BillingConfig(key, profile); err != nil {
 			return err
-		}
-		if err := validateResolutionPrices(key, "input_video_unit_price", profile.InputVideoUnitPrice); err != nil {
-			return err
-		}
-		for name, price := range map[string]string{
-			"input_image_extra_unit_price": profile.InputImageExtraUnitPrice,
-			"input_audio_unit_price":       profile.InputAudioUnitPrice,
-		} {
-			parsedPrice, err := nonNegativePrice(price)
-			if err != nil {
-				return fmt.Errorf("H3 billing profile %s %s: %w", key, name, err)
-			}
-			if name == "input_audio_unit_price" && !parsedPrice.IsZero() {
-				return fmt.Errorf("H3 billing profile %s input_audio_unit_price must be zero in schema version 1", key)
-			}
 		}
 	}
 	if _, ok := profiles[H3BillingProfileKey]; !ok {
 		return fmt.Errorf("H3 billing profile %s is required", H3BillingProfileKey)
+	}
+	return nil
+}
+
+func validateH3BillingConfig(key string, profile H3BillingConfig) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("H3 billing profile key cannot be empty")
+	}
+	if profile.SchemaVersion != 1 {
+		return fmt.Errorf("H3 billing profile %s has unsupported schema_version", key)
+	}
+	if profile.Mode != H3BillingMode {
+		return fmt.Errorf("H3 billing profile %s has unsupported mode", key)
+	}
+	if strings.TrimSpace(profile.Currency) == "" {
+		return fmt.Errorf("H3 billing profile %s currency cannot be empty", key)
+	}
+	if profile.InputVideoMaxSeconds <= 0 || profile.InputVideoMaxSeconds > H3MaxOutputDurationSeconds {
+		return fmt.Errorf("H3 billing profile %s input_video_max_seconds must be between 1 and %d", key, H3MaxOutputDurationSeconds)
+	}
+	if profile.InputImageFreeCount < 0 || profile.InputImageFreeCount > H3MaxInputImageCount {
+		return fmt.Errorf("H3 billing profile %s input_image_free_count must be between 0 and %d", key, H3MaxInputImageCount)
+	}
+	if err := validateResolutionPrices(key, "output_unit_price", profile.OutputUnitPrice); err != nil {
+		return err
+	}
+	if err := validateResolutionPrices(key, "input_video_unit_price", profile.InputVideoUnitPrice); err != nil {
+		return err
+	}
+	for name, price := range map[string]string{
+		"input_image_extra_unit_price": profile.InputImageExtraUnitPrice,
+		"input_audio_unit_price":       profile.InputAudioUnitPrice,
+	} {
+		parsedPrice, err := nonNegativePrice(price)
+		if err != nil {
+			return fmt.Errorf("H3 billing profile %s %s: %w", key, name, err)
+		}
+		if name == "input_audio_unit_price" && !parsedPrice.IsZero() {
+			return fmt.Errorf("H3 billing profile %s input_audio_unit_price must be zero in schema version 1", key)
+		}
 	}
 	return nil
 }
@@ -214,11 +259,26 @@ func BuildH3BillingPlan(input H3BillingInput, groupRatio float64) (*types.TaskBi
 	if !ok {
 		return nil, fmt.Errorf("H3 billing profile %s is not configured", H3BillingProfileKey)
 	}
-	return buildH3BillingPlan(*profile, input, groupRatio)
+	return buildH3BillingPlan(*profile, input, groupRatio, LegacyH3BillingSource, H3BillingProfileKey)
+}
+
+// BuildH3BillingPlanForModels selects the structured MiniMax rule from the
+// unified task rate-card option. The legacy profile remains a read-only
+// fallback for installations that have not yet saved a unified rate-card JSON.
+func BuildH3BillingPlanForModels(input H3BillingInput, groupRatio float64, models ...string) (*types.TaskBillingPlan, error) {
+	card, key := findMinimaxRateCard(models...)
+	if card != nil {
+		profile, err := decodeMinimaxBillingConfig(card.BillingConfig)
+		if err != nil {
+			return nil, fmt.Errorf("rate card %s: %w", key, err)
+		}
+		return buildH3BillingPlan(profile, input, groupRatio, H3BillingSource, key)
+	}
+	return BuildH3BillingPlan(input, groupRatio)
 }
 
 func PreviewH3Billing(config H3BillingConfig, input H3BillingInput, groupRatio float64, usage *types.TaskUsage) (*H3BillingPreview, error) {
-	plan, err := buildH3BillingPlan(config, input, groupRatio)
+	plan, err := buildH3BillingPlan(config, input, groupRatio, LegacyH3BillingSource, H3BillingProfileKey)
 	if err != nil {
 		return nil, err
 	}
@@ -255,8 +315,8 @@ func PreviewH3Billing(config H3BillingConfig, input H3BillingInput, groupRatio f
 	return preview, nil
 }
 
-func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRatio float64) (*types.TaskBillingPlan, error) {
-	if err := validateH3Profiles(map[string]H3BillingConfig{H3BillingProfileKey: profile}); err != nil {
+func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRatio float64, source, ruleKey string) (*types.TaskBillingPlan, error) {
+	if err := validateH3BillingConfig(ruleKey, profile); err != nil {
 		return nil, err
 	}
 	resolution := strings.ToUpper(strings.TrimSpace(input.Resolution))
@@ -281,8 +341,8 @@ func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRati
 		videoReserve = profile.InputVideoMaxSeconds
 	}
 	plan := &types.TaskBillingPlan{
-		Source:                         H3BillingSource,
-		RuleKey:                        H3BillingProfileKey,
+		Source:                         source,
+		RuleKey:                        ruleKey,
 		SchemaVersion:                  profile.SchemaVersion,
 		Mode:                           profile.Mode,
 		ConfigHash:                     hashH3BillingConfig(profile),
@@ -473,7 +533,7 @@ func quoteH3PlanMilliseconds(plan *types.TaskBillingPlan, stage string, outputMs
 }
 
 func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
-	if plan == nil || plan.Source != H3BillingSource || plan.RuleKey != H3BillingProfileKey || plan.SchemaVersion != 1 || plan.Mode != H3BillingMode || strings.TrimSpace(plan.ConfigHash) == "" {
+	if plan == nil || (plan.Source != H3BillingSource && plan.Source != LegacyH3BillingSource) || strings.TrimSpace(plan.RuleKey) == "" || plan.SchemaVersion != 1 || plan.Mode != H3BillingMode || strings.TrimSpace(plan.ConfigHash) == "" {
 		return fmt.Errorf("H3 billing plan identity is invalid")
 	}
 	if plan.GroupRatio < 0 || math.IsNaN(plan.GroupRatio) || math.IsInf(plan.GroupRatio, 0) || plan.QuotaPerUnit <= 0 || math.IsNaN(plan.QuotaPerUnit) || math.IsInf(plan.QuotaPerUnit, 0) {

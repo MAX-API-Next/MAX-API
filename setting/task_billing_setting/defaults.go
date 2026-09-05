@@ -25,12 +25,18 @@ func defaultRateCards() map[string]RateCard {
 		row("pro_video", 1.2, "quality", "pro", "has_video_input", "true"),
 		row("pro_no_video", 0.8, "quality", "pro", "has_video_input", "false"),
 	}
+	minimaxConfig := defaultH3BillingConfig()
 	return map[string]RateCard{
 		"kling/kling-v3-video-generation":      perSecondCard("kling", v3Rows),
 		"kling-v3":                             perSecondCard("kling", v3Rows),
 		"kling/kling-v3-omni-video-generation": perSecondCard("kling", v3OmniRows),
 		"kling-v3-omni":                        perSecondCard("kling", v3OmniRows),
 		"kling-video-o1":                       perSecondCard("kling", o1Rows),
+		MinimaxBillingRuleKey: {
+			Vendor:        "minimax",
+			BillingType:   MinimaxBillingType,
+			BillingConfig: encodeBillingConfig(minimaxConfig),
+		},
 	}
 }
 

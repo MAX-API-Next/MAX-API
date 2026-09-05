@@ -452,7 +452,7 @@ func updatePricing() {
 }
 
 func newTaskRateCardPricing(ruleKey string, card *task_billing_setting.RateCard) *TaskRateCardPricing {
-	if card == nil {
+	if card == nil || card.BillingType != "" {
 		return nil
 	}
 	rows := make([]TaskRateCardPricingRow, len(card.Rows))
