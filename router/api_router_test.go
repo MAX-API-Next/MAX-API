@@ -117,6 +117,19 @@ func TestVerificationMethodsRouteIsRegistered(t *testing.T) {
 	t.Fatal("expected GET /api/verify/methods route to be registered")
 }
 
+func TestPermissionCatalogRouteIsRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	for _, route := range engine.Routes() {
+		if route.Method == http.MethodGet && route.Path == "/api/authz/catalog" {
+			return
+		}
+	}
+	t.Fatal("expected GET /api/authz/catalog route to be registered")
+}
+
 func TestHealthRoutesAreRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -179,6 +179,39 @@ func TestGetSelfRedactsNotificationSecrets(t *testing.T) {
 	assert.Equal(t, 7, returned.GotifyPriority)
 }
 
+func TestGetSelfIncludesFineGrainedAdminPermissions(t *testing.T) {
+	db := setupUserSettingControllerTestDB(t)
+	user := model.User{
+		Id:       1151,
+		Username: "self-permissions-user",
+		Password: "password",
+		Role:     common.RoleAdminUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.AutoMigrate(&model.AuthzUserOverride{}))
+	require.NoError(t, db.Create(&model.AuthzUserOverride{UserID: user.Id, Resource: "channel", Action: "sensitive_write", Allowed: true}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	ctx.Set("id", user.Id)
+	ctx.Set("role", user.Role)
+	GetSelf(ctx)
+
+	var response struct {
+		Data struct {
+			Permissions map[string]any `json:"permissions"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	adminPermissions, ok := response.Data.Permissions["admin_permissions"].(map[string]any)
+	require.True(t, ok)
+	channelPermissions, ok := adminPermissions["channel"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, channelPermissions["sensitive_write"])
+}
+
 func TestGetSelfIgnoresQueryUserID(t *testing.T) {
 	db := setupUserSettingControllerTestDB(t)
 

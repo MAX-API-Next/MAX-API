@@ -282,6 +282,26 @@ func TestIsOidcIdAlreadyTakenHandlesDuplicateLegacyRows(t *testing.T) {
 	require.True(t, taken)
 }
 
+func TestIsOAuthIdentityTakenWithTxExcludesCurrentUser(t *testing.T) {
+	setupUserUpdateTestState(t)
+	primary := User{Id: 136, Username: "oauth-tx-primary", GitHubId: "github-tx-id", AffCode: "oauth-tx-primary-aff", Status: common.UserStatusEnabled}
+	other := User{Id: 137, Username: "oauth-tx-other", GitHubId: "github-other-id", AffCode: "oauth-tx-other-aff", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&primary).Error)
+	require.NoError(t, DB.Create(&other).Error)
+
+	taken, err := IsOAuthIdentityTakenWithTx(DB, UserUpdateFieldGitHubId, primary.GitHubId, 0)
+	require.NoError(t, err)
+	assert.True(t, taken)
+	taken, err = IsOAuthIdentityTakenWithTx(DB, UserUpdateFieldGitHubId, primary.GitHubId, primary.Id)
+	require.NoError(t, err)
+	assert.False(t, taken)
+	taken, err = IsOAuthIdentityTakenWithTx(DB, UserUpdateFieldGitHubId, other.GitHubId, primary.Id)
+	require.NoError(t, err)
+	assert.True(t, taken)
+	_, err = IsOAuthIdentityTakenWithTx(DB, UserUpdateFieldUsername, "not-an-oauth-field", primary.Id)
+	require.Error(t, err)
+}
+
 func TestOAuthIDTakenChecksReturnDatabaseErrors(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)

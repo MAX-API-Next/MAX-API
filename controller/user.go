@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/service/authz"
 	"github.com/MAX-API-Next/MAX-API/setting"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 
@@ -538,6 +539,7 @@ func GetSelf(c *gin.Context) {
 
 	// 计算用户权限信息
 	permissions := calculateUserPermissions(userRole)
+	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
 
 	// 获取用户设置并提取sidebar_modules
 	userSetting := user.GetSetting()
