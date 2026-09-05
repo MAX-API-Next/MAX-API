@@ -11,14 +11,21 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
-	AuthFlowPurposeOAuth            = "oauth"
-	AuthFlowIntentLogin             = "login"
-	AuthFlowIntentBind              = "bind"
-	AuthFlowTokenBytes              = 32
-	AuthFlowDefaultCleanupRetention = 24 * time.Hour
+	AuthFlowPurposeOAuth             = "oauth"
+	AuthFlowPurposeTwoFALogin        = "2fa_login"
+	AuthFlowPurposePasskeyLogin      = "passkey_login"
+	AuthFlowPurposePasskeyRegister   = "passkey_register"
+	AuthFlowPurposePasskeyStepUp     = "passkey_step_up"
+	AuthFlowPurposeTelegramBind      = "telegram_bind"
+	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
+	AuthFlowIntentLogin              = "login"
+	AuthFlowIntentBind               = "bind"
+	AuthFlowTokenBytes               = 32
+	AuthFlowDefaultCleanupRetention  = 24 * time.Hour
 
 	SecureVerificationMethod2FA      = "2fa"
 	SecureVerificationMethodPasskey  = "passkey"
@@ -47,6 +54,7 @@ type AuthFlow struct {
 	Provider   string     `json:"provider,omitempty" gorm:"type:varchar(64)"`
 	Intent     string     `json:"intent,omitempty" gorm:"type:varchar(16)"`
 	UserId     int        `json:"user_id,omitempty" gorm:"index"`
+	SessionId  string     `json:"session_id,omitempty" gorm:"type:varchar(64);index"`
 	Payload    string     `json:"-" gorm:"type:text"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ExpiresAt  time.Time  `json:"expires_at" gorm:"not null;index:idx_auth_flow_purpose_expiry"`
@@ -60,15 +68,17 @@ type AuthFlowCreate struct {
 	Provider  string
 	Intent    string
 	UserId    int
+	SessionId string
 	Payload   string
 	ExpiresAt time.Time
 }
 
 type AuthFlowMatch struct {
-	Purpose  string
-	Provider string
-	Intent   string
-	UserId   int
+	Purpose   string
+	Provider  string
+	Intent    string
+	UserId    int
+	SessionId string
 }
 
 func authFlowTokenHash(token string) string {
@@ -85,6 +95,9 @@ func applyAuthFlowMatch(query *gorm.DB, token string, match AuthFlowMatch) *gorm
 	}
 	if match.UserId != 0 {
 		query = query.Where("user_id = ?", match.UserId)
+	}
+	if match.SessionId != "" {
+		query = query.Where("session_id = ?", match.SessionId)
 	}
 	return query
 }
@@ -111,6 +124,7 @@ func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
 		Provider:  input.Provider,
 		Intent:    input.Intent,
 		UserId:    input.UserId,
+		SessionId: input.SessionId,
 		Payload:   input.Payload,
 		ExpiresAt: input.ExpiresAt,
 	}
@@ -146,6 +160,114 @@ func getAuthFlowWithDB(db *gorm.DB, token string, match AuthFlowMatch) (*AuthFlo
 
 func ConsumeAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 	return consumeAuthFlowWithDB(DB, token, match)
+}
+
+// ConsumeAuthFlowWithAction atomically consumes a flow and executes action in
+// the same database transaction. If action fails, the flow remains usable.
+// Optional match fields are enforced when non-zero, including SessionId.
+func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx *gorm.DB, flow *AuthFlow) error) (*AuthFlow, error) {
+	if token == "" || match.Purpose == "" || DB == nil {
+		return nil, ErrAuthFlowInvalid
+	}
+	var flow AuthFlow
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		consumed, err := ConsumeAuthFlowWithActionTx(tx, token, match, action)
+		if consumed != nil {
+			flow = *consumed
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &flow, nil
+}
+
+// ConsumeAuthFlowWithActionTx consumes a flow and executes its action inside
+// an existing transaction. The caller owns transaction begin/commit, which
+// allows an outer connection-level lock to remain held until commit.
+func ConsumeAuthFlowWithActionTx(tx *gorm.DB, token string, match AuthFlowMatch, action func(tx *gorm.DB, flow *AuthFlow) error) (*AuthFlow, error) {
+	if tx == nil || token == "" || match.Purpose == "" {
+		return nil, ErrAuthFlowInvalid
+	}
+	var flow AuthFlow
+	query := lockAuthFlowQuery(applyAuthFlowMatch(tx, token, match))
+	if err := query.First(&flow).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAuthFlowInvalid
+		}
+		return nil, err
+	}
+	if flow.ConsumedAt != nil {
+		return nil, ErrAuthFlowConsumed
+	}
+	now := time.Now()
+	if !flow.ExpiresAt.After(now) {
+		return nil, ErrAuthFlowExpired
+	}
+	result := tx.Model(&AuthFlow{}).
+		Where("id = ? AND consumed_at IS NULL AND expires_at > ?", flow.Id, now).
+		Update("consumed_at", now)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, ErrAuthFlowConsumed
+	}
+	flow.ConsumedAt = &now
+	if action != nil {
+		if err := action(tx, &flow); err != nil {
+			return nil, err
+		}
+	}
+	return &flow, nil
+}
+
+// ClaimExternalAuthAssertion atomically records a provider assertion as
+// consumed. The assertion itself is never persisted; its HMAC is protected by
+// the unique token_hash index so replay is rejected on all supported databases.
+func ClaimExternalAuthAssertion(purpose, assertion string, expiresAt time.Time) error {
+	if DB == nil {
+		return ErrAuthFlowInvalid
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return ClaimExternalAuthAssertionWithTx(tx, purpose, assertion, expiresAt)
+	})
+}
+
+// ClaimExternalAuthAssertionWithTx performs the assertion claim in a caller
+// transaction so replay protection can commit with the resulting state change.
+func ClaimExternalAuthAssertionWithTx(tx *gorm.DB, purpose, assertion string, expiresAt time.Time) error {
+	purpose = strings.TrimSpace(purpose)
+	assertion = strings.TrimSpace(assertion)
+	now := time.Now()
+	if tx == nil || purpose == "" || assertion == "" || !expiresAt.After(now) {
+		return ErrAuthFlowInvalid
+	}
+	flow := AuthFlow{
+		TokenHash:  authFlowTokenHash("external:" + purpose + ":" + assertion),
+		Purpose:    purpose,
+		ExpiresAt:  expiresAt,
+		ConsumedAt: &now,
+	}
+	result := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "token_hash"}},
+		DoNothing: true,
+	}).Create(&flow)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrAuthFlowConsumed
+	}
+	return nil
+}
+
+func lockAuthFlowQuery(query *gorm.DB) *gorm.DB {
+	if query == nil || query.Dialector == nil || query.Dialector.Name() == "sqlite" {
+		return query
+	}
+	return query.Clauses(clause.Locking{Strength: "UPDATE"})
 }
 
 func consumeAuthFlowWithDB(db *gorm.DB, token string, match AuthFlowMatch) (*AuthFlow, error) {

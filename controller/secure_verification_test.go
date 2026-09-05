@@ -1070,6 +1070,78 @@ func TestTelegramLoginRequiresBrowserBoundStateAndConsumesItOnce(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrAuthFlowConsumed)
 }
 
+func TestTelegramLoginRejectsProviderAssertionReplayAcrossStates(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	require.NoError(t, appi18n.Init())
+	gin.SetMode(gin.TestMode)
+
+	const token = "123456:telegram-assertion-replay-test"
+	originalEnabled := common.TelegramOAuthEnabled
+	originalToken := common.TelegramBotToken
+	common.TelegramOAuthEnabled = true
+	common.TelegramBotToken = token
+	t.Cleanup(func() {
+		common.TelegramOAuthEnabled = originalEnabled
+		common.TelegramBotToken = originalToken
+	})
+
+	user := model.User{
+		Id: 99002, Username: "telegram-assertion-replay-user", TelegramId: "123456",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, model.DB.Create(&user).Error)
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("telegram-assertion-replay"))))
+	router.POST("/api/oauth/state", GenerateOAuthCode)
+	router.GET("/api/oauth/telegram/login", TelegramLogin)
+
+	generateState := func() (string, []*http.Cookie) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"telegram","intent":"login"}`))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var response struct {
+			Success bool   `json:"success"`
+			Data    string `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.True(t, response.Success)
+		return response.Data, recorder.Result().Cookies()
+	}
+
+	stateA, cookiesA := generateState()
+	stateB, cookiesB := generateState()
+	params := signedTelegramParams(t, token, time.Now())
+
+	paramsA := params.Encode()
+	paramsWithStateA, err := url.ParseQuery(paramsA)
+	require.NoError(t, err)
+	paramsWithStateA.Set("state", stateA)
+	callbackA := httptest.NewRequest(http.MethodGet, "/api/oauth/telegram/login?"+paramsWithStateA.Encode(), nil)
+	for _, sessionCookie := range cookiesA {
+		callbackA.AddCookie(sessionCookie)
+	}
+	recorderA := httptest.NewRecorder()
+	router.ServeHTTP(recorderA, callbackA)
+	require.Equal(t, http.StatusOK, recorderA.Code, recorderA.Body.String())
+
+	paramsWithStateB, err := url.ParseQuery(paramsA)
+	require.NoError(t, err)
+	paramsWithStateB.Set("state", stateB)
+	callbackB := httptest.NewRequest(http.MethodGet, "/api/oauth/telegram/login?"+paramsWithStateB.Encode(), nil)
+	for _, sessionCookie := range cookiesB {
+		callbackB.AddCookie(sessionCookie)
+	}
+	recorderB := httptest.NewRecorder()
+	router.ServeHTTP(recorderB, callbackB)
+	require.Equal(t, http.StatusForbidden, recorderB.Code)
+
+	_, err = model.GetAuthFlow(stateB, telegramLoginFlowMatch)
+	require.NoError(t, err)
+}
+
 type failingSaveSession struct {
 	values map[interface{}]interface{}
 }

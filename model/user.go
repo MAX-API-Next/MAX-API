@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -275,6 +276,12 @@ func withUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) 
 	if db == nil {
 		db = DB
 	}
+	if db == nil {
+		return errors.New("database is not initialized")
+	}
+	if fn == nil {
+		return errors.New("OAuth identity mutation callback is required")
+	}
 	switch {
 	case common.UsingPostgreSQL:
 		return db.Connection(func(conn *gorm.DB) error {
@@ -315,6 +322,13 @@ func withUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) 
 		defer userOAuthIdentityLockMu.Unlock()
 		return fn(db)
 	}
+}
+
+// WithUserOAuthIdentityMutationLock serializes OAuth identity mutations while
+// allowing a caller-owned transaction to retain the lock across its complete
+// read/write action.
+func WithUserOAuthIdentityMutationLock(db *gorm.DB, fn func(db *gorm.DB) error) error {
+	return withUserOAuthIdentityMutationLock(db, fn)
 }
 
 func finishUserOAuthIdentityLock(callbackErr, releaseErr error, released *bool) error {
@@ -1070,6 +1084,16 @@ func (user *User) UpdateFieldsWithTx(tx *gorm.DB, updatePassword bool, fields ..
 	return user.updateWithTx(tx, updatePassword, fields)
 }
 
+// UpdateFieldsWithTxAndCache applies a user update and stages the durable
+// cache invalidation in the same transaction. Callers must dispatch the
+// returned task only after the transaction commits.
+func (user *User) UpdateFieldsWithTxAndCache(tx *gorm.DB, updatePassword bool, fields ...UserUpdateField) (CacheInvalidationTask, error) {
+	if err := user.updateWithTx(tx, updatePassword, fields); err != nil {
+		return CacheInvalidationTask{}, err
+	}
+	return stageUserCacheInvalidationTx(tx, user.Id, false)
+}
+
 func isAccessTokenOnlyUserUpdate(updatePassword bool, fields []UserUpdateField) bool {
 	return !updatePassword && len(fields) == 1 && fields[0] == UserUpdateFieldAccessToken
 }
@@ -1353,6 +1377,9 @@ func (user *User) deleteWithCacheInvalidation(hardDelete bool) error {
 			if err := tx.Where("user_id = ?", user.Id).Delete(&UserOAuthBinding{}).Error; err != nil {
 				return err
 			}
+			if err := DeleteAuthzUserOverridesTx(tx, user.Id); err != nil {
+				return err
+			}
 			now := common.GetTimestamp()
 			if err := tx.Model(&UserSubscription{}).
 				Where("user_id = ? AND status = ?", user.Id, "active").
@@ -1584,19 +1611,38 @@ func IsTelegramIdAlreadyTaken(telegramId string) (bool, error) {
 }
 
 func BindTelegramIdentityWithAuthFlow(userID int, telegramID string, state string) (int64, error) {
+	return BindTelegramIdentityWithAuthFlowAndSession(userID, telegramID, state, "")
+}
+
+// BindTelegramIdentityWithAuthFlowAndSession binds a Telegram identity while
+// consuming the matching one-time flow. A non-empty sessionID is enforced for
+// newly created flows; an empty value keeps compatibility with legacy flows.
+func BindTelegramIdentityWithAuthFlowAndSession(userID int, telegramID string, state string, sessionID string) (int64, error) {
+	return BindTelegramIdentityWithAuthFlowAndSessionAndAssertion(userID, telegramID, state, sessionID, "", time.Time{})
+}
+
+// BindTelegramIdentityWithAuthFlowAndSessionAndAssertion binds a Telegram
+// identity, consumes the matching flow, and optionally claims the provider
+// assertion in one transaction. The optional assertion is used to prevent a
+// valid Telegram payload from being replayed with a newly issued state.
+func BindTelegramIdentityWithAuthFlowAndSessionAndAssertion(userID int, telegramID string, state string, sessionID string, assertion string, assertionExpiresAt time.Time) (int64, error) {
 	if userID <= 0 || strings.TrimSpace(telegramID) == "" || strings.TrimSpace(state) == "" {
 		return 0, ErrAuthFlowInvalid
+	}
+	match := AuthFlowMatch{
+		Purpose:  AuthFlowPurposeOAuth,
+		Provider: "telegram",
+		Intent:   AuthFlowIntentBind,
+		UserId:   userID,
+	}
+	if strings.TrimSpace(sessionID) != "" {
+		match.SessionId = strings.TrimSpace(sessionID)
 	}
 	var generation int64
 	var cacheTask CacheInvalidationTask
 	err := withUserOAuthIdentityMutationLock(DB, func(db *gorm.DB) error {
 		return db.Transaction(func(tx *gorm.DB) error {
-			if _, err := consumeAuthFlowWithDB(tx, state, AuthFlowMatch{
-				Purpose:  AuthFlowPurposeOAuth,
-				Provider: "telegram",
-				Intent:   AuthFlowIntentBind,
-				UserId:   userID,
-			}); err != nil {
+			if _, err := consumeAuthFlowWithDB(tx, state, match); err != nil {
 				return err
 			}
 			var count int64
@@ -1611,6 +1657,11 @@ func BindTelegramIdentityWithAuthFlow(userID int, telegramID string, state strin
 			result := tx.Model(&User{}).Where("id = ?", userID).Update("telegram_id", telegramID)
 			if err := ensureUserUpdateMatchedTx(tx, result, userID, ErrUserNotFound); err != nil {
 				return err
+			}
+			if strings.TrimSpace(assertion) != "" {
+				if err := ClaimExternalAuthAssertionWithTx(tx, AuthFlowPurposeTelegramAssertion, assertion, assertionExpiresAt); err != nil {
+					return err
+				}
 			}
 			var err error
 			generation, cacheTask, err = bumpUserSessionGenerationTx(tx, userID)

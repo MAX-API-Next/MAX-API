@@ -364,6 +364,7 @@ func migrateDB() error {
 		&PerfMetricFlushReceipt{},
 		&SystemTask{},
 		&SystemInstance{},
+		&AuthzUserOverride{},
 	)
 	if err != nil {
 		return err

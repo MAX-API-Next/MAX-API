@@ -128,6 +128,13 @@ func dispatchStagedCacheInvalidation(task CacheInvalidationTask) {
 	}
 }
 
+// DispatchStagedCacheInvalidation executes a cache invalidation task after
+// its transaction has committed. It is exported for cross-package flows that
+// stage invalidation together with an authentication or identity mutation.
+func DispatchStagedCacheInvalidation(task CacheInvalidationTask) {
+	dispatchStagedCacheInvalidation(task)
+}
+
 func dispatchStagedCacheInvalidations(tasks []CacheInvalidationTask) {
 	for _, task := range tasks {
 		dispatchStagedCacheInvalidation(task)

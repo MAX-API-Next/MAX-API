@@ -20,6 +20,7 @@ import (
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -83,6 +84,19 @@ func (p telegramAuthPayload) values() url.Values {
 	return values
 }
 
+func telegramAssertionKey(payload telegramAuthPayload) string {
+	// Telegram's hash comparison is case-insensitive at the hex decoding
+	// boundary; normalize it before claiming so casing changes cannot bypass
+	// one-time assertion replay protection.
+	return strings.ToLower(strings.TrimSpace(payload.Hash))
+}
+
+func telegramAssertionExpiry(now time.Time) time.Time {
+	// Keep the claim alive for the whole accepted authorization window,
+	// including the configured future-clock skew.
+	return now.Add(telegramAuthorizationTTL + telegramClockSkew)
+}
+
 func GenerateTelegramBindState(c *gin.Context) {
 	if !common.TelegramOAuthEnabled {
 		common.ApiErrorMsg(c, "管理员未开启 Telegram 登录")
@@ -93,25 +107,32 @@ func GenerateTelegramBindState(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": i18n.T(c, i18n.MsgUnauthorized)})
 		return
 	}
+	session := sessions.Default(c)
+	sessionID, err := ensureAuthSessionID(session)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
 		Purpose:   model.AuthFlowPurposeOAuth,
 		Provider:  "telegram",
 		Intent:    model.AuthFlowIntentBind,
 		UserId:    userID,
+		SessionId: sessionID,
 		ExpiresAt: time.Now().Add(telegramBindFlowTTL),
 	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	session := sessions.Default(c)
 	session.Set(oauthStateSessionKey, state)
 	if err := session.Save(); err != nil {
 		if _, consumeErr := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
-			Purpose:  model.AuthFlowPurposeOAuth,
-			Provider: "telegram",
-			Intent:   model.AuthFlowIntentBind,
-			UserId:   userID,
+			Purpose:   model.AuthFlowPurposeOAuth,
+			Provider:  "telegram",
+			Intent:    model.AuthFlowIntentBind,
+			UserId:    userID,
+			SessionId: sessionID,
 		}); consumeErr != nil {
 			common.SysError("failed to invalidate Telegram bind flow after session save failure: " + consumeErr.Error())
 		}
@@ -140,7 +161,29 @@ func TelegramBind(c *gin.Context) {
 		return
 	}
 	userID := c.GetInt("id")
-	generation, err := model.BindTelegramIdentityWithAuthFlow(userID, strconv.FormatInt(payload.ID, 10), payload.State)
+	pendingFlow, err := model.GetAuthFlow(payload.State, model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeOAuth,
+		Provider: "telegram",
+		Intent:   model.AuthFlowIntentBind,
+		UserId:   userID,
+	})
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	currentSessionID := authSessionID(sessions.Default(c))
+	if pendingFlow.SessionId != "" && pendingFlow.SessionId != currentSessionID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	generation, err := model.BindTelegramIdentityWithAuthFlowAndSessionAndAssertion(
+		userID,
+		strconv.FormatInt(payload.ID, 10),
+		payload.State,
+		pendingFlow.SessionId,
+		telegramAssertionKey(payload),
+		telegramAssertionExpiry(time.Now()),
+	)
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrTelegramIdAlreadyTaken):
@@ -177,7 +220,26 @@ func TelegramLogin(c *gin.Context) {
 	if err := user.FillUserByTelegramId(); handleOAuthUserLookupError(c, err) {
 		return
 	}
-	if _, err := model.ConsumeAuthFlow(state, telegramLoginFlowMatch); err != nil {
+	pendingFlow, err := model.GetAuthFlow(state, telegramLoginFlowMatch)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	currentSessionID := authSessionID(sessions.Default(c))
+	if pendingFlow.SessionId != "" && pendingFlow.SessionId != currentSessionID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		return
+	}
+	consumeMatch := telegramLoginFlowMatch
+	consumeMatch.SessionId = pendingFlow.SessionId
+	if _, err := model.ConsumeAuthFlowWithAction(state, consumeMatch, func(tx *gorm.DB, _ *model.AuthFlow) error {
+		return model.ClaimExternalAuthAssertionWithTx(
+			tx,
+			model.AuthFlowPurposeTelegramAssertion,
+			strings.ToLower(strings.TrimSpace(params.Get("hash"))),
+			telegramAssertionExpiry(time.Now()),
+		)
+	}); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 		return
 	}

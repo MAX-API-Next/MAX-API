@@ -128,6 +128,56 @@ func TestGenerateOAuthCodeCreatesProviderBoundOpaqueState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, response.Data, flow.TokenHash)
 	require.Contains(t, flow.Payload, "invite")
+	require.Len(t, flow.SessionId, 48)
+}
+
+func TestHandleOAuthRejectsSessionBoundFlowFromModifiedSession(t *testing.T) {
+	setupControllerAuthFlowDB(t)
+	require.NoError(t, appi18n.Init())
+	originalGitHubOAuthEnabled := common.GitHubOAuthEnabled
+	common.GitHubOAuthEnabled = true
+	t.Cleanup(func() { common.GitHubOAuthEnabled = originalGitHubOAuthEnabled })
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("oauth-session-binding-test"))))
+	router.POST("/api/oauth/state", GenerateOAuthCode)
+	router.GET("/tamper", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set(authSessionIDSessionKey, strings.Repeat("x", 48))
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	router.GET("/api/oauth/:provider", HandleOAuth)
+
+	stateRecorder := httptest.NewRecorder()
+	stateRequest := httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"github","intent":"login"}`))
+	stateRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(stateRecorder, stateRequest)
+	require.Equal(t, http.StatusOK, stateRecorder.Code)
+	var stateResponse struct {
+		Success bool   `json:"success"`
+		Data    string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(stateRecorder.Body.Bytes(), &stateResponse))
+	require.True(t, stateResponse.Success)
+
+	tamperRequest := httptest.NewRequest(http.MethodGet, "/tamper", nil)
+	for _, sessionCookie := range stateRecorder.Result().Cookies() {
+		tamperRequest.AddCookie(sessionCookie)
+	}
+	tamperRecorder := httptest.NewRecorder()
+	router.ServeHTTP(tamperRecorder, tamperRequest)
+	require.Equal(t, http.StatusNoContent, tamperRecorder.Code)
+
+	callbackRequest := httptest.NewRequest(http.MethodGet, "/api/oauth/github?state="+stateResponse.Data+"&error=access_denied", nil)
+	for _, sessionCookie := range tamperRecorder.Result().Cookies() {
+		callbackRequest.AddCookie(sessionCookie)
+	}
+	callbackRecorder := httptest.NewRecorder()
+	router.ServeHTTP(callbackRecorder, callbackRequest)
+	require.Equal(t, http.StatusForbidden, callbackRecorder.Code)
+	_, err := model.GetAuthFlow(stateResponse.Data, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: "github"})
+	require.NoError(t, err)
 }
 
 func TestHandleOAuthRejectsStateFromDifferentBrowserSession(t *testing.T) {

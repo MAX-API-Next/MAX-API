@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	oauthAuthFlowTTL     = 10 * time.Minute
-	oauthStateSessionKey = "oauth_state"
+	oauthAuthFlowTTL        = 10 * time.Minute
+	oauthStateSessionKey    = "oauth_state"
+	authSessionIDSessionKey = "auth_session_id"
 )
 
 type oauthStateRequest struct {
@@ -47,6 +48,33 @@ func clearOAuthSessionState(c *gin.Context) {
 	if err := session.Save(); err != nil {
 		common.SysError("failed to clear OAuth state from session: " + err.Error())
 	}
+}
+
+func authSessionID(session sessions.Session) string {
+	value, ok := session.Get(authSessionIDSessionKey).(string)
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if len(value) != 48 {
+		return ""
+	}
+	return value
+}
+
+func ensureAuthSessionID(session sessions.Session) (string, error) {
+	if session == nil {
+		return "", errors.New("auth session is unavailable")
+	}
+	if value := authSessionID(session); value != "" {
+		return value, nil
+	}
+	value, err := common.GenerateRandomKey(48)
+	if err != nil {
+		return "", fmt.Errorf("generate auth session id: %w", err)
+	}
+	session.Set(authSessionIDSessionKey, value)
+	return value, nil
 }
 
 // providerParams returns map with Provider key for i18n templates
@@ -142,6 +170,12 @@ func GenerateOAuthCode(c *gin.Context) {
 			return
 		}
 	}
+	session := sessions.Default(c)
+	sessionID, err := ensureAuthSessionID(session)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	payload, err := common.Marshal(oauthFlowPayload{AffiliateCode: request.Aff})
 	if err != nil {
 		common.ApiError(c, err)
@@ -153,6 +187,7 @@ func GenerateOAuthCode(c *gin.Context) {
 		Provider:  request.Provider,
 		Intent:    request.Intent,
 		UserId:    userID,
+		SessionId: sessionID,
 		Payload:   string(payload),
 		ExpiresAt: expiresAt,
 	})
@@ -160,14 +195,14 @@ func GenerateOAuthCode(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	session := sessions.Default(c)
 	session.Set(oauthStateSessionKey, state)
 	if err := session.Save(); err != nil {
 		if _, consumeErr := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
-			Purpose:  model.AuthFlowPurposeOAuth,
-			Provider: request.Provider,
-			Intent:   request.Intent,
-			UserId:   userID,
+			Purpose:   model.AuthFlowPurposeOAuth,
+			Provider:  request.Provider,
+			Intent:    request.Intent,
+			UserId:    userID,
+			SessionId: sessionID,
 		}); consumeErr != nil {
 			common.SysError("failed to invalidate OAuth flow after session save failure: " + consumeErr.Error())
 		}
@@ -213,11 +248,20 @@ func HandleOAuth(c *gin.Context) {
 		})
 		return
 	}
+	sessionID := authSessionID(sessions.Default(c))
+	if pendingFlow.SessionId != "" && pendingFlow.SessionId != sessionID {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
+		})
+		return
+	}
 
 	consumeMatch := model.AuthFlowMatch{
-		Purpose:  model.AuthFlowPurposeOAuth,
-		Provider: providerName,
-		Intent:   pendingFlow.Intent,
+		Purpose:   model.AuthFlowPurposeOAuth,
+		Provider:  providerName,
+		Intent:    pendingFlow.Intent,
+		SessionId: pendingFlow.SessionId,
 	}
 	if pendingFlow.Intent == model.AuthFlowIntentBind {
 		userID := c.GetInt("id")
@@ -355,45 +399,56 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 		}
 	}
 
-	if _, err := model.ConsumeAuthFlow(flowToken, model.AuthFlowMatch{
-		Purpose:  model.AuthFlowPurposeOAuth,
-		Provider: pendingFlow.Provider,
-		Intent:   model.AuthFlowIntentBind,
-		UserId:   pendingFlow.UserId,
-	}); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
-		return
-	}
-	clearOAuthSessionState(c)
-	user := model.User{Id: pendingFlow.UserId}
-	err = user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
+	// Resolve the mutation path before consuming the one-time flow so an
+	// unsupported provider can never burn a valid state.
+	genericProvider, isGenericProvider := provider.(*oauth.GenericOAuthProvider)
+	updateField, hasUpdateField := oauthProviderUserUpdateField(provider)
+	if !isGenericProvider && !hasUpdateField {
+		common.ApiError(c, fmt.Errorf("unsupported built-in OAuth provider: %s", provider.GetName()))
 		return
 	}
 
-	// Handle binding based on provider type
-	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
-		// Custom provider: use user_oauth_bindings table
-		err = model.UpdateUserOAuthBinding(user.Id, genericProvider.GetProviderId(), oauthUser.ProviderUserID)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-	} else {
-		// Built-in provider: update user record directly
-		provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
-		updateField, ok := oauthProviderUserUpdateField(provider)
-		if !ok {
-			common.ApiError(c, fmt.Errorf("unsupported built-in OAuth provider: %s", provider.GetName()))
-			return
-		}
-		err = user.UpdateFields(false, updateField)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
+	var cacheTask model.CacheInvalidationTask
+	bindMatch := model.AuthFlowMatch{
+		Purpose:   model.AuthFlowPurposeOAuth,
+		Provider:  pendingFlow.Provider,
+		Intent:    model.AuthFlowIntentBind,
+		UserId:    pendingFlow.UserId,
+		SessionId: pendingFlow.SessionId,
 	}
+	err = model.WithUserOAuthIdentityMutationLock(nil, func(conn *gorm.DB) error {
+		return conn.Transaction(func(tx *gorm.DB) error {
+			_, consumeErr := model.ConsumeAuthFlowWithActionTx(tx, flowToken, bindMatch, func(identityTx *gorm.DB, _ *model.AuthFlow) error {
+				var user model.User
+				if err := identityTx.First(&user, pendingFlow.UserId).Error; err != nil {
+					return err
+				}
+				if isGenericProvider {
+					// Custom provider: keep the binding mutation in the same transaction
+					// as AuthFlow consumption.
+					return model.UpdateUserOAuthBindingWithTx(identityTx, user.Id, genericProvider.GetProviderId(), oauthUser.ProviderUserID)
+				}
+
+				// Built-in provider: update the user identity and durable cache fence
+				// in the same transaction as AuthFlow consumption.
+				provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
+				var updateErr error
+				cacheTask, updateErr = user.UpdateFieldsWithTxAndCache(identityTx, false, updateField)
+				return updateErr
+			})
+			return consumeErr
+		})
+	})
+	if err != nil {
+		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	model.DispatchStagedCacheInvalidation(cacheTask)
+	clearOAuthSessionState(c)
 
 	common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{
 		"action": "bind",

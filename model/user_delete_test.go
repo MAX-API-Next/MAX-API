@@ -52,6 +52,8 @@ func TestUserSoftDeleteInvalidatesCredentialsAndCancelsActiveSubscriptions(t *te
 	require.NoError(t, DB.Create(&token).Error)
 	binding := UserOAuthBinding{UserId: user.Id, ProviderId: 9103, ProviderUserId: "soft-delete-provider-user"}
 	require.NoError(t, DB.Create(&binding).Error)
+	override := AuthzUserOverride{UserID: user.Id, Resource: "channel", Action: "sensitive_write", Allowed: true}
+	require.NoError(t, DB.Create(&override).Error)
 	subscription := UserSubscription{
 		Id:          29103,
 		UserId:      user.Id,
@@ -80,6 +82,9 @@ func TestUserSoftDeleteInvalidatesCredentialsAndCancelsActiveSubscriptions(t *te
 	var bindingCount int64
 	require.NoError(t, DB.Model(&UserOAuthBinding{}).Where("user_id = ?", user.Id).Count(&bindingCount).Error)
 	assert.Zero(t, bindingCount)
+	var overrideCount int64
+	require.NoError(t, DB.Model(&AuthzUserOverride{}).Where("user_id = ?", user.Id).Count(&overrideCount).Error)
+	assert.Zero(t, overrideCount)
 
 	var storedSubscription UserSubscription
 	require.NoError(t, DB.First(&storedSubscription, subscription.Id).Error)
@@ -106,6 +111,8 @@ func TestUserHardDeleteRemovesCredentialsAndCancelsActiveSubscriptions(t *testin
 	require.NoError(t, DB.Create(&token).Error)
 	binding := UserOAuthBinding{UserId: user.Id, ProviderId: 9104, ProviderUserId: "hard-delete-provider-user"}
 	require.NoError(t, DB.Create(&binding).Error)
+	override := AuthzUserOverride{UserID: user.Id, Resource: "channel", Action: "sensitive_write", Allowed: true}
+	require.NoError(t, DB.Create(&override).Error)
 	subscription := UserSubscription{
 		Id:          29104,
 		UserId:      user.Id,
@@ -132,6 +139,9 @@ func TestUserHardDeleteRemovesCredentialsAndCancelsActiveSubscriptions(t *testin
 	var bindingCount int64
 	require.NoError(t, DB.Model(&UserOAuthBinding{}).Where("user_id = ?", user.Id).Count(&bindingCount).Error)
 	assert.Zero(t, bindingCount)
+	var overrideCount int64
+	require.NoError(t, DB.Unscoped().Model(&AuthzUserOverride{}).Where("user_id = ?", user.Id).Count(&overrideCount).Error)
+	assert.Zero(t, overrideCount)
 
 	var storedSubscription UserSubscription
 	require.NoError(t, DB.First(&storedSubscription, subscription.Id).Error)

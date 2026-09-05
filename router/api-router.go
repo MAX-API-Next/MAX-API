@@ -4,6 +4,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/controller"
 	"github.com/MAX-API-Next/MAX-API/middleware"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/service/authz"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/MAX-API-Next/MAX-API/oauth"
@@ -59,6 +60,14 @@ func SetApiRouter(router *gin.Engine) {
 		// Standard OAuth providers (GitHub, Discord, OIDC, LinuxDO) - unified route
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.HandleOAuth)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
+
+		// Fine-grained authorization catalog. Route enforcement remains on the
+		// legacy AdminAuth boundary during the shadow rollout.
+		authzRoute := apiRouter.Group("/authz")
+		authzRoute.Use(middleware.AdminAuth())
+		{
+			authzRoute.GET("/catalog", controller.GetPermissionCatalog)
+		}
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", anonymousRequestBodyLimit, controller.CreemWebhook)
@@ -138,7 +147,7 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
-				adminRoute.GET("/search", controller.SearchUsers)
+				adminRoute.GET("/search", middleware.AuthzShadow(authz.Permission{Resource: authz.ResourceUser, Action: authz.ActionSearch}), controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
@@ -252,9 +261,9 @@ func SetApiRouter(router *gin.Engine) {
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{
-			channelRoute.GET("/", controller.GetAllChannels)
+			channelRoute.GET("/", middleware.AuthzShadow(authz.ChannelRead), controller.GetAllChannels)
 			channelRoute.GET("/search", controller.SearchChannels)
-			channelRoute.GET("/models", controller.ChannelListModels)
+			channelRoute.GET("/models", middleware.AuthzShadow(authz.ChannelRead), controller.ChannelListModels)
 			channelRoute.GET("/models_enabled", controller.EnabledListModels)
 			channelRoute.GET("/:id", controller.GetChannel)
 			channelRoute.POST("/:id/key", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), controller.GetChannelKey)
