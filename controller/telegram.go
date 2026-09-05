@@ -88,7 +88,11 @@ func telegramAssertionKey(payload telegramAuthPayload) string {
 	// Telegram's hash comparison is case-insensitive at the hex decoding
 	// boundary; normalize it before claiming so casing changes cannot bypass
 	// one-time assertion replay protection.
-	return strings.ToLower(strings.TrimSpace(payload.Hash))
+	return normalizeTelegramAssertionHash(payload.Hash)
+}
+
+func normalizeTelegramAssertionHash(hash string) string {
+	return strings.ToLower(strings.TrimSpace(hash))
 }
 
 func telegramAssertionExpiry(now time.Time) time.Time {
@@ -236,11 +240,11 @@ func TelegramLogin(c *gin.Context) {
 		return model.ClaimExternalAuthAssertionWithTx(
 			tx,
 			model.AuthFlowPurposeTelegramAssertion,
-			strings.ToLower(strings.TrimSpace(params.Get("hash"))),
+			normalizeTelegramAssertionHash(params.Get("hash")),
 			telegramAssertionExpiry(time.Now()),
 		)
 	}); err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		handleAuthFlowConsumeError(c, err)
 		return
 	}
 	clearOAuthSessionState(c)

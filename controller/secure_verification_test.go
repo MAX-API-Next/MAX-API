@@ -972,6 +972,12 @@ func TestTelegramAuthPayloadPreservesUnknownSignedFields(t *testing.T) {
 	require.True(t, checkTelegramAuthorizationAt(values, token, now))
 }
 
+func TestTelegramAssertionHashNormalizationIsShared(t *testing.T) {
+	payload := telegramAuthPayload{Hash: "  AbCdEf123  "}
+	require.Equal(t, "abcdef123", telegramAssertionKey(payload))
+	require.Equal(t, telegramAssertionKey(payload), normalizeTelegramAssertionHash("  AbCdEf123  "))
+}
+
 func TestTelegramAuthorizationRejectsAuthDateBeyondClockSkew(t *testing.T) {
 	const token = "123456:telegram-test-token"
 	now := time.Unix(1_800_000_000, 0)

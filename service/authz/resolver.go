@@ -89,8 +89,11 @@ func Evaluate(userID int, systemRole int, permission Permission) Decision {
 
 func Capabilities(userID int, systemRole int) PermissionsMap {
 	result := roleGrants(systemRole)
-	if systemRole < common.RoleAdminUser || model.DB == nil || userID <= 0 {
+	if systemRole >= common.RoleRootUser || systemRole < common.RoleAdminUser || userID <= 0 {
 		return result
+	}
+	if model.DB == nil {
+		return make(PermissionsMap)
 	}
 
 	var overrides []model.AuthzUserOverride

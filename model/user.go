@@ -1605,6 +1605,45 @@ func IsOidcIdAlreadyTaken(oidcId string) (bool, error) {
 	return result.RowsAffected > 0, result.Error
 }
 
+// IsOAuthIdentityTakenWithTx checks a built-in OAuth identity in the caller's
+// transaction, excluding the user being updated. The column is selected from
+// a closed set so provider input can never become SQL.
+func IsOAuthIdentityTakenWithTx(tx *gorm.DB, field UserUpdateField, providerUserID string, excludeUserID int) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database is not initialized")
+	}
+	providerUserID = strings.TrimSpace(providerUserID)
+	if providerUserID == "" {
+		return false, nil
+	}
+	column, ok := oauthIdentityColumn(field)
+	if !ok {
+		return false, fmt.Errorf("unsupported OAuth identity field: %s", field)
+	}
+	query := tx.Unscoped().Model(&User{}).Where(column+" = ?", providerUserID)
+	if excludeUserID > 0 {
+		query = query.Where("id <> ?", excludeUserID)
+	}
+	var existing User
+	result := query.Limit(1).Find(&existing)
+	return result.RowsAffected > 0, result.Error
+}
+
+func oauthIdentityColumn(field UserUpdateField) (string, bool) {
+	switch field {
+	case UserUpdateFieldGitHubId:
+		return "github_id", true
+	case UserUpdateFieldDiscordId:
+		return "discord_id", true
+	case UserUpdateFieldOidcId:
+		return "oidc_id", true
+	case UserUpdateFieldLinuxDOId:
+		return "linux_do_id", true
+	default:
+		return "", false
+	}
+}
+
 func IsTelegramIdAlreadyTaken(telegramId string) (bool, error) {
 	result := DB.Unscoped().Where("telegram_id = ?", telegramId).Limit(1).Find(&User{})
 	return result.RowsAffected > 0, result.Error

@@ -82,3 +82,14 @@ func TestEvaluateFailsClosedWhenDatabaseUnavailable(t *testing.T) {
 	assert.Equal(t, "error", decision.Source)
 	assert.Error(t, decision.Err)
 }
+
+func TestCapabilitiesFailsClosedWhenDatabaseUnavailable(t *testing.T) {
+	previous := model.DB
+	model.DB = nil
+	t.Cleanup(func() { model.DB = previous })
+
+	capabilities := Capabilities(1, common.RoleAdminUser)
+	assert.Empty(t, capabilities)
+	rootCapabilities := Capabilities(1, common.RoleRootUser)
+	assert.True(t, rootCapabilities[ResourceChannel][ActionSecretView])
+}

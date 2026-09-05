@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -244,23 +245,59 @@ func ClaimExternalAuthAssertionWithTx(tx *gorm.DB, purpose, assertion string, ex
 	if tx == nil || purpose == "" || assertion == "" || !expiresAt.After(now) {
 		return ErrAuthFlowInvalid
 	}
+	claimToken := uuid.NewString()
 	flow := AuthFlow{
 		TokenHash:  authFlowTokenHash("external:" + purpose + ":" + assertion),
 		Purpose:    purpose,
+		Payload:    claimToken,
 		ExpiresAt:  expiresAt,
 		ConsumedAt: &now,
 	}
-	result := tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "token_hash"}},
-		DoNothing: true,
-	}).Create(&flow)
+	dialect := ""
+	if tx.Dialector != nil {
+		dialect = tx.Dialector.Name()
+	}
+	result := tx.Clauses(authFlowAssertionConflictClause(dialect)).Create(&flow)
 	if result.Error != nil {
 		return result.Error
 	}
-	if result.RowsAffected != 1 {
+	claimed, err := ownsExternalAuthAssertionClaim(tx, dialect, flow.TokenHash, claimToken, result.RowsAffected)
+	if err != nil {
+		return err
+	}
+	if !claimed {
 		return ErrAuthFlowConsumed
 	}
 	return nil
+}
+
+func ownsExternalAuthAssertionClaim(tx *gorm.DB, dialect, tokenHash, claimToken string, rowsAffected int64) (bool, error) {
+	if dialect != "mysql" {
+		return rowsAffected == 1, nil
+	}
+
+	// MySQL may report a duplicate-key no-op as affected when clientFoundRows
+	// is enabled. The random payload proves that this attempt inserted the row.
+	var stored AuthFlow
+	if err := tx.Select("payload").Where("token_hash = ?", tokenHash).Take(&stored).Error; err != nil {
+		return false, err
+	}
+	return stored.Payload == claimToken, nil
+}
+
+func authFlowAssertionConflictClause(dialect string) clause.OnConflict {
+	conflict := clause.OnConflict{
+		Columns:   []clause.Column{{Name: "token_hash"}},
+		DoNothing: true,
+	}
+	if dialect == "mysql" {
+		// gorm.io/driver/mysql v1.4.3 translates DoNothing into
+		// ON DUPLICATE KEY UPDATE id=id. Avoid touching AuthFlow.Id because
+		// MySQL can reject that auto-increment no-op with error 1869.
+		conflict.DoNothing = false
+		conflict.DoUpdates = clause.AssignmentColumns([]string{"token_hash"})
+	}
+	return conflict
 }
 
 func lockAuthFlowQuery(query *gorm.DB) *gorm.DB {
@@ -271,22 +308,7 @@ func lockAuthFlowQuery(query *gorm.DB) *gorm.DB {
 }
 
 func consumeAuthFlowWithDB(db *gorm.DB, token string, match AuthFlowMatch) (*AuthFlow, error) {
-	flow, err := getAuthFlowWithDB(db, token, match)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	result := db.Model(&AuthFlow{}).
-		Where("id = ? AND consumed_at IS NULL AND expires_at > ?", flow.Id, now).
-		Update("consumed_at", now)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected != 1 {
-		return nil, ErrAuthFlowConsumed
-	}
-	flow.ConsumedAt = &now
-	return flow, nil
+	return ConsumeAuthFlowWithActionTx(db, token, match, nil)
 }
 
 func DeleteExpiredAuthFlows(now time.Time) error {

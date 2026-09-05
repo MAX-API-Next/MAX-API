@@ -340,6 +340,29 @@ func TestOAuthProviderUserUpdateField(t *testing.T) {
 	}
 }
 
+func TestHandleAuthFlowConsumeErrorDistinguishesValidationAndInfrastructure(t *testing.T) {
+	require.NoError(t, appi18n.Init())
+
+	for _, validationErr := range []error{
+		model.ErrAuthFlowInvalid,
+		model.ErrAuthFlowExpired,
+		model.ErrAuthFlowConsumed,
+	} {
+		validationRecorder := httptest.NewRecorder()
+		validationContext, _ := gin.CreateTestContext(validationRecorder)
+		validationContext.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		handleAuthFlowConsumeError(validationContext, validationErr)
+		require.Equal(t, http.StatusForbidden, validationRecorder.Code)
+	}
+
+	infrastructureRecorder := httptest.NewRecorder()
+	infrastructureContext, _ := gin.CreateTestContext(infrastructureRecorder)
+	infrastructureContext.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	handleAuthFlowConsumeError(infrastructureContext, errors.New("database unavailable"))
+	require.Equal(t, http.StatusOK, infrastructureRecorder.Code)
+	require.Contains(t, infrastructureRecorder.Body.String(), "database unavailable")
+}
+
 func TestFindOrCreateOAuthUserMapsDeletedUserDomainError(t *testing.T) {
 	_, err := findOrCreateOAuthUser(nil, &deletedUserOAuthProvider{}, &oauth.OAuthUser{
 		ProviderUserID: "deleted-user-id",

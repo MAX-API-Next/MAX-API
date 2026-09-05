@@ -1,13 +1,16 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -160,6 +163,69 @@ func TestConsumeAuthFlowWithActionRollsBackOAuthBindingMutation(t *testing.T) {
 	flow, err := GetAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeOAuth, Provider: "custom", Intent: AuthFlowIntentBind, UserId: user.Id})
 	require.NoError(t, err)
 	require.Nil(t, flow.ConsumedAt)
+}
+
+func TestConsumeAuthFlowWithActionCommitsTogether(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	token, _, err := CreateAuthFlow(AuthFlowCreate{
+		Purpose: AuthFlowPurposeTelegramBind, UserId: 44, SessionId: "session-a",
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	match := AuthFlowMatch{Purpose: AuthFlowPurposeTelegramBind, UserId: 44, SessionId: "session-a"}
+	flow, err := ConsumeAuthFlowWithAction(token, match, func(tx *gorm.DB, _ *AuthFlow) error {
+		return ClaimExternalAuthAssertionWithTx(tx, AuthFlowPurposeTelegramAssertion, "assertion-b", time.Now().Add(time.Minute))
+	})
+	require.NoError(t, err)
+	require.NotNil(t, flow.ConsumedAt)
+
+	_, err = ConsumeAuthFlowWithAction(token, match, nil)
+	require.ErrorIs(t, err, ErrAuthFlowConsumed)
+	require.ErrorIs(t, ClaimExternalAuthAssertion(AuthFlowPurposeTelegramAssertion, "assertion-b", time.Now().Add(time.Minute)), ErrAuthFlowConsumed)
+}
+
+func TestAuthFlowAssertionConflictClauseAvoidsMySQLPrimaryKeyNoop(t *testing.T) {
+	mysqlClause := authFlowAssertionConflictClause("mysql")
+	require.False(t, mysqlClause.DoNothing)
+	require.Len(t, mysqlClause.DoUpdates, 1)
+	require.Equal(t, "token_hash", mysqlClause.DoUpdates[0].Column.Name)
+
+	conn, err := sql.Open("mysql", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: conn, SkipInitializeWithVersion: true}), &gorm.Config{
+		DryRun: true, DisableAutomaticPing: true,
+	})
+	require.NoError(t, err)
+	statement := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Clauses(authFlowAssertionConflictClause(tx.Dialector.Name())).Create(&AuthFlow{
+			TokenHash: "assertion-hash", Purpose: AuthFlowPurposeTelegramAssertion, ExpiresAt: time.Now().Add(time.Minute),
+		})
+	})
+	require.Contains(t, statement, "ON DUPLICATE KEY UPDATE `token_hash`=VALUES(`token_hash`)")
+	require.NotContains(t, strings.ToLower(statement), "update `id`=")
+
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		require.True(t, authFlowAssertionConflictClause(dialect).DoNothing)
+	}
+}
+
+func TestMySQLExternalAssertionClaimOwnershipDoesNotTrustRowsAffected(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	stored := AuthFlow{
+		TokenHash: "stored-assertion-hash", Purpose: AuthFlowPurposeTelegramAssertion,
+		Payload: "first-claim", ExpiresAt: time.Now().Add(time.Minute),
+	}
+	require.NoError(t, DB.Create(&stored).Error)
+
+	claimed, err := ownsExternalAuthAssertionClaim(DB, "mysql", stored.TokenHash, "second-claim", 1)
+	require.NoError(t, err)
+	require.False(t, claimed)
+
+	claimed, err = ownsExternalAuthAssertionClaim(DB, "mysql", stored.TokenHash, stored.Payload, 0)
+	require.NoError(t, err)
+	require.True(t, claimed)
 }
 
 func TestBindTelegramIdentityRejectsMismatchedSessionWithoutConsumingFlow(t *testing.T) {

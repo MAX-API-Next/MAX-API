@@ -428,6 +428,18 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 					// as AuthFlow consumption.
 					return model.UpdateUserOAuthBindingWithTx(identityTx, user.Id, genericProvider.GetProviderId(), oauthUser.ProviderUserID)
 				}
+				if taken, err := model.IsOAuthIdentityTakenWithTx(identityTx, updateField, oauthUser.ProviderUserID, user.Id); err != nil {
+					return err
+				} else if taken {
+					return model.ErrOAuthIdentityAlreadyTaken
+				}
+				if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && strings.TrimSpace(legacyID) != "" {
+					if taken, err := model.IsOAuthIdentityTakenWithTx(identityTx, updateField, legacyID, user.Id); err != nil {
+						return err
+					} else if taken {
+						return model.ErrOAuthIdentityAlreadyTaken
+					}
+				}
 
 				// Built-in provider: update the user identity and durable cache fence
 				// in the same transaction as AuthFlow consumption.
@@ -440,11 +452,11 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 		})
 	})
 	if err != nil {
-		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
+		if errors.Is(err, model.ErrOAuthIdentityAlreadyTaken) {
+			common.ApiErrorI18n(c, i18n.MsgOAuthAlreadyBound, providerParams(provider.GetName()))
 			return
 		}
-		common.ApiError(c, err)
+		handleAuthFlowConsumeError(c, err)
 		return
 	}
 	model.DispatchStagedCacheInvalidation(cacheTask)
@@ -644,6 +656,17 @@ func handleOAuthError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, e.Message)
 	case *oauth.TrustLevelError:
 		common.ApiErrorI18n(c, i18n.MsgOAuthTrustLevelLow)
+	default:
+		common.ApiError(c, err)
+	}
+}
+
+func handleAuthFlowConsumeError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, model.ErrAuthFlowInvalid),
+		errors.Is(err, model.ErrAuthFlowExpired),
+		errors.Is(err, model.ErrAuthFlowConsumed):
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 	default:
 		common.ApiError(c, err)
 	}
