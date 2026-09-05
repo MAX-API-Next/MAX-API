@@ -1,13 +1,16 @@
 package hailuo
 
-import "github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+import (
+	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+)
 
 const (
 	ChannelName = "hailuo-video"
 )
 
 var ModelList = []string{
-	"MiniMax-H3",
+	H3Model,
 	"MiniMax-Hailuo-2.3",
 	"MiniMax-Hailuo-2.3-Fast",
 	"MiniMax-Hailuo-02",
@@ -22,7 +25,7 @@ var ModelList = []string{
 const (
 	TextToVideoEndpoint   = "/v1/video_generation"
 	QueryTaskEndpoint     = "/v1/query/video_generation"
-	H3Model               = "MiniMax-H3"
+	H3Model               = constant.TaskModelMiniMaxH3
 	H3MaxModel            = "MiniMax-H3-Max"
 	H3TextToVideoEndpoint = "/v2/video_generation"
 	H3QueryTaskEndpoint   = "/v2/query/video_generation"

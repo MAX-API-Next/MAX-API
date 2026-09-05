@@ -835,6 +835,9 @@ func (t *TaskSubmitReq) ResolvedSeconds() (int, error) {
 		return 0, nil
 	}
 	seconds := t.DurationValue()
+	if seconds == 0 && t.DurationSeconds != nil {
+		seconds = *t.DurationSeconds
+	}
 	if seconds == 0 && t.Seconds != "" {
 		parsed, err := strconv.Atoi(t.Seconds)
 		if err != nil {

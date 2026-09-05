@@ -240,6 +240,66 @@ func TestPrepareTaskSubmitRequestBodyMakesH3PlanUseFinalRequestFacts(t *testing.
 	require.Equal(t, "2K", plan.Resolution)
 }
 
+func TestCaptureShadowTaskBillingPlanFailureDoesNotBlockSubmission(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	previous := &types.TaskBillingPlan{RuleKey: "stale"}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: hailuo.H3Model,
+		TaskBillingPlan: previous,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: hailuo.H3Model,
+		},
+	}
+
+	captureShadowTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
+
+	require.Nil(t, info.TaskBillingPlan)
+}
+
+func TestRelayTaskSubmitMapsModelBeforeContentOnlyValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model":"MiniMax-H3",
+		"content":[{"type":"text","text":"Create a short film"}]
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("channel_type", constant.ChannelTypeMiniMax)
+	c.Set("model_mapping", `{"MiniMax-H3":"MiniMax-Hailuo-2.3"}`)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+	}
+
+	_, taskErr := RelayTaskSubmit(c, info)
+
+	require.NotNil(t, taskErr)
+	require.Contains(t, taskErr.Message, "prompt is required")
+}
+
+func TestCaptureShadowTaskBillingPlanSuccessKeepsSnapshot(t *testing.T) {
+	duration := 5
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("task_request", relaycommon.TaskSubmitReq{
+		Model:    hailuo.H3Model,
+		Prompt:   "test",
+		Duration: &duration,
+		Content:  []map[string]any{{"type": "text", "text": "test"}},
+	})
+	info := &relaycommon.RelayInfo{
+		OriginModelName: hailuo.H3Model,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: hailuo.H3Model,
+		},
+		PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+
+	captureShadowTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
+
+	require.NotNil(t, info.TaskBillingPlan)
+	require.EqualValues(t, 5, info.TaskBillingPlan.RequestedOutputDurationSeconds)
+}
+
 func TestPrepareTaskSubmitRequestBodyMakesMultipartParamOverrideVisibleToBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

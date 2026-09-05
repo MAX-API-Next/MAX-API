@@ -92,6 +92,18 @@ func TestTaskSubmitReqResolvedSeconds(t *testing.T) {
 	_, err = req.ResolvedSeconds()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid seconds value: abc")
+
+	durationSeconds := 10
+	req = TaskSubmitReq{DurationSeconds: &durationSeconds, Seconds: "12"}
+	seconds, err = req.ResolvedSeconds()
+	require.NoError(t, err)
+	require.Equal(t, 10, seconds)
+
+	zeroDuration := 0
+	req = TaskSubmitReq{Duration: &zeroDuration, DurationSeconds: &durationSeconds, Seconds: "12"}
+	seconds, err = req.ResolvedSeconds()
+	require.NoError(t, err)
+	require.Equal(t, 10, seconds)
 }
 
 func TestTaskSubmitReqResolvedSecondsOrDefault(t *testing.T) {

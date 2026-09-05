@@ -268,21 +268,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
 	adaptor.Init(info)
+	modelName := info.OriginModelName
+	if modelName != "" {
+		info.UpstreamModelName = modelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
+	}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}
 
 	// 2. 确定模型名称
-	modelName := info.OriginModelName
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
-	}
-
-	// 2.5 应用渠道的模型映射（与同步任务对齐）
-	info.OriginModelName = modelName
-	info.UpstreamModelName = modelName
-	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
-		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		info.OriginModelName = modelName
+		info.UpstreamModelName = modelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
 	}
 
 	// 3. 预生成公开 task ID（仅首次）
@@ -306,14 +310,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// H3 uses a bounded multi-component plan. During H3-02 this is a shadow
 	// snapshot only; legacy submission settlement remains unchanged.
-	info.TaskBillingPlan = nil
-	if planner, ok := adaptor.(channel.TaskBillingPlanProvider); ok {
-		plan, planErr := planner.BuildTaskBillingPlan(c, info)
-		if planErr != nil {
-			return nil, service.TaskErrorWrapper(planErr, "task_billing_plan_error", http.StatusBadRequest)
-		}
-		info.TaskBillingPlan = plan
-	}
+	captureShadowTaskBillingPlan(c, info, adaptor)
 
 	// 6. Prefer a parameterized rate card when the adaptor can normalize the
 	// request. Legacy task models continue to use OtherRatios.
@@ -441,6 +438,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Task:           task,
 		response:       responseSnapshot,
 	}, nil
+}
+
+func captureShadowTaskBillingPlan(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor) {
+	if info == nil {
+		return
+	}
+	info.TaskBillingPlan = nil
+	planner, ok := adaptor.(channel.TaskBillingPlanProvider)
+	if !ok {
+		return
+	}
+	plan, err := planner.BuildTaskBillingPlan(c, info)
+	if err != nil {
+		common.SysLog("task_billing_plan_error: " + common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())))
+		return
+	}
+	info.TaskBillingPlan = plan
 }
 
 func setTaskOtherRatioHeaders(header http.Header, otherRatios map[string]float64) {

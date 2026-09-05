@@ -5620,7 +5620,7 @@
     "Input audio price": "入力音声の価格",
     "Free in schema version 1": "スキーマバージョン 1 では無料",
     "Server-side billing preview": "サーバー側の課金プレビュー",
-    "Preview uses the draft profile and has no task, wallet, token, settlement, log, or statistics side effects.": "プレビューは下書きプロファイルを使用し、タスク、ウォレット、トークン、決済、ログ、統計への副作用はありません。",
+    "Preview uses the draft profile and has no task, wallet, token, settlement, log, or statistics side effects.": "プレビューは下書きプロファイルを使用し、タスク、ウォレット、トークン、精算、ログ、統計への副作用はありません。",
     "Resolution": "解像度",
     "Requested output seconds": "要求する出力秒数",
     "Input video count": "入力動画数",

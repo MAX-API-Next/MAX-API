@@ -19,6 +19,8 @@ const (
 	TaskActionKlingOmniVideo    = "klingOmniVideo"
 )
 
+const TaskModelMiniMaxH3 = "MiniMax-H3"
+
 var SunoModel2Action = map[string]string{
 	"suno_music":  SunoActionMusic,
 	"suno_lyrics": SunoActionLyrics,

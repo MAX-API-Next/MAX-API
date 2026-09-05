@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/shopspring/decimal"
@@ -25,7 +26,7 @@ var h3Ratios = map[string]struct{}{
 }
 
 func isH3Model(model string) bool {
-	return strings.EqualFold(strings.TrimSpace(model), H3Model)
+	return strings.EqualFold(strings.TrimSpace(model), constant.TaskModelMiniMaxH3)
 }
 
 func isUnsupportedH3Model(model string) bool {
@@ -347,15 +348,13 @@ func h3Resolution(req *relaycommon.TaskSubmitReq) (string, error) {
 }
 
 func h3Duration(req *relaycommon.TaskSubmitReq) (int, error) {
+	seconds, err := req.ResolvedSeconds()
+	if err != nil {
+		return 0, fmt.Errorf("H3 duration must be an integer: %w", err)
+	}
 	duration := H3DefaultDuration
-	if req.Duration != nil {
-		duration = *req.Duration
-	} else if strings.TrimSpace(req.Seconds) != "" {
-		parsed, err := strconv.Atoi(strings.TrimSpace(req.Seconds))
-		if err != nil {
-			return 0, fmt.Errorf("H3 duration must be an integer")
-		}
-		duration = parsed
+	if req.Duration != nil || req.DurationSeconds != nil || strings.TrimSpace(req.Seconds) != "" {
+		duration = seconds
 	}
 	if int64(duration) < H3MinDuration || int64(duration) > H3MaxDuration {
 		return 0, fmt.Errorf("H3 duration must be between %d and %d seconds", H3MinDuration, H3MaxDuration)

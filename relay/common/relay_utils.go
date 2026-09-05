@@ -146,7 +146,7 @@ func allowsTaskContentWithoutPrompt(info *RelayInfo, req TaskSubmitReq) bool {
 		if model == "" {
 			model = strings.TrimSpace(req.Model)
 		}
-		return strings.EqualFold(model, "MiniMax-H3")
+		return strings.EqualFold(model, constant.TaskModelMiniMaxH3)
 	default:
 		return false
 	}

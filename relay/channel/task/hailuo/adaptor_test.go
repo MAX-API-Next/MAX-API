@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -64,6 +65,31 @@ func TestBuildH3RequestUsesOfficialV2ContentShape(t *testing.T) {
 	require.Equal(t, "https://example.com/frame.png", request.Content[1].ImageURL.URL)
 }
 
+func TestBuildH3RequestAndBillingPlanUseDurationSeconds(t *testing.T) {
+	durationSeconds := 10
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("task_request", relaycommon.TaskSubmitReq{
+		Model:           H3Model,
+		Prompt:          "A cinematic ocean sunrise",
+		DurationSeconds: &durationSeconds,
+		Content:         []map[string]any{{"type": "text", "text": "A cinematic ocean sunrise"}},
+	})
+	info := newH3TestInfo()
+	info.PriceData.GroupRatioInfo.GroupRatio = 1
+
+	body, err := (&TaskAdaptor{}).BuildRequestBody(c, info)
+	require.NoError(t, err)
+	data, err := io.ReadAll(body)
+	require.NoError(t, err)
+	var request H3VideoRequest
+	require.NoError(t, common.Unmarshal(data, &request))
+	require.Equal(t, 10, request.Duration)
+
+	plan, err := (&TaskAdaptor{}).BuildTaskBillingPlan(c, info)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, plan.RequestedOutputDurationSeconds)
+}
+
 func TestH3UsesEffectiveUpstreamModelAfterMapping(t *testing.T) {
 	info := newH3TestInfo()
 	info.OriginModelName = H3Model
@@ -91,6 +117,25 @@ func TestValidateH3RequestAcceptsTextOnlyInsideContent(t *testing.T) {
 
 	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, newH3TestInfo())
 	require.Nil(t, taskErr)
+}
+
+func TestValidateH3RequestRejectsContentOnlyAfterMappingToLegacyModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model":"MiniMax-H3",
+		"content":[{"type":"text","text":"Create a short film"}]
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = request
+	c.Set("model_mapping", `{"MiniMax-H3":"MiniMax-Hailuo-2.3"}`)
+	info := newH3TestInfo()
+
+	require.NoError(t, helper.ModelMappedHelper(c, info, nil))
+	require.Equal(t, "MiniMax-Hailuo-2.3", info.UpstreamModelName)
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, info)
+	require.NotNil(t, taskErr)
+	require.Contains(t, taskErr.Message, "prompt is required")
 }
 
 func TestBuildH3RequestMapsReferenceVideoAndAudio(t *testing.T) {

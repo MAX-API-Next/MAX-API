@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/shopspring/decimal"
 )
@@ -131,7 +132,7 @@ func decodeMinimaxBillingConfig(raw map[string]any) (H3BillingConfig, error) {
 }
 
 func isMinimaxH3Model(model string) bool {
-	return strings.EqualFold(strings.TrimSpace(model), "MiniMax-H3")
+	return strings.EqualFold(strings.TrimSpace(model), constant.TaskModelMiniMaxH3)
 }
 
 func newH3BillingProfileMap(profiles map[string]H3BillingConfig) *types.RWMap[string, H3BillingConfig] {
