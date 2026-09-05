@@ -18,6 +18,11 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { api } from '@/lib/api'
 import type {
+  H3BillingPreview,
+  H3BillingPreviewScenario,
+  H3BillingProfile,
+} from './billing/h3-billing-utils'
+import type {
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
@@ -37,6 +42,35 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  return res.data
+}
+
+export async function previewH3Billing(request: {
+  profile: H3BillingProfile
+  scenario: H3BillingPreviewScenario
+  groupRatio: number
+}) {
+  const res = await api.post<{
+    success: boolean
+    message: string
+    data?: H3BillingPreview
+  }>('/api/option/h3_billing/preview', {
+    profile: request.profile,
+    resolution: request.scenario.resolution,
+    output_duration_seconds: request.scenario.outputDurationSeconds,
+    input_video_count: request.scenario.inputVideoCount,
+    input_audio_count: request.scenario.inputAudioCount,
+    input_image_count: request.scenario.inputImageCount,
+    group_ratio: request.groupRatio,
+    actual: request.scenario.actual
+      ? {
+          output_duration_ms: request.scenario.actual.outputDurationMs,
+          input_video_duration_ms: request.scenario.actual.inputVideoDurationMs,
+          input_audio_duration_ms: request.scenario.actual.inputAudioDurationMs,
+          input_image_count: request.scenario.actual.inputImageCount,
+        }
+      : undefined,
+  })
   return res.data
 }
 

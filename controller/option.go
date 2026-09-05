@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -116,6 +117,65 @@ func GetOptions(c *gin.Context) {
 type OptionUpdateRequest struct {
 	Key   string `json:"key"`
 	Value any    `json:"value"`
+}
+
+type H3BillingPreviewActual struct {
+	OutputDurationMs     *int64 `json:"output_duration_ms,omitempty"`
+	InputVideoDurationMs *int64 `json:"input_video_duration_ms,omitempty"`
+	InputAudioDurationMs *int64 `json:"input_audio_duration_ms,omitempty"`
+	InputImageCount      *int64 `json:"input_image_count,omitempty"`
+}
+
+type H3BillingPreviewRequest struct {
+	Profile               task_billing_setting.H3BillingConfig `json:"profile"`
+	Resolution            string                               `json:"resolution"`
+	OutputDurationSeconds int64                                `json:"output_duration_seconds"`
+	InputVideoCount       int64                                `json:"input_video_count"`
+	InputAudioCount       int64                                `json:"input_audio_count"`
+	InputImageCount       int64                                `json:"input_image_count"`
+	GroupRatio            float64                              `json:"group_ratio"`
+	Actual                *H3BillingPreviewActual              `json:"actual,omitempty"`
+}
+
+func PreviewH3Billing(c *gin.Context) {
+	var request H3BillingPreviewRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "无效的参数",
+		})
+		return
+	}
+
+	var usage *types.TaskUsage
+	if request.Actual != nil {
+		usage = &types.TaskUsage{
+			OutputDurationMs:     request.Actual.OutputDurationMs,
+			InputVideoDurationMs: request.Actual.InputVideoDurationMs,
+			InputAudioDurationMs: request.Actual.InputAudioDurationMs,
+			InputImageCount:      request.Actual.InputImageCount,
+			Completeness:         types.TaskUsageCompletenessComplete,
+		}
+	}
+	preview, err := task_billing_setting.PreviewH3Billing(request.Profile, task_billing_setting.H3BillingInput{
+		Resolution:            request.Resolution,
+		OutputDurationSeconds: request.OutputDurationSeconds,
+		InputVideoCount:       request.InputVideoCount,
+		InputAudioCount:       request.InputAudioCount,
+		InputImageCount:       request.InputImageCount,
+	}, request.GroupRatio, usage)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "H3 计费预览失败: " + err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    preview,
+	})
 }
 
 func UpdateOption(c *gin.Context) {

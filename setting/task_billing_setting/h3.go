@@ -15,6 +15,12 @@ const (
 	H3BillingSource     = "minimax_hailuo"
 	H3BillingProfileKey = "minimax_h3_v2"
 	H3BillingMode       = types.TaskBillingPlanModeBoundedActual
+
+	H3MinOutputDurationSeconds int64 = 4
+	H3MaxOutputDurationSeconds int64 = 15
+	H3MaxInputVideoCount       int64 = 3
+	H3MaxInputAudioCount       int64 = 3
+	H3MaxInputImageCount       int64 = 9
 )
 
 type H3BillingConfig struct {
@@ -60,6 +66,17 @@ type H3BillingQuote struct {
 	InputAudioDurationMs int64                     `json:"input_audio_duration_ms"`
 	InputImageCount      int64                     `json:"input_image_count"`
 	Components           []H3BillingQuoteComponent `json:"components"`
+}
+
+type H3BillingPreview struct {
+	ConfigHash      string          `json:"config_hash"`
+	QuotaPerUnit    float64         `json:"quota_per_unit"`
+	GroupRatio      float64         `json:"group_ratio"`
+	Estimate        *H3BillingQuote `json:"estimate"`
+	Reserve         *H3BillingQuote `json:"reserve"`
+	Final           *H3BillingQuote `json:"final,omitempty"`
+	AdjustmentQuota *int            `json:"adjustment_quota,omitempty"`
+	RefundQuota     *int            `json:"refund_quota,omitempty"`
 }
 
 func defaultH3BillingProfiles() map[string]H3BillingConfig {
@@ -110,7 +127,7 @@ func GetH3BillingProfileCopy(key string) (*H3BillingConfig, bool) {
 
 func ValidateH3ProfilesJSON(raw string) error {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return fmt.Errorf("H3 billing profiles cannot be empty")
 	}
 	var profiles map[string]H3BillingConfig
 	if err := common.UnmarshalJsonStr(raw, &profiles); err != nil {
@@ -197,18 +214,66 @@ func BuildH3BillingPlan(input H3BillingInput, groupRatio float64) (*types.TaskBi
 	if !ok {
 		return nil, fmt.Errorf("H3 billing profile %s is not configured", H3BillingProfileKey)
 	}
-	if err := validateH3Profiles(map[string]H3BillingConfig{H3BillingProfileKey: *profile}); err != nil {
+	return buildH3BillingPlan(*profile, input, groupRatio)
+}
+
+func PreviewH3Billing(config H3BillingConfig, input H3BillingInput, groupRatio float64, usage *types.TaskUsage) (*H3BillingPreview, error) {
+	plan, err := buildH3BillingPlan(config, input, groupRatio)
+	if err != nil {
+		return nil, err
+	}
+	estimate, err := QuoteH3Estimate(plan)
+	if err != nil {
+		return nil, err
+	}
+	reserve, err := QuoteH3Reserve(plan)
+	if err != nil {
+		return nil, err
+	}
+	preview := &H3BillingPreview{
+		ConfigHash:   plan.ConfigHash,
+		QuotaPerUnit: plan.QuotaPerUnit,
+		GroupRatio:   plan.GroupRatio,
+		Estimate:     estimate,
+		Reserve:      reserve,
+	}
+	if usage == nil {
+		return preview, nil
+	}
+	finalQuote, err := QuoteH3Final(plan, usage)
+	if err != nil {
+		return nil, err
+	}
+	adjustmentQuota := finalQuote.Quota - reserve.Quota
+	refundQuota := reserve.Quota - finalQuote.Quota
+	if refundQuota < 0 {
+		refundQuota = 0
+	}
+	preview.Final = finalQuote
+	preview.AdjustmentQuota = &adjustmentQuota
+	preview.RefundQuota = &refundQuota
+	return preview, nil
+}
+
+func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRatio float64) (*types.TaskBillingPlan, error) {
+	if err := validateH3Profiles(map[string]H3BillingConfig{H3BillingProfileKey: profile}); err != nil {
 		return nil, err
 	}
 	resolution := strings.ToUpper(strings.TrimSpace(input.Resolution))
 	if resolution != "768P" && resolution != "2K" {
 		return nil, fmt.Errorf("unsupported H3 resolution %q", input.Resolution)
 	}
-	if input.OutputDurationSeconds <= 0 || input.InputVideoCount < 0 || input.InputAudioCount < 0 || input.InputImageCount < 0 {
+	if input.OutputDurationSeconds < H3MinOutputDurationSeconds || input.OutputDurationSeconds > H3MaxOutputDurationSeconds ||
+		input.InputVideoCount < 0 || input.InputVideoCount > H3MaxInputVideoCount ||
+		input.InputAudioCount < 0 || input.InputAudioCount > H3MaxInputAudioCount ||
+		input.InputImageCount < 0 || input.InputImageCount > H3MaxInputImageCount {
 		return nil, fmt.Errorf("H3 billing request facts are invalid")
 	}
-	if math.IsNaN(groupRatio) || math.IsInf(groupRatio, 0) || groupRatio < 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || common.QuotaPerUnit <= 0 {
+	if math.IsNaN(groupRatio) || math.IsInf(groupRatio, 0) || groupRatio < 0 {
 		return nil, fmt.Errorf("H3 group ratio must be finite and non-negative")
+	}
+	if math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || common.QuotaPerUnit <= 0 {
+		return nil, fmt.Errorf("H3 quota per unit must be finite and positive")
 	}
 
 	videoReserve := int64(0)
@@ -220,7 +285,7 @@ func BuildH3BillingPlan(input H3BillingInput, groupRatio float64) (*types.TaskBi
 		RuleKey:                        H3BillingProfileKey,
 		SchemaVersion:                  profile.SchemaVersion,
 		Mode:                           profile.Mode,
-		ConfigHash:                     hashH3BillingConfig(*profile),
+		ConfigHash:                     hashH3BillingConfig(profile),
 		Currency:                       profile.Currency,
 		GroupRatio:                     groupRatio,
 		QuotaPerUnit:                   common.QuotaPerUnit,

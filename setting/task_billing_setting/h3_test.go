@@ -134,6 +134,11 @@ func TestH3BillingConfigValidationRejectsIncompleteProfile(t *testing.T) {
 	require.Error(t, ValidateH3ProfilesJSON(raw))
 }
 
+func TestH3BillingConfigValidationRejectsEmptyProfiles(t *testing.T) {
+	require.Error(t, ValidateH3ProfilesJSON(""))
+	require.Error(t, ValidateH3ProfilesJSON("   "))
+}
+
 func TestH3BillingConfigValidationRejectsProviderLimitOverflow(t *testing.T) {
 	profiles := defaultH3BillingProfiles()
 	profile := profiles[H3BillingProfileKey]
@@ -197,6 +202,55 @@ func TestH3BillingPlanKeepsFrozenPricesAfterConfigReload(t *testing.T) {
 	oldQuoteAgain, err := QuoteH3Reserve(oldPlan)
 	require.NoError(t, err)
 	require.Equal(t, oldQuote, oldQuoteAgain)
+}
+
+func TestPreviewH3BillingUsesDraftWithoutChangingGlobalConfig(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	original := GetH3BillingProfilesCopy()
+	draft := cloneH3BillingConfig(original[H3BillingProfileKey])
+	draft.OutputUnitPrice["768P"] = "0.10"
+	draft.InputVideoUnitPrice["768P"] = "0.10"
+
+	preview, err := PreviewH3Billing(draft, H3BillingInput{
+		Resolution:            "768P",
+		OutputDurationSeconds: 5,
+		InputVideoCount:       1,
+	}, 1, &types.TaskUsage{
+		OutputDurationMs:     int64Ptr(5_000),
+		InputVideoDurationMs: int64Ptr(7_500),
+		InputImageCount:      int64Ptr(0),
+		Completeness:         types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "0.5", preview.Estimate.Price)
+	require.Equal(t, "2", preview.Reserve.Price)
+	require.Equal(t, "1.25", preview.Final.Price)
+	require.Equal(t, -750, *preview.AdjustmentQuota)
+	require.Equal(t, 750, *preview.RefundQuota)
+	require.NotEqual(t, hashH3BillingConfig(original[H3BillingProfileKey]), preview.ConfigHash)
+	require.Equal(t, original, GetH3BillingProfilesCopy())
+}
+
+func TestPreviewH3BillingRejectsInvalidDraftAndRequestBounds(t *testing.T) {
+	profile, ok := GetH3BillingProfileCopy(H3BillingProfileKey)
+	require.True(t, ok)
+
+	invalidProfile := cloneH3BillingConfig(*profile)
+	invalidProfile.InputAudioUnitPrice = "0.01"
+	_, err := PreviewH3Billing(invalidProfile, H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1, nil)
+	require.Error(t, err)
+
+	_, err = PreviewH3Billing(*profile, H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputImageCount: H3MaxInputImageCount + 1,
+	}, 1, nil)
+	require.Error(t, err)
+
+	_, err = PreviewH3Billing(*profile, H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputVideoCount: H3MaxInputVideoCount + 1,
+	}, 1, nil)
+	require.Error(t, err)
 }
 
 func int64Ptr(value int64) *int64 {
