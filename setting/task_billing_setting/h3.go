@@ -19,11 +19,12 @@ const (
 	H3BillingProfileKey   = "minimax_h3_v2" // Deprecated legacy option key.
 	H3BillingMode         = types.TaskBillingPlanModeBoundedActual
 
-	H3MinOutputDurationSeconds int64 = 4
-	H3MaxOutputDurationSeconds int64 = 15
-	H3MaxInputVideoCount       int64 = 3
-	H3MaxInputAudioCount       int64 = 3
-	H3MaxInputImageCount       int64 = 9
+	H3MinOutputDurationSeconds     int64 = 4
+	H3MaxOutputDurationSeconds     int64 = 15
+	H3MaxInputMediaDurationSeconds int64 = 15
+	H3MaxInputVideoCount           int64 = 3
+	H3MaxInputAudioCount           int64 = 3
+	H3MaxInputImageCount           int64 = 9
 )
 
 type H3BillingConfig struct {
@@ -90,7 +91,7 @@ func defaultH3BillingProfiles() map[string]H3BillingConfig {
 			Currency:                 "USD",
 			OutputUnitPrice:          map[string]string{"768P": "0.08", "2K": "0.13"},
 			InputVideoUnitPrice:      map[string]string{"768P": "0.08", "2K": "0.13"},
-			InputVideoMaxSeconds:     15,
+			InputVideoMaxSeconds:     H3MaxInputMediaDurationSeconds,
 			InputImageFreeCount:      5,
 			InputImageExtraUnitPrice: "0.04",
 			InputAudioUnitPrice:      "0",
@@ -199,8 +200,8 @@ func validateH3BillingConfig(key string, profile H3BillingConfig) error {
 	if strings.TrimSpace(profile.Currency) == "" {
 		return fmt.Errorf("H3 billing profile %s currency cannot be empty", key)
 	}
-	if profile.InputVideoMaxSeconds <= 0 || profile.InputVideoMaxSeconds > H3MaxOutputDurationSeconds {
-		return fmt.Errorf("H3 billing profile %s input_video_max_seconds must be between 1 and %d", key, H3MaxOutputDurationSeconds)
+	if profile.InputVideoMaxSeconds <= 0 || profile.InputVideoMaxSeconds > H3MaxInputMediaDurationSeconds {
+		return fmt.Errorf("H3 billing profile %s input_video_max_seconds must be between 1 and %d", key, H3MaxInputMediaDurationSeconds)
 	}
 	if profile.InputImageFreeCount < 0 || profile.InputImageFreeCount > H3MaxInputImageCount {
 		return fmt.Errorf("H3 billing profile %s input_image_free_count must be between 0 and %d", key, H3MaxInputImageCount)
@@ -408,14 +409,14 @@ func QuoteH3Final(plan *types.TaskBillingPlan, usage *types.TaskUsage) (*H3Billi
 	if usage.Completeness != types.TaskUsageCompletenessComplete {
 		return nil, fmt.Errorf("H3 usage is not automatically billable: %s", usage.Completeness)
 	}
-	outputMs, err := usageMilliseconds(usage.OutputDurationMs, "output_duration_ms", true, 4, 15)
+	outputMs, err := usageMilliseconds(usage.OutputDurationMs, "output_duration_ms", true, H3MinOutputDurationSeconds, H3MaxOutputDurationSeconds)
 	if err != nil {
 		return nil, err
 	}
 	if outputMs > plan.RequestedOutputDurationSeconds*1000 {
 		return nil, fmt.Errorf("H3 output usage exceeds the requested duration")
 	}
-	videoMs, err := usageMilliseconds(usage.InputVideoDurationMs, "input_video_duration_ms", plan.InputVideoCount > 0, 0, 15)
+	videoMs, err := usageMilliseconds(usage.InputVideoDurationMs, "input_video_duration_ms", plan.InputVideoCount > 0, 0, H3MaxInputMediaDurationSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +433,7 @@ func QuoteH3Final(plan *types.TaskBillingPlan, usage *types.TaskUsage) (*H3Billi
 	if plan.InputVideoCount == 0 && videoMs > 0 {
 		return nil, fmt.Errorf("H3 provider reported input video usage without a request video")
 	}
-	audioMs, err := usageMilliseconds(usage.InputAudioDurationMs, "input_audio_duration_ms", plan.InputAudioCount > 0, 0, 15)
+	audioMs, err := usageMilliseconds(usage.InputAudioDurationMs, "input_audio_duration_ms", plan.InputAudioCount > 0, 0, H3MaxInputMediaDurationSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -442,15 +443,10 @@ func QuoteH3Final(plan *types.TaskBillingPlan, usage *types.TaskUsage) (*H3Billi
 	if usage.InputImageCount == nil {
 		return nil, fmt.Errorf("H3 input_image_count is missing")
 	}
-	imageCount := plan.InputImageCount
-	if usage.InputImageCount != nil {
-		if *usage.InputImageCount < 0 {
-			return nil, fmt.Errorf("H3 input_image_count cannot be negative")
-		}
-		imageCount = *usage.InputImageCount
-	} else if plan.InputImageCount > 0 {
-		return nil, fmt.Errorf("H3 input_image_count is missing")
+	if *usage.InputImageCount < 0 {
+		return nil, fmt.Errorf("H3 input_image_count cannot be negative")
 	}
+	imageCount := *usage.InputImageCount
 	if imageCount != plan.InputImageCount {
 		return nil, fmt.Errorf("H3 input_image_count does not match the request snapshot")
 	}
@@ -539,7 +535,7 @@ func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
 	if plan.GroupRatio < 0 || math.IsNaN(plan.GroupRatio) || math.IsInf(plan.GroupRatio, 0) || plan.QuotaPerUnit <= 0 || math.IsNaN(plan.QuotaPerUnit) || math.IsInf(plan.QuotaPerUnit, 0) {
 		return fmt.Errorf("H3 billing plan group ratio is invalid")
 	}
-	if plan.Resolution != "768P" && plan.Resolution != "2K" || plan.RequestedOutputDurationSeconds < 4 || plan.RequestedOutputDurationSeconds > 15 {
+	if plan.Resolution != "768P" && plan.Resolution != "2K" || plan.RequestedOutputDurationSeconds < H3MinOutputDurationSeconds || plan.RequestedOutputDurationSeconds > H3MaxOutputDurationSeconds {
 		return fmt.Errorf("H3 billing plan request facts are invalid")
 	}
 	if plan.InputVideoCount < 0 || plan.InputAudioCount < 0 || plan.InputImageCount < 0 {
@@ -564,7 +560,7 @@ func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
 		if component.Key == "input_image" && (component.RequestedQuantity != plan.InputImageCount || component.ReservedQuantity < component.RequestedQuantity) {
 			return fmt.Errorf("H3 image component does not match the request snapshot")
 		}
-		if component.Key == "input_video" && (component.ReservedQuantity < component.RequestedQuantity || component.ReservedQuantity > 15) {
+		if component.Key == "input_video" && (component.ReservedQuantity < component.RequestedQuantity || component.ReservedQuantity > H3MaxInputMediaDurationSeconds) {
 			return fmt.Errorf("H3 input video component reservation is invalid")
 		}
 	}

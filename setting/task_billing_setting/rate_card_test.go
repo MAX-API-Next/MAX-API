@@ -84,6 +84,31 @@ func TestValidateRateCardsAcceptsStructuredMinimaxRule(t *testing.T) {
 	require.NoError(t, ValidateRateCardsJSON(raw))
 }
 
+func TestValidateRateCardsRejectsStructuredNonH3Model(t *testing.T) {
+	raw := `{"MiniMax-Hailuo-2.3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`
+	require.ErrorContains(t, ValidateRateCardsJSON(raw), "only supports MiniMax-H3")
+}
+
+func TestHasRateCardIgnoresStructuredNonH3ExactKey(t *testing.T) {
+	original := GetRateCardsCopy()
+	data, err := common.Marshal(map[string]RateCard{
+		"MiniMax-Hailuo-2.3": {
+			Vendor:        "minimax",
+			BillingType:   MinimaxBillingType,
+			BillingConfig: encodeBillingConfig(defaultH3BillingConfig()),
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
+	t.Cleanup(func() {
+		data, marshalErr := common.Marshal(original)
+		require.NoError(t, marshalErr)
+		require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
+	})
+
+	require.False(t, HasRateCard("MiniMax-Hailuo-2.3"))
+}
+
 func TestCalculateSkipsStructuredMinimaxRule(t *testing.T) {
 	withQuotaPerUnit(t, 1000)
 

@@ -138,7 +138,7 @@ func validateH3Content(items []H3ContentItem) error {
 	if lastFrames > 0 && firstFrames == 0 {
 		return fmt.Errorf("H3 last_frame requires a first_frame image")
 	}
-	if referenceImages > H3MaxImages || referenceVideos > H3MaxVideos || referenceAudios > H3MaxAudios {
+	if int64(referenceImages) > H3MaxImages || int64(referenceVideos) > H3MaxVideos || int64(referenceAudios) > H3MaxAudios {
 		return fmt.Errorf("H3 reference media count exceeds the official limit")
 	}
 	if (firstFrames > 0 || lastFrames > 0) && (referenceImages > 0 || referenceVideos > 0 || referenceAudios > 0) {
@@ -357,7 +357,7 @@ func h3Duration(req *relaycommon.TaskSubmitReq) (int, error) {
 		}
 		duration = parsed
 	}
-	if duration < H3MinDuration || duration > H3MaxDuration {
+	if int64(duration) < H3MinDuration || int64(duration) > H3MaxDuration {
 		return 0, fmt.Errorf("H3 duration must be between %d and %d seconds", H3MinDuration, H3MaxDuration)
 	}
 	return duration, nil

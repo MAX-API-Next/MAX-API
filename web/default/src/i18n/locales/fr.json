@@ -2540,7 +2540,7 @@
     "Kling": "Kling",
     "Kling billing example": "Exemple de facturation Kling",
     "MiniMax billing example": "Exemple de facturation MiniMax",
-    "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Utilise la structure unifiée billing_type et billing_config pour la vidéo générée, la vidéo d'entrée, les images et l'audio.",
+    "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Utilise la structure unifiée composée de billing_type et billing_config pour la vidéo générée, la vidéo d'entrée, les images et l'audio.",
     "Knowledge Base ID *": "ID de la base de connaissances *",
     "Knowledge cutoff": "Date de coupure des connaissances",
     "Lake View": "Vue du lac",

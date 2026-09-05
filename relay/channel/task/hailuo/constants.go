@@ -1,5 +1,7 @@
 package hailuo
 
+import "github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+
 const (
 	ChannelName = "hailuo-video"
 )
@@ -56,10 +58,10 @@ const (
 	DefaultDuration        = 6
 	DefaultResolution      = Resolution720P
 	H3DefaultDuration      = 5
-	H3MinDuration          = 4
-	H3MaxDuration          = 15
-	H3MaxInputVideoSeconds = 15
-	H3MaxImages            = 9
-	H3MaxVideos            = 3
-	H3MaxAudios            = 3
+	H3MinDuration          = task_billing_setting.H3MinOutputDurationSeconds
+	H3MaxDuration          = task_billing_setting.H3MaxOutputDurationSeconds
+	H3MaxInputVideoSeconds = task_billing_setting.H3MaxInputMediaDurationSeconds
+	H3MaxImages            = task_billing_setting.H3MaxInputImageCount
+	H3MaxVideos            = task_billing_setting.H3MaxInputVideoCount
+	H3MaxAudios            = task_billing_setting.H3MaxInputAudioCount
 )

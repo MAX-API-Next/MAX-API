@@ -136,6 +136,9 @@ func validateRateCards(rateCards map[string]RateCard) error {
 			if card.BillingType != RateCardBillingTypeMinimax {
 				return fmt.Errorf("rate card %s has unsupported billing_type %q", key, card.BillingType)
 			}
+			if !isMinimaxH3RateCardKey(key) {
+				return fmt.Errorf("rate card %s structured billing only supports MiniMax-H3", key)
+			}
 			if len(card.BillingConfig) == 0 {
 				return fmt.Errorf("rate card %s billing_config is required", key)
 			}
@@ -169,6 +172,11 @@ func validateRateCards(rateCards map[string]RateCard) error {
 	return nil
 }
 
+func isMinimaxH3RateCardKey(key string) bool {
+	key = strings.TrimSpace(key)
+	return strings.EqualFold(key, MinimaxBillingRuleKey) || isMinimaxH3Model(key)
+}
+
 func validQuantity(value float64) bool {
 	return value > 0 && value <= math.MaxInt32 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
@@ -184,6 +192,9 @@ func findRateCard(models ...string) (*RateCard, string) {
 			continue
 		}
 		if card, ok := rateCards[model]; ok {
+			if card.BillingType != "" && !isMinimaxH3RateCardKey(model) {
+				continue
+			}
 			return &card, model
 		}
 	}
@@ -231,7 +242,7 @@ func findMinimaxRateCard(models ...string) (*RateCard, string) {
 		if model == "" {
 			continue
 		}
-		if card, ok := rateCards[model]; ok && card.BillingType == MinimaxBillingType {
+		if card, ok := rateCards[model]; ok && card.BillingType == MinimaxBillingType && isMinimaxH3RateCardKey(model) {
 			return &card, model
 		}
 	}
@@ -248,7 +259,7 @@ func findMinimaxRateCard(models ...string) (*RateCard, string) {
 		}
 		for _, key := range keys {
 			card := rateCards[key]
-			if card.BillingType == MinimaxBillingType && strings.Contains(key, "*") && matchPattern(key, model) {
+			if card.BillingType == MinimaxBillingType && strings.Contains(key, "*") && isMinimaxH3Model(model) && matchPattern(key, model) {
 				return &card, key
 			}
 		}
@@ -256,9 +267,6 @@ func findMinimaxRateCard(models ...string) (*RateCard, string) {
 
 	if card, ok := rateCards[MinimaxBillingRuleKey]; ok && card.BillingType == MinimaxBillingType {
 		return &card, MinimaxBillingRuleKey
-	}
-	if card, ok := rateCards["minimax"]; ok && card.BillingType == MinimaxBillingType {
-		return &card, "minimax"
 	}
 	return nil, ""
 }

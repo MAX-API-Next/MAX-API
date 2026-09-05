@@ -109,10 +109,11 @@ func TestQuoteH3FinalRejectsMissingOrConflictingUsage(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = QuoteH3Final(plan, &types.TaskUsage{
-		OutputDurationMs: int64Ptr(5_000),
-		InputImageCount:  int64Ptr(0),
+		OutputDurationMs:     int64Ptr(5_000),
+		InputVideoDurationMs: int64Ptr(0),
+		Completeness:         types.TaskUsageCompletenessComplete,
 	})
-	require.Error(t, err)
+	require.ErrorContains(t, err, "input_image_count is missing")
 
 	_, err = QuoteH3Final(plan, &types.TaskUsage{
 		OutputDurationMs:     int64Ptr(5_000),
