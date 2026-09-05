@@ -130,7 +130,7 @@ func TestQuoteH3FinalRejectsImageCountMismatch(t *testing.T) {
 }
 
 func TestH3BillingConfigValidationRejectsIncompleteProfile(t *testing.T) {
-	raw := `{"minimax_h3_v2":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":0.08},"input_video_unit_price":{"768P":0.08,"2K":0.13},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":0.04,"input_audio_unit_price":0}}`
+	raw := `{"minimax_h3_v2":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}`
 	require.Error(t, ValidateH3ProfilesJSON(raw))
 }
 

@@ -581,7 +581,9 @@ func normalizeH3Usage(usage *H3Usage) *types.TaskUsage {
 	}
 	if imagesPresent {
 		invalid = invalid || images < 0 || images > H3MaxImages
-		result.InputImageCount = int64Pointer(images)
+		if imagesErr == nil {
+			result.InputImageCount = int64Pointer(images)
+		}
 	}
 	if audioPresent {
 		invalid = invalid || audio.IsNegative() || audio.GreaterThan(decimal.NewFromInt(H3MaxInputVideoSeconds))

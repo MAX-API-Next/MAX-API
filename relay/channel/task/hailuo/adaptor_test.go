@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -23,6 +24,7 @@ func newH3TestInfo() *relaycommon.RelayInfo {
 		OriginModelName: H3Model,
 		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
 		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeMiniMax,
 			ChannelBaseUrl:    H3TestBaseURL,
 			UpstreamModelName: H3Model,
 		},
@@ -87,7 +89,7 @@ func TestValidateH3RequestAcceptsTextOnlyInsideContent(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = request
 
-	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}})
+	taskErr := (&TaskAdaptor{}).ValidateRequestAndSetAction(c, newH3TestInfo())
 	require.Nil(t, taskErr)
 }
 
@@ -186,11 +188,13 @@ func TestH3QueryUsesV2PathAndEscapesTaskID(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := (&TaskAdaptor{}).FetchTask(server.URL, "test-key", map[string]any{
+	resp, err := (&TaskAdaptor{}).FetchTask(server.URL, "test-key", map[string]any{
 		"model":   H3Model,
 		"task_id": "task/with-special-id",
 	}, "")
 	require.NoError(t, err)
+	require.NotNil(t, resp)
+	defer resp.Body.Close()
 
 	select {
 	case path := <-requestPath:
@@ -318,12 +322,13 @@ func TestParseH3UsageMarksInvalidProviderValues(t *testing.T) {
 				"total_seconds": 5,
 				"input_seconds": 0,
 				"output_seconds": "not-a-number",
-				"input_image_count": 0
+				"input_image_count": "not-a-number"
 			}
 		}
 	}`))
 	require.NoError(t, err)
 	require.Equal(t, types.TaskUsageCompletenessInvalid, result.Usage.Completeness)
+	require.Nil(t, result.Usage.InputImageCount)
 }
 
 func TestParseH3UsagePreservesFractionalVideoAndAudioSeconds(t *testing.T) {

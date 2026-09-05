@@ -123,6 +123,35 @@ func hasTaskContentText(content []map[string]any) bool {
 	return false
 }
 
+func allowsTaskContentWithoutPrompt(info *RelayInfo, req TaskSubmitReq) bool {
+	if info == nil {
+		return false
+	}
+
+	channelType := 0
+	if info.ChannelMeta != nil {
+		channelType = info.ChannelMeta.ChannelType
+	}
+	switch channelType {
+	case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
+		return true
+	case constant.ChannelTypeMiniMax:
+		model := ""
+		if info.ChannelMeta != nil {
+			model = strings.TrimSpace(info.ChannelMeta.UpstreamModelName)
+		}
+		if model == "" {
+			model = strings.TrimSpace(info.OriginModelName)
+		}
+		if model == "" {
+			model = strings.TrimSpace(req.Model)
+		}
+		return strings.EqualFold(model, "MiniMax-H3")
+	default:
+		return false
+	}
+}
+
 // MaxTaskDurationSeconds caps user-supplied video duration before it becomes
 // an OtherRatio billing multiplier.
 const MaxTaskDurationSeconds = 3600
@@ -278,10 +307,10 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
 	}
 
-	if strings.TrimSpace(req.Prompt) == "" && !hasTaskContentText(req.Content) {
-		if taskErr := validatePrompt(req.Prompt); taskErr != nil {
-			return taskErr
-		}
+	if strings.TrimSpace(req.Prompt) == "" && hasTaskContentText(req.Content) && allowsTaskContentWithoutPrompt(info, req) {
+		// H3 and Doubao consume the structured content field directly.
+	} else if taskErr := validatePrompt(req.Prompt); taskErr != nil {
+		return taskErr
 	}
 
 	if taskErr := validateTaskDurationBounds(req); taskErr != nil {
