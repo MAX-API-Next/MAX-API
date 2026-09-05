@@ -414,6 +414,18 @@ func TestConvertH3TaskToOpenAIVideo(t *testing.T) {
 			wantURL:    "https://cdn.example.com/video.mp4",
 		},
 		{
+			name:       "success without content",
+			status:     model.TaskStatusSuccess,
+			data:       `{"task":{"id":"upstream-task","model":"MiniMax-H3","status":"succeeded"}}`,
+			wantStatus: dto.VideoStatusInProgress,
+		},
+		{
+			name:       "success with blank content url",
+			status:     model.TaskStatusSuccess,
+			data:       `{"task":{"id":"upstream-task","model":"MiniMax-H3","status":"succeeded","content":{"url":"  "}}}`,
+			wantStatus: dto.VideoStatusInProgress,
+		},
+		{
 			name:       "failure",
 			status:     model.TaskStatusFailure,
 			data:       `{"task":{"id":"upstream-task","model":"MiniMax-H3","status":"failed","error":{"code":3001,"message":"generation failed"}}}`,

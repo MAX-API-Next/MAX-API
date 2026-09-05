@@ -385,7 +385,11 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 			case "running":
 				openAIVideo.Status = dto.VideoStatusInProgress
 			case "succeeded":
-				openAIVideo.Status = dto.VideoStatusCompleted
+				if h3Resp.Task.Content != nil && strings.TrimSpace(h3Resp.Task.Content.URL) != "" {
+					openAIVideo.Status = dto.VideoStatusCompleted
+				} else {
+					openAIVideo.Status = dto.VideoStatusInProgress
+				}
 			case "failed", "cancelled":
 				openAIVideo.Status = dto.VideoStatusFailed
 				openAIVideo.Error = &dto.OpenAIVideoError{
