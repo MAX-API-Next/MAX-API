@@ -294,6 +294,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "task_billing_setting.h3_profiles":
+		err = task_billing_setting.ValidateH3ProfilesJSON(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "H3 计费配置失败: " + err.Error(),
+			})
+			return
+		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {

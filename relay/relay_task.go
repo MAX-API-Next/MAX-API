@@ -59,6 +59,7 @@ func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) 
 		ModelRatio:              info.PriceData.ModelRatio,
 		OtherRatios:             info.PriceData.OtherRatios,
 		TaskBilling:             info.TaskBilling,
+		TaskBillingPlan:         types.CloneTaskBillingPlan(info.TaskBillingPlan),
 		OriginModelName:         info.OriginModelName,
 		PerCallBilling:          common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice || info.TaskBilling != nil,
 		DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
@@ -302,6 +303,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
 	info.PriceData = priceData
+
+	// H3 uses a bounded multi-component plan. During H3-02 this is a shadow
+	// snapshot only; legacy submission settlement remains unchanged.
+	info.TaskBillingPlan = nil
+	if planner, ok := adaptor.(channel.TaskBillingPlanProvider); ok {
+		plan, planErr := planner.BuildTaskBillingPlan(c, info)
+		if planErr != nil {
+			return nil, service.TaskErrorWrapper(planErr, "task_billing_plan_error", http.StatusBadRequest)
+		}
+		info.TaskBillingPlan = plan
+	}
 
 	// 6. Prefer a parameterized rate card when the adaptor can normalize the
 	// request. Legacy task models continue to use OtherRatios.

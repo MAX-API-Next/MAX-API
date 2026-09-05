@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/hailuo"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
@@ -26,6 +27,36 @@ type recordingTaskReservationBilling struct {
 	preConsumed int
 	reserveTo   []int
 	settleTo    []int
+}
+
+func TestPopulateTaskBillingMetadataPersistsH3PlanSnapshot(t *testing.T) {
+	plan := &types.TaskBillingPlan{
+		Source:        "minimax_hailuo",
+		RuleKey:       "minimax_h3_v2",
+		SchemaVersion: 1,
+		Mode:          types.TaskBillingPlanModeBoundedActual,
+		ConfigHash:    "sha256:test",
+		Currency:      "USD",
+		GroupRatio:    1,
+		QuotaPerUnit:  1000,
+		Resolution:    "768P",
+		ReserveQuota:  800,
+	}
+	info := &relaycommon.RelayInfo{
+		RequestId:       "h3-plan-snapshot",
+		OriginModelName: "MiniMax-H3",
+		TaskBillingPlan: plan,
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+	}
+	task := &model.Task{}
+	populateTaskBillingMetadata(task, info)
+	require.Equal(t, plan, task.PrivateData.BillingContext.TaskBillingPlan)
+
+	data, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	var restored model.TaskPrivateData
+	require.NoError(t, common.Unmarshal(data, &restored))
+	require.Equal(t, plan, restored.BillingContext.TaskBillingPlan)
 }
 
 func (b *recordingTaskReservationBilling) Settle(actualQuota int) error {
@@ -164,6 +195,49 @@ func TestPrepareTaskSubmitRequestBodyMakesParamOverrideVisibleToBilling(t *testi
 	ratios := (&doubao.TaskAdaptor{}).EstimateBilling(c, info)
 	require.NotNil(t, ratios)
 	assert.InDelta(t, 51.0/46.0, ratios["video_input"], 1e-9)
+}
+
+func TestPrepareTaskSubmitRequestBodyMakesH3PlanUseFinalRequestFacts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+		"model":"MiniMax-H3",
+		"prompt":"test",
+		"duration":5,
+		"resolution":"768P",
+		"content":[{"type":"text","text":"test"}]
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "MiniMax-H3",
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{"path": "duration", "mode": "set", "value": 10},
+					map[string]interface{}{"path": "resolution", "mode": "set", "value": "2K"},
+				},
+			},
+		},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+		PriceData:     types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
+		Model:      "MiniMax-H3",
+		Prompt:     "test",
+		Duration:   common.GetPointer(5),
+		Resolution: "768P",
+		Content:    []map[string]any{{"type": "text", "text": "test"}},
+	})
+
+	_, taskErr := prepareTaskSubmitRequestBody(c, info, &hailuo.TaskAdaptor{})
+	require.Nil(t, taskErr)
+
+	plan, err := (&hailuo.TaskAdaptor{}).BuildTaskBillingPlan(c, info)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, plan.RequestedOutputDurationSeconds)
+	require.Equal(t, "2K", plan.Resolution)
 }
 
 func TestPrepareTaskSubmitRequestBodyMakesMultipartParamOverrideVisibleToBilling(t *testing.T) {

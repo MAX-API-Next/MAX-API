@@ -163,9 +163,10 @@ type RelayInfo struct {
 	AuditResponseContent    string
 	AuditResponseTruncated  bool
 
-	PriceData   types.PriceData
-	TaskBilling *types.TaskBillingResult
-	ToolUsage   *ToolUsageLedger
+	PriceData       types.PriceData
+	TaskBilling     *types.TaskBillingResult
+	TaskBillingPlan *types.TaskBillingPlan
+	ToolUsage       *ToolUsageLedger
 
 	// QuotaClamp is set when a quota conversion saturated at the int32 bound
 	// or fell back from NaN while computing this request's charge.
@@ -921,15 +922,16 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	Code             int              `json:"code"`
+	TaskID           string           `json:"task_id"`
+	Status           string           `json:"status"`
+	Reason           string           `json:"reason,omitempty"`
+	Url              string           `json:"url,omitempty"`
+	RemoteUrl        string           `json:"remote_url,omitempty"`
+	Progress         string           `json:"progress,omitempty"`
+	CompletionTokens int              `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens      int              `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	Usage            *types.TaskUsage `json:"usage,omitempty"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

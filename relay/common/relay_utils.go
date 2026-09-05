@@ -112,6 +112,17 @@ func validatePrompt(prompt string) *dto.TaskError {
 	return nil
 }
 
+func hasTaskContentText(content []map[string]any) bool {
+	for _, item := range content {
+		typeName, _ := item["type"].(string)
+		text, _ := item["text"].(string)
+		if strings.EqualFold(strings.TrimSpace(typeName), "text") && strings.TrimSpace(text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // MaxTaskDurationSeconds caps user-supplied video duration before it becomes
 // an OtherRatio billing multiplier.
 const MaxTaskDurationSeconds = 3600
@@ -267,8 +278,10 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
 	}
 
-	if taskErr := validatePrompt(req.Prompt); taskErr != nil {
-		return taskErr
+	if strings.TrimSpace(req.Prompt) == "" && !hasTaskContentText(req.Content) {
+		if taskErr := validatePrompt(req.Prompt); taskErr != nil {
+			return taskErr
+		}
 	}
 
 	if taskErr := validateTaskDurationBounds(req); taskErr != nil {

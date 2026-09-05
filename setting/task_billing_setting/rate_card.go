@@ -30,11 +30,13 @@ type RateCard struct {
 }
 
 type TaskBillingSetting struct {
-	RateCards *types.RWMap[string, RateCard] `json:"rate_cards"`
+	RateCards  *types.RWMap[string, RateCard]        `json:"rate_cards"`
+	H3Profiles *types.RWMap[string, H3BillingConfig] `json:"h3_profiles"`
 }
 
 var taskBillingSetting = TaskBillingSetting{
-	RateCards: newRateCardMap(defaultRateCards()),
+	RateCards:  newRateCardMap(defaultRateCards()),
+	H3Profiles: newH3BillingProfileMap(defaultH3BillingProfiles()),
 }
 
 func init() {
