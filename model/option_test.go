@@ -300,6 +300,17 @@ func TestValidateOptionUpdateRejectsNullRWMapConfigs(t *testing.T) {
 	}
 }
 
+func TestValidateOptionUpdateRejectsSemanticallyInvalidTaskBillingConfigs(t *testing.T) {
+	for key, value := range map[string]string{
+		"task_billing_setting.rate_cards":  `{ "invalid": { "billing_type": "unsupported" } }`,
+		"task_billing_setting.h3_profiles": `{}`,
+	} {
+		t.Run(key, func(t *testing.T) {
+			require.Error(t, validateOptionUpdate(key, value))
+		})
+	}
+}
+
 func TestNormalizeDataExportIntervalRejectsUnsafeValues(t *testing.T) {
 	for _, value := range []string{"0", "-1", "1441", "not-a-number"} {
 		t.Run(value, func(t *testing.T) {

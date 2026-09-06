@@ -819,11 +819,6 @@ func handleConfigUpdate(key, value string) (bool, error) {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
 	} else if configName == "task_billing_setting" {
-		if configKey == "rate_cards" {
-			_ = task_billing_setting.ValidateRateCardsJSON(value)
-		} else if configKey == "h3_profiles" {
-			_ = task_billing_setting.ValidateH3ProfilesJSON(value)
-		}
 		InvalidatePricingCache()
 	} else if configName == "theme" {
 		system_setting.UpdateAndSyncTheme()
