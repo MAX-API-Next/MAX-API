@@ -5329,7 +5329,7 @@
     "When enabled, the store field will be blocked": "有効にすると、ストアフィールドはブロックされます",
     "When enabled, users can pick this group when creating tokens.": "有効にすると、ユーザーはトークン作成時にこのグループを選択できます。",
     "When enabled, violation requests will incur additional charges.": "有効にすると、違反リクエストに追加料金が発生します。",
-    "When enabled, zero-cost models also pre-consume quota before final settlement.": "有効にすると、ゼロコストモデルも最終決済前にクォータを事前消費します。",
+    "When enabled, zero-cost models also pre-consume quota before final settlement.": "有効にすると、ゼロコストモデルも最終精算前にクォータを事前消費します。",
     "When no conditions are set, the operation always executes.": "条件が設定されていない場合、操作は常に実行されます。",
     "When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.": "パフォーマンス監視を有効にすると、システムリソース使用率が閾値を超えた場合、新しいRelayリクエストが拒否されます。",
     "When running in containers or ephemeral environments, ensure the SQLite file is mapped to persistent storage to avoid data loss on restart.": "コンテナまたは一時的な環境で実行する場合、再起動時のデータ損失を防ぐために、SQLiteファイルが永続ストレージにマッピングされていることを確認してください。",
