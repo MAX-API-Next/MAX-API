@@ -66,7 +66,10 @@ func GetRateCardCopy(models ...string) (*RateCard, string) {
 
 func HasRateCard(models ...string) bool {
 	card, _ := findRateCard(models...)
-	return card != nil
+	// This signal is consumed by legacy per-call pricing and the generic
+	// single-quantity task calculator. Structured cards have their own planner
+	// and must not turn a missing model price into a zero-price fallback.
+	return card != nil && card.BillingType == ""
 }
 
 func Calculate(input types.TaskBillingInput, groupRatio float64) (*types.TaskBillingResult, error) {

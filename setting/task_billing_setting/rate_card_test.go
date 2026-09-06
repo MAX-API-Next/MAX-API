@@ -150,6 +150,7 @@ func TestCalculateSkipsStructuredMinimaxRule(t *testing.T) {
 	got, err := Calculate(types.TaskBillingInput{Model: "minimax/minimax-h3"}, 1)
 	require.NoError(t, err)
 	require.Nil(t, got)
+	require.False(t, HasRateCard("MiniMax-H3"))
 }
 
 func TestHasRateCardIgnoresStructuredWildcardKey(t *testing.T) {
