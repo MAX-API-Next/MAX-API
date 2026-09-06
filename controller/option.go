@@ -137,6 +137,26 @@ type H3BillingPreviewRequest struct {
 	Actual                *H3BillingPreviewActual              `json:"actual,omitempty"`
 }
 
+func buildH3BillingPreviewUsage(actual *H3BillingPreviewActual) *types.TaskUsage {
+	if actual == nil {
+		return nil
+	}
+	if actual.OutputDurationMs == nil && actual.InputVideoDurationMs == nil && actual.InputAudioDurationMs == nil && actual.InputImageCount == nil {
+		return nil
+	}
+	completeness := types.TaskUsageCompletenessPartial
+	if actual.OutputDurationMs != nil && actual.InputImageCount != nil {
+		completeness = types.TaskUsageCompletenessComplete
+	}
+	return &types.TaskUsage{
+		OutputDurationMs:     actual.OutputDurationMs,
+		InputVideoDurationMs: actual.InputVideoDurationMs,
+		InputAudioDurationMs: actual.InputAudioDurationMs,
+		InputImageCount:      actual.InputImageCount,
+		Completeness:         completeness,
+	}
+}
+
 func PreviewH3Billing(c *gin.Context) {
 	var request H3BillingPreviewRequest
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
@@ -147,16 +167,7 @@ func PreviewH3Billing(c *gin.Context) {
 		return
 	}
 
-	var usage *types.TaskUsage
-	if request.Actual != nil {
-		usage = &types.TaskUsage{
-			OutputDurationMs:     request.Actual.OutputDurationMs,
-			InputVideoDurationMs: request.Actual.InputVideoDurationMs,
-			InputAudioDurationMs: request.Actual.InputAudioDurationMs,
-			InputImageCount:      request.Actual.InputImageCount,
-			Completeness:         types.TaskUsageCompletenessComplete,
-		}
-	}
+	usage := buildH3BillingPreviewUsage(request.Actual)
 	preview, err := task_billing_setting.PreviewH3Billing(request.Profile, task_billing_setting.H3BillingInput{
 		Resolution:            request.Resolution,
 		OutputDurationSeconds: request.OutputDurationSeconds,

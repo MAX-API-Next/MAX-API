@@ -103,6 +103,74 @@ func TestPreviewH3BillingRejectsInvalidDraft(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "input_audio_unit_price must be zero")
 }
 
+func TestPreviewH3BillingDerivesActualUsageCompleteness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	profile, ok := task_billing_setting.GetH3BillingProfileCopy(task_billing_setting.H3BillingProfileKey)
+	require.True(t, ok)
+
+	tests := []struct {
+		name            string
+		actual          *H3BillingPreviewActual
+		wantSuccess     bool
+		wantFinal       bool
+		wantMessagePart string
+	}{
+		{
+			name:        "empty actual is treated as absent",
+			actual:      &H3BillingPreviewActual{},
+			wantSuccess: true,
+		},
+		{
+			name: "missing output duration is partial",
+			actual: &H3BillingPreviewActual{
+				InputImageCount: testInt64Pointer(0),
+			},
+			wantMessagePart: "not automatically billable: partial",
+		},
+		{
+			name: "missing image count is partial",
+			actual: &H3BillingPreviewActual{
+				OutputDurationMs: testInt64Pointer(5_000),
+			},
+			wantMessagePart: "not automatically billable: partial",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := common.Marshal(H3BillingPreviewRequest{
+				Profile:               *profile,
+				Resolution:            "768P",
+				OutputDurationSeconds: 5,
+				GroupRatio:            1,
+				Actual:                test.actual,
+			})
+			require.NoError(t, err)
+
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/option/h3_billing/preview", bytes.NewReader(body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			PreviewH3Billing(ctx)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var response struct {
+				Success bool                                   `json:"success"`
+				Message string                                 `json:"message"`
+				Data    *task_billing_setting.H3BillingPreview `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.Equal(t, test.wantSuccess, response.Success)
+			if test.wantSuccess {
+				require.NotNil(t, response.Data)
+				require.Equal(t, test.wantFinal, response.Data.Final != nil)
+				return
+			}
+			require.Contains(t, response.Message, test.wantMessagePart)
+		})
+	}
+}
+
 func testInt64Pointer(value int64) *int64 {
 	return &value
 }

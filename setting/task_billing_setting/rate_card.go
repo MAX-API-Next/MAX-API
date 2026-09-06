@@ -436,6 +436,9 @@ func cloneRateCards(src map[string]RateCard) map[string]RateCard {
 func cloneRateCard(card RateCard) RateCard {
 	card.BillingConfig = cloneBillingConfig(card.BillingConfig)
 	card.Defaults = cloneStringMap(card.Defaults)
+	if card.Rows == nil {
+		return card
+	}
 	rows := make([]RateCardRow, len(card.Rows))
 	for i, row := range card.Rows {
 		row.Match = cloneStringMap(row.Match)

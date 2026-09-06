@@ -85,6 +85,27 @@ func TestValidateRateCardsAcceptsStructuredMinimaxRule(t *testing.T) {
 	require.NoError(t, ValidateRateCardsJSON(raw))
 }
 
+func TestGetRateCardsCopyPreservesStructuredRowsRoundTrip(t *testing.T) {
+	original := GetRateCardsCopy()
+	raw := `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`
+	require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": raw}))
+	t.Cleanup(func() {
+		data, err := common.Marshal(original)
+		require.NoError(t, err)
+		require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
+	})
+
+	copied := GetRateCardsCopy()
+	card, ok := copied[MinimaxBillingRuleKey]
+	require.True(t, ok)
+	require.Nil(t, card.Rows)
+
+	data, err := common.Marshal(copied)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"rows":null`)
+	require.NoError(t, ValidateRateCardsJSON(string(data)))
+}
+
 func TestValidateRateCardsRejectsLegacyFieldsOnStructuredMinimaxRule(t *testing.T) {
 	legacyFields := map[string]func(*RateCard){
 		"unit":             func(card *RateCard) { card.Unit = "second" },
