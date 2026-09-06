@@ -79,4 +79,60 @@ describe('TaskRateCardSettings billing examples', () => {
       queryClient.clear()
     }
   })
+
+  test('does not re-render billing examples when rate-card text changes', async () => {
+    const queryClient = new QueryClient()
+    const originalTranslate = testEnv.i18n.t
+    const titleCalls = {
+      kling: 0,
+      minimax: 0,
+    }
+
+    testEnv.i18n.t = new Proxy(originalTranslate, {
+      apply(target, thisArg, args) {
+        if (args[0] === 'Kling billing example') titleCalls.kling += 1
+        if (args[0] === 'MiniMax billing example') titleCalls.minimax += 1
+        return Reflect.apply(target, thisArg, args)
+      },
+    })
+
+    try {
+      const view = await testEnv.render(
+        <QueryClientProvider client={queryClient}>
+          <TaskRateCardSettings defaultValue='{}' />
+        </QueryClientProvider>
+      )
+
+      try {
+        assert.ok(titleCalls.kling > 0)
+        assert.ok(titleCalls.minimax > 0)
+        titleCalls.kling = 0
+        titleCalls.minimax = 0
+
+        const screen = within(view.container)
+        const klingHeading = screen.getByRole('heading', {
+          name: 'Kling billing example',
+        })
+        const klingSection = klingHeading.closest('section')
+        assert.ok(klingSection)
+        const klingUseButton = within(klingSection).getByRole('button', {
+          name: 'Use example',
+        }) as HTMLButtonElement
+        await view.click(klingUseButton)
+
+        const currentEditor = screen.getByRole('textbox', {
+          name: 'Current rate card JSON',
+        }) as HTMLTextAreaElement
+        assert.match(currentEditor.value, /kling\/kling-v3-video-generation/)
+        screen.getByText('kling/kling-v3-video-generation')
+        assert.equal(titleCalls.kling, 0)
+        assert.equal(titleCalls.minimax, 0)
+      } finally {
+        await view.unmount()
+      }
+    } finally {
+      testEnv.i18n.t = originalTranslate
+      queryClient.clear()
+    }
+  })
 })

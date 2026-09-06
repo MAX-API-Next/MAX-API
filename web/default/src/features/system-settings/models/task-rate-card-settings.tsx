@@ -358,6 +358,14 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
     [t]
   )
 
+  const handleUseKlingExample = useCallback((): void => {
+    handleUseExample(KLING_RATE_CARD_EXAMPLE)
+  }, [handleUseExample])
+
+  const handleUseMiniMaxExample = useCallback((): void => {
+    handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)
+  }, [handleUseExample])
+
   const handleSave = useCallback(async () => {
     if (error) {
       toast.error(error)
@@ -467,7 +475,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         description='Includes duration, quality, audio, and video-input pricing conditions.'
         value={KLING_RATE_CARD_EXAMPLE}
         rows={12}
-        onUseExample={() => handleUseExample(KLING_RATE_CARD_EXAMPLE)}
+        onUseExample={handleUseKlingExample}
       />
 
       <BillingExampleSection
@@ -475,7 +483,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         description='Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.'
         value={MINIMAX_RATE_CARD_EXAMPLE}
         rows={18}
-        onUseExample={() => handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)}
+        onUseExample={handleUseMiniMaxExample}
         useExampleDisabled
         notice='Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.'
       />
