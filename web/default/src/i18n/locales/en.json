@@ -2541,6 +2541,7 @@
     "Kling billing example": "Kling billing example",
     "MiniMax billing example": "MiniMax billing example",
     "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.",
+    "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.": "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.",
     "Knowledge Base ID *": "Knowledge Base ID *",
     "Knowledge cutoff": "Knowledge cutoff",
     "Lake View": "Lake View",

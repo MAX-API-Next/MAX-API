@@ -2541,6 +2541,7 @@
     "Kling billing example": "Kling 課金例",
     "MiniMax billing example": "MiniMax 課金例",
     "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "出力動画、入力動画、画像、音声に統一された billing_type と billing_config の形式を使用します。",
+    "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.": "プレビュー専用：MiniMax の構造化課金は、まだタスクの受付や精算には使用されません。通常のモデル価格を別途設定してください。未設定の場合、リクエストは拒否されます。",
     "Knowledge Base ID *": "ナレッジベースID *",
     "Knowledge cutoff": "知識のカットオフ",
     "Lake View": "レイクビュー",

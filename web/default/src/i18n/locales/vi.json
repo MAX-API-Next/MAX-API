@@ -2541,6 +2541,7 @@
     "Kling billing example": "Ví dụ tính phí Kling",
     "MiniMax billing example": "Ví dụ tính phí MiniMax",
     "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Sử dụng cấu trúc billing_type và billing_config thống nhất cho video đầu ra, video đầu vào, hình ảnh và âm thanh.",
+    "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.": "Chỉ để xem trước: cơ chế tính phí có cấu trúc của MiniMax chưa được dùng để tiếp nhận hoặc quyết toán tác vụ. Hãy cấu hình riêng giá mô hình thông thường; yêu cầu sẽ bị từ chối nếu chưa có giá này.",
     "Knowledge Base ID *": "Mã số Cơ sở kiến thức *",
     "Knowledge cutoff": "Mốc dữ liệu",
     "Lake View": "Hồ nước",

@@ -2541,6 +2541,7 @@
     "Kling billing example": "Exemple de facturation Kling",
     "MiniMax billing example": "Exemple de facturation MiniMax",
     "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "Utilise la structure unifiée composée de billing_type et billing_config pour la vidéo générée, la vidéo d'entrée, les images et l'audio.",
+    "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.": "Aperçu uniquement : la facturation structurée MiniMax n'est pas encore utilisée pour l'admission ou le règlement des tâches. Configurez séparément un prix de modèle standard ; sans celui-ci, les requêtes sont rejetées.",
     "Knowledge Base ID *": "ID de la base de connaissances *",
     "Knowledge cutoff": "Date de coupure des connaissances",
     "Lake View": "Vue du lac",

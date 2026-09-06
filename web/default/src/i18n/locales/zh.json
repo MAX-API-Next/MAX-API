@@ -2541,6 +2541,7 @@
     "Kling billing example": "Kling 计费示例",
     "MiniMax billing example": "MiniMax 计费示例",
     "Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.": "使用统一的 billing_type 和 billing_config 结构配置输出视频、输入视频、图片和音频。",
+    "Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.": "仅供预览：MiniMax 结构化计费尚未用于任务准入或结算。请另行配置普通模型价格；未配置时请求将被拒绝。",
     "Knowledge Base ID *": "知识库 ID *",
     "Knowledge cutoff": "知识截止",
     "Lake View": "湖光",
