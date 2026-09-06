@@ -74,6 +74,35 @@ func TestBuildH3BillingPlanReadsMinimaxRuleFromUnifiedRateCards(t *testing.T) {
 	require.EqualValues(t, 500, plan.EstimateQuota)
 }
 
+func TestBuildH3BillingPlanSelectsExactModelAliasRateCard(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	original := GetRateCardsCopy()
+	profile := defaultH3BillingConfig()
+	profile.OutputUnitPrice["768P"] = "0.11"
+	data, err := common.Marshal(map[string]RateCard{
+		"MiniMax-H3": {
+			Vendor:        "minimax",
+			BillingType:   MinimaxBillingType,
+			BillingConfig: encodeBillingConfig(profile),
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
+	t.Cleanup(func() {
+		data, marshalErr := common.Marshal(original)
+		require.NoError(t, marshalErr)
+		require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
+	})
+
+	plan, err := BuildH3BillingPlanForModels(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1, "MiniMax-H3")
+	require.NoError(t, err)
+	require.Equal(t, H3BillingSource, plan.Source)
+	require.Equal(t, "MiniMax-H3", plan.RuleKey)
+	require.EqualValues(t, 550, plan.EstimateQuota)
+}
+
 func TestBuildH3BillingPlanDoesNotChargeFreeImagesOrAudio(t *testing.T) {
 	withQuotaPerUnit(t, 1000)
 	plan, err := BuildH3BillingPlan(H3BillingInput{

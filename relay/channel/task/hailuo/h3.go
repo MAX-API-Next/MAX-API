@@ -429,6 +429,29 @@ func h3OptionalBool(metadata map[string]interface{}, key string) (*bool, error) 
 	return &boolValue, nil
 }
 
+func h3CallbackURL(req *relaycommon.TaskSubmitReq) (*string, error) {
+	if req.CallbackURL != nil {
+		value := strings.TrimSpace(*req.CallbackURL)
+		if value == "" {
+			return nil, nil
+		}
+		return &value, nil
+	}
+	raw, exists := req.Metadata["callback_url"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return nil, fmt.Errorf("H3 callback_url must be a string")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	return &value, nil
+}
+
 func buildH3Request(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo) (*H3VideoRequest, error) {
 	if isUnsupportedH3Model(h3RequestModel(req, info)) {
 		return nil, fmt.Errorf("%s is not supported by this adaptor", H3MaxModel)
@@ -450,11 +473,9 @@ func buildH3Request(req *relaycommon.TaskSubmitReq, info *relaycommon.RelayInfo)
 		return nil, err
 	}
 
-	callbackURL := req.CallbackURL
-	if callbackURL == nil {
-		if value, ok := req.Metadata["callback_url"].(string); ok {
-			callbackURL = &value
-		}
+	callbackURL, err := h3CallbackURL(req)
+	if err != nil {
+		return nil, err
 	}
 	watermark := req.Watermark
 	if watermark == nil {

@@ -162,6 +162,74 @@ func TestBuildH3RequestMapsReferenceVideoAndAudio(t *testing.T) {
 	require.Equal(t, "reference_audio", request.Content[2].Role)
 }
 
+func TestBuildH3RequestNormalizesCallbackURL(t *testing.T) {
+	direct := "  https://example.com/direct-callback  "
+	directBlank := "   "
+	tests := []struct {
+		name        string
+		callbackURL *string
+		metadata    map[string]any
+		wantURL     string
+		wantNil     bool
+		wantErr     string
+	}{
+		{
+			name:        "direct value is trimmed",
+			callbackURL: &direct,
+			metadata:    map[string]any{"callback_url": 42},
+			wantURL:     "https://example.com/direct-callback",
+		},
+		{
+			name:        "direct blank remains authoritative and is omitted",
+			callbackURL: &directBlank,
+			metadata:    map[string]any{"callback_url": "https://example.com/metadata-callback"},
+			wantNil:     true,
+		},
+		{
+			name:     "metadata value is trimmed",
+			metadata: map[string]any{"callback_url": "  https://example.com/metadata-callback  "},
+			wantURL:  "https://example.com/metadata-callback",
+		},
+		{
+			name:     "metadata blank is omitted",
+			metadata: map[string]any{"callback_url": "  "},
+			wantNil:  true,
+		},
+		{
+			name:     "metadata null is omitted",
+			metadata: map[string]any{"callback_url": nil},
+			wantNil:  true,
+		},
+		{
+			name:     "metadata non-string is rejected",
+			metadata: map[string]any{"callback_url": 42},
+			wantErr:  "callback_url must be a string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := buildH3Request(&relaycommon.TaskSubmitReq{
+				Model:       H3Model,
+				Prompt:      "Create a video",
+				CallbackURL: tt.callbackURL,
+				Metadata:    tt.metadata,
+			}, newH3TestInfo())
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNil {
+				require.Nil(t, request.CallbackURL)
+				return
+			}
+			require.NotNil(t, request.CallbackURL)
+			require.Equal(t, tt.wantURL, *request.CallbackURL)
+		})
+	}
+}
+
 func TestBuildH3BillingPlanCapturesRequestFactsWithoutChargingAudio(t *testing.T) {
 	originalQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 1000

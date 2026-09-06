@@ -84,6 +84,26 @@ func TestValidateRateCardsAcceptsStructuredMinimaxRule(t *testing.T) {
 	require.NoError(t, ValidateRateCardsJSON(raw))
 }
 
+func TestValidateRateCardsRequiresCanonicalStructuredMinimaxKey(t *testing.T) {
+	structured := RateCard{
+		Vendor:        "minimax",
+		BillingType:   MinimaxBillingType,
+		BillingConfig: encodeBillingConfig(defaultH3BillingConfig()),
+	}
+
+	for _, key := range []string{MinimaxBillingRuleKey, "MiniMax-H3"} {
+		data, err := common.Marshal(map[string]RateCard{key: structured})
+		require.NoError(t, err)
+		require.NoError(t, ValidateRateCardsJSON(string(data)), key)
+	}
+
+	for _, key := range []string{"minimax-h3", " MINIMAX/MINIMAX-H3 ", " MiniMax-H3 "} {
+		data, err := common.Marshal(map[string]RateCard{key: structured})
+		require.NoError(t, err)
+		require.ErrorContains(t, ValidateRateCardsJSON(string(data)), "only supports MiniMax-H3", key)
+	}
+}
+
 func TestValidateRateCardsRejectsStructuredNonH3Model(t *testing.T) {
 	raw := `{"MiniMax-Hailuo-2.3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`
 	require.ErrorContains(t, ValidateRateCardsJSON(raw), "only supports MiniMax-H3")

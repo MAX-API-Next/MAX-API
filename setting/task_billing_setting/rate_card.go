@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/types"
 )
@@ -173,8 +174,7 @@ func validateRateCards(rateCards map[string]RateCard) error {
 }
 
 func isMinimaxH3RateCardKey(key string) bool {
-	key = strings.TrimSpace(key)
-	return strings.EqualFold(key, MinimaxBillingRuleKey) || isMinimaxH3Model(key)
+	return key == MinimaxBillingRuleKey || key == constant.TaskModelMiniMaxH3
 }
 
 func validQuantity(value float64) bool {
