@@ -152,7 +152,7 @@ func TestCalculateSkipsStructuredMinimaxRule(t *testing.T) {
 	require.Nil(t, got)
 }
 
-func TestHasRateCardRecognizesOnlyTheMiniMaxH3Alias(t *testing.T) {
+func TestHasRateCardIgnoresStructuredWildcardKey(t *testing.T) {
 	original := GetRateCardsCopy()
 	data, err := common.Marshal(map[string]RateCard{
 		"*": {
@@ -169,7 +169,9 @@ func TestHasRateCardRecognizesOnlyTheMiniMaxH3Alias(t *testing.T) {
 		require.NoError(t, config.UpdateConfigFromMap(&taskBillingSetting, map[string]string{"rate_cards": string(data)}))
 	})
 
-	require.True(t, HasRateCard("MiniMax-H3"))
+	// This bypasses the config validation boundary to guard against stale or
+	// programmatically loaded maps reintroducing structured wildcard cards.
+	require.False(t, HasRateCard("MiniMax-H3"))
 	require.False(t, HasRateCard("MiniMax-Hailuo-2.3"))
 }
 

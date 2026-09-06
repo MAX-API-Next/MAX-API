@@ -176,9 +176,11 @@ func TestValidateBasicTaskRequestScopesContentOnlyException(t *testing.T) {
 		name          string
 		channelType   int
 		upstreamModel string
+		requestModel  string
 		wantErr       bool
 	}{
 		{name: "H3 content", channelType: constant.ChannelTypeMiniMax, upstreamModel: "MiniMax-H3"},
+		{name: "H3 request model fallback", channelType: constant.ChannelTypeMiniMax, requestModel: "MiniMax-H3"},
 		{name: "Doubao content", channelType: constant.ChannelTypeDoubaoVideo},
 		{name: "VolcEngine Doubao content", channelType: constant.ChannelTypeVolcEngine},
 		{name: "legacy Hailuo requires prompt", channelType: constant.ChannelTypeMiniMax, upstreamModel: "MiniMax-Hailuo-2.3", wantErr: true},
@@ -191,8 +193,12 @@ func TestValidateBasicTaskRequestScopesContentOnlyException(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			requestModel := tt.requestModel
+			if requestModel == "" {
+				requestModel = "MiniMax-H3"
+			}
 			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
-				"model":"MiniMax-H3",
+				"model":"`+requestModel+`",
 				"content":[{"type":"text","text":"Create a short film"}]
 			}`))
 			request.Header.Set("Content-Type", "application/json")

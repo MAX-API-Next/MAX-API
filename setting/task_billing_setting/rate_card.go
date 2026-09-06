@@ -214,7 +214,7 @@ func findRateCard(models ...string) (*RateCard, string) {
 			}
 			if matchPattern(key, model) {
 				card := rateCards[key]
-				if card.BillingType != "" && !isMinimaxH3Model(model) {
+				if card.BillingType != "" {
 					continue
 				}
 				return &card, key
@@ -244,24 +244,6 @@ func findMinimaxRateCard(models ...string) (*RateCard, string) {
 		}
 		if card, ok := rateCards[model]; ok && card.BillingType == MinimaxBillingType && isMinimaxH3RateCardKey(model) {
 			return &card, model
-		}
-	}
-
-	keys := make([]string, 0, len(rateCards))
-	for key := range rateCards {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		for _, key := range keys {
-			card := rateCards[key]
-			if card.BillingType == MinimaxBillingType && strings.Contains(key, "*") && isMinimaxH3Model(model) && matchPattern(key, model) {
-				return &card, key
-			}
 		}
 	}
 
