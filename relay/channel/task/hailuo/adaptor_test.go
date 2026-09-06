@@ -162,6 +162,43 @@ func TestBuildH3RequestMapsReferenceVideoAndAudio(t *testing.T) {
 	require.Equal(t, "reference_audio", request.Content[2].Role)
 }
 
+func TestBuildH3RequestRejectsReferenceImagesMixedWithFrameImages(t *testing.T) {
+	tests := []struct {
+		name    string
+		request relaycommon.TaskSubmitReq
+	}{
+		{
+			name: "top-level reference images with first frame",
+			request: relaycommon.TaskSubmitReq{
+				Model:           H3Model,
+				Prompt:          "Match the reference performance",
+				ReferenceImages: []string{"https://example.com/reference.png"},
+				Metadata:        map[string]any{"first_frame_image": "https://example.com/first.png"},
+			},
+		},
+		{
+			name: "metadata reference images with last frame",
+			request: relaycommon.TaskSubmitReq{
+				Model:  H3Model,
+				Prompt: "Match the reference performance",
+				Metadata: map[string]any{
+					"first_frame_image": "https://example.com/first.png",
+					"last_frame_image":  "https://example.com/last.png",
+					"reference_images":  []any{"https://example.com/reference.png"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildH3Request(&tt.request, newH3TestInfo())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "H3 frame images and reference media cannot be mixed")
+		})
+	}
+}
+
 func TestBuildH3RequestNormalizesCallbackURL(t *testing.T) {
 	direct := "  https://example.com/direct-callback  "
 	directBlank := "   "

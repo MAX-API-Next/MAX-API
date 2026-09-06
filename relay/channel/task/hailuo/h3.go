@@ -232,19 +232,17 @@ func buildH3Content(req *relaycommon.TaskSubmitReq) ([]H3ContentItem, error) {
 		}
 	}
 
-	if len(firstFrame) == 0 && len(lastFrame) == 0 && len(req.ReferenceImages) > 0 {
+	if len(req.ReferenceImages) > 0 {
 		for _, image := range req.ReferenceImages {
 			items = append(items, H3ContentItem{Type: "image_url", Role: "reference_image", ImageURL: &H3MediaURL{URL: strings.TrimSpace(image)}})
 		}
 	}
-	if len(firstFrame) == 0 && len(lastFrame) == 0 {
-		referenceImages, err := h3MetadataMediaURLs(req.Metadata, "reference_images")
-		if err != nil {
-			return nil, err
-		}
-		for _, image := range referenceImages {
-			items = append(items, H3ContentItem{Type: "image_url", Role: "reference_image", ImageURL: &H3MediaURL{URL: image}})
-		}
+	referenceImages, err := h3MetadataMediaURLs(req.Metadata, "reference_images")
+	if err != nil {
+		return nil, err
+	}
+	for _, image := range referenceImages {
+		items = append(items, H3ContentItem{Type: "image_url", Role: "reference_image", ImageURL: &H3MediaURL{URL: image}})
 	}
 
 	for _, key := range []struct {
