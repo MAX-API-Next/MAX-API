@@ -10,6 +10,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/shopspring/decimal"
@@ -519,7 +520,7 @@ func parseH3TaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
 		if code == httpStatusRequestTimeout || code == httpStatusTooManyRequests || code >= 500 {
 			return nil, true, fmt.Errorf("H3 temporary query error: %s", message)
 		}
-		return &relaycommon.TaskInfo{Code: code, Status: modelTaskFailure, Progress: "100%", Reason: message}, true, nil
+		return &relaycommon.TaskInfo{Code: code, Status: model.TaskStatusFailure, Progress: "100%", Reason: message}, true, nil
 	}
 
 	task := response.Task
@@ -530,22 +531,22 @@ func parseH3TaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
 	result := &relaycommon.TaskInfo{TaskID: task.ID, Code: 0, Usage: usage}
 	switch strings.ToLower(strings.TrimSpace(task.Status)) {
 	case "queued":
-		result.Status = modelTaskQueued
+		result.Status = model.TaskStatusQueued
 		result.Progress = "30%"
 	case "running":
-		result.Status = modelTaskInProgress
+		result.Status = model.TaskStatusInProgress
 		result.Progress = "50%"
 	case "succeeded":
 		result.Progress = "100%"
 		if task.Content == nil || strings.TrimSpace(task.Content.URL) == "" {
-			result.Status = modelTaskInProgress
+			result.Status = model.TaskStatusInProgress
 			result.Progress = "90%"
 		} else {
-			result.Status = modelTaskSuccess
+			result.Status = model.TaskStatusSuccess
 			result.Url = strings.TrimSpace(task.Content.URL)
 		}
 	case "failed", "cancelled":
-		result.Status = modelTaskFailure
+		result.Status = model.TaskStatusFailure
 		result.Progress = "100%"
 		result.Code = h3CodeNumber(task.ErrorCode())
 		result.Reason = strings.TrimSpace(task.ErrorMessage())
@@ -733,8 +734,4 @@ func (t *H3Task) ErrorMessage() string {
 const (
 	httpStatusRequestTimeout  = 408
 	httpStatusTooManyRequests = 429
-	modelTaskQueued           = "QUEUED"
-	modelTaskInProgress       = "IN_PROGRESS"
-	modelTaskSuccess          = "SUCCESS"
-	modelTaskFailure          = "FAILURE"
 )
