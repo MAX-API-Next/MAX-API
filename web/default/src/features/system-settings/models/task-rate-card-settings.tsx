@@ -16,7 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { memo, useCallback, useEffect, useId, useMemo, useState } from 'react'
+import {
+  memo,
+  type ReactElement,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from 'react'
 import { FileJson } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -166,7 +174,7 @@ type BillingExampleSectionProps = {
 
 const BillingExampleSection = memo(function BillingExampleSection(
   props: BillingExampleSectionProps
-) {
+): ReactElement {
   const { t } = useTranslation()
   const headingId = useId()
 
@@ -328,7 +336,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   )
 
   const handleUseExample = useCallback(
-    (example: string) => {
+    (example: string): void => {
       setText(example)
       setError('')
       toast.success(t('Example loaded. Review prices before saving.'))
