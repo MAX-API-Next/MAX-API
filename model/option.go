@@ -394,6 +394,8 @@ func validateOptionUpdate(key string, value string) error {
 		return validateJSONOption[[]map[string]string](value)
 	case "task_billing_setting.rate_cards":
 		return task_billing_setting.ValidateRateCardsJSON(value)
+	case "task_billing_setting.h3_profiles":
+		return task_billing_setting.ValidateH3ProfilesJSON(value)
 	default:
 		return nil
 	}
@@ -817,9 +819,6 @@ func handleConfigUpdate(key, value string) (bool, error) {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
 	} else if configName == "task_billing_setting" {
-		if configKey == "rate_cards" {
-			_ = task_billing_setting.ValidateRateCardsJSON(value)
-		}
 		InvalidatePricingCache()
 	} else if configName == "theme" {
 		system_setting.UpdateAndSyncTheme()

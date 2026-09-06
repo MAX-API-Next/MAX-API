@@ -1,5 +1,7 @@
 package hailuo
 
+import "encoding/json"
+
 type SubjectReference struct {
 	Type  string   `json:"type"`  // Subject type, currently only supports "character"
 	Image []string `json:"image"` // Array of subject reference images (currently only supports single image)
@@ -17,6 +19,29 @@ type VideoRequest struct {
 	FirstFrameImage  string             `json:"first_frame_image,omitempty"` // For image-to-video and start-end-to-video
 	LastFrameImage   string             `json:"last_frame_image,omitempty"`  // For start-end-to-video
 	SubjectReference []SubjectReference `json:"subject_reference,omitempty"` // For subject-reference-to-video
+}
+
+type H3MediaURL struct {
+	URL string `json:"url"`
+}
+
+type H3ContentItem struct {
+	Type     string      `json:"type"`
+	Text     string      `json:"text,omitempty"`
+	ImageURL *H3MediaURL `json:"image_url,omitempty"`
+	VideoURL *H3MediaURL `json:"video_url,omitempty"`
+	AudioURL *H3MediaURL `json:"audio_url,omitempty"`
+	Role     string      `json:"role,omitempty"`
+}
+
+type H3VideoRequest struct {
+	Model         string          `json:"model"`
+	Content       []H3ContentItem `json:"content"`
+	Resolution    string          `json:"resolution"`
+	Duration      int             `json:"duration"`
+	Ratio         string          `json:"ratio"`
+	CallbackURL   *string         `json:"callback_url,omitempty"`
+	AigcWatermark *bool           `json:"aigc_watermark,omitempty"`
 }
 
 type VideoResponse struct {
@@ -40,6 +65,47 @@ type QueryTaskResponse struct {
 	VideoWidth  int      `json:"video_width,omitempty"`
 	VideoHeight int      `json:"video_height,omitempty"`
 	BaseResp    BaseResp `json:"base_resp"`
+}
+
+type H3QueryResponse struct {
+	Task  *H3Task     `json:"task,omitempty"`
+	Error *H3APIError `json:"error,omitempty"`
+}
+
+type H3Task struct {
+	ID         string         `json:"id"`
+	Model      string         `json:"model"`
+	Status     string         `json:"status"`
+	Content    *H3TaskContent `json:"content,omitempty"`
+	Resolution string         `json:"resolution,omitempty"`
+	Duration   *int64         `json:"duration,omitempty"`
+	Usage      *H3Usage       `json:"usage,omitempty"`
+	Error      *H3TaskError   `json:"error,omitempty"`
+}
+
+type H3TaskContent struct {
+	URL    string `json:"url,omitempty"`
+	Prompt string `json:"prompt,omitempty"`
+}
+
+type H3TaskError struct {
+	Code    any    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type H3APIError struct {
+	Type     string `json:"type,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Code     any    `json:"code,omitempty"`
+	HTTPCode any    `json:"http_code,omitempty"`
+}
+
+type H3Usage struct {
+	TotalSeconds      json.RawMessage `json:"total_seconds"`
+	InputSeconds      json.RawMessage `json:"input_seconds"`
+	OutputSeconds     json.RawMessage `json:"output_seconds"`
+	InputImageCount   json.RawMessage `json:"input_image_count"`
+	InputAudioSeconds json.RawMessage `json:"input_audio_seconds"`
 }
 
 type ErrorInfo struct {
@@ -81,6 +147,12 @@ type FileObject struct {
 
 func GetModelConfig(model string) ModelConfig {
 	configs := map[string]ModelConfig{
+		H3Model: {
+			Name:                 H3Model,
+			DefaultResolution:    Resolution768P,
+			SupportedDurations:   []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+			SupportedResolutions: []string{Resolution768P, Resolution2K},
+		},
 		"MiniMax-Hailuo-2.3": {
 			Name:                 "MiniMax-Hailuo-2.3",
 			DefaultResolution:    Resolution768P,

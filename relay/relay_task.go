@@ -59,6 +59,7 @@ func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) 
 		ModelRatio:              info.PriceData.ModelRatio,
 		OtherRatios:             info.PriceData.OtherRatios,
 		TaskBilling:             info.TaskBilling,
+		TaskBillingPlan:         types.CloneTaskBillingPlan(info.TaskBillingPlan),
 		OriginModelName:         info.OriginModelName,
 		PerCallBilling:          common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice || info.TaskBilling != nil,
 		DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
@@ -267,21 +268,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
 	adaptor.Init(info)
+	modelName := info.OriginModelName
+	if modelName != "" {
+		info.UpstreamModelName = modelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
+	}
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}
 
 	// 2. 确定模型名称
-	modelName := info.OriginModelName
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
-	}
-
-	// 2.5 应用渠道的模型映射（与同步任务对齐）
-	info.OriginModelName = modelName
-	info.UpstreamModelName = modelName
-	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
-		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		info.OriginModelName = modelName
+		info.UpstreamModelName = modelName
+		if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+			return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
+		}
 	}
 
 	// 3. 预生成公开 task ID（仅首次）
@@ -302,6 +307,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
 	info.PriceData = priceData
+
+	// H3 uses a bounded multi-component plan. During H3-02 this is a shadow
+	// snapshot only; legacy submission settlement remains unchanged.
+	captureShadowTaskBillingPlan(c, info, adaptor)
 
 	// 6. Prefer a parameterized rate card when the adaptor can normalize the
 	// request. Legacy task models continue to use OtherRatios.
@@ -429,6 +438,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Task:           task,
 		response:       responseSnapshot,
 	}, nil
+}
+
+func captureShadowTaskBillingPlan(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor) {
+	if info == nil {
+		return
+	}
+	info.TaskBillingPlan = nil
+	planner, ok := adaptor.(channel.TaskBillingPlanProvider)
+	if !ok {
+		return
+	}
+	plan, err := planner.BuildTaskBillingPlan(c, info)
+	if err != nil {
+		common.SysLog("task_billing_plan_error: " + common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())))
+		return
+	}
+	info.TaskBillingPlan = plan
 }
 
 func setTaskOtherRatioHeaders(header http.Header, otherRatios map[string]float64) {

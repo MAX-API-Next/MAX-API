@@ -292,9 +292,21 @@ func TestValidateOptionUpdateRejectsNullRWMapConfigs(t *testing.T) {
 		"billing_setting.billing_mode",
 		"billing_setting.billing_expr",
 		"task_billing_setting.rate_cards",
+		"task_billing_setting.h3_profiles",
 	} {
 		t.Run(key, func(t *testing.T) {
 			require.Error(t, validateOptionUpdate(key, "null"))
+		})
+	}
+}
+
+func TestValidateOptionUpdateRejectsSemanticallyInvalidTaskBillingConfigs(t *testing.T) {
+	for key, value := range map[string]string{
+		"task_billing_setting.rate_cards":  `{ "invalid": { "billing_type": "unsupported" } }`,
+		"task_billing_setting.h3_profiles": `{}`,
+	} {
+		t.Run(key, func(t *testing.T) {
+			require.Error(t, validateOptionUpdate(key, value))
 		})
 	}
 }

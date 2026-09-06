@@ -81,3 +81,16 @@ type TaskAdaptor interface {
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }
+
+// TaskUsageProvider is an optional provider-specific usage extractor. It does
+// not change the required TaskAdaptor contract, so existing adaptors keep
+// their current behavior until they opt in.
+type TaskUsageProvider interface {
+	ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error)
+}
+
+// TaskBillingPlanProvider is an optional provider-specific request normalizer.
+// It only produces a bounded pricing snapshot; it has no funding authority.
+type TaskBillingPlanProvider interface {
+	BuildTaskBillingPlan(c *gin.Context, info *relaycommon.RelayInfo) (*types.TaskBillingPlan, error)
+}

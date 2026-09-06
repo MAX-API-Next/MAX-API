@@ -1,6 +1,8 @@
 package task_billing_setting
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"path"
@@ -9,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/types"
 )
@@ -19,22 +22,67 @@ type RateCardRow struct {
 	UnitPrice float64           `json:"unit_price"`
 }
 
+const RateCardBillingTypeMinimax = "minimax"
+
 type RateCard struct {
 	Vendor          string            `json:"vendor,omitempty"`
+	BillingType     string            `json:"billing_type,omitempty"`
+	BillingConfig   map[string]any    `json:"billing_config,omitempty"`
 	Unit            string            `json:"unit,omitempty"`
 	QuantityField   string            `json:"quantity_field,omitempty"`
 	DefaultQuantity float64           `json:"default_quantity,omitempty"`
-	Strict          bool              `json:"strict"`
+	Strict          bool              `json:"strict,omitempty"`
 	Defaults        map[string]string `json:"defaults,omitempty"`
 	Rows            []RateCardRow     `json:"rows"`
+	legacyFields    rateCardLegacyFields
+}
+
+type rateCardLegacyFields struct {
+	unit            bool
+	quantityField   bool
+	defaultQuantity bool
+	strict          bool
+	defaults        bool
+	rows            bool
+}
+
+// UnmarshalJSON records whether legacy fields were explicitly present so a
+// structured card cannot silently accept zero-valued fields that it ignores.
+func (card *RateCard) UnmarshalJSON(data []byte) error {
+	type rateCardAlias RateCard
+	var decoded rateCardAlias
+	if err := common.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decoded.legacyFields = rateCardLegacyFields{
+		unit:            hasConfiguredJSONField(fields, "unit"),
+		quantityField:   hasConfiguredJSONField(fields, "quantity_field"),
+		defaultQuantity: hasConfiguredJSONField(fields, "default_quantity"),
+		strict:          hasConfiguredJSONField(fields, "strict"),
+		defaults:        hasConfiguredJSONField(fields, "defaults"),
+		rows:            hasConfiguredJSONField(fields, "rows"),
+	}
+	*card = RateCard(decoded)
+	return nil
+}
+
+func hasConfiguredJSONField(fields map[string]json.RawMessage, key string) bool {
+	value, ok := fields[key]
+	return ok && !bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 }
 
 type TaskBillingSetting struct {
-	RateCards *types.RWMap[string, RateCard] `json:"rate_cards"`
+	RateCards  *types.RWMap[string, RateCard]        `json:"rate_cards"`
+	H3Profiles *types.RWMap[string, H3BillingConfig] `json:"h3_profiles"`
 }
 
 var taskBillingSetting = TaskBillingSetting{
-	RateCards: newRateCardMap(defaultRateCards()),
+	RateCards:  newRateCardMap(defaultRateCards()),
+	H3Profiles: newH3BillingProfileMap(defaultH3BillingProfiles()),
 }
 
 func init() {
@@ -59,12 +107,21 @@ func GetRateCardCopy(models ...string) (*RateCard, string) {
 
 func HasRateCard(models ...string) bool {
 	card, _ := findRateCard(models...)
-	return card != nil
+	// This signal is consumed by legacy per-call pricing and the generic
+	// single-quantity task calculator. Structured cards have their own planner
+	// and must not turn a missing model price into a zero-price fallback.
+	return card != nil && card.BillingType == ""
 }
 
 func Calculate(input types.TaskBillingInput, groupRatio float64) (*types.TaskBillingResult, error) {
 	card, key := findRateCard(input.Model, input.UpstreamModel)
 	if card == nil {
+		return nil, nil
+	}
+	// Structured provider rules are executed by their task planner after the
+	// adaptor has normalized provider-specific facts. They are not reducible to
+	// the single-quantity legacy rate-card calculator.
+	if card.BillingType != "" {
 		return nil, nil
 	}
 	fields := mergeFields(*card, input)
@@ -120,6 +177,35 @@ func validateRateCards(rateCards map[string]RateCard) error {
 		if strings.TrimSpace(key) == "" {
 			return fmt.Errorf("rate card key cannot be empty")
 		}
+		if card.BillingType != "" {
+			if card.BillingType != RateCardBillingTypeMinimax {
+				return fmt.Errorf("rate card %s has unsupported billing_type %q", key, card.BillingType)
+			}
+			if !isMinimaxH3RateCardKey(key) {
+				return fmt.Errorf("rate card %s structured billing only supports MiniMax-H3", key)
+			}
+			if len(card.BillingConfig) == 0 {
+				return fmt.Errorf("rate card %s billing_config is required", key)
+			}
+			if card.legacyFields.rows || len(card.Rows) > 0 {
+				return fmt.Errorf("rate card %s structured billing cannot define rows", key)
+			}
+			if card.legacyFields.unit || card.legacyFields.quantityField || card.legacyFields.defaultQuantity || card.legacyFields.strict || card.legacyFields.defaults ||
+				strings.TrimSpace(card.Unit) != "" || strings.TrimSpace(card.QuantityField) != "" || card.DefaultQuantity != 0 || card.Strict || len(card.Defaults) > 0 {
+				return fmt.Errorf("rate card %s structured billing cannot define legacy fields", key)
+			}
+			billingConfig, err := decodeMinimaxBillingConfig(card.BillingConfig)
+			if err != nil {
+				return fmt.Errorf("rate card %s: %w", key, err)
+			}
+			if err := validateH3BillingConfig(key, billingConfig); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(card.BillingConfig) > 0 {
+			return fmt.Errorf("rate card %s billing_config requires billing_type", key)
+		}
 		if len(card.Rows) == 0 {
 			return fmt.Errorf("rate card %s has no rows", key)
 		}
@@ -133,6 +219,10 @@ func validateRateCards(rateCards map[string]RateCard) error {
 		}
 	}
 	return nil
+}
+
+func isMinimaxH3RateCardKey(key string) bool {
+	return key == MinimaxBillingRuleKey || key == constant.TaskModelMiniMaxH3
 }
 
 func validQuantity(value float64) bool {
@@ -150,6 +240,9 @@ func findRateCard(models ...string) (*RateCard, string) {
 			continue
 		}
 		if card, ok := rateCards[model]; ok {
+			if card.BillingType != "" && !isMinimaxH3RateCardKey(model) {
+				continue
+			}
 			return &card, model
 		}
 	}
@@ -169,9 +262,41 @@ func findRateCard(models ...string) (*RateCard, string) {
 			}
 			if matchPattern(key, model) {
 				card := rateCards[key]
+				if card.BillingType != "" {
+					continue
+				}
 				return &card, key
 			}
 		}
+	}
+	// MiniMax-H3 uses a structured rule whose canonical rate-card key is not
+	// the upstream model name. Keep this alias narrow so another MiniMax task
+	// model cannot accidentally inherit the H3 pricing rule.
+	for _, model := range models {
+		if isMinimaxH3Model(model) {
+			return findMinimaxRateCard(models...)
+		}
+	}
+	return nil, ""
+}
+
+func findMinimaxRateCard(models ...string) (*RateCard, string) {
+	if taskBillingSetting.RateCards == nil {
+		return nil, ""
+	}
+	rateCards := taskBillingSetting.RateCards.ReadAll()
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if card, ok := rateCards[model]; ok && card.BillingType == MinimaxBillingType && isMinimaxH3RateCardKey(model) {
+			return &card, model
+		}
+	}
+
+	if card, ok := rateCards[MinimaxBillingRuleKey]; ok && card.BillingType == MinimaxBillingType {
+		return &card, MinimaxBillingRuleKey
 	}
 	return nil, ""
 }
@@ -309,7 +434,11 @@ func cloneRateCards(src map[string]RateCard) map[string]RateCard {
 }
 
 func cloneRateCard(card RateCard) RateCard {
+	card.BillingConfig = cloneBillingConfig(card.BillingConfig)
 	card.Defaults = cloneStringMap(card.Defaults)
+	if card.Rows == nil {
+		return card
+	}
 	rows := make([]RateCardRow, len(card.Rows))
 	for i, row := range card.Rows {
 		row.Match = cloneStringMap(row.Match)
@@ -317,6 +446,21 @@ func cloneRateCard(card RateCard) RateCard {
 	}
 	card.Rows = rows
 	return card
+}
+
+func cloneBillingConfig(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	data, err := common.Marshal(src)
+	if err != nil {
+		return src
+	}
+	var dst map[string]any
+	if err := common.Unmarshal(data, &dst); err != nil {
+		return src
+	}
+	return dst
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

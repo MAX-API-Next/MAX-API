@@ -168,3 +168,57 @@ func TestValidateBasicTaskRequestNormalizesImageField(t *testing.T) {
 	require.Equal(t, []string{"https://example.com/first.png"}, storedReq.Images)
 	require.Equal(t, constant.TaskActionGenerate, info.Action)
 }
+
+func TestValidateBasicTaskRequestScopesContentOnlyException(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name          string
+		channelType   int
+		upstreamModel string
+		requestModel  string
+		wantErr       bool
+	}{
+		{name: "H3 content", channelType: constant.ChannelTypeMiniMax, upstreamModel: "MiniMax-H3"},
+		{name: "H3 request model fallback", channelType: constant.ChannelTypeMiniMax, requestModel: "MiniMax-H3"},
+		{name: "Doubao content", channelType: constant.ChannelTypeDoubaoVideo},
+		{name: "VolcEngine Doubao content", channelType: constant.ChannelTypeVolcEngine},
+		{name: "legacy Hailuo requires prompt", channelType: constant.ChannelTypeMiniMax, upstreamModel: "MiniMax-Hailuo-2.3", wantErr: true},
+		{name: "Gemini requires prompt", channelType: constant.ChannelTypeGemini, upstreamModel: "veo-3.0-generate-001", wantErr: true},
+		{name: "Kling requires prompt", channelType: constant.ChannelTypeKling, upstreamModel: "kling-v2", wantErr: true},
+		{name: "Jimeng requires prompt", channelType: constant.ChannelTypeJimeng, upstreamModel: "jimeng-video", wantErr: true},
+		{name: "Vertex requires prompt", channelType: constant.ChannelTypeVertexAi, upstreamModel: "veo-3.0-generate-001", wantErr: true},
+		{name: "Vidu requires prompt", channelType: constant.ChannelTypeVidu, upstreamModel: "viduq1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestModel := tt.requestModel
+			if requestModel == "" {
+				requestModel = "MiniMax-H3"
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/videos", strings.NewReader(`{
+				"model":"`+requestModel+`",
+				"content":[{"type":"text","text":"Create a short film"}]
+			}`))
+			request.Header.Set("Content-Type", "application/json")
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = request
+			info := &RelayInfo{
+				TaskRelayInfo: &TaskRelayInfo{},
+				ChannelMeta: &ChannelMeta{
+					ChannelType:       tt.channelType,
+					UpstreamModelName: tt.upstreamModel,
+				},
+			}
+
+			taskErr := ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+			if tt.wantErr {
+				require.NotNil(t, taskErr)
+				require.Contains(t, taskErr.Message, "prompt is required")
+				return
+			}
+			require.Nil(t, taskErr)
+		})
+	}
+}

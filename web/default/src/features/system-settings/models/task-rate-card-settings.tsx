@@ -16,8 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { FileJson } from 'lucide-react'
+import {
+  memo,
+  type ReactElement,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from 'react'
+import { AlertTriangle, FileJson } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -32,13 +40,21 @@ const OPTION_KEY = 'task_billing_setting.rate_cards'
 
 const VENDOR_LABELS: Record<string, string> = {
   kling: 'Kling',
+  minimax: 'MiniMax',
   openai: 'OpenAI / Sora',
   google: 'Google / Veo',
   bytedance: 'ByteDance / Seedance',
   unclassified: 'Unclassified',
 }
 
-const VENDOR_ORDER = ['kling', 'openai', 'google', 'bytedance', 'unclassified']
+const VENDOR_ORDER = [
+  'kling',
+  'minimax',
+  'openai',
+  'google',
+  'bytedance',
+  'unclassified',
+]
 
 const KLING_RATE_CARD_EXAMPLE = JSON.stringify(
   {
@@ -108,6 +124,34 @@ const KLING_RATE_CARD_EXAMPLE = JSON.stringify(
   2
 )
 
+const MINIMAX_RATE_CARD_EXAMPLE = JSON.stringify(
+  {
+    'minimax/minimax-h3': {
+      vendor: 'minimax',
+      billing_type: 'minimax',
+      billing_config: {
+        schema_version: 1,
+        mode: 'bounded_actual',
+        currency: 'USD',
+        output_unit_price: {
+          '768P': '0.08',
+          '2K': '0.13',
+        },
+        input_video_unit_price: {
+          '768P': '0.08',
+          '2K': '0.13',
+        },
+        input_video_max_seconds: 15,
+        input_image_free_count: 5,
+        input_image_extra_unit_price: '0.04',
+        input_audio_unit_price: '0',
+      },
+    },
+  },
+  null,
+  2
+)
+
 type TaskRateCardSettingsProps = {
   defaultValue: string
 }
@@ -119,6 +163,77 @@ type VendorSummary = {
   rowCount: number
   models: string[]
 }
+
+type BillingExampleSectionProps = {
+  title: string
+  description: string
+  value: string
+  rows: number
+  onUseExample: () => void
+  notice?: string
+  useExampleDisabled?: boolean
+}
+
+const BillingExampleSection = memo(function BillingExampleSection(
+  props: BillingExampleSectionProps
+): ReactElement {
+  const { t } = useTranslation()
+  const headingId = useId()
+  const noticeId = useId()
+
+  return (
+    <section className='space-y-2'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div>
+          <h3 id={headingId} className='text-sm font-medium'>
+            {t(props.title)}
+          </h3>
+          <p className='text-muted-foreground text-xs'>
+            {t(props.description)}
+          </p>
+        </div>
+        <div className='flex flex-wrap items-center gap-2'>
+          <CopyButton
+            value={props.value}
+            variant='outline'
+            size='sm'
+            iconClassName='mr-2 h-4 w-4'
+          >
+            <span>{t('Copy example')}</span>
+          </CopyButton>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={props.onUseExample}
+            disabled={props.useExampleDisabled}
+            aria-describedby={props.notice ? noticeId : undefined}
+          >
+            <FileJson className='mr-2 h-4 w-4' />
+            {t('Use example')}
+          </Button>
+        </div>
+      </div>
+      {props.notice && (
+        <Alert
+          id={noticeId}
+          className='border-warning/40 bg-warning/5 text-foreground'
+        >
+          <AlertTriangle className='text-warning' aria-hidden='true' />
+          <AlertDescription>{t(props.notice)}</AlertDescription>
+        </Alert>
+      )}
+      <Textarea
+        aria-labelledby={headingId}
+        rows={props.rows}
+        value={props.value}
+        readOnly
+        spellCheck={false}
+        className='bg-muted/30 font-mono text-xs'
+      />
+    </section>
+  )
+})
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -137,6 +252,7 @@ function inferVendor(model: string, card: Record<string, unknown>) {
 
   const normalizedModel = normalizeVendor(model)
   if (normalizedModel.includes('kling')) return 'kling'
+  if (normalizedModel.includes('minimax')) return 'minimax'
   if (normalizedModel.includes('sora') || normalizedModel.includes('openai')) {
     return 'openai'
   }
@@ -166,7 +282,7 @@ function sortVendors(a: VendorSummary, b: VendorSummary) {
 
 function buildVendorSummary(value: string): VendorSummary[] {
   const trimmed = value.trim()
-  let parsed: unknown = {}
+  let parsed: unknown
 
   try {
     parsed = trimmed ? JSON.parse(trimmed) : {}
@@ -206,6 +322,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
 }: TaskRateCardSettingsProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const currentRateCardHeadingId = useId()
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
@@ -232,11 +349,22 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
     [t]
   )
 
-  const handleUseExample = useCallback(() => {
-    setText(KLING_RATE_CARD_EXAMPLE)
-    setError('')
-    toast.success(t('Example loaded. Review prices before saving.'))
-  }, [t])
+  const handleUseExample = useCallback(
+    (example: string): void => {
+      setText(example)
+      setError('')
+      toast.success(t('Example loaded. Review prices before saving.'))
+    },
+    [t]
+  )
+
+  const handleUseKlingExample = useCallback((): void => {
+    handleUseExample(KLING_RATE_CARD_EXAMPLE)
+  }, [handleUseExample])
+
+  const handleUseMiniMaxExample = useCallback((): void => {
+    handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)
+  }, [handleUseExample])
 
   const handleSave = useCallback(async () => {
     if (error) {
@@ -288,7 +416,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
                 className='inline-flex items-center gap-1 rounded-md border px-2 py-1'
               >
                 <code>vendor: "{key}"</code>
-                <span className='text-muted-foreground'>{label}</span>
+                <span className='text-muted-foreground'>{t(label)}</span>
               </span>
             ))}
         </div>
@@ -342,50 +470,30 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         )}
       </section>
 
-      <section className='space-y-2'>
-        <div className='flex flex-wrap items-center justify-between gap-2'>
-          <div>
-            <h3 className='text-sm font-medium'>
-              {t('Kling billing example')}
-            </h3>
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Includes duration, quality, audio, and video-input pricing conditions.'
-              )}
-            </p>
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <CopyButton
-              value={KLING_RATE_CARD_EXAMPLE}
-              variant='outline'
-              size='sm'
-              iconClassName='mr-2 h-4 w-4'
-            >
-              <span>{t('Copy example')}</span>
-            </CopyButton>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={handleUseExample}
-            >
-              <FileJson className='mr-2 h-4 w-4' />
-              {t('Use example')}
-            </Button>
-          </div>
-        </div>
-        <Textarea
-          rows={12}
-          value={KLING_RATE_CARD_EXAMPLE}
-          readOnly
-          spellCheck={false}
-          className='bg-muted/30 font-mono text-xs'
-        />
-      </section>
+      <BillingExampleSection
+        title='Kling billing example'
+        description='Includes duration, quality, audio, and video-input pricing conditions.'
+        value={KLING_RATE_CARD_EXAMPLE}
+        rows={12}
+        onUseExample={handleUseKlingExample}
+      />
+
+      <BillingExampleSection
+        title='MiniMax billing example'
+        description='Uses the unified billing_type and billing_config shape for output video, input video, images, and audio.'
+        value={MINIMAX_RATE_CARD_EXAMPLE}
+        rows={18}
+        onUseExample={handleUseMiniMaxExample}
+        useExampleDisabled
+        notice='Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.'
+      />
 
       <section className='space-y-2'>
-        <h3 className='text-sm font-medium'>{t('Current rate card JSON')}</h3>
+        <h3 id={currentRateCardHeadingId} className='text-sm font-medium'>
+          {t('Current rate card JSON')}
+        </h3>
         <Textarea
+          aria-labelledby={currentRateCardHeadingId}
           rows={18}
           value={text}
           onChange={(event) => handleChange(event.target.value)}

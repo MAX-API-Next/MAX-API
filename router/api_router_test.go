@@ -130,6 +130,19 @@ func TestPermissionCatalogRouteIsRegistered(t *testing.T) {
 	t.Fatal("expected GET /api/authz/catalog route to be registered")
 }
 
+func TestH3BillingPreviewRouteIsRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	for _, route := range engine.Routes() {
+		if route.Method == http.MethodPost && route.Path == "/api/option/h3_billing/preview" {
+			return
+		}
+	}
+	t.Fatal("expected POST /api/option/h3_billing/preview route to be registered")
+}
+
 func TestHealthRoutesAreRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

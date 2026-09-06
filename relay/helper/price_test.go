@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -129,6 +130,49 @@ func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
 			require.Contains(t, err.Error(), "not been priced")
 		})
 	}
+}
+
+func TestModelPriceHelperPerCallDoesNotTreatStructuredMinimaxCardAsLegacyPrice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalSelfUseMode := operation_setting.SelfUseModeEnabled
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		operation_setting.SelfUseModeEnabled = originalSelfUseMode
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"task_billing_setting.rate_cards": string(originalRateCards),
+		}))
+	})
+
+	operation_setting.SelfUseModeEnabled = false
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"task_billing_setting.rate_cards": `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "MiniMax-H3",
+		},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not been priced")
+	require.Zero(t, priceData)
 }
 
 func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
