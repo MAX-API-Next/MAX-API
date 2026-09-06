@@ -264,9 +264,9 @@ func BuildH3BillingPlan(input H3BillingInput, groupRatio float64) (*types.TaskBi
 	return buildH3BillingPlan(*profile, input, groupRatio, LegacyH3BillingSource, H3BillingProfileKey)
 }
 
-// BuildH3BillingPlanForModels selects the structured MiniMax rule from the
-// unified task rate-card option. The legacy profile remains a read-only
-// fallback for installations that have not yet saved a unified rate-card JSON.
+// BuildH3BillingPlanForModels selects an explicitly configured structured
+// MiniMax rule from the unified task rate-card option. The legacy profile is
+// the fallback when no unified MiniMax card was saved.
 func BuildH3BillingPlanForModels(input H3BillingInput, groupRatio float64, models ...string) (*types.TaskBillingPlan, error) {
 	card, key := findMinimaxRateCard(models...)
 	if card != nil {

@@ -74,6 +74,34 @@ func TestBuildH3BillingPlanReadsMinimaxRuleFromUnifiedRateCards(t *testing.T) {
 	require.EqualValues(t, 500, plan.EstimateQuota)
 }
 
+func TestBuildH3BillingPlanUsesUpdatedLegacyProfileWithoutDefaultMinimaxCard(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	cards := GetRateCardsCopy()
+	_, hasMinimaxCard := cards[MinimaxBillingRuleKey]
+	require.False(t, hasMinimaxCard)
+	require.Contains(t, cards, "kling-v3")
+
+	profiles := GetH3BillingProfilesCopy()
+	profile := profiles[H3BillingProfileKey]
+	profile.OutputUnitPrice["768P"] = "0.20"
+	profiles[H3BillingProfileKey] = profile
+	withH3BillingProfiles(t, profiles)
+
+	plan, err := BuildH3BillingPlanForModels(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1, "MiniMax-H3")
+	require.NoError(t, err)
+	require.Equal(t, LegacyH3BillingSource, plan.Source)
+	require.Equal(t, H3BillingProfileKey, plan.RuleKey)
+
+	estimate, err := QuoteH3Estimate(plan)
+	require.NoError(t, err)
+	reserve, err := QuoteH3Reserve(plan)
+	require.NoError(t, err)
+	require.EqualValues(t, 1000, estimate.Quota)
+	require.EqualValues(t, 1000, reserve.Quota)
+}
+
 func TestBuildH3BillingPlanSelectsExactModelAliasRateCard(t *testing.T) {
 	withQuotaPerUnit(t, 1000)
 	original := GetRateCardsCopy()
