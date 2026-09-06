@@ -181,6 +181,54 @@ func TestQuoteH3FinalRejectsMissingOrConflictingUsage(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestQuoteH3FinalReportsInvalidPlanProperty(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	basePlan, err := BuildH3BillingPlan(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		mutate  func(*types.TaskBillingPlan)
+		message string
+	}{
+		{
+			name:    "group ratio",
+			mutate:  func(plan *types.TaskBillingPlan) { plan.GroupRatio = -1 },
+			message: "group ratio is invalid",
+		},
+		{
+			name:    "quota per unit",
+			mutate:  func(plan *types.TaskBillingPlan) { plan.QuotaPerUnit = 0 },
+			message: "quota per unit is invalid",
+		},
+		{
+			name:    "resolution",
+			mutate:  func(plan *types.TaskBillingPlan) { plan.Resolution = "1080P" },
+			message: "resolution is invalid",
+		},
+		{
+			name:    "requested output duration",
+			mutate:  func(plan *types.TaskBillingPlan) { plan.RequestedOutputDurationSeconds = 0 },
+			message: "requested output duration is invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := *basePlan
+			tt.mutate(&plan)
+			_, err := QuoteH3Final(&plan, &types.TaskUsage{
+				OutputDurationMs: int64Ptr(5_000),
+				InputImageCount:  int64Ptr(0),
+				Completeness:     types.TaskUsageCompletenessComplete,
+			})
+			require.ErrorContains(t, err, tt.message)
+		})
+	}
+}
+
 func TestQuoteH3FinalSupportsFractionalMediaSeconds(t *testing.T) {
 	withQuotaPerUnit(t, 1000)
 	plan, err := BuildH3BillingPlan(H3BillingInput{

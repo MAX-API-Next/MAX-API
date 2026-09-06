@@ -330,7 +330,11 @@ func h3MediaURLValue(value any) (string, error) {
 func h3Resolution(req *relaycommon.TaskSubmitReq) (string, error) {
 	value := strings.TrimSpace(req.Resolution)
 	if value == "" {
-		value = strings.TrimSpace(metadataString(req.Metadata, "resolution"))
+		metadataValue, err := metadataString(req.Metadata, "resolution")
+		if err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(metadataValue)
 	}
 	if value == "" {
 		value = strings.TrimSpace(req.Size)
@@ -364,7 +368,11 @@ func h3Duration(req *relaycommon.TaskSubmitReq) (int, error) {
 }
 
 func h3Ratio(req *relaycommon.TaskSubmitReq, content []H3ContentItem) (string, error) {
-	value := strings.TrimSpace(metadataString(req.Metadata, "ratio"))
+	metadataValue, err := metadataString(req.Metadata, "ratio")
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(metadataValue)
 	if value == "" && req.Ratio != nil {
 		value = strings.TrimSpace(*req.Ratio)
 	}
@@ -403,16 +411,19 @@ func h3Ratio(req *relaycommon.TaskSubmitReq, content []H3ContentItem) (string, e
 	return value, nil
 }
 
-func metadataString(metadata map[string]interface{}, key string) string {
+func metadataString(metadata map[string]interface{}, key string) (string, error) {
 	if metadata == nil {
-		return ""
+		return "", nil
 	}
 	value, ok := metadata[key]
 	if !ok {
-		return ""
+		return "", nil
 	}
-	stringValue, _ := value.(string)
-	return stringValue
+	stringValue, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("H3 %s must be a string", key)
+	}
+	return stringValue, nil
 }
 
 func h3OptionalBool(metadata map[string]interface{}, key string) (*bool, error) {

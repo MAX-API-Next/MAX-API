@@ -1,6 +1,8 @@
 package task_billing_setting
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"path"
@@ -29,9 +31,48 @@ type RateCard struct {
 	Unit            string            `json:"unit,omitempty"`
 	QuantityField   string            `json:"quantity_field,omitempty"`
 	DefaultQuantity float64           `json:"default_quantity,omitempty"`
-	Strict          bool              `json:"strict"`
+	Strict          bool              `json:"strict,omitempty"`
 	Defaults        map[string]string `json:"defaults,omitempty"`
 	Rows            []RateCardRow     `json:"rows"`
+	legacyFields    rateCardLegacyFields
+}
+
+type rateCardLegacyFields struct {
+	unit            bool
+	quantityField   bool
+	defaultQuantity bool
+	strict          bool
+	defaults        bool
+	rows            bool
+}
+
+// UnmarshalJSON records whether legacy fields were explicitly present so a
+// structured card cannot silently accept zero-valued fields that it ignores.
+func (card *RateCard) UnmarshalJSON(data []byte) error {
+	type rateCardAlias RateCard
+	var decoded rateCardAlias
+	if err := common.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	decoded.legacyFields = rateCardLegacyFields{
+		unit:            hasConfiguredJSONField(fields, "unit"),
+		quantityField:   hasConfiguredJSONField(fields, "quantity_field"),
+		defaultQuantity: hasConfiguredJSONField(fields, "default_quantity"),
+		strict:          hasConfiguredJSONField(fields, "strict"),
+		defaults:        hasConfiguredJSONField(fields, "defaults"),
+		rows:            hasConfiguredJSONField(fields, "rows"),
+	}
+	*card = RateCard(decoded)
+	return nil
+}
+
+func hasConfiguredJSONField(fields map[string]json.RawMessage, key string) bool {
+	value, ok := fields[key]
+	return ok && !bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 }
 
 type TaskBillingSetting struct {
@@ -146,8 +187,12 @@ func validateRateCards(rateCards map[string]RateCard) error {
 			if len(card.BillingConfig) == 0 {
 				return fmt.Errorf("rate card %s billing_config is required", key)
 			}
-			if len(card.Rows) > 0 {
+			if card.legacyFields.rows || len(card.Rows) > 0 {
 				return fmt.Errorf("rate card %s structured billing cannot define rows", key)
+			}
+			if card.legacyFields.unit || card.legacyFields.quantityField || card.legacyFields.defaultQuantity || card.legacyFields.strict || card.legacyFields.defaults ||
+				strings.TrimSpace(card.Unit) != "" || strings.TrimSpace(card.QuantityField) != "" || card.DefaultQuantity != 0 || card.Strict || len(card.Defaults) > 0 {
+				return fmt.Errorf("rate card %s structured billing cannot define legacy fields", key)
 			}
 			billingConfig, err := decodeMinimaxBillingConfig(card.BillingConfig)
 			if err != nil {

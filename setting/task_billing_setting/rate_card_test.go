@@ -1,6 +1,7 @@
 package task_billing_setting
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -82,6 +83,48 @@ func TestCalculateUnknownModelFallsBack(t *testing.T) {
 func TestValidateRateCardsAcceptsStructuredMinimaxRule(t *testing.T) {
 	raw := `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`
 	require.NoError(t, ValidateRateCardsJSON(raw))
+}
+
+func TestValidateRateCardsRejectsLegacyFieldsOnStructuredMinimaxRule(t *testing.T) {
+	legacyFields := map[string]func(*RateCard){
+		"unit":             func(card *RateCard) { card.Unit = "second" },
+		"quantity_field":   func(card *RateCard) { card.QuantityField = "duration" },
+		"default_quantity": func(card *RateCard) { card.DefaultQuantity = 1 },
+		"strict":           func(card *RateCard) { card.Strict = true },
+		"defaults":         func(card *RateCard) { card.Defaults = map[string]string{"quality": "high"} },
+		"rows": func(card *RateCard) {
+			card.Rows = []RateCardRow{{Match: map[string]string{"quality": "high"}, UnitPrice: 1}}
+		},
+	}
+
+	for name, mutate := range legacyFields {
+		t.Run(name, func(t *testing.T) {
+			card := RateCard{
+				Vendor:        "minimax",
+				BillingType:   MinimaxBillingType,
+				BillingConfig: encodeBillingConfig(defaultH3BillingConfig()),
+			}
+			mutate(&card)
+			data, err := common.Marshal(map[string]RateCard{MinimaxBillingRuleKey: card})
+			require.NoError(t, err)
+			require.Error(t, ValidateRateCardsJSON(string(data)))
+		})
+	}
+}
+
+func TestValidateRateCardsRejectsExplicitZeroLegacyFieldsOnStructuredMinimaxRule(t *testing.T) {
+	legacyFields := []string{
+		`"unit":""`,
+		`"quantity_field":""`,
+		`"default_quantity":0`,
+		`"strict":false`,
+		`"defaults":{}`,
+		`"rows":[]`,
+	}
+	for _, field := range legacyFields {
+		raw := fmt.Sprintf(`{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"},%s}}`, field)
+		require.ErrorContains(t, ValidateRateCardsJSON(raw), "structured billing cannot define")
+	}
 }
 
 func TestValidateRateCardsRequiresCanonicalStructuredMinimaxKey(t *testing.T) {

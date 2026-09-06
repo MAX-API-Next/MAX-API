@@ -530,17 +530,44 @@ func quoteH3PlanMilliseconds(plan *types.TaskBillingPlan, stage string, outputMs
 }
 
 func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
-	if plan == nil || (plan.Source != H3BillingSource && plan.Source != LegacyH3BillingSource) || strings.TrimSpace(plan.RuleKey) == "" || plan.SchemaVersion != 1 || plan.Mode != H3BillingMode || strings.TrimSpace(plan.ConfigHash) == "" {
+	if plan == nil {
 		return fmt.Errorf("H3 billing plan identity is invalid")
 	}
-	if plan.GroupRatio < 0 || math.IsNaN(plan.GroupRatio) || math.IsInf(plan.GroupRatio, 0) || plan.QuotaPerUnit <= 0 || math.IsNaN(plan.QuotaPerUnit) || math.IsInf(plan.QuotaPerUnit, 0) {
+	if plan.Source != H3BillingSource && plan.Source != LegacyH3BillingSource {
+		return fmt.Errorf("H3 billing plan source is invalid")
+	}
+	if strings.TrimSpace(plan.RuleKey) == "" {
+		return fmt.Errorf("H3 billing plan rule key is invalid")
+	}
+	if plan.SchemaVersion != 1 {
+		return fmt.Errorf("H3 billing plan schema version is invalid")
+	}
+	if plan.Mode != H3BillingMode {
+		return fmt.Errorf("H3 billing plan mode is invalid")
+	}
+	if strings.TrimSpace(plan.ConfigHash) == "" {
+		return fmt.Errorf("H3 billing plan config hash is invalid")
+	}
+	if plan.GroupRatio < 0 || math.IsNaN(plan.GroupRatio) || math.IsInf(plan.GroupRatio, 0) {
 		return fmt.Errorf("H3 billing plan group ratio is invalid")
 	}
-	if plan.Resolution != "768P" && plan.Resolution != "2K" || plan.RequestedOutputDurationSeconds < H3MinOutputDurationSeconds || plan.RequestedOutputDurationSeconds > H3MaxOutputDurationSeconds {
-		return fmt.Errorf("H3 billing plan request facts are invalid")
+	if plan.QuotaPerUnit <= 0 || math.IsNaN(plan.QuotaPerUnit) || math.IsInf(plan.QuotaPerUnit, 0) {
+		return fmt.Errorf("H3 billing plan quota per unit is invalid")
 	}
-	if plan.InputVideoCount < 0 || plan.InputAudioCount < 0 || plan.InputImageCount < 0 {
-		return fmt.Errorf("H3 billing plan input counts are invalid")
+	if plan.Resolution != "768P" && plan.Resolution != "2K" {
+		return fmt.Errorf("H3 billing plan resolution is invalid")
+	}
+	if plan.RequestedOutputDurationSeconds < H3MinOutputDurationSeconds || plan.RequestedOutputDurationSeconds > H3MaxOutputDurationSeconds {
+		return fmt.Errorf("H3 billing plan requested output duration is invalid")
+	}
+	if plan.InputVideoCount < 0 {
+		return fmt.Errorf("H3 billing plan input video count is invalid")
+	}
+	if plan.InputAudioCount < 0 {
+		return fmt.Errorf("H3 billing plan input audio count is invalid")
+	}
+	if plan.InputImageCount < 0 {
+		return fmt.Errorf("H3 billing plan input image count is invalid")
 	}
 	seen := make(map[string]struct{}, len(plan.Components))
 	allowed := map[string]struct{}{"output_video": {}, "input_video": {}, "input_image": {}, "input_audio": {}}
@@ -617,18 +644,7 @@ func hashH3BillingConfig(config H3BillingConfig) string {
 }
 
 func cloneH3BillingConfig(config H3BillingConfig) H3BillingConfig {
-	config.OutputUnitPrice = cloneFloatMap(config.OutputUnitPrice)
-	config.InputVideoUnitPrice = cloneFloatMap(config.InputVideoUnitPrice)
+	config.OutputUnitPrice = cloneStringMap(config.OutputUnitPrice)
+	config.InputVideoUnitPrice = cloneStringMap(config.InputVideoUnitPrice)
 	return config
-}
-
-func cloneFloatMap(source map[string]string) map[string]string {
-	if len(source) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
 }

@@ -230,6 +230,46 @@ func TestBuildH3RequestNormalizesCallbackURL(t *testing.T) {
 	}
 }
 
+func TestBuildH3RequestRejectsNonStringMetadataOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		wantErr  string
+	}{
+		{
+			name:     "resolution",
+			metadata: map[string]any{"resolution": 1080},
+			wantErr:  "resolution must be a string",
+		},
+		{
+			name:     "ratio",
+			metadata: map[string]any{"ratio": 16},
+			wantErr:  "ratio must be a string",
+		},
+		{
+			name:     "resolution null",
+			metadata: map[string]any{"resolution": nil},
+			wantErr:  "resolution must be a string",
+		},
+		{
+			name:     "ratio null",
+			metadata: map[string]any{"ratio": nil},
+			wantErr:  "ratio must be a string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildH3Request(&relaycommon.TaskSubmitReq{
+				Model:    H3Model,
+				Prompt:   "Create a video",
+				Metadata: tt.metadata,
+			}, newH3TestInfo())
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestBuildH3BillingPlanCapturesRequestFactsWithoutChargingAudio(t *testing.T) {
 	originalQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 1000
