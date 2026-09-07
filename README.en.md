@@ -326,9 +326,11 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 ## 🤝 Legal notes and derivative use
 
-If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there.
+If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there in a prominent location.
 
-At the current stage, derivative projects that complete the attribution to MAX API and MAX-API-Next described above automatically receive a free derivative-development authorization from the MAX API project, with no separate application or approval required. This policy is not a permanent commitment and may be adjusted in the future.
+In addition to the default AGPLv3 license, a derivative project used only by its operator automatically receives, without a separate application or approval, the no-fee, non-perpetual temporary commercial permission described in [NOTICE](./NOTICE) for MAX API additions and modifications that the project maintainers have the right to license, while it continuously keeps either the [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) project link or an acknowledgement of the [MAX-API-Next](https://github.com/MAX-API-Next) community clearly visible in a prominent homepage, footer, About, legal, or attribution location.
+
+This temporary permission does not cover, replace, or waive AGPLv3 or any license obligation for One API, New API, or other upstream material. It ceases to apply if the display condition is no longer met, or if it expires, is amended, or is terminated through NOTICE, the README, or an official MAX-API-Next community notice. Rights independently granted by AGPLv3 remain unaffected; continued use outside the temporary permission must comply with AGPLv3 or a separate written authorization from the applicable rights holder. See [NOTICE](./NOTICE) for the complete terms.
 
 ## 📜 License
 

@@ -222,6 +222,7 @@ func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *tes
 
 func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	const legacyH3ProfilesFixture = `{"minimax_h3_v2":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}`
 	originalSelfUseMode := operation_setting.SelfUseModeEnabled
 	originalModelPrice := ratio_setting.ModelPrice2JSONString()
 	originalModelRatio := ratio_setting.ModelRatio2JSONString()
@@ -247,7 +248,7 @@ func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testin
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
 		"task_billing_setting.rate_cards":  `{}`,
-		"task_billing_setting.h3_profiles": string(originalProfiles),
+		"task_billing_setting.h3_profiles": legacyH3ProfilesFixture,
 	}))
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

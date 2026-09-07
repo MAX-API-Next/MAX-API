@@ -326,9 +326,11 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 ## 🤝 Mentions légales et développements dérivés
 
-Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
+Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez à un emplacement bien visible les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
 
-À ce stade, les projets dérivés qui respectent les mentions de MAX API et MAX-API-Next décrites ci-dessus bénéficient automatiquement et gratuitement d'une autorisation de développement dérivé accordée par le projet MAX API, sans demande ni approbation distincte. Cette politique ne constitue pas un engagement permanent et pourra être ajustée ultérieurement.
+En complément de la licence AGPLv3 par défaut, un projet dérivé réservé à l'usage de son opérateur bénéficie automatiquement, sans demande ni approbation distincte, de l'autorisation commerciale temporaire, gratuite et non permanente décrite dans [NOTICE](./NOTICE) pour les ajouts et modifications de MAX API que les mainteneurs du projet ont le droit de concéder, tant qu'il affiche clairement soit le lien du projet [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API), soit une mention de la communauté [MAX-API-Next](https://github.com/MAX-API-Next), à un emplacement bien visible de la page d'accueil, du pied de page, de la page À propos, des mentions légales ou des attributions.
+
+Cette autorisation temporaire ne couvre, ne remplace ni ne supprime les obligations de l'AGPLv3, de One API, de New API ou de tout autre composant amont. Elle cesse de s'appliquer si la condition d'affichage n'est plus respectée, ou si elle expire, est modifiée ou prend fin par une mention publiée dans NOTICE, le README ou la communauté officielle MAX-API-Next. Les droits accordés indépendamment par l'AGPLv3 restent inchangés ; toute utilisation poursuivie hors de cette autorisation temporaire doit respecter l'AGPLv3 ou faire l'objet d'une autorisation écrite distincte du titulaire de droits concerné. Consultez [NOTICE](./NOTICE) pour les conditions complètes.
 
 ## 📜 Licence
 

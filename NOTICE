@@ -11,8 +11,74 @@ THIRD-PARTY-LICENSES.md.
 max-api
 Copyright (c) MAX-API-Next(https://github.com/MAX-API-Next) and contributors.
 
+This project is licensed under the GNU Affero General Public License v3.0.
+See LICENSE for the full project license terms.
+
+==== Additional Terms under AGPLv3 Section 7 ====
+
+Pursuant to Section 7(b) of the GNU Affero General Public License version 3,
+the following reasonable legal notice and author attribution must be preserved
+by modified versions in the Appropriate Legal Notices and in any prominent
+about, legal, footer, or attribution location presented by the user interface:
+
+"Frontend design and development by MAX API contributors."
+
+Modified versions that present a user interface must also preserve a visible
+link to the original project in a prominent about, legal, footer, or
+attribution location:
+
+https://github.com/MAX-API-Next/MAX-API
+
+Modified versions must not misrepresent the origin of the software and must
+mark their changes in accordance with AGPLv3 Section 7(c).
+
+==== MAX API Temporary Commercial Permission ====
+
+In addition to, and not as a replacement for, AGPLv3, a derivative project
+used only by its operator automatically receives a no-fee, non-perpetual
+temporary commercial permission for the MAX API additions and modifications
+that the MAX API project maintainers have the right to license, without a
+separate application or approval, while it keeps either of the following
+clearly visible in a prominent homepage, footer, about, legal, or attribution
+location:
+
+* a link to https://github.com/MAX-API-Next/MAX-API; or
+* an acknowledgement of the MAX-API-Next community with a link to
+  https://github.com/MAX-API-Next.
+
+This temporary permission does not cover, replace, or waive AGPLv3 or any
+license obligation for One API, New API, or other upstream material. It ceases
+to apply if the display condition is no longer met, or if it expires, is
+amended, or is terminated by a later notice published in this NOTICE, the
+project README, or the official MAX-API-Next community. Rights independently
+granted by AGPLv3 remain unaffected. Continued use outside this temporary
+permission must comply with AGPLv3 or a separate written authorization from
+the applicable rights holder.
+
+==== Preserved New API Upstream Notice ====
+
 new-api
 Copyright (c) New API(https://github.com/QuantumNous/new-api/) contributors.
+
+This project includes software derived from New API, which is licensed under
+the GNU Affero General Public License v3.0. The following additional terms from
+the New API NOTICE are preserved:
+
+Pursuant to Section 7(b) of the GNU Affero General Public License version 3,
+the following reasonable legal notice and author attribution must be preserved
+by modified versions in the Appropriate Legal Notices and in any prominent
+about, legal, footer, or attribution location presented by the user interface:
+
+"Frontend design and development by New API contributors."
+
+Modified versions that present a user interface must also preserve a visible
+link to the original project in a prominent about, legal, footer, or
+attribution location:
+
+https://github.com/QuantumNous/new-api
+
+Modified versions must not misrepresent the origin of the software and must
+mark their changes in accordance with AGPLv3 Section 7(c).
 
 ==== Apache-2.0 Notices ====
 
