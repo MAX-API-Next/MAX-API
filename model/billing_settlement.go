@@ -247,10 +247,9 @@ func unresolvedBillingReconciliationScope(db *gorm.DB) *gorm.DB {
 	return db.Model(&BillingSettlement{}).
 		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
 		Where(
-			"(funding_delta > ? AND operation_key LIKE ?) OR (status = ? AND task_id > ? AND operation_key LIKE ?)",
+			"(funding_delta > ? AND operation_key LIKE ?) OR (task_id > ? AND operation_key LIKE ?)",
 			0,
 			BillingRequestFinalizeOperationKey("%"),
-			BillingSettlementStatusManual,
 			0,
 			billingTaskOperationPrefix+"%"+billingRequestFinalizeSuffix,
 		)

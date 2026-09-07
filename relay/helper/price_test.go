@@ -256,7 +256,7 @@ func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *tes
 		},
 	}
 
-	_, err = ModelPriceHelperPerCall(ctx, info)
+	_, err = ModelPriceHelperPerCallWithPlanCapability(ctx, info, true)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not been priced")

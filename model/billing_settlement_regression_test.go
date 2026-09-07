@@ -314,6 +314,60 @@ func TestTaskManualFinalizeIsVisibleForReconciliationWithoutBlockingAdmission(t 
 	assert.Zero(t, stats.Count, "reviewed task-manual evidence must leave the active alert projection")
 }
 
+func TestTaskPendingFinalizeIsVisibleForReconciliationWithoutBlockingAdmission(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey:    BillingTaskFinalizeOperationKey(9811),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          9812,
+		TaskID:          9811,
+		FundingDelta:    -100,
+		TokenDelta:      -100,
+		TaskQuota:       900,
+		TaskQuotaTarget: 800,
+		Status:          BillingSettlementStatusPending,
+		LastError:       "transient task finalize database error",
+		NextAttempt:     now + 60,
+		CreatedAt:       now - 30,
+		UpdatedAt:       now,
+		Revision:        2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, stats.Count)
+	assert.Equal(t, record.CreatedAt, stats.OldestCreatedAt)
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, reconciliation.TotalCount)
+	assert.EqualValues(t, 1, reconciliation.PendingCount)
+	assert.Zero(t, reconciliation.ManualCount)
+	require.Len(t, reconciliation.Items, 1)
+	assert.Equal(t, record.ID, reconciliation.Items[0].ID)
+	assert.False(t, reconciliation.Items[0].RecordBlocksUser)
+	assert.False(t, reconciliation.Items[0].BlocksUser)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "a pending bounded-actual task refund must not block paid-request admission")
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 9813, true, "Verified the pending task settlement evidence")
+	require.NoError(t, err)
+	assert.Equal(t, BillingSettlementStatusPending, reviewed.Status)
+	assert.Equal(t, record.Revision, reviewed.Revision)
+	assert.Equal(t, record.UpdatedAt, reviewed.UpdatedAt)
+	assert.EqualValues(t, -100, reviewed.FundingDelta)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count, "reviewed task-pending evidence must leave the active alert projection")
+}
+
 func TestBillingSettlementReconciliationProjectsOnlyOpenAlerts(t *testing.T) {
 	setupUserUpdateTestState(t)
 	setBillingReconciliationBlockDefaultForTest(t, false)
