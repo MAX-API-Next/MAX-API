@@ -15,6 +15,8 @@
     "Audit note must contain between 3 and 1000 characters.": "監査メモは 3 文字以上 1000 文字以下で入力してください。",
     "Complete manual task billing": "タスクの手動課金を完了",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "プロバイダーの証拠に基づく正確な最終クォータを入力してください。この操作により未使用の予約分が返金され、その後タスクの最終状態のロックが解除される場合があります。",
+    "This reconciliation record changed while the dialog was open.": "ダイアログを開いている間に、この照合レコードが変更されました。",
+    "Close this dialog and reopen the latest record before submitting.": "送信する前にこのダイアログを閉じ、最新のレコードを開き直してください。",
     "Task #{{id}} · reserved {{quota}}": "タスク #{{id}} · 予約済み {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "検証済みのプロバイダー証拠に基づく正確なクォータのみ許可されます。この手順では元の予約額を超える追加課金はできません。",
     "Exact final quota": "正確な最終クォータ",

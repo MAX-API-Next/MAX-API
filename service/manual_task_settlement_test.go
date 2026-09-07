@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func createManualTaskFinalizeSettlement(t *testing.T, task *model.Task, reason string) model.BillingSettlement {
@@ -311,4 +313,110 @@ func TestCompleteManualTaskBillingSettlementRejectsClampedSubscriptionRefund(t *
 	assert.Equal(t, model.BillingSettlementStatusManual, child.Status)
 	assert.Equal(t, 9061, child.ReconciliationReviewedBy)
 	assert.Equal(t, "Verified provider evidence for a full refund.", child.ReconciliationReviewNote)
+}
+
+func TestCompleteManualTaskBillingSettlementReapprovesManualChildAfterRecovery(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID, subscriptionID = 871, 872, 873, 874
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "manual-completion-reapproval", 100)
+	seedChannel(t, channelID)
+	seedSubscription(t, subscriptionID, userID, 1000, 50)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceSubscription, subscriptionID)
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider confirmed no billable usage")
+	actualQuota := int64(0)
+	note := "Verified provider evidence for a full refund."
+
+	_, err := CompleteManualTaskBillingSettlement(manual.ID, manual.Revision, 9071, &actualQuota, note)
+	require.Error(t, err)
+
+	var failedChild model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskManualCompletionOperationKey(task.ID)).First(&failedChild).Error)
+	require.Equal(t, model.BillingSettlementStatusManual, failedChild.Status)
+	require.Equal(t, 9071, failedChild.ReconciliationReviewedBy)
+	require.Equal(t, note, failedChild.ReconciliationReviewNote)
+	failedRevision := failedChild.Revision
+
+	// An operator repairs the inconsistent subscription mirror before
+	// re-approving the exact same immutable child operation.
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).
+		Where("id = ?", subscriptionID).
+		Update("amount_used", 100).Error)
+
+	_, err = CompleteManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9072,
+		&actualQuota,
+		"A different administrator attempted to replace the original approval.",
+	)
+	require.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+
+	result, err := CompleteManualTaskBillingSettlement(manual.ID, manual.Revision, 9071, &actualQuota, note)
+	require.NoError(t, err)
+	assert.False(t, result.AlreadyApplied)
+	assert.EqualValues(t, -100, result.AppliedFundingDelta)
+	assert.Zero(t, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTokenUsedQuota(t, tokenID))
+	assert.EqualValues(t, 1, countLogs(t))
+
+	var recoveredChild model.BillingSettlement
+	require.NoError(t, model.DB.First(&recoveredChild, failedChild.ID).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, recoveredChild.Status)
+	assert.Greater(t, recoveredChild.Revision, failedRevision)
+	assert.Equal(t, 9071, recoveredChild.ReconciliationReviewedBy)
+	assert.Equal(t, note, recoveredChild.ReconciliationReviewNote)
+	var recoveredParent model.BillingSettlement
+	require.NoError(t, model.DB.First(&recoveredParent, manual.ID).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, recoveredParent.Status)
+}
+
+func TestCompleteManualTaskBillingSettlementPropagatesFinalTaskReadFailure(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 881, 882, 883
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-final-read", 100)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider usage needed manual verification")
+	actualQuota := int64(40)
+	finalReadErr := errors.New("final task read unavailable")
+	taskQueryCount := 0
+	callbackName := "test:manual-completion-final-task-read"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "tasks" {
+			taskQueryCount++
+			if taskQueryCount == 3 {
+				tx.AddError(finalReadErr)
+			}
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Query().Remove(callbackName))
+	})
+
+	_, err := CompleteManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9081,
+		&actualQuota,
+		"Verified provider evidence and exact usage.",
+	)
+
+	require.ErrorIs(t, err, finalReadErr)
+	require.False(t, errors.Is(err, model.ErrBillingSettlementTaskConflict))
+	assert.EqualValues(t, 960, getUserQuota(t, userID))
+	assert.Equal(t, 160, getTokenRemainQuota(t, tokenID))
+	var storedTask model.Task
+	require.NoError(t, model.DB.First(&storedTask, task.ID).Error)
+	assert.Equal(t, 40, storedTask.Quota)
+	var child model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskManualCompletionOperationKey(task.ID)).First(&child).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, child.Status)
+	var parent model.BillingSettlement
+	require.NoError(t, model.DB.First(&parent, manual.ID).Error)
+	assert.Equal(t, model.BillingSettlementStatusManual, parent.Status)
 }

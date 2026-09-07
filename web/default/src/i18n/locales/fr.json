@@ -15,6 +15,8 @@
     "Audit note must contain between 3 and 1000 characters.": "La note d’audit doit contenir entre 3 et 1 000 caractères.",
     "Complete manual task billing": "Finaliser manuellement la facturation de la tâche",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Saisissez le quota final exact confirmé par le fournisseur. Cette action peut rembourser la réservation inutilisée, puis déverrouiller l’état final de la tâche.",
+    "This reconciliation record changed while the dialog was open.": "Cet enregistrement de rapprochement a changé pendant que la boîte de dialogue était ouverte.",
+    "Close this dialog and reopen the latest record before submitting.": "Fermez cette boîte de dialogue et rouvrez l’enregistrement le plus récent avant d’envoyer.",
     "Task #{{id}} · reserved {{quota}}": "Tâche nº {{id}} · réservé : {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Seul un quota exact fondé sur des données fournisseur vérifiées est autorisé. Ce processus ne peut pas ajouter de frais au-delà de la réservation initiale.",
     "Exact final quota": "Quota final exact",

@@ -44,6 +44,7 @@ import type { BillingSettlementReconciliationItem } from '../types'
 interface ManualTaskSettlementDialogProps {
   item: BillingSettlementReconciliationItem | null
   pending: boolean
+  stale: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (
     item: BillingSettlementReconciliationItem,
@@ -80,7 +81,8 @@ export function ManualTaskSettlementDialog(
     }
     return ''
   }, [t, trimmedNote])
-  const canSubmit = Boolean(props.item) && quotaError === '' && noteError === ''
+  const canSubmit =
+    Boolean(props.item) && !props.stale && quotaError === '' && noteError === ''
 
   return (
     <Dialog
@@ -115,6 +117,21 @@ export function ManualTaskSettlementDialog(
               </AlertDescription>
             </Alert>
 
+            {props.stale && (
+              <Alert variant='destructive'>
+                <AlertTitle>
+                  {t(
+                    'This reconciliation record changed while the dialog was open.'
+                  )}
+                </AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'Close this dialog and reopen the latest record before submitting.'
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
             <FieldGroup>
               <Field data-invalid={quotaError !== ''}>
                 <FieldLabel htmlFor='manual-task-actual-quota'>
@@ -129,7 +146,7 @@ export function ManualTaskSettlementDialog(
                   step={1}
                   value={actualQuotaInput}
                   onChange={(event) => setActualQuotaInput(event.target.value)}
-                  disabled={props.pending}
+                  disabled={props.pending || props.stale}
                   aria-invalid={quotaError !== ''}
                 />
                 <FieldDescription>
@@ -154,7 +171,7 @@ export function ManualTaskSettlementDialog(
                     'Describe the provider evidence and calculation used.'
                   )}
                   maxLength={1000}
-                  disabled={props.pending}
+                  disabled={props.pending || props.stale}
                   aria-invalid={noteError !== ''}
                 />
                 <FieldDescription>

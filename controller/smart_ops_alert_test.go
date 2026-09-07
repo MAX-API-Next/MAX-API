@@ -165,6 +165,99 @@ func TestCompleteManualTaskBillingSettlementAuditsExactCompletion(t *testing.T) 
 	assert.Equal(t, model.BillingTaskManualCompletionOperationKey(task.ID), other.Op.Params["operation_key"])
 }
 
+func TestCompleteManualTaskBillingSettlementMapsTokenRefundConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.LogConsumeEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Token{},
+		&model.Task{},
+		&model.BillingSettlement{},
+		&model.CacheInvalidationTask{},
+		&model.Log{},
+	))
+	model.DB = db
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+	})
+
+	administrator := model.User{
+		Id: 7061, Username: "manual-task-token-root", AffCode: "manual-task-token-root-aff",
+		Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default",
+	}
+	owner := model.User{
+		Id: 7062, Username: "manual-task-token-owner", AffCode: "manual-task-token-owner-aff",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", Quota: 900,
+	}
+	token := model.Token{
+		Id: 7063, UserId: owner.Id, Key: "manual-task-token-conflict", Status: common.TokenStatusEnabled,
+		Name: "manual-task-token-conflict", RemainQuota: 100, UsedQuota: 10, Group: "default",
+	}
+	require.NoError(t, db.Create(&administrator).Error)
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&token).Error)
+	task := model.Task{
+		TaskID: "controller-manual-task-token-conflict", UserId: owner.Id, Group: "default", Quota: 100,
+		Status: model.TaskStatus(model.TaskStatusInProgress), CreatedAt: 1, UpdatedAt: 1,
+		PrivateData: model.TaskPrivateData{
+			TokenId: token.Id, BillingSource: "wallet",
+			BillingContext: &model.TaskBillingContext{OriginModelName: "manual-task-model"},
+		},
+	}
+	task.SetData(map[string]any{"provider_status": "complete"})
+	require.NoError(t, db.Create(&task).Error)
+	settlement := model.BillingSettlement{
+		OperationKey: model.BillingTaskFinalizeOperationKey(task.ID), Source: model.BillingSettlementSourceWallet,
+		UserID: owner.Id, TokenID: token.Id, TaskID: task.ID, TaskQuota: 100, TaskQuotaTarget: 100,
+		Status: model.BillingSettlementStatusManual, LastError: "provider usage requires an exact quota",
+		CreatedAt: 1, UpdatedAt: 1, Revision: 1,
+	}
+	require.NoError(t, db.Create(&settlement).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/smart-ops/billing-settlements/%d/complete-task", settlement.ID),
+		bytes.NewBufferString(`{"revision":1,"actual_quota":40,"note":"Verified provider evidence and exact usage."}`),
+	)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", settlement.ID)}}
+	ctx.Set("id", administrator.Id)
+	ctx.Set("username", administrator.Username)
+	ctx.Set("role", administrator.Role)
+
+	CompleteManualTaskBillingSettlement(ctx)
+
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "refresh and reconcile")
+	var storedOwner model.User
+	require.NoError(t, db.First(&storedOwner, owner.Id).Error)
+	assert.EqualValues(t, 900, storedOwner.Quota)
+	var storedToken model.Token
+	require.NoError(t, db.First(&storedToken, token.Id).Error)
+	assert.EqualValues(t, 100, storedToken.RemainQuota)
+	assert.EqualValues(t, 10, storedToken.UsedQuota)
+}
+
 func TestReviewBillingSettlementAuditRecordsActingAdministrator(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB

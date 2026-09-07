@@ -15,6 +15,8 @@
     "Audit note must contain between 3 and 1000 characters.": "Примечание аудита должно содержать от 3 до 1000 символов.",
     "Complete manual task billing": "Завершить ручной расчет задачи",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Введите точную итоговую квоту, подтвержденную данными провайдера. Это действие может вернуть неиспользованный резерв, а затем разблокировать конечное состояние задачи.",
+    "This reconciliation record changed while the dialog was open.": "Эта запись сверки изменилась, пока диалоговое окно было открыто.",
+    "Close this dialog and reopen the latest record before submitting.": "Перед отправкой закройте это диалоговое окно и снова откройте последнюю версию записи.",
     "Task #{{id}} · reserved {{quota}}": "Задача № {{id}} · зарезервировано {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Разрешена только точная квота, основанная на проверенных данных провайдера. Этот процесс не может начислить сумму сверх исходного резерва.",
     "Exact final quota": "Точная итоговая квота",

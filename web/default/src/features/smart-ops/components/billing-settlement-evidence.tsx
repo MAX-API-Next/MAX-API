@@ -72,17 +72,18 @@ export function BillingSettlementEvidence(
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
   const reconciliationItems = props.data?.items
-  const activeManualTaskItem = useMemo(() => {
+  const currentManualTaskItem = useMemo(() => {
     if (!manualTaskItem) return null
     return (
-      reconciliationItems?.find(
-        (item) =>
-          item.id === manualTaskItem.id &&
-          item.revision === manualTaskItem.revision &&
-          item.requires_manual_completion
-      ) ?? null
+      reconciliationItems?.find((item) => item.id === manualTaskItem.id) ?? null
     )
   }, [manualTaskItem, reconciliationItems])
+  const manualTaskItemStale = Boolean(
+    manualTaskItem &&
+    (!currentManualTaskItem ||
+      currentManualTaskItem.revision !== manualTaskItem.revision ||
+      !currentManualTaskItem.requires_manual_completion)
+  )
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
@@ -399,11 +400,12 @@ export function BillingSettlementEvidence(
             onReviewTargets={reviewTargets}
             onCompleteManualTask={setManualTaskItem}
           />
-          {activeManualTaskItem && (
+          {manualTaskItem && (
             <ManualTaskSettlementDialog
-              key={`${activeManualTaskItem.id}:${activeManualTaskItem.revision}`}
-              item={activeManualTaskItem}
+              key={`${manualTaskItem.id}:${manualTaskItem.revision}`}
+              item={manualTaskItem}
               pending={manualTaskCompletionMutation.isPending}
+              stale={manualTaskItemStale}
               onOpenChange={(open) => {
                 if (!open) setManualTaskItem(null)
               }}

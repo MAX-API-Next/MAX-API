@@ -61,6 +61,7 @@ jobs:
           files: |
             max-api-*
             checksums-linux.txt
+            NOTICE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -107,6 +108,7 @@ jobs:
           files: |
             max-api-macos-*
             checksums-macos.txt
+            NOTICE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -155,5 +157,6 @@ jobs:
           files: |
             max-api-*.exe
             checksums-windows.txt
+            NOTICE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

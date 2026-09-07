@@ -15,6 +15,8 @@
     "Audit note must contain between 3 and 1000 characters.": "Audit note must contain between 3 and 1000 characters.",
     "Complete manual task billing": "Complete manual task billing",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.",
+    "This reconciliation record changed while the dialog was open.": "This reconciliation record changed while the dialog was open.",
+    "Close this dialog and reopen the latest record before submitting.": "Close this dialog and reopen the latest record before submitting.",
     "Task #{{id}} · reserved {{quota}}": "Task #{{id}} · reserved {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.",
     "Exact final quota": "Exact final quota",

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	gormmysql "gorm.io/driver/mysql"
 	gormpostgres "gorm.io/driver/postgres"
@@ -46,7 +48,7 @@ func TestTimedOutTaskQueryUsesPortableTaskFinalizeExclusion(t *testing.T) {
 		{
 			name: "postgres",
 			open: func(t *testing.T) *gorm.DB {
-				conn, err := sql.Open("pgx", "")
+				conn, err := sql.Open("pgx/v5", "")
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = conn.Close() })
 				db, err := gorm.Open(gormpostgres.New(gormpostgres.Config{Conn: conn}), &gorm.Config{

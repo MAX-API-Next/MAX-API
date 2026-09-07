@@ -611,6 +611,8 @@ describe('SmartOps active alerts', () => {
     htmlElementPrototype.detachEvent = function (name, listener) {
       this.removeEventListener(name.replace(/^on/, ''), listener)
     }
+    let manualRevision = 2
+    let manualCompletionRequired = true
     api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
@@ -624,7 +626,7 @@ describe('SmartOps active alerts', () => {
                 items: [
                   {
                     id: 93,
-                    revision: 2,
+                    revision: manualRevision,
                     operation_key: 'task:7001:finalize',
                     status: 'manual',
                     source: 'wallet',
@@ -634,7 +636,7 @@ describe('SmartOps active alerts', () => {
                     task_id: 7001,
                     task_quota: 100,
                     task_quota_target: 100,
-                    requires_manual_completion: true,
+                    requires_manual_completion: manualCompletionRequired,
                     funding_delta: 0,
                     applied_funding_delta: 0,
                     token_delta: 0,
@@ -707,6 +709,38 @@ describe('SmartOps active alerts', () => {
         (dialog.textContent ?? '').includes(
           'This workflow cannot add a charge above the original reservation.'
         )
+      )
+
+      manualRevision = 3
+      manualCompletionRequired = false
+      await queryClient.invalidateQueries({
+        queryKey: ['smart-ops', 'billing-settlement-reconciliation'],
+      })
+
+      const staleDialog = await waitFor(() => {
+        const currentDialog = within(document.body).getByRole('dialog')
+        assert.ok(
+          (currentDialog.textContent ?? '').includes(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+        return currentDialog
+      })
+      const staleDialogScreen = within(staleDialog)
+      assert.equal(staleDialog, dialog)
+      assert.equal(
+        staleDialog.querySelector('#manual-task-actual-quota'),
+        quotaInput
+      )
+      assert.equal(
+        staleDialog.querySelector('#manual-task-audit-note'),
+        noteInput
+      )
+      assert.equal(
+        staleDialogScreen
+          .getByRole('button', { name: 'Apply exact settlement' })
+          .hasAttribute('disabled'),
+        true
       )
     } finally {
       api.get = originalGet

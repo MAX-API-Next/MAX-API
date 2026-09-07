@@ -533,7 +533,10 @@ func CompleteManualTaskBillingSettlement(
 		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementOperationConflict
 	}
 	settledTask, err := model.GetTaskByID(task.ID)
-	if err != nil || int64(settledTask.Quota) != *actualQuota {
+	if err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	if int64(settledTask.Quota) != *actualQuota {
 		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementTaskConflict
 	}
 	if _, originalResolvedByReplay, err := model.ResolveManualTaskBillingSettlement(

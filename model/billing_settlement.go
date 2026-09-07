@@ -752,7 +752,15 @@ func EnsureManualTaskBillingCompletion(input BillingSettlementInput, reviewerID 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		record, _, err := ensureBillingSettlementRecordDB(tx, input)
 		if err != nil {
-			return err
+			if !errors.Is(err, ErrBillingSettlementManualReview) {
+				return err
+			}
+			reapproved, reapproveErr := reapproveManualTaskBillingCompletionDB(tx, input, reviewerID, note)
+			if reapproveErr != nil {
+				return reapproveErr
+			}
+			approved = reapproved
+			return nil
 		}
 		if record.ReconciliationReviewedAt > 0 || record.ReconciliationReviewedBy > 0 || record.ReconciliationReviewNote != "" {
 			if record.ReconciliationReviewedAt <= 0 || record.ReconciliationReviewedBy != reviewerID || record.ReconciliationReviewNote != note {
@@ -785,6 +793,51 @@ func EnsureManualTaskBillingCompletion(input BillingSettlementInput, reviewerID 
 		return tx.First(&approved, record.ID).Error
 	})
 	return approved, err
+}
+
+func reapproveManualTaskBillingCompletionDB(tx *gorm.DB, input BillingSettlementInput, reviewerID int, note string) (BillingSettlement, error) {
+	var record BillingSettlement
+	if err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+		return BillingSettlement{}, err
+	}
+	if !billingSettlementIsManualTaskCompletion(record.OperationKey, record.TaskID) ||
+		record.Status != BillingSettlementStatusManual ||
+		record.ReconciliationReviewedAt <= 0 ||
+		record.ReconciliationReviewedBy != reviewerID ||
+		record.ReconciliationReviewNote != note {
+		return BillingSettlement{}, ErrBillingSettlementReviewConflict
+	}
+	if err := validateBillingSettlement(record, input); err != nil {
+		return BillingSettlement{}, err
+	}
+
+	now := time.Now().Unix()
+	result := tx.Model(&BillingSettlement{}).
+		Where(
+			"id = ? AND revision = ? AND status = ? AND reconciliation_reviewed_at = ? AND reconciliation_reviewed_by = ? AND reconciliation_review_note = ?",
+			record.ID,
+			record.Revision,
+			BillingSettlementStatusManual,
+			record.ReconciliationReviewedAt,
+			reviewerID,
+			note,
+		).
+		Updates(map[string]interface{}{
+			"status":       BillingSettlementStatusPending,
+			"next_attempt": now,
+			"updated_at":   now,
+			"revision":     gorm.Expr("revision + ?", 1),
+		})
+	if result.Error != nil {
+		return BillingSettlement{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return BillingSettlement{}, ErrBillingSettlementReviewConflict
+	}
+	if err := tx.First(&record, record.ID).Error; err != nil {
+		return BillingSettlement{}, err
+	}
+	return record, nil
 }
 
 // GetManualTaskBillingSettlement loads the immutable task-finalize evidence

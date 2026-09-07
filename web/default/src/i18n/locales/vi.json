@@ -15,6 +15,8 @@
     "Audit note must contain between 3 and 1000 characters.": "Ghi chú kiểm toán phải có từ 3 đến 1000 ký tự.",
     "Complete manual task billing": "Hoàn tất tính phí thủ công cho tác vụ",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Nhập hạn mức cuối cùng chính xác được xác nhận bằng bằng chứng từ nhà cung cấp. Thao tác này có thể hoàn trả phần dự phòng chưa sử dụng rồi mở khóa trạng thái cuối của tác vụ.",
+    "This reconciliation record changed while the dialog was open.": "Bản ghi đối soát này đã thay đổi trong khi hộp thoại đang mở.",
+    "Close this dialog and reopen the latest record before submitting.": "Hãy đóng hộp thoại này và mở lại bản ghi mới nhất trước khi gửi.",
     "Task #{{id}} · reserved {{quota}}": "Tác vụ #{{id}} · đã dự phòng {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Chỉ cho phép hạn mức chính xác dựa trên bằng chứng đã xác minh từ nhà cung cấp. Quy trình này không thể tính thêm phí vượt quá mức dự phòng ban đầu.",
     "Exact final quota": "Hạn mức cuối cùng chính xác",
