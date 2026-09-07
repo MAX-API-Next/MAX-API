@@ -695,7 +695,7 @@ func BillingRequestFinalizeOperationKey(requestID string) string {
 }
 
 func BillingTaskFinalizeOperationKey(taskID int64) string {
-	return fmt.Sprintf("task:%d:finalize", taskID)
+	return fmt.Sprintf("%s%d%s", billingTaskOperationPrefix, taskID, billingRequestFinalizeSuffix)
 }
 
 // GetBillingSettlementStatus returns the durable funding state for one stable

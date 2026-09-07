@@ -170,6 +170,30 @@ func TestResolveTaskBillingQuotasUsesH3ReserveAndAppliesFloorOnce(t *testing.T) 
 	require.Equal(t, 1700, reserve)
 }
 
+func TestResolveTaskBillingQuotasRejectsTamperedH3SnapshotBeforeReadingTotals(t *testing.T) {
+	withRelayTaskQuotaPerUnit(t, 1000)
+	plan, err := task_billing_setting.BuildH3BillingPlan(task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+	plan.EstimateQuota++
+	info := &relaycommon.RelayInfo{
+		TaskBillingPlan: plan,
+		PriceData: types.PriceData{
+			FreeModel:      false,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+
+	estimate, reserve, usesPlan, err := resolveTaskBillingQuotas(info)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "frozen totals do not match")
+	require.True(t, usesPlan)
+	require.Zero(t, estimate)
+	require.Zero(t, reserve)
+}
+
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
 	t.Helper()
 	original := task_billing_setting.GetRateCardsCopy()

@@ -475,16 +475,8 @@ func resolveTaskBillingQuotas(info *relaycommon.RelayInfo) (estimateQuota int, r
 		if validateErr := task_billing_setting.ValidateH3BillingPlanSnapshot(plan); validateErr != nil {
 			return 0, 0, true, validateErr
 		}
-		estimate, quoteErr := task_billing_setting.QuoteH3Estimate(plan)
-		if quoteErr != nil {
-			return 0, 0, true, quoteErr
-		}
-		reserve, quoteErr := task_billing_setting.QuoteH3Reserve(plan)
-		if quoteErr != nil {
-			return 0, 0, true, quoteErr
-		}
-		estimateQuota = estimate.Quota
-		reservationQuota = reserve.Quota
+		estimateQuota = plan.EstimateQuota
+		reservationQuota = plan.ReserveQuota
 		usesPlan = true
 	}
 	if estimateQuota < 0 || reservationQuota < 0 {
