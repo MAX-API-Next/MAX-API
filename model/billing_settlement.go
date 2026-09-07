@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 
 const billingRequestOperationPrefix = "request:"
 const billingRequestFinalizeSuffix = ":finalize"
+const billingTaskOperationPrefix = "task:"
 
 const billingSettlementBacklogSampleInterval = 30 * time.Second
 
@@ -174,8 +176,8 @@ type BillingSettlementInput struct {
 }
 
 // BillingSettlementBacklogStats is a read-only operational projection of open
-// positive-final-settlement alerts. User admission is evaluated separately by
-// the global and per-record blocking policy.
+// reconciliation alerts. User admission is evaluated separately and remains
+// limited to unresolved positive request-finalize funding.
 type BillingSettlementBacklogStats struct {
 	Count           int64 `gorm:"column:record_count"`
 	OldestCreatedAt int64 `gorm:"column:oldest_created_at"`
@@ -241,13 +243,33 @@ func unresolvedPositiveFinalizeSettlementScope(db *gorm.DB) *gorm.DB {
 		Where("operation_key LIKE ?", BillingRequestFinalizeOperationKey("%"))
 }
 
-func openPositiveFinalizeSettlementAlertScope(db *gorm.DB) *gorm.DB {
-	return unresolvedPositiveFinalizeSettlementScope(db).
-		Where("(reconciliation_reviewed_at = ? OR user_blocking_override = ?)", 0, true)
+func unresolvedBillingReconciliationScope(db *gorm.DB) *gorm.DB {
+	return db.Model(&BillingSettlement{}).
+		Where("status IN ?", []string{BillingSettlementStatusPending, BillingSettlementStatusManual}).
+		Where(
+			"(funding_delta > ? AND operation_key LIKE ?) OR (status = ? AND task_id > ? AND operation_key LIKE ?)",
+			0,
+			BillingRequestFinalizeOperationKey("%"),
+			BillingSettlementStatusManual,
+			0,
+			billingTaskOperationPrefix+"%"+billingRequestFinalizeSuffix,
+		)
+}
+
+func openBillingReconciliationAlertScope(db *gorm.DB) *gorm.DB {
+	return unresolvedBillingReconciliationScope(db).
+		Where(
+			"reconciliation_reviewed_at = ? OR (funding_delta > ? AND operation_key LIKE ? AND user_blocking_override = ?)",
+			0,
+			0,
+			BillingRequestFinalizeOperationKey("%"),
+			true,
+		)
 }
 
 func blockingPositiveFinalizeSettlementScope(db *gorm.DB, blockUserByDefault bool) *gorm.DB {
-	scope := openPositiveFinalizeSettlementAlertScope(db)
+	scope := unresolvedPositiveFinalizeSettlementScope(db).
+		Where("(reconciliation_reviewed_at = ? OR user_blocking_override = ?)", 0, true)
 	if blockUserByDefault {
 		return scope.Where("(user_blocking_override IS NULL OR user_blocking_override = ?)", true)
 	}
@@ -335,7 +357,7 @@ func ProcessPendingBillingSettlementsOnce() {
 func observeBillingSettlementBacklog(observedAt time.Time) {
 	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
 	if err != nil {
-		common.SysLog(fmt.Sprintf("failed to query unresolved positive final billing settlements: %s", err.Error()))
+		common.SysLog(fmt.Sprintf("failed to query open billing reconciliation settlements: %s", err.Error()))
 		return
 	}
 	billingSettlementBacklogObserverState.RLock()
@@ -346,23 +368,22 @@ func observeBillingSettlementBacklog(observedAt time.Time) {
 	}
 }
 
-// GetUnresolvedPositiveFinalizeSettlementStats returns the count and oldest
-// creation time for open positive request-finalize alerts. Reviewed rows
-// remain durable financial records and leave this operational projection
-// unless an administrator explicitly keeps the affected user blocked or new
-// failure evidence reopens them.
+// GetUnresolvedPositiveFinalizeSettlementStats keeps its historical name for
+// API compatibility. It returns all open reconciliation alerts: unresolved
+// positive request-finalize funding and reconciliation-only task-finalize
+// records. Only the former can block new paid requests.
 func GetUnresolvedPositiveFinalizeSettlementStats() (BillingSettlementBacklogStats, error) {
 	if DB == nil {
 		return BillingSettlementBacklogStats{}, errors.New("database is not initialized")
 	}
-	return getOpenPositiveFinalizeSettlementAlertStatsDB(DB)
+	return getOpenBillingReconciliationAlertStatsDB(DB)
 }
 
-// GetUnresolvedPositiveFinalizeSettlements returns bounded, read-only evidence
-// for open operator alerts. Reviewed rows remain durable financial records and
-// are excluded after closure unless an administrator explicitly keeps the
-// affected user blocked. This function never retries, updates, deletes, or
-// otherwise mutates a settlement record or any financial balance.
+// GetUnresolvedPositiveFinalizeSettlements keeps its historical name for API
+// compatibility and returns bounded, read-only evidence for every open
+// reconciliation alert. Reviewed task-finalize records leave the projection;
+// reviewed positive request-finalize records remain only when explicitly kept
+// blocking. This function never mutates financial state.
 func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementReconciliationData, error) {
 	if DB == nil {
 		return BillingSettlementReconciliationData{}, errors.New("database is not initialized")
@@ -387,19 +408,19 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		})
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		stats, err := getOpenPositiveFinalizeSettlementAlertStatsDB(tx)
+		stats, err := getOpenBillingReconciliationAlertStatsDB(tx)
 		if err != nil {
 			return err
 		}
 		data.TotalCount = stats.Count
 		data.OldestCreatedAt = stats.OldestCreatedAt
 
-		if err := openPositiveFinalizeSettlementAlertScope(tx).
+		if err := openBillingReconciliationAlertScope(tx).
 			Where("status = ?", BillingSettlementStatusPending).
 			Count(&data.PendingCount).Error; err != nil {
 			return err
 		}
-		if err := openPositiveFinalizeSettlementAlertScope(tx).
+		if err := openBillingReconciliationAlertScope(tx).
 			Where("status = ?", BillingSettlementStatusManual).
 			Count(&data.ManualCount).Error; err != nil {
 			return err
@@ -417,7 +438,7 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		}
 
 		items := make([]BillingSettlementReconciliationItem, 0, limit+1)
-		if err := openPositiveFinalizeSettlementAlertScope(tx).
+		if err := openBillingReconciliationAlertScope(tx).
 			Select(
 				"id", "revision", "operation_key", "status", "source", "user_id", "subscription_id", "token_id", "task_id",
 				"funding_delta", "applied_funding_delta", "token_delta", "applied_token_delta", "attempts", "last_error",
@@ -442,10 +463,10 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			items[index].ReconciliationReviewNote = common.SanitizePersistedLogContent(
 				common.MaskSensitiveInfo(items[index].ReconciliationReviewNote),
 			)
-			items[index].RecordBlocksUser = billingSettlementBlocksUser(
-				items[index].UserBlockingOverride,
-				data.BlockUserByDefault,
-			)
+			items[index].RecordBlocksUser = items[index].FundingDelta > 0 &&
+				strings.HasPrefix(items[index].OperationKey, billingRequestOperationPrefix) &&
+				strings.HasSuffix(items[index].OperationKey, billingRequestFinalizeSuffix) &&
+				billingSettlementBlocksUser(items[index].UserBlockingOverride, data.BlockUserByDefault)
 			if items[index].UserID > 0 {
 				displayedUserIDs = append(displayedUserIDs, items[index].UserID)
 			}
@@ -472,9 +493,9 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 	return data, err
 }
 
-func getOpenPositiveFinalizeSettlementAlertStatsDB(db *gorm.DB) (BillingSettlementBacklogStats, error) {
+func getOpenBillingReconciliationAlertStatsDB(db *gorm.DB) (BillingSettlementBacklogStats, error) {
 	var stats BillingSettlementBacklogStats
-	err := openPositiveFinalizeSettlementAlertScope(db).
+	err := openBillingReconciliationAlertScope(db).
 		Select("COUNT(*) AS record_count, COALESCE(MIN(created_at), 0) AS oldest_created_at").
 		Scan(&stats).Error
 	return stats, err
@@ -560,7 +581,7 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 		reviewedAt := time.Now()
 		updatedIDs := make([]int64, 0, len(sortedTargets))
 		for _, target := range sortedTargets {
-			result := openPositiveFinalizeSettlementAlertScope(tx).
+			result := openBillingReconciliationAlertScope(tx).
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
 				UpdateColumns(billingSettlementReviewUpdates(reviewerID, false, "", reviewedAt))
 			if result.Error != nil {
@@ -640,7 +661,7 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 
 	reviewedAt := time.Now()
 	result := billingSettlementReviewSnapshotScope(
-		unresolvedPositiveFinalizeSettlementScope(DB),
+		unresolvedBillingReconciliationScope(DB),
 		record,
 	).
 		UpdateColumns(billingSettlementReviewUpdates(reviewerID, blockUser, note, reviewedAt))
@@ -649,7 +670,7 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 	}
 	if result.RowsAffected != 1 {
 		var matching BillingSettlement
-		err := unresolvedPositiveFinalizeSettlementScope(DB).
+		err := unresolvedBillingReconciliationScope(DB).
 			Where("id = ?", id).
 			First(&matching).Error
 		if err != nil {
@@ -671,6 +692,10 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 
 func BillingRequestFinalizeOperationKey(requestID string) string {
 	return billingRequestOperationPrefix + requestID + billingRequestFinalizeSuffix
+}
+
+func BillingTaskFinalizeOperationKey(taskID int64) string {
+	return fmt.Sprintf("task:%d:finalize", taskID)
 }
 
 // GetBillingSettlementStatus returns the durable funding state for one stable
@@ -1012,6 +1037,59 @@ func ensureBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput) 
 		return BillingSettlement{}, false, fmt.Errorf("%w: %s", ErrBillingSettlementManualReview, record.LastError)
 	}
 	return record, record.Status == "" || record.Status == BillingSettlementStatusApplied, nil
+}
+
+func ensureManualBillingSettlementRecordDB(db *gorm.DB, input BillingSettlementInput, reason string) (BillingSettlement, error) {
+	if db == nil {
+		return BillingSettlement{}, fmt.Errorf("%w: database is not initialized", ErrBillingSettlementRecordNotDurable)
+	}
+	if strings.TrimSpace(input.OperationKey) == "" {
+		return BillingSettlement{}, fmt.Errorf("%w: billing settlement operation key is required", ErrBillingSettlementRecordNotDurable)
+	}
+	if input.FundingDelta != 0 || input.TokenDelta != 0 || input.TaskQuotaTarget != input.TaskQuota || input.Effect != nil {
+		return BillingSettlement{}, permanentBillingSettlement(fmt.Errorf("%w: manual settlement must preserve all balances and task quota", ErrBillingSettlementOperationConflict))
+	}
+	if err := validateBillingSettlementInput(input); err != nil {
+		return BillingSettlement{}, err
+	}
+	reason = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(reason))
+	if strings.TrimSpace(reason) == "" {
+		return BillingSettlement{}, permanentBillingSettlement(fmt.Errorf("%w: manual settlement reason is required", ErrBillingSettlementOperationConflict))
+	}
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey: input.OperationKey, Source: input.Source, UserID: input.UserID,
+		SubscriptionID: input.SubscriptionID, TokenID: input.TokenID,
+		FundingDelta: input.FundingDelta, TokenDelta: input.TokenDelta,
+		TaskID: input.TaskID, TaskQuota: input.TaskQuota, TaskQuotaTarget: input.TaskQuotaTarget,
+		SubscriptionPreConsumeRequestID: input.SubscriptionPreConsumeRequestID,
+		AllowMissingToken:               input.AllowMissingToken,
+		FinalizeSubscriptionPreConsume:  input.FinalizeSubscriptionPreConsume,
+		ManualOnFailure:                 input.ManualOnFailure,
+		Status:                          BillingSettlementStatusManual,
+		LastError:                       reason,
+		NextAttempt:                     0,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
+		Revision:                        1,
+	}
+	result := db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "operation_key"}},
+		DoNothing: true,
+	}).Create(&record)
+	if result.Error != nil {
+		return BillingSettlement{}, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, result.Error)
+	}
+	if err := db.Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+		return BillingSettlement{}, err
+	}
+	if err := validateBillingSettlement(record, input); err != nil {
+		return BillingSettlement{}, err
+	}
+	if record.Status != BillingSettlementStatusManual || record.LastError != reason {
+		return BillingSettlement{}, permanentBillingSettlement(fmt.Errorf("%w: manual settlement identity conflict: %s", ErrBillingSettlementOperationConflict, input.OperationKey))
+	}
+	return record, nil
 }
 
 func billingSettlementEffectPayload(effect *BillingSettlementEffect) (string, error) {
@@ -1494,6 +1572,13 @@ func applySubscriptionDeltaTx(tx *gorm.DB, input BillingSettlementInput) (int64,
 	}
 	if err := validateSubscriptionPreConsumePeriod(record, sub); err != nil {
 		return 0, permanentBillingSettlement(err)
+	}
+	// A zero-delta finalize is still a durable lifecycle operation, but it must
+	// not issue a same-value subscription UPDATE. MySQL may report zero affected
+	// rows for that UPDATE while SQLite reports a matched row, which would turn a
+	// valid replay into a database-dependent conflict.
+	if input.FundingDelta == 0 {
+		return 0, nil
 	}
 	if input.FinalizeSubscriptionPreConsume {
 		if input.FundingDelta >= 0 || -input.FundingDelta < record.PreConsumed {

@@ -165,6 +165,20 @@ func GetH3BillingProfileCopy(key string) (*H3BillingConfig, bool) {
 	return &profile, true
 }
 
+// HasH3BillingPlanForModel mirrors the Hailuo adaptor's effective-model gate.
+// A structured rate card or the legacy H3 profile can own pricing only when
+// the final upstream model is actually MiniMax-H3.
+func HasH3BillingPlanForModel(model string) bool {
+	if !isMinimaxH3Model(model) {
+		return false
+	}
+	if card, _ := findMinimaxRateCard(model); card != nil {
+		return true
+	}
+	_, ok := GetH3BillingProfileCopy(H3BillingProfileKey)
+	return ok
+}
+
 func ValidateH3ProfilesJSON(raw string) error {
 	if strings.TrimSpace(raw) == "" {
 		return fmt.Errorf("H3 billing profiles cannot be empty")
@@ -398,6 +412,28 @@ func QuoteH3Reserve(plan *types.TaskBillingPlan) (*H3BillingQuote, error) {
 		}
 	}
 	return quoteH3Plan(plan, types.TaskBillingPlanStageReserve, plan.RequestedOutputDurationSeconds, videoSeconds, 0, plan.InputImageCount)
+}
+
+// ValidateH3BillingPlanSnapshot proves that the persisted summary totals still
+// match the immutable component snapshot. Completion must fail closed when a
+// stored estimate or reservation has drifted from the prices and quantities
+// that originally produced it.
+func ValidateH3BillingPlanSnapshot(plan *types.TaskBillingPlan) error {
+	estimate, err := QuoteH3Estimate(plan)
+	if err != nil {
+		return err
+	}
+	reserve, err := QuoteH3Reserve(plan)
+	if err != nil {
+		return err
+	}
+	if estimate.Quota != plan.EstimateQuota || reserve.Quota != plan.ReserveQuota {
+		return fmt.Errorf("H3 billing plan frozen totals do not match its component snapshot")
+	}
+	if reserve.Quota < estimate.Quota {
+		return fmt.Errorf("H3 billing plan reservation is below its estimate")
+	}
+	return nil
 }
 
 func QuoteH3Final(plan *types.TaskBillingPlan, usage *types.TaskUsage) (*H3BillingQuote, error) {

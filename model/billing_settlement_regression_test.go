@@ -264,6 +264,56 @@ func TestBillingSettlementBlockingPolicyAndReviewAreIndependentFromFinancialStat
 	assert.True(t, sharedBlockItem.BlocksUser)
 }
 
+func TestTaskManualFinalizeIsVisibleForReconciliationWithoutBlockingAdmission(t *testing.T) {
+	setupUserUpdateTestState(t)
+	setBillingReconciliationBlockDefaultForTest(t, true)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey:    BillingTaskFinalizeOperationKey(9801),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          9802,
+		TaskID:          9801,
+		TaskQuota:       800,
+		TaskQuotaTarget: 800,
+		Status:          BillingSettlementStatusManual,
+		LastError:       "H3 terminal usage requires manual reconciliation",
+		CreatedAt:       now - 30,
+		UpdatedAt:       now,
+		Revision:        1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	stats, err := GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, stats.Count)
+	assert.Equal(t, record.CreatedAt, stats.OldestCreatedAt)
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, reconciliation.TotalCount)
+	assert.Zero(t, reconciliation.PendingCount)
+	assert.EqualValues(t, 1, reconciliation.ManualCount)
+	require.Len(t, reconciliation.Items, 1)
+	assert.Equal(t, record.ID, reconciliation.Items[0].ID)
+	assert.False(t, reconciliation.Items[0].RecordBlocksUser)
+	assert.False(t, reconciliation.Items[0].BlocksUser)
+
+	blocked, err := HasUnresolvedPositiveFinalizeSettlement(record.UserID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "a bounded-actual task manual review must not be treated as unpaid positive funding")
+
+	reviewed, err := ReviewBillingSettlement(record.ID, 9803, true, "Verified the frozen task usage evidence")
+	require.NoError(t, err)
+	assert.Equal(t, BillingSettlementStatusManual, reviewed.Status)
+	assert.EqualValues(t, 800, reviewed.TaskQuota)
+	assert.EqualValues(t, 800, reviewed.TaskQuotaTarget)
+
+	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
+	require.NoError(t, err)
+	assert.Zero(t, stats.Count, "reviewed task-manual evidence must leave the active alert projection")
+}
+
 func TestBillingSettlementReconciliationProjectsOnlyOpenAlerts(t *testing.T) {
 	setupUserUpdateTestState(t)
 	setBillingReconciliationBlockDefaultForTest(t, false)

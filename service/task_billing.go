@@ -8,10 +8,13 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -66,6 +69,9 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 	if info == nil {
 		return nil
 	}
+	if taskSubmissionUsageIsDeferred(info) {
+		return nil
+	}
 	logContent, other := buildTaskConsumptionLogData(c, info)
 	useTimeSeconds := 0
 	if !info.StartTime.IsZero() {
@@ -93,6 +99,9 @@ func BuildTaskSubmissionSettlementEffect(c *gin.Context, info *relaycommon.Relay
 // LogTaskConsumption records task usage for legacy/custom funding paths that
 // do not have a durable BillingSettlement operation to carry the effect.
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
+	if info == nil || taskSubmissionUsageIsDeferred(info) {
+		return
+	}
 	tokenName := ""
 	if c != nil {
 		tokenName = c.GetString("token_name")
@@ -138,6 +147,12 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		if bc.TaskBilling != nil {
 			other["task_billing"] = bc.TaskBilling
 		}
+		if bc.TaskBillingPlan != nil {
+			other["task_billing_plan"] = bc.TaskBillingPlan
+		}
+		if bc.TaskUsage != nil {
+			other["task_usage"] = bc.TaskUsage
+		}
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
@@ -145,6 +160,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
 	return other
+}
+
+func taskSubmissionUsageIsDeferred(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.TaskBillingPlan != nil
 }
 
 // taskModelName 从 BillingContext 或 Properties 中获取模型名称。
@@ -180,10 +199,33 @@ func taskFinalSettlementPending(task *model.Task) (bool, error) {
 // provider transition that would make the task terminal. Callers keep their
 // own error reporting and skip/return behavior.
 func taskTerminalSettlementPending(task *model.Task, providerTerminal bool) (bool, error) {
+	pending, _, err := taskTerminalSettlementState(task, providerTerminal)
+	return pending, err
+}
+
+// taskTerminalSettlementState separates a task-finalize funding result from
+// its effect replay. Applied funding allows the provider-driven terminal
+// transition even when the non-financial effect is still pending.
+func taskTerminalSettlementState(task *model.Task, providerTerminal bool) (pending bool, taskFinalizeApplied bool, err error) {
 	if !providerTerminal {
-		return false, nil
+		return false, false, nil
 	}
-	return taskFinalSettlementPending(task)
+	pending, err = taskFinalSettlementPending(task)
+	if err != nil || pending || task == nil || task.ID <= 0 {
+		return pending, false, err
+	}
+	status, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(task.ID))
+	if err != nil || !found {
+		return false, false, err
+	}
+	switch status {
+	case "", model.BillingSettlementStatusApplied:
+		return false, true, nil
+	case model.BillingSettlementStatusPending, model.BillingSettlementStatusManual:
+		return true, false, nil
+	default:
+		return true, false, fmt.Errorf("unknown task terminal settlement status %q", status)
+	}
 }
 
 func BuildTaskRefundSettlementInput(task *model.Task, reason string) *model.BillingSettlementInput {
@@ -246,7 +288,7 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 		attachQuotaSaturationToOther(other, clamp)
 	}
 	return &model.BillingSettlementInput{
-		OperationKey:                    fmt.Sprintf("task:%d:finalize", task.ID),
+		OperationKey:                    model.BillingTaskFinalizeOperationKey(task.ID),
 		Source:                          source,
 		UserID:                          task.UserId,
 		SubscriptionID:                  task.PrivateData.SubscriptionId,
@@ -263,6 +305,149 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 			ModelName: taskModelName(task), TokenID: task.PrivateData.TokenId,
 			Group: task.Group, Other: other, NodeName: task.PrivateData.NodeName,
 			UpdateUsage: quotaDelta > 0,
+		},
+	}
+}
+
+type taskTerminalBillingDecision struct {
+	Settlement   *model.BillingSettlementInput
+	ManualReason string
+	Usage        *types.TaskUsage
+	UsesPlan     bool
+}
+
+func prepareTaskTerminalBillingDecision(
+	ctx context.Context,
+	adaptor TaskPollingAdaptor,
+	task *model.Task,
+	taskResult *relaycommon.TaskInfo,
+	channelType int,
+	channelSettings ...dto.ChannelOtherSettings,
+) taskTerminalBillingDecision {
+	plan := taskBillingPlan(task)
+	if plan == nil {
+		if taskResult != nil && taskResult.Status == string(model.TaskStatusFailure) {
+			return taskTerminalBillingDecision{Settlement: BuildTaskRefundSettlementInput(task, taskResult.Reason)}
+		}
+		return taskTerminalBillingDecision{
+			Settlement: prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, channelType, channelSettings...),
+		}
+	}
+
+	usage := frozenTaskUsage(task, taskResult)
+	decision := taskTerminalBillingDecision{
+		Settlement: buildTaskManualSettlementInput(task),
+		Usage:      usage,
+		UsesPlan:   true,
+	}
+	if task == nil || task.ID <= 0 || task.Quota < 0 {
+		decision.ManualReason = "H3 terminal billing task snapshot is invalid"
+		return decision
+	}
+	if plan.ReserveQuota < 0 || task.Quota < plan.ReserveQuota {
+		decision.ManualReason = "H3 terminal billing reservation snapshot conflicts with the frozen plan"
+		return decision
+	}
+	if err := task_billing_setting.ValidateH3BillingPlanSnapshot(plan); err != nil {
+		decision.ManualReason = "H3 terminal billing frozen totals require manual reconciliation: " + err.Error()
+		return decision
+	}
+	quote, err := task_billing_setting.QuoteH3Final(plan, usage)
+	if err != nil {
+		decision.ManualReason = "H3 terminal usage requires manual reconciliation: " + err.Error()
+		return decision
+	}
+	if quote.Quota > task.Quota {
+		decision.ManualReason = "H3 terminal quota exceeds the actual task reservation"
+		return decision
+	}
+	status := "unknown"
+	if taskResult != nil && strings.TrimSpace(taskResult.Status) != "" {
+		status = strings.ToLower(strings.TrimSpace(taskResult.Status))
+	}
+	decision.Settlement = buildTaskExactFinalSettlementInput(task, quote.Quota, usage, "H3 actual usage settlement (provider status: "+status+")")
+	return decision
+}
+
+func taskBillingPlan(task *model.Task) *types.TaskBillingPlan {
+	if task == nil || task.PrivateData.BillingContext == nil {
+		return nil
+	}
+	return task.PrivateData.BillingContext.TaskBillingPlan
+}
+
+func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo) *types.TaskUsage {
+	if task != nil && task.PrivateData.BillingContext != nil && task.PrivateData.BillingContext.TaskUsage != nil {
+		return types.CloneTaskUsage(task.PrivateData.BillingContext.TaskUsage)
+	}
+	if taskResult != nil && taskResult.Usage != nil {
+		return types.CloneTaskUsage(taskResult.Usage)
+	}
+	return &types.TaskUsage{
+		Source:       types.TaskUsageSourceProviderResponse,
+		Completeness: types.TaskUsageCompletenessMissing,
+	}
+}
+
+func buildTaskManualSettlementInput(task *model.Task) *model.BillingSettlementInput {
+	if task == nil || task.ID <= 0 {
+		return nil
+	}
+	source := model.BillingSettlementSourceWallet
+	if taskIsSubscription(task) {
+		source = model.BillingSettlementSourceSubscription
+	}
+	return &model.BillingSettlementInput{
+		OperationKey:                    model.BillingTaskFinalizeOperationKey(task.ID),
+		Source:                          source,
+		UserID:                          task.UserId,
+		SubscriptionID:                  task.PrivateData.SubscriptionId,
+		TokenID:                         task.PrivateData.TokenId,
+		TaskID:                          task.ID,
+		TaskQuota:                       int64(task.Quota),
+		TaskQuotaTarget:                 int64(task.Quota),
+		SubscriptionPreConsumeRequestID: task.PrivateData.BillingRequestId,
+	}
+}
+
+func buildTaskExactFinalSettlementInput(task *model.Task, actualQuota int, usage *types.TaskUsage, reason string) *model.BillingSettlementInput {
+	if task == nil || task.ID <= 0 || actualQuota < 0 {
+		return nil
+	}
+	reason = common.SanitizePersistedLogContent(reason)
+	quotaDelta := actualQuota - task.Quota
+	source := model.BillingSettlementSourceWallet
+	if taskIsSubscription(task) {
+		source = model.BillingSettlementSourceSubscription
+	}
+	tokenDelta := int64(quotaDelta)
+	if task.PrivateData.TokenId <= 0 {
+		tokenDelta = 0
+	}
+	other := taskBillingOther(task)
+	other["task_id"] = task.TaskID
+	other["reserved_quota"] = task.Quota
+	other["actual_quota"] = actualQuota
+	other["task_usage"] = types.CloneTaskUsage(usage)
+	return &model.BillingSettlementInput{
+		OperationKey:                    model.BillingTaskFinalizeOperationKey(task.ID),
+		Source:                          source,
+		UserID:                          task.UserId,
+		SubscriptionID:                  task.PrivateData.SubscriptionId,
+		TokenID:                         task.PrivateData.TokenId,
+		FundingDelta:                    int64(quotaDelta),
+		TokenDelta:                      tokenDelta,
+		TaskID:                          task.ID,
+		TaskQuota:                       int64(task.Quota),
+		TaskQuotaTarget:                 int64(actualQuota),
+		SubscriptionPreConsumeRequestID: task.PrivateData.BillingRequestId,
+		FinalizeSubscriptionPreConsume:  source == model.BillingSettlementSourceSubscription && actualQuota == 0 && quotaDelta < 0,
+		AllowMissingToken:               quotaDelta < 0,
+		Effect: &model.BillingSettlementEffect{
+			LogType: model.LogTypeConsume, Content: reason, ChannelID: task.ChannelId,
+			ModelName: taskModelName(task), TokenID: task.PrivateData.TokenId,
+			Group: task.Group, Other: other, NodeName: task.PrivateData.NodeName,
+			UpdateUsage: true, Quota: int64(actualQuota), QuotaIsActual: true,
 		},
 	}
 }
