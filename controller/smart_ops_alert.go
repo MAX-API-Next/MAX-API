@@ -206,6 +206,7 @@ func CompleteManualTaskBillingSettlement(c *gin.Context) {
 			errors.Is(err, model.ErrBillingSettlementTaskConflict),
 			errors.Is(err, model.ErrBillingSettlementManualReview),
 			errors.Is(err, model.ErrTokenQuotaInsufficient),
+			errors.Is(err, model.ErrSubscriptionRefundClamped),
 			errors.Is(err, model.ErrSubscriptionSettlementUnbound),
 			errors.Is(err, model.ErrSubscriptionSettlementPeriodChanged):
 			status = http.StatusConflict

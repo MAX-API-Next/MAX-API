@@ -255,7 +255,7 @@ func TestUpdateVideoSingleTaskKeepsManualH3TaskPollable(t *testing.T) {
 	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsage)
 	require.Equal(t, types.TaskUsageCompletenessMissing, stored.PrivateData.BillingContext.TaskUsage.Completeness)
 	var settlement model.BillingSettlement
-	require.NoError(t, model.DB.Where("operation_key = ?", "task:"+fmt.Sprint(task.ID)+":finalize").First(&settlement).Error)
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&settlement).Error)
 	require.Equal(t, model.BillingSettlementStatusManual, settlement.Status)
 	require.Zero(t, settlement.FundingDelta)
 

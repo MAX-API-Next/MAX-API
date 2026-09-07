@@ -42,6 +42,7 @@ var (
 	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
 	ErrBillingSettlementReviewConflict     = errors.New("billing settlement is no longer reviewable")
 	ErrBillingSettlementCompletionRequired = errors.New("manual task settlement requires financial completion")
+	ErrSubscriptionRefundClamped           = errors.New("subscription refund was clamped")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
 )
@@ -605,6 +606,9 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 			if billingSettlementRequiresManualTaskCompletion(current.Status, current.TaskID, current.OperationKey) {
 				return ErrBillingSettlementCompletionRequired
 			}
+			if billingSettlementIsManualTaskCompletion(current.OperationKey, current.TaskID) {
+				return ErrBillingSettlementCompletionRequired
+			}
 			result := openBillingReconciliationAlertScope(tx).
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
 				UpdateColumns(billingSettlementReviewUpdates(reviewerID, false, "", reviewedAt))
@@ -686,6 +690,9 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 		return BillingSettlement{}, err
 	}
 	if billingSettlementRequiresManualTaskCompletion(record.Status, record.TaskID, record.OperationKey) {
+		return BillingSettlement{}, ErrBillingSettlementCompletionRequired
+	}
+	if billingSettlementIsManualTaskCompletion(record.OperationKey, record.TaskID) {
 		return BillingSettlement{}, ErrBillingSettlementCompletionRequired
 	}
 
@@ -1919,7 +1926,7 @@ func applySubscriptionDeltaTx(tx *gorm.DB, input BillingSettlementInput) (int64,
 	}
 	if input.FinalizeSubscriptionPreConsume {
 		if applied != input.FundingDelta {
-			return 0, permanentBillingSettlement(fmt.Errorf("subscription refund was clamped: request=%s requested=%d applied=%d", requestID, input.FundingDelta, applied))
+			return 0, permanentBillingSettlement(fmt.Errorf("%w: request=%s requested=%d applied=%d", ErrSubscriptionRefundClamped, requestID, input.FundingDelta, applied))
 		}
 		result := tx.Model(&SubscriptionPreConsumeRecord{}).
 			Where("id = ? AND status = ?", record.Id, "consumed").

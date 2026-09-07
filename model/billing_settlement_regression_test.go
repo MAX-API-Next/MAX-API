@@ -544,6 +544,88 @@ func TestReviewBillingSettlementRefusesToHideManualTaskFinalization(t *testing.T
 	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
 }
 
+func TestReviewBillingSettlementsRefusesToOverwriteManualTaskCompletion(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	reviewable := BillingSettlement{
+		OperationKey: "request:review-before-manual-completion:finalize",
+		Source:       BillingSettlementSourceWallet,
+		UserID:       9819,
+		FundingDelta: 10,
+		TokenDelta:   10,
+		Status:       BillingSettlementStatusPending,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}
+	record := BillingSettlement{
+		OperationKey:    BillingTaskManualCompletionOperationKey(9820),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          9821,
+		TaskID:          9820,
+		TaskQuota:       100,
+		TaskQuotaTarget: 40,
+		FundingDelta:    -60,
+		TokenDelta:      -60,
+		Status:          BillingSettlementStatusManual,
+		LastError:       "manual completion requires repaired account mirrors",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Revision:        2,
+	}
+	require.NoError(t, DB.Create(&reviewable).Error)
+	require.NoError(t, DB.Create(&record).Error)
+
+	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{
+		{ID: reviewable.ID, Revision: reviewable.Revision},
+		{ID: record.ID, Revision: record.Revision},
+	}, 7011)
+
+	require.ErrorIs(t, err, ErrBillingSettlementCompletionRequired)
+	var storedReviewable BillingSettlement
+	require.NoError(t, DB.First(&storedReviewable, reviewable.ID).Error)
+	assert.Zero(t, storedReviewable.ReconciliationReviewedAt)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
+}
+
+func TestReviewBillingSettlementRefusesToOverwriteManualTaskCompletion(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey:             BillingTaskManualCompletionOperationKey(9822),
+		Source:                   BillingSettlementSourceWallet,
+		UserID:                   9823,
+		TaskID:                   9822,
+		TaskQuota:                100,
+		TaskQuotaTarget:          40,
+		FundingDelta:             -60,
+		TokenDelta:               -60,
+		Status:                   BillingSettlementStatusManual,
+		LastError:                "manual completion requires repaired account mirrors",
+		ReconciliationReviewedAt: now,
+		ReconciliationReviewedBy: 7012,
+		ReconciliationReviewNote: "Original provider evidence and approval.",
+		CreatedAt:                now,
+		UpdatedAt:                now,
+		Revision:                 2,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	_, err := ReviewBillingSettlement(record.ID, 7013, false, "Attempted replacement approval.")
+
+	require.ErrorIs(t, err, ErrBillingSettlementCompletionRequired)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, record.ReconciliationReviewedAt, stored.ReconciliationReviewedAt)
+	assert.Equal(t, record.ReconciliationReviewedBy, stored.ReconciliationReviewedBy)
+	assert.Equal(t, record.ReconciliationReviewNote, stored.ReconciliationReviewNote)
+}
+
 func TestResolveManualTaskBillingSettlementRequiresMatchingAppliedChild(t *testing.T) {
 	setupUserUpdateTestState(t)
 

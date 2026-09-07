@@ -302,7 +302,7 @@ func TestCompleteManualTaskBillingSettlementRejectsClampedSubscriptionRefund(t *
 		"Verified provider evidence for a full refund.",
 	)
 
-	require.Error(t, err)
+	require.ErrorIs(t, err, model.ErrSubscriptionRefundClamped)
 	assert.EqualValues(t, 50, getSubscriptionUsed(t, subscriptionID))
 	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
 	var storedManual model.BillingSettlement
