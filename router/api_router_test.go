@@ -198,7 +198,7 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Option{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Option{}, &model.Log{}, &model.BillingSettlement{}))
 	model.DB = db
 	model.LOG_DB = db
 
@@ -285,6 +285,29 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	require.Equal(t, http.StatusOK, rootResponse.Code)
 	require.Contains(t, rootResponse.Body.String(), `"success":true`)
 	require.False(t, billing_reconciliation_setting.BlockUserByDefault())
+
+	completeTask := func(cookies []*http.Cookie) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/smart-ops/billing-settlements/1/complete-task",
+			strings.NewReader(`{"revision":1,"actual_quota":0,"note":"verified provider evidence"}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		for _, sessionCookie := range cookies {
+			request.AddCookie(sessionCookie)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	adminCompletion := completeTask(login(admin.Id))
+	require.Equal(t, http.StatusOK, adminCompletion.Code)
+	require.Contains(t, adminCompletion.Body.String(), `"success":false`)
+
+	rootCompletion := completeTask(login(root.Id))
+	require.Equal(t, http.StatusConflict, rootCompletion.Code)
+	require.Contains(t, rootCompletion.Body.String(), `"success":false`)
 }
 
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {

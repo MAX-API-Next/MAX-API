@@ -35,6 +35,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
+  completeManualTaskBillingSettlement,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
@@ -46,11 +47,14 @@ import {
 } from '../lib/query-keys'
 import type {
   BillingSettlementReconciliationData,
+  BillingSettlementReconciliationItem,
   BillingSettlementReviewTarget,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
+import { ManualTaskSettlementDialog } from './manual-task-settlement-dialog'
 
 interface BillingSettlementEvidenceProps {
+  canCompleteManualTask: boolean
   canUpdateBlockingPolicy: boolean
   data?: BillingSettlementReconciliationData
   error: Error | null
@@ -65,7 +69,20 @@ export function BillingSettlementEvidence(
   const [selectedTargets, setSelectedTargets] = useState<
     Map<number, BillingSettlementReviewTarget>
   >(() => new Map())
+  const [manualTaskItem, setManualTaskItem] =
+    useState<BillingSettlementReconciliationItem | null>(null)
   const reconciliationItems = props.data?.items
+  const activeManualTaskItem = useMemo(() => {
+    if (!manualTaskItem) return null
+    return (
+      reconciliationItems?.find(
+        (item) =>
+          item.id === manualTaskItem.id &&
+          item.revision === manualTaskItem.revision &&
+          item.requires_manual_completion
+      ) ?? null
+    )
+  }, [manualTaskItem, reconciliationItems])
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
@@ -169,6 +186,52 @@ export function BillingSettlementEvidence(
     }
   }
 
+  const manualTaskCompletionMutation = useMutation({
+    mutationKey: ['smart-ops', 'manual-task-billing-completion'],
+    mutationFn: async ({
+      item,
+      actualQuota,
+      note,
+    }: {
+      item: BillingSettlementReconciliationItem
+      actualQuota: number
+      note: string
+    }): Promise<void> => {
+      const response = await completeManualTaskBillingSettlement(item.id, {
+        revision: item.revision,
+        actual_quota: actualQuota,
+        note,
+      })
+      if (!response.success) {
+        throw new Error(
+          response.message || t('Failed to complete manual task billing.')
+        )
+      }
+    },
+    onSuccess: () => {
+      setManualTaskItem(null)
+      toast.success(t('Manual task billing completed.'))
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
+      handleServerError(error, {
+        fallback: mutationErrorMessage(
+          error,
+          t('Failed to complete manual task billing.')
+        ),
+      })
+    },
+  })
+
   const replaceSelectedTargets = (
     targets: Map<number, BillingSettlementReviewTarget>
   ): void => {
@@ -226,7 +289,7 @@ export function BillingSettlementEvidence(
           </h4>
           <p className='text-muted-foreground mt-0.5 text-xs'>
             {t(
-              'Select one or more alerts and close them with one click. The underlying financial settlement record remains available for safe retry and audit.'
+              'Batch-close ordinary alerts after review. Task-finalization alerts require a root administrator to enter the exact provider-backed quota before they can close.'
             )}
           </p>
         </div>
@@ -327,11 +390,32 @@ export function BillingSettlementEvidence(
           </div>
           <BillingSettlementTable
             items={props.data.items}
+            canCompleteManualTask={props.canCompleteManualTask}
             selectedTargets={activeSelectedTargetMap}
-            reviewPending={reviewMutation.isPending}
+            reviewPending={
+              reviewMutation.isPending || manualTaskCompletionMutation.isPending
+            }
             onSelectedTargetsChange={replaceSelectedTargets}
             onReviewTargets={reviewTargets}
+            onCompleteManualTask={setManualTaskItem}
           />
+          {activeManualTaskItem && (
+            <ManualTaskSettlementDialog
+              key={`${activeManualTaskItem.id}:${activeManualTaskItem.revision}`}
+              item={activeManualTaskItem}
+              pending={manualTaskCompletionMutation.isPending}
+              onOpenChange={(open) => {
+                if (!open) setManualTaskItem(null)
+              }}
+              onSubmit={(item, actualQuota, note) =>
+                manualTaskCompletionMutation.mutate({
+                  item,
+                  actualQuota,
+                  note,
+                })
+              }
+            />
+          )}
         </div>
       )}
 

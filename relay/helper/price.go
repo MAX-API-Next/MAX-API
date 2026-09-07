@@ -345,13 +345,14 @@ func modelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo, taskPl
 	}
 
 	priceData := types.PriceData{
-		FreeModel:         freeModel,
-		ModelPrice:        modelPrice,
-		ModelRatio:        modelRatio,
-		UsePrice:          usePrice,
-		Quota:             quota,
-		QuotaToPreConsume: preConsumedQuota,
-		GroupRatioInfo:    groupRatioInfo,
+		FreeModel:               freeModel,
+		ModelPrice:              modelPrice,
+		ModelRatio:              modelRatio,
+		UsePrice:                usePrice,
+		Quota:                   quota,
+		QuotaToPreConsume:       preConsumedQuota,
+		TaskBillingPlanRequired: taskPlanPriced,
+		GroupRatioInfo:          groupRatioInfo,
 	}
 	return priceData, nil
 }

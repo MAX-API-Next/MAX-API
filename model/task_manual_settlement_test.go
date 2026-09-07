@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,12 +8,29 @@ import (
 
 func TestUpdateWithStatusAndManualSettlementKeepsTaskNonTerminal(t *testing.T) {
 	truncateTables(t)
-	task := &Task{TaskID: "manual-h3", Status: TaskStatusInProgress, Quota: 800}
+	task := &Task{
+		TaskID:     "manual-h3",
+		Status:     TaskStatusInProgress,
+		Quota:      800,
+		Progress:   "35%",
+		StartTime:  11,
+		FinishTime: 0,
+		FailReason: "",
+	}
+	task.SetData(map[string]any{"phase": "running"})
 	insertTask(t, task)
 	expectedUpdatedAt := task.UpdatedAt
-	task.PrivateData.BillingContext = &TaskBillingContext{}
+	task.PrivateData.BillingContext = &TaskBillingContext{
+		OriginModelName: "MiniMax-H3",
+		PerCallBilling:  true,
+	}
+	task.SetData(map[string]any{"phase": "provider-terminal-evidence"})
+	task.Progress = "100%"
+	task.StartTime = 22
+	task.FinishTime = 33
+	task.FailReason = "must remain reconciliation-only"
 	task.UpdatedAt++
-	operationKey := fmt.Sprintf("task:%d:finalize", task.ID)
+	operationKey := BillingTaskFinalizeOperationKey(task.ID)
 
 	won, err := task.UpdateWithStatusAndManualSettlement(TaskStatusInProgress, expectedUpdatedAt, BillingSettlementInput{
 		OperationKey: operationKey, Source: BillingSettlementSourceWallet,
@@ -27,6 +43,16 @@ func TestUpdateWithStatusAndManualSettlementKeepsTaskNonTerminal(t *testing.T) {
 	require.NoError(t, DB.First(&stored, task.ID).Error)
 	require.Equal(t, TaskStatus(TaskStatusInProgress), stored.Status)
 	require.Equal(t, 800, stored.Quota)
+	require.Equal(t, "35%", stored.Progress)
+	require.EqualValues(t, 11, stored.StartTime)
+	require.Zero(t, stored.FinishTime)
+	require.Empty(t, stored.FailReason)
+	var storedData map[string]any
+	require.NoError(t, stored.GetData(&storedData))
+	require.Equal(t, "provider-terminal-evidence", storedData["phase"])
+	require.NotNil(t, stored.PrivateData.BillingContext)
+	require.Equal(t, "MiniMax-H3", stored.PrivateData.BillingContext.OriginModelName)
+	require.True(t, stored.PrivateData.BillingContext.PerCallBilling)
 	var settlement BillingSettlement
 	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
 	require.Equal(t, BillingSettlementStatusManual, settlement.Status)
@@ -38,7 +64,7 @@ func TestUpdateWithStatusAndManualSettlementCASLossLeavesNoIntent(t *testing.T) 
 	truncateTables(t)
 	task := &Task{TaskID: "manual-h3-cas-loss", Status: TaskStatusQueued, Quota: 800}
 	insertTask(t, task)
-	operationKey := fmt.Sprintf("task:%d:finalize", task.ID)
+	operationKey := BillingTaskFinalizeOperationKey(task.ID)
 	task.Status = TaskStatusInProgress
 	task.UpdatedAt++
 

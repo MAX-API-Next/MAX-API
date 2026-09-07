@@ -175,6 +175,7 @@ func TestModelPriceHelperPerCallDefersStructuredMinimaxPricingToTaskPlan(t *test
 	require.Zero(t, priceData.QuotaToPreConsume)
 	require.False(t, priceData.FreeModel)
 	require.False(t, priceData.UsePrice)
+	require.True(t, priceData.TaskBillingPlanRequired)
 	require.EqualValues(t, 1, priceData.GroupRatioInfo.GroupRatio)
 }
 
@@ -256,10 +257,11 @@ func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *tes
 		},
 	}
 
-	_, err = ModelPriceHelperPerCallWithPlanCapability(ctx, info, true)
+	priceData, err := ModelPriceHelperPerCallWithPlanCapability(ctx, info, true)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not been priced")
+	require.False(t, priceData.TaskBillingPlanRequired)
 }
 
 func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testing.T) {
@@ -309,6 +311,7 @@ func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testin
 	require.Zero(t, priceData.Quota)
 	require.Zero(t, priceData.QuotaToPreConsume)
 	require.False(t, priceData.UsePrice)
+	require.True(t, priceData.TaskBillingPlanRequired)
 }
 
 func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
@@ -344,6 +347,7 @@ func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {
 	require.Equal(t, float64(1), priceData.GroupRatioInfo.GroupRatio)
 	require.Equal(t, 0.1, priceData.ModelPrice)
 	require.Equal(t, 100, priceData.Quota)
+	require.False(t, priceData.TaskBillingPlanRequired)
 }
 
 func TestModelPriceHelperPerCallSeparatesFinalAndPreConsumedQuota(t *testing.T) {

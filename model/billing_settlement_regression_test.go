@@ -303,15 +303,18 @@ func TestTaskManualFinalizeIsVisibleForReconciliationWithoutBlockingAdmission(t 
 	require.NoError(t, err)
 	assert.False(t, blocked, "a bounded-actual task manual review must not be treated as unpaid positive funding")
 
-	reviewed, err := ReviewBillingSettlement(record.ID, 9803, true, "Verified the frozen task usage evidence")
-	require.NoError(t, err)
-	assert.Equal(t, BillingSettlementStatusManual, reviewed.Status)
-	assert.EqualValues(t, 800, reviewed.TaskQuota)
-	assert.EqualValues(t, 800, reviewed.TaskQuotaTarget)
+	_, err = ReviewBillingSettlement(record.ID, 9803, true, "Verified the frozen task usage evidence")
+	require.ErrorIs(t, err, ErrBillingSettlementCompletionRequired)
+	var unchanged BillingSettlement
+	require.NoError(t, DB.First(&unchanged, record.ID).Error)
+	assert.Zero(t, unchanged.ReconciliationReviewedAt)
+	assert.Equal(t, BillingSettlementStatusManual, unchanged.Status)
+	assert.EqualValues(t, 800, unchanged.TaskQuota)
+	assert.EqualValues(t, 800, unchanged.TaskQuotaTarget)
 
 	stats, err = GetUnresolvedPositiveFinalizeSettlementStats()
 	require.NoError(t, err)
-	assert.Zero(t, stats.Count, "reviewed task-manual evidence must leave the active alert projection")
+	assert.EqualValues(t, 1, stats.Count, "manual task-finalize evidence must remain visible until financial completion")
 }
 
 func TestTaskPendingFinalizeIsVisibleForReconciliationWithoutBlockingAdmission(t *testing.T) {
@@ -442,7 +445,7 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, reviewed, 2)
-	assert.Equal(t, 1, queryCount, "reviewed settlements must be read back in one query")
+	assert.Equal(t, len(targets)+1, queryCount, "review must lock each settlement in ID order and read the completed batch back once")
 	assert.Equal(t, records[1].ID, targets[0].ID, "sorting must not mutate the caller's target order")
 	assert.Equal(t, records[0].ID, targets[1].ID)
 	for index := range reviewed {
@@ -465,6 +468,184 @@ func TestReviewBillingSettlementsClosesSelectionAtomically(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, reconciliation.TotalCount)
 	assert.Empty(t, reconciliation.Items)
+}
+
+func TestReviewBillingSettlementsRefusesToHideManualTaskFinalization(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	reviewable := BillingSettlement{
+		OperationKey: "request:review-before-manual-task:finalize",
+		Source:       BillingSettlementSourceWallet,
+		UserID:       9800,
+		FundingDelta: 10,
+		TokenDelta:   10,
+		Status:       BillingSettlementStatusPending,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Revision:     1,
+	}
+	require.NoError(t, DB.Create(&reviewable).Error)
+	record := BillingSettlement{
+		OperationKey:    BillingTaskFinalizeOperationKey(9801),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          9802,
+		TaskID:          9801,
+		TaskQuota:       100,
+		TaskQuotaTarget: 100,
+		Status:          BillingSettlementStatusManual,
+		LastError:       "provider usage requires reconciliation",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Revision:        1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	_, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{
+		{ID: reviewable.ID, Revision: reviewable.Revision},
+		{ID: record.ID, Revision: record.Revision},
+	}, 7009)
+
+	require.ErrorIs(t, err, ErrBillingSettlementCompletionRequired)
+	var storedReviewable BillingSettlement
+	require.NoError(t, DB.First(&storedReviewable, reviewable.ID).Error)
+	assert.Zero(t, storedReviewable.ReconciliationReviewedAt)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
+}
+
+func TestReviewBillingSettlementRefusesToHideManualTaskFinalization(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey:    BillingTaskFinalizeOperationKey(9811),
+		Source:          BillingSettlementSourceWallet,
+		UserID:          9812,
+		TaskID:          9811,
+		TaskQuota:       100,
+		TaskQuotaTarget: 100,
+		Status:          BillingSettlementStatusManual,
+		LastError:       "provider usage requires reconciliation",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Revision:        1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	_, err := ReviewBillingSettlement(record.ID, 7010, false, "Reviewed but not settled")
+
+	require.ErrorIs(t, err, ErrBillingSettlementCompletionRequired)
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Zero(t, stored.ReconciliationReviewedAt)
+	assert.Equal(t, BillingSettlementStatusManual, stored.Status)
+}
+
+func TestResolveManualTaskBillingSettlementRequiresMatchingAppliedChild(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	original := BillingSettlement{
+		OperationKey:                    BillingTaskFinalizeOperationKey(9821),
+		Source:                          BillingSettlementSourceWallet,
+		UserID:                          9822,
+		TokenID:                         9823,
+		TaskID:                          9821,
+		TaskQuota:                       100,
+		TaskQuotaTarget:                 100,
+		SubscriptionPreConsumeRequestID: "manual-child-binding",
+		Status:                          BillingSettlementStatusManual,
+		LastError:                       "provider evidence needs reconciliation",
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
+		Revision:                        1,
+	}
+	require.NoError(t, DB.Create(&original).Error)
+
+	const reviewerID = 7021
+	const note = "Verified provider artifacts and exact final quota."
+	_, _, err := ResolveManualTaskBillingSettlement(original.ID, original.Revision, reviewerID, note)
+	require.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+
+	child := BillingSettlement{
+		OperationKey:                    BillingTaskManualCompletionOperationKey(original.TaskID),
+		Source:                          original.Source,
+		UserID:                          original.UserID,
+		TokenID:                         original.TokenID,
+		FundingDelta:                    -60,
+		TokenDelta:                      -60,
+		TaskID:                          original.TaskID,
+		TaskQuota:                       original.TaskQuota,
+		TaskQuotaTarget:                 40,
+		SubscriptionPreConsumeRequestID: original.SubscriptionPreConsumeRequestID,
+		Status:                          BillingSettlementStatusPending,
+		ReconciliationReviewedAt:        now,
+		ReconciliationReviewedBy:        reviewerID,
+		ReconciliationReviewNote:        note,
+		CreatedAt:                       now,
+		UpdatedAt:                       now,
+		Revision:                        1,
+	}
+	require.NoError(t, DB.Create(&child).Error)
+	_, _, err = ResolveManualTaskBillingSettlement(original.ID, original.Revision, reviewerID, note)
+	require.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+
+	require.NoError(t, DB.Model(&child).Updates(map[string]interface{}{
+		"status":                BillingSettlementStatusApplied,
+		"applied_funding_delta": -59,
+		"revision":              2,
+	}).Error)
+	_, _, err = ResolveManualTaskBillingSettlement(original.ID, original.Revision, reviewerID, note)
+	require.ErrorIs(t, err, ErrBillingSettlementReviewConflict)
+
+	require.NoError(t, DB.Model(&child).Update("applied_funding_delta", -60).Error)
+	resolved, alreadyResolved, err := ResolveManualTaskBillingSettlement(original.ID, original.Revision, reviewerID, note)
+	require.NoError(t, err)
+	assert.False(t, alreadyResolved)
+	assert.Equal(t, BillingSettlementStatusApplied, resolved.Status)
+	assert.EqualValues(t, original.Revision+1, resolved.Revision)
+
+	replayed, alreadyResolved, err := ResolveManualTaskBillingSettlement(original.ID, original.Revision, reviewerID, note)
+	require.NoError(t, err)
+	assert.True(t, alreadyResolved)
+	assert.Equal(t, resolved.ID, replayed.ID)
+}
+
+func TestManualTaskCompletionFailurePreservesAdministratorAuthorization(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	record := BillingSettlement{
+		OperationKey:             BillingTaskManualCompletionOperationKey(9831),
+		Source:                   BillingSettlementSourceWallet,
+		UserID:                   9832,
+		TaskID:                   9831,
+		TaskQuota:                100,
+		TaskQuotaTarget:          40,
+		FundingDelta:             -60,
+		TokenDelta:               -60,
+		Status:                   BillingSettlementStatusPending,
+		NextAttempt:              now,
+		ReconciliationReviewedAt: now,
+		ReconciliationReviewedBy: 7031,
+		ReconciliationReviewNote: "Verified provider evidence before applying the refund.",
+		CreatedAt:                now,
+		UpdatedAt:                now,
+		Revision:                 1,
+	}
+	require.NoError(t, DB.Create(&record).Error)
+
+	markBillingSettlementFailure(record.OperationKey, errors.New("temporary database failure"))
+
+	var stored BillingSettlement
+	require.NoError(t, DB.First(&stored, record.ID).Error)
+	assert.Equal(t, BillingSettlementStatusPending, stored.Status)
+	assert.Equal(t, record.ReconciliationReviewedAt, stored.ReconciliationReviewedAt)
+	assert.Equal(t, record.ReconciliationReviewedBy, stored.ReconciliationReviewedBy)
+	assert.Equal(t, record.ReconciliationReviewNote, stored.ReconciliationReviewNote)
 }
 
 func TestReviewBillingSettlementsRejectsStaleBatchWithoutPartialClose(t *testing.T) {

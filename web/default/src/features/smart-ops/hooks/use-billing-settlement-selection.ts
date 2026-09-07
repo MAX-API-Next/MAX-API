@@ -49,13 +49,20 @@ export function useBillingSettlementSelection(
   const onSelectedTargetsChange = params.onSelectedTargetsChange
   const isSelected = useCallback(
     (item: BillingSettlementReconciliationItem): boolean =>
+      !item.requires_manual_completion &&
       selectedTargets.get(item.id)?.revision === item.revision,
     [selectedTargets]
   )
   const { allSelected, someSelected } = useMemo(() => {
     return {
-      allSelected: items.length > 0 && items.every((item) => isSelected(item)),
-      someSelected: items.some((item) => isSelected(item)),
+      allSelected:
+        items.some((item) => !item.requires_manual_completion) &&
+        items
+          .filter((item) => !item.requires_manual_completion)
+          .every((item) => isSelected(item)),
+      someSelected: items.some(
+        (item) => !item.requires_manual_completion && isSelected(item)
+      ),
     }
   }, [isSelected, items])
 
@@ -64,10 +71,12 @@ export function useBillingSettlementSelection(
       onSelectedTargetsChange(
         checked
           ? new Map(
-              items.map((item) => [
-                item.id,
-                { id: item.id, revision: item.revision },
-              ])
+              items
+                .filter((item) => !item.requires_manual_completion)
+                .map((item) => [
+                  item.id,
+                  { id: item.id, revision: item.revision },
+                ])
             )
           : new Map()
       )
@@ -78,6 +87,11 @@ export function useBillingSettlementSelection(
   const toggleItem = useCallback(
     (item: BillingSettlementReconciliationItem, checked: boolean): void => {
       const next = new Map(selectedTargets)
+      if (item.requires_manual_completion) {
+        next.delete(item.id)
+        onSelectedTargetsChange(next)
+        return
+      }
       if (checked) {
         next.set(item.id, { id: item.id, revision: item.revision })
       } else {

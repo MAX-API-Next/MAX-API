@@ -22,6 +22,7 @@ import type {
   BillingSettlementReconciliationResponse,
   BillingSettlementMutationResponse,
   BillingSettlementReviewRequest,
+  ManualTaskBillingCompletionRequest,
   ChannelPerformanceData,
   ChannelPerformanceQuery,
   ChannelPerformanceResponse,
@@ -63,6 +64,18 @@ export async function reviewBillingSettlements(
 ): Promise<BillingSettlementMutationResponse> {
   const response = await api.post<BillingSettlementMutationResponse>(
     '/api/smart-ops/billing-settlements/reviews',
+    request,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function completeManualTaskBillingSettlement(
+  settlementId: number,
+  request: ManualTaskBillingCompletionRequest
+): Promise<BillingSettlementMutationResponse> {
+  const response = await api.post<BillingSettlementMutationResponse>(
+    `/api/smart-ops/billing-settlements/${settlementId}/complete-task`,
     request,
     { skipBusinessError: true, skipErrorHandler: true }
   )

@@ -455,11 +455,17 @@ func captureTaskBillingPlan(c *gin.Context, info *relaycommon.RelayInfo, adaptor
 	info.TaskBillingPlan = nil
 	planner, ok := adaptor.(channel.TaskBillingPlanProvider)
 	if !ok {
+		if info.PriceData.TaskBillingPlanRequired {
+			return errors.New("required task billing plan provider is unavailable")
+		}
 		return nil
 	}
 	plan, err := planner.BuildTaskBillingPlan(c, info)
 	if err != nil {
 		return err
+	}
+	if info.PriceData.TaskBillingPlanRequired && plan == nil {
+		return errors.New("required task billing plan was not produced")
 	}
 	info.TaskBillingPlan = plan
 	return nil

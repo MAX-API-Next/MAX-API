@@ -51,6 +51,9 @@ export type BillingSettlementReconciliationItem = {
   subscription_id: number
   token_id: number
   task_id: number
+  task_quota: number
+  task_quota_target: number
+  requires_manual_completion: boolean
   funding_delta: number
   applied_funding_delta: number
   token_delta: number
@@ -97,6 +100,12 @@ export type BillingSettlementReviewTarget = {
 
 export type BillingSettlementReviewRequest = {
   items: BillingSettlementReviewTarget[]
+}
+
+export type ManualTaskBillingCompletionRequest = {
+  revision: number
+  actual_quota: number
+  note: string
 }
 
 export type BillingSettlementReconciliationResponse = {

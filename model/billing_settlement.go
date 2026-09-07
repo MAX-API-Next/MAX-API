@@ -31,6 +31,7 @@ const (
 const billingRequestOperationPrefix = "request:"
 const billingRequestFinalizeSuffix = ":finalize"
 const billingTaskOperationPrefix = "task:"
+const billingTaskManualCompletionSuffix = ":manual-completion"
 
 const billingSettlementBacklogSampleInterval = 30 * time.Second
 
@@ -40,6 +41,7 @@ var (
 	ErrBillingSettlementOperationConflict  = errors.New("billing settlement operation conflict")
 	ErrBillingSettlementRecordNotDurable   = errors.New("billing settlement record was not durably created")
 	ErrBillingSettlementReviewConflict     = errors.New("billing settlement is no longer reviewable")
+	ErrBillingSettlementCompletionRequired = errors.New("manual task settlement requires financial completion")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
 )
@@ -196,6 +198,9 @@ type BillingSettlementReconciliationItem struct {
 	SubscriptionID           int    `json:"subscription_id"`
 	TokenID                  int    `json:"token_id"`
 	TaskID                   int64  `json:"task_id"`
+	TaskQuota                int64  `json:"task_quota"`
+	TaskQuotaTarget          int64  `json:"task_quota_target"`
+	RequiresManualCompletion bool   `json:"requires_manual_completion"`
 	FundingDelta             int64  `json:"funding_delta"`
 	AppliedFundingDelta      int64  `json:"applied_funding_delta"`
 	TokenDelta               int64  `json:"token_delta"`
@@ -439,7 +444,7 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		items := make([]BillingSettlementReconciliationItem, 0, limit+1)
 		if err := openBillingReconciliationAlertScope(tx).
 			Select(
-				"id", "revision", "operation_key", "status", "source", "user_id", "subscription_id", "token_id", "task_id",
+				"id", "revision", "operation_key", "status", "source", "user_id", "subscription_id", "token_id", "task_id", "task_quota", "task_quota_target",
 				"funding_delta", "applied_funding_delta", "token_delta", "applied_token_delta", "attempts", "last_error",
 				"next_attempt", "created_at", "updated_at", "reconciliation_reviewed_at", "reconciliation_reviewed_by",
 				"reconciliation_review_note", "user_blocking_override",
@@ -462,6 +467,7 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			items[index].ReconciliationReviewNote = common.SanitizePersistedLogContent(
 				common.MaskSensitiveInfo(items[index].ReconciliationReviewNote),
 			)
+			items[index].RequiresManualCompletion = billingSettlementRequiresManualTaskCompletion(items[index].Status, items[index].TaskID, items[index].OperationKey)
 			items[index].RecordBlocksUser = items[index].FundingDelta > 0 &&
 				strings.HasPrefix(items[index].OperationKey, billingRequestOperationPrefix) &&
 				strings.HasSuffix(items[index].OperationKey, billingRequestFinalizeSuffix) &&
@@ -505,6 +511,12 @@ func billingSettlementBlocksUser(override *bool, blockUserByDefault bool) bool {
 		return *override
 	}
 	return blockUserByDefault
+}
+
+func billingSettlementRequiresManualTaskCompletion(status string, taskID int64, operationKey string) bool {
+	return status == BillingSettlementStatusManual &&
+		taskID > 0 &&
+		operationKey == BillingTaskFinalizeOperationKey(taskID)
 }
 
 // HasUnresolvedPositiveFinalizeSettlement reports whether a user has an
@@ -580,6 +592,19 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 		reviewedAt := time.Now()
 		updatedIDs := make([]int64, 0, len(sortedTargets))
 		for _, target := range sortedTargets {
+			var current BillingSettlement
+			if err := withRowLock(openBillingReconciliationAlertScope(tx)).
+				Select("id", "revision", "status", "task_id", "operation_key").
+				Where("id = ? AND revision = ?", target.ID, target.Revision).
+				First(&current).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrBillingSettlementReviewConflict
+				}
+				return err
+			}
+			if billingSettlementRequiresManualTaskCompletion(current.Status, current.TaskID, current.OperationKey) {
+				return ErrBillingSettlementCompletionRequired
+			}
 			result := openBillingReconciliationAlertScope(tx).
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
 				UpdateColumns(billingSettlementReviewUpdates(reviewerID, false, "", reviewedAt))
@@ -645,7 +670,10 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 	var record BillingSettlement
 	if err := DB.Select(
 		"id",
+		"operation_key",
+		"status",
 		"user_id",
+		"task_id",
 		"revision",
 		"reconciliation_reviewed_at",
 		"reconciliation_reviewed_by",
@@ -656,6 +684,9 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 			return BillingSettlement{}, ErrBillingSettlementReviewConflict
 		}
 		return BillingSettlement{}, err
+	}
+	if billingSettlementRequiresManualTaskCompletion(record.Status, record.TaskID, record.OperationKey) {
+		return BillingSettlement{}, ErrBillingSettlementCompletionRequired
 	}
 
 	reviewedAt := time.Now()
@@ -695,6 +726,236 @@ func BillingRequestFinalizeOperationKey(requestID string) string {
 
 func BillingTaskFinalizeOperationKey(taskID int64) string {
 	return fmt.Sprintf("%s%d%s", billingTaskOperationPrefix, taskID, billingRequestFinalizeSuffix)
+}
+
+func BillingTaskManualCompletionOperationKey(taskID int64) string {
+	return fmt.Sprintf("%s%d%s%s", billingTaskOperationPrefix, taskID, billingTaskManualCompletionSuffix, billingRequestFinalizeSuffix)
+}
+
+func billingSettlementIsManualTaskCompletion(operationKey string, taskID int64) bool {
+	return taskID > 0 && operationKey == BillingTaskManualCompletionOperationKey(taskID)
+}
+
+// EnsureManualTaskBillingCompletion records the administrator's exact approval
+// together with the independently keyed child settlement before any balance
+// mutation. A process restart may then let the normal runner apply the already
+// approved operation without losing who authorized it or which evidence note
+// was supplied.
+func EnsureManualTaskBillingCompletion(input BillingSettlementInput, reviewerID int, note string) (BillingSettlement, error) {
+	if DB == nil {
+		return BillingSettlement{}, errors.New("database is not initialized")
+	}
+	if reviewerID <= 0 || strings.TrimSpace(note) == "" || !billingSettlementIsManualTaskCompletion(input.OperationKey, input.TaskID) {
+		return BillingSettlement{}, ErrBillingSettlementReviewConflict
+	}
+	var approved BillingSettlement
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		record, _, err := ensureBillingSettlementRecordDB(tx, input)
+		if err != nil {
+			return err
+		}
+		if record.ReconciliationReviewedAt > 0 || record.ReconciliationReviewedBy > 0 || record.ReconciliationReviewNote != "" {
+			if record.ReconciliationReviewedAt <= 0 || record.ReconciliationReviewedBy != reviewerID || record.ReconciliationReviewNote != note {
+				return ErrBillingSettlementReviewConflict
+			}
+			approved = record
+			return nil
+		}
+		now := time.Now().Unix()
+		result := tx.Model(&BillingSettlement{}).
+			Where(
+				"id = ? AND reconciliation_reviewed_at = ? AND reconciliation_reviewed_by = ?",
+				record.ID,
+				0,
+				0,
+			).
+			Where("reconciliation_review_note = ? OR reconciliation_review_note IS NULL", "").
+			UpdateColumns(map[string]interface{}{
+				"reconciliation_reviewed_at": now,
+				"reconciliation_reviewed_by": reviewerID,
+				"reconciliation_review_note": note,
+				"user_blocking_override":     false,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBillingSettlementReviewConflict
+		}
+		return tx.First(&approved, record.ID).Error
+	})
+	return approved, err
+}
+
+// GetManualTaskBillingSettlement loads the immutable task-finalize evidence
+// used by the audited administrator completion flow. The original revision is
+// accepted after resolution so an HTTP retry can replay the child settlement
+// without changing the first administrator's audit disposition.
+func GetManualTaskBillingSettlement(id int64, expectedRevision int64) (BillingSettlement, bool, error) {
+	if DB == nil {
+		return BillingSettlement{}, false, errors.New("database is not initialized")
+	}
+	if id <= 0 || expectedRevision <= 0 {
+		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+	var record BillingSettlement
+	if err := DB.First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+		}
+		return BillingSettlement{}, false, err
+	}
+	if record.TaskID <= 0 || record.OperationKey != BillingTaskFinalizeOperationKey(record.TaskID) {
+		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+	switch record.Status {
+	case BillingSettlementStatusManual:
+		if record.Revision != expectedRevision {
+			return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+		}
+		return record, false, nil
+	case BillingSettlementStatusApplied:
+		if record.Revision != expectedRevision+1 || record.ReconciliationReviewedAt <= 0 || record.ReconciliationReviewedBy <= 0 {
+			return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+		}
+		var completion BillingSettlement
+		if err := DB.Where("operation_key = ?", BillingTaskManualCompletionOperationKey(record.TaskID)).First(&completion).Error; err != nil {
+			return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+		}
+		if err := validateManualTaskBillingCompletionPair(record, completion, record.ReconciliationReviewedBy, record.ReconciliationReviewNote); err != nil {
+			return BillingSettlement{}, false, err
+		}
+		return record, true, nil
+	default:
+		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+}
+
+// GetManualTaskBillingCompletion returns the independently keyed financial
+// operation, when present. Callers use it to distinguish an untouched task
+// reservation from a child settlement that already committed before a retry.
+func GetManualTaskBillingCompletion(taskID int64) (BillingSettlement, bool, error) {
+	if DB == nil {
+		return BillingSettlement{}, false, errors.New("database is not initialized")
+	}
+	if taskID <= 0 {
+		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+	var record BillingSettlement
+	result := DB.Where("operation_key = ?", BillingTaskManualCompletionOperationKey(taskID)).Limit(1).Find(&record)
+	if result.Error != nil {
+		return BillingSettlement{}, false, result.Error
+	}
+	return record, result.RowsAffected == 1, nil
+}
+
+func validateManualTaskBillingCompletionPair(original BillingSettlement, completion BillingSettlement, reviewerID int, note string) error {
+	if original.TaskID <= 0 || original.OperationKey != BillingTaskFinalizeOperationKey(original.TaskID) ||
+		completion.OperationKey != BillingTaskManualCompletionOperationKey(original.TaskID) ||
+		completion.Status != BillingSettlementStatusApplied ||
+		completion.Source != original.Source ||
+		completion.UserID != original.UserID ||
+		completion.SubscriptionID != original.SubscriptionID ||
+		completion.TokenID != original.TokenID ||
+		completion.TaskID != original.TaskID ||
+		completion.TaskQuota != original.TaskQuota ||
+		completion.TaskQuotaTarget < 0 ||
+		completion.TaskQuotaTarget > original.TaskQuota ||
+		completion.FundingDelta != completion.TaskQuotaTarget-completion.TaskQuota ||
+		completion.AppliedFundingDelta != completion.FundingDelta ||
+		completion.SubscriptionPreConsumeRequestID != original.SubscriptionPreConsumeRequestID ||
+		completion.ReconciliationReviewedAt <= 0 ||
+		completion.ReconciliationReviewedBy != reviewerID ||
+		completion.ReconciliationReviewNote != note {
+		return ErrBillingSettlementReviewConflict
+	}
+	return nil
+}
+
+// ResolveManualTaskBillingSettlement closes the original manual lifecycle only
+// after its independently keyed child settlement has reached applied. A lost
+// response or process interruption can safely replay this compare-and-swap.
+func ResolveManualTaskBillingSettlement(id int64, expectedRevision int64, reviewerID int, note string) (BillingSettlement, bool, error) {
+	if DB == nil {
+		return BillingSettlement{}, false, errors.New("database is not initialized")
+	}
+	if id <= 0 || expectedRevision <= 0 || reviewerID <= 0 || strings.TrimSpace(note) == "" {
+		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+	var resolved BillingSettlement
+	alreadyResolved := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var current BillingSettlement
+		if err := withRowLock(tx).Where("id = ?", id).First(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBillingSettlementReviewConflict
+			}
+			return err
+		}
+		if current.TaskID <= 0 || current.OperationKey != BillingTaskFinalizeOperationKey(current.TaskID) {
+			return ErrBillingSettlementReviewConflict
+		}
+
+		var completion BillingSettlement
+		if err := withRowLock(tx).
+			Where("operation_key = ?", BillingTaskManualCompletionOperationKey(current.TaskID)).
+			First(&completion).Error; err != nil {
+			return ErrBillingSettlementReviewConflict
+		}
+		if err := validateManualTaskBillingCompletionPair(current, completion, reviewerID, note); err != nil {
+			return err
+		}
+
+		switch current.Status {
+		case BillingSettlementStatusApplied:
+			if current.Revision != expectedRevision+1 ||
+				current.ReconciliationReviewedAt <= 0 ||
+				current.ReconciliationReviewedBy != reviewerID ||
+				current.ReconciliationReviewNote != note {
+				return ErrBillingSettlementReviewConflict
+			}
+			resolved = current
+			alreadyResolved = true
+			return nil
+		case BillingSettlementStatusManual:
+			if current.Revision != expectedRevision {
+				return ErrBillingSettlementReviewConflict
+			}
+		default:
+			return ErrBillingSettlementReviewConflict
+		}
+
+		now := time.Now().Unix()
+		result := tx.Model(&BillingSettlement{}).
+			Where(
+				"id = ? AND revision = ? AND status = ? AND operation_key = ?",
+				id,
+				expectedRevision,
+				BillingSettlementStatusManual,
+				current.OperationKey,
+			).
+			Updates(map[string]interface{}{
+				"status":                     BillingSettlementStatusApplied,
+				"reconciliation_reviewed_at": now,
+				"reconciliation_reviewed_by": reviewerID,
+				"reconciliation_review_note": note,
+				"user_blocking_override":     false,
+				"next_attempt":               0,
+				"updated_at":                 now,
+				"revision":                   gorm.Expr("revision + ?", 1),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBillingSettlementReviewConflict
+		}
+		return tx.First(&resolved, id).Error
+	})
+	if err != nil {
+		return BillingSettlement{}, false, err
+	}
+	return resolved, alreadyResolved, nil
 }
 
 // GetBillingSettlementStatus returns the durable funding state for one stable
@@ -812,6 +1073,14 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 		appliedFundingDelta, applyErr = applyFundingDeltaTx(tx, input)
 		if applyErr != nil {
 			return applyErr
+		}
+		if billingSettlementIsManualTaskCompletion(input.OperationKey, input.TaskID) && appliedFundingDelta != input.FundingDelta {
+			return permanentBillingSettlement(fmt.Errorf(
+				"%w: exact funding delta required requested=%d applied=%d",
+				ErrBillingSettlementOperationConflict,
+				input.FundingDelta,
+				appliedFundingDelta,
+			))
 		}
 		if input.Source == BillingSettlementSourceSubscription && input.TokenDelta == input.FundingDelta {
 			effectiveTokenDelta = appliedFundingDelta
@@ -1165,7 +1434,11 @@ func markBillingSettlementFailure(operationKey string, cause error) {
 	if cause != nil {
 		lastError = cause.Error()
 	}
-	resetReview := lastError != record.LastError || status != record.Status
+	// Manual task-completion children persist the approving administrator and
+	// evidence note before any financial mutation. Retrying or escalating that
+	// already-authorized operation must never erase its durable authorization.
+	resetReview := (lastError != record.LastError || status != record.Status) &&
+		!billingSettlementIsManualTaskCompletion(record.OperationKey, record.TaskID)
 	if err := DB.Model(&BillingSettlement{}).
 		Where("id = ? AND status = ?", record.ID, BillingSettlementStatusPending).
 		Updates(billingSettlementFailureUpdates(attempts, lastError, status, nextAttempt, time.Now().Unix(), resetReview)).Error; err != nil {

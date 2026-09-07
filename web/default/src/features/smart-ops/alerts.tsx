@@ -309,6 +309,7 @@ export function ActiveAlerts(): ReactElement {
               onRetry={() => void alertsQuery.refetch()}
             />
             <BillingSettlementEvidence
+              canCompleteManualTask={canUpdateBlockingPolicy}
               canUpdateBlockingPolicy={canUpdateBlockingPolicy}
               data={reconciliationQuery.data}
               error={

@@ -394,9 +394,9 @@ func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int6
 
 func taskFinalizeOperationKeySQL(usingSQLite bool) string {
 	if usingSQLite {
-		return "'task:' || CAST(tasks.id AS TEXT) || ':finalize'"
+		return fmt.Sprintf("'%s' || CAST(tasks.id AS TEXT) || '%s'", billingTaskOperationPrefix, billingRequestFinalizeSuffix)
 	}
-	return "CONCAT('task:', tasks.id, ':finalize')"
+	return fmt.Sprintf("CONCAT('%s', tasks.id, '%s')", billingTaskOperationPrefix, billingRequestFinalizeSuffix)
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
@@ -462,6 +462,20 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 		return nil, false, err
 	}
 	return task, exist, err
+}
+
+func GetTaskByID(id int64) (*Task, error) {
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var task Task
+	if err := DB.First(&task, id).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
@@ -700,9 +714,16 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
 			return err
 		}
+		updates := map[string]interface{}{
+			"private_data": t.PrivateData,
+			"updated_at":   t.UpdatedAt,
+		}
+		if t.Data != nil || t.includeDataInUpdate {
+			updates["data"] = t.Data
+		}
 		result := tx.Model(&Task{}).
 			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
-			Updates(t.statusUpdateValues())
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

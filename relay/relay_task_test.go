@@ -360,13 +360,39 @@ func TestCaptureTaskBillingPlanSuccessKeepsSnapshot(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: hailuo.H3Model,
 		},
-		PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		PriceData: types.PriceData{
+			TaskBillingPlanRequired: true,
+			GroupRatioInfo:          types.GroupRatioInfo{GroupRatio: 1},
+		},
 	}
 
 	require.NoError(t, captureTaskBillingPlan(c, info, &hailuo.TaskAdaptor{}))
 
 	require.NotNil(t, info.TaskBillingPlan)
 	require.EqualValues(t, 5, info.TaskBillingPlan.RequestedOutputDurationSeconds)
+}
+
+func TestCaptureTaskBillingPlanRejectsMissingRequiredPlan(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: hailuo.H3Model,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "MiniMax-Hailuo-2.3",
+		},
+		PriceData: types.PriceData{
+			TaskBillingPlanRequired: true,
+			GroupRatioInfo:          types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+
+	err := captureTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
+
+	require.ErrorContains(t, err, "required task billing plan was not produced")
+	require.Nil(t, info.TaskBillingPlan)
+
+	info.PriceData.TaskBillingPlanRequired = false
+	require.NoError(t, captureTaskBillingPlan(c, info, &hailuo.TaskAdaptor{}))
+	require.Nil(t, info.TaskBillingPlan)
 }
 
 func TestPrepareTaskSubmitRequestBodyMakesMultipartParamOverrideVisibleToBilling(t *testing.T) {
