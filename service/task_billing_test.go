@@ -307,6 +307,61 @@ func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
 }
 
+func TestSweepTimedOutTasksDoesNotSpendBudgetOnTaskFinalizeOwnedTasks(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	originalScanBudget := timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes = 1
+	timedOutTaskScanBudget = 1
+	t.Cleanup(func() {
+		constant.TaskTimeoutMinutes = originalTimeout
+		timedOutTaskScanBudget = originalScanBudget
+	})
+
+	now := time.Now().Unix()
+	submitTime := legacyTaskRefundCutoff - 2
+	protected := []model.Task{
+		{TaskID: "timeout-finalize-pending", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+		{TaskID: "timeout-finalize-manual", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+		{TaskID: "timeout-finalize-applied", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+	}
+	require.NoError(t, model.DB.Create(&protected).Error)
+	statuses := []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+		model.BillingSettlementStatusApplied,
+	}
+	for i := range protected {
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingTaskFinalizeOperationKey(protected[i].ID),
+			Source:       model.BillingSettlementSourceWallet,
+			TaskID:       protected[i].ID,
+			Status:       statuses[i],
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		}).Error)
+	}
+	actionable := model.Task{
+		TaskID:     "timeout-after-finalize-backlog",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: submitTime + 1,
+	}
+	require.NoError(t, model.DB.Create(&actionable).Error)
+
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	for i := range protected {
+		reloaded = model.Task{}
+		require.NoError(t, model.DB.First(&reloaded, protected[i].ID).Error)
+		assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+	}
+}
+
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {
 	t.Helper()
 	reset := func() {

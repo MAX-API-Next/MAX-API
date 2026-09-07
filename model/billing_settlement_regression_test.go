@@ -1694,6 +1694,37 @@ func TestTimedOutTaskCursorRemainsGroupedWithStatusPredicate(t *testing.T) {
 	require.Equal(t, "cursor-unfinished", got[0].TaskID)
 }
 
+func TestTimedOutTaskCursorExcludesTaskFinalizeOwnedTasksBeforeLimit(t *testing.T) {
+	truncateTables(t)
+	const submitTime = int64(100)
+	tasks := []Task{
+		{ID: 410, TaskID: "cursor-finalize-pending", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 411, TaskID: "cursor-finalize-manual", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 412, TaskID: "cursor-finalize-applied", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 413, TaskID: "cursor-finalize-empty-applied", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 414, TaskID: "cursor-finalize-unknown", Status: TaskStatusInProgress, SubmitTime: submitTime},
+		{ID: 415, TaskID: "cursor-actionable", Status: TaskStatusInProgress, SubmitTime: submitTime},
+	}
+	require.NoError(t, DB.Create(&tasks).Error)
+	settlements := []BillingSettlement{
+		{OperationKey: BillingTaskFinalizeOperationKey(410), Source: BillingSettlementSourceWallet, TaskID: 410, Status: BillingSettlementStatusPending},
+		{OperationKey: BillingTaskFinalizeOperationKey(411), Source: BillingSettlementSourceWallet, TaskID: 411, Status: BillingSettlementStatusManual},
+		{OperationKey: BillingTaskFinalizeOperationKey(412), Source: BillingSettlementSourceWallet, TaskID: 412, Status: BillingSettlementStatusApplied},
+		{OperationKey: BillingTaskFinalizeOperationKey(413), Source: BillingSettlementSourceWallet, TaskID: 413, Status: BillingSettlementStatusApplied},
+		{OperationKey: BillingTaskFinalizeOperationKey(414), Source: BillingSettlementSourceWallet, TaskID: 414, Status: "unexpected"},
+	}
+	require.NoError(t, DB.Create(&settlements).Error)
+	require.NoError(t, DB.Model(&BillingSettlement{}).
+		Where("operation_key = ?", BillingTaskFinalizeOperationKey(413)).
+		UpdateColumn("status", "").Error)
+
+	got, err := GetTimedOutUnfinishedTasksAfter(200, submitTime, 409, 2)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "cursor-finalize-unknown", got[0].TaskID)
+	require.Equal(t, "cursor-actionable", got[1].TaskID)
+}
+
 func TestTimedOutTaskCursorReturnsQueryError(t *testing.T) {
 	failingDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)

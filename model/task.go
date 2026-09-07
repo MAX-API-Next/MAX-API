@@ -359,8 +359,28 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 // the supplied (submit_time, id) cursor in stable ascending order.
 func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) ([]*Task, error) {
 	var tasks []*Task
-	query := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix)
+	err := timedOutUnfinishedTasksQuery(DB, common.UsingSQLite, cutoffUnix, afterSubmitTime, afterID, limit).
+		Find(&tasks).Error
+	if err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) *gorm.DB {
+	taskFinalizeOwned := db.Model(&BillingSettlement{}).
+		Select("1").
+		Where("operation_key = "+taskFinalizeOperationKeySQL(usingSQLite)).
+		Where("status IN ?", []string{
+			"",
+			BillingSettlementStatusPending,
+			BillingSettlementStatusManual,
+			BillingSettlementStatusApplied,
+		})
+	query := db.Model(&Task{}).
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Where("NOT EXISTS (?)", taskFinalizeOwned)
 	if afterID > 0 {
 		query = query.Where(
 			"(submit_time > ? OR (submit_time = ? AND id > ?))",
@@ -369,13 +389,14 @@ func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, af
 			afterID,
 		)
 	}
-	err := query.Order("submit_time ASC, id ASC").
-		Limit(limit).
-		Find(&tasks).Error
-	if err != nil {
-		return nil, err
+	return query.Order("submit_time ASC, id ASC").Limit(limit)
+}
+
+func taskFinalizeOperationKeySQL(usingSQLite bool) string {
+	if usingSQLite {
+		return "'task:' || CAST(tasks.id AS TEXT) || ':finalize'"
 	}
-	return tasks, nil
+	return "CONCAT('task:', tasks.id, ':finalize')"
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
