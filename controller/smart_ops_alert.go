@@ -162,7 +162,7 @@ func ReviewBillingSettlement(c *gin.Context) {
 }
 
 // GetBillingSettlementReconciliation exposes bounded, read-only evidence for
-// unresolved positive final settlements. It does not retry or mutate records.
+// open billing reconciliation records. It does not retry or mutate records.
 func GetBillingSettlementReconciliation(c *gin.Context) {
 	limit, err := parseIntQuery(c, "limit")
 	if err != nil {

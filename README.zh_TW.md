@@ -330,6 +330,8 @@ docker compose up -d
 
 如果你基於本專案進行二次開發或散布，請先完整閱讀 [NOTICE](./NOTICE) 和 [LICENSE](./LICENSE)，並依其中要求保留法律聲明、歸屬資訊、原專案連結和修改標記。
 
+現階段，二次開發專案依上述要求完成對 MAX API 和 MAX-API-Next 的致謝後，即可免費取得 MAX API 專案方提供的二次開發授權，無需另行申請或審批；此政策不構成永久承諾，後續可能調整。
+
 ## 📜 許可證
 
 本專案採用 [GNU Affero 通用公共許可證 v3.0（AGPLv3）](./LICENSE) 授權。

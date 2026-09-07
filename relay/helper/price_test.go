@@ -132,7 +132,7 @@ func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
 	}
 }
 
-func TestModelPriceHelperPerCallDoesNotTreatStructuredMinimaxCardAsLegacyPrice(t *testing.T) {
+func TestModelPriceHelperPerCallDefersStructuredMinimaxPricingToTaskPlan(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalSelfUseMode := operation_setting.SelfUseModeEnabled
 	originalModelPrice := ratio_setting.ModelPrice2JSONString()
@@ -170,9 +170,102 @@ func TestModelPriceHelperPerCallDoesNotTreatStructuredMinimaxCardAsLegacyPrice(t
 
 	priceData, err := ModelPriceHelperPerCall(ctx, info)
 
+	require.NoError(t, err)
+	require.Zero(t, priceData.Quota)
+	require.Zero(t, priceData.QuotaToPreConsume)
+	require.False(t, priceData.FreeModel)
+	require.False(t, priceData.UsePrice)
+	require.EqualValues(t, 1, priceData.GroupRatioInfo.GroupRatio)
+}
+
+func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalSelfUseMode := operation_setting.SelfUseModeEnabled
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		operation_setting.SelfUseModeEnabled = originalSelfUseMode
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"task_billing_setting.rate_cards": string(originalRateCards),
+		}))
+	})
+
+	operation_setting.SelfUseModeEnabled = false
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"task_billing_setting.rate_cards": `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "MiniMax-Hailuo-2.3",
+		},
+	}
+
+	_, err = ModelPriceHelperPerCall(ctx, info)
+
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not been priced")
-	require.Zero(t, priceData)
+}
+
+func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalSelfUseMode := operation_setting.SelfUseModeEnabled
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
+	require.NoError(t, err)
+	originalProfiles, err := common.Marshal(task_billing_setting.GetH3BillingProfilesCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		operation_setting.SelfUseModeEnabled = originalSelfUseMode
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"task_billing_setting.rate_cards":  string(originalRateCards),
+			"task_billing_setting.h3_profiles": string(originalProfiles),
+		}))
+	})
+
+	operation_setting.SelfUseModeEnabled = false
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"task_billing_setting.rate_cards":  `{}`,
+		"task_billing_setting.h3_profiles": string(originalProfiles),
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "MiniMax-H3",
+		},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+
+	require.NoError(t, err)
+	require.Zero(t, priceData.Quota)
+	require.Zero(t, priceData.QuotaToPreConsume)
+	require.False(t, priceData.UsePrice)
 }
 
 func TestModelPriceHelperPerCallUsesDefaultTaskPrice(t *testing.T) {

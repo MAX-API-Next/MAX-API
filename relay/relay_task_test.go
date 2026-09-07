@@ -130,6 +130,32 @@ func TestReserveTaskQuotaReturnsZeroForUnreservedFreeTask(t *testing.T) {
 	assert.Nil(t, info.Billing)
 }
 
+func TestResolveTaskBillingQuotasUsesH3ReserveAndAppliesFloorOnce(t *testing.T) {
+	originalFloor := common.PreConsumedQuota
+	common.PreConsumedQuota = 1700
+	t.Cleanup(func() { common.PreConsumedQuota = originalFloor })
+	withRelayTaskQuotaPerUnit(t, 1000)
+	plan, err := task_billing_setting.BuildH3BillingPlan(task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputVideoCount: 1,
+	}, 1)
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{
+		TaskBillingPlan: plan,
+		PriceData: types.PriceData{
+			Quota:          1,
+			FreeModel:      false,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+
+	estimate, reserve, usesPlan, err := resolveTaskBillingQuotas(info)
+
+	require.NoError(t, err)
+	require.True(t, usesPlan)
+	require.Equal(t, plan.EstimateQuota, estimate)
+	require.Equal(t, 1700, reserve)
+}
+
 func withRelayTaskRateCards(t *testing.T, cards map[string]task_billing_setting.RateCard) {
 	t.Helper()
 	original := task_billing_setting.GetRateCardsCopy()
@@ -244,7 +270,7 @@ func TestPrepareTaskSubmitRequestBodyMakesH3PlanUseFinalRequestFacts(t *testing.
 	require.Equal(t, "2K", plan.Resolution)
 }
 
-func TestCaptureShadowTaskBillingPlanFailureDoesNotBlockSubmission(t *testing.T) {
+func TestCaptureTaskBillingPlanFailureBlocksUnsafeFallback(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	previous := &types.TaskBillingPlan{RuleKey: "stale"}
 	info := &relaycommon.RelayInfo{
@@ -255,8 +281,9 @@ func TestCaptureShadowTaskBillingPlanFailureDoesNotBlockSubmission(t *testing.T)
 		},
 	}
 
-	captureShadowTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
+	err := captureTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
 
+	require.Error(t, err)
 	require.Nil(t, info.TaskBillingPlan)
 }
 
@@ -281,7 +308,7 @@ func TestRelayTaskSubmitMapsModelBeforeContentOnlyValidation(t *testing.T) {
 	require.Contains(t, taskErr.Message, "prompt is required")
 }
 
-func TestCaptureShadowTaskBillingPlanSuccessKeepsSnapshot(t *testing.T) {
+func TestCaptureTaskBillingPlanSuccessKeepsSnapshot(t *testing.T) {
 	duration := 5
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set("task_request", relaycommon.TaskSubmitReq{
@@ -298,7 +325,7 @@ func TestCaptureShadowTaskBillingPlanSuccessKeepsSnapshot(t *testing.T) {
 		PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
 	}
 
-	captureShadowTaskBillingPlan(c, info, &hailuo.TaskAdaptor{})
+	require.NoError(t, captureTaskBillingPlan(c, info, &hailuo.TaskAdaptor{}))
 
 	require.NotNil(t, info.TaskBillingPlan)
 	require.EqualValues(t, 5, info.TaskBillingPlan.RequestedOutputDurationSeconds)

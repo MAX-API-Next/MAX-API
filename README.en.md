@@ -328,6 +328,8 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there.
 
+At the current stage, derivative projects that complete the attribution to MAX API and MAX-API-Next described above automatically receive a free derivative-development authorization from the MAX API project, with no separate application or approval required. This policy is not a permanent commitment and may be adjusted in the future.
+
 ## 📜 License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).

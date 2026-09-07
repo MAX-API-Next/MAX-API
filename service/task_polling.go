@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/samber/lo"
 )
@@ -88,17 +89,33 @@ func sweepTimedOutTasks(ctx context.Context) {
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
 			scanBudget--
-			settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
+			settlementPending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, true)
 			if settlementErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
 				continue
 			}
-			if settlementPending {
+			if settlementPending || taskFinalizeApplied {
+				// A task-finalize operation that is pending/manual still owns
+				// recovery. If funding is already applied, normal provider polling
+				// owns the final status so a synthetic timeout cannot overwrite the
+				// frozen terminal evidence.
 				continue
 			}
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
 			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+			terminalDecision := prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
+				Status: string(model.TaskStatusFailure), Reason: reason,
+			}, 0)
+			if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
+				won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, terminalDecision)
+				if err != nil {
+					logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks manual settlement error for task %s: %v", task.TaskID, err))
+				} else if !won {
+					logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s manual settlement CAS lost", task.TaskID))
+				}
+				continue
+			}
 
 			oldStatus := task.Status
 			task.Status = model.TaskStatusFailure
@@ -114,7 +131,11 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 			var settlement *model.BillingSettlementInput
 			if !isLegacy && !isUnconfirmedSubmit {
-				settlement = BuildTaskRefundSettlementInput(task, reason)
+				if terminalDecision.UsesPlan {
+					settlement = terminalDecision.Settlement
+				} else {
+					settlement = BuildTaskRefundSettlementInput(task, reason)
+				}
 			}
 			var won bool
 			var err error
@@ -451,6 +472,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	logger.LogDebug(ctx, "updateVideoSingleTask response bytes: %d", len(responseBody))
 
 	snap := task.Snapshot()
+	expectedUpdatedAt := task.UpdatedAt
 
 	taskResult := &relaycommon.TaskInfo{}
 	// try parse as MAX API response format
@@ -499,12 +521,41 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 	}
 	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
-	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	pending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, providerTerminal)
 	if settlementErr != nil {
 		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
 	}
 	if pending {
 		return nil
+	}
+	terminalDecision := taskTerminalBillingDecision{}
+	if providerTerminal && !taskFinalizeApplied {
+		terminalDecision = prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
+		if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
+			won, manualErr := persistTaskManualBillingDecision(task, snap.Status, expectedUpdatedAt, terminalDecision)
+			if manualErr != nil {
+				return fmt.Errorf("persist manual task settlement for task %s: %w", task.TaskID, manualErr)
+			}
+			if !won {
+				logger.LogWarn(ctx, fmt.Sprintf("Task %s manual settlement CAS lost", task.TaskID))
+			}
+			return nil
+		}
+		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
+			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
+			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
+			if intentErr != nil {
+				return fmt.Errorf("persist task settlement intent for task %s: %w", task.TaskID, intentErr)
+			}
+			if !won {
+				logger.LogWarn(ctx, fmt.Sprintf("Task %s settlement intent CAS lost", task.TaskID))
+				return nil
+			}
+			if !applyTaskBillingSettlement(ctx, task, terminalDecision.Settlement) {
+				return nil
+			}
+			taskFinalizeApplied = true
+		}
 	}
 
 	shouldRefund := false
@@ -562,7 +613,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	var settlement *model.BillingSettlementInput
 	transitionWon := false
 	if isDone && snap.Status != task.Status {
-		if shouldSettle {
+		if taskFinalizeApplied {
+			settlement = nil
+		} else if terminalDecision.UsesPlan {
+			return fmt.Errorf("task %s terminal settlement was not applied", task.TaskID)
+		} else if shouldSettle {
 			settlement = prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
 		} else if shouldRefund {
 			settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
@@ -599,6 +654,25 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskStatus, expectedUpdatedAt int64, decision taskTerminalBillingDecision) (bool, error) {
+	if task == nil || !decision.UsesPlan || decision.ManualReason == "" || decision.Settlement == nil {
+		return false, errors.New("complete manual task billing decision is required")
+	}
+	if task.PrivateData.BillingContext == nil {
+		return false, errors.New("task billing context is required")
+	}
+	task.Status = fromStatus
+	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	task.UpdatedAt = time.Now().Unix()
+	if task.UpdatedAt <= expectedUpdatedAt {
+		if expectedUpdatedAt == 1<<63-1 {
+			return false, errors.New("task updated_at cannot advance")
+		}
+		task.UpdatedAt = expectedUpdatedAt + 1
+	}
+	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }
 
 func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {

@@ -328,6 +328,8 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
 
+À ce stade, les projets dérivés qui respectent les mentions de MAX API et MAX-API-Next décrites ci-dessus bénéficient automatiquement et gratuitement d'une autorisation de développement dérivé accordée par le projet MAX API, sans demande ni approbation distincte. Cette politique ne constitue pas un engagement permanent et pourra être ajustée ultérieurement.
+
 ## 📜 Licence
 
 Ce projet est distribué sous la [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).

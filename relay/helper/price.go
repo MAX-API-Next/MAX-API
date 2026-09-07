@@ -253,6 +253,11 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		upstreamModelName = info.UpstreamModelName
 	}
 	rateCardPriced := task_billing_setting.HasRateCard(info.OriginModelName, upstreamModelName)
+	effectiveTaskModel := strings.TrimSpace(info.OriginModelName)
+	if strings.TrimSpace(upstreamModelName) != "" {
+		effectiveTaskModel = strings.TrimSpace(upstreamModelName)
+	}
+	taskPlanPriced := task_billing_setting.HasH3BillingPlanForModel(effectiveTaskModel)
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
@@ -262,6 +267,11 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		} else if rateCardPriced {
 			modelPrice = 0
 			usePrice = true
+		} else if taskPlanPriced {
+			// Structured task plans own the actual estimate and reservation. This
+			// helper only supplies the selected group ratio and must not require or
+			// synthesize a legacy model price.
+			modelPrice = 0
 		} else if taskModelRequiresConfiguredPrice(info.OriginModelName) {
 			return types.PriceData{}, modelPriceNotConfiguredError(info.OriginModelName, info.UserId)
 		} else {
@@ -282,7 +292,12 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	var err error
 	freeModel := false
 
-	if usePrice {
+	if taskPlanPriced {
+		quota = 0
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+			freeModel = true
+		}
+	} else if usePrice {
 		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return types.PriceData{}, err
@@ -311,7 +326,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	// Keep the model price in Quota for final settlement. The configured
 	// minimum belongs only to the reservation made before the request.
 	preConsumedQuota := quota
-	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+	if !taskPlanPriced && !freeModel && groupRatioInfo.GroupRatio > 0 {
 		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(quota, true)
 		if err != nil {
 			return types.PriceData{}, err
