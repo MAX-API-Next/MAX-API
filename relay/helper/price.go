@@ -237,6 +237,17 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+	return modelPriceHelperPerCall(c, info, false)
+}
+
+// ModelPriceHelperPerCallWithPlanCapability allows the selected task adaptor
+// to opt into structured task-plan pricing. Other callers remain on the
+// ordinary fixed-price or ratio path.
+func ModelPriceHelperPerCallWithPlanCapability(c *gin.Context, info *relaycommon.RelayInfo, taskPlanCapable bool) (types.PriceData, error) {
+	return modelPriceHelperPerCall(c, info, taskPlanCapable)
+}
+
+func modelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo, taskPlanCapable bool) (types.PriceData, error) {
 	if info == nil {
 		return types.PriceData{}, fmt.Errorf("relay info is nil")
 	}
@@ -257,7 +268,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	if strings.TrimSpace(upstreamModelName) != "" {
 		effectiveTaskModel = strings.TrimSpace(upstreamModelName)
 	}
-	taskPlanPriced := task_billing_setting.HasH3BillingPlanForModel(effectiveTaskModel)
+	taskPlanPriced := taskPlanCapable && task_billing_setting.HasH3BillingPlanForModel(effectiveTaskModel)
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/doubao"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/hailuo"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -27,6 +29,18 @@ type recordingTaskReservationBilling struct {
 	preConsumed int
 	reserveTo   []int
 	settleTo    []int
+}
+
+func TestTaskBillingPlanCapabilityFollowsSelectedAdaptor(t *testing.T) {
+	unsupported := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeDoubaoVideo)))
+	require.NotNil(t, unsupported)
+	_, ok := unsupported.(channel.TaskBillingPlanProvider)
+	require.False(t, ok)
+
+	supported := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeMiniMax)))
+	require.NotNil(t, supported)
+	_, ok = supported.(channel.TaskBillingPlanProvider)
+	require.True(t, ok)
 }
 
 func TestPopulateTaskBillingMetadataPersistsH3PlanSnapshot(t *testing.T) {
