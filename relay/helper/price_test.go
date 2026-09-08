@@ -20,6 +20,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func withTaskPricingFixture(t *testing.T, rateCards, h3Profiles string) {
+	t.Helper()
+	originalSelfUseMode := operation_setting.SelfUseModeEnabled
+	originalModelPrice := ratio_setting.ModelPrice2JSONString()
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
+	require.NoError(t, err)
+	originalProfiles, err := common.Marshal(task_billing_setting.GetH3BillingProfilesCopy())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		operation_setting.SelfUseModeEnabled = originalSelfUseMode
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			"task_billing_setting.rate_cards":  string(originalRateCards),
+			"task_billing_setting.h3_profiles": string(originalProfiles),
+		}))
+	})
+
+	operation_setting.SelfUseModeEnabled = false
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	settings := map[string]string{"task_billing_setting.rate_cards": rateCards}
+	if h3Profiles != "" {
+		settings["task_billing_setting.h3_profiles"] = h3Profiles
+	}
+	require.NoError(t, config.GlobalConfig.LoadFromDB(settings))
+}
+
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalPreConsumedQuota := common.PreConsumedQuota
@@ -134,29 +166,7 @@ func TestModelPriceHelperPerCallRejectsUnpricedMJSunoTaskModels(t *testing.T) {
 
 func TestModelPriceHelperPerCallDefersStructuredMinimaxPricingToTaskPlan(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	originalSelfUseMode := operation_setting.SelfUseModeEnabled
-	originalModelPrice := ratio_setting.ModelPrice2JSONString()
-	originalModelRatio := ratio_setting.ModelRatio2JSONString()
-	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
-	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = originalSelfUseMode
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
-		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-			"task_billing_setting.rate_cards": string(originalRateCards),
-		}))
-	})
-
-	operation_setting.SelfUseModeEnabled = false
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"task_billing_setting.rate_cards": `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`,
-	}))
+	withTaskPricingFixture(t, `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`, "")
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
@@ -181,29 +191,7 @@ func TestModelPriceHelperPerCallDefersStructuredMinimaxPricingToTaskPlan(t *test
 
 func TestModelPriceHelperPerCallDoesNotDeferH3PricingWithoutPlanCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	originalSelfUseMode := operation_setting.SelfUseModeEnabled
-	originalModelPrice := ratio_setting.ModelPrice2JSONString()
-	originalModelRatio := ratio_setting.ModelRatio2JSONString()
-	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
-	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = originalSelfUseMode
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
-		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-			"task_billing_setting.rate_cards": string(originalRateCards),
-		}))
-	})
-
-	operation_setting.SelfUseModeEnabled = false
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"task_billing_setting.rate_cards": `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`,
-	}))
+	withTaskPricingFixture(t, `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`, "")
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
@@ -215,7 +203,7 @@ func TestModelPriceHelperPerCallDoesNotDeferH3PricingWithoutPlanCapability(t *te
 		},
 	}
 
-	_, err = ModelPriceHelperPerCall(ctx, info)
+	_, err := ModelPriceHelperPerCall(ctx, info)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not been priced")
@@ -223,29 +211,7 @@ func TestModelPriceHelperPerCallDoesNotDeferH3PricingWithoutPlanCapability(t *te
 
 func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	originalSelfUseMode := operation_setting.SelfUseModeEnabled
-	originalModelPrice := ratio_setting.ModelPrice2JSONString()
-	originalModelRatio := ratio_setting.ModelRatio2JSONString()
-	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
-	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = originalSelfUseMode
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
-		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-			"task_billing_setting.rate_cards": string(originalRateCards),
-		}))
-	})
-
-	operation_setting.SelfUseModeEnabled = false
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"task_billing_setting.rate_cards": `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`,
-	}))
+	withTaskPricingFixture(t, `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`, "")
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
@@ -267,33 +233,7 @@ func TestModelPriceHelperPerCallDoesNotUseH3PlanAfterMappingToLegacyModel(t *tes
 func TestModelPriceHelperPerCallDefersLegacyH3ProfilePricingToTaskPlan(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	const legacyH3ProfilesFixture = `{"minimax_h3_v2":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}`
-	originalSelfUseMode := operation_setting.SelfUseModeEnabled
-	originalModelPrice := ratio_setting.ModelPrice2JSONString()
-	originalModelRatio := ratio_setting.ModelRatio2JSONString()
-	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
-	originalRateCards, err := common.Marshal(task_billing_setting.GetRateCardsCopy())
-	require.NoError(t, err)
-	originalProfiles, err := common.Marshal(task_billing_setting.GetH3BillingProfilesCopy())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = originalSelfUseMode
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(originalModelPrice))
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
-		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-			"task_billing_setting.rate_cards":  string(originalRateCards),
-			"task_billing_setting.h3_profiles": string(originalProfiles),
-		}))
-	})
-
-	operation_setting.SelfUseModeEnabled = false
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
-		"task_billing_setting.rate_cards":  `{}`,
-		"task_billing_setting.h3_profiles": legacyH3ProfilesFixture,
-	}))
+	withTaskPricingFixture(t, `{}`, legacyH3ProfilesFixture)
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{

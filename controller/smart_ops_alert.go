@@ -204,13 +204,19 @@ func CompleteManualTaskBillingSettlement(c *gin.Context) {
 		case errors.Is(err, model.ErrBillingSettlementReviewConflict),
 			errors.Is(err, model.ErrBillingSettlementOperationConflict),
 			errors.Is(err, model.ErrBillingSettlementTaskConflict),
-			errors.Is(err, model.ErrBillingSettlementManualReview),
-			errors.Is(err, model.ErrTokenQuotaInsufficient),
-			errors.Is(err, model.ErrSubscriptionRefundClamped),
-			errors.Is(err, model.ErrSubscriptionSettlementUnbound),
-			errors.Is(err, model.ErrSubscriptionSettlementPeriodChanged):
+			errors.Is(err, model.ErrBillingSettlementManualReview):
 			status = http.StatusConflict
 			message = "manual task billing settlement could not be applied safely; refresh and reconcile the current record"
+		case errors.Is(err, model.ErrTokenQuotaInsufficient):
+			status = http.StatusConflict
+			message = "the token quota mirror is inconsistent; repair the token record before completing this settlement"
+		case errors.Is(err, model.ErrSubscriptionRefundClamped):
+			status = http.StatusConflict
+			message = "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement"
+		case errors.Is(err, model.ErrSubscriptionSettlementUnbound),
+			errors.Is(err, model.ErrSubscriptionSettlementPeriodChanged):
+			status = http.StatusConflict
+			message = "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation"
 		}
 		if status == http.StatusInternalServerError {
 			common.SysError(fmt.Sprintf("failed to complete manual task billing settlement %d: %v", id, err))

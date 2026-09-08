@@ -529,6 +529,28 @@ func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, types.TaskUsageCompletenessComplete, result.Usage.Completeness)
 }
 
+func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
+	withMessage, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"failed",
+		"error":{"message":"provider rejected the prompt"}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, model.TaskStatusFailure, withMessage.Status)
+	assert.Equal(t, "provider rejected the prompt", withMessage.Reason)
+	assert.Equal(t, "100%", withMessage.Progress)
+
+	withoutMessage, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"failed"
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, model.TaskStatusFailure, withoutMessage.Status)
+	assert.Equal(t, "MiniMax task failed", withoutMessage.Reason)
+}
+
 func TestParseH3UsagePreservesExplicitZeroAndMissingFields(t *testing.T) {
 	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
 		"task": {

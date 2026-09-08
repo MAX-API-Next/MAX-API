@@ -33,6 +33,10 @@ func TestBillingSettlementMutationRequestsPreserveExplicitFalse(t *testing.T) {
 	require.NoError(t, common.Unmarshal([]byte(`{"revision":1,"actual_quota":0,"note":"verified"}`), &completion))
 	require.NotNil(t, completion.ActualQuota)
 	assert.Zero(t, *completion.ActualQuota)
+
+	var omittedCompletion manualTaskBillingCompletionRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"revision":1,"note":"verified"}`), &omittedCompletion))
+	assert.Nil(t, omittedCompletion.ActualQuota)
 }
 
 func TestCompleteManualTaskBillingSettlementAuditsExactCompletion(t *testing.T) {
@@ -249,7 +253,7 @@ func TestCompleteManualTaskBillingSettlementMapsTokenRefundConflict(t *testing.T
 	CompleteManualTaskBillingSettlement(ctx)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	assert.Contains(t, recorder.Body.String(), "refresh and reconcile")
+	assert.Contains(t, recorder.Body.String(), "token quota mirror")
 	var storedOwner model.User
 	require.NoError(t, db.First(&storedOwner, owner.Id).Error)
 	assert.EqualValues(t, 900, storedOwner.Quota)
@@ -356,7 +360,7 @@ func TestCompleteManualTaskBillingSettlementMapsClampedSubscriptionRefund(t *tes
 	CompleteManualTaskBillingSettlement(ctx)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	assert.Contains(t, recorder.Body.String(), "refresh and reconcile")
+	assert.Contains(t, recorder.Body.String(), "subscription usage mirror")
 	var storedSubscription model.UserSubscription
 	require.NoError(t, db.First(&storedSubscription, subscription.Id).Error)
 	assert.EqualValues(t, 50, storedSubscription.AmountUsed)

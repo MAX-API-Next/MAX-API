@@ -118,12 +118,17 @@ type GenericMiniMaxVideoResponse struct {
 	Status string                     `json:"status"`
 	Data   []GenericMiniMaxVideoAsset `json:"data"`
 	Usage  *H3Usage                   `json:"usage,omitempty"`
+	Error  *GenericMiniMaxVideoError  `json:"error,omitempty"`
 }
 
 type GenericMiniMaxVideoAsset struct {
 	URL       string `json:"url,omitempty"`
 	VideoURL  string `json:"video_url,omitempty"`
 	OutputURL string `json:"output_url,omitempty"`
+}
+
+type GenericMiniMaxVideoError struct {
+	Message string `json:"message,omitempty"`
 }
 
 type ErrorInfo struct {

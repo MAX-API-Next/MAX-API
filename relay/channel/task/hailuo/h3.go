@@ -610,6 +610,12 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 	case "failed", "failure", "error", "cancelled", "canceled":
 		result.Status = model.TaskStatusFailure
 		result.Progress = "100%"
+		if response.Error != nil {
+			result.Reason = strings.TrimSpace(response.Error.Message)
+		}
+		if result.Reason == "" {
+			result.Reason = "MiniMax task failed"
+		}
 	default:
 		result.Status = model.TaskStatusInProgress
 		result.Progress = "30%"

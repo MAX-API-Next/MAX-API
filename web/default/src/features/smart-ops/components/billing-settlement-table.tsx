@@ -64,6 +64,56 @@ function settlementReferences(
   return references
 }
 
+interface BillingSettlementActionsCellProps {
+  item: BillingSettlementReconciliationItem
+  reviewPending: boolean
+  canCompleteManualTask: boolean
+  onReviewTargets: (targets: BillingSettlementReviewTarget[]) => void
+  onCompleteManualTask: (item: BillingSettlementReconciliationItem) => void
+}
+
+function BillingSettlementActionsCell(
+  props: BillingSettlementActionsCellProps
+): ReactElement {
+  const { t } = useTranslation()
+
+  if (props.item.requires_manual_completion) {
+    return (
+      <div className='flex flex-col items-end gap-1'>
+        <Button
+          type='button'
+          size='sm'
+          onClick={() => props.onCompleteManualTask(props.item)}
+          disabled={props.reviewPending || !props.canCompleteManualTask}
+        >
+          {t('Complete billing')}
+        </Button>
+        {!props.canCompleteManualTask && (
+          <span className='text-muted-foreground text-xs'>
+            {t('Root administrator required')}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <Button
+      type='button'
+      variant='outline'
+      size='sm'
+      onClick={() =>
+        props.onReviewTargets([
+          { id: props.item.id, revision: props.item.revision },
+        ])
+      }
+      disabled={props.reviewPending}
+    >
+      {t('Review and close')}
+    </Button>
+  )
+}
+
 interface BillingSettlementTableProps {
   items: BillingSettlementReconciliationItem[]
   canCompleteManualTask: boolean
@@ -235,39 +285,13 @@ export function BillingSettlementTable(
                   )}
                 </TableCell>
                 <TableCell className='text-right'>
-                  {item.requires_manual_completion ? (
-                    <div className='flex flex-col items-end gap-1'>
-                      <Button
-                        type='button'
-                        size='sm'
-                        onClick={() => props.onCompleteManualTask(item)}
-                        disabled={
-                          props.reviewPending || !props.canCompleteManualTask
-                        }
-                      >
-                        {t('Complete billing')}
-                      </Button>
-                      {!props.canCompleteManualTask && (
-                        <span className='text-muted-foreground text-xs'>
-                          {t('Root administrator required')}
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <Button
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      onClick={() =>
-                        props.onReviewTargets([
-                          { id: item.id, revision: item.revision },
-                        ])
-                      }
-                      disabled={props.reviewPending}
-                    >
-                      {t('Review and close')}
-                    </Button>
-                  )}
+                  <BillingSettlementActionsCell
+                    item={item}
+                    reviewPending={props.reviewPending}
+                    canCompleteManualTask={props.canCompleteManualTask}
+                    onReviewTargets={props.onReviewTargets}
+                    onCompleteManualTask={props.onCompleteManualTask}
+                  />
                 </TableCell>
               </TableRow>
             )

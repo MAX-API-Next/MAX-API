@@ -224,11 +224,12 @@ export function BillingSettlementEvidence(
       ])
     },
     onError: (error) => {
+      const message = mutationErrorMessage(
+        error,
+        t('Failed to complete manual task billing.')
+      )
       handleServerError(error, {
-        fallback: mutationErrorMessage(
-          error,
-          t('Failed to complete manual task billing.')
-        ),
+        fallback: t(message),
       })
     },
   })
