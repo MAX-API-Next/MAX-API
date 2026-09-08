@@ -33,6 +33,8 @@ type TaskAdaptor struct {
 	baseURL     string
 }
 
+var _ channel.TaskUsageProvider = (*TaskAdaptor)(nil)
+
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
 	a.baseURL = info.ChannelBaseUrl

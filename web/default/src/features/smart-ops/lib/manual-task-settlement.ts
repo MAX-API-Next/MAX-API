@@ -39,6 +39,7 @@ export function getManualTaskSettlementSchema(
       .trim()
       .min(1, t('Enter the exact final quota.'))
       .refine((value) => {
+        if (!/^\d+$/.test(value)) return false
         const quota = Number(value)
         return Number.isSafeInteger(quota) && quota >= 0
       }, t('Final quota must be a non-negative safe integer.'))

@@ -41,16 +41,68 @@ describe('manual task settlement schema', () => {
     }
   })
 
-  test('rejects empty, unsafe, negative, over-reservation, and short notes', () => {
-    for (const input of [
-      { actualQuota: '', note: 'valid note' },
-      { actualQuota: '1.5', note: 'valid note' },
-      { actualQuota: '-1', note: 'valid note' },
-      { actualQuota: '9007199254740992', note: 'valid note' },
-      { actualQuota: '101', note: 'valid note' },
-      { actualQuota: '0', note: 'x' },
-    ]) {
-      assert.equal(schema.safeParse(input).success, false)
+  test('accepts the exact reservation cap', () => {
+    const result = schema.safeParse({
+      actualQuota: '100',
+      note: 'Verified full reservation usage.',
+    })
+
+    assert.equal(result.success, true)
+  })
+
+  test('rejects empty quota', () => {
+    assert.equal(
+      schema.safeParse({ actualQuota: '', note: 'valid note' }).success,
+      false
+    )
+  })
+
+  test('rejects fractional quota', () => {
+    assert.equal(
+      schema.safeParse({ actualQuota: '1.5', note: 'valid note' }).success,
+      false
+    )
+  })
+
+  test('rejects negative quota', () => {
+    assert.equal(
+      schema.safeParse({ actualQuota: '-1', note: 'valid note' }).success,
+      false
+    )
+  })
+
+  test('rejects over-reservation quota', () => {
+    assert.equal(
+      schema.safeParse({ actualQuota: '101', note: 'valid note' }).success,
+      false
+    )
+  })
+
+  test('rejects a short audit note', () => {
+    assert.equal(
+      schema.safeParse({ actualQuota: '0', note: 'x' }).success,
+      false
+    )
+  })
+
+  test('rejects an unsafe integer below the cap', () => {
+    const largeSchema = getManualTaskSettlementSchema(t, Number.MAX_VALUE)
+
+    assert.equal(
+      largeSchema.safeParse({
+        actualQuota: '9007199254740992',
+        note: 'valid note',
+      }).success,
+      false
+    )
+  })
+
+  test('rejects non-decimal quota representations', () => {
+    for (const actualQuota of ['1e1', '0x10', '+5']) {
+      assert.equal(
+        schema.safeParse({ actualQuota, note: 'valid note' }).success,
+        false
+      )
     }
   })
 
