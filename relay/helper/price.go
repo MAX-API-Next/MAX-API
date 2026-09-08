@@ -269,6 +269,12 @@ func modelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo, taskPl
 		effectiveTaskModel = strings.TrimSpace(upstreamModelName)
 	}
 	taskPlanPriced := taskPlanCapable && task_billing_setting.HasH3BillingPlanForModel(effectiveTaskModel)
+	if taskPlanPriced {
+		// A structured task plan owns H3 pricing. Ignore a stale legacy card
+		// match so it cannot turn the request into per-call billing or a second
+		// generic task estimate.
+		rateCardPriced = false
+	}
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]

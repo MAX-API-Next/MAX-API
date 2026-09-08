@@ -6,6 +6,9 @@ This product includes third-party open source software. Copyright notices and
 license terms for direct third-party dependencies are listed in
 THIRD-PARTY-LICENSES.md.
 
+Redistributed modified versions must retain this complete NOTICE file,
+including its third-party, attribution, and additional-term notices.
+
 ==== GNU Affero General Public License v3.0 Notices ====
 
 max-api

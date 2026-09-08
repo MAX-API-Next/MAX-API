@@ -54,6 +54,7 @@ func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) 
 	task.PrivateData.SubscriptionId = info.SubscriptionId
 	task.PrivateData.TokenId = info.TokenId
 	task.PrivateData.NodeName = common.NodeName
+	structuredTaskPlan := info.TaskBillingPlan != nil
 	task.PrivateData.BillingContext = &model.TaskBillingContext{
 		ModelPrice:              info.PriceData.ModelPrice,
 		GroupRatio:              info.PriceData.GroupRatioInfo.GroupRatio,
@@ -62,7 +63,7 @@ func populateTaskBillingMetadata(task *model.Task, info *relaycommon.RelayInfo) 
 		TaskBilling:             info.TaskBilling,
 		TaskBillingPlan:         types.CloneTaskBillingPlan(info.TaskBillingPlan),
 		OriginModelName:         info.OriginModelName,
-		PerCallBilling:          common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice || info.TaskBilling != nil,
+		PerCallBilling:          !structuredTaskPlan && (common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice || info.TaskBilling != nil),
 		DeltaSettlementDisabled: common.GetPointer(deltaSettlementDisabled),
 	}
 	task.Action = info.Action
@@ -522,6 +523,12 @@ func mapUpstreamTaskError(c *gin.Context, taskErr *dto.TaskError) *dto.TaskError
 }
 
 func estimateTaskBilling(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor, platform constant.TaskPlatform) (*types.TaskBillingResult, error) {
+	// A structured task plan is the sole pricing source for its provider. Do not
+	// retain a legacy rate-card result alongside it, or later settlement/logging
+	// could observe two competing billing identities for one task.
+	if info != nil && info.TaskBillingPlan != nil {
+		return nil, nil
+	}
 	if estimator, ok := adaptor.(taskBillingEstimator); ok {
 		taskBilling, err := estimator.EstimateTaskBilling(c, info)
 		if err != nil || taskBilling != nil {

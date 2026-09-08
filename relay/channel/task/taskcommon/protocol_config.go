@@ -217,6 +217,9 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		resultURL = ExtractConfiguredResultURL(respBody, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
 	}
 	reason := StringFromGJSONPath(respBody, cfg.ErrorMessagePath)
+	if reason == "" {
+		reason = StringFromGJSONPath(respBody, "error.message")
+	}
 	if reason == "" && officialTaskEnvelope {
 		reason = StringFromGJSONPath(respBody, "task.error.message")
 	}

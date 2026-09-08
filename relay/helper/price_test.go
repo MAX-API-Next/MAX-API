@@ -189,13 +189,33 @@ func TestModelPriceHelperPerCallDefersStructuredMinimaxPricingToTaskPlan(t *test
 	require.EqualValues(t, 1, priceData.GroupRatioInfo.GroupRatio)
 }
 
+func TestModelPriceHelperPerCallIgnoresLegacyRateCardWhenStructuredPlanIsActive(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withTaskPricingFixture(t, `{"MiniMax-H3":{"vendor":"legacy","unit":"call","default_quantity":1,"rows":[{"id":"legacy-call","unit_price":1}],"billing_type":""},"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`, "")
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "MiniMax-H3"},
+	}
+
+	priceData, err := ModelPriceHelperPerCallWithPlanCapability(ctx, info, true)
+
+	require.NoError(t, err)
+	require.True(t, priceData.TaskBillingPlanRequired)
+	require.False(t, priceData.UsePrice)
+	require.Zero(t, priceData.Quota)
+}
+
 func TestModelPriceHelperPerCallDoesNotDeferH3PricingWithoutPlanCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withTaskPricingFixture(t, `{"minimax/minimax-h3":{"vendor":"minimax","billing_type":"minimax","billing_config":{"schema_version":1,"mode":"bounded_actual","currency":"USD","output_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_unit_price":{"768P":"0.08","2K":"0.13"},"input_video_max_seconds":15,"input_image_free_count":5,"input_image_extra_unit_price":"0.04","input_audio_unit_price":"0"}}}`, "")
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{
-		OriginModelName: "mapped-task-model",
+		OriginModelName: "MiniMax-H3",
 		UserGroup:       "default",
 		UsingGroup:      "default",
 		ChannelMeta: &relaycommon.ChannelMeta{

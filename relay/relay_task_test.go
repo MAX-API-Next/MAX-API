@@ -77,6 +77,22 @@ func TestPopulateTaskBillingMetadataPersistsH3PlanSnapshot(t *testing.T) {
 	require.Equal(t, plan, restored.BillingContext.TaskBillingPlan)
 }
 
+func TestPopulateTaskBillingMetadataDoesNotMarkStructuredPlanAsPerCall(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "MiniMax-H3",
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		TaskBillingPlan: &types.TaskBillingPlan{RuleKey: "minimax_h3"},
+		PriceData:       types.PriceData{UsePrice: true},
+		TaskBilling:     &types.TaskBillingResult{RuleKey: "legacy-card"},
+	}
+	task := &model.Task{}
+
+	populateTaskBillingMetadata(task, info)
+
+	require.NotNil(t, task.PrivateData.BillingContext)
+	assert.False(t, task.PrivateData.BillingContext.PerCallBilling)
+}
+
 func (b *recordingTaskReservationBilling) Settle(actualQuota int) error {
 	b.settleTo = append(b.settleTo, actualQuota)
 	b.preConsumed = actualQuota
@@ -492,6 +508,44 @@ func TestEstimateTaskBillingFallsBackToGenericRateCard(t *testing.T) {
 	assert.Equal(t, "720p_no_audio", got.RowID)
 	assert.InDelta(t, 6.0, got.Quantity, 1e-9)
 	assert.Equal(t, 3000, got.Quota)
+}
+
+func TestEstimateTaskBillingDoesNotMixLegacyRateCardWithStructuredPlan(t *testing.T) {
+	withRelayTaskQuotaPerUnit(t, 1000)
+	withRelayTaskRateCards(t, map[string]task_billing_setting.RateCard{
+		"MiniMax-H3": {
+			Vendor:          "legacy",
+			Unit:            "call",
+			DefaultQuantity: 1,
+			Rows: []task_billing_setting.RateCardRow{{
+				ID:        "legacy-call",
+				UnitPrice: 1,
+			}},
+		},
+	})
+
+	plan, err := task_billing_setting.BuildH3BillingPlan(task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	duration := 5
+	info := &relaycommon.RelayInfo{
+		OriginModelName: hailuo.H3Model,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: hailuo.H3Model},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
+		TaskBillingPlan: plan,
+	}
+	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
+		Model:    hailuo.H3Model,
+		Duration: &duration,
+	})
+
+	got, err := estimateTaskBilling(c, info, &hailuo.TaskAdaptor{}, constant.TaskPlatform("minimax"))
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestRecalcQuotaFromRatiosUsesRawEstimateBeforePreConsumeFloor(t *testing.T) {

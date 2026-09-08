@@ -321,6 +321,24 @@ func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing
 	assert.Equal(t, "https://cdn.example.com/minimax.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
+	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
+	body := []byte(`{
+		"id": "439499419230570",
+		"status": "failed",
+		"error": {"message": "provider rejected the prompt"}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusFailure), result.Status)
+	assert.Equal(t, "provider rejected the prompt", result.Reason)
+}
+
 func TestParseConfiguredTaskResultSupportsOfficialMiniMaxTaskEnvelope(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocol: TaskProtocolGenericVideo,
