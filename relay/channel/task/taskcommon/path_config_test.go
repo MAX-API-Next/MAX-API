@@ -293,6 +293,84 @@ func TestParseConfiguredTaskResultPromotesResultURLToSuccess(t *testing.T) {
 	assert.Equal(t, "https://example.com/video.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		// These are common legacy guesses when the configured response is
+		// copied from the local task wrapper rather than the upstream body.
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "data.id",
+			StatusPath:     "data.status",
+			ResultURLPaths: []string{"data.data.0.url"},
+		},
+	}
+	body := []byte(`{
+		"id": "439499419230570",
+		"status": "completed",
+		"data": [{"url": "https://cdn.example.com/minimax.mp4"}],
+		"usage": {"output_seconds": 5, "input_image_count": 1}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "https://cdn.example.com/minimax.mp4", result.Url)
+}
+
+func TestParseConfiguredTaskResultSupportsOfficialMiniMaxTaskEnvelope(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		// Keep legacy paths to prove the official envelope is a compatibility
+		// fallback rather than a requirement to reconfigure the channel.
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "data.id",
+			StatusPath:     "data.status",
+			ResultURLPaths: []string{"data.data.0.url"},
+		},
+	}
+	body := []byte(`{
+		"task": {
+			"id": "424010985738629",
+			"model": "MiniMax-H3",
+			"status": "succeeded",
+			"content": {"url": "https://cdn.example.com/h3.mp4"}
+		}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "424010985738629", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "https://cdn.example.com/h3.mp4", result.Url)
+}
+
+func TestParseConfiguredTaskResultKeepsOfficialMiniMaxTaskPendingWithoutURL(t *testing.T) {
+	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
+	body := []byte(`{
+		"task": {
+			"id": "424010985738629",
+			"model": "MiniMax-H3",
+			"status": "succeeded"
+		}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+	assert.Equal(t, "50%", result.Progress)
+	assert.Empty(t, result.Url)
+}
+
 func TestParseConfiguredTaskResultReadsOpenAIVideoMetadataURL(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocol: TaskProtocolGenericVideo,

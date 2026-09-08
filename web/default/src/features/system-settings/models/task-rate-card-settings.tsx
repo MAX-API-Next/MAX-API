@@ -25,7 +25,7 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { AlertTriangle, FileJson } from 'lucide-react'
+import { FileJson } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -170,8 +170,6 @@ type BillingExampleSectionProps = {
   value: string
   rows: number
   onUseExample: () => void
-  notice?: string
-  useExampleDisabled?: boolean
 }
 
 const BillingExampleSection = memo(function BillingExampleSection(
@@ -179,7 +177,6 @@ const BillingExampleSection = memo(function BillingExampleSection(
 ): ReactElement {
   const { t } = useTranslation()
   const headingId = useId()
-  const noticeId = useId()
 
   return (
     <section className='space-y-2'>
@@ -206,23 +203,12 @@ const BillingExampleSection = memo(function BillingExampleSection(
             variant='outline'
             size='sm'
             onClick={props.onUseExample}
-            disabled={props.useExampleDisabled}
-            aria-describedby={props.notice ? noticeId : undefined}
           >
             <FileJson className='mr-2 h-4 w-4' />
             {t('Use example')}
           </Button>
         </div>
       </div>
-      {props.notice && (
-        <Alert
-          id={noticeId}
-          className='border-warning/40 bg-warning/5 text-foreground'
-        >
-          <AlertTriangle className='text-warning' aria-hidden='true' />
-          <AlertDescription>{t(props.notice)}</AlertDescription>
-        </Alert>
-      )}
       <Textarea
         aria-labelledby={headingId}
         rows={props.rows}
@@ -484,8 +470,6 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         value={MINIMAX_RATE_CARD_EXAMPLE}
         rows={18}
         onUseExample={handleUseMiniMaxExample}
-        useExampleDisabled
-        notice='Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.'
       />
 
       <section className='space-y-2'>

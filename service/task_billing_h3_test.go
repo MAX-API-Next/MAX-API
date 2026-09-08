@@ -272,6 +272,170 @@ func TestUpdateVideoSingleTaskKeepsManualH3TaskPollable(t *testing.T) {
 	require.EqualValues(t, 1, settlementCount)
 }
 
+func TestUpdateVideoSingleTaskRecoversManualH3WhenLaterPollHasCompleteUsage(t *testing.T) {
+	truncate(t)
+	seedUser(t, 901, 900)
+	seedToken(t, 903, 901, "h3-manual-recovery", 900)
+	seedChannel(t, 902)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputImageCount: 1,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	task.Status = model.TaskStatusInProgress
+	persistTask(t, task)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess),
+		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, missingDecision.ManualReason)
+	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(1),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	finalQuote, err := task_billing_setting.QuoteH3Final(plan, completeUsage)
+	require.NoError(t, err)
+	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess),
+		Usage:  completeUsage,
+	}}
+	ch := &model.Channel{Id: task.ChannelId, Type: constant.ChannelTypeMiniMax, Key: "test"}
+
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	}))
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+	require.EqualValues(t, finalQuote.Quota, stored.Quota)
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&settlement).Error)
+	require.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+	require.EqualValues(t, finalQuote.Quota-plan.ReserveQuota, settlement.FundingDelta)
+	require.Contains(t, settlement.ReconciliationReviewNote, "original manual reason")
+	require.Contains(t, settlement.ReconciliationReviewNote, "H3 terminal usage requires manual reconciliation")
+	require.EqualValues(t, 1, countLogs(t))
+	// A repeated provider poll must replay the same settlement without a
+	// second balance mutation or receipt.
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, stored.GetUpstreamTaskID(), map[string]*model.Task{
+		stored.GetUpstreamTaskID(): &stored,
+	}))
+	require.EqualValues(t, 1, countLogs(t))
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+}
+
+func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID, subscriptionID = 905, 906, 907, 908
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "h3-manual-subscription-recovery", 100)
+	seedChannel(t, channelID)
+	seedSubscription(t, subscriptionID, userID, 10_000, 5_000)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{Resolution: "768P", OutputDurationSeconds: 5})
+	for i := range plan.Components {
+		plan.Components[i].UnitPrice = "0"
+	}
+	plan.EstimateQuota = 0
+	plan.ReserveQuota = 0
+	task := makeServiceH3Task(t, 100, plan)
+	task.UserId = userID
+	task.ChannelId = channelID
+	task.PrivateData.TokenId = tokenID
+	task.PrivateData.BillingSource = BillingSourceSubscription
+	task.PrivateData.SubscriptionId = subscriptionID
+	task.PrivateData.BillingRequestId = ""
+	task.Status = model.TaskStatusInProgress
+	persistTask(t, task)
+
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, missingDecision.ManualReason)
+	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(0),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: completeUsage,
+	}, constant.ChannelTypeMiniMax)
+	require.Empty(t, decision.ManualReason)
+	require.NotNil(t, decision.Settlement)
+	require.EqualValues(t, -100, decision.Settlement.FundingDelta)
+	require.True(t, decision.Settlement.FinalizeSubscriptionPreConsume)
+	require.True(t, decision.Settlement.AllowMissingToken)
+
+	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: completeUsage,
+	}}
+	ch := &model.Channel{Id: channelID, Type: constant.ChannelTypeMiniMax, Key: "test"}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	}))
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+	require.Zero(t, stored.Quota)
+	require.EqualValues(t, 4_900, getSubscriptionUsed(t, subscriptionID))
+	require.EqualValues(t, 200, getTokenRemainQuota(t, tokenID))
+	require.EqualValues(t, 0, getTokenUsedQuota(t, tokenID))
+	require.EqualValues(t, 1, countLogs(t))
+	var preConsume model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", stored.PrivateData.BillingRequestId).First(&preConsume).Error)
+	require.Equal(t, "refunded", preConsume.Status)
+
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, stored.GetUpstreamTaskID(), map[string]*model.Task{
+		stored.GetUpstreamTaskID(): &stored,
+	}))
+	require.EqualValues(t, 4_900, getSubscriptionUsed(t, subscriptionID))
+	require.EqualValues(t, 200, getTokenRemainQuota(t, tokenID))
+	require.EqualValues(t, 1, countLogs(t))
+}
+
+func TestUpdateVideoSingleTaskDoesNotRecoverManualH3BeforeSubmissionSettlement(t *testing.T) {
+	truncate(t)
+	seedUser(t, 901, 900)
+	seedToken(t, 903, 901, "h3-manual-submission-pending", 900)
+	seedChannel(t, 902)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{Resolution: "768P", OutputDurationSeconds: 5, InputImageCount: 1})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	persistTask(t, task)
+	requestKey := model.BillingRequestFinalizeOperationKey(task.PrivateData.BillingRequestId)
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey: requestKey, Source: model.BillingSettlementSourceWallet, UserID: task.UserId,
+		Status: model.BillingSettlementStatusPending, CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(), Revision: 1,
+	}).Error)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
+	}, constant.ChannelTypeMiniMax)
+	_, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
+	require.NoError(t, err)
+
+	completeUsage := &types.TaskUsage{OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(1), Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete}
+	adaptor := &h3TerminalPollingAdaptor{result: &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Usage: completeUsage}}
+	ch := &model.Channel{Id: task.ChannelId, Type: constant.ChannelTypeMiniMax, Key: "test"}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusInProgress), stored.Status)
+	var finalSettlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&finalSettlement).Error)
+	require.Equal(t, model.BillingSettlementStatusManual, finalSettlement.Status)
+}
+
 func TestUpdateVideoSingleTaskKeepsH3TaskPollableWhenSubscriptionPeriodChanged(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID, subscriptionID = 911, 912, 913, 914

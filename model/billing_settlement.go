@@ -1210,6 +1210,120 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 	return appliedFundingDelta, alreadyApplied, nil
 }
 
+// PromoteManualTaskBillingSettlement reopens only the narrow class of H3 task
+// settlements that were held because provider usage was incomplete. The
+// replacement input must keep the original task/funding identity and may only
+// reduce the frozen reservation. The transition is durable before the caller
+// applies funding, so a process interruption leaves a replayable pending
+// record rather than an ambiguous manual mutation.
+func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
+	if DB == nil {
+		return false, errors.New("database is not initialized")
+	}
+	if input.TaskID <= 0 || input.OperationKey != BillingTaskFinalizeOperationKey(input.TaskID) || input.Effect == nil {
+		return false, permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+	}
+	if input.TaskQuota < 0 || input.TaskQuotaTarget < 0 || input.TaskQuotaTarget > input.TaskQuota ||
+		input.FundingDelta != input.TaskQuotaTarget-input.TaskQuota {
+		return false, permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+	}
+	if input.TokenID <= 0 && input.TokenDelta != 0 {
+		return false, permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+	}
+	if input.TokenID > 0 && input.TokenDelta != input.FundingDelta {
+		return false, permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+	}
+	if strings.TrimSpace(reasonPrefix) == "" || strings.TrimSpace(recoveryNote) == "" {
+		return false, permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+	}
+	if err := validateBillingSettlementInput(input); err != nil {
+		return false, err
+	}
+	effectPayload, err := billingSettlementEffectPayload(input.Effect)
+	if err != nil {
+		return false, fmt.Errorf("%w: %v", ErrBillingSettlementRecordNotDurable, err)
+	}
+	recoveryNote = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(recoveryNote))
+
+	promoted := false
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var record BillingSettlement
+		if err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+			}
+			return err
+		}
+		if record.Status == BillingSettlementStatusApplied {
+			return nil
+		}
+		if record.Status != BillingSettlementStatusManual {
+			if record.Status == BillingSettlementStatusPending {
+				return nil
+			}
+			return permanentBillingSettlement(fmt.Errorf("%w: unexpected status %q", ErrBillingSettlementOperationConflict, record.Status))
+		}
+		if !strings.HasPrefix(record.LastError, reasonPrefix) ||
+			record.Source != input.Source ||
+			record.UserID != input.UserID ||
+			record.SubscriptionID != input.SubscriptionID ||
+			record.TokenID != input.TokenID ||
+			record.TaskID != input.TaskID ||
+			record.TaskQuota != input.TaskQuota ||
+			record.TaskQuotaTarget != record.TaskQuota ||
+			record.FundingDelta != 0 || record.TokenDelta != 0 ||
+			record.SubscriptionPreConsumeRequestID != input.SubscriptionPreConsumeRequestID ||
+			(record.FinalizeSubscriptionPreConsume && !input.FinalizeSubscriptionPreConsume) ||
+			(record.AllowMissingToken && !input.AllowMissingToken) ||
+			record.ManualOnFailure != input.ManualOnFailure ||
+			record.EffectPayload != "" {
+			return permanentBillingSettlement(ErrBillingSettlementOperationConflict)
+		}
+		now := time.Now().Unix()
+		originalReason := common.SanitizePersistedLogContent(common.MaskSensitiveInfo(record.LastError))
+		auditNote := fmt.Sprintf("%s; original manual reason: %s", recoveryNote, originalReason)
+		if record.ReconciliationReviewedBy > 0 || record.ReconciliationReviewNote != "" {
+			auditNote = fmt.Sprintf("%s; prior reviewer=%d note=%s", auditNote, record.ReconciliationReviewedBy,
+				common.SanitizePersistedLogContent(common.MaskSensitiveInfo(record.ReconciliationReviewNote)))
+		}
+		updates := map[string]interface{}{
+			"funding_delta":                     input.FundingDelta,
+			"token_delta":                       input.TokenDelta,
+			"task_quota_target":                 input.TaskQuotaTarget,
+			"finalize_subscription_pre_consume": input.FinalizeSubscriptionPreConsume,
+			"allow_missing_token":               input.AllowMissingToken,
+			"effect_payload":                    effectPayload,
+			"effect_status":                     effectStatusAfterSettlement(effectPayload),
+			"status":                            BillingSettlementStatusPending,
+			"last_error":                        recoveryNote,
+			"next_attempt":                      now,
+			"updated_at":                        now,
+			"revision":                          gorm.Expr("revision + ?", 1),
+			"reconciliation_reviewed_at":        0,
+			"reconciliation_reviewed_by":        0,
+			"reconciliation_review_note":        auditNote,
+			"user_blocking_override":            nil,
+			"applied_funding_delta":             0,
+			"applied_token_delta":               0,
+		}
+		result := tx.Model(&BillingSettlement{}).
+			Where("id = ? AND revision = ? AND status = ?", record.ID, record.Revision, BillingSettlementStatusManual).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrBillingSettlementOperationConflict
+		}
+		promoted = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return promoted, nil
+}
+
 // ResolveBillingPreConsumeSource returns the funding source already selected by
 // a request's durable pre-consume record. A request must never move between a
 // wallet settlement and a subscription pre-consume on replay.

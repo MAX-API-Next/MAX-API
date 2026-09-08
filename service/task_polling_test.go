@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,6 +38,50 @@ func (a *sunoPollingResponseAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskI
 
 func (a *sunoPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
 	return 0
+}
+
+type usagePollingResponseAdaptor struct {
+	usage    *types.TaskUsage
+	usageErr error
+}
+
+func (a *usagePollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a *usagePollingResponseAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+
+func (a *usagePollingResponseAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess)}, nil
+}
+
+func (a *usagePollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *usagePollingResponseAdaptor) ExtractTaskUsage([]byte) (*types.TaskUsage, error) {
+	return a.usage, a.usageErr
+}
+
+func TestApplyTaskUsageFactsAttachesProviderEvidence(t *testing.T) {
+	taskResult := &relaycommon.TaskInfo{}
+	usage := &types.TaskUsage{
+		Source:       types.TaskUsageSourceProviderResponse,
+		Completeness: types.TaskUsageCompletenessComplete,
+	}
+
+	require.NoError(t, applyTaskUsageFacts(&usagePollingResponseAdaptor{usage: usage}, []byte(`{}`), taskResult))
+	assert.Same(t, usage, taskResult.Usage)
+}
+
+func TestApplyTaskUsageFactsFailsClosedOnProviderError(t *testing.T) {
+	taskResult := &relaycommon.TaskInfo{}
+	providerErr := errors.New("ambiguous usage response")
+
+	err := applyTaskUsageFacts(&usagePollingResponseAdaptor{usageErr: providerErr}, []byte(`{}`), taskResult)
+
+	require.ErrorIs(t, err, providerErr)
+	assert.Nil(t, taskResult.Usage)
 }
 
 func TestUpdateVideoTasksLeavesChargedTasksPendingWhenChannelCacheFails(t *testing.T) {

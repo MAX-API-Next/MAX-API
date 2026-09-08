@@ -108,6 +108,24 @@ type H3Usage struct {
 	InputAudioSeconds json.RawMessage `json:"input_audio_seconds"`
 }
 
+// GenericMiniMaxVideoResponse is used by compatible gateways that expose the
+// MiniMax H3 result at the response root instead of under the official task
+// envelope. Keep this shape deliberately narrow so legacy Hailuo responses do
+// not get reclassified accidentally.
+type GenericMiniMaxVideoResponse struct {
+	ID     string                     `json:"id"`
+	Object string                     `json:"object"`
+	Status string                     `json:"status"`
+	Data   []GenericMiniMaxVideoAsset `json:"data"`
+	Usage  *H3Usage                   `json:"usage,omitempty"`
+}
+
+type GenericMiniMaxVideoAsset struct {
+	URL       string `json:"url,omitempty"`
+	VideoURL  string `json:"video_url,omitempty"`
+	OutputURL string `json:"output_url,omitempty"`
+}
+
 type ErrorInfo struct {
 	StatusCode int    `json:"status_code"`
 	StatusMsg  string `json:"status_msg"`

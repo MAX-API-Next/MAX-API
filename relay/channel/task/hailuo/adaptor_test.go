@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -474,6 +475,58 @@ func TestParseH3TaskResultCarriesVideoAndAudioUsageSeparately(t *testing.T) {
 	require.Equal(t, int64(6000), *result.Usage.InputAudioDurationMs)
 	require.Equal(t, int64(1), *result.Usage.InputImageCount)
 	require.Equal(t, types.TaskUsageSourceProviderResponse, result.Usage.Source)
+}
+
+func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+		"created": 1788853061,
+		"data": [{"url": "https://cdn.example.com/result.mp4"}],
+		"id": "439499419230570",
+		"object": "video.generation",
+		"status": "completed",
+		"usage": {
+			"completion_tokens": 162745,
+			"input_image_count": 1,
+			"input_seconds": 0,
+			"output_seconds": 5,
+			"prompt_tokens": 13020,
+			"total_seconds": 5,
+			"total_tokens": 175765
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, usage.Completeness)
+	require.NotNil(t, usage.InputVideoDurationMs)
+	assert.Equal(t, int64(0), *usage.InputVideoDurationMs)
+	require.NotNil(t, usage.OutputDurationMs)
+	assert.Equal(t, int64(5000), *usage.OutputDurationMs)
+	require.NotNil(t, usage.InputImageCount)
+	assert.Equal(t, int64(1), *usage.InputImageCount)
+}
+
+func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"created": 1788853061,
+		"data": [{"url": "https://cdn.example.com/result.mp4"}],
+		"id": "439499419230570",
+		"object": "video.generation",
+		"status": "completed",
+		"usage": {
+			"input_image_count": 1,
+			"input_seconds": 0,
+			"output_seconds": 5,
+			"total_seconds": 5
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, "https://cdn.example.com/result.mp4", result.Url)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, result.Usage.Completeness)
 }
 
 func TestParseH3UsagePreservesExplicitZeroAndMissingFields(t *testing.T) {

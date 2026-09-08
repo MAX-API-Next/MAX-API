@@ -307,6 +307,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	if result, handled, err := parseH3TaskResult(respBody); handled {
 		return result, err
 	}
+	if result, handled, err := parseGenericMiniMaxTaskResult(respBody); handled {
+		return result, err
+	}
 
 	resTask := QueryTaskResponse{}
 	if err := common.Unmarshal(respBody, &resTask); err != nil {
@@ -362,10 +365,28 @@ func (a *TaskAdaptor) ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error
 	if err != nil {
 		return nil, err
 	}
-	if !handled || response.Task == nil {
+	if handled {
+		if response.Task == nil {
+			return nil, nil
+		}
+		return normalizeH3Usage(response.Task.Usage), nil
+	}
+
+	// Some MiniMax-compatible gateways expose the H3 usage facts in a generic
+	// video response ({"id", "status", "data", "usage"}) instead of the
+	// native {"task": ...} envelope. Keep the same strict H3 normalizer so
+	// seconds, image counts, explicit zeroes, and consistency checks are not
+	// weakened by the alternate envelope.
+	var genericResponse struct {
+		Usage *H3Usage `json:"usage,omitempty"`
+	}
+	if err := common.Unmarshal(respBody, &genericResponse); err != nil {
+		return nil, err
+	}
+	if genericResponse.Usage == nil {
 		return nil, nil
 	}
-	return normalizeH3Usage(response.Task.Usage), nil
+	return normalizeH3Usage(genericResponse.Usage), nil
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {

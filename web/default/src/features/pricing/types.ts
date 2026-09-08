@@ -35,9 +35,23 @@ export type TaskRateCardPricingRow = {
   unit_price: number
 }
 
+export type TaskRateCardPricingComponent = {
+  key: string
+  variant?: string
+  unit: string
+  unit_price: string
+  free_quantity?: number
+  min_quantity?: number
+  max_quantity?: number
+}
+
 export type TaskRateCardPricing = {
   rule_key?: string
   vendor?: string
+  billing_type?: string
+  schema_version?: number
+  mode?: string
+  currency?: string
   unit?: string
   quantity_field?: string
   default_quantity?: number
@@ -46,6 +60,7 @@ export type TaskRateCardPricing = {
   min_unit_price: number
   max_unit_price: number
   rows: TaskRateCardPricingRow[]
+  components?: TaskRateCardPricingComponent[]
 }
 
 export type PricingModel = {

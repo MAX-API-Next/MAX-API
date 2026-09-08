@@ -33,6 +33,14 @@ type TaskPollingAdaptor interface {
 	AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int
 }
 
+// taskUsageProvider is an optional provider-specific usage extractor. It is
+// deliberately local to service so the polling package does not import the
+// relay/channel host package and create an import cycle. Usage facts remain
+// evidence only; billing is still owned by the existing settlement path.
+type taskUsageProvider interface {
+	ExtractTaskUsage(responseBody []byte) (*types.TaskUsage, error)
+}
+
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
@@ -493,6 +501,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 	}
+	if err := applyTaskUsageFacts(adaptor, responseBody, taskResult); err != nil {
+		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
+	}
 
 	task.Data = redactVideoResponseBody(responseBody)
 
@@ -526,7 +537,25 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
 	}
 	if pending {
-		return nil
+		// A task-finalize manual record created by incomplete H3 usage may be
+		// safely reopened when a later provider poll supplies complete,
+		// validated usage. Other manual reasons remain operator-gated.
+		if providerTerminal {
+			recoveryDecision := prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
+			recovered, recoveryErr := recoverManualTaskBillingSettlement(ctx, task, recoveryDecision)
+			if recoveryErr != nil {
+				return fmt.Errorf("recover manual task settlement for task %s: %w", task.TaskID, recoveryErr)
+			}
+			if recovered {
+				pending, taskFinalizeApplied, settlementErr = taskTerminalSettlementState(task, providerTerminal)
+				if settlementErr != nil {
+					return fmt.Errorf("reload recovered task settlement for task %s: %w", task.TaskID, settlementErr)
+				}
+			}
+		}
+		if pending {
+			return nil
+		}
 	}
 	terminalDecision := taskTerminalBillingDecision{}
 	if providerTerminal && !taskFinalizeApplied {
@@ -654,6 +683,56 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskResult *relaycommon.TaskInfo) error {
+	if adaptor == nil || taskResult == nil {
+		return nil
+	}
+	provider, ok := adaptor.(taskUsageProvider)
+	if !ok {
+		return nil
+	}
+	usage, err := provider.ExtractTaskUsage(responseBody)
+	if err != nil {
+		return err
+	}
+	if usage != nil {
+		taskResult.Usage = usage
+	}
+	return nil
+}
+
+func recoverManualTaskBillingSettlement(ctx context.Context, task *model.Task, decision taskTerminalBillingDecision) (bool, error) {
+	if task == nil || task.ID <= 0 || !decision.UsesPlan || decision.ManualReason != "" || decision.Settlement == nil {
+		return false, nil
+	}
+	if submissionPending, err := taskFinalSettlementPending(task); err != nil || submissionPending {
+		return false, err
+	}
+	status, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(task.ID))
+	if err != nil || !found || status != model.BillingSettlementStatusManual {
+		return false, err
+	}
+	const h3UsageManualReasonPrefix = "H3 terminal usage requires manual reconciliation:"
+	recoveryNote := "H3 task settlement automatically recovered after a complete provider usage response"
+	promoted, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
+	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
+		// A different manual reason or a concurrent/permanent recovery failure
+		// must remain operator-gated; do not turn that durable state into a
+		// polling error or publish a terminal task status.
+		return false, nil
+	}
+	if err != nil || !promoted {
+		return false, err
+	}
+	if task.PrivateData.BillingContext != nil {
+		task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	}
+	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskStatus, expectedUpdatedAt int64, decision taskTerminalBillingDecision) (bool, error) {

@@ -378,7 +378,19 @@ func taskBillingPlan(task *model.Task) *types.TaskBillingPlan {
 
 func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo) *types.TaskUsage {
 	if task != nil && task.PrivateData.BillingContext != nil && task.PrivateData.BillingContext.TaskUsage != nil {
-		return types.CloneTaskUsage(task.PrivateData.BillingContext.TaskUsage)
+		frozen := task.PrivateData.BillingContext.TaskUsage
+		// A terminal poll may initially lack usage and create a manual hold while
+		// a later provider poll returns the complete authoritative facts. Missing
+		// evidence is not a financial value to freeze; replace only that state with
+		// a complete provider result. Partial, invalid, ambiguous, and complete
+		// snapshots remain immutable and continue to require reconciliation.
+		if frozen.Completeness == types.TaskUsageCompletenessMissing &&
+			taskResult != nil && taskResult.Usage != nil &&
+			taskResult.Usage.Source == types.TaskUsageSourceProviderResponse &&
+			taskResult.Usage.Completeness == types.TaskUsageCompletenessComplete {
+			return types.CloneTaskUsage(taskResult.Usage)
+		}
+		return types.CloneTaskUsage(frozen)
 	}
 	if taskResult != nil && taskResult.Usage != nil {
 		return types.CloneTaskUsage(taskResult.Usage)

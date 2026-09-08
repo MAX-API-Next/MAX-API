@@ -186,10 +186,40 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	}
 	cfg := EffectiveTaskProtocolConfig(settings)
 	taskID := StringFromGJSONPath(respBody, cfg.TaskIDPath)
+	if taskID == "" {
+		// MiniMax-compatible gateways may return the task identifier at the
+		// response root even when a legacy nested path was configured.
+		taskID = StringFromGJSONPath(respBody, "id")
+	}
+	// The official MiniMax H3 query response nests the task facts under
+	// `task`. Keep this fallback after the configured path and root-level
+	// compatibility path so an explicit provider mapping remains authoritative.
+	officialTaskEnvelope := gjson.GetBytes(respBody, "task").IsObject()
+	if taskID == "" && officialTaskEnvelope {
+		taskID = StringFromGJSONPath(respBody, "task.id")
+	}
 	statusRaw := StringFromGJSONPath(respBody, cfg.StatusPath)
+	if statusRaw == "" {
+		statusRaw = StringFromGJSONPath(respBody, "status")
+	}
+	if statusRaw == "" && officialTaskEnvelope {
+		statusRaw = StringFromGJSONPath(respBody, "task.status")
+	}
 	progressRaw := StringFromGJSONPath(respBody, cfg.ProgressPath)
 	resultURL := ExtractConfiguredResultURL(respBody, cfg.ResultURLPaths)
+	if resultURL == "" {
+		// The generic MiniMax video response uses data[0].url. Keep this
+		// compatibility fallback narrow so an explicitly configured provider
+		// path remains authoritative whenever it yields a value.
+		resultURL = ExtractConfiguredResultURL(respBody, []string{"data.0.url", "data.0.video_url", "data.0.output_url"})
+	}
+	if resultURL == "" && officialTaskEnvelope {
+		resultURL = ExtractConfiguredResultURL(respBody, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
+	}
 	reason := StringFromGJSONPath(respBody, cfg.ErrorMessagePath)
+	if reason == "" && officialTaskEnvelope {
+		reason = StringFromGJSONPath(respBody, "task.error.message")
+	}
 
 	if taskID == "" && statusRaw == "" && progressRaw == "" && resultURL == "" && reason == "" {
 		return nil, false, nil
@@ -198,6 +228,12 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	status := MapConfiguredTaskStatus(statusRaw, cfg)
 	if statusRaw == "" {
 		status = inferConfiguredTaskStatus(resultURL, reason)
+	}
+	// MiniMax only has a retrievable result once `content.url` is present.
+	// Do not let a generic status map turn an intermediate succeeded envelope
+	// into a billable terminal task before the artifact is available.
+	if officialTaskEnvelope && status == string(model.TaskStatusSuccess) && resultURL == "" && reason == "" {
+		status = string(model.TaskStatusInProgress)
 	}
 	if resultURL != "" && status != string(model.TaskStatusFailure) {
 		status = string(model.TaskStatusSuccess)
@@ -231,6 +267,9 @@ func ConvertConfiguredTaskToOpenAIVideo(originTask *model.Task) ([]byte, bool, e
 	urlValue := originTask.GetResultURL()
 	if urlValue == "" {
 		urlValue = ExtractConfiguredResultURL(originTask.Data, cfg.ResultURLPaths)
+	}
+	if urlValue == "" && gjson.GetBytes(originTask.Data, "task").IsObject() {
+		urlValue = ExtractConfiguredResultURL(originTask.Data, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
 	}
 	openAIVideo.SetMetadata("url", urlValue)
 	openAIVideo.CreatedAt = firstTimestamp(originTask.CreatedAt, TimestampFromGJSONPath(originTask.Data, cfg.CreatedAtPath))

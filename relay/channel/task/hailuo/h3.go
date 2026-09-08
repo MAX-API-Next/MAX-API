@@ -568,6 +568,64 @@ func parseH3TaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
 	return result, true, nil
 }
 
+func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
+	var response GenericMiniMaxVideoResponse
+	if err := common.Unmarshal(body, &response); err != nil {
+		return nil, false, err
+	}
+	// The root-level shape is used by compatible gateways. Requiring an id and
+	// either the documented object marker or a status/data field prevents a
+	// legacy Hailuo response from being treated as a MiniMax result.
+	if strings.TrimSpace(response.ID) == "" ||
+		(strings.TrimSpace(response.Object) != "video.generation" &&
+			(strings.TrimSpace(response.Status) == "" || response.Data == nil)) {
+		return nil, false, nil
+	}
+
+	result := &relaycommon.TaskInfo{
+		TaskID: response.ID,
+		Code:   0,
+		Usage:  normalizeH3Usage(response.Usage),
+	}
+	if len(response.Data) > 0 {
+		asset := response.Data[0]
+		result.Url = firstNonEmptyString(asset.URL, asset.VideoURL, asset.OutputURL)
+	}
+	status := strings.ToLower(strings.TrimSpace(response.Status))
+	switch status {
+	case "queued", "pending", "submitted", "created":
+		result.Status = model.TaskStatusQueued
+		result.Progress = "30%"
+	case "running", "processing", "in_progress":
+		result.Status = model.TaskStatusInProgress
+		result.Progress = "50%"
+	case "succeeded", "success", "completed", "complete":
+		result.Progress = "100%"
+		if result.Url == "" {
+			result.Status = model.TaskStatusInProgress
+			result.Progress = "90%"
+		} else {
+			result.Status = model.TaskStatusSuccess
+		}
+	case "failed", "failure", "error", "cancelled", "canceled":
+		result.Status = model.TaskStatusFailure
+		result.Progress = "100%"
+	default:
+		result.Status = model.TaskStatusInProgress
+		result.Progress = "30%"
+	}
+	return result, true, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func h3APIErrorCode(apiError *H3APIError) int {
 	if apiError == nil {
 		return 0
