@@ -19,7 +19,20 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { z } from 'zod'
 import type { TFunction } from 'i18next'
 
-export function getManualTaskSettlementSchema(t: TFunction, maxQuota: number) {
+type ManualTaskSettlementSchemaShape = {
+  actualQuota: string
+  note: string
+}
+
+type ManualTaskSettlementSchema = z.ZodType<
+  ManualTaskSettlementSchemaShape,
+  ManualTaskSettlementSchemaShape
+>
+
+export function getManualTaskSettlementSchema(
+  t: TFunction,
+  maxQuota: number
+): ManualTaskSettlementSchema {
   return z.object({
     actualQuota: z
       .string()
@@ -43,6 +56,4 @@ export function getManualTaskSettlementSchema(t: TFunction, maxQuota: number) {
   })
 }
 
-export type ManualTaskSettlementFormValues = z.infer<
-  ReturnType<typeof getManualTaskSettlementSchema>
->
+export type ManualTaskSettlementFormValues = z.infer<ManualTaskSettlementSchema>

@@ -123,7 +123,7 @@ describe('ModelDetailsContent structured task pricing', () => {
       assert.match(content, /Extra input image price/)
       assert.match(content, /Input audio price/)
       assert.match(content, /Free input images/)
-      assert.doesNotMatch(content, /Per Request/)
+      assert.doesNotMatch(content, /Per request/)
     } finally {
       await view.unmount()
       queryClient.clear()
