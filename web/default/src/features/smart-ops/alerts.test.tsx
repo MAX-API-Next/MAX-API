@@ -611,8 +611,9 @@ describe('SmartOps active alerts', () => {
     htmlElementPrototype.detachEvent = function (name, listener) {
       this.removeEventListener(name.replace(/^on/, ''), listener)
     }
-    let manualRevision = 2
-    let manualCompletionRequired = true
+    const manualRevision = 2
+    const manualCompletionRequired = true
+    let includeManualItem = true
     api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
@@ -620,40 +621,42 @@ describe('SmartOps active alerts', () => {
               success: true,
               data: {
                 ...emptyReconciliationData(),
-                total_count: 1,
-                manual_count: 1,
-                open_alert_count: 1,
-                items: [
-                  {
-                    id: 93,
-                    revision: manualRevision,
-                    operation_key: 'task:7001:finalize',
-                    status: 'manual',
-                    source: 'wallet',
-                    user_id: 53,
-                    subscription_id: 0,
-                    token_id: 54,
-                    task_id: 7001,
-                    task_quota: 100,
-                    task_quota_target: 100,
-                    requires_manual_completion: manualCompletionRequired,
-                    funding_delta: 0,
-                    applied_funding_delta: 0,
-                    token_delta: 0,
-                    applied_token_delta: 0,
-                    attempts: 0,
-                    last_error: 'provider usage needs verification',
-                    next_attempt: 0,
-                    created_at: 1786032545,
-                    updated_at: 1786032545,
-                    reconciliation_reviewed_at: 0,
-                    reconciliation_reviewed_by: 0,
-                    reconciliation_review_note: '',
-                    user_blocking_override: null,
-                    record_blocks_user: false,
-                    blocks_user: false,
-                  },
-                ],
+                total_count: includeManualItem ? 1 : 0,
+                manual_count: includeManualItem ? 1 : 0,
+                open_alert_count: includeManualItem ? 1 : 0,
+                items: includeManualItem
+                  ? [
+                      {
+                        id: 93,
+                        revision: manualRevision,
+                        operation_key: 'task:7001:finalize',
+                        status: 'manual',
+                        source: 'wallet',
+                        user_id: 53,
+                        subscription_id: 0,
+                        token_id: 54,
+                        task_id: 7001,
+                        task_quota: 100,
+                        task_quota_target: 100,
+                        requires_manual_completion: manualCompletionRequired,
+                        funding_delta: 0,
+                        applied_funding_delta: 0,
+                        token_delta: 0,
+                        applied_token_delta: 0,
+                        attempts: 0,
+                        last_error: 'provider usage needs verification',
+                        next_attempt: 0,
+                        created_at: 1786032545,
+                        updated_at: 1786032545,
+                        reconciliation_reviewed_at: 0,
+                        reconciliation_reviewed_by: 0,
+                        reconciliation_review_note: '',
+                        user_blocking_override: null,
+                        record_blocks_user: false,
+                        blocks_user: false,
+                      },
+                    ]
+                  : [],
               },
             }
           : { success: true, data: [] },
@@ -711,8 +714,7 @@ describe('SmartOps active alerts', () => {
         )
       )
 
-      manualRevision = 3
-      manualCompletionRequired = false
+      includeManualItem = false
       await queryClient.invalidateQueries({
         queryKey: ['smart-ops', 'billing-settlement-reconciliation'],
       })

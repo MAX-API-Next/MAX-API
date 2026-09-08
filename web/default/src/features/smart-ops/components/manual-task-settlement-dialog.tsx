@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactElement } from 'react'
+import { type ReactElement } from 'react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatQuota } from '@/lib/format'
@@ -37,8 +39,13 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { Form, FormField } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  getManualTaskSettlementSchema,
+  type ManualTaskSettlementFormValues,
+} from '../lib/manual-task-settlement'
 import type { BillingSettlementReconciliationItem } from '../types'
 
 interface ManualTaskSettlementDialogProps {
@@ -57,32 +64,22 @@ export function ManualTaskSettlementDialog(
   props: ManualTaskSettlementDialogProps
 ): ReactElement {
   const { t } = useTranslation()
-  const [actualQuotaInput, setActualQuotaInput] = useState('')
-  const [note, setNote] = useState('')
-
-  const actualQuota = Number(actualQuotaInput)
-  const quotaError = useMemo((): string => {
-    if (!props.item || actualQuotaInput.trim() === '') {
-      return t('Enter the exact final quota.')
-    }
-    if (!Number.isSafeInteger(actualQuota) || actualQuota < 0) {
-      return t('Final quota must be a non-negative safe integer.')
-    }
-    if (actualQuota > props.item.task_quota) {
-      return t('Final quota cannot exceed the reserved quota.')
-    }
-    return ''
-  }, [actualQuota, actualQuotaInput, props.item, t])
-  const trimmedNote = note.trim()
-  const noteError = useMemo((): string => {
-    const length = Array.from(trimmedNote).length
-    if (length < 3 || length > 1000) {
-      return t('Audit note must contain between 3 and 1000 characters.')
-    }
-    return ''
-  }, [t, trimmedNote])
+  const item = props.item
+  const form = useForm<ManualTaskSettlementFormValues>({
+    resolver: zodResolver(
+      getManualTaskSettlementSchema(t, props.item?.task_quota ?? 0)
+    ),
+    defaultValues: { actualQuota: '', note: '' },
+    mode: 'onChange',
+  })
   const canSubmit =
-    Boolean(props.item) && !props.stale && quotaError === '' && noteError === ''
+    Boolean(props.item) && !props.stale && form.formState.isValid
+
+  const handleSubmit = form.handleSubmit((values) => {
+    if (props.item && !props.stale) {
+      props.onSubmit(props.item, Number(values.actualQuota), values.note)
+    }
+  })
 
   return (
     <Dialog
@@ -101,13 +98,13 @@ export function ManualTaskSettlementDialog(
           </DialogDescription>
         </DialogHeader>
 
-        {props.item && (
+        {item && (
           <>
             <Alert>
               <AlertTitle>
                 {t('Task #{{id}} · reserved {{quota}}', {
-                  id: props.item.task_id,
-                  quota: formatQuota(props.item.task_quota),
+                  id: item.task_id,
+                  quota: formatQuota(item.task_quota),
                 })}
               </AlertTitle>
               <AlertDescription>
@@ -132,58 +129,72 @@ export function ManualTaskSettlementDialog(
               </Alert>
             )}
 
-            <FieldGroup>
-              <Field data-invalid={quotaError !== ''}>
-                <FieldLabel htmlFor='manual-task-actual-quota'>
-                  {t('Exact final quota')}
-                </FieldLabel>
-                <Input
-                  id='manual-task-actual-quota'
-                  type='number'
-                  inputMode='numeric'
-                  min={0}
-                  max={props.item.task_quota}
-                  step={1}
-                  value={actualQuotaInput}
-                  onChange={(event) => setActualQuotaInput(event.target.value)}
-                  disabled={props.pending || props.stale}
-                  aria-invalid={quotaError !== ''}
-                />
-                <FieldDescription>
-                  {t('Allowed range: 0 to {{quota}}.', {
-                    quota: formatQuota(props.item.task_quota),
-                  })}
-                </FieldDescription>
-                {actualQuotaInput !== '' && quotaError !== '' && (
-                  <FieldError>{quotaError}</FieldError>
-                )}
-              </Field>
+            <Form {...form}>
+              <form id='manual-task-settlement-form' onSubmit={handleSubmit}>
+                <FieldGroup>
+                  <FormField
+                    control={form.control}
+                    name='actualQuota'
+                    render={({ field, fieldState }) => (
+                      <Field data-invalid={fieldState.invalid}>
+                        <FieldLabel htmlFor='manual-task-actual-quota'>
+                          {t('Exact final quota')}
+                        </FieldLabel>
+                        <Input
+                          {...field}
+                          id='manual-task-actual-quota'
+                          type='number'
+                          inputMode='numeric'
+                          min={0}
+                          max={item.task_quota}
+                          step={1}
+                          disabled={props.pending || props.stale}
+                          aria-invalid={fieldState.invalid}
+                        />
+                        <FieldDescription>
+                          {t('Allowed range: 0 to {{quota}}.', {
+                            quota: formatQuota(item.task_quota),
+                          })}
+                        </FieldDescription>
+                        {fieldState.error && (
+                          <FieldError>{fieldState.error.message}</FieldError>
+                        )}
+                      </Field>
+                    )}
+                  />
 
-              <Field data-invalid={noteError !== ''}>
-                <FieldLabel htmlFor='manual-task-audit-note'>
-                  {t('Audit note')}
-                </FieldLabel>
-                <Textarea
-                  id='manual-task-audit-note'
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  placeholder={t(
-                    'Describe the provider evidence and calculation used.'
-                  )}
-                  maxLength={1000}
-                  disabled={props.pending || props.stale}
-                  aria-invalid={noteError !== ''}
-                />
-                <FieldDescription>
-                  {t(
-                    'This note is bound to the idempotent financial operation.'
-                  )}
-                </FieldDescription>
-                {note !== '' && noteError !== '' && (
-                  <FieldError>{noteError}</FieldError>
-                )}
-              </Field>
-            </FieldGroup>
+                  <FormField
+                    control={form.control}
+                    name='note'
+                    render={({ field, fieldState }) => (
+                      <Field data-invalid={fieldState.invalid}>
+                        <FieldLabel htmlFor='manual-task-audit-note'>
+                          {t('Audit note')}
+                        </FieldLabel>
+                        <Textarea
+                          {...field}
+                          id='manual-task-audit-note'
+                          placeholder={t(
+                            'Describe the provider evidence and calculation used.'
+                          )}
+                          maxLength={1000}
+                          disabled={props.pending || props.stale}
+                          aria-invalid={fieldState.invalid}
+                        />
+                        <FieldDescription>
+                          {t(
+                            'This note is bound to the idempotent financial operation.'
+                          )}
+                        </FieldDescription>
+                        {fieldState.error && (
+                          <FieldError>{fieldState.error.message}</FieldError>
+                        )}
+                      </Field>
+                    )}
+                  />
+                </FieldGroup>
+              </form>
+            </Form>
           </>
         )}
 
@@ -197,12 +208,8 @@ export function ManualTaskSettlementDialog(
             {t('Cancel')}
           </Button>
           <Button
-            type='button'
-            onClick={() => {
-              if (props.item && canSubmit) {
-                props.onSubmit(props.item, actualQuota, trimmedNote)
-              }
-            }}
+            type='submit'
+            form='manual-task-settlement-form'
             disabled={!canSubmit || props.pending}
           >
             {props.pending && (

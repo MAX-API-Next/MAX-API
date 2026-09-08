@@ -195,6 +195,14 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// `task`. Keep this fallback after the configured path and root-level
 	// compatibility path so an explicit provider mapping remains authoritative.
 	officialTaskEnvelope := gjson.GetBytes(respBody, "task").IsObject()
+	// Some MiniMax-compatible gateways return the task facts at the root with
+	// an array-valued `data` field (or the `video.generation` object marker).
+	// Treat this as the same envelope for terminal-state safety: a completed
+	// status without a retrievable artifact must remain pollable.
+	rootMiniMaxEnvelope := !officialTaskEnvelope &&
+		StringFromGJSONPath(respBody, "id") != "" &&
+		(strings.TrimSpace(StringFromGJSONPath(respBody, "object")) == "video.generation" ||
+			gjson.GetBytes(respBody, "data").IsArray())
 	if taskID == "" && officialTaskEnvelope {
 		taskID = StringFromGJSONPath(respBody, "task.id")
 	}
@@ -235,7 +243,8 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// MiniMax only has a retrievable result once `content.url` is present.
 	// Do not let a generic status map turn an intermediate succeeded envelope
 	// into a billable terminal task before the artifact is available.
-	if officialTaskEnvelope && status == string(model.TaskStatusSuccess) && resultURL == "" && reason == "" {
+	if (officialTaskEnvelope || rootMiniMaxEnvelope) &&
+		status == string(model.TaskStatusSuccess) && resultURL == "" && reason == "" {
 		status = string(model.TaskStatusInProgress)
 	}
 	if resultURL != "" && status != string(model.TaskStatusFailure) {

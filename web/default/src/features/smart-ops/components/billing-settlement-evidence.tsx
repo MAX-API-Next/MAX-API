@@ -229,7 +229,7 @@ export function BillingSettlementEvidence(
         t('Failed to complete manual task billing.')
       )
       handleServerError(error, {
-        fallback: t(message),
+        fallback: message,
       })
     },
   })
@@ -401,25 +401,22 @@ export function BillingSettlementEvidence(
             onReviewTargets={reviewTargets}
             onCompleteManualTask={setManualTaskItem}
           />
-          {manualTaskItem && (
-            <ManualTaskSettlementDialog
-              key={`${manualTaskItem.id}:${manualTaskItem.revision}`}
-              item={manualTaskItem}
-              pending={manualTaskCompletionMutation.isPending}
-              stale={manualTaskItemStale}
-              onOpenChange={(open) => {
-                if (!open) setManualTaskItem(null)
-              }}
-              onSubmit={(item, actualQuota, note) =>
-                manualTaskCompletionMutation.mutate({
-                  item,
-                  actualQuota,
-                  note,
-                })
-              }
-            />
-          )}
         </div>
+      )}
+
+      {manualTaskItem && (
+        <ManualTaskSettlementDialog
+          key={`${manualTaskItem.id}:${manualTaskItem.revision}`}
+          item={manualTaskItem}
+          pending={manualTaskCompletionMutation.isPending}
+          stale={manualTaskItemStale}
+          onOpenChange={(open) => {
+            if (!open) setManualTaskItem(null)
+          }}
+          onSubmit={(item, actualQuota, note) =>
+            manualTaskCompletionMutation.mutate({ item, actualQuota, note })
+          }
+        />
       )}
 
       {props.data.truncated && (

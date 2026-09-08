@@ -384,18 +384,27 @@ func TestCompleteManualTaskBillingSettlementPropagatesFinalTaskReadFailure(t *te
 	manual := createManualTaskFinalizeSettlement(t, task, "provider usage needed manual verification")
 	actualQuota := int64(40)
 	finalReadErr := errors.New("final task read unavailable")
-	taskQueryCount := 0
-	callbackName := "test:manual-completion-final-task-read"
-	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement != nil && tx.Statement.Table == "tasks" {
-			taskQueryCount++
-			if taskQueryCount == 3 {
-				tx.AddError(finalReadErr)
-			}
+	childSettlementApplied := false
+	beforeCallbackName := "test:manual-completion-final-task-read-before"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(beforeCallbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "tasks" && childSettlementApplied {
+			tx.AddError(finalReadErr)
+			childSettlementApplied = false
+		}
+	}))
+	updateCallbackName := "test:manual-completion-final-task-read-update"
+	require.NoError(t, model.DB.Callback().Update().After("gorm:update").Register(updateCallbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "BillingSettlement" {
+			return
+		}
+		fields, ok := tx.Statement.Dest.(map[string]interface{})
+		if status, statusOK := fields["status"].(string); ok && statusOK && status == model.BillingSettlementStatusApplied {
+			childSettlementApplied = true
 		}
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, model.DB.Callback().Query().Remove(callbackName))
+		require.NoError(t, model.DB.Callback().Query().Remove(beforeCallbackName))
+		require.NoError(t, model.DB.Callback().Update().Remove(updateCallbackName))
 	})
 
 	_, err := CompleteManualTaskBillingSettlement(

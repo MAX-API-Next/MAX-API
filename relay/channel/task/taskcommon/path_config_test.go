@@ -321,6 +321,33 @@ func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing
 	assert.Equal(t, "https://cdn.example.com/minimax.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultKeepsMiniMaxCompatibleRootPendingWithoutURL(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "data.id",
+			StatusPath:     "data.status",
+			ResultURLPaths: []string{"data.data.0.url"},
+		},
+	}
+	body := []byte(`{
+		"id": "439499419230570",
+		"object": "video.generation",
+		"status": "completed",
+		"data": []
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+	assert.Equal(t, "50%", result.Progress)
+	assert.Empty(t, result.Url)
+}
+
 func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
 	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
 	body := []byte(`{
