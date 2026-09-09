@@ -185,15 +185,9 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		return nil, false, nil
 	}
 	cfg := EffectiveTaskProtocolConfig(settings)
-	taskID := StringFromGJSONPath(respBody, cfg.TaskIDPath)
-	if taskID == "" {
-		// MiniMax-compatible gateways may return the task identifier at the
-		// response root even when a legacy nested path was configured.
-		taskID = StringFromGJSONPath(respBody, "id")
-	}
 	// The official MiniMax H3 query response nests the task facts under
-	// `task`. Keep this fallback after the configured path and root-level
-	// compatibility path so an explicit provider mapping remains authoritative.
+	// `task`. Keep these envelope markers before compatibility fallbacks so
+	// unrelated providers cannot be mistaken for MiniMax responses.
 	officialTaskEnvelope := gjson.GetBytes(respBody, "task").IsObject()
 	// MiniMax-compatible gateways return the task facts at the root with an
 	// array-valued `data` field and the `video.generation` object marker. Keep
@@ -204,6 +198,12 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		StringFromGJSONPath(respBody, "id") != "" &&
 		strings.EqualFold(rootObject, "video.generation") &&
 		gjson.GetBytes(respBody, "data").IsArray()
+	taskID := StringFromGJSONPath(respBody, cfg.TaskIDPath)
+	if taskID == "" && rootMiniMaxEnvelope {
+		// MiniMax-compatible gateways may return the task identifier at the
+		// response root even when a legacy nested path was configured.
+		taskID = StringFromGJSONPath(respBody, "id")
+	}
 	if taskID == "" && officialTaskEnvelope {
 		taskID = StringFromGJSONPath(respBody, "task.id")
 	}

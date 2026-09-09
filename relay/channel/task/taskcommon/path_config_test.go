@@ -401,8 +401,28 @@ func TestParseConfiguredTaskResultDoesNotUseMiniMaxFallbackForOtherEnvelope(t *t
 	assert.Empty(t, result.Url)
 }
 
-func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
+func TestParseConfiguredTaskResultDoesNotUseRootIDFallbackForNonMiniMax(t *testing.T) {
 	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
+	body := []byte(`{
+		"id": "provider-task-root",
+		"object": "media.task",
+		"status": "in_progress"
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Empty(t, result.TaskID)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+}
+
+func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol:       TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{TaskIDPath: "id"},
+	}
 	body := []byte(`{
 		"id": "439499419230570",
 		"status": "failed",
