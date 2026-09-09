@@ -199,10 +199,11 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// an array-valued `data` field (or the `video.generation` object marker).
 	// Treat this as the same envelope for terminal-state safety: a completed
 	// status without a retrievable artifact must remain pollable.
+	rootObject := strings.TrimSpace(StringFromGJSONPath(respBody, "object"))
 	rootMiniMaxEnvelope := !officialTaskEnvelope &&
 		StringFromGJSONPath(respBody, "id") != "" &&
-		(strings.TrimSpace(StringFromGJSONPath(respBody, "object")) == "video.generation" ||
-			gjson.GetBytes(respBody, "data").IsArray())
+		(rootObject == "" || strings.EqualFold(rootObject, "video.generation")) &&
+		gjson.GetBytes(respBody, "data").IsArray()
 	if taskID == "" && officialTaskEnvelope {
 		taskID = StringFromGJSONPath(respBody, "task.id")
 	}
@@ -215,7 +216,7 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	}
 	progressRaw := StringFromGJSONPath(respBody, cfg.ProgressPath)
 	resultURL := ExtractConfiguredResultURL(respBody, cfg.ResultURLPaths)
-	if resultURL == "" {
+	if resultURL == "" && (officialTaskEnvelope || rootMiniMaxEnvelope) {
 		// The generic MiniMax video response uses data[0].url. Keep this
 		// compatibility fallback narrow so an explicitly configured provider
 		// path remains authoritative whenever it yields a value.

@@ -348,6 +348,32 @@ func TestParseConfiguredTaskResultKeepsMiniMaxCompatibleRootPendingWithoutURL(t 
 	assert.Empty(t, result.Url)
 }
 
+func TestParseConfiguredTaskResultDoesNotUseMiniMaxFallbackForOtherEnvelope(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "id",
+			StatusPath:     "status",
+			ResultURLPaths: []string{"result.url"},
+		},
+	}
+	body := []byte(`{
+		"id": "provider-task-1",
+		"object": "media.task",
+		"status": "in_progress",
+		"data": [{"url": "https://cdn.example.com/should-not-be-used.mp4"}]
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "provider-task-1", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+	assert.Empty(t, result.Url)
+}
+
 func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
 	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
 	body := []byte(`{

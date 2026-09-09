@@ -537,7 +537,7 @@ func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
 		"error":{"message":"provider rejected the prompt"}
 	}`))
 	require.NoError(t, err)
-	require.Equal(t, model.TaskStatusFailure, withMessage.Status)
+	require.Equal(t, string(model.TaskStatusFailure), withMessage.Status)
 	assert.Equal(t, "provider rejected the prompt", withMessage.Reason)
 	assert.Equal(t, "100%", withMessage.Progress)
 
@@ -547,7 +547,7 @@ func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
 		"status":"failed"
 	}`))
 	require.NoError(t, err)
-	require.Equal(t, model.TaskStatusFailure, withoutMessage.Status)
+	require.Equal(t, string(model.TaskStatusFailure), withoutMessage.Status)
 	assert.Equal(t, "MiniMax task failed", withoutMessage.Reason)
 }
 
@@ -557,7 +557,7 @@ func TestParseTaskResultTreatsGenericMiniMaxErrorAsTerminalFailure(t *testing.T)
 		"error":{"message":"provider rejected the prompt"}
 	}`))
 	require.NoError(t, err)
-	require.Equal(t, model.TaskStatusFailure, result.Status)
+	require.Equal(t, string(model.TaskStatusFailure), result.Status)
 	require.Equal(t, "100%", result.Progress)
 	require.Equal(t, "provider rejected the prompt", result.Reason)
 
@@ -568,7 +568,7 @@ func TestParseTaskResultTreatsGenericMiniMaxErrorAsTerminalFailure(t *testing.T)
 		"error":{}
 	}`))
 	require.NoError(t, err)
-	require.Equal(t, model.TaskStatusFailure, result.Status)
+	require.Equal(t, string(model.TaskStatusFailure), result.Status)
 	require.Equal(t, "MiniMax task failed", result.Reason)
 }
 
