@@ -105,7 +105,10 @@ describe('ModelDetailsContent structured task pricing', () => {
     } as PricingModel
   }
 
-  async function renderModel(model: PricingModel) {
+  async function renderModel(model: PricingModel): Promise<{
+    queryClient: QueryClient
+    view: Awaited<ReturnType<typeof testEnv.render>>
+  }> {
     const queryClient = new QueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
