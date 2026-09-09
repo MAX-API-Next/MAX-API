@@ -73,12 +73,15 @@ import {
   formatTaskRateCardRange,
   formatTaskRateCardUnitPrice,
 } from '../lib/price'
+import {
+  getTaskRateCardComponentLabelKey,
+  hasStructuredTaskRateCard,
+} from '../lib/task-rate-card'
 import type {
   Modality,
   ModelCapability,
   PriceType,
   PricingModel,
-  TaskRateCardPricingComponent,
   TokenUnit,
 } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
@@ -425,7 +428,7 @@ function PriceSection(props: {
   if (props.model.task_rate_card) {
     const card = props.model.task_rate_card
     const structuredComponents = card.components || []
-    if (card.billing_type && structuredComponents.length > 0) {
+    if (hasStructuredTaskRateCard(card)) {
       const inputVideo = structuredComponents.find(
         (component) => component.key === 'input_video'
       )
@@ -697,28 +700,7 @@ function TaskRateCardBreakdown(props: {
   if (!card) return null
 
   const structuredComponents = card.components || []
-  if (card.billing_type && structuredComponents.length > 0) {
-    const componentLabel = (component: TaskRateCardPricingComponent) => {
-      if (component.key === 'output_video' && component.variant === '768P') {
-        return t('Output video / 768P')
-      }
-      if (component.key === 'output_video' && component.variant === '2K') {
-        return t('Output video / 2K')
-      }
-      if (component.key === 'input_video' && component.variant === '768P') {
-        return t('Input video / 768P')
-      }
-      if (component.key === 'input_video' && component.variant === '2K') {
-        return t('Input video / 2K')
-      }
-      if (component.key === 'input_image') {
-        return t('Extra input image price')
-      }
-      if (component.key === 'input_audio') {
-        return t('Input audio price')
-      }
-      return [component.key, component.variant].filter(Boolean).join(' / ')
-    }
+  if (hasStructuredTaskRateCard(card)) {
     const thClass =
       'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
 
@@ -766,7 +748,10 @@ function TaskRateCardBreakdown(props: {
                   key={`${component.key}:${component.variant || index}`}
                 >
                   <TableCell className='py-2.5 text-xs'>
-                    {componentLabel(component)}
+                    {t(
+                      getTaskRateCardComponentLabelKey(component) ??
+                        'Other pricing component'
+                    )}
                   </TableCell>
                   <TableCell className='py-2.5 text-right font-mono tabular-nums'>
                     {formatTaskRateCardUnitPrice(

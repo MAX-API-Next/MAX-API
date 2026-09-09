@@ -418,6 +418,40 @@ func TestParseConfiguredTaskResultDoesNotUseRootIDFallbackForNonMiniMax(t *testi
 	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
 }
 
+func TestParseConfiguredTaskResultDoesNotUseRootStatusFallbackForNonMiniMax(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath: "id",
+			StatusPath: "task.status",
+		},
+	}
+	body := []byte(`{
+		"object": "media.task",
+		"id": "provider-task-root",
+		"status": "completed"
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "provider-task-root", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+}
+
+func TestParseConfiguredTaskResultLeavesErrorOnlyResponseForAdaptor(t *testing.T) {
+	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
+	result, parsed, err := ParseConfiguredTaskResult([]byte(`{
+		"error": {"message": "temporary upstream failure"}
+	}`), settings)
+
+	require.NoError(t, err)
+	assert.False(t, parsed)
+	assert.Nil(t, result)
+}
+
 func TestParseConfiguredTaskResultReadsGenericFailureReason(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocol:       TaskProtocolGenericVideo,

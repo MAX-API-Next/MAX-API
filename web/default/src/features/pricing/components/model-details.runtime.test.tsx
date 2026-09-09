@@ -94,6 +94,12 @@ describe('ModelDetailsContent structured task pricing', () => {
             unit_price: '0',
             max_quantity: 15,
           },
+          {
+            key: 'experimental_component',
+            variant: 'custom',
+            unit: 'second',
+            unit_price: '0.3',
+          },
         ],
       },
     } as PricingModel
@@ -129,6 +135,7 @@ describe('ModelDetailsContent structured task pricing', () => {
       assert.match(content, /Input video \/ 2K/)
       assert.match(content, /Extra input image price/)
       assert.match(content, /Input audio price/)
+      assert.match(content, /Other pricing component/)
       assert.match(content, /Free input images/)
       assert.match(content, /\/ images/)
       assert.doesNotMatch(content, /\/ image(?!s)/)

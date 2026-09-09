@@ -438,7 +438,7 @@ func buildTaskExactFinalSettlementInput(task *model.Task, actualQuota int, usage
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
-	other["reserved_quota"] = task.Quota
+	other["pre_consumed_quota"] = task.Quota
 	other["actual_quota"] = actualQuota
 	other["task_usage"] = types.CloneTaskUsage(usage)
 	return &model.BillingSettlementInput{

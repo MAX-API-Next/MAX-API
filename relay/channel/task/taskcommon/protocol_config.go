@@ -208,7 +208,7 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		taskID = StringFromGJSONPath(respBody, "task.id")
 	}
 	statusRaw := StringFromGJSONPath(respBody, cfg.StatusPath)
-	if statusRaw == "" {
+	if statusRaw == "" && (officialTaskEnvelope || rootMiniMaxEnvelope) {
 		statusRaw = StringFromGJSONPath(respBody, "status")
 	}
 	if statusRaw == "" && officialTaskEnvelope {
@@ -226,7 +226,7 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		resultURL = ExtractConfiguredResultURL(respBody, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
 	}
 	reason := StringFromGJSONPath(respBody, cfg.ErrorMessagePath)
-	if reason == "" {
+	if reason == "" && (taskID != "" || statusRaw != "") {
 		reason = StringFromGJSONPath(respBody, "error.message")
 	}
 	if reason == "" && officialTaskEnvelope {

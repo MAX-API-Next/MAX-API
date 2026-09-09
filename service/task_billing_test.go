@@ -108,6 +108,19 @@ func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T)
 	assert.True(t, effect.IsStream)
 }
 
+func TestBuildTaskExactFinalSettlementUsesPreConsumedQuotaMetadata(t *testing.T) {
+	task := makeTask(901, 902, 100, 0, BillingSourceWallet, 0)
+	task.ID = 903
+	task.TaskID = "task-exact-finalize"
+
+	input := buildTaskExactFinalSettlementInput(task, 80, nil, "exact settlement")
+
+	require.NotNil(t, input)
+	require.NotNil(t, input.Effect)
+	assert.Equal(t, 100, input.Effect.Other["pre_consumed_quota"])
+	assert.NotContains(t, input.Effect.Other, "reserved_quota")
+}
+
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
 	truncate(t)
 	resetTimedOutTaskSweepCursorForTest(t)
