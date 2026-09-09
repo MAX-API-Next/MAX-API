@@ -18,6 +18,7 @@
     "Final quota cannot exceed the reserved quota.": "Final quota cannot exceed the reserved quota.",
     "Audit note must contain between 3 and 1000 characters.": "Audit note must contain between 3 and 1000 characters.",
     "Complete manual task billing": "Complete manual task billing",
+    "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}": "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.",
     "This reconciliation record changed while the dialog was open.": "This reconciliation record changed while the dialog was open.",
     "Close this dialog and reopen the latest record before submitting.": "Close this dialog and reopen the latest record before submitting.",

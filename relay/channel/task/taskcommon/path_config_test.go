@@ -372,7 +372,7 @@ func TestParseConfiguredTaskResultBoundsNestedSuccessEnvelopes(t *testing.T) {
 		"status": "completed",
 		"data":   []any{map[string]any{"url": "https://cdn.example.com/deep.mp4"}},
 	}
-	for depth := 0; depth < maxWrappedTaskUnwrapDepth+2; depth++ {
+	for depth := 0; depth < MaxWrappedTaskUnwrapDepth+2; depth++ {
 		payload = map[string]any{
 			"code":   "success",
 			"id":     fmt.Sprintf("wrapper-%d", depth),

@@ -363,8 +363,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error) {
-	if nested := taskcommon.WrappedTaskProviderPayload(respBody); nested != nil {
-		return a.ExtractTaskUsage(nested)
+	return a.extractTaskUsage(respBody, 0)
+}
+
+func (a *TaskAdaptor) extractTaskUsage(respBody []byte, unwrapDepth int) (*types.TaskUsage, error) {
+	if unwrapDepth < taskcommon.MaxWrappedTaskUnwrapDepth {
+		if nested := taskcommon.WrappedTaskProviderPayload(respBody); nested != nil {
+			return a.extractTaskUsage(nested, unwrapDepth+1)
+		}
 	}
 	response, handled, err := parseH3Response(respBody)
 	if err != nil {

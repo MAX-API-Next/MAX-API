@@ -12,6 +12,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -533,6 +534,44 @@ func TestExtractTaskUsageReadsWrappedGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, int64(1), *usage.InputImageCount)
 	require.NotNil(t, usage.OutputDurationMs)
 	assert.Equal(t, int64(5000), *usage.OutputDurationMs)
+}
+
+func TestExtractTaskUsageBoundsWrappedProviderPayloadDepth(t *testing.T) {
+	buildPayload := func(depth int) []byte {
+		payload := map[string]any{
+			"id":     "439499419230570",
+			"object": "video.generation",
+			"status": "completed",
+			"data":   []any{map[string]any{"url": "https://cdn.example.com/result.mp4"}},
+			"usage": map[string]any{
+				"input_image_count": 1,
+				"input_seconds":     0,
+				"output_seconds":    5,
+				"total_seconds":     5,
+			},
+		}
+		for index := 0; index < depth; index++ {
+			payload = map[string]any{
+				"code":   "success",
+				"id":     "wrapper-task",
+				"status": "IN_PROGRESS",
+				"data":   map[string]any{"data": payload},
+			}
+		}
+		body, err := common.Marshal(payload)
+		require.NoError(t, err)
+		return body
+	}
+
+	withinLimit, err := (&TaskAdaptor{}).ExtractTaskUsage(buildPayload(taskcommon.MaxWrappedTaskUnwrapDepth))
+	require.NoError(t, err)
+	require.NotNil(t, withinLimit)
+	require.NotNil(t, withinLimit.OutputDurationMs)
+	assert.Equal(t, int64(5000), *withinLimit.OutputDurationMs)
+
+	beyondLimit, err := (&TaskAdaptor{}).ExtractTaskUsage(buildPayload(taskcommon.MaxWrappedTaskUnwrapDepth + 1))
+	require.NoError(t, err)
+	assert.Nil(t, beyondLimit)
 }
 
 func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {

@@ -184,7 +184,9 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	return parseConfiguredTaskResult(respBody, settings, 0)
 }
 
-const maxWrappedTaskUnwrapDepth = 4
+// MaxWrappedTaskUnwrapDepth bounds successful relay-envelope unwrapping so
+// task result and provider usage parsing apply the same resource limit.
+const MaxWrappedTaskUnwrapDepth = 4
 
 func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSettings, unwrapDepth int) (*relaycommon.TaskInfo, bool, error) {
 	if !UseConfiguredTaskProtocol(settings) {
@@ -196,7 +198,7 @@ func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// first so the wrapper's local IN_PROGRESS status cannot hide a terminal
 	// upstream result. Configurations copied from the wrapper commonly prefix
 	// paths with data.; strip that prefix for this explicit nested candidate.
-	if unwrapDepth < maxWrappedTaskUnwrapDepth {
+	if unwrapDepth < MaxWrappedTaskUnwrapDepth {
 		if nested := WrappedTaskProviderPayload(respBody); nested != nil {
 			nestedCfg := cfg
 			nestedCfg.TaskIDPath = stripWrappedTaskPath(cfg.TaskIDPath)

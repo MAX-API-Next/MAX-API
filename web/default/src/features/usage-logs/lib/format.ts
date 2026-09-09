@@ -279,6 +279,8 @@ export function getTieredBillingSummary(
 
 const AUDIT_TEMPLATES: Record<string, string> = {
   login: 'Logged in successfully via {{method}}',
+  'billing.manual_task_settlement_complete':
+    'Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}',
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',
   'user.delete': 'Deleted user {{username}} (ID: {{id}})',
