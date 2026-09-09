@@ -306,6 +306,7 @@ func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing
 	}
 	body := []byte(`{
 		"id": "439499419230570",
+		"object": "video.generation",
 		"status": "completed",
 		"data": [{"url": "https://cdn.example.com/minimax.mp4"}],
 		"usage": {"output_seconds": 5, "input_image_count": 1}
@@ -319,6 +320,32 @@ func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing
 	assert.Equal(t, "439499419230570", result.TaskID)
 	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
 	assert.Equal(t, "https://cdn.example.com/minimax.mp4", result.Url)
+}
+
+func TestParseConfiguredTaskResultDoesNotUseObjectlessMiniMaxFallback(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "id",
+			StatusPath:     "status",
+			ResultURLPaths: []string{"result.url"},
+			StatusMap:      map[string]string{"completed": "SUCCESS"},
+		},
+	}
+	body := []byte(`{
+		"id": "provider-task-2",
+		"status": "completed",
+		"data": [{"url": "https://cdn.example.com/unrelated.mp4"}]
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "provider-task-2", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Empty(t, result.Url)
 }
 
 func TestParseConfiguredTaskResultKeepsMiniMaxCompatibleRootPendingWithoutURL(t *testing.T) {

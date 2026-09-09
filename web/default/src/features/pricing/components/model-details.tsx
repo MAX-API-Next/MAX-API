@@ -458,10 +458,16 @@ function PriceSection(props: {
                 {t('Input video reservation cap')}
               </div>
               <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
-                {inputVideo?.max_quantity ?? '-'}{' '}
-                <span className='text-muted-foreground/40 text-xs font-normal'>
-                  {t('seconds')}
-                </span>
+                {inputVideo?.max_quantity == null ? (
+                  '-'
+                ) : (
+                  <>
+                    {inputVideo.max_quantity}{' '}
+                    <span className='text-muted-foreground/40 text-xs font-normal'>
+                      {t('seconds')}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <div className='bg-muted/20 rounded-lg border p-3'>

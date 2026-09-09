@@ -745,12 +745,6 @@ func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskSta
 	task.Status = fromStatus
 	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
 	task.UpdatedAt = time.Now().Unix()
-	if task.UpdatedAt <= expectedUpdatedAt {
-		if expectedUpdatedAt == 1<<63-1 {
-			return false, errors.New("task updated_at cannot advance")
-		}
-		task.UpdatedAt = expectedUpdatedAt + 1
-	}
 	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }
 

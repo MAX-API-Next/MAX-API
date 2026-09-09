@@ -195,14 +195,14 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// `task`. Keep this fallback after the configured path and root-level
 	// compatibility path so an explicit provider mapping remains authoritative.
 	officialTaskEnvelope := gjson.GetBytes(respBody, "task").IsObject()
-	// Some MiniMax-compatible gateways return the task facts at the root with
-	// an array-valued `data` field (or the `video.generation` object marker).
-	// Treat this as the same envelope for terminal-state safety: a completed
-	// status without a retrievable artifact must remain pollable.
+	// MiniMax-compatible gateways return the task facts at the root with an
+	// array-valued `data` field and the `video.generation` object marker. Keep
+	// this compatibility fallback explicit so unrelated providers cannot be
+	// mistaken for MiniMax responses.
 	rootObject := strings.TrimSpace(StringFromGJSONPath(respBody, "object"))
 	rootMiniMaxEnvelope := !officialTaskEnvelope &&
 		StringFromGJSONPath(respBody, "id") != "" &&
-		(rootObject == "" || strings.EqualFold(rootObject, "video.generation")) &&
+		strings.EqualFold(rootObject, "video.generation") &&
 		gjson.GetBytes(respBody, "data").IsArray()
 	if taskID == "" && officialTaskEnvelope {
 		taskID = StringFromGJSONPath(respBody, "task.id")

@@ -30,9 +30,8 @@ before(() => testEnv.setup())
 after(() => testEnv.teardown())
 
 describe('ModelDetailsContent structured task pricing', () => {
-  test('shows every MiniMax billing component without falling back to model price', async () => {
-    const queryClient = new QueryClient()
-    const model = {
+  function createModel(inputVideoMaxQuantity?: number): PricingModel {
+    return {
       id: 1,
       model_name: 'MiniMax-H3',
       quota_type: 1,
@@ -73,14 +72,14 @@ describe('ModelDetailsContent structured task pricing', () => {
             variant: '768P',
             unit: 'second',
             unit_price: '0.08',
-            max_quantity: 15,
+            max_quantity: inputVideoMaxQuantity,
           },
           {
             key: 'input_video',
             variant: '2K',
             unit: 'second',
             unit_price: '0.13',
-            max_quantity: 15,
+            max_quantity: inputVideoMaxQuantity,
           },
           {
             key: 'input_image',
@@ -98,7 +97,10 @@ describe('ModelDetailsContent structured task pricing', () => {
         ],
       },
     } as PricingModel
+  }
 
+  async function renderModel(model: PricingModel) {
+    const queryClient = new QueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
         <ModelDetailsContent
@@ -113,6 +115,11 @@ describe('ModelDetailsContent structured task pricing', () => {
         />
       </QueryClientProvider>
     )
+    return { queryClient, view }
+  }
+
+  test('shows every MiniMax billing component without falling back to model price', async () => {
+    const { queryClient, view } = await renderModel(createModel(15))
 
     try {
       const content = view.container.textContent || ''
@@ -124,6 +131,19 @@ describe('ModelDetailsContent structured task pricing', () => {
       assert.match(content, /Input audio price/)
       assert.match(content, /Free input images/)
       assert.doesNotMatch(content, /Per request/)
+    } finally {
+      await view.unmount()
+      queryClient.clear()
+    }
+  })
+
+  test('does not append seconds when input video cap is absent', async () => {
+    const { queryClient, view } = await renderModel(createModel())
+
+    try {
+      const content = view.container.textContent || ''
+      assert.match(content, /Input video reservation cap-/)
+      assert.doesNotMatch(content, /- seconds/)
     } finally {
       await view.unmount()
       queryClient.clear()

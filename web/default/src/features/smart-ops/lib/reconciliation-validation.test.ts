@@ -114,5 +114,19 @@ describe('isBillingSettlementReconciliationData', () => {
       }),
       false
     )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, task_quota: -1 }],
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, task_quota_target: -1 }],
+      }),
+      false
+    )
   })
 })
