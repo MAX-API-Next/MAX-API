@@ -130,6 +130,8 @@ describe('ModelDetailsContent structured task pricing', () => {
       assert.match(content, /Extra input image price/)
       assert.match(content, /Input audio price/)
       assert.match(content, /Free input images/)
+      assert.match(content, /\/ images/)
+      assert.doesNotMatch(content, /\/ image(?!s)/)
       assert.doesNotMatch(content, /Per request/)
     } finally {
       await view.unmount()

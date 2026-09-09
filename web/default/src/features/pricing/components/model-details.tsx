@@ -777,7 +777,12 @@ function TaskRateCardBreakdown(props: {
                       1
                     )}
                     <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
-                      / {t(component.unit || 'unit')}
+                      /{' '}
+                      {t(
+                        component.unit === 'image'
+                          ? 'images'
+                          : component.unit || 'unit'
+                      )}
                     </span>
                   </TableCell>
                 </TableRow>
