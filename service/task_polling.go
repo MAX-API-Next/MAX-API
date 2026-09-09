@@ -570,6 +570,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 			task.Data = t.Data
 		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+		} else if taskResult == nil {
+			return fmt.Errorf("parseTaskResult returned no result for task %s", taskId)
 		}
 	}
 	if err := applyTaskUsageFacts(adaptor, responseBody, taskResult); err != nil {

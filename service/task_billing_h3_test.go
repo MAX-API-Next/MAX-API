@@ -318,6 +318,47 @@ func TestUpdateVideoSingleTaskLeavesBillingUntouchedOnTransientQueryError(t *tes
 	require.Zero(t, settlementCount)
 }
 
+func TestUpdateVideoSingleTaskRejectsNilParsedResultWithoutBillingMutation(t *testing.T) {
+	truncate(t)
+	seedUser(t, 901, 900)
+	seedToken(t, 903, 901, "h3-nil-query-result", 900)
+	seedChannel(t, 902)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	task.Status = model.TaskStatusInProgress
+	persistTask(t, task)
+
+	var before model.Task
+	require.NoError(t, model.DB.First(&before, task.ID).Error)
+	adaptor := &h3TerminalPollingAdaptor{}
+	ch := &model.Channel{Id: task.ChannelId, Type: constant.ChannelTypeMiniMax, Key: "test"}
+
+	err := updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	})
+	require.ErrorContains(t, err, "parseTaskResult returned no result")
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, before.Status, stored.Status)
+	require.Equal(t, before.Progress, stored.Progress)
+	require.Equal(t, before.Quota, stored.Quota)
+	require.Equal(t, before.UpdatedAt, stored.UpdatedAt)
+	require.EqualValues(t, 900, getUserQuota(t, task.UserId))
+	require.Equal(t, 900, getTokenRemainQuota(t, task.PrivateData.TokenId))
+	require.Zero(t, countLogs(t))
+
+	var settlementCount int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).
+		Where("operation_key IN ?", []string{
+			model.BillingTaskFinalizeOperationKey(task.ID),
+			fmt.Sprintf("task:%d:refund", task.ID),
+		}).Count(&settlementCount).Error)
+	require.Zero(t, settlementCount)
+}
+
 func TestUpdateVideoSingleTaskRecoversManualH3WhenLaterPollHasCompleteUsage(t *testing.T) {
 	truncate(t)
 	seedUser(t, 901, 900)
