@@ -1,10 +1,81 @@
 package model
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func TestUpdateWithStatusAndPendingTerminalEvidenceUsesCAS(t *testing.T) {
+	truncateTables(t)
+	task := &Task{
+		TaskID:   "pending-terminal-evidence",
+		Status:   TaskStatusInProgress,
+		Progress: "50%",
+		PrivateData: TaskPrivateData{
+			PendingTerminalStatus:     TaskStatusSuccess,
+			PendingTerminalProgress:   "100%",
+			PendingTerminalFinishTime: time.Now().Unix(),
+			PendingTerminalResultURL:  "https://cdn.example.com/pending.mp4",
+		},
+	}
+	insertTask(t, task)
+	expectedUpdatedAt := task.UpdatedAt
+
+	won, err := task.UpdateWithStatusAndPendingTerminalEvidence(TaskStatusInProgress, expectedUpdatedAt)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	var stored Task
+	require.NoError(t, DB.First(&stored, task.ID).Error)
+	require.Equal(t, TaskStatus(TaskStatusInProgress), stored.Status)
+	require.Equal(t, expectedUpdatedAt+1, stored.UpdatedAt)
+	require.Equal(t, TaskStatus(TaskStatusSuccess), stored.PrivateData.PendingTerminalStatus)
+	require.Equal(t, "https://cdn.example.com/pending.mp4", stored.PrivateData.PendingTerminalResultURL)
+
+	stale := stored
+	stale.UpdatedAt = expectedUpdatedAt
+	won, err = stale.UpdateWithStatusAndPendingTerminalEvidence(TaskStatusInProgress, expectedUpdatedAt)
+	require.NoError(t, err)
+	require.False(t, won)
+	var afterCASLoss Task
+	require.NoError(t, DB.First(&afterCASLoss, task.ID).Error)
+	require.Equal(t, TaskStatus(TaskStatusInProgress), afterCASLoss.Status)
+	require.Equal(t, TaskStatus(TaskStatusSuccess), afterCASLoss.PrivateData.PendingTerminalStatus)
+}
+
+func TestUpdateWithStatusAndPendingTerminalEvidencePropagatesError(t *testing.T) {
+	truncateTables(t)
+	task := &Task{
+		TaskID: "pending-terminal-evidence-error",
+		Status: TaskStatusInProgress,
+	}
+	insertTask(t, task)
+	expectedUpdatedAt := task.UpdatedAt
+	task.PrivateData.PendingTerminalStatus = TaskStatusSuccess
+	task.PrivateData.PendingTerminalProgress = "100%"
+	task.PrivateData.PendingTerminalResultURL = "https://cdn.example.com/should-not-persist.mp4"
+
+	callbackName := "test:pending-terminal-evidence-update-error"
+	forcedErr := errors.New("forced pending terminal evidence update error")
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		tx.AddError(forcedErr)
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+	won, err := task.UpdateWithStatusAndPendingTerminalEvidence(TaskStatusInProgress, expectedUpdatedAt)
+	require.ErrorIs(t, err, forcedErr)
+	require.False(t, won)
+	require.Equal(t, expectedUpdatedAt, task.UpdatedAt)
+	var stored Task
+	require.NoError(t, DB.First(&stored, task.ID).Error)
+	require.Equal(t, TaskStatus(TaskStatusInProgress), stored.Status)
+	require.Empty(t, stored.PrivateData.PendingTerminalStatus)
+	require.Empty(t, stored.PrivateData.PendingTerminalResultURL)
+}
 
 func TestUpdateWithStatusAndManualSettlementKeepsTaskNonTerminal(t *testing.T) {
 	truncateTables(t)

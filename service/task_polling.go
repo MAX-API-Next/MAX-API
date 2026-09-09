@@ -613,7 +613,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		// validated usage. Other manual reasons remain operator-gated.
 		if providerTerminal {
 			recoveryDecision := prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
-			recovered, recoveryErr := recoverManualTaskBillingSettlement(ctx, task, recoveryDecision)
+			recovered, recoveryErr := recoverManualTaskBillingSettlement(ctx, task, recoveryDecision, taskResult, snap.Status, expectedUpdatedAt)
 			if recoveryErr != nil {
 				return fmt.Errorf("recover manual task settlement for task %s: %w", task.TaskID, recoveryErr)
 			}
@@ -863,9 +863,19 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 	return nil
 }
 
-func recoverManualTaskBillingSettlement(ctx context.Context, task *model.Task, decision taskTerminalBillingDecision) (bool, error) {
+func recoverManualTaskBillingSettlement(
+	ctx context.Context,
+	task *model.Task,
+	decision taskTerminalBillingDecision,
+	providerResult *relaycommon.TaskInfo,
+	fromStatus model.TaskStatus,
+	expectedUpdatedAt int64,
+) (bool, error) {
 	if task == nil || task.ID <= 0 || !decision.UsesPlan || decision.ManualReason != "" || decision.Settlement == nil {
 		return false, nil
+	}
+	if providerResult == nil || (providerResult.Status != string(model.TaskStatusSuccess) && providerResult.Status != string(model.TaskStatusFailure)) {
+		return false, errors.New("terminal provider result is required for manual settlement recovery")
 	}
 	if submissionPending, err := taskFinalSettlementPending(task); err != nil || submissionPending {
 		return false, err
@@ -874,6 +884,24 @@ func recoverManualTaskBillingSettlement(ctx context.Context, task *model.Task, d
 	if err != nil || !found || status != model.BillingSettlementStatusManual {
 		return false, err
 	}
+	// Persist the provider terminal facts before promoting the manual settlement
+	// to a funding operation. A crash after promotion must remain recoverable as
+	// the provider's terminal state, not be misclassified as missing evidence.
+	candidate := *task
+	if task.PrivateData.BillingContext != nil {
+		billingContext := *task.PrivateData.BillingContext
+		candidate.PrivateData.BillingContext = &billingContext
+		candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	}
+	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
+	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("persist manual task terminal evidence: %w", err)
+	}
+	if !won {
+		return false, nil
+	}
+	*task = candidate
 	const h3UsageManualReasonPrefix = "H3 terminal usage requires manual reconciliation:"
 	recoveryNote := "H3 task settlement automatically recovered after a complete provider usage response"
 	promoted, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
@@ -885,9 +913,6 @@ func recoverManualTaskBillingSettlement(ctx context.Context, task *model.Task, d
 	}
 	if err != nil || !promoted {
 		return false, err
-	}
-	if task.PrivateData.BillingContext != nil {
-		task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
 	}
 	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {
 		return false, nil

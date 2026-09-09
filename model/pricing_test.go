@@ -113,6 +113,46 @@ func TestNewTaskRateCardPricingOmitsNonPositiveInputVideoLimit(t *testing.T) {
 	}
 }
 
+func TestNewTaskRateCardPricingFallsBackToRowsForUnknownBillingType(t *testing.T) {
+	pricing := newTaskRateCardPricing("vendor/custom", &task_billing_setting.RateCard{
+		Vendor:      "vendor",
+		BillingType: "future_billing_type",
+		Rows: []task_billing_setting.RateCardRow{
+			{ID: "base", Match: map[string]string{"quality": "standard"}, UnitPrice: 0.42},
+		},
+	})
+
+	require.NotNil(t, pricing)
+	require.Empty(t, pricing.BillingType)
+	require.Len(t, pricing.Rows, 1)
+	require.Equal(t, "base", pricing.Rows[0].ID)
+	require.Equal(t, 0.42, pricing.Rows[0].UnitPrice)
+}
+
+func TestNewTaskRateCardPricingFallsBackToRowsWhenStructuredDisplayIsInvalid(t *testing.T) {
+	pricing := newTaskRateCardPricing("minimax/minimax-h3", &task_billing_setting.RateCard{
+		Vendor:      "minimax",
+		BillingType: task_billing_setting.MinimaxBillingType,
+		BillingConfig: map[string]any{
+			"output_unit_price": map[string]any{"768P": "invalid"},
+		},
+		Rows: []task_billing_setting.RateCardRow{
+			{ID: "legacy", Match: map[string]string{"resolution": "768P"}, UnitPrice: 0.25},
+		},
+	})
+
+	require.NotNil(t, pricing)
+	require.Empty(t, pricing.BillingType)
+	require.Len(t, pricing.Rows, 1)
+	require.Equal(t, "legacy", pricing.Rows[0].ID)
+}
+
+func TestNewTaskRateCardPricingOmitsUnsupportedCardWithoutRows(t *testing.T) {
+	require.Nil(t, newTaskRateCardPricing("vendor/custom", &task_billing_setting.RateCard{
+		BillingType: "future_billing_type",
+	}))
+}
+
 func int64Pointer(value int64) *int64 {
 	return &value
 }

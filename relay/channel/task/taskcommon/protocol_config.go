@@ -181,6 +181,12 @@ func TryHandleConfiguredSubmitResponse(c *gin.Context, responseBody []byte, info
 }
 
 func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSettings) (*relaycommon.TaskInfo, bool, error) {
+	return parseConfiguredTaskResult(respBody, settings, 0)
+}
+
+const maxWrappedTaskUnwrapDepth = 4
+
+func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSettings, unwrapDepth int) (*relaycommon.TaskInfo, bool, error) {
 	if !UseConfiguredTaskProtocol(settings) {
 		return nil, false, nil
 	}
@@ -190,23 +196,25 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	// first so the wrapper's local IN_PROGRESS status cannot hide a terminal
 	// upstream result. Configurations copied from the wrapper commonly prefix
 	// paths with data.; strip that prefix for this explicit nested candidate.
-	if nested := WrappedTaskProviderPayload(respBody); nested != nil {
-		nestedCfg := cfg
-		nestedCfg.TaskIDPath = stripWrappedTaskPath(cfg.TaskIDPath)
-		nestedCfg.StatusPath = stripWrappedTaskPath(cfg.StatusPath)
-		nestedCfg.ProgressPath = stripWrappedTaskPath(cfg.ProgressPath)
-		nestedCfg.ErrorMessagePath = stripWrappedTaskPath(cfg.ErrorMessagePath)
-		nestedCfg.CreatedAtPath = stripWrappedTaskPath(cfg.CreatedAtPath)
-		nestedCfg.UpdatedAtPath = stripWrappedTaskPath(cfg.UpdatedAtPath)
-		nestedCfg.ResultURLPaths = make([]string, 0, len(cfg.ResultURLPaths))
-		for _, path := range cfg.ResultURLPaths {
-			nestedCfg.ResultURLPaths = append(nestedCfg.ResultURLPaths, stripWrappedTaskPath(path))
-		}
-		nestedSettings := settings
-		nestedSettings.TaskProtocolConfig = &nestedCfg
-		result, ok, err := ParseConfiguredTaskResult(nested, nestedSettings)
-		if err != nil || ok {
-			return result, ok, err
+	if unwrapDepth < maxWrappedTaskUnwrapDepth {
+		if nested := WrappedTaskProviderPayload(respBody); nested != nil {
+			nestedCfg := cfg
+			nestedCfg.TaskIDPath = stripWrappedTaskPath(cfg.TaskIDPath)
+			nestedCfg.StatusPath = stripWrappedTaskPath(cfg.StatusPath)
+			nestedCfg.ProgressPath = stripWrappedTaskPath(cfg.ProgressPath)
+			nestedCfg.ErrorMessagePath = stripWrappedTaskPath(cfg.ErrorMessagePath)
+			nestedCfg.CreatedAtPath = stripWrappedTaskPath(cfg.CreatedAtPath)
+			nestedCfg.UpdatedAtPath = stripWrappedTaskPath(cfg.UpdatedAtPath)
+			nestedCfg.ResultURLPaths = make([]string, 0, len(cfg.ResultURLPaths))
+			for _, path := range cfg.ResultURLPaths {
+				nestedCfg.ResultURLPaths = append(nestedCfg.ResultURLPaths, stripWrappedTaskPath(path))
+			}
+			nestedSettings := settings
+			nestedSettings.TaskProtocolConfig = &nestedCfg
+			result, ok, err := parseConfiguredTaskResult(nested, nestedSettings, unwrapDepth+1)
+			if err != nil || ok {
+				return result, ok, err
+			}
 		}
 	}
 	// The official MiniMax H3 query response nests the task facts under

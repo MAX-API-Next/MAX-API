@@ -2,6 +2,7 @@ package taskcommon
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"testing"
@@ -354,6 +355,42 @@ func TestParseConfiguredTaskResultUnwrapsMaxSuccessEnvelope(t *testing.T) {
 	assert.Equal(t, "439499419230570", result.TaskID)
 	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
 	assert.Equal(t, "https://cdn.example.com/wrapped.mp4", result.Url)
+}
+
+func TestParseConfiguredTaskResultBoundsNestedSuccessEnvelopes(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "id",
+			StatusPath:     "status",
+			ResultURLPaths: []string{"data.0.url"},
+		},
+	}
+	payload := map[string]any{
+		"id":     "provider-task",
+		"object": "video.generation",
+		"status": "completed",
+		"data":   []any{map[string]any{"url": "https://cdn.example.com/deep.mp4"}},
+	}
+	for depth := 0; depth < maxWrappedTaskUnwrapDepth+2; depth++ {
+		payload = map[string]any{
+			"code":   "success",
+			"id":     fmt.Sprintf("wrapper-%d", depth),
+			"status": "IN_PROGRESS",
+			"data":   map[string]any{"data": payload},
+		}
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.NotEqual(t, "provider-task", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusInProgress), result.Status)
+	assert.Empty(t, result.Url)
 }
 
 func TestParseConfiguredTaskResultDoesNotUseObjectlessMiniMaxFallback(t *testing.T) {

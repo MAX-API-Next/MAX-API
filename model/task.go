@@ -618,6 +618,46 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+// UpdateWithStatusAndPendingTerminalEvidence durably records terminal provider
+// evidence while keeping the task in fromStatus. The status and updated_at
+// guards prevent a stale poller from publishing evidence for another lifecycle.
+func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	if t == nil || t.ID <= 0 {
+		return false, errors.New("persisted task is required")
+	}
+	if t.Status != fromStatus {
+		return false, errors.New("terminal evidence must keep the task non-terminal")
+	}
+	if expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
+		if expectedUpdatedAt == 1<<63-1 {
+			return false, errors.New("task updated_at cannot advance")
+		}
+		updatedAt = expectedUpdatedAt + 1
+	}
+	updates := map[string]interface{}{
+		"private_data": t.PrivateData,
+		"updated_at":   updatedAt,
+	}
+	if t.Data != nil || t.includeDataInUpdate {
+		updates["data"] = t.Data
+	}
+	result := DB.Model(&Task{}).
+		Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
+}
+
 var errTaskStatusCASLost = errors.New("task status compare-and-swap lost")
 
 // UpdateWithStatusAndSettlement commits a terminal task transition and its

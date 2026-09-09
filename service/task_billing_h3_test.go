@@ -330,6 +330,62 @@ func TestUpdateVideoSingleTaskRecoversManualH3WhenLaterPollHasCompleteUsage(t *t
 	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
 }
 
+func TestRecoverManualH3PersistsTerminalEvidenceBeforeFunding(t *testing.T) {
+	truncate(t)
+	seedUser(t, 901, 900)
+	seedChannel(t, 902)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputImageCount: 1,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	persistTask(t, task)
+
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess),
+		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, missingDecision.ManualReason)
+	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(1),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: completeUsage,
+	}, constant.ChannelTypeMiniMax)
+	require.Empty(t, decision.ManualReason)
+	providerResult := &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess),
+		Url:    "https://cdn.example.com/manual-recovered.mp4",
+		Usage:  completeUsage,
+	}
+	expectedUpdatedAt := task.UpdatedAt
+	recovered, err := recoverManualTaskBillingSettlement(
+		context.Background(), task, decision, providerResult, model.TaskStatusInProgress, expectedUpdatedAt,
+	)
+	require.NoError(t, err)
+	require.True(t, recovered)
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusInProgress), stored.Status)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.PrivateData.PendingTerminalStatus)
+	require.Equal(t, "https://cdn.example.com/manual-recovered.mp4", stored.PrivateData.PendingTerminalResultURL)
+	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsage)
+	require.Equal(t, types.TaskUsageCompletenessComplete, stored.PrivateData.BillingContext.TaskUsage.Completeness)
+
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&settlement).Error)
+	require.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+	require.EqualValues(t, decision.Settlement.TaskQuotaTarget, stored.Quota)
+
+}
+
 func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID, subscriptionID = 905, 906, 907, 908

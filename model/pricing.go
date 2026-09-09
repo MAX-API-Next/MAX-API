@@ -471,9 +471,21 @@ func newTaskRateCardPricing(ruleKey string, card *task_billing_setting.RateCard)
 	if card == nil {
 		return nil
 	}
-	if card.BillingType != "" {
-		return newStructuredTaskRateCardPricing(ruleKey, card)
+	if card.BillingType == task_billing_setting.MinimaxBillingType {
+		if structured := newStructuredTaskRateCardPricing(ruleKey, card); structured != nil {
+			return structured
+		}
+		// A malformed structured card should not erase a valid legacy price
+		// payload that may still be present in persisted settings.
+		if len(card.Rows) == 0 {
+			return nil
+		}
 	}
+	if card.BillingType != "" && len(card.Rows) == 0 {
+		return nil
+	}
+	// Unknown structured types must not hide legacy row pricing. This keeps
+	// model pricing visible while the billing type is not yet supported.
 	rows := make([]TaskRateCardPricingRow, len(card.Rows))
 	var minUnitPrice float64
 	var maxUnitPrice float64
