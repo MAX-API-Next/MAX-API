@@ -129,7 +129,10 @@ type GenericMiniMaxVideoAsset struct {
 }
 
 type GenericMiniMaxVideoError struct {
-	Message string `json:"message,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Code     any    `json:"code,omitempty"`
+	HTTPCode any    `json:"http_code,omitempty"`
 }
 
 type ErrorInfo struct {

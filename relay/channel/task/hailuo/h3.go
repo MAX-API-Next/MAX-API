@@ -522,12 +522,12 @@ func parseH3TaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
 		return nil, handled, err
 	}
 	if response.Error != nil {
-		code := h3APIErrorCode(response.Error)
+		code := miniMaxAPIErrorCode(response.Error.HTTPCode, response.Error.Code)
 		message := strings.TrimSpace(response.Error.Message)
 		if message == "" {
 			message = "H3 query failed"
 		}
-		if code == httpStatusRequestTimeout || code == httpStatusTooManyRequests || code >= 500 {
+		if isMiniMaxTemporaryQueryErrorCode(code) {
 			return nil, true, fmt.Errorf("H3 temporary query error: %s", message)
 		}
 		return &relaycommon.TaskInfo{Code: code, Status: model.TaskStatusFailure, Progress: "100%", Reason: message}, true, nil
@@ -594,12 +594,18 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 	}
 	status := strings.ToLower(strings.TrimSpace(response.Status))
 	if response.Error != nil {
+		code := miniMaxAPIErrorCode(response.Error.HTTPCode, response.Error.Code)
+		message := strings.TrimSpace(response.Error.Message)
+		if message == "" {
+			message = "MiniMax task failed"
+		}
+		if isMiniMaxTemporaryQueryErrorCode(code) {
+			return nil, true, fmt.Errorf("MiniMax temporary query error: %s", message)
+		}
+		result.Code = code
 		result.Status = model.TaskStatusFailure
 		result.Progress = "100%"
-		result.Reason = strings.TrimSpace(response.Error.Message)
-		if result.Reason == "" {
-			result.Reason = "MiniMax task failed"
-		}
+		result.Reason = message
 		return result, true, nil
 	}
 	switch status {
@@ -620,9 +626,6 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 	case "failed", "failure", "error", "cancelled", "canceled":
 		result.Status = model.TaskStatusFailure
 		result.Progress = "100%"
-		if response.Error != nil {
-			result.Reason = strings.TrimSpace(response.Error.Message)
-		}
 		if result.Reason == "" {
 			result.Reason = "MiniMax task failed"
 		}
@@ -642,14 +645,22 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
+func miniMaxAPIErrorCode(httpCode any, code any) int {
+	if parsed := h3CodeNumber(httpCode); parsed != 0 {
+		return parsed
+	}
+	return h3CodeNumber(code)
+}
+
 func h3APIErrorCode(apiError *H3APIError) int {
 	if apiError == nil {
 		return 0
 	}
-	if code := h3CodeNumber(apiError.HTTPCode); code != 0 {
-		return code
-	}
-	return h3CodeNumber(apiError.Code)
+	return miniMaxAPIErrorCode(apiError.HTTPCode, apiError.Code)
+}
+
+func isMiniMaxTemporaryQueryErrorCode(code int) bool {
+	return code == httpStatusRequestTimeout || code == httpStatusTooManyRequests || code >= 500
 }
 
 func normalizeH3Usage(usage *H3Usage) *types.TaskUsage {

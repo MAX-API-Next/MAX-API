@@ -18,7 +18,7 @@
     "Final quota cannot exceed the reserved quota.": "Hạn mức cuối cùng không được vượt quá hạn mức đã dự phòng.",
     "Audit note must contain between 3 and 1000 characters.": "Ghi chú kiểm toán phải có từ 3 đến 1000 ký tự.",
     "Complete manual task billing": "Hoàn tất tính phí thủ công cho tác vụ",
-    "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}": "Đã hoàn tất quyết toán tính phí thủ công cho tác vụ {{settlement_id}} với hạn mức chính xác {{actual_quota}}",
+    "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}": "Đã hoàn tất quyết toán tính phí thủ công có mã {{settlement_id}} với hạn mức chính xác {{actual_quota}}",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Nhập hạn mức cuối cùng chính xác có bằng chứng từ nhà cung cấp. Thao tác này có thể hoàn trả phần dự phòng chưa sử dụng rồi mở khóa trạng thái cuối của tác vụ.",
     "This reconciliation record changed while the dialog was open.": "Bản ghi đối soát này đã thay đổi trong khi hộp thoại đang mở.",
     "Close this dialog and reopen the latest record before submitting.": "Hãy đóng hộp thoại này và mở lại bản ghi mới nhất trước khi gửi.",

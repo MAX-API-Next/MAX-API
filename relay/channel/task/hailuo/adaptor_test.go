@@ -622,11 +622,12 @@ func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
 func TestParseTaskResultTreatsGenericMiniMaxErrorAsTerminalFailure(t *testing.T) {
 	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
 		"id":"439499419230570",
-		"error":{"message":"provider rejected the prompt"}
+		"error":{"type":"bad_request_error","message":"provider rejected the prompt","code":"503","http_code":"400"}
 	}`))
 	require.NoError(t, err)
 	require.Equal(t, string(model.TaskStatusFailure), result.Status)
 	require.Equal(t, "100%", result.Progress)
+	require.Equal(t, 400, result.Code)
 	require.Equal(t, "provider rejected the prompt", result.Reason)
 
 	result, err = (&TaskAdaptor{}).ParseTaskResult([]byte(`{
@@ -638,6 +639,34 @@ func TestParseTaskResultTreatsGenericMiniMaxErrorAsTerminalFailure(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, string(model.TaskStatusFailure), result.Status)
 	require.Equal(t, "MiniMax task failed", result.Reason)
+}
+
+func TestParseTaskResultKeepsGenericMiniMaxTransientErrorsRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "rate limit from http code",
+			body: `{"id":"task-429","error":{"type":"rate_limit_error","message":"retry later","http_code":"429"}}`,
+		},
+		{
+			name: "service unavailable",
+			body: `{"id":"task-503","error":{"type":"server_error","message":"temporarily unavailable","http_code":503}}`,
+		},
+		{
+			name: "request timeout from fallback code",
+			body: `{"id":"task-408","error":{"type":"timeout_error","message":"query timed out","code":"408"}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
+			require.ErrorContains(t, err, "temporary query error")
+			require.Nil(t, result)
+		})
+	}
 }
 
 func TestParseH3UsagePreservesExplicitZeroAndMissingFields(t *testing.T) {
