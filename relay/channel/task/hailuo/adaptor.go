@@ -2,6 +2,7 @@ package hailuo
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -389,15 +390,12 @@ func (a *TaskAdaptor) extractTaskUsage(respBody []byte, unwrapDepth int) (*types
 	// seconds, image counts, explicit zeroes, and consistency checks are not
 	// weakened by the alternate envelope.
 	var genericResponse struct {
-		Usage *H3Usage `json:"usage,omitempty"`
+		Usage json.RawMessage `json:"usage,omitempty"`
 	}
 	if err := common.Unmarshal(respBody, &genericResponse); err != nil {
 		return nil, err
 	}
-	if genericResponse.Usage == nil {
-		return nil, nil
-	}
-	return normalizeH3Usage(genericResponse.Usage), nil
+	return parseGenericMiniMaxUsage(genericResponse.Usage), nil
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {

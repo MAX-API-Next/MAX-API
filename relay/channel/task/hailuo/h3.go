@@ -586,7 +586,7 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 	result := &relaycommon.TaskInfo{
 		TaskID: response.ID,
 		Code:   0,
-		Usage:  normalizeH3Usage(response.Usage),
+		Usage:  parseGenericMiniMaxUsage(response.Usage),
 	}
 	if len(response.Data) > 0 {
 		asset := response.Data[0]
@@ -660,7 +660,21 @@ func h3APIErrorCode(apiError *H3APIError) int {
 }
 
 func isMiniMaxTemporaryQueryErrorCode(code int) bool {
-	return code == httpStatusRequestTimeout || code == httpStatusTooManyRequests || code >= 500
+	return code == StatusRateLimit ||
+		code == httpStatusRequestTimeout ||
+		code == httpStatusTooManyRequests ||
+		(code >= 500 && code < 600)
+}
+
+func parseGenericMiniMaxUsage(raw json.RawMessage) *types.TaskUsage {
+	if common.GetJsonType(raw) != "object" {
+		return nil
+	}
+	var usage H3Usage
+	if err := common.Unmarshal(raw, &usage); err != nil {
+		return nil
+	}
+	return normalizeH3Usage(&usage)
 }
 
 func normalizeH3Usage(usage *H3Usage) *types.TaskUsage {

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import ru from '@/i18n/locales/ru.json'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { renderAuditContent } from './format'
@@ -39,5 +40,15 @@ describe('renderAuditContent', () => {
       rendered,
       'Completed manual task billing settlement 42 with exact quota 1250000'
     )
+  })
+
+  test('labels the Russian audit value as a settlement id', () => {
+    const key =
+      'Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}'
+    const translated = ru.translation[key]
+
+    assert.match(translated, /Идентификатор расчёта/)
+    assert.match(translated, /{{settlement_id}}/)
+    assert.match(translated, /{{actual_quota}}/)
   })
 })

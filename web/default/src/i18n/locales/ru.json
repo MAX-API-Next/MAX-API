@@ -18,7 +18,7 @@
     "Final quota cannot exceed the reserved quota.": "Итоговая квота не может превышать зарезервированную квоту.",
     "Audit note must contain between 3 and 1000 characters.": "Примечание аудита должно содержать от 3 до 1000 символов.",
     "Complete manual task billing": "Завершить ручной биллинг задачи",
-    "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}": "Расчет ручного биллинга задачи {{settlement_id}} завершен с точной квотой {{actual_quota}}",
+    "Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}": "Ручной биллинг задачи завершён. Идентификатор расчёта: {{settlement_id}}. Точная квота: {{actual_quota}}",
     "Enter the exact provider-backed final quota. This action may refund the unused reservation and then unlock the task terminal state.": "Введите точную итоговую квоту, подтвержденную данными провайдера. Это действие может вернуть неиспользованный резерв, а затем разблокировать конечное состояние задачи.",
     "This reconciliation record changed while the dialog was open.": "Эта запись сверки изменилась, пока диалоговое окно было открыто.",
     "Close this dialog and reopen the latest record before submitting.": "Перед отправкой закройте это диалоговое окно и снова откройте последнюю версию записи.",

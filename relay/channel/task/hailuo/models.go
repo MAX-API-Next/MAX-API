@@ -118,7 +118,7 @@ type GenericMiniMaxVideoResponse struct {
 	Object string                     `json:"object"`
 	Status string                     `json:"status"`
 	Data   []GenericMiniMaxVideoAsset `json:"data"`
-	Usage  *H3Usage                   `json:"usage,omitempty"`
+	Usage  json.RawMessage            `json:"usage,omitempty"`
 	Error  *GenericMiniMaxVideoError  `json:"error,omitempty"`
 }
 

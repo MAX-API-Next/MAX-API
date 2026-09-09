@@ -507,6 +507,30 @@ func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, int64(1), *usage.InputImageCount)
 }
 
+func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
+	for _, value := range []string{`null`, `[]`, `"none"`, `123`} {
+		t.Run(value, func(t *testing.T) {
+			usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+				"id":"439499419230570",
+				"object":"video.generation",
+				"status":"completed",
+				"data":[{"url":"https://cdn.example.com/result.mp4"}],
+				"usage":` + value + `
+			}`))
+
+			require.NoError(t, err)
+			assert.Nil(t, usage)
+		})
+	}
+}
+
+func TestExtractTaskUsageRejectsMalformedGenericPayload(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{"usage":`))
+
+	require.Error(t, err)
+	assert.Nil(t, usage)
+}
+
 func TestExtractTaskUsageReadsWrappedGenericMiniMaxVideoResponse(t *testing.T) {
 	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
 		"code": "success",
@@ -597,6 +621,22 @@ func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, types.TaskUsageCompletenessComplete, result.Usage.Completeness)
 }
 
+func TestParseTaskResultDoesNotLetNonObjectUsageHideGenericTerminalState(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"completed",
+		"data":[{"url":"https://cdn.example.com/result.mp4"}],
+		"usage":[]
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "https://cdn.example.com/result.mp4", result.Url)
+	assert.Nil(t, result.Usage)
+}
+
 func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
 	withMessage, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
 		"id":"439499419230570",
@@ -658,6 +698,10 @@ func TestParseTaskResultKeepsGenericMiniMaxTransientErrorsRetryable(t *testing.T
 			name: "request timeout from fallback code",
 			body: `{"id":"task-408","error":{"type":"timeout_error","message":"query timed out","code":"408"}}`,
 		},
+		{
+			name: "legacy MiniMax rate limit",
+			body: `{"id":"task-1002","error":{"type":"rate_limit_error","message":"retry later","code":1002}}`,
+		},
 	}
 
 	for _, test := range tests {
@@ -665,6 +709,42 @@ func TestParseTaskResultKeepsGenericMiniMaxTransientErrorsRetryable(t *testing.T
 			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
 			require.ErrorContains(t, err, "temporary query error")
 			require.Nil(t, result)
+		})
+	}
+}
+
+func TestParseTaskResultTreatsPermanentMiniMaxCodesAsTerminalFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{
+			name: "generic authentication failure",
+			body: `{"id":"task-1004","error":{"message":"invalid key","code":1004}}`,
+			code: StatusAuthFailed,
+		},
+		{
+			name: "official sensitive input",
+			body: `{"error":{"message":"sensitive input","code":1026}}`,
+			code: StatusSensitive,
+		},
+		{
+			name: "generic parameter error",
+			body: `{"id":"task-2013","error":{"message":"invalid parameters","code":2013}}`,
+			code: StatusParamError,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, string(model.TaskStatusFailure), result.Status)
+			assert.Equal(t, "100%", result.Progress)
+			assert.Equal(t, test.code, result.Code)
 		})
 	}
 }
