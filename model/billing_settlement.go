@@ -1226,7 +1226,10 @@ func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDel
 // replacement input must keep the original task/funding identity and may only
 // reduce the frozen reservation. The transition is durable before the caller
 // applies funding, so a process interruption leaves a replayable pending
-// record rather than an ambiguous manual mutation.
+// record rather than an ambiguous manual mutation. The boolean reports whether
+// the settlement is already applied or is ready for idempotent application;
+// this keeps a retry after interruption from stranding an existing pending
+// record.
 func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPrefix, recoveryNote string) (bool, error) {
 	if DB == nil {
 		return false, errors.New("database is not initialized")
@@ -1256,7 +1259,7 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	}
 	recoveryNote = common.SanitizePersistedLogContent(common.MaskSensitiveInfo(recoveryNote))
 
-	promoted := false
+	ready := false
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		var record BillingSettlement
 		if err := withRowLock(tx).Where("operation_key = ?", input.OperationKey).First(&record).Error; err != nil {
@@ -1265,13 +1268,14 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 			}
 			return err
 		}
-		if record.Status == BillingSettlementStatusApplied {
+		if record.Status == BillingSettlementStatusApplied || record.Status == BillingSettlementStatusPending {
+			if err := validateBillingSettlement(record, input); err != nil {
+				return err
+			}
+			ready = true
 			return nil
 		}
 		if record.Status != BillingSettlementStatusManual {
-			if record.Status == BillingSettlementStatusPending {
-				return nil
-			}
 			return permanentBillingSettlement(fmt.Errorf("%w: unexpected status %q", ErrBillingSettlementOperationConflict, record.Status))
 		}
 		if !strings.HasPrefix(record.LastError, reasonPrefix) ||
@@ -1326,13 +1330,13 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 		if result.RowsAffected != 1 {
 			return ErrBillingSettlementOperationConflict
 		}
-		promoted = true
+		ready = true
 		return nil
 	})
 	if err != nil {
 		return false, err
 	}
-	return promoted, nil
+	return ready, nil
 }
 
 // ResolveBillingPreConsumeSource returns the funding source already selected by

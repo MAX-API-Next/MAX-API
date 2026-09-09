@@ -432,6 +432,106 @@ func TestRecoverManualH3PersistsTerminalEvidenceBeforeFunding(t *testing.T) {
 
 }
 
+func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testing.T) {
+	truncate(t)
+	seedUser(t, 901, 900)
+	seedToken(t, 903, 901, "h3-promoted-recovery", 900)
+	seedChannel(t, 902)
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5, InputImageCount: 1,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	task.Status = model.TaskStatusInProgress
+	persistTask(t, task)
+
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess),
+		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, missingDecision.ManualReason)
+	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(1),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	providerResult := &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Url: "https://cdn.example.com/promoted-recovery.mp4", Usage: completeUsage,
+	}
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task, providerResult, constant.ChannelTypeMiniMax,
+	)
+	require.Empty(t, decision.ManualReason)
+	require.NotNil(t, decision.Settlement)
+
+	candidate := *task
+	billingContext := *task.PrivateData.BillingContext
+	candidate.PrivateData.BillingContext = &billingContext
+	candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(completeUsage)
+	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
+	won, err = candidate.UpdateWithStatusAndPendingTerminalEvidence(task.Status, task.UpdatedAt)
+	require.NoError(t, err)
+	require.True(t, won)
+	*task = candidate
+
+	ready, err := model.PromoteManualTaskBillingSettlement(
+		*decision.Settlement,
+		"H3 terminal usage requires manual reconciliation:",
+		"H3 task settlement automatically recovered after a complete provider usage response",
+	)
+	require.NoError(t, err)
+	require.True(t, ready)
+	status, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(task.ID))
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, model.BillingSettlementStatusPending, status)
+
+	beforeUserQuota := getUserQuota(t, task.UserId)
+	beforeTokenQuota := getTokenRemainQuota(t, task.PrivateData.TokenId)
+	adaptor := &h3TerminalPollingAdaptor{result: providerResult}
+	ch := &model.Channel{Id: task.ChannelId, Type: constant.ChannelTypeMiniMax, Key: "test"}
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+		task.GetUpstreamTaskID(): task,
+	}))
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+	require.EqualValues(t, decision.Settlement.TaskQuotaTarget, stored.Quota)
+	require.EqualValues(t, beforeUserQuota-decision.Settlement.FundingDelta, getUserQuota(t, task.UserId))
+	require.EqualValues(t, beforeTokenQuota-int(decision.Settlement.TokenDelta), getTokenRemainQuota(t, task.PrivateData.TokenId))
+	require.EqualValues(t, 1, countLogs(t))
+	var logOther map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(getLastLog(t).Other, &logOther))
+	planMetadata, ok := logOther["task_billing_plan"].(map[string]interface{})
+	require.True(t, ok)
+	require.NotContains(t, planMetadata, "config_hash")
+	require.NotContains(t, planMetadata, "group_ratio")
+	require.NotContains(t, planMetadata, "quota_per_unit")
+	require.NotContains(t, planMetadata, "components")
+	usageMetadata, ok := logOther["task_usage"].(map[string]interface{})
+	require.True(t, ok)
+	require.EqualValues(t, 5_000, usageMetadata["output_duration_ms"])
+	require.EqualValues(t, 1, usageMetadata["input_image_count"])
+	require.Equal(t, types.TaskUsageCompletenessComplete, usageMetadata["completeness"])
+	var settlement model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskFinalizeOperationKey(task.ID)).First(&settlement).Error)
+	require.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+
+	userQuotaAfterFirstPoll := getUserQuota(t, task.UserId)
+	tokenQuotaAfterFirstPoll := getTokenRemainQuota(t, task.PrivateData.TokenId)
+	require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, stored.GetUpstreamTaskID(), map[string]*model.Task{
+		stored.GetUpstreamTaskID(): &stored,
+	}))
+	require.EqualValues(t, userQuotaAfterFirstPoll, getUserQuota(t, task.UserId))
+	require.EqualValues(t, tokenQuotaAfterFirstPoll, getTokenRemainQuota(t, task.PrivateData.TokenId))
+	require.EqualValues(t, 1, countLogs(t))
+}
+
 func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID, subscriptionID = 905, 906, 907, 908

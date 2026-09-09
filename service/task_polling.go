@@ -881,7 +881,7 @@ func recoverManualTaskBillingSettlement(
 		return false, err
 	}
 	status, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(task.ID))
-	if err != nil || !found || status != model.BillingSettlementStatusManual {
+	if err != nil || !found || (status != model.BillingSettlementStatusManual && status != model.BillingSettlementStatusPending) {
 		return false, err
 	}
 	// Persist the provider terminal facts before promoting the manual settlement
@@ -904,14 +904,14 @@ func recoverManualTaskBillingSettlement(
 	*task = candidate
 	const h3UsageManualReasonPrefix = "H3 terminal usage requires manual reconciliation:"
 	recoveryNote := "H3 task settlement automatically recovered after a complete provider usage response"
-	promoted, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
+	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
 	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
 		// A different manual reason or a concurrent/permanent recovery failure
 		// must remain operator-gated; do not turn that durable state into a
 		// polling error or publish a terminal task status.
 		return false, nil
 	}
-	if err != nil || !promoted {
+	if err != nil || !ready {
 		return false, err
 	}
 	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {

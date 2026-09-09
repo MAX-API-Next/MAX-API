@@ -148,10 +148,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 			other["task_billing"] = bc.TaskBilling
 		}
 		if bc.TaskBillingPlan != nil {
-			other["task_billing_plan"] = bc.TaskBillingPlan
+			other["task_billing_plan"] = taskBillingPlanLogMetadata(bc.TaskBillingPlan)
 		}
 		if bc.TaskUsage != nil {
-			other["task_usage"] = bc.TaskUsage
+			other["task_usage"] = taskUsageLogMetadata(bc.TaskUsage)
 		}
 	}
 	props := task.Properties
@@ -160,6 +160,46 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
 	return other
+}
+
+func taskBillingPlanLogMetadata(plan *types.TaskBillingPlan) map[string]interface{} {
+	if plan == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"source":        plan.Source,
+		"rule_key":      plan.RuleKey,
+		"reserve_quota": plan.ReserveQuota,
+	}
+}
+
+func taskUsageLogMetadata(usage *types.TaskUsage) map[string]interface{} {
+	if usage == nil {
+		return nil
+	}
+	metadata := map[string]interface{}{
+		"source":       usage.Source,
+		"completeness": usage.Completeness,
+	}
+	if usage.OutputDurationMs != nil {
+		metadata["output_duration_ms"] = *usage.OutputDurationMs
+	}
+	if usage.InputVideoDurationMs != nil {
+		metadata["input_video_duration_ms"] = *usage.InputVideoDurationMs
+	}
+	if usage.InputAudioDurationMs != nil {
+		metadata["input_audio_duration_ms"] = *usage.InputAudioDurationMs
+	}
+	if usage.InputImageCount != nil {
+		metadata["input_image_count"] = *usage.InputImageCount
+	}
+	if usage.InputVideoCount != nil {
+		metadata["input_video_count"] = *usage.InputVideoCount
+	}
+	if usage.InputAudioCount != nil {
+		metadata["input_audio_count"] = *usage.InputAudioCount
+	}
+	return metadata
 }
 
 func taskSubmissionUsageIsDeferred(info *relaycommon.RelayInfo) bool {
@@ -440,7 +480,7 @@ func buildTaskExactFinalSettlementInput(task *model.Task, actualQuota int, usage
 	other["task_id"] = task.TaskID
 	other["pre_consumed_quota"] = task.Quota
 	other["actual_quota"] = actualQuota
-	other["task_usage"] = types.CloneTaskUsage(usage)
+	other["task_usage"] = taskUsageLogMetadata(usage)
 	return &model.BillingSettlementInput{
 		OperationKey:                    model.BillingTaskFinalizeOperationKey(task.ID),
 		Source:                          source,

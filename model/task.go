@@ -401,7 +401,7 @@ func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int6
 			BillingSettlementStatusApplied,
 		})
 	query := db.Model(&Task{}).
-		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Where("NOT EXISTS (?)", taskFinalizeOwned)
 	if afterID > 0 {

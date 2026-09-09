@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -119,6 +120,87 @@ func TestBuildTaskExactFinalSettlementUsesPreConsumedQuotaMetadata(t *testing.T)
 	require.NotNil(t, input.Effect)
 	assert.Equal(t, 100, input.Effect.Other["pre_consumed_quota"])
 	assert.NotContains(t, input.Effect.Other, "reserved_quota")
+}
+
+func TestTaskBillingOtherRestrictsStructuredReconciliationMetadata(t *testing.T) {
+	zero := int64(0)
+	task := &model.Task{
+		PrivateData: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{
+				TaskBillingPlan: &types.TaskBillingPlan{
+					Source:       "minimax_h3_v2",
+					RuleKey:      "minimax_h3_v2",
+					ConfigHash:   "must-not-reach-user-logs",
+					GroupRatio:   1.25,
+					QuotaPerUnit: 500000,
+					ReserveQuota: 800,
+					Components: []types.TaskBillingPlanComponent{{
+						Key: "output_video", UnitPrice: "9.99", ReservedQuantity: 5,
+					}},
+				},
+				TaskUsage: &types.TaskUsage{
+					OutputDurationMs: &zero, InputVideoDurationMs: &zero, InputAudioDurationMs: &zero,
+					InputImageCount: &zero, InputVideoCount: &zero, InputAudioCount: &zero,
+					Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+				},
+			},
+		},
+	}
+
+	other := taskBillingOther(task)
+	planMetadata, ok := other["task_billing_plan"].(map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, planMetadata, 3)
+	require.Equal(t, "minimax_h3_v2", planMetadata["source"])
+	require.Equal(t, "minimax_h3_v2", planMetadata["rule_key"])
+	require.EqualValues(t, 800, planMetadata["reserve_quota"])
+	require.NotContains(t, planMetadata, "config_hash")
+	require.NotContains(t, planMetadata, "group_ratio")
+	require.NotContains(t, planMetadata, "quota_per_unit")
+	require.NotContains(t, planMetadata, "components")
+
+	usageMetadata, ok := other["task_usage"].(map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, usageMetadata, 8)
+	for _, key := range []string{
+		"output_duration_ms", "input_video_duration_ms", "input_audio_duration_ms",
+		"input_image_count", "input_video_count", "input_audio_count",
+	} {
+		require.Contains(t, usageMetadata, key)
+		require.EqualValues(t, 0, usageMetadata[key])
+	}
+	require.Equal(t, types.TaskUsageSourceProviderResponse, usageMetadata["source"])
+	require.Equal(t, types.TaskUsageCompletenessComplete, usageMetadata["completeness"])
+}
+
+func TestBuildTaskExactFinalSettlementUsesAllowlistedUsageMetadata(t *testing.T) {
+	task := makeTask(901, 902, 100, 0, BillingSourceWallet, 0)
+	task.ID = 903
+	task.PrivateData.BillingContext.TaskBillingPlan = &types.TaskBillingPlan{
+		RuleKey: "minimax_h3_v2", ReserveQuota: 100, ConfigHash: "must-not-reach-user-logs",
+	}
+	task.PrivateData.BillingContext.TaskUsage = &types.TaskUsage{
+		Completeness: types.TaskUsageCompletenessPartial,
+	}
+	zero := int64(0)
+	usage := &types.TaskUsage{
+		OutputDurationMs: &zero,
+		InputImageCount:  &zero,
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+
+	input := buildTaskExactFinalSettlementInput(task, 80, usage, "exact settlement")
+
+	require.NotNil(t, input)
+	require.NotNil(t, input.Effect)
+	usageMetadata, ok := input.Effect.Other["task_usage"].(map[string]interface{})
+	require.True(t, ok)
+	require.EqualValues(t, 0, usageMetadata["output_duration_ms"])
+	require.EqualValues(t, 0, usageMetadata["input_image_count"])
+	require.Equal(t, types.TaskUsageSourceProviderResponse, usageMetadata["source"])
+	require.Equal(t, types.TaskUsageCompletenessComplete, usageMetadata["completeness"])
+	require.NotContains(t, usageMetadata, "unit_price")
 }
 
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
