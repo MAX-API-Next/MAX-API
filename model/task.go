@@ -139,6 +139,13 @@ type TaskPrivateData struct {
 	TokenId          int                 `json:"token_id,omitempty"`           // 令牌 ID，用于令牌额度退款
 	NodeName         string              `json:"node_name,omitempty"`          // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext   *TaskBillingContext `json:"billing_context,omitempty"`    // 计费参数快照（用于轮询阶段重新计算）
+	// Pending terminal evidence is persisted before task-finalize funding is
+	// applied, so a crash cannot strand the task in a non-terminal state.
+	PendingTerminalStatus     TaskStatus `json:"pending_terminal_status,omitempty"`
+	PendingTerminalProgress   string     `json:"pending_terminal_progress,omitempty"`
+	PendingTerminalFinishTime int64      `json:"pending_terminal_finish_time,omitempty"`
+	PendingTerminalReason     string     `json:"pending_terminal_reason,omitempty"`
+	PendingTerminalResultURL  string     `json:"pending_terminal_result_url,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -353,6 +360,22 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	tasks, _ := GetTimedOutUnfinishedTasksAfter(cutoffUnix, 0, 0, limit)
 	return tasks
+}
+
+func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*Task, error) {
+	var tasks []*Task
+	if limit <= 0 {
+		limit = 100
+	}
+	finalize := DB.Model(&BillingSettlement{}).Select("1").
+		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
+		Where("status = ?", BillingSettlementStatusApplied)
+	err := DB.Model(&Task{}).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Where("EXISTS (?)", finalize).
+		Order("submit_time ASC, id ASC").Limit(limit).Find(&tasks).Error
+	return tasks, err
 }
 
 // GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after

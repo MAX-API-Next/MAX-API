@@ -371,8 +371,62 @@ func TestSweepTimedOutTasksDoesNotSpendBudgetOnTaskFinalizeOwnedTasks(t *testing
 	for i := range protected {
 		reloaded = model.Task{}
 		require.NoError(t, model.DB.First(&reloaded, protected[i].ID).Error)
-		assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+		if statuses[i] == model.BillingSettlementStatusApplied {
+			assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+			assert.Contains(t, reloaded.FailReason, "manual reconciliation")
+		} else {
+			assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+		}
 	}
+}
+
+func TestSweepTimedOutTasksRecoversAppliedFinalizeTerminalEvidence(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+
+	task := &model.Task{
+		TaskID:     "task_applied_finalize_recovery",
+		Status:     model.TaskStatusInProgress,
+		Quota:      40,
+		SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
+		PrivateData: model.TaskPrivateData{
+			PendingTerminalStatus:     model.TaskStatusSuccess,
+			PendingTerminalProgress:   "100%",
+			PendingTerminalFinishTime: time.Now().Unix(),
+			PendingTerminalResultURL:  "https://cdn.example.com/recovered.mp4",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey:        model.BillingTaskFinalizeOperationKey(task.ID),
+		TaskID:              task.ID,
+		TaskQuota:           40,
+		TaskQuotaTarget:     40,
+		Status:              model.BillingSettlementStatusApplied,
+		AppliedFundingDelta: 0,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Revision:            1,
+	}).Error)
+	candidates, err := model.GetAppliedTaskFinalizeRecoveryCandidates(time.Now().Unix(), 10)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, "100%", reloaded.Progress)
+	assert.Equal(t, "https://cdn.example.com/recovered.mp4", reloaded.PrivateData.ResultURL)
+	assert.Equal(t, 40, reloaded.Quota)
+	var settlementCount int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", task.ID).Count(&settlementCount).Error)
+	assert.EqualValues(t, 1, settlementCount)
 }
 
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {

@@ -363,6 +363,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error) {
+	if nested := taskcommon.WrappedTaskProviderPayload(respBody); nested != nil {
+		return a.ExtractTaskUsage(nested)
+	}
 	response, handled, err := parseH3Response(respBody)
 	if err != nil {
 		return nil, err

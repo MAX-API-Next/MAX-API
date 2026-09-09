@@ -185,6 +185,30 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		return nil, false, nil
 	}
 	cfg := EffectiveTaskProtocolConfig(settings)
+	// Relay gateways may wrap the provider result in a successful MAX envelope
+	// ({"code":"success","data":{...}}). Parse the nested provider object
+	// first so the wrapper's local IN_PROGRESS status cannot hide a terminal
+	// upstream result. Configurations copied from the wrapper commonly prefix
+	// paths with data.; strip that prefix for this explicit nested candidate.
+	if nested := WrappedTaskProviderPayload(respBody); nested != nil {
+		nestedCfg := cfg
+		nestedCfg.TaskIDPath = stripWrappedTaskPath(cfg.TaskIDPath)
+		nestedCfg.StatusPath = stripWrappedTaskPath(cfg.StatusPath)
+		nestedCfg.ProgressPath = stripWrappedTaskPath(cfg.ProgressPath)
+		nestedCfg.ErrorMessagePath = stripWrappedTaskPath(cfg.ErrorMessagePath)
+		nestedCfg.CreatedAtPath = stripWrappedTaskPath(cfg.CreatedAtPath)
+		nestedCfg.UpdatedAtPath = stripWrappedTaskPath(cfg.UpdatedAtPath)
+		nestedCfg.ResultURLPaths = make([]string, 0, len(cfg.ResultURLPaths))
+		for _, path := range cfg.ResultURLPaths {
+			nestedCfg.ResultURLPaths = append(nestedCfg.ResultURLPaths, stripWrappedTaskPath(path))
+		}
+		nestedSettings := settings
+		nestedSettings.TaskProtocolConfig = &nestedCfg
+		result, ok, err := ParseConfiguredTaskResult(nested, nestedSettings)
+		if err != nil || ok {
+			return result, ok, err
+		}
+	}
 	// The official MiniMax H3 query response nests the task facts under
 	// `task`. Keep these envelope markers before compatibility fallbacks so
 	// unrelated providers cannot be mistaken for MiniMax responses.
@@ -265,6 +289,32 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		CompletionTokens: completionTokens,
 		TotalTokens:      totalTokens,
 	}, true, nil
+}
+
+// WrappedTaskProviderPayload returns an explicit provider object from the
+// successful MAX relay envelope used by some task gateways. It is deliberately
+// narrow to avoid treating arbitrary `data.data` responses as this contract.
+func WrappedTaskProviderPayload(respBody []byte) []byte {
+	if !strings.EqualFold(strings.TrimSpace(StringFromGJSONPath(respBody, "code")), "success") {
+		return nil
+	}
+	nested := gjson.GetBytes(respBody, "data.data")
+	if !nested.Exists() || !nested.IsObject() {
+		return nil
+	}
+	if StringFromGJSONPath([]byte(nested.Raw), "id") == "" ||
+		StringFromGJSONPath([]byte(nested.Raw), "status") == "" {
+		return nil
+	}
+	return []byte(nested.Raw)
+}
+
+func stripWrappedTaskPath(path string) string {
+	path = strings.TrimSpace(path)
+	if strings.HasPrefix(path, "data.") {
+		return strings.TrimPrefix(path, "data.")
+	}
+	return path
 }
 
 func ConvertConfiguredTaskToOpenAIVideo(originTask *model.Task) ([]byte, bool, error) {

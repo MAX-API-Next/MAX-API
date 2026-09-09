@@ -322,6 +322,40 @@ func TestParseConfiguredTaskResultSupportsMiniMaxCompatibleRootFields(t *testing
 	assert.Equal(t, "https://cdn.example.com/minimax.mp4", result.Url)
 }
 
+func TestParseConfiguredTaskResultUnwrapsMaxSuccessEnvelope(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		TaskProtocol: TaskProtocolGenericVideo,
+		TaskProtocolConfig: &dto.TaskProtocolConfig{
+			TaskIDPath:     "data.id",
+			StatusPath:     "data.status",
+			ResultURLPaths: []string{"data.data.0.url"},
+		},
+	}
+	body := []byte(`{
+		"code": "success",
+		"data": {
+			"id": 10,
+			"task_id": "task_public",
+			"status": "IN_PROGRESS",
+			"data": {
+				"id": "439499419230570",
+				"object": "video.generation",
+				"status": "completed",
+				"data": [{"url": "https://cdn.example.com/wrapped.mp4"}]
+			}
+		}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "https://cdn.example.com/wrapped.mp4", result.Url)
+}
+
 func TestParseConfiguredTaskResultDoesNotUseObjectlessMiniMaxFallback(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		TaskProtocol: TaskProtocolGenericVideo,

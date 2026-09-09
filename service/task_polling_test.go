@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -43,6 +44,37 @@ func (a *sunoPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relay
 type usagePollingResponseAdaptor struct {
 	usage    *types.TaskUsage
 	usageErr error
+}
+
+type configuredWrapperPollingAdaptor struct{}
+
+func (a *configuredWrapperPollingAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a *configuredWrapperPollingAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(`{
+			"code":"success",
+			"data":{
+				"id":10,
+				"status":"IN_PROGRESS",
+				"data":{
+					"id":"439499419230570",
+					"object":"video.generation",
+					"status":"completed",
+					"data":[{"url":"https://cdn.example.com/polled.mp4"}]
+				}
+			}
+		}`)),
+	}, nil
+}
+
+func (a *configuredWrapperPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return nil, errors.New("configured parser should handle wrapper response")
+}
+
+func (a *configuredWrapperPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
 }
 
 func (a *usagePollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -82,6 +114,36 @@ func TestApplyTaskUsageFactsFailsClosedOnProviderError(t *testing.T) {
 
 	require.ErrorIs(t, err, providerErr)
 	assert.Nil(t, taskResult.Usage)
+}
+
+func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {
+	truncate(t)
+	baseURL := "https://upstream.example.com"
+	task := &model.Task{
+		TaskID:      "task_wrapped_polling",
+		Status:      model.TaskStatusInProgress,
+		Progress:    "50%",
+		SubmitTime:  time.Now().Unix(),
+		UpdatedAt:   time.Now().Unix(),
+		PrivateData: model.TaskPrivateData{},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	channel := &model.Channel{
+		Id:            8101,
+		Key:           "sk-test",
+		BaseURL:       &baseURL,
+		OtherSettings: `{"task_protocol":"generic_video_task","task_protocol_config":{"task_id_path":"data.id","status_path":"data.status","result_url_paths":["data.data.0.url"]}}`,
+	}
+	task.ChannelId = channel.Id
+	require.NoError(t, model.DB.Create(channel).Error)
+
+	err := updateVideoSingleTask(context.Background(), &configuredWrapperPollingAdaptor{}, channel, task.TaskID, map[string]*model.Task{task.TaskID: task})
+
+	require.NoError(t, err)
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, "https://cdn.example.com/polled.mp4", reloaded.PrivateData.ResultURL)
 }
 
 func TestUpdateVideoTasksLeavesChargedTasksPendingWhenChannelCacheFails(t *testing.T) {

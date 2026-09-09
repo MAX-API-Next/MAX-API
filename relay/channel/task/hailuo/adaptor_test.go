@@ -506,6 +506,35 @@ func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, int64(1), *usage.InputImageCount)
 }
 
+func TestExtractTaskUsageReadsWrappedGenericMiniMaxVideoResponse(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+		"code": "success",
+		"data": {
+			"status": "IN_PROGRESS",
+			"data": {
+				"id": "439499419230570",
+				"object": "video.generation",
+				"status": "completed",
+				"data": [{"url": "https://cdn.example.com/result.mp4"}],
+				"usage": {
+					"input_image_count": 1,
+					"input_seconds": 0,
+					"output_seconds": 5,
+					"total_seconds": 5
+				}
+			}
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, usage.Completeness)
+	require.NotNil(t, usage.InputImageCount)
+	assert.Equal(t, int64(1), *usage.InputImageCount)
+	require.NotNil(t, usage.OutputDurationMs)
+	assert.Equal(t, int64(5000), *usage.OutputDurationMs)
+}
+
 func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
 		"created": 1788853061,

@@ -73,6 +73,18 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 	remaining := timedOutTaskTransitionBudget
 	scanBudget := timedOutTaskScanBudget
+	if recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidates(cutoff, remaining); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error: %v", err))
+	} else {
+		for _, task := range recovered {
+			if remaining <= 0 {
+				break
+			}
+			if recoverAppliedTaskTerminalEvidence(task) || markAppliedTaskEvidenceMissing(task, now) {
+				remaining--
+			}
+		}
+	}
 	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
 	afterID := timedOutTaskSweepCursor.afterID
 	for remaining > 0 && scanBudget > 0 {
@@ -103,11 +115,17 @@ func sweepTimedOutTasks(ctx context.Context) {
 				continue
 			}
 			if settlementPending || taskFinalizeApplied {
-				// A task-finalize operation that is pending/manual still owns
-				// recovery. If funding is already applied, normal provider polling
-				// owns the final status so a synthetic timeout cannot overwrite the
-				// frozen terminal evidence.
-				continue
+				// Pending/manual funding remains operator/retry owned. Applied
+				// funding with durable terminal evidence only needs a status update;
+				// legacy applied rows without evidence retain the historical timeout
+				// path so they cannot be stranded.
+				if taskFinalizeApplied {
+					if recoverAppliedTaskTerminalEvidence(task) {
+						continue
+					}
+				} else {
+					continue
+				}
 			}
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
@@ -483,23 +501,29 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	expectedUpdatedAt := task.UpdatedAt
 
 	taskResult := &relaycommon.TaskInfo{}
-	// try parse as MAX API response format
-	var responseItems dto.TaskResponse[model.Task]
-	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
-		logger.LogDebug(ctx, "updateVideoSingleTask parsed as compatible response format: %+v", responseItems)
-		t := responseItems.Data
-		taskResult.TaskID = t.TaskID
-		taskResult.Status = string(t.Status)
-		taskResult.Url = t.GetResultURL()
-		taskResult.Progress = t.Progress
-		taskResult.Reason = t.FailReason
-		task.Data = t.Data
-	} else if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
+	// Configured task protocols take precedence over the MAX envelope. Relay
+	// gateways may return code=success while their nested data.data object is
+	// the actual provider result; consuming the outer wrapper first would keep
+	// the task in the gateway's local IN_PROGRESS state forever.
+	if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
 		return fmt.Errorf("parse configured task result failed for task %s: %w", taskId, parseErr)
 	} else if ok {
 		taskResult = configuredResult
-	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
-		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+	} else {
+		// try parse as MAX API response format
+		var responseItems dto.TaskResponse[model.Task]
+		if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+			logger.LogDebug(ctx, "updateVideoSingleTask parsed as compatible response format: %+v", responseItems)
+			t := responseItems.Data
+			taskResult.TaskID = t.TaskID
+			taskResult.Status = string(t.Status)
+			taskResult.Url = t.GetResultURL()
+			taskResult.Progress = t.Progress
+			taskResult.Reason = t.FailReason
+			task.Data = t.Data
+		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
+			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+		}
 	}
 	if err := applyTaskUsageFacts(adaptor, responseBody, taskResult); err != nil {
 		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
@@ -572,6 +596,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
 			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
+			persistPendingTaskTerminalEvidence(task, taskResult, time.Now().Unix())
 			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
 			if intentErr != nil {
 				return fmt.Errorf("persist task settlement intent for task %s: %w", task.TaskID, intentErr)
@@ -643,6 +668,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	transitionWon := false
 	if isDone && snap.Status != task.Status {
 		if taskFinalizeApplied {
+			clearPendingTaskTerminalEvidence(task)
+		}
+		if taskFinalizeApplied {
 			settlement = nil
 		} else if terminalDecision.UsesPlan {
 			return fmt.Errorf("task %s terminal settlement was not applied", task.TaskID)
@@ -683,6 +711,76 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func persistPendingTaskTerminalEvidence(task *model.Task, result *relaycommon.TaskInfo, now int64) {
+	if task == nil || result == nil {
+		return
+	}
+	task.PrivateData.PendingTerminalStatus = model.TaskStatus(result.Status)
+	task.PrivateData.PendingTerminalProgress = result.Progress
+	task.PrivateData.PendingTerminalFinishTime = now
+	task.PrivateData.PendingTerminalReason = common.SanitizePersistedLogContent(result.Reason)
+	task.PrivateData.PendingTerminalResultURL = result.Url
+	task.IncludePrivateDataInUpdate()
+}
+
+func recoverAppliedTaskTerminalEvidence(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+	pending := task.PrivateData.PendingTerminalStatus
+	if pending != model.TaskStatusSuccess && pending != model.TaskStatusFailure {
+		return false
+	}
+	oldStatus := task.Status
+	task.Status = pending
+	task.Progress = task.PrivateData.PendingTerminalProgress
+	if task.Progress == "" {
+		task.Progress = taskcommon.ProgressComplete
+	}
+	task.FinishTime = task.PrivateData.PendingTerminalFinishTime
+	if task.FinishTime == 0 {
+		task.FinishTime = time.Now().Unix()
+	}
+	task.FailReason = task.PrivateData.PendingTerminalReason
+	if pending == model.TaskStatusSuccess && task.PrivateData.PendingTerminalResultURL != "" {
+		task.PrivateData.ResultURL = task.PrivateData.PendingTerminalResultURL
+	}
+	task.PrivateData.PendingTerminalStatus = ""
+	task.PrivateData.PendingTerminalProgress = ""
+	task.PrivateData.PendingTerminalFinishTime = 0
+	task.PrivateData.PendingTerminalReason = ""
+	task.PrivateData.PendingTerminalResultURL = ""
+	task.IncludePrivateDataInUpdate()
+	won, err := task.UpdateWithStatus(oldStatus)
+	return err == nil && won
+}
+
+func clearPendingTaskTerminalEvidence(task *model.Task) {
+	if task == nil {
+		return
+	}
+	task.PrivateData.PendingTerminalStatus = ""
+	task.PrivateData.PendingTerminalProgress = ""
+	task.PrivateData.PendingTerminalFinishTime = 0
+	task.PrivateData.PendingTerminalReason = ""
+	task.PrivateData.PendingTerminalResultURL = ""
+	task.IncludePrivateDataInUpdate()
+}
+
+func markAppliedTaskEvidenceMissing(task *model.Task, now int64) bool {
+	if task == nil || task.ID <= 0 {
+		return false
+	}
+	oldStatus := task.Status
+	task.Status = model.TaskStatusFailure
+	task.Progress = taskcommon.ProgressComplete
+	task.FinishTime = now
+	task.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
+	clearPendingTaskTerminalEvidence(task)
+	won, err := task.UpdateWithStatus(oldStatus)
+	return err == nil && won
 }
 
 func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskResult *relaycommon.TaskInfo) error {
