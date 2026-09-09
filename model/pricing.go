@@ -552,7 +552,7 @@ func newStructuredTaskRateCardPricing(ruleKey string, card *task_billing_setting
 			Variant:     resolution,
 			Unit:        "second",
 			UnitPrice:   priceText,
-			MaxQuantity: pricingInt64Pointer(config.InputVideoMaxSeconds),
+			MaxQuantity: pricingQuantityLimit(config.InputVideoMaxSeconds),
 		})
 	}
 	if _, ok := parseTaskRateCardDisplayPrice(config.InputImageExtraUnitPrice); !ok {
@@ -602,6 +602,13 @@ func parseTaskRateCardDisplayPrice(value string) (float64, bool) {
 
 func pricingInt64Pointer(value int64) *int64 {
 	return &value
+}
+
+func pricingQuantityLimit(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return pricingInt64Pointer(value)
 }
 
 func clonePricingStringMap(src map[string]string) map[string]string {

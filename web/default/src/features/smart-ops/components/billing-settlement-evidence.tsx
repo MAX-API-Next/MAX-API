@@ -80,7 +80,9 @@ export function BillingSettlementEvidence(
   }, [manualTaskItem, reconciliationItems])
   const manualTaskItemStale = Boolean(
     manualTaskItem &&
-    (!currentManualTaskItem ||
+    (props.error ||
+      !props.data ||
+      !currentManualTaskItem ||
       currentManualTaskItem.revision !== manualTaskItem.revision ||
       !currentManualTaskItem.requires_manual_completion)
   )
@@ -234,23 +236,37 @@ export function BillingSettlementEvidence(
     },
   })
 
+  const manualTaskDialog = manualTaskItem ? (
+    <ManualTaskSettlementDialog
+      key={`${manualTaskItem.id}:${manualTaskItem.revision}`}
+      item={manualTaskItem}
+      pending={manualTaskCompletionMutation.isPending}
+      stale={manualTaskItemStale}
+      onOpenChange={(open) => {
+        if (!open) setManualTaskItem(null)
+      }}
+      onSubmit={(item, actualQuota, note) =>
+        manualTaskCompletionMutation.mutate({ item, actualQuota, note })
+      }
+    />
+  ) : null
+
   const replaceSelectedTargets = (
     targets: Map<number, BillingSettlementReviewTarget>
   ): void => {
     setSelectedTargets(targets)
   }
 
+  let content: ReactElement
   if (props.loading) {
-    return (
+    content = (
       <div className='flex flex-col gap-2 border-t pt-4'>
         <Skeleton className='h-16 w-full rounded-md' />
         <Skeleton className='h-40 w-full rounded-md' />
       </div>
     )
-  }
-
-  if (props.error) {
-    return (
+  } else if (props.error) {
+    content = (
       <Alert variant='destructive'>
         <TriangleAlert aria-hidden='true' />
         <AlertTitle>
@@ -270,173 +286,172 @@ export function BillingSettlementEvidence(
         </AlertDescription>
       </Alert>
     )
-  }
+  } else if (!props.data) {
+    content = <></>
+  } else {
+    content = (
+      <section
+        aria-labelledby='billing-reconciliation-heading'
+        className='flex flex-col gap-3 border-t pt-4'
+      >
+        <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
+          <div className='min-w-0'>
+            <h4
+              id='billing-reconciliation-heading'
+              className='text-sm font-semibold'
+            >
+              {t('Open billing reconciliation alerts')}
+            </h4>
+            <p className='text-muted-foreground mt-0.5 text-xs'>
+              {t(
+                'Batch-close ordinary alerts after review. Task-finalization alerts require a root administrator to enter the exact provider-backed quota before they can close.'
+              )}
+            </p>
+          </div>
+          <div className='flex flex-wrap gap-2'>
+            <Badge variant='outline'>
+              {formatLocalizedCount(
+                props.data.open_alert_count,
+                i18n.language,
+                t,
+                'Open alert: {{count}}',
+                'Open alerts: {{count}}'
+              )}
+            </Badge>
+            <Badge variant='outline'>
+              {t('Open pending settlements: {{count}}', {
+                count: formatCount(props.data.pending_count, i18n.language),
+              })}
+            </Badge>
+            <Badge variant='outline'>
+              {t('Open manual settlements: {{count}}', {
+                count: formatCount(props.data.manual_count, i18n.language),
+              })}
+            </Badge>
+            <Badge variant='outline'>
+              {formatLocalizedCount(
+                props.data.blocked_user_count,
+                i18n.language,
+                t,
+                'Blocked user: {{count}}',
+                'Blocked users: {{count}}'
+              )}
+            </Badge>
+          </div>
+        </div>
 
-  if (!props.data) {
-    return <></>
+        <Field className='rounded-lg border p-3' orientation='horizontal'>
+          <FieldContent>
+            <FieldTitle>{t('Block affected users by default')}</FieldTitle>
+            <FieldDescription>
+              {t(
+                'When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.'
+              )}
+            </FieldDescription>
+            {!props.canUpdateBlockingPolicy && (
+              <FieldDescription>
+                {t(
+                  'Only root administrators can change the default blocking policy.'
+                )}
+              </FieldDescription>
+            )}
+          </FieldContent>
+          <Switch
+            id='billing-reconciliation-block-user-default'
+            checked={policyValue}
+            onCheckedChange={handlePolicyChange}
+            disabled={
+              policyMutation.isPending || !props.canUpdateBlockingPolicy
+            }
+            aria-label={t('Block affected users by default')}
+          />
+        </Field>
+
+        {props.data.items.length === 0 ? (
+          <Alert>
+            <CheckCircle2 aria-hidden='true' />
+            <AlertTitle>{t('No open reconciliation alerts.')}</AlertTitle>
+            <AlertDescription>
+              {t(
+                'There are no pending or manual positive final settlements waiting for administrator review.'
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <div className='flex flex-col gap-2'>
+            <div className='flex flex-wrap items-center justify-between gap-2'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Selected alerts: {{count}}', {
+                  count: formatCount(
+                    activeSelectedTargets.length,
+                    i18n.language
+                  ),
+                })}
+              </span>
+              <Button
+                type='button'
+                size='sm'
+                onClick={() => reviewTargets(activeSelectedTargets)}
+                disabled={
+                  activeSelectedTargets.length === 0 || reviewMutation.isPending
+                }
+              >
+                {reviewMutation.isPending && (
+                  <Loader2
+                    data-icon='inline-start'
+                    className='animate-spin'
+                    aria-hidden='true'
+                  />
+                )}
+                {t('Review and close selected ({{count}})', {
+                  count: formatCount(
+                    activeSelectedTargets.length,
+                    i18n.language
+                  ),
+                })}
+              </Button>
+            </div>
+            <BillingSettlementTable
+              items={props.data.items}
+              canCompleteManualTask={props.canCompleteManualTask}
+              selectedTargets={activeSelectedTargetMap}
+              reviewPending={
+                reviewMutation.isPending ||
+                manualTaskCompletionMutation.isPending
+              }
+              onSelectedTargetsChange={replaceSelectedTargets}
+              onReviewTargets={reviewTargets}
+              onCompleteManualTask={setManualTaskItem}
+            />
+          </div>
+        )}
+
+        {props.data.truncated && (
+          <Alert>
+            <AlertDescription>
+              {t(
+                'Showing the oldest {{count}} alerts; the summary covers all {{total}} open alerts.',
+                {
+                  count: formatCount(props.data.items.length, i18n.language),
+                  total: formatCount(props.data.total_count, i18n.language),
+                }
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+        <p className='text-muted-foreground text-right text-xs'>
+          {t('Generated at {{time}}', {
+            time: formatTimestampToDate(props.data.generated_at),
+          })}
+        </p>
+      </section>
+    )
   }
 
   return (
-    <section
-      aria-labelledby='billing-reconciliation-heading'
-      className='flex flex-col gap-3 border-t pt-4'
-    >
-      <div className='flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
-        <div className='min-w-0'>
-          <h4
-            id='billing-reconciliation-heading'
-            className='text-sm font-semibold'
-          >
-            {t('Open billing reconciliation alerts')}
-          </h4>
-          <p className='text-muted-foreground mt-0.5 text-xs'>
-            {t(
-              'Batch-close ordinary alerts after review. Task-finalization alerts require a root administrator to enter the exact provider-backed quota before they can close.'
-            )}
-          </p>
-        </div>
-        <div className='flex flex-wrap gap-2'>
-          <Badge variant='outline'>
-            {formatLocalizedCount(
-              props.data.open_alert_count,
-              i18n.language,
-              t,
-              'Open alert: {{count}}',
-              'Open alerts: {{count}}'
-            )}
-          </Badge>
-          <Badge variant='outline'>
-            {t('Open pending settlements: {{count}}', {
-              count: formatCount(props.data.pending_count, i18n.language),
-            })}
-          </Badge>
-          <Badge variant='outline'>
-            {t('Open manual settlements: {{count}}', {
-              count: formatCount(props.data.manual_count, i18n.language),
-            })}
-          </Badge>
-          <Badge variant='outline'>
-            {formatLocalizedCount(
-              props.data.blocked_user_count,
-              i18n.language,
-              t,
-              'Blocked user: {{count}}',
-              'Blocked users: {{count}}'
-            )}
-          </Badge>
-        </div>
-      </div>
-
-      <Field className='rounded-lg border p-3' orientation='horizontal'>
-        <FieldContent>
-          <FieldTitle>{t('Block affected users by default')}</FieldTitle>
-          <FieldDescription>
-            {t(
-              'When enabled, new paid requests remain blocked while any unresolved positive final settlement record still blocks the user. Allowing one reviewed record does not override other blocking records.'
-            )}
-          </FieldDescription>
-          {!props.canUpdateBlockingPolicy && (
-            <FieldDescription>
-              {t(
-                'Only root administrators can change the default blocking policy.'
-              )}
-            </FieldDescription>
-          )}
-        </FieldContent>
-        <Switch
-          id='billing-reconciliation-block-user-default'
-          checked={policyValue}
-          onCheckedChange={handlePolicyChange}
-          disabled={policyMutation.isPending || !props.canUpdateBlockingPolicy}
-          aria-label={t('Block affected users by default')}
-        />
-      </Field>
-
-      {props.data.items.length === 0 ? (
-        <Alert>
-          <CheckCircle2 aria-hidden='true' />
-          <AlertTitle>{t('No open reconciliation alerts.')}</AlertTitle>
-          <AlertDescription>
-            {t(
-              'There are no pending or manual positive final settlements waiting for administrator review.'
-            )}
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <div className='flex flex-col gap-2'>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Selected alerts: {{count}}', {
-                count: formatCount(activeSelectedTargets.length, i18n.language),
-              })}
-            </span>
-            <Button
-              type='button'
-              size='sm'
-              onClick={() => reviewTargets(activeSelectedTargets)}
-              disabled={
-                activeSelectedTargets.length === 0 || reviewMutation.isPending
-              }
-            >
-              {reviewMutation.isPending && (
-                <Loader2
-                  data-icon='inline-start'
-                  className='animate-spin'
-                  aria-hidden='true'
-                />
-              )}
-              {t('Review and close selected ({{count}})', {
-                count: formatCount(activeSelectedTargets.length, i18n.language),
-              })}
-            </Button>
-          </div>
-          <BillingSettlementTable
-            items={props.data.items}
-            canCompleteManualTask={props.canCompleteManualTask}
-            selectedTargets={activeSelectedTargetMap}
-            reviewPending={
-              reviewMutation.isPending || manualTaskCompletionMutation.isPending
-            }
-            onSelectedTargetsChange={replaceSelectedTargets}
-            onReviewTargets={reviewTargets}
-            onCompleteManualTask={setManualTaskItem}
-          />
-        </div>
-      )}
-
-      {manualTaskItem && (
-        <ManualTaskSettlementDialog
-          key={`${manualTaskItem.id}:${manualTaskItem.revision}`}
-          item={manualTaskItem}
-          pending={manualTaskCompletionMutation.isPending}
-          stale={manualTaskItemStale}
-          onOpenChange={(open) => {
-            if (!open) setManualTaskItem(null)
-          }}
-          onSubmit={(item, actualQuota, note) =>
-            manualTaskCompletionMutation.mutate({ item, actualQuota, note })
-          }
-        />
-      )}
-
-      {props.data.truncated && (
-        <Alert>
-          <AlertDescription>
-            {t(
-              'Showing the oldest {{count}} alerts; the summary covers all {{total}} open alerts.',
-              {
-                count: formatCount(props.data.items.length, i18n.language),
-                total: formatCount(props.data.total_count, i18n.language),
-              }
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-      <p className='text-muted-foreground text-right text-xs'>
-        {t('Generated at {{time}}', {
-          time: formatTimestampToDate(props.data.generated_at),
-        })}
-      </p>
-    </section>
+    <>
+      {content}
+      {manualTaskDialog}
+    </>
   )
 }

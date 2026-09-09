@@ -512,7 +512,8 @@ func parseH3Response(body []byte) (*H3QueryResponse, bool, error) {
 	if err := common.Unmarshal(body, &response); err != nil {
 		return nil, false, err
 	}
-	return &response, response.Task != nil || response.Error != nil, nil
+	return &response, response.Task != nil ||
+		(response.Error != nil && strings.TrimSpace(response.ID) == ""), nil
 }
 
 func parseH3TaskResult(body []byte) (*relaycommon.TaskInfo, bool, error) {
@@ -576,9 +577,9 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 	// The root-level shape is used by compatible gateways. Requiring an id and
 	// either the documented object marker or a status/data field prevents a
 	// legacy Hailuo response from being treated as a MiniMax result.
-	if strings.TrimSpace(response.ID) == "" ||
+	if response.Error == nil && (strings.TrimSpace(response.ID) == "" ||
 		(strings.TrimSpace(response.Object) != "video.generation" &&
-			(strings.TrimSpace(response.Status) == "" || response.Data == nil)) {
+			(strings.TrimSpace(response.Status) == "" || response.Data == nil))) {
 		return nil, false, nil
 	}
 
@@ -592,6 +593,15 @@ func parseGenericMiniMaxTaskResult(body []byte) (*relaycommon.TaskInfo, bool, er
 		result.Url = firstNonEmptyString(asset.URL, asset.VideoURL, asset.OutputURL)
 	}
 	status := strings.ToLower(strings.TrimSpace(response.Status))
+	if response.Error != nil {
+		result.Status = model.TaskStatusFailure
+		result.Progress = "100%"
+		result.Reason = strings.TrimSpace(response.Error.Message)
+		if result.Reason == "" {
+			result.Reason = "MiniMax task failed"
+		}
+		return result, true, nil
+	}
 	switch status {
 	case "queued", "pending", "submitted", "created":
 		result.Status = model.TaskStatusQueued

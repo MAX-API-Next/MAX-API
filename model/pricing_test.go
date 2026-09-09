@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -84,6 +85,32 @@ func TestNewTaskRateCardPricingExposesStructuredMinimaxBilling(t *testing.T) {
 		FreeQuantity: int64Pointer(5),
 		MaxQuantity:  int64Pointer(9),
 	}, pricing.Components[4])
+}
+
+func TestNewTaskRateCardPricingOmitsNonPositiveInputVideoLimit(t *testing.T) {
+	for _, limit := range []int64{0, -1} {
+		t.Run(strconv.FormatInt(limit, 10), func(t *testing.T) {
+			pricing := newTaskRateCardPricing("minimax/minimax-h3", &task_billing_setting.RateCard{
+				Vendor:      "minimax",
+				BillingType: task_billing_setting.MinimaxBillingType,
+				BillingConfig: map[string]any{
+					"schema_version":               1,
+					"mode":                         "bounded_actual",
+					"currency":                     "USD",
+					"output_unit_price":            map[string]any{"768P": "0.08", "2K": "0.13"},
+					"input_video_unit_price":       map[string]any{"768P": "0.08", "2K": "0.13"},
+					"input_video_max_seconds":      limit,
+					"input_image_extra_unit_price": "0.04",
+					"input_audio_unit_price":       "0",
+				},
+			})
+
+			require.NotNil(t, pricing)
+			require.Len(t, pricing.Components, 6)
+			require.Nil(t, pricing.Components[2].MaxQuantity)
+			require.Nil(t, pricing.Components[3].MaxQuantity)
+		})
+	}
 }
 
 func int64Pointer(value int64) *int64 {

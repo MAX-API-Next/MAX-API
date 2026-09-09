@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useMemo, useState, type ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
 import { waitFor, within } from '@testing-library/react'
@@ -40,6 +41,8 @@ const testEnv = createReactTestEnvironment({
 
 await testEnv.setup()
 const { ActiveAlerts } = await import('./alerts')
+const { BillingSettlementEvidence } =
+  await import('./components/billing-settlement-evidence')
 
 after(() => testEnv.teardown())
 
@@ -66,6 +69,67 @@ function emptyReconciliationData(): BillingSettlementReconciliationData {
     generated_at: 1788106455,
     items: [],
   }
+}
+
+function ManualSettlementEvidenceHarness(): ReactElement {
+  const [failed, setFailed] = useState(false)
+  const data = useMemo<BillingSettlementReconciliationData>(
+    () => ({
+      ...emptyReconciliationData(),
+      total_count: 1,
+      manual_count: 1,
+      open_alert_count: 1,
+      items: [
+        {
+          id: 701,
+          revision: 4,
+          operation_key: 'task:9701:finalize',
+          status: 'manual',
+          source: 'wallet',
+          user_id: 53,
+          subscription_id: 0,
+          token_id: 54,
+          task_id: 9701,
+          task_quota: 100,
+          task_quota_target: 100,
+          requires_manual_completion: true,
+          funding_delta: 0,
+          applied_funding_delta: 0,
+          token_delta: 0,
+          applied_token_delta: 0,
+          attempts: 0,
+          last_error: 'provider usage needs verification',
+          next_attempt: 0,
+          created_at: 1786032545,
+          updated_at: 1786032545,
+          reconciliation_reviewed_at: 0,
+          reconciliation_reviewed_by: 0,
+          reconciliation_review_note: '',
+          user_blocking_override: null,
+          record_blocks_user: false,
+          blocks_user: false,
+        },
+      ],
+    }),
+    []
+  )
+  const error = useMemo(() => new Error('temporary reconciliation failure'), [])
+
+  return (
+    <>
+      <button type='button' onClick={() => setFailed(true)}>
+        Cause reconciliation error
+      </button>
+      <BillingSettlementEvidence
+        canCompleteManualTask
+        canUpdateBlockingPolicy
+        data={failed ? undefined : data}
+        error={failed ? error : null}
+        loading={false}
+        onRetry={() => undefined}
+      />
+    </>
+  )
 }
 
 describe('SmartOps active alerts', () => {
@@ -400,6 +464,86 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('keeps the manual settlement dialog mounted when reconciliation fails', async (): Promise<void> => {
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    // React's async rendering path probes the legacy IE event API in this test
+    // environment; emulate it on the shared prototype and remove it below.
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ManualSettlementEvidenceHarness />
+      </QueryClientProvider>
+    )
+
+    try {
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Complete billing',
+          })
+        )
+      })
+      const causeErrorButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Complete billing',
+        })
+      )
+
+      const dialog = await waitFor(() => {
+        const currentDialog = document.body.querySelector(
+          '[role="dialog"]'
+        ) as HTMLElement
+        assert.ok(currentDialog)
+        return currentDialog
+      })
+      assert.ok(dialog.querySelector('#manual-task-actual-quota'))
+
+      await view.click(causeErrorButton)
+      await waitFor(() => {
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'We could not load billing reconciliation details.'
+          )
+        )
+      })
+
+      const currentDialog = document.body.querySelector(
+        '[role="dialog"]'
+      ) as HTMLElement
+      assert.ok(currentDialog)
+      assert.equal(currentDialog, dialog)
+      assert.ok(
+        (currentDialog.textContent ?? '').includes(
+          'This reconciliation record changed while the dialog was open.'
+        )
+      )
+      const submitButton = currentDialog.querySelector(
+        'button[type="submit"]'
+      ) as HTMLButtonElement
+      assert.ok(submitButton)
+      assert.equal(submitButton.hasAttribute('disabled'), true)
+    } finally {
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+      queryClient.clear()
+      await view.unmount()
+    }
+  })
+
   test('batch closes selected active reconciliation alerts without requesting notes', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({
@@ -605,6 +749,8 @@ describe('SmartOps active alerts', () => {
       attachEvent?: (name: string, listener: EventListener) => void
       detachEvent?: (name: string, listener: EventListener) => void
     }
+    // React's async rendering path probes the legacy IE event API in this test
+    // environment; emulate it on the shared prototype and remove it below.
     htmlElementPrototype.attachEvent = function (name, listener) {
       this.addEventListener(name.replace(/^on/, ''), listener)
     }
@@ -614,53 +760,55 @@ describe('SmartOps active alerts', () => {
     const manualRevision = 2
     const manualCompletionRequired = true
     let includeManualItem = true
-    api.get = (async (url: string): Promise<unknown> => ({
-      data:
-        url === '/api/smart-ops/billing-settlements'
-          ? {
-              success: true,
-              data: {
-                ...emptyReconciliationData(),
-                total_count: includeManualItem ? 1 : 0,
-                manual_count: includeManualItem ? 1 : 0,
-                open_alert_count: includeManualItem ? 1 : 0,
-                items: includeManualItem
-                  ? [
-                      {
-                        id: 93,
-                        revision: manualRevision,
-                        operation_key: 'task:7001:finalize',
-                        status: 'manual',
-                        source: 'wallet',
-                        user_id: 53,
-                        subscription_id: 0,
-                        token_id: 54,
-                        task_id: 7001,
-                        task_quota: 100,
-                        task_quota_target: 100,
-                        requires_manual_completion: manualCompletionRequired,
-                        funding_delta: 0,
-                        applied_funding_delta: 0,
-                        token_delta: 0,
-                        applied_token_delta: 0,
-                        attempts: 0,
-                        last_error: 'provider usage needs verification',
-                        next_attempt: 0,
-                        created_at: 1786032545,
-                        updated_at: 1786032545,
-                        reconciliation_reviewed_at: 0,
-                        reconciliation_reviewed_by: 0,
-                        reconciliation_review_note: '',
-                        user_blocking_override: null,
-                        record_blocks_user: false,
-                        blocks_user: false,
-                      },
-                    ]
-                  : [],
-              },
-            }
-          : { success: true, data: [] },
-    })) as typeof api.get
+    api.get = (async (url: string): Promise<unknown> => {
+      return {
+        data:
+          url === '/api/smart-ops/billing-settlements'
+            ? {
+                success: true,
+                data: {
+                  ...emptyReconciliationData(),
+                  total_count: includeManualItem ? 1 : 0,
+                  manual_count: includeManualItem ? 1 : 0,
+                  open_alert_count: includeManualItem ? 1 : 0,
+                  items: includeManualItem
+                    ? [
+                        {
+                          id: 93,
+                          revision: manualRevision,
+                          operation_key: 'task:7001:finalize',
+                          status: 'manual',
+                          source: 'wallet',
+                          user_id: 53,
+                          subscription_id: 0,
+                          token_id: 54,
+                          task_id: 7001,
+                          task_quota: 100,
+                          task_quota_target: 100,
+                          requires_manual_completion: manualCompletionRequired,
+                          funding_delta: 0,
+                          applied_funding_delta: 0,
+                          token_delta: 0,
+                          applied_token_delta: 0,
+                          attempts: 0,
+                          last_error: 'provider usage needs verification',
+                          next_attempt: 0,
+                          created_at: 1786032545,
+                          updated_at: 1786032545,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: false,
+                          blocks_user: false,
+                        },
+                      ]
+                    : [],
+                },
+              }
+            : { success: true, data: [] },
+      }
+    }) as typeof api.get
     const queryClient = createQueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>

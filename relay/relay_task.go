@@ -527,6 +527,7 @@ func estimateTaskBilling(c *gin.Context, info *relaycommon.RelayInfo, adaptor ch
 	// retain a legacy rate-card result alongside it, or later settlement/logging
 	// could observe two competing billing identities for one task.
 	if info != nil && info.TaskBillingPlan != nil {
+		info.TaskBilling = nil
 		return nil, nil
 	}
 	if estimator, ok := adaptor.(taskBillingEstimator); ok {

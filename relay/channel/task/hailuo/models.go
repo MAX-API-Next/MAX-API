@@ -68,6 +68,7 @@ type QueryTaskResponse struct {
 }
 
 type H3QueryResponse struct {
+	ID    string      `json:"id,omitempty"`
 	Task  *H3Task     `json:"task,omitempty"`
 	Error *H3APIError `json:"error,omitempty"`
 }

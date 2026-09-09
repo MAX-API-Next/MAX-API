@@ -536,6 +536,7 @@ func TestEstimateTaskBillingDoesNotMixLegacyRateCardWithStructuredPlan(t *testin
 		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: hailuo.H3Model},
 		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: constant.TaskActionGenerate},
 		TaskBillingPlan: plan,
+		TaskBilling:     &types.TaskBillingResult{RuleKey: "legacy-call"},
 	}
 	relaycommon.StoreTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.TaskSubmitReq{
 		Model:    hailuo.H3Model,
@@ -546,6 +547,7 @@ func TestEstimateTaskBillingDoesNotMixLegacyRateCardWithStructuredPlan(t *testin
 
 	require.NoError(t, err)
 	assert.Nil(t, got)
+	assert.Nil(t, info.TaskBilling)
 }
 
 func TestRecalcQuotaFromRatiosUsesRawEstimateBeforePreConsumeFloor(t *testing.T) {
