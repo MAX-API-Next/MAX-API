@@ -714,11 +714,12 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 	if err := validateBillingSettlementInput(input); err != nil {
 		return false, err
 	}
-	if t.UpdatedAt <= expectedUpdatedAt {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
 		if expectedUpdatedAt == 1<<63-1 {
 			return false, errors.New("task updated_at cannot advance")
 		}
-		t.UpdatedAt = expectedUpdatedAt + 1
+		updatedAt = expectedUpdatedAt + 1
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -727,7 +728,7 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		}
 		updates := map[string]interface{}{
 			"private_data": t.PrivateData,
-			"updated_at":   t.UpdatedAt,
+			"updated_at":   updatedAt,
 		}
 		if t.Data != nil || t.includeDataInUpdate {
 			updates["data"] = t.Data
@@ -746,7 +747,11 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 	if errors.Is(err, errTaskStatusCASLost) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
 }
 
 // UpdateWithStatusAndManualSettlement atomically records a reconciliation-only
@@ -766,11 +771,12 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 	if input.TaskID != t.ID {
 		return false, fmt.Errorf("billing settlement task identity mismatch: task=%d input=%d", t.ID, input.TaskID)
 	}
-	if t.UpdatedAt <= expectedUpdatedAt {
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
 		if expectedUpdatedAt == 1<<63-1 {
 			return false, errors.New("task updated_at cannot advance")
 		}
-		t.UpdatedAt = expectedUpdatedAt + 1
+		updatedAt = expectedUpdatedAt + 1
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -779,7 +785,7 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		}
 		updates := map[string]interface{}{
 			"private_data": t.PrivateData,
-			"updated_at":   t.UpdatedAt,
+			"updated_at":   updatedAt,
 		}
 		if t.Data != nil || t.includeDataInUpdate {
 			updates["data"] = t.Data
@@ -798,7 +804,11 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 	if errors.Is(err, errTaskStatusCASLost) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
 }
 
 // UpdateWithSettlementIntent persists upstream task identity and the request's

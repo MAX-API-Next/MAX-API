@@ -114,6 +114,8 @@ func TestUpdateWithStatusAndManualSettlementKeepsTaskNonTerminal(t *testing.T) {
 	require.NoError(t, DB.First(&stored, task.ID).Error)
 	require.Equal(t, TaskStatus(TaskStatusInProgress), stored.Status)
 	require.Equal(t, 800, stored.Quota)
+	require.Equal(t, expectedUpdatedAt+1, task.UpdatedAt)
+	require.Equal(t, task.UpdatedAt, stored.UpdatedAt)
 	require.Equal(t, "35%", stored.Progress)
 	require.EqualValues(t, 11, stored.StartTime)
 	require.Zero(t, stored.FinishTime)
@@ -136,16 +138,17 @@ func TestUpdateWithStatusAndManualSettlementCASLossLeavesNoIntent(t *testing.T) 
 	task := &Task{TaskID: "manual-h3-cas-loss", Status: TaskStatusQueued, Quota: 800}
 	insertTask(t, task)
 	operationKey := BillingTaskFinalizeOperationKey(task.ID)
+	expectedUpdatedAt := task.UpdatedAt
 	task.Status = TaskStatusInProgress
-	task.UpdatedAt++
 
-	won, err := task.UpdateWithStatusAndManualSettlement(TaskStatusInProgress, task.UpdatedAt-1, BillingSettlementInput{
+	won, err := task.UpdateWithStatusAndManualSettlement(TaskStatusInProgress, expectedUpdatedAt, BillingSettlementInput{
 		OperationKey: operationKey, Source: BillingSettlementSourceWallet,
 		UserID: 1, TaskID: task.ID, TaskQuota: 800, TaskQuotaTarget: 800,
 	}, "H3 terminal usage is missing")
 
 	require.NoError(t, err)
 	require.False(t, won)
+	require.Equal(t, expectedUpdatedAt, task.UpdatedAt)
 	var count int64
 	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
 	require.Zero(t, count)
@@ -172,6 +175,8 @@ func TestUpdateWithStatusAndSettlementIntentKeepsTaskNonTerminal(t *testing.T) {
 	require.NoError(t, DB.First(&stored, task.ID).Error)
 	require.Equal(t, TaskStatus(TaskStatusInProgress), stored.Status)
 	require.Equal(t, 800, stored.Quota)
+	require.Equal(t, expectedUpdatedAt+1, task.UpdatedAt)
+	require.Equal(t, task.UpdatedAt, stored.UpdatedAt)
 	require.NotNil(t, stored.PrivateData.BillingContext)
 	var settlement BillingSettlement
 	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
@@ -184,10 +189,10 @@ func TestUpdateWithStatusAndSettlementIntentCASLossLeavesNoIntent(t *testing.T) 
 	task := &Task{TaskID: "pending-h3-cas-loss", Status: TaskStatusQueued, Quota: 800}
 	insertTask(t, task)
 	operationKey := BillingTaskFinalizeOperationKey(task.ID)
+	expectedUpdatedAt := task.UpdatedAt
 	task.Status = TaskStatusInProgress
-	task.UpdatedAt++
 
-	won, err := task.UpdateWithStatusAndSettlementIntent(TaskStatusInProgress, task.UpdatedAt-1, BillingSettlementInput{
+	won, err := task.UpdateWithStatusAndSettlementIntent(TaskStatusInProgress, expectedUpdatedAt, BillingSettlementInput{
 		OperationKey: operationKey, Source: BillingSettlementSourceWallet,
 		UserID: 1, TaskID: task.ID, TaskQuota: 800, TaskQuotaTarget: 500,
 		FundingDelta: -300,
@@ -195,7 +200,63 @@ func TestUpdateWithStatusAndSettlementIntentCASLossLeavesNoIntent(t *testing.T) 
 
 	require.NoError(t, err)
 	require.False(t, won)
+	require.Equal(t, expectedUpdatedAt, task.UpdatedAt)
 	var count int64
 	require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestTaskSettlementIntentErrorsKeepCallerTimestamp(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Task, int64, BillingSettlementInput) (bool, error)
+	}{
+		{
+			name: "pending settlement intent",
+			call: func(task *Task, expectedUpdatedAt int64, input BillingSettlementInput) (bool, error) {
+				return task.UpdateWithStatusAndSettlementIntent(TaskStatusInProgress, expectedUpdatedAt, input)
+			},
+		},
+		{
+			name: "manual settlement intent",
+			call: func(task *Task, expectedUpdatedAt int64, input BillingSettlementInput) (bool, error) {
+				input.TaskQuotaTarget = input.TaskQuota
+				input.FundingDelta = 0
+				return task.UpdateWithStatusAndManualSettlement(TaskStatusInProgress, expectedUpdatedAt, input, "provider usage is missing")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			truncateTables(t)
+			task := &Task{TaskID: "settlement-intent-error", Status: TaskStatusInProgress, Quota: 800}
+			insertTask(t, task)
+			expectedUpdatedAt := task.UpdatedAt
+			operationKey := BillingTaskFinalizeOperationKey(task.ID)
+
+			callbackName := "test:settlement-intent-error-" + test.name
+			forcedErr := errors.New("forced settlement create error")
+			require.NoError(t, DB.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+				_ = tx.AddError(forcedErr)
+			}))
+			t.Cleanup(func() { _ = DB.Callback().Create().Remove(callbackName) })
+
+			won, err := test.call(task, expectedUpdatedAt, BillingSettlementInput{
+				OperationKey: operationKey, Source: BillingSettlementSourceWallet,
+				UserID: 1, TaskID: task.ID, TaskQuota: 800, TaskQuotaTarget: 500,
+				FundingDelta: -300,
+			})
+			require.ErrorContains(t, err, forcedErr.Error())
+			require.False(t, won)
+			require.Equal(t, expectedUpdatedAt, task.UpdatedAt)
+
+			var stored Task
+			require.NoError(t, DB.First(&stored, task.ID).Error)
+			require.Equal(t, expectedUpdatedAt, stored.UpdatedAt)
+			var count int64
+			require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", operationKey).Count(&count).Error)
+			require.Zero(t, count)
+		})
+	}
 }
