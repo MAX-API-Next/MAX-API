@@ -196,7 +196,7 @@ func TestAppliedTaskRecoveryPropagatesUpdateError(t *testing.T) {
 	callbackName := "test:task-recovery-update-error"
 	forcedErr := errors.New("forced task recovery update error")
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
-		tx.AddError(forcedErr)
+		_ = tx.AddError(forcedErr)
 	}))
 	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove(callbackName) })
 

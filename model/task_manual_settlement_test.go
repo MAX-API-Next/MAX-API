@@ -62,7 +62,7 @@ func TestUpdateWithStatusAndPendingTerminalEvidencePropagatesError(t *testing.T)
 	callbackName := "test:pending-terminal-evidence-update-error"
 	forcedErr := errors.New("forced pending terminal evidence update error")
 	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
-		tx.AddError(forcedErr)
+		_ = tx.AddError(forcedErr)
 	}))
 	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
 

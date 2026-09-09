@@ -388,7 +388,7 @@ func TestCompleteManualTaskBillingSettlementPropagatesFinalTaskReadFailure(t *te
 	beforeCallbackName := "test:manual-completion-final-task-read-before"
 	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(beforeCallbackName, func(tx *gorm.DB) {
 		if tx.Statement != nil && tx.Statement.Table == "tasks" && childSettlementApplied {
-			tx.AddError(finalReadErr)
+			_ = tx.AddError(finalReadErr)
 			childSettlementApplied = false
 		}
 	}))
