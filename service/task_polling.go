@@ -56,6 +56,14 @@ var timedOutTaskSweepCursor struct {
 	afterID         int64
 }
 
+type appliedTaskRecoveryOutcome uint8
+
+const (
+	appliedTaskRecoveryNoEvidence appliedTaskRecoveryOutcome = iota
+	appliedTaskRecoveryUpdated
+	appliedTaskRecoveryCASLost
+)
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -80,7 +88,25 @@ func sweepTimedOutTasks(ctx context.Context) {
 			if remaining <= 0 {
 				break
 			}
-			if recoverAppliedTaskTerminalEvidence(task) || markAppliedTaskEvidenceMissing(task, now) {
+			recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(task)
+			if recoveryErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize terminal recovery error for task %s: %v", task.TaskID, recoveryErr))
+				continue
+			}
+			if recoveryOutcome == appliedTaskRecoveryCASLost {
+				continue
+			}
+			if recoveryOutcome == appliedTaskRecoveryNoEvidence {
+				recoveryOutcome, recoveryErr = markAppliedTaskEvidenceMissing(task, now)
+				if recoveryErr != nil {
+					logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize evidence disposition error for task %s: %v", task.TaskID, recoveryErr))
+					continue
+				}
+				if recoveryOutcome == appliedTaskRecoveryCASLost {
+					continue
+				}
+			}
+			if recoveryOutcome == appliedTaskRecoveryUpdated {
 				remaining--
 			}
 		}
@@ -120,9 +146,30 @@ func sweepTimedOutTasks(ctx context.Context) {
 				// legacy applied rows without evidence retain the historical timeout
 				// path so they cannot be stranded.
 				if taskFinalizeApplied {
-					if recoverAppliedTaskTerminalEvidence(task) {
+					latestTask, reloadErr := model.GetTaskByID(task.ID)
+					if reloadErr != nil {
+						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize task reload error for task %s: %v", task.TaskID, reloadErr))
 						continue
 					}
+					if latestTask.Status == model.TaskStatusFailure || latestTask.Status == model.TaskStatusSuccess {
+						continue
+					}
+					recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(latestTask)
+					if recoveryErr != nil {
+						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize terminal recovery error for task %s: %v", task.TaskID, recoveryErr))
+						continue
+					}
+					if recoveryOutcome == appliedTaskRecoveryNoEvidence {
+						recoveryOutcome, recoveryErr = markAppliedTaskEvidenceMissing(latestTask, now)
+						if recoveryErr != nil {
+							logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize evidence disposition error for task %s: %v", task.TaskID, recoveryErr))
+							continue
+						}
+					}
+					if recoveryOutcome == appliedTaskRecoveryUpdated {
+						remaining--
+					}
+					continue
 				} else {
 					continue
 				}
@@ -725,36 +772,41 @@ func persistPendingTaskTerminalEvidence(task *model.Task, result *relaycommon.Ta
 	task.IncludePrivateDataInUpdate()
 }
 
-func recoverAppliedTaskTerminalEvidence(task *model.Task) bool {
-	if task == nil {
-		return false
+func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOutcome, error) {
+	if task == nil || task.ID <= 0 {
+		return appliedTaskRecoveryNoEvidence, errors.New("applied-finalize task is required")
 	}
 	pending := task.PrivateData.PendingTerminalStatus
 	if pending != model.TaskStatusSuccess && pending != model.TaskStatusFailure {
-		return false
+		return appliedTaskRecoveryNoEvidence, nil
 	}
-	oldStatus := task.Status
-	task.Status = pending
-	task.Progress = task.PrivateData.PendingTerminalProgress
-	if task.Progress == "" {
-		task.Progress = taskcommon.ProgressComplete
+	// Stage all changes on a copy. A lost CAS must leave the caller's snapshot
+	// untouched so it cannot be mistaken for missing evidence and overwritten.
+	candidate := *task
+	oldStatus := candidate.Status
+	candidate.Status = pending
+	candidate.Progress = candidate.PrivateData.PendingTerminalProgress
+	if candidate.Progress == "" {
+		candidate.Progress = taskcommon.ProgressComplete
 	}
-	task.FinishTime = task.PrivateData.PendingTerminalFinishTime
-	if task.FinishTime == 0 {
-		task.FinishTime = time.Now().Unix()
+	candidate.FinishTime = candidate.PrivateData.PendingTerminalFinishTime
+	if candidate.FinishTime == 0 {
+		candidate.FinishTime = time.Now().Unix()
 	}
-	task.FailReason = task.PrivateData.PendingTerminalReason
-	if pending == model.TaskStatusSuccess && task.PrivateData.PendingTerminalResultURL != "" {
-		task.PrivateData.ResultURL = task.PrivateData.PendingTerminalResultURL
+	candidate.FailReason = candidate.PrivateData.PendingTerminalReason
+	if pending == model.TaskStatusSuccess && candidate.PrivateData.PendingTerminalResultURL != "" {
+		candidate.PrivateData.ResultURL = candidate.PrivateData.PendingTerminalResultURL
 	}
-	task.PrivateData.PendingTerminalStatus = ""
-	task.PrivateData.PendingTerminalProgress = ""
-	task.PrivateData.PendingTerminalFinishTime = 0
-	task.PrivateData.PendingTerminalReason = ""
-	task.PrivateData.PendingTerminalResultURL = ""
-	task.IncludePrivateDataInUpdate()
-	won, err := task.UpdateWithStatus(oldStatus)
-	return err == nil && won
+	clearPendingTaskTerminalEvidence(&candidate)
+	won, err := candidate.UpdateWithStatus(oldStatus)
+	if err != nil {
+		return appliedTaskRecoveryNoEvidence, err
+	}
+	if !won {
+		return appliedTaskRecoveryCASLost, nil
+	}
+	*task = candidate
+	return appliedTaskRecoveryUpdated, nil
 }
 
 func clearPendingTaskTerminalEvidence(task *model.Task) {
@@ -769,18 +821,28 @@ func clearPendingTaskTerminalEvidence(task *model.Task) {
 	task.IncludePrivateDataInUpdate()
 }
 
-func markAppliedTaskEvidenceMissing(task *model.Task, now int64) bool {
+func markAppliedTaskEvidenceMissing(task *model.Task, now int64) (appliedTaskRecoveryOutcome, error) {
 	if task == nil || task.ID <= 0 {
-		return false
+		return appliedTaskRecoveryNoEvidence, errors.New("applied-finalize task is required")
 	}
-	oldStatus := task.Status
-	task.Status = model.TaskStatusFailure
-	task.Progress = taskcommon.ProgressComplete
-	task.FinishTime = now
-	task.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
-	clearPendingTaskTerminalEvidence(task)
-	won, err := task.UpdateWithStatus(oldStatus)
-	return err == nil && won
+	// Use the same copy-and-CAS discipline as terminal recovery. This preserves
+	// a concurrently published terminal state when the CAS is lost.
+	candidate := *task
+	oldStatus := candidate.Status
+	candidate.Status = model.TaskStatusFailure
+	candidate.Progress = taskcommon.ProgressComplete
+	candidate.FinishTime = now
+	candidate.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
+	clearPendingTaskTerminalEvidence(&candidate)
+	won, err := candidate.UpdateWithStatus(oldStatus)
+	if err != nil {
+		return appliedTaskRecoveryNoEvidence, err
+	}
+	if !won {
+		return appliedTaskRecoveryCASLost, nil
+	}
+	*task = candidate
+	return appliedTaskRecoveryUpdated, nil
 }
 
 func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskResult *relaycommon.TaskInfo) error {

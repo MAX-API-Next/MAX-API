@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 type sunoPollingResponseAdaptor struct {
@@ -144,6 +145,76 @@ func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *te
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
 	assert.Equal(t, "https://cdn.example.com/polled.mp4", reloaded.PrivateData.ResultURL)
+}
+
+func TestAppliedTaskRecoveryPreservesSnapshotOnCASLoss(t *testing.T) {
+	truncate(t)
+	task := &model.Task{
+		TaskID:   "task_recovery_cas_loss",
+		Status:   model.TaskStatusInProgress,
+		Progress: "50%",
+		PrivateData: model.TaskPrivateData{
+			PendingTerminalStatus:    model.TaskStatusSuccess,
+			PendingTerminalProgress:  "100%",
+			PendingTerminalResultURL: "https://cdn.example.com/cas-loss.mp4",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("status", model.TaskStatusSuccess).Error)
+
+	outcome, err := recoverAppliedTaskTerminalEvidence(task)
+	require.NoError(t, err)
+	assert.Equal(t, appliedTaskRecoveryCASLost, outcome)
+	assert.EqualValues(t, model.TaskStatusInProgress, task.Status)
+	assert.EqualValues(t, model.TaskStatusSuccess, task.PrivateData.PendingTerminalStatus)
+	assert.Equal(t, "https://cdn.example.com/cas-loss.mp4", task.PrivateData.PendingTerminalResultURL)
+
+	task = &model.Task{
+		TaskID: "task_missing_evidence_cas_loss",
+		Status: model.TaskStatusInProgress,
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("status", model.TaskStatusSuccess).Error)
+
+	outcome, err = markAppliedTaskEvidenceMissing(task, time.Now().Unix())
+	require.NoError(t, err)
+	assert.Equal(t, appliedTaskRecoveryCASLost, outcome)
+	assert.EqualValues(t, model.TaskStatusInProgress, task.Status)
+}
+
+func TestAppliedTaskRecoveryPropagatesUpdateError(t *testing.T) {
+	truncate(t)
+	task := &model.Task{
+		TaskID: "task_recovery_update_error",
+		Status: model.TaskStatusInProgress,
+		PrivateData: model.TaskPrivateData{
+			PendingTerminalStatus: model.TaskStatusSuccess,
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	callbackName := "test:task-recovery-update-error"
+	forcedErr := errors.New("forced task recovery update error")
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		tx.AddError(forcedErr)
+	}))
+	t.Cleanup(func() { _ = model.DB.Callback().Update().Remove(callbackName) })
+
+	outcome, err := recoverAppliedTaskTerminalEvidence(task)
+	assert.ErrorIs(t, err, forcedErr)
+	assert.Equal(t, appliedTaskRecoveryNoEvidence, outcome)
+	assert.EqualValues(t, model.TaskStatusInProgress, task.Status)
+	assert.EqualValues(t, model.TaskStatusSuccess, task.PrivateData.PendingTerminalStatus)
+
+	missingEvidenceTask := &model.Task{
+		TaskID: "task_missing_evidence_update_error",
+		Status: model.TaskStatusInProgress,
+	}
+	require.NoError(t, model.DB.Create(missingEvidenceTask).Error)
+	outcome, err = markAppliedTaskEvidenceMissing(missingEvidenceTask, time.Now().Unix())
+	assert.ErrorIs(t, err, forcedErr)
+	assert.Equal(t, appliedTaskRecoveryNoEvidence, outcome)
+	assert.EqualValues(t, model.TaskStatusInProgress, missingEvidenceTask.Status)
 }
 
 func TestUpdateVideoTasksLeavesChargedTasksPendingWhenChannelCacheFails(t *testing.T) {

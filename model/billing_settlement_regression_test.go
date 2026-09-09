@@ -626,6 +626,61 @@ func TestReviewBillingSettlementRefusesToOverwriteManualTaskCompletion(t *testin
 	assert.Equal(t, record.ReconciliationReviewNote, stored.ReconciliationReviewNote)
 }
 
+func TestReviewBillingSettlementAllowsFundedManualTaskFinalize(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	now := time.Now().Unix()
+	records := []BillingSettlement{
+		{
+			OperationKey:    BillingTaskFinalizeOperationKey(9831),
+			Source:          BillingSettlementSourceWallet,
+			UserID:          9832,
+			TaskID:          9831,
+			TaskQuota:       100,
+			TaskQuotaTarget: 40,
+			FundingDelta:    -60,
+			TokenDelta:      -60,
+			Status:          BillingSettlementStatusManual,
+			LastError:       "task quota mirror conflict",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			Revision:        1,
+		},
+		{
+			OperationKey:    BillingTaskFinalizeOperationKey(9833),
+			Source:          BillingSettlementSourceWallet,
+			UserID:          9834,
+			TaskID:          9833,
+			TaskQuota:       100,
+			TaskQuotaTarget: 40,
+			FundingDelta:    -60,
+			TokenDelta:      -60,
+			Status:          BillingSettlementStatusManual,
+			LastError:       "task quota mirror conflict",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			Revision:        1,
+		},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	reconciliation, err := GetUnresolvedPositiveFinalizeSettlements(100)
+	require.NoError(t, err)
+	require.Len(t, reconciliation.Items, 2)
+	for _, item := range reconciliation.Items {
+		assert.False(t, item.RequiresManualCompletion, "funded manual task-finalize records are not zero-delta completion markers")
+	}
+
+	reviewed, err := ReviewBillingSettlement(records[0].ID, 9835, false, "Reviewed funded task settlement")
+	require.NoError(t, err)
+	assert.Equal(t, BillingSettlementStatusManual, reviewed.Status)
+
+	reviewedBatch, err := ReviewBillingSettlements([]BillingSettlementReviewTarget{{ID: records[1].ID, Revision: records[1].Revision}}, 9836)
+	require.NoError(t, err)
+	require.Len(t, reviewedBatch, 1)
+	assert.Equal(t, BillingSettlementStatusManual, reviewedBatch[0].Status)
+}
+
 func TestResolveManualTaskBillingSettlementRequiresMatchingAppliedChild(t *testing.T) {
 	setupUserUpdateTestState(t)
 

@@ -468,7 +468,11 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			items[index].ReconciliationReviewNote = common.SanitizePersistedLogContent(
 				common.MaskSensitiveInfo(items[index].ReconciliationReviewNote),
 			)
-			items[index].RequiresManualCompletion = billingSettlementRequiresManualTaskCompletion(items[index].Status, items[index].TaskID, items[index].OperationKey)
+			items[index].RequiresManualCompletion = billingSettlementRequiresManualTaskCompletion(BillingSettlement{
+				Status: items[index].Status, TaskID: items[index].TaskID, OperationKey: items[index].OperationKey,
+				FundingDelta: items[index].FundingDelta, TokenDelta: items[index].TokenDelta,
+				TaskQuota: items[index].TaskQuota, TaskQuotaTarget: items[index].TaskQuotaTarget,
+			})
 			items[index].RecordBlocksUser = items[index].FundingDelta > 0 &&
 				strings.HasPrefix(items[index].OperationKey, billingRequestOperationPrefix) &&
 				strings.HasSuffix(items[index].OperationKey, billingRequestFinalizeSuffix) &&
@@ -514,10 +518,13 @@ func billingSettlementBlocksUser(override *bool, blockUserByDefault bool) bool {
 	return blockUserByDefault
 }
 
-func billingSettlementRequiresManualTaskCompletion(status string, taskID int64, operationKey string) bool {
-	return status == BillingSettlementStatusManual &&
-		taskID > 0 &&
-		operationKey == BillingTaskFinalizeOperationKey(taskID)
+func billingSettlementRequiresManualTaskCompletion(record BillingSettlement) bool {
+	return record.Status == BillingSettlementStatusManual &&
+		record.TaskID > 0 &&
+		record.OperationKey == BillingTaskFinalizeOperationKey(record.TaskID) &&
+		record.FundingDelta == 0 &&
+		record.TokenDelta == 0 &&
+		record.TaskQuotaTarget == record.TaskQuota
 }
 
 // HasUnresolvedPositiveFinalizeSettlement reports whether a user has an
@@ -595,7 +602,7 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 		for _, target := range sortedTargets {
 			var current BillingSettlement
 			if err := withRowLock(openBillingReconciliationAlertScope(tx)).
-				Select("id", "revision", "status", "task_id", "operation_key").
+				Select("id", "revision", "status", "task_id", "operation_key", "funding_delta", "token_delta", "task_quota", "task_quota_target").
 				Where("id = ? AND revision = ?", target.ID, target.Revision).
 				First(&current).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -603,7 +610,7 @@ func ReviewBillingSettlements(targets []BillingSettlementReviewTarget, reviewerI
 				}
 				return err
 			}
-			if billingSettlementRequiresManualTaskCompletion(current.Status, current.TaskID, current.OperationKey) {
+			if billingSettlementRequiresManualTaskCompletion(current) {
 				return ErrBillingSettlementCompletionRequired
 			}
 			if billingSettlementIsManualTaskCompletion(current.OperationKey, current.TaskID) {
@@ -678,6 +685,10 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 		"status",
 		"user_id",
 		"task_id",
+		"funding_delta",
+		"token_delta",
+		"task_quota",
+		"task_quota_target",
 		"revision",
 		"reconciliation_reviewed_at",
 		"reconciliation_reviewed_by",
@@ -689,7 +700,7 @@ func ReviewBillingSettlement(id int64, reviewerID int, blockUser bool, note stri
 		}
 		return BillingSettlement{}, err
 	}
-	if billingSettlementRequiresManualTaskCompletion(record.Status, record.TaskID, record.OperationKey) {
+	if billingSettlementRequiresManualTaskCompletion(record) {
 		return BillingSettlement{}, ErrBillingSettlementCompletionRequired
 	}
 	if billingSettlementIsManualTaskCompletion(record.OperationKey, record.TaskID) {
