@@ -202,6 +202,7 @@ type BillingSettlementReconciliationItem struct {
 	TaskQuota                int64  `json:"task_quota"`
 	TaskQuotaTarget          int64  `json:"task_quota_target"`
 	RequiresManualCompletion bool   `json:"requires_manual_completion"`
+	ZeroQuotaEligible        bool   `json:"zero_quota_eligible"`
 	FundingDelta             int64  `json:"funding_delta"`
 	AppliedFundingDelta      int64  `json:"applied_funding_delta"`
 	TokenDelta               int64  `json:"token_delta"`
@@ -460,6 +461,22 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			data.Truncated = true
 			items = items[:limit]
 		}
+		taskIDs := make([]int64, 0, len(items))
+		for _, item := range items {
+			if item.TaskID > 0 {
+				taskIDs = append(taskIDs, item.TaskID)
+			}
+		}
+		tasksByID := make(map[int64]*Task, len(taskIDs))
+		if len(taskIDs) > 0 {
+			var tasks []Task
+			if err := tx.Select("id", "properties", "private_data").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
+				return err
+			}
+			for index := range tasks {
+				tasksByID[tasks[index].ID] = &tasks[index]
+			}
+		}
 		displayedUserIDs := make([]int, 0, len(items))
 		for index := range items {
 			items[index].LastError = common.SanitizePersistedLogContent(
@@ -473,6 +490,9 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 				FundingDelta: items[index].FundingDelta, TokenDelta: items[index].TokenDelta,
 				TaskQuota: items[index].TaskQuota, TaskQuotaTarget: items[index].TaskQuotaTarget,
 			})
+			if items[index].RequiresManualCompletion {
+				items[index].ZeroQuotaEligible = IsMiniMaxH3Task(tasksByID[items[index].TaskID])
+			}
 			items[index].RecordBlocksUser = items[index].FundingDelta > 0 &&
 				strings.HasPrefix(items[index].OperationKey, billingRequestOperationPrefix) &&
 				strings.HasSuffix(items[index].OperationKey, billingRequestFinalizeSuffix) &&

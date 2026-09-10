@@ -21,7 +21,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota } from '@/lib/format'
+import { formatNumber, formatQuota } from '@/lib/format'
+import { useSystemConfig } from '@/hooks/use-system-config'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -62,6 +63,7 @@ export function ManualTaskSettlementDialog(
   props: ManualTaskSettlementDialogProps
 ): ReactElement {
   const { t } = useTranslation()
+  const { currency } = useSystemConfig()
   const item = props.item
   const form = useForm<ManualTaskSettlementFormValues>({
     resolver: zodResolver(
@@ -151,8 +153,9 @@ export function ManualTaskSettlementDialog(
                         />
                         <FieldDescription>
                           {t(
-                            'Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.',
+                            'Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.',
                             {
+                              quotaPerUnit: formatNumber(currency.quotaPerUnit),
                               quota: formatQuota(item.task_quota),
                             }
                           )}

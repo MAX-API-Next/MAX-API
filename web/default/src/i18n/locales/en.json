@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "Task #{{id}} · reserved {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.",
     "Exact final quota": "Exact final quota",
-    "Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.": "Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.",
     "Apply exact settlement": "Apply exact settlement",
     "{{count}} attempt": "{{count}} attempt",
     "{{count}} attempts": "{{count}} attempts",

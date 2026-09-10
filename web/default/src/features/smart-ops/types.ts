@@ -54,6 +54,7 @@ export type BillingSettlementReconciliationItem = {
   task_quota: number
   task_quota_target: number
   requires_manual_completion: boolean
+  zero_quota_eligible?: boolean
   funding_delta: number
   applied_funding_delta: number
   token_delta: number
@@ -116,7 +117,8 @@ export type ManualTaskBillingBatchCompletionData = {
 
 export type ManualTaskBillingBatchFailure = {
   settlement_id: number
-  message: string
+  code?: string
+  message?: string
 }
 
 export type BillingSettlementReconciliationResponse = {

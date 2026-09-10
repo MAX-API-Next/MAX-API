@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "Tâche nº {{id}} · quota réservé : {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Seul un quota exact fondé sur des données fournisseur vérifiées est autorisé. Ce processus ne peut pas ajouter de frais au-delà de la réservation initiale.",
     "Exact final quota": "Quota final exact",
-    "Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.": "Saisissez la valeur du quota. 500 000 quota = 1 $. Plage autorisée : de 0 à {{quota}}.",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "Saisissez la valeur du quota. {{quotaPerUnit}} quota = 1 $. Plage autorisée : de 0 à {{quota}}.",
     "Apply exact settlement": "Appliquer le règlement exact",
     "{{count}} attempt": "{{count}} tentative",
     "{{count}} attempts": "{{count}} tentatives",

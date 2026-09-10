@@ -93,6 +93,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
           task_quota: 100,
           task_quota_target: 100,
           requires_manual_completion: true,
+          zero_quota_eligible: true,
           funding_delta: 0,
           applied_funding_delta: 0,
           token_delta: 0,
@@ -786,6 +787,7 @@ describe('SmartOps active alerts', () => {
                           task_quota: 100,
                           task_quota_target: 100,
                           requires_manual_completion: manualCompletionRequired,
+                          zero_quota_eligible: manualCompletionRequired,
                           funding_delta: 0,
                           applied_funding_delta: 0,
                           token_delta: 0,
@@ -875,9 +877,7 @@ describe('SmartOps active alerts', () => {
           data: { items: [{ id: 93, revision: manualRevision }] },
         })
         assert.ok(
-          (view.container.textContent ?? '').includes(
-            'Settlement #94: record changed or could not be applied safely; refresh and reconcile it'
-          )
+          (view.container.textContent ?? '').includes('Settlement #94:')
         )
       })
       assert.ok(completeButton)

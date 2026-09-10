@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "Tác vụ #{{id}} · đã dự phòng {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Chỉ cho phép hạn mức chính xác dựa trên bằng chứng đã xác minh từ nhà cung cấp. Quy trình này không thể tính thêm phí vượt quá mức dự phòng ban đầu.",
     "Exact final quota": "Hạn mức cuối cùng chính xác",
-    "Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.": "Nhập giá trị quota. 500.000 quota = $1. Phạm vi cho phép: từ 0 đến {{quota}}.",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "Nhập giá trị quota. {{quotaPerUnit}} quota = $1. Phạm vi cho phép: từ 0 đến {{quota}}.",
     "Apply exact settlement": "Áp dụng quyết toán chính xác",
     "{{count}} attempt": "{{count}} lần thử",
     "{{count}} attempts": "{{count}} lần thử",

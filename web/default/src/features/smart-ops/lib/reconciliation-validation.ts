@@ -36,6 +36,7 @@ const billingSettlementReconciliationItemSchema: z.ZodType<BillingSettlementReco
     task_quota: z.number().int().safe().nonnegative(),
     task_quota_target: z.number().int().safe().nonnegative(),
     requires_manual_completion: z.boolean(),
+    zero_quota_eligible: z.boolean().optional(),
     funding_delta: z.number().int().safe(),
     applied_funding_delta: z.number().int().safe(),
     token_delta: z.number().int().safe(),

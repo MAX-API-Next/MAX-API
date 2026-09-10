@@ -24,7 +24,7 @@ func newTaskBillingContractFixture(t *testing.T, db *gorm.DB, number int, source
 	t.Helper()
 	label := fmt.Sprintf("tb%04d", number)
 	f := taskBillingContractFixture{
-		user:    User{Username: label, AffCode: label, Password: "synthetic-fixture", Quota: 900},
+		user:    User{Username: label, AffCode: label, Quota: 900},
 		channel: Channel{Name: label, Key: "synthetic-fixture"},
 	}
 	taskBillingTestCheck(t, db.Create(&f.user).Error, "create fixture user")

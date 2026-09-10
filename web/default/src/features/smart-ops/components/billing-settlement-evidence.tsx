@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useMemo, useState, type ReactElement } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -54,6 +55,44 @@ import type {
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
 import { ManualTaskSettlementDialog } from './manual-task-settlement-dialog'
+
+function formatBatchFailureMessage(
+  failure: ManualTaskBillingBatchFailure,
+  t: TFunction
+): string {
+  const code =
+    failure.code ??
+    (failure.message ===
+    'record changed or could not be applied safely; refresh and reconcile it'
+      ? 'record_conflict'
+      : undefined)
+  switch (code) {
+    case 'minimax_h3_required':
+      return t(
+        'Only MiniMax-H3 task settlements can use the zero-quota batch action'
+      )
+    case 'record_conflict':
+      return t(
+        'manual task billing settlement could not be applied safely; refresh and reconcile the current record'
+      )
+    case 'token_quota_inconsistent':
+      return t(
+        'the token quota mirror is inconsistent; repair the token record before completing this settlement'
+      )
+    case 'subscription_refund_clamped':
+      return t(
+        'the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement'
+      )
+    case 'subscription_reservation_invalid':
+      return t(
+        'the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation'
+      )
+    case 'manual_review_required':
+      return t('record still requires a manual financial review')
+    default:
+      return t('Failed to complete manual task billing.')
+  }
+}
 
 interface BillingSettlementEvidenceProps {
   canCompleteManualTask: boolean
@@ -262,7 +301,7 @@ export function BillingSettlementEvidence(
       )
     )
     const manual = selectedItems.filter(
-      (item) => item.requires_manual_completion
+      (item) => item.zero_quota_eligible === true
     )
     const ordinary = selectedItems.filter(
       (item) => !item.requires_manual_completion
@@ -514,7 +553,7 @@ export function BillingSettlementEvidence(
                       <li key={`${failure.settlement_id}:${failure.message}`}>
                         {t('Settlement #{{id}}: {{message}}', {
                           id: failure.settlement_id,
-                          message: failure.message,
+                          message: formatBatchFailureMessage(failure, t),
                         })}
                       </li>
                     ))}

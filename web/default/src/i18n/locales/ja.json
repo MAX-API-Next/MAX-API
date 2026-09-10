@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "タスク #{{id}} · 予約済み {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "検証済みのプロバイダー証拠に基づく正確なクォータのみ許可されます。この手順では元の予約額を超える追加課金はできません。",
     "Exact final quota": "正確な最終クォータ",
-    "Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.": "quota の値を入力してください。500,000 quota = $1。許可範囲：0 ～ {{quota}}。",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "quota の値を入力してください。{{quotaPerUnit}} quota = $1。許可範囲：0 ～ {{quota}}。",
     "Apply exact settlement": "正確な精算を適用",
     "{{count}} attempt": "{{count}} 回の試行",
     "{{count}} attempts": "{{count}} 回の試行",

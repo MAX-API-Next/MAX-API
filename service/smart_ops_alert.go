@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
-	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
@@ -22,6 +21,7 @@ import (
 
 var ErrInvalidBillingSettlementReconciliationQuery = errors.New("invalid billing settlement reconciliation query")
 var ErrInvalidBillingSettlementReconciliationReview = errors.New("invalid billing settlement reconciliation review")
+var errManualTaskBillingZeroQuotaRequiresMiniMaxH3 = errors.New("only MiniMax-H3 task settlements can use the zero-quota batch action")
 
 const manualTaskBillingDefaultNote = "Administrator-approved manual task usage settlement"
 const manualTaskBillingZeroNote = "Administrator-confirmed zero final quota settlement"
@@ -438,7 +438,9 @@ type ManualTaskBillingCompletionResult struct {
 
 type ManualTaskBillingBatchFailure struct {
 	SettlementID int64  `json:"settlement_id"`
-	Message      string `json:"message"`
+	Code         string `json:"code"`
+	// Message is retained for older clients; new clients must translate Code.
+	Message string `json:"message,omitempty"`
 }
 
 type ManualTaskBillingBatchCompletionResult struct {
@@ -465,27 +467,6 @@ func normalizeManualTaskBillingNote(note string) (string, error) {
 
 func isGeneratedManualTaskBillingNote(note string) bool {
 	return note == manualTaskBillingDefaultNote || note == manualTaskBillingZeroNote
-}
-
-func taskUsesMiniMaxH3(task *model.Task) bool {
-	if task == nil {
-		return false
-	}
-	// A persisted effective upstream model is authoritative. Do not let a
-	// client-facing H3 alias bypass a mapping to a legacy non-H3 protocol.
-	if upstream := strings.TrimSpace(task.Properties.UpstreamModelName); upstream != "" {
-		return strings.EqualFold(upstream, constant.TaskModelMiniMaxH3)
-	}
-	names := []string{task.Properties.OriginModelName}
-	if billingContext := task.PrivateData.BillingContext; billingContext != nil {
-		names = append(names, billingContext.OriginModelName)
-	}
-	for _, name := range names {
-		if strings.EqualFold(strings.TrimSpace(name), constant.TaskModelMiniMaxH3) {
-			return true
-		}
-	}
-	return false
 }
 
 // CompleteManualTaskBillingSettlement applies an administrator-approved exact
@@ -554,8 +535,11 @@ func completeManualTaskBillingSettlement(
 		}
 		return ManualTaskBillingCompletionResult{}, err
 	}
-	if requireMiniMaxH3 && !taskUsesMiniMaxH3(task) {
-		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	if requireMiniMaxH3 && !model.IsMiniMaxH3Task(task) {
+		return ManualTaskBillingCompletionResult{}, errors.Join(
+			model.ErrBillingSettlementReviewConflict,
+			errManualTaskBillingZeroQuotaRequiresMiniMaxH3,
+		)
 	}
 	expectedSource := model.BillingSettlementSourceWallet
 	if taskIsSubscription(task) {
@@ -672,38 +656,20 @@ func CompleteManualTaskBillingSettlementsZero(
 			return ManualTaskBillingBatchCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
 		}
 		seen[target.ID] = struct{}{}
-		original, _, lookupErr := model.GetManualTaskBillingSettlement(target.ID, target.Revision)
-		if lookupErr == nil {
-			task, taskErr := model.GetTaskByID(original.TaskID)
-			if taskErr != nil || !taskUsesMiniMaxH3(task) {
-				result.FailedCount++
-				result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-					SettlementID: target.ID,
-					Message:      "only MiniMax-H3 task settlements can use the zero-quota batch action",
-				})
-				continue
-			}
-		} else {
-			result.FailedCount++
-			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-				SettlementID: target.ID,
-				Message:      manualTaskBillingBatchErrorMessage(lookupErr),
-			})
-			continue
-		}
-		actualQuota := int64(0)
 		if _, err := completeManualTaskBillingSettlement(
 			target.ID,
 			target.Revision,
 			reviewerID,
-			&actualQuota,
+			ptrInt64(0),
 			manualTaskBillingZeroNote,
 			true,
 		); err != nil {
 			result.FailedCount++
+			code := manualTaskBillingBatchErrorCode(err)
 			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
 				SettlementID: target.ID,
-				Message:      manualTaskBillingBatchErrorMessage(err),
+				Code:         code,
+				Message:      manualTaskBillingBatchErrorMessage(code),
 			})
 			continue
 		}
@@ -713,20 +679,45 @@ func CompleteManualTaskBillingSettlementsZero(
 	return result, nil
 }
 
-func manualTaskBillingBatchErrorMessage(err error) string {
+func ptrInt64(value int64) *int64 {
+	return &value
+}
+
+func manualTaskBillingBatchErrorCode(err error) string {
 	switch {
+	case errors.Is(err, errManualTaskBillingZeroQuotaRequiresMiniMaxH3):
+		return "minimax_h3_required"
 	case errors.Is(err, model.ErrBillingSettlementReviewConflict),
 		errors.Is(err, model.ErrBillingSettlementTaskConflict),
 		errors.Is(err, model.ErrBillingSettlementOperationConflict):
-		return "record changed or could not be applied safely; refresh and reconcile it"
+		return "record_conflict"
 	case errors.Is(err, model.ErrBillingSettlementManualReview):
-		return "record still requires a manual financial review"
+		return "manual_review_required"
 	case errors.Is(err, model.ErrTokenQuotaInsufficient):
-		return "the token quota mirror is inconsistent; repair the token record"
+		return "token_quota_inconsistent"
 	case errors.Is(err, model.ErrSubscriptionRefundClamped):
-		return "the subscription usage mirror is lower than the refund"
+		return "subscription_refund_clamped"
 	case errors.Is(err, model.ErrSubscriptionSettlementUnbound),
 		errors.Is(err, model.ErrSubscriptionSettlementPeriodChanged):
+		return "subscription_reservation_invalid"
+	default:
+		return "settlement_failed"
+	}
+}
+
+func manualTaskBillingBatchErrorMessage(code string) string {
+	switch code {
+	case "minimax_h3_required":
+		return "only MiniMax-H3 task settlements can use the zero-quota batch action"
+	case "record_conflict":
+		return "record changed or could not be applied safely; refresh and reconcile it"
+	case "manual_review_required":
+		return "record still requires a manual financial review"
+	case "token_quota_inconsistent":
+		return "the token quota mirror is inconsistent; repair the token record"
+	case "subscription_refund_clamped":
+		return "the subscription usage mirror is lower than the refund"
+	case "subscription_reservation_invalid":
 		return "the subscription reservation is unbound or its period changed"
 	default:
 		return "manual task billing settlement failed; inspect the reconciliation record"
