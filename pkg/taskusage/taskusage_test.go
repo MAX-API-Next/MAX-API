@@ -88,6 +88,43 @@ func TestEvidenceDigestIsCanonicalAcrossProducerKindsAndFieldOrder(t *testing.T)
 	require.Equal(t, goEnvelope.ContractDigest, digest)
 }
 
+func TestEvidenceDigestIgnoresCanonicalFieldsOutsideFrozenContract(t *testing.T) {
+	contract := MiniMaxH3Contract()
+	output := int64(5_000)
+	video := int64(0)
+	audio := int64(0)
+	images := int64(1)
+	usage := &types.TaskUsage{
+		OutputDurationMs:     &output,
+		InputVideoDurationMs: &video,
+		InputAudioDurationMs: &audio,
+		InputImageCount:      &images,
+		Source:               types.TaskUsageSourceProviderResponse,
+		Completeness:         types.TaskUsageCompletenessComplete,
+	}
+	before, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, usage)
+	require.NoError(t, err)
+
+	// Constructing a later contract with an additional canonical field must not
+	// change the digest of the already-frozen contract.
+	later := contract
+	later.Fields = append(append([]types.TaskUsageFieldContract(nil), contract.Fields...), types.TaskUsageFieldContract{
+		Key: types.TaskUsageFieldInputVideoCount, Unit: types.TaskUsageUnitCount,
+		MinValue: int64Pointer(0),
+	})
+	laterEnvelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, later, types.TaskUsageSourceProviderResponse, usage)
+	require.NoError(t, err)
+
+	after, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, usage)
+	require.NoError(t, err)
+	require.Equal(t, before.EvidenceDigest, after.EvidenceDigest)
+	require.NotEqual(t, before.EvidenceDigest, laterEnvelope.EvidenceDigest)
+
+	legacy := types.CloneTaskUsageEnvelope(before)
+	legacy.EvidenceDigest = legacyEvidenceDigest(legacy.Stage, legacy.Presence, legacy.Completeness, legacy.Usage)
+	require.NoError(t, ValidateEnvelope(contract, legacy, types.TaskUsageProducerKindGoAdapter))
+}
+
 func TestValidateEnvelopeRejectsIdentityAndDigestTampering(t *testing.T) {
 	zero := int64(0)
 	envelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, DoubaoVideoContract(), types.TaskUsageSourceProviderResponse, &types.TaskUsage{

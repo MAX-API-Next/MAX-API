@@ -202,6 +202,7 @@ func TestH3TerminalDecisionFailsClosedOnUsageEnvelopeIdentityDrift(t *testing.T)
 
 	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, result, constant.ChannelTypeMiniMax)
 	require.True(t, decision.UsesPlan)
+	require.True(t, strings.HasPrefix(decision.ManualReason, "H3 terminal usage requires manual reconciliation:"))
 	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope identity")
 	require.NotNil(t, decision.Settlement)
 	require.Zero(t, decision.Settlement.FundingDelta)

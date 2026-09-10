@@ -425,7 +425,7 @@ func prepareTaskTerminalBillingDecision(
 		return decision
 	}
 	if err := validateTaskUsageEnvelopeForPlan(plan, usageEnvelope); err != nil {
-		decision.ManualReason = "H3 terminal usage contract requires manual reconciliation: " + err.Error()
+		decision.ManualReason = "H3 terminal usage requires manual reconciliation: usage contract: " + err.Error()
 		return decision
 	}
 	quote, err := task_billing_setting.QuoteH3Final(plan, usage)

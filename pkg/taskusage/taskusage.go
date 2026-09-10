@@ -15,7 +15,10 @@ const (
 	SourceIDDoubaoVideo = "doubao_video"
 )
 
-var canonicalFieldOrder = []string{
+// legacyEvidenceFieldOrder is the field order used by envelopes emitted before
+// evidence digests were scoped to the frozen contract. Keep it unchanged so
+// historical in-flight tasks remain verifiable after future schema additions.
+var legacyEvidenceFieldOrder = [...]string{
 	types.TaskUsageFieldOutputDurationMs,
 	types.TaskUsageFieldInputVideoDurationMs,
 	types.TaskUsageFieldInputAudioDurationMs,
@@ -155,7 +158,7 @@ func BuildEnvelope(producerKind string, contract types.TaskUsageContract, stage 
 		Completeness:   completeness,
 		Usage:          cloned,
 	}
-	envelope.EvidenceDigest = evidenceDigest(stage, presence, completeness, cloned)
+	envelope.EvidenceDigest = evidenceDigest(contract, stage, presence, completeness, cloned)
 	return envelope, nil
 }
 
@@ -179,8 +182,11 @@ func ValidateEnvelope(contract types.TaskUsageContract, envelope *types.TaskUsag
 		envelope.SchemaVersion != expected.SchemaVersion ||
 		envelope.ContractDigest != expected.ContractDigest ||
 		envelope.Presence != expected.Presence ||
-		envelope.Completeness != expected.Completeness ||
-		envelope.EvidenceDigest != expected.EvidenceDigest {
+		envelope.Completeness != expected.Completeness {
+		return fmt.Errorf("task usage envelope identity or digest mismatch")
+	}
+	if envelope.EvidenceDigest != expected.EvidenceDigest &&
+		envelope.EvidenceDigest != legacyEvidenceDigest(envelope.Stage, envelope.Presence, envelope.Completeness, envelope.Usage) {
 		return fmt.Errorf("task usage envelope identity or digest mismatch")
 	}
 	return nil
@@ -302,11 +308,26 @@ func usageValues(usage *types.TaskUsage) map[string]*int64 {
 	return values
 }
 
-func evidenceDigest(stage, presence, completeness string, usage *types.TaskUsage) string {
+func evidenceDigest(contract types.TaskUsageContract, stage, presence, completeness string, usage *types.TaskUsage) string {
+	values := usageValues(usage)
+	fields := append([]types.TaskUsageFieldContract(nil), contract.Fields...)
+	sort.Slice(fields, func(i, j int) bool { return fields[i].Key < fields[j].Key })
+	var canonical strings.Builder
+	fmt.Fprintf(&canonical, "stage=%s\npresence=%s\ncompleteness=%s\n", stage, presence, completeness)
+	for _, field := range fields {
+		fmt.Fprintf(&canonical, "%s=%s\n", field.Key, pointerString(values[field.Key]))
+	}
+	return sha256Hex(canonical.String())
+}
+
+// legacyEvidenceDigest accepts envelopes emitted before the digest was scoped
+// to the frozen contract. This keeps in-flight task evidence verifiable while
+// new envelopes remain stable when later contracts add fields.
+func legacyEvidenceDigest(stage, presence, completeness string, usage *types.TaskUsage) string {
 	values := usageValues(usage)
 	var canonical strings.Builder
 	fmt.Fprintf(&canonical, "stage=%s\npresence=%s\ncompleteness=%s\n", stage, presence, completeness)
-	for _, key := range canonicalFieldOrder {
+	for _, key := range legacyEvidenceFieldOrder {
 		fmt.Fprintf(&canonical, "%s=%s\n", key, pointerString(values[key]))
 	}
 	return sha256Hex(canonical.String())

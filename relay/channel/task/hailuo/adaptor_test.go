@@ -528,6 +528,10 @@ func TestProduceUsageReturnsAuditableH3Envelope(t *testing.T) {
 	require.Zero(t, *envelope.Usage.InputVideoDurationMs)
 	require.NotNil(t, envelope.Usage.InputAudioDurationMs)
 	require.Zero(t, *envelope.Usage.InputAudioDurationMs)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	require.EqualValues(t, 5_000, *envelope.Usage.OutputDurationMs)
+	require.NotNil(t, envelope.Usage.InputImageCount)
+	require.EqualValues(t, 1, *envelope.Usage.InputImageCount)
 }
 
 func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {

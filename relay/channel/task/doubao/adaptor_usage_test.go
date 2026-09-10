@@ -60,6 +60,11 @@ func TestParseTaskResultAttachesDoubaoUsageEnvelopeWithoutChangingLegacyTokens(t
 	require.Equal(t, 20, result.TotalTokens)
 	require.NotNil(t, result.UsageEnvelope)
 	require.Equal(t, types.TaskUsagePresencePresentValid, result.UsageEnvelope.Presence)
+	require.NotNil(t, result.UsageEnvelope.Usage)
+	require.NotNil(t, result.UsageEnvelope.Usage.CompletionTokens)
+	require.EqualValues(t, result.CompletionTokens, *result.UsageEnvelope.Usage.CompletionTokens)
+	require.NotNil(t, result.UsageEnvelope.Usage.TotalTokens)
+	require.EqualValues(t, result.TotalTokens, *result.UsageEnvelope.Usage.TotalTokens)
 }
 
 func TestParseTaskResultDoesNotLetNonObjectUsageHideTerminalResult(t *testing.T) {
