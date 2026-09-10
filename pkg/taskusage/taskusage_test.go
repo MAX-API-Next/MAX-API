@@ -34,6 +34,27 @@ func TestBuildEnvelopeDistinguishesAbsentAndExplicitZero(t *testing.T) {
 	require.NoError(t, ValidateEnvelope(contract, explicitZero, types.TaskUsageProducerKindGoAdapter))
 }
 
+func TestBuildEnvelopeRejectsCompletionTokensAboveTotalTokens(t *testing.T) {
+	contract := DoubaoVideoContract()
+	completion := int64(4)
+	total := int64(3)
+
+	for _, completeness := range []string{
+		types.TaskUsageCompletenessComplete,
+		types.TaskUsageCompletenessPartial,
+	} {
+		t.Run(completeness, func(t *testing.T) {
+			_, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+				CompletionTokens: &completion,
+				TotalTokens:      &total,
+				Source:           types.TaskUsageSourceProviderResponse,
+				Completeness:     completeness,
+			})
+			require.ErrorContains(t, err, "total tokens cannot be less than completion tokens")
+		})
+	}
+}
+
 func TestEvidenceDigestIsCanonicalAcrossProducerKindsAndFieldOrder(t *testing.T) {
 	contract := MiniMaxH3Contract()
 	output := int64(5_000)

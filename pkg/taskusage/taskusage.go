@@ -234,6 +234,13 @@ func validateUsage(contract types.TaskUsageContract, usage *types.TaskUsage, com
 			}
 		}
 	}
+	if completeness == types.TaskUsageCompletenessComplete || completeness == types.TaskUsageCompletenessPartial {
+		completionTokens := values[types.TaskUsageFieldCompletionTokens]
+		totalTokens := values[types.TaskUsageFieldTotalTokens]
+		if completionTokens != nil && totalTokens != nil && *totalTokens < *completionTokens {
+			return "", fmt.Errorf("total tokens cannot be less than completion tokens")
+		}
+	}
 
 	presentCount := 0
 	allZero := true
