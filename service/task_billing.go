@@ -460,7 +460,10 @@ func frozenTaskUsageEnvelope(task *model.Task, taskResult *relaycommon.TaskInfo)
 			taskResult != nil && taskResult.UsageEnvelope != nil &&
 			taskResult.UsageEnvelope.Stage == types.TaskUsageSourceProviderResponse &&
 			taskResult.UsageEnvelope.Completeness == types.TaskUsageCompletenessComplete {
-			return types.CloneTaskUsageEnvelope(taskResult.UsageEnvelope)
+			candidate := types.CloneTaskUsageEnvelope(taskResult.UsageEnvelope)
+			if err := validateTaskUsageEnvelopeForPlan(taskBillingPlan(task), candidate); err == nil {
+				return candidate
+			}
 		}
 		return types.CloneTaskUsageEnvelope(frozen)
 	}

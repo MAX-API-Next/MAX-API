@@ -208,6 +208,38 @@ func TestH3TerminalDecisionFailsClosedOnUsageEnvelopeIdentityDrift(t *testing.T)
 	require.Nil(t, decision.Settlement.Effect)
 }
 
+func TestFrozenTaskUsageEnvelopeKeepsMissingUntilReplacementMatchesPlan(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	missing, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		nil,
+	)
+	require.NoError(t, err)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = missing
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(0),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	mismatched := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	mismatched.SourceID = "unexpected-source"
+	selected := frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: mismatched})
+	require.Equal(t, missing.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessMissing, selected.Completeness)
+
+	valid := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	selected = frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: valid})
+	require.Equal(t, valid.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessComplete, selected.Completeness)
+}
+
 func TestH3HistoricalPlanWithoutUsageIdentityKeepsLegacyCompatibility(t *testing.T) {
 	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
 		Resolution: "768P", OutputDurationSeconds: 5,

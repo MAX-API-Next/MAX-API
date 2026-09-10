@@ -32,6 +32,8 @@ func TestProduceUsageClassifiesDoubaoMissingPartialAndInvalid(t *testing.T) {
 	}{
 		{name: "missing", body: `{"status":"succeeded"}`, presence: types.TaskUsagePresenceNotPresent, completeness: types.TaskUsageCompletenessMissing},
 		{name: "partial", body: `{"status":"succeeded","usage":{"completion_tokens":3}}`, presence: types.TaskUsagePresencePartial, completeness: types.TaskUsageCompletenessPartial},
+		{name: "single negative completion", body: `{"status":"succeeded","usage":{"completion_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
+		{name: "single negative total", body: `{"status":"succeeded","usage":{"total_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
 		{name: "negative", body: `{"status":"succeeded","usage":{"completion_tokens":-1,"total_tokens":2}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
 		{name: "inconsistent", body: `{"status":"succeeded","usage":{"completion_tokens":4,"total_tokens":3}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
 	}

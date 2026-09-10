@@ -6,6 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -49,10 +52,11 @@ type usagePollingResponseAdaptor struct {
 }
 
 type usageFactPollingResponseAdaptor struct {
-	contract types.TaskUsageContract
-	envelope *types.TaskUsageEnvelope
-	err      error
-	calls    int
+	contract     types.TaskUsageContract
+	envelope     *types.TaskUsageEnvelope
+	err          error
+	calls        int
+	producerKind string
 }
 
 type configuredWrapperPollingAdaptor struct{}
@@ -120,6 +124,13 @@ func (a *usageFactPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *
 
 func (a *usageFactPollingResponseAdaptor) UsageContract() types.TaskUsageContract {
 	return a.contract
+}
+
+func (a *usageFactPollingResponseAdaptor) UsageProducerKind() string {
+	if a.producerKind == "" {
+		return types.TaskUsageProducerKindGoAdapter
+	}
+	return a.producerKind
 }
 
 func (a *usageFactPollingResponseAdaptor) ProduceUsage(types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
@@ -202,6 +213,35 @@ func TestApplyTaskUsageFactsRejectsNonProviderResponseEnvelope(t *testing.T) {
 	require.EqualError(t, err, `task usage envelope stage "request_estimate" is not supported for polling`)
 	require.Nil(t, taskResult.Usage)
 	require.Nil(t, taskResult.UsageEnvelope)
+}
+
+func TestApplyTaskUsageFactsAcceptsTrustedTaskPluginEnvelope(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "..", "pkg", "taskusage", "testdata", "task-plugin-minimax-h3-v1.json"))
+	require.NoError(t, err)
+	var fixture struct {
+		ProducerKind  string           `json:"producer_kind"`
+		SourceID      string           `json:"source_id"`
+		SchemaVersion int              `json:"schema_version"`
+		Stage         string           `json:"stage"`
+		Usage         *types.TaskUsage `json:"usage"`
+	}
+	require.NoError(t, common.Unmarshal(data, &fixture))
+	contract := taskusage.MiniMaxH3Contract()
+	require.Equal(t, contract.SourceID, fixture.SourceID)
+	require.Equal(t, contract.SchemaVersion, fixture.SchemaVersion)
+	envelope, err := taskusage.BuildEnvelope(fixture.ProducerKind, contract, fixture.Stage, fixture.Usage)
+	require.NoError(t, err)
+	taskResult := &relaycommon.TaskInfo{}
+	adaptor := &usageFactPollingResponseAdaptor{
+		contract: contract, envelope: envelope, producerKind: fixture.ProducerKind,
+	}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult))
+	require.NotNil(t, taskResult.UsageEnvelope)
+	require.Equal(t, fixture.ProducerKind, taskResult.UsageEnvelope.ProducerKind)
+	require.EqualValues(t, 5_000, *taskResult.Usage.OutputDurationMs)
 }
 
 func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {

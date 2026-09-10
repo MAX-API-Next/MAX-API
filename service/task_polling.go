@@ -44,6 +44,9 @@ type taskUsageProvider interface {
 
 type taskUsageFactProvider interface {
 	UsageContract() types.TaskUsageContract
+	// UsageProducerKind is host-owned provenance. The polling boundary must
+	// validate against this trusted value instead of the envelope's self-report.
+	UsageProducerKind() string
 	ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error)
 }
 
@@ -870,7 +873,7 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 				return err
 			}
 		}
-		if err := taskusage.ValidateEnvelope(contract, envelope, types.TaskUsageProducerKindGoAdapter); err != nil {
+		if err := taskusage.ValidateEnvelope(contract, envelope, provider.UsageProducerKind()); err != nil {
 			return err
 		}
 		if envelope.Stage != types.TaskUsageSourceProviderResponse {

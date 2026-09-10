@@ -373,6 +373,10 @@ func (a *TaskAdaptor) UsageContract() types.TaskUsageContract {
 	return taskusage.MiniMaxH3Contract()
 }
 
+func (a *TaskAdaptor) UsageProducerKind() string {
+	return types.TaskUsageProducerKindGoAdapter
+}
+
 func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
 	if ctx.Stage != types.TaskUsageSourceProviderResponse {
 		return nil, fmt.Errorf("H3 task usage stage %q is not supported", ctx.Stage)

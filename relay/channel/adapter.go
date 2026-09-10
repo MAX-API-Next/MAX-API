@@ -95,6 +95,9 @@ type TaskUsageProvider interface {
 // TaskUsageProvider remains as the compatibility entry for existing adaptors.
 type TaskUsageFactProvider interface {
 	UsageContract() types.TaskUsageContract
+	// UsageProducerKind is host-owned provenance. The polling boundary must
+	// validate against this trusted value instead of the envelope's self-report.
+	UsageProducerKind() string
 	ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error)
 }
 

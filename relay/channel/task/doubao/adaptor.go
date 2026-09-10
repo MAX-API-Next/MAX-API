@@ -629,6 +629,10 @@ func (a *TaskAdaptor) UsageContract() types.TaskUsageContract {
 	return taskusage.DoubaoVideoContract()
 }
 
+func (a *TaskAdaptor) UsageProducerKind() string {
+	return types.TaskUsageProducerKindGoAdapter
+}
+
 func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
 	if ctx.Stage != types.TaskUsageSourceProviderResponse {
 		return nil, fmt.Errorf("Doubao task usage stage %q is not supported", ctx.Stage)
@@ -696,9 +700,12 @@ func buildDoubaoUsageEnvelope(raw json.RawMessage) (*types.TaskUsageEnvelope, er
 		switch {
 		case parsed.CompletionTokens == nil && parsed.TotalTokens == nil:
 			usage = nil
+		case (parsed.CompletionTokens != nil && *parsed.CompletionTokens < 0) ||
+			(parsed.TotalTokens != nil && *parsed.TotalTokens < 0):
+			usage.Completeness = types.TaskUsageCompletenessInvalid
 		case parsed.CompletionTokens == nil || parsed.TotalTokens == nil:
 			usage.Completeness = types.TaskUsageCompletenessPartial
-		case *parsed.CompletionTokens < 0 || *parsed.TotalTokens < 0 || *parsed.TotalTokens < *parsed.CompletionTokens:
+		case *parsed.TotalTokens < *parsed.CompletionTokens:
 			usage.Completeness = types.TaskUsageCompletenessInvalid
 		default:
 			usage.Completeness = types.TaskUsageCompletenessComplete
