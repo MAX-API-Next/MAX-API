@@ -31,7 +31,7 @@ func TestBuildEnvelopeDistinguishesAbsentAndExplicitZero(t *testing.T) {
 	require.NotEqual(t, absent.EvidenceDigest, explicitZero.EvidenceDigest)
 	require.NotNil(t, explicitZero.Usage.CompletionTokens)
 	require.Zero(t, *explicitZero.Usage.CompletionTokens)
-	require.NoError(t, ValidateEnvelope(contract, explicitZero))
+	require.NoError(t, ValidateEnvelope(contract, explicitZero, types.TaskUsageProducerKindGoAdapter))
 }
 
 func TestEvidenceDigestIsCanonicalAcrossProducerKindsAndFieldOrder(t *testing.T) {
@@ -79,11 +79,24 @@ func TestValidateEnvelopeRejectsIdentityAndDigestTampering(t *testing.T) {
 
 	tampered := types.CloneTaskUsageEnvelope(envelope)
 	tampered.SourceID = "client-supplied-source"
-	require.Error(t, ValidateEnvelope(DoubaoVideoContract(), tampered))
+	require.Error(t, ValidateEnvelope(DoubaoVideoContract(), tampered, types.TaskUsageProducerKindGoAdapter))
 
 	tampered = types.CloneTaskUsageEnvelope(envelope)
 	*tampered.Usage.TotalTokens = 1
-	require.Error(t, ValidateEnvelope(DoubaoVideoContract(), tampered))
+	require.Error(t, ValidateEnvelope(DoubaoVideoContract(), tampered, types.TaskUsageProducerKindGoAdapter))
+}
+
+func TestValidateEnvelopeRejectsProducerIdentityTampering(t *testing.T) {
+	zero := int64(0)
+	envelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, DoubaoVideoContract(), types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &zero,
+		TotalTokens:      &zero,
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	envelope.ProducerKind = types.TaskUsageProducerKindTaskPlugin
+	require.Error(t, ValidateEnvelope(DoubaoVideoContract(), envelope, types.TaskUsageProducerKindGoAdapter))
 }
 
 func TestResolveContractUsesFrozenIdentity(t *testing.T) {
@@ -121,5 +134,5 @@ func TestTaskPluginFixtureMatchesGoAdapterCanonicalFacts(t *testing.T) {
 	goEnvelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, fixture.Stage, fixture.Usage)
 	require.NoError(t, err)
 	require.Equal(t, goEnvelope.EvidenceDigest, pluginEnvelope.EvidenceDigest)
-	require.NoError(t, ValidateEnvelope(contract, pluginEnvelope))
+	require.NoError(t, ValidateEnvelope(contract, pluginEnvelope, types.TaskUsageProducerKindTaskPlugin))
 }

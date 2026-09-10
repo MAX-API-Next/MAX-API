@@ -521,7 +521,7 @@ func validateTaskUsageEnvelopeForPlan(plan *types.TaskBillingPlan, envelope *typ
 	if err != nil {
 		return fmt.Errorf("resolve frozen usage contract: %w", err)
 	}
-	if err := taskusage.ValidateEnvelope(contract, envelope); err != nil {
+	if err := taskusage.ValidateEnvelope(contract, envelope, plan.UsageProducerKind); err != nil {
 		return fmt.Errorf("usage envelope validation failed: %w", err)
 	}
 	return nil

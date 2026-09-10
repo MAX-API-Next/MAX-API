@@ -633,8 +633,16 @@ func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsage
 	if ctx.Stage != types.TaskUsageSourceProviderResponse {
 		return nil, fmt.Errorf("Doubao task usage stage %q is not supported", ctx.Stage)
 	}
+	payload := ctx.Payload
+	for depth := 0; depth < taskcommon.MaxWrappedTaskUnwrapDepth; depth++ {
+		nested := taskcommon.WrappedTaskProviderPayload(payload)
+		if nested == nil {
+			break
+		}
+		payload = nested
+	}
 	var response responseTask
-	if err := common.Unmarshal(ctx.Payload, &response); err != nil {
+	if err := common.Unmarshal(payload, &response); err != nil {
 		return nil, errors.Wrap(err, "unmarshal Doubao task usage failed")
 	}
 	return buildDoubaoUsageEnvelope(response.Usage)

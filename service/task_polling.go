@@ -870,7 +870,7 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 				return err
 			}
 		}
-		if err := taskusage.ValidateEnvelope(contract, envelope); err != nil {
+		if err := taskusage.ValidateEnvelope(contract, envelope, types.TaskUsageProducerKindGoAdapter); err != nil {
 			return err
 		}
 		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)

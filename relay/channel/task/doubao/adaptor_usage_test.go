@@ -73,3 +73,21 @@ func TestParseTaskResultDoesNotLetNonObjectUsageHideTerminalResult(t *testing.T)
 	require.Equal(t, types.TaskUsagePresenceInvalid, result.UsageEnvelope.Presence)
 	require.Equal(t, types.TaskUsageCompletenessInvalid, result.UsageEnvelope.Completeness)
 }
+
+func TestProduceUsageUnwrapsConfiguredRelayEnvelope(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"code":"success",
+			"data":{"data":{
+				"id":"task_123",
+				"status":"succeeded",
+				"usage":{"completion_tokens":12,"total_tokens":20}
+			}}
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TaskUsagePresencePresentValid, envelope.Presence)
+	require.EqualValues(t, 12, *envelope.Usage.CompletionTokens)
+	require.EqualValues(t, 20, *envelope.Usage.TotalTokens)
+}

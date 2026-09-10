@@ -89,10 +89,10 @@ func ResolveContract(sourceID string, schemaVersion int, contractDigest string) 
 	return contract, nil
 }
 
-func usageField(key, unit string, required bool, min int64, max *int64) types.TaskUsageFieldContract {
+func usageField(key, unit string, required bool, minValue int64, max *int64) types.TaskUsageFieldContract {
 	return types.TaskUsageFieldContract{
 		Key: key, Unit: unit, RequiredForTerminal: required,
-		MinValue: int64Pointer(min), MaxValue: max,
+		MinValue: int64Pointer(minValue), MaxValue: max,
 	}
 }
 
@@ -161,11 +161,17 @@ func BuildEnvelope(producerKind string, contract types.TaskUsageContract, stage 
 
 // ValidateEnvelope detects identity, presence, fact, and digest drift before a
 // caller can use the envelope as settlement evidence.
-func ValidateEnvelope(contract types.TaskUsageContract, envelope *types.TaskUsageEnvelope) error {
+func ValidateEnvelope(contract types.TaskUsageContract, envelope *types.TaskUsageEnvelope, expectedProducerKind string) error {
 	if envelope == nil {
 		return fmt.Errorf("task usage envelope is required")
 	}
-	expected, err := BuildEnvelope(envelope.ProducerKind, contract, envelope.Stage, envelope.Usage)
+	if expectedProducerKind != types.TaskUsageProducerKindGoAdapter && expectedProducerKind != types.TaskUsageProducerKindTaskPlugin {
+		return fmt.Errorf("unsupported expected task usage producer kind %q", expectedProducerKind)
+	}
+	if envelope.ProducerKind != expectedProducerKind {
+		return fmt.Errorf("task usage producer kind mismatch")
+	}
+	expected, err := BuildEnvelope(expectedProducerKind, contract, envelope.Stage, envelope.Usage)
 	if err != nil {
 		return err
 	}
