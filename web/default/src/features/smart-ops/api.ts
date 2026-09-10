@@ -23,6 +23,7 @@ import type {
   BillingSettlementMutationResponse,
   BillingSettlementReviewRequest,
   ManualTaskBillingCompletionRequest,
+  ManualTaskBillingBatchCompletionData,
   ChannelPerformanceData,
   ChannelPerformanceQuery,
   ChannelPerformanceResponse,
@@ -79,6 +80,24 @@ export async function completeManualTaskBillingSettlement(
     request,
     { skipBusinessError: true, skipErrorHandler: true }
   )
+  return response.data
+}
+
+export async function completeManualTaskBillingSettlementsZero(
+  request: BillingSettlementReviewRequest
+): Promise<
+  BillingSettlementMutationResponse & {
+    data?: ManualTaskBillingBatchCompletionData
+  }
+> {
+  const response = await api.post<
+    BillingSettlementMutationResponse & {
+      data?: ManualTaskBillingBatchCompletionData
+    }
+  >('/api/smart-ops/billing-settlements/complete-tasks-zero', request, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return response.data
 }
 

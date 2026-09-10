@@ -308,6 +308,28 @@ func TestBillingSettlementBlockingPolicyRequiresRootRole(t *testing.T) {
 	rootCompletion := completeTask(login(root.Id))
 	require.Equal(t, http.StatusConflict, rootCompletion.Code)
 	require.Contains(t, rootCompletion.Body.String(), `"success":false`)
+
+	completeTasksZero := func(cookies []*http.Cookie) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/smart-ops/billing-settlements/complete-tasks-zero",
+			strings.NewReader(`{"items":[]}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		for _, sessionCookie := range cookies {
+			request.AddCookie(sessionCookie)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	adminZero := completeTasksZero(login(admin.Id))
+	require.Equal(t, http.StatusOK, adminZero.Code)
+	require.Contains(t, adminZero.Body.String(), `"success":false`)
+	rootZero := completeTasksZero(login(root.Id))
+	require.Equal(t, http.StatusBadRequest, rootZero.Code)
+	require.Contains(t, rootZero.Body.String(), `"success":false`)
 }
 
 func TestUniversalVerifyRateLimitFollowsUserAcrossIPs(t *testing.T) {

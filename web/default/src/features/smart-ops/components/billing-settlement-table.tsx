@@ -131,11 +131,12 @@ export function BillingSettlementTable(
 ): ReactElement {
   const { t, i18n } = useTranslation()
   const hasReviewableItems = props.items.some(
-    (item) => !item.requires_manual_completion
+    (item) => !item.requires_manual_completion || props.canCompleteManualTask
   )
   const { allSelected, someSelected, isSelected, toggleAll, toggleItem } =
     useBillingSettlementSelection({
       items: props.items,
+      canSelectManualTask: props.canCompleteManualTask,
       selectedTargets: props.selectedTargets,
       onSelectedTargetsChange: props.onSelectedTargetsChange,
     })
@@ -182,7 +183,9 @@ export function BillingSettlementTable(
                       toggleItem(item, checked === true)
                     }
                     disabled={
-                      props.reviewPending || item.requires_manual_completion
+                      props.reviewPending ||
+                      (item.requires_manual_completion &&
+                        !props.canCompleteManualTask)
                     }
                     aria-label={t(
                       'Select billing reconciliation alert {{id}}',

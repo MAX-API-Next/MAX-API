@@ -24,6 +24,7 @@ import type {
 
 interface UseBillingSettlementSelectionParams {
   items: BillingSettlementReconciliationItem[]
+  canSelectManualTask: boolean
   selectedTargets: ReadonlyMap<number, BillingSettlementReviewTarget>
   onSelectedTargetsChange: (
     targets: Map<number, BillingSettlementReviewTarget>
@@ -49,22 +50,26 @@ export function useBillingSettlementSelection(
   const onSelectedTargetsChange = params.onSelectedTargetsChange
   const isSelected = useCallback(
     (item: BillingSettlementReconciliationItem): boolean =>
-      !item.requires_manual_completion &&
+      (!item.requires_manual_completion || params.canSelectManualTask) &&
       selectedTargets.get(item.id)?.revision === item.revision,
-    [selectedTargets]
+    [params.canSelectManualTask, selectedTargets]
   )
   const { allSelected, someSelected } = useMemo(() => {
     return {
       allSelected:
-        items.some((item) => !item.requires_manual_completion) &&
+        items.some(
+          (item) =>
+            !item.requires_manual_completion || params.canSelectManualTask
+        ) &&
         items
-          .filter((item) => !item.requires_manual_completion)
-          .every((item) => isSelected(item)),
-      someSelected: items.some(
-        (item) => !item.requires_manual_completion && isSelected(item)
-      ),
+          .filter(
+            (item) =>
+              !item.requires_manual_completion || params.canSelectManualTask
+          )
+          .every(isSelected),
+      someSelected: items.some(isSelected),
     }
-  }, [isSelected, items])
+  }, [isSelected, items, params.canSelectManualTask])
 
   const toggleAll = useCallback(
     (checked: boolean): void => {
@@ -72,7 +77,11 @@ export function useBillingSettlementSelection(
         checked
           ? new Map(
               items
-                .filter((item) => !item.requires_manual_completion)
+                .filter(
+                  (item) =>
+                    !item.requires_manual_completion ||
+                    params.canSelectManualTask
+                )
                 .map((item) => [
                   item.id,
                   { id: item.id, revision: item.revision },
@@ -81,13 +90,13 @@ export function useBillingSettlementSelection(
           : new Map()
       )
     },
-    [items, onSelectedTargetsChange]
+    [items, onSelectedTargetsChange, params.canSelectManualTask]
   )
 
   const toggleItem = useCallback(
     (item: BillingSettlementReconciliationItem, checked: boolean): void => {
       const next = new Map(selectedTargets)
-      if (item.requires_manual_completion) {
+      if (item.requires_manual_completion && !params.canSelectManualTask) {
         next.delete(item.id)
         onSelectedTargetsChange(next)
         return
@@ -99,7 +108,7 @@ export function useBillingSettlementSelection(
       }
       onSelectedTargetsChange(next)
     },
-    [onSelectedTargetsChange, selectedTargets]
+    [onSelectedTargetsChange, params.canSelectManualTask, selectedTargets]
   )
 
   return { allSelected, someSelected, isSelected, toggleAll, toggleItem }

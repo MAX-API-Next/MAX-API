@@ -36,6 +36,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   completeManualTaskBillingSettlement,
+  completeManualTaskBillingSettlementsZero,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
@@ -48,6 +49,7 @@ import {
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
+  ManualTaskBillingBatchFailure,
   BillingSettlementReviewTarget,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
@@ -71,6 +73,9 @@ export function BillingSettlementEvidence(
   >(() => new Map())
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
+  const [batchFailures, setBatchFailures] = useState<
+    ManualTaskBillingBatchFailure[]
+  >([])
   const reconciliationItems = props.data?.items
   const currentManualTaskItem = useMemo(() => {
     if (!manualTaskItem) return null
@@ -159,6 +164,7 @@ export function BillingSettlementEvidence(
     },
     onSuccess: async (count: number): Promise<void> => {
       setSelectedTargets(new Map())
+      setBatchFailures([])
       toast.success(
         t('Billing reconciliation alerts closed: {{count}}', { count })
       )
@@ -183,8 +189,93 @@ export function BillingSettlementEvidence(
     },
   })
 
+  const zeroSettlementMutation = useMutation({
+    mutationKey: ['smart-ops', 'manual-task-billing-zero-batch'],
+    mutationFn: async (targets: BillingSettlementReviewTarget[]) => {
+      const response = await completeManualTaskBillingSettlementsZero({
+        items: targets,
+      })
+      if (!response.success) {
+        throw new Error(
+          response.message || t('Failed to complete manual task billing.')
+        )
+      }
+      return response.data
+    },
+    onSuccess: (data) => {
+      setSelectedTargets(new Map())
+      const completed = data?.completed_count ?? 0
+      const failed = data?.failed_count ?? 0
+      const failures = data?.failed ?? []
+      setBatchFailures(failures)
+      toast.success(
+        failed > 0
+          ? t(
+              'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
+              { completed, failed }
+            )
+          : t(
+              'Completed selected task settlements with zero final quota: {{count}}.',
+              { count: completed }
+            )
+      )
+      if (failures.length > 0) {
+        toast.warning(
+          t('Some settlements remain for review: {{ids}}', {
+            ids: failures
+              .map((failure) => `#${failure.settlement_id}`)
+              .join(', '),
+          })
+        )
+      }
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
+      handleServerError(error, {
+        fallback: mutationErrorMessage(
+          error,
+          t('Failed to complete manual task billing.')
+        ),
+      })
+    },
+  })
+
   const reviewTargets = (targets: BillingSettlementReviewTarget[]): void => {
-    if (targets.length > 0 && !reviewMutation.isPending) {
+    if (
+      targets.length === 0 ||
+      reviewMutation.isPending ||
+      zeroSettlementMutation.isPending
+    )
+      return
+    const selectedItems = (reconciliationItems ?? []).filter((item) =>
+      targets.some(
+        (target) => target.id === item.id && target.revision === item.revision
+      )
+    )
+    const manual = selectedItems.filter(
+      (item) => item.requires_manual_completion
+    )
+    const ordinary = selectedItems.filter(
+      (item) => !item.requires_manual_completion
+    )
+    if (manual.length > 0 && ordinary.length > 0) {
+      toast.error(
+        t('Select either task settlements or ordinary alerts, not both.')
+      )
+      return
+    }
+    if (manual.length > 0) {
+      zeroSettlementMutation.mutate(targets)
+    } else {
       reviewMutation.mutate(targets)
     }
   }
@@ -194,16 +285,13 @@ export function BillingSettlementEvidence(
     mutationFn: async ({
       item,
       actualQuota,
-      note,
     }: {
       item: BillingSettlementReconciliationItem
       actualQuota: number
-      note: string
     }): Promise<void> => {
       const response = await completeManualTaskBillingSettlement(item.id, {
         revision: item.revision,
         actual_quota: actualQuota,
-        note,
       })
       if (!response.success) {
         throw new Error(
@@ -245,8 +333,8 @@ export function BillingSettlementEvidence(
       onOpenChange={(open) => {
         if (!open) setManualTaskItem(null)
       }}
-      onSubmit={(item, actualQuota, note) =>
-        manualTaskCompletionMutation.mutate({ item, actualQuota, note })
+      onSubmit={(item, actualQuota) =>
+        manualTaskCompletionMutation.mutate({ item, actualQuota })
       }
     />
   ) : null
@@ -304,7 +392,7 @@ export function BillingSettlementEvidence(
             </h4>
             <p className='text-muted-foreground mt-0.5 text-xs'>
               {t(
-                'Batch-close ordinary alerts after review. Task-finalization alerts require a root administrator to enter the exact provider-backed quota before they can close.'
+                'Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.'
               )}
             </p>
           </div>
@@ -393,10 +481,13 @@ export function BillingSettlementEvidence(
                 size='sm'
                 onClick={() => reviewTargets(activeSelectedTargets)}
                 disabled={
-                  activeSelectedTargets.length === 0 || reviewMutation.isPending
+                  activeSelectedTargets.length === 0 ||
+                  reviewMutation.isPending ||
+                  zeroSettlementMutation.isPending
                 }
               >
-                {reviewMutation.isPending && (
+                {(reviewMutation.isPending ||
+                  zeroSettlementMutation.isPending) && (
                   <Loader2
                     data-icon='inline-start'
                     className='animate-spin'
@@ -411,12 +502,33 @@ export function BillingSettlementEvidence(
                 })}
               </Button>
             </div>
+            {batchFailures.length > 0 && (
+              <Alert variant='destructive'>
+                <TriangleAlert aria-hidden='true' />
+                <AlertTitle>
+                  {t('Some task settlements still need review.')}
+                </AlertTitle>
+                <AlertDescription>
+                  <ul className='list-disc space-y-1 pl-4'>
+                    {batchFailures.map((failure) => (
+                      <li key={`${failure.settlement_id}:${failure.message}`}>
+                        {t('Settlement #{{id}}: {{message}}', {
+                          id: failure.settlement_id,
+                          message: failure.message,
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
             <BillingSettlementTable
               items={props.data.items}
               canCompleteManualTask={props.canCompleteManualTask}
               selectedTargets={activeSelectedTargetMap}
               reviewPending={
                 reviewMutation.isPending ||
+                zeroSettlementMutation.isPending ||
                 manualTaskCompletionMutation.isPending
               }
               onSelectedTargetsChange={replaceSelectedTargets}

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
@@ -94,6 +95,21 @@ func TestCompleteManualTaskBillingSettlementRefundsWalletAndReplays(t *testing.T
 	assert.Equal(t, 160, getTokenRemainQuota(t, tokenID))
 	assert.EqualValues(t, 1, countLogs(t))
 
+	// The current UI no longer submits an audit note. A retry of a settlement
+	// created by the previous UI must retain its durable note rather than fail
+	// solely because the generated default differs.
+	replayedWithoutNote, err := CompleteManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9001,
+		&actualQuota,
+		"",
+	)
+	require.NoError(t, err)
+	assert.True(t, replayedWithoutNote.AlreadyApplied)
+	assert.EqualValues(t, -60, replayedWithoutNote.AppliedFundingDelta)
+	assert.EqualValues(t, 1, countLogs(t))
+
 	differentQuota := int64(30)
 	_, err = CompleteManualTaskBillingSettlement(
 		manual.ID,
@@ -124,7 +140,7 @@ func TestCompleteManualTaskBillingSettlementPreservesExplicitZero(t *testing.T) 
 		manual.Revision,
 		9011,
 		&actualQuota,
-		"Verified that the provider produced no billable output.",
+		"",
 	)
 
 	require.NoError(t, err)
@@ -139,6 +155,111 @@ func TestCompleteManualTaskBillingSettlementPreservesExplicitZero(t *testing.T) 
 	assert.Zero(t, user.UsedQuota)
 	assert.EqualValues(t, 1, user.RequestCount)
 	assert.EqualValues(t, 1, countLogs(t))
+	var storedManual model.BillingSettlement
+	require.NoError(t, model.DB.First(&storedManual, manual.ID).Error)
+	assert.Equal(t, "Administrator-approved manual task usage settlement", storedManual.ReconciliationReviewNote)
+}
+
+func TestCompleteManualTaskBillingSettlementsZeroIsIdempotent(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 816, 817, 818
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-batch", 100)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	// The client model may be an alias while the persisted channel mapping
+	// records the effective MiniMax-H3 upstream model.
+	task.Properties.OriginModelName = "minimax-h3-alias"
+	task.Properties.UpstreamModelName = constant.TaskModelMiniMaxH3
+	task.PrivateData.BillingContext.OriginModelName = "minimax-h3-alias"
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider usage requires manual review")
+
+	result, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{{ID: manual.ID, Revision: manual.Revision}},
+		9016,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CompletedCount)
+	assert.Zero(t, result.FailedCount)
+	assert.Equal(t, []int64{manual.ID}, result.SettlementIDs)
+	assert.EqualValues(t, 1000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTokenUsedQuota(t, tokenID))
+
+	replay, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{{ID: manual.ID, Revision: manual.Revision}},
+		9016,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, replay.CompletedCount)
+	assert.Zero(t, replay.FailedCount)
+	assert.EqualValues(t, 1000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, 1, countLogs(t))
+}
+
+func TestCompleteManualTaskBillingSettlementsZeroReturnsPartialFailures(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 819, 820, 821
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-partial", 100)
+	seedChannel(t, channelID)
+	h3Task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	h3Task.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	h3Task.PrivateData.BillingContext.OriginModelName = constant.TaskModelMiniMaxH3
+	persistTask(t, h3Task)
+	h3Manual := createManualTaskFinalizeSettlement(t, h3Task, "provider usage requires manual review")
+
+	ordinaryTask := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	ordinaryTask.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	ordinaryTask.Properties.UpstreamModelName = "legacy-video-model"
+	persistTask(t, ordinaryTask)
+	ordinaryManual := createManualTaskFinalizeSettlement(t, ordinaryTask, "provider usage requires manual review")
+
+	result, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{
+			{ID: h3Manual.ID, Revision: h3Manual.Revision},
+			{ID: ordinaryManual.ID, Revision: ordinaryManual.Revision},
+		},
+		9019,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CompletedCount)
+	assert.Equal(t, 1, result.FailedCount)
+	assert.Equal(t, []int64{h3Manual.ID}, result.SettlementIDs)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, ordinaryManual.ID, result.Failed[0].SettlementID)
+	assert.Contains(t, result.Failed[0].Message, "MiniMax-H3")
+}
+
+func TestZeroTaskSettlementRechecksMiniMaxH3AtCompletionBoundary(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 825, 826, 827
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-boundary", 100)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	task.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	task.Properties.UpstreamModelName = "legacy-video-model"
+	task.PrivateData.BillingContext.OriginModelName = constant.TaskModelMiniMaxH3
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider usage requires manual review")
+	actualQuota := int64(0)
+
+	_, err := completeManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9020,
+		&actualQuota,
+		manualTaskBillingZeroNote,
+		true,
+	)
+
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+	assert.EqualValues(t, 900, getUserQuota(t, userID))
+	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 100, getTokenUsedQuota(t, tokenID))
 }
 
 func TestCompleteManualTaskBillingSettlementRefundsSubscriptionWithDeletedToken(t *testing.T) {

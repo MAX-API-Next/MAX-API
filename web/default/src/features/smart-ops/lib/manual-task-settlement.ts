@@ -21,7 +21,6 @@ import type { TFunction } from 'i18next'
 
 type ManualTaskSettlementSchemaShape = {
   actualQuota: string
-  note: string
 }
 
 type ManualTaskSettlementSchema = z.ZodType<
@@ -47,13 +46,6 @@ export function getManualTaskSettlementSchema(
         (value) => Number(value) <= maxQuota,
         t('Final quota cannot exceed the reserved quota.')
       ),
-    note: z
-      .string()
-      .trim()
-      .refine((value) => {
-        const length = Array.from(value).length
-        return length >= 3 && length <= 1000
-      }, t('Audit note must contain between 3 and 1000 characters.')),
   })
 }
 

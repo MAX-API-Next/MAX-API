@@ -68,6 +68,10 @@ type manualTaskBillingCompletionRequest struct {
 	Note        string `json:"note"`
 }
 
+type manualTaskBillingBatchCompletionRequest struct {
+	Items []model.BillingSettlementReviewTarget `json:"items"`
+}
+
 // ReviewBillingSettlements closes a bounded set of current reconciliation
 // alerts after the administrator acknowledges them.
 func ReviewBillingSettlements(c *gin.Context) {
@@ -232,6 +236,37 @@ func CompleteManualTaskBillingSettlement(c *gin.Context) {
 		"actual_quota":          result.ActualQuota,
 		"applied_funding_delta": result.AppliedFundingDelta,
 		"already_applied":       result.AlreadyApplied,
+	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+}
+
+// CompleteManualTaskBillingSettlementsZero performs an explicit root-admin
+// zero-quota settlement for selected MiniMax-H3 task alerts. Ordinary
+// reconciliation alerts are never accepted by this endpoint.
+func CompleteManualTaskBillingSettlementsZero(c *gin.Context) {
+	var request manualTaskBillingBatchCompletionRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid manual task billing batch completion request"})
+		return
+	}
+	result, err := service.CompleteManualTaskBillingSettlementsZero(request.Items, c.GetInt("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "failed to complete manual task billing settlements"
+		if errors.Is(err, service.ErrInvalidBillingSettlementReconciliationReview) {
+			status = http.StatusBadRequest
+			message = err.Error()
+		} else {
+			common.SysError(fmt.Sprintf("failed to complete manual task billing settlements: %v", err))
+		}
+		c.JSON(status, gin.H{"success": false, "message": message})
+		return
+	}
+	recordManageAudit(c, "billing.manual_task_settlement_batch_zero", map[string]interface{}{
+		"completed_count": result.CompletedCount,
+		"failed_count":    result.FailedCount,
+		"settlement_ids":  result.SettlementIDs,
+		"failed":          result.Failed,
 	})
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
 }

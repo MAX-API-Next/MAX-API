@@ -149,7 +149,6 @@ describe('SmartOps active alerts', () => {
       const response = await completeManualTaskBillingSettlement(93, {
         revision: 2,
         actual_quota: 0,
-        note: 'Verified provider evidence and exact usage.',
       })
 
       assert.equal(response.success, true)
@@ -159,7 +158,6 @@ describe('SmartOps active alerts', () => {
           data: {
             revision: 2,
             actual_quota: 0,
-            note: 'Verified provider evidence and exact usage.',
           },
           config: { skipBusinessError: true, skipErrorHandler: true },
         },
@@ -744,6 +742,8 @@ describe('SmartOps active alerts', () => {
       role: 100,
     })
     const originalGet = api.get
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
     const htmlElementPrototype = window.HTMLElement
       .prototype as typeof window.HTMLElement.prototype & {
       attachEvent?: (name: string, listener: EventListener) => void
@@ -809,6 +809,26 @@ describe('SmartOps active alerts', () => {
             : { success: true, data: [] },
       }
     }) as typeof api.get
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 1,
+            failed_count: 1,
+            settlement_ids: [93],
+            failed: [
+              {
+                settlement_id: 94,
+                message:
+                  'record changed or could not be applied safely; refresh and reconcile it',
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.post
     const queryClient = createQueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
@@ -829,7 +849,7 @@ describe('SmartOps active alerts', () => {
               name: 'Select billing reconciliation alert 93',
             })
             .hasAttribute('data-disabled'),
-          true
+          false
         )
         assert.equal(
           screen
@@ -840,6 +860,26 @@ describe('SmartOps active alerts', () => {
           true
         )
       })
+      const taskCheckbox = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 93',
+      })
+      await view.click(taskCheckbox)
+      const zeroBatchButton = within(view.container).getByRole('button', {
+        name: 'Review and close selected (1)',
+      })
+      assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
+      await view.click(zeroBatchButton)
+      await waitFor(() => {
+        assert.deepEqual(writes[0], {
+          url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+          data: { items: [{ id: 93, revision: manualRevision }] },
+        })
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'Settlement #94: record changed or could not be applied safely; refresh and reconcile it'
+          )
+        )
+      })
       assert.ok(completeButton)
       await view.click(completeButton)
 
@@ -848,14 +888,13 @@ describe('SmartOps active alerts', () => {
       )
       const dialogScreen = within(dialog)
       const quotaInput = dialogScreen.getByLabelText('Exact final quota')
-      const noteInput = dialogScreen.getByLabelText('Audit note')
       const submitButton = dialogScreen.getByRole('button', {
         name: 'Apply exact settlement',
       })
       assert.equal(submitButton.hasAttribute('disabled'), true)
       assert.equal((quotaInput as HTMLInputElement).max, '100')
       assert.equal((quotaInput as HTMLInputElement).min, '0')
-      assert.equal((noteInput as HTMLTextAreaElement).maxLength, 1000)
+      assert.equal(dialogScreen.queryByLabelText('Audit note'), null)
       assert.ok(
         (dialog.textContent ?? '').includes(
           'This workflow cannot add a charge above the original reservation.'
@@ -882,10 +921,7 @@ describe('SmartOps active alerts', () => {
         staleDialog.querySelector('#manual-task-actual-quota'),
         quotaInput
       )
-      assert.equal(
-        staleDialog.querySelector('#manual-task-audit-note'),
-        noteInput
-      )
+      assert.equal(staleDialog.querySelector('#manual-task-audit-note'), null)
       assert.equal(
         staleDialogScreen
           .getByRole('button', { name: 'Apply exact settlement' })
@@ -894,6 +930,7 @@ describe('SmartOps active alerts', () => {
       )
     } finally {
       api.get = originalGet
+      api.post = originalPost
       delete htmlElementPrototype.attachEvent
       delete htmlElementPrototype.detachEvent
       await view.unmount()

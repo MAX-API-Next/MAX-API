@@ -41,7 +41,6 @@ import {
 } from '@/components/ui/field'
 import { Form, FormField } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import {
   getManualTaskSettlementSchema,
   type ManualTaskSettlementFormValues,
@@ -55,8 +54,7 @@ interface ManualTaskSettlementDialogProps {
   onOpenChange: (open: boolean) => void
   onSubmit: (
     item: BillingSettlementReconciliationItem,
-    actualQuota: number,
-    note: string
+    actualQuota: number
   ) => void
 }
 
@@ -69,7 +67,7 @@ export function ManualTaskSettlementDialog(
     resolver: zodResolver(
       getManualTaskSettlementSchema(t, props.item?.task_quota ?? 0)
     ),
-    defaultValues: { actualQuota: '', note: '' },
+    defaultValues: { actualQuota: '' },
     mode: 'onChange',
   })
   const canSubmit =
@@ -77,7 +75,7 @@ export function ManualTaskSettlementDialog(
 
   const handleSubmit = form.handleSubmit((values) => {
     if (props.item && !props.stale) {
-      props.onSubmit(props.item, Number(values.actualQuota), values.note)
+      props.onSubmit(props.item, Number(values.actualQuota))
     }
   })
 
@@ -152,38 +150,11 @@ export function ManualTaskSettlementDialog(
                           aria-invalid={fieldState.invalid}
                         />
                         <FieldDescription>
-                          {t('Allowed range: 0 to {{quota}}.', {
-                            quota: formatQuota(item.task_quota),
-                          })}
-                        </FieldDescription>
-                        {fieldState.error && (
-                          <FieldError>{fieldState.error.message}</FieldError>
-                        )}
-                      </Field>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name='note'
-                    render={({ field, fieldState }) => (
-                      <Field data-invalid={fieldState.invalid}>
-                        <FieldLabel htmlFor='manual-task-audit-note'>
-                          {t('Audit note')}
-                        </FieldLabel>
-                        <Textarea
-                          {...field}
-                          id='manual-task-audit-note'
-                          placeholder={t(
-                            'Describe the provider evidence and calculation used.'
-                          )}
-                          maxLength={1000}
-                          disabled={props.pending || props.stale}
-                          aria-invalid={fieldState.invalid}
-                        />
-                        <FieldDescription>
                           {t(
-                            'This note is bound to the idempotent financial operation.'
+                            'Enter quota value. 500,000 quota = $1. Allowed range: 0 to {{quota}}.',
+                            {
+                              quota: formatQuota(item.task_quota),
+                            }
                           )}
                         </FieldDescription>
                         {fieldState.error && (
