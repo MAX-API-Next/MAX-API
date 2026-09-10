@@ -12,11 +12,13 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -474,6 +476,277 @@ func TestParseH3TaskResultCarriesVideoAndAudioUsageSeparately(t *testing.T) {
 	require.Equal(t, int64(6000), *result.Usage.InputAudioDurationMs)
 	require.Equal(t, int64(1), *result.Usage.InputImageCount)
 	require.Equal(t, types.TaskUsageSourceProviderResponse, result.Usage.Source)
+}
+
+func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+		"created": 1788853061,
+		"data": [{"url": "https://cdn.example.com/result.mp4"}],
+		"id": "439499419230570",
+		"object": "video.generation",
+		"status": "completed",
+		"usage": {
+			"completion_tokens": 162745,
+			"input_image_count": 1,
+			"input_seconds": 0,
+			"output_seconds": 5,
+			"prompt_tokens": 13020,
+			"total_seconds": 5,
+			"total_tokens": 175765
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, usage.Completeness)
+	require.NotNil(t, usage.InputVideoDurationMs)
+	assert.Equal(t, int64(0), *usage.InputVideoDurationMs)
+	require.NotNil(t, usage.OutputDurationMs)
+	assert.Equal(t, int64(5000), *usage.OutputDurationMs)
+	require.NotNil(t, usage.InputImageCount)
+	assert.Equal(t, int64(1), *usage.InputImageCount)
+}
+
+func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
+	for _, value := range []string{`null`, `[]`, `"none"`, `123`} {
+		t.Run(value, func(t *testing.T) {
+			usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+				"id":"439499419230570",
+				"object":"video.generation",
+				"status":"completed",
+				"data":[{"url":"https://cdn.example.com/result.mp4"}],
+				"usage":` + value + `
+			}`))
+
+			require.NoError(t, err)
+			assert.Nil(t, usage)
+		})
+	}
+}
+
+func TestExtractTaskUsageRejectsMalformedGenericPayload(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{"usage":`))
+
+	require.Error(t, err)
+	assert.Nil(t, usage)
+}
+
+func TestExtractTaskUsageReadsWrappedGenericMiniMaxVideoResponse(t *testing.T) {
+	usage, err := (&TaskAdaptor{}).ExtractTaskUsage([]byte(`{
+		"code": "success",
+		"data": {
+			"status": "IN_PROGRESS",
+			"data": {
+				"id": "439499419230570",
+				"object": "video.generation",
+				"status": "completed",
+				"data": [{"url": "https://cdn.example.com/result.mp4"}],
+				"usage": {
+					"input_image_count": 1,
+					"input_seconds": 0,
+					"output_seconds": 5,
+					"total_seconds": 5
+				}
+			}
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, usage.Completeness)
+	require.NotNil(t, usage.InputImageCount)
+	assert.Equal(t, int64(1), *usage.InputImageCount)
+	require.NotNil(t, usage.OutputDurationMs)
+	assert.Equal(t, int64(5000), *usage.OutputDurationMs)
+}
+
+func TestExtractTaskUsageBoundsWrappedProviderPayloadDepth(t *testing.T) {
+	buildPayload := func(depth int) []byte {
+		payload := map[string]any{
+			"id":     "439499419230570",
+			"object": "video.generation",
+			"status": "completed",
+			"data":   []any{map[string]any{"url": "https://cdn.example.com/result.mp4"}},
+			"usage": map[string]any{
+				"input_image_count": 1,
+				"input_seconds":     0,
+				"output_seconds":    5,
+				"total_seconds":     5,
+			},
+		}
+		for index := 0; index < depth; index++ {
+			payload = map[string]any{
+				"code":   "success",
+				"id":     "wrapper-task",
+				"status": "IN_PROGRESS",
+				"data":   map[string]any{"data": payload},
+			}
+		}
+		body, err := common.Marshal(payload)
+		require.NoError(t, err)
+		return body
+	}
+
+	withinLimit, err := (&TaskAdaptor{}).ExtractTaskUsage(buildPayload(taskcommon.MaxWrappedTaskUnwrapDepth))
+	require.NoError(t, err)
+	require.NotNil(t, withinLimit)
+	require.NotNil(t, withinLimit.OutputDurationMs)
+	assert.Equal(t, int64(5000), *withinLimit.OutputDurationMs)
+
+	beyondLimit, err := (&TaskAdaptor{}).ExtractTaskUsage(buildPayload(taskcommon.MaxWrappedTaskUnwrapDepth + 1))
+	require.NoError(t, err)
+	assert.Nil(t, beyondLimit)
+}
+
+func TestParseTaskResultReadsGenericMiniMaxVideoResponse(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"created": 1788853061,
+		"data": [{"url": "https://cdn.example.com/result.mp4"}],
+		"id": "439499419230570",
+		"object": "video.generation",
+		"status": "completed",
+		"usage": {
+			"input_image_count": 1,
+			"input_seconds": 0,
+			"output_seconds": 5,
+			"total_seconds": 5
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "439499419230570", result.TaskID)
+	assert.Equal(t, "https://cdn.example.com/result.mp4", result.Url)
+	assert.Equal(t, types.TaskUsageCompletenessComplete, result.Usage.Completeness)
+}
+
+func TestParseTaskResultDoesNotLetNonObjectUsageHideGenericTerminalState(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"completed",
+		"data":[{"url":"https://cdn.example.com/result.mp4"}],
+		"usage":[]
+	}`))
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
+	assert.Equal(t, "https://cdn.example.com/result.mp4", result.Url)
+	assert.Nil(t, result.Usage)
+}
+
+func TestParseTaskResultReadsGenericMiniMaxFailureReason(t *testing.T) {
+	withMessage, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"failed",
+		"error":{"message":"provider rejected the prompt"}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, string(model.TaskStatusFailure), withMessage.Status)
+	assert.Equal(t, "provider rejected the prompt", withMessage.Reason)
+	assert.Equal(t, "100%", withMessage.Progress)
+
+	withoutMessage, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"failed"
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, string(model.TaskStatusFailure), withoutMessage.Status)
+	assert.Equal(t, "MiniMax task failed", withoutMessage.Reason)
+}
+
+func TestParseTaskResultTreatsGenericMiniMaxErrorAsTerminalFailure(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"error":{"type":"bad_request_error","message":"provider rejected the prompt","code":"503","http_code":"400"}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, string(model.TaskStatusFailure), result.Status)
+	require.Equal(t, "100%", result.Progress)
+	require.Equal(t, 400, result.Code)
+	require.Equal(t, "provider rejected the prompt", result.Reason)
+
+	result, err = (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"id":"439499419230570",
+		"object":"video.generation",
+		"status":"unexpected",
+		"error":{}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, string(model.TaskStatusFailure), result.Status)
+	require.Equal(t, "MiniMax task failed", result.Reason)
+}
+
+func TestParseTaskResultKeepsGenericMiniMaxTransientErrorsRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "rate limit from http code",
+			body: `{"id":"task-429","error":{"type":"rate_limit_error","message":"retry later","http_code":"429"}}`,
+		},
+		{
+			name: "service unavailable",
+			body: `{"id":"task-503","error":{"type":"server_error","message":"temporarily unavailable","http_code":503}}`,
+		},
+		{
+			name: "request timeout from fallback code",
+			body: `{"id":"task-408","error":{"type":"timeout_error","message":"query timed out","code":"408"}}`,
+		},
+		{
+			name: "legacy MiniMax rate limit",
+			body: `{"id":"task-1002","error":{"type":"rate_limit_error","message":"retry later","code":1002}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
+			require.ErrorContains(t, err, "temporary query error")
+			require.Nil(t, result)
+		})
+	}
+}
+
+func TestParseTaskResultTreatsPermanentMiniMaxCodesAsTerminalFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{
+			name: "generic authentication failure",
+			body: `{"id":"task-1004","error":{"message":"invalid key","code":1004}}`,
+			code: StatusAuthFailed,
+		},
+		{
+			name: "official sensitive input",
+			body: `{"error":{"message":"sensitive input","code":1026}}`,
+			code: StatusSensitive,
+		},
+		{
+			name: "generic parameter error",
+			body: `{"id":"task-2013","error":{"message":"invalid parameters","code":2013}}`,
+			code: StatusParamError,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(test.body))
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, string(model.TaskStatusFailure), result.Status)
+			assert.Equal(t, "100%", result.Progress)
+			assert.Equal(t, test.code, result.Code)
+		})
+	}
 }
 
 func TestParseH3UsagePreservesExplicitZeroAndMissingFields(t *testing.T) {

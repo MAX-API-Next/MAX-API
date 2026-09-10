@@ -73,6 +73,10 @@ import {
   formatTaskRateCardRange,
   formatTaskRateCardUnitPrice,
 } from '../lib/price'
+import {
+  getTaskRateCardComponentLabelKey,
+  hasStructuredTaskRateCard,
+} from '../lib/task-rate-card'
 import type {
   Modality,
   ModelCapability,
@@ -423,6 +427,67 @@ function PriceSection(props: {
 
   if (props.model.task_rate_card) {
     const card = props.model.task_rate_card
+    const structuredComponents = card.components || []
+    if (hasStructuredTaskRateCard(card)) {
+      const inputVideo = structuredComponents.find(
+        (component) => component.key === 'input_video'
+      )
+      const inputImage = structuredComponents.find(
+        (component) => component.key === 'input_image'
+      )
+      return (
+        <section>
+          <SectionTitle>{t('Base Price')}</SectionTitle>
+          <div className='grid gap-2 sm:grid-cols-3'>
+            <div className='bg-muted/20 rounded-lg border p-3'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Price per second')}
+              </div>
+              <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
+                {formatTaskRateCardRange(
+                  props.model,
+                  props.showRechargePrice,
+                  props.priceRate,
+                  props.usdExchangeRate,
+                  1
+                )}
+                <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+                  / {t(card.unit || 'second')}
+                </span>
+              </div>
+            </div>
+            <div className='bg-muted/20 rounded-lg border p-3'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Input video reservation cap')}
+              </div>
+              <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
+                {inputVideo?.max_quantity == null ? (
+                  '-'
+                ) : (
+                  <>
+                    {inputVideo.max_quantity}{' '}
+                    <span className='text-muted-foreground/40 text-xs font-normal'>
+                      {t('seconds')}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className='bg-muted/20 rounded-lg border p-3'>
+              <div className='text-muted-foreground text-xs'>
+                {t('Free input images')}
+              </div>
+              <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
+                {inputImage?.free_quantity ?? 0}{' '}
+                <span className='text-muted-foreground/40 text-xs font-normal'>
+                  {t('images')}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+      )
+    }
     return (
       <section>
         <SectionTitle>{t('Base Price')}</SectionTitle>
@@ -633,6 +698,86 @@ function TaskRateCardBreakdown(props: {
   const { t } = useTranslation()
   const card = props.model.task_rate_card
   if (!card) return null
+
+  const structuredComponents = card.components || []
+  if (hasStructuredTaskRateCard(card)) {
+    const thClass =
+      'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
+
+    return (
+      <section>
+        <SectionTitle>{t('Parameter pricing rules')}</SectionTitle>
+        <div className='text-muted-foreground mb-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2'>
+          <div>
+            <span className='text-muted-foreground/60'>{t('Rule')}: </span>
+            <code className='font-mono'>
+              {card.rule_key || props.model.model_name}
+            </code>
+          </div>
+          <div>
+            <span className='text-muted-foreground/60'>{t('Vendor')}: </span>
+            <span>{card.vendor || props.model.vendor_name || '-'}</span>
+          </div>
+          <div>
+            <span className='text-muted-foreground/60'>{t('Currency')}: </span>
+            <span>{card.currency || '-'}</span>
+          </div>
+          <div>
+            <span className='text-muted-foreground/60'>{t('Schema')}: </span>
+            <span className='font-mono'>
+              {card.schema_version ?? '-'}
+              {card.mode ? ` / ${card.mode}` : ''}
+            </span>
+          </div>
+        </div>
+        <div className='-mx-4 overflow-x-auto sm:mx-0'>
+          <Table className='text-sm'>
+            <TableHeader>
+              <TableRow className='hover:bg-transparent'>
+                <TableHead className={thClass}>
+                  {t('Pricing component')}
+                </TableHead>
+                <TableHead className={`${thClass} text-right`}>
+                  {t('Unit price')}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {structuredComponents.map((component, index) => (
+                <TableRow
+                  key={`${component.key}:${component.variant || index}`}
+                >
+                  <TableCell className='py-2.5 text-xs'>
+                    {t(
+                      getTaskRateCardComponentLabelKey(component) ??
+                        'Other pricing component'
+                    )}
+                  </TableCell>
+                  <TableCell className='py-2.5 text-right font-mono tabular-nums'>
+                    {formatTaskRateCardUnitPrice(
+                      Number(component.unit_price),
+                      props.showRechargePrice,
+                      props.priceRate,
+                      props.usdExchangeRate,
+                      1
+                    )}
+                    <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+                      /{' '}
+                      {t(
+                        component.unit === 'image'
+                          ? 'images'
+                          : component.unit || 'unit'
+                      )}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+    )
+  }
 
   const defaults = Object.entries(card.defaults || {}).sort(([a], [b]) =>
     a.localeCompare(b)

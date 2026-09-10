@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -106,6 +107,100 @@ func TestBuildTaskSubmissionSettlementEffectCarriesRequestMetadata(t *testing.T)
 	assert.Equal(t, "request-time-task-token", effect.TokenName)
 	assert.GreaterOrEqual(t, effect.UseTimeSeconds, 3)
 	assert.True(t, effect.IsStream)
+}
+
+func TestBuildTaskExactFinalSettlementUsesPreConsumedQuotaMetadata(t *testing.T) {
+	task := makeTask(901, 902, 100, 0, BillingSourceWallet, 0)
+	task.ID = 903
+	task.TaskID = "task-exact-finalize"
+
+	input := buildTaskExactFinalSettlementInput(task, 80, nil, "exact settlement")
+
+	require.NotNil(t, input)
+	require.NotNil(t, input.Effect)
+	assert.Equal(t, 100, input.Effect.Other["pre_consumed_quota"])
+	assert.NotContains(t, input.Effect.Other, "reserved_quota")
+}
+
+func TestTaskBillingOtherRestrictsStructuredReconciliationMetadata(t *testing.T) {
+	zero := int64(0)
+	task := &model.Task{
+		PrivateData: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{
+				TaskBillingPlan: &types.TaskBillingPlan{
+					Source:       "minimax_h3_v2",
+					RuleKey:      "minimax_h3_v2",
+					ConfigHash:   "must-not-reach-user-logs",
+					GroupRatio:   1.25,
+					QuotaPerUnit: 500000,
+					ReserveQuota: 800,
+					Components: []types.TaskBillingPlanComponent{{
+						Key: "output_video", UnitPrice: "9.99", ReservedQuantity: 5,
+					}},
+				},
+				TaskUsage: &types.TaskUsage{
+					OutputDurationMs: &zero, InputVideoDurationMs: &zero, InputAudioDurationMs: &zero,
+					InputImageCount: &zero, InputVideoCount: &zero, InputAudioCount: &zero,
+					Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+				},
+			},
+		},
+	}
+
+	other := taskBillingOther(task)
+	planMetadata, ok := other["task_billing_plan"].(map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, planMetadata, 3)
+	require.Equal(t, "minimax_h3_v2", planMetadata["source"])
+	require.Equal(t, "minimax_h3_v2", planMetadata["rule_key"])
+	require.EqualValues(t, 800, planMetadata["reserve_quota"])
+	require.NotContains(t, planMetadata, "config_hash")
+	require.NotContains(t, planMetadata, "group_ratio")
+	require.NotContains(t, planMetadata, "quota_per_unit")
+	require.NotContains(t, planMetadata, "components")
+
+	usageMetadata, ok := other["task_usage"].(map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, usageMetadata, 8)
+	for _, key := range []string{
+		"output_duration_ms", "input_video_duration_ms", "input_audio_duration_ms",
+		"input_image_count", "input_video_count", "input_audio_count",
+	} {
+		require.Contains(t, usageMetadata, key)
+		require.EqualValues(t, 0, usageMetadata[key])
+	}
+	require.Equal(t, types.TaskUsageSourceProviderResponse, usageMetadata["source"])
+	require.Equal(t, types.TaskUsageCompletenessComplete, usageMetadata["completeness"])
+}
+
+func TestBuildTaskExactFinalSettlementUsesAllowlistedUsageMetadata(t *testing.T) {
+	task := makeTask(901, 902, 100, 0, BillingSourceWallet, 0)
+	task.ID = 903
+	task.PrivateData.BillingContext.TaskBillingPlan = &types.TaskBillingPlan{
+		RuleKey: "minimax_h3_v2", ReserveQuota: 100, ConfigHash: "must-not-reach-user-logs",
+	}
+	task.PrivateData.BillingContext.TaskUsage = &types.TaskUsage{
+		Completeness: types.TaskUsageCompletenessPartial,
+	}
+	zero := int64(0)
+	usage := &types.TaskUsage{
+		OutputDurationMs: &zero,
+		InputImageCount:  &zero,
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+
+	input := buildTaskExactFinalSettlementInput(task, 80, usage, "exact settlement")
+
+	require.NotNil(t, input)
+	require.NotNil(t, input.Effect)
+	usageMetadata, ok := input.Effect.Other["task_usage"].(map[string]interface{})
+	require.True(t, ok)
+	require.EqualValues(t, 0, usageMetadata["output_duration_ms"])
+	require.EqualValues(t, 0, usageMetadata["input_image_count"])
+	require.Equal(t, types.TaskUsageSourceProviderResponse, usageMetadata["source"])
+	require.Equal(t, types.TaskUsageCompletenessComplete, usageMetadata["completeness"])
+	require.NotContains(t, usageMetadata, "unit_price")
 }
 
 func TestSweepTimedOutUnconfirmedSubmitRequiresReviewWithoutRefund(t *testing.T) {
@@ -305,6 +400,115 @@ func TestSweepTimedOutTasksBoundsScansAndContinuesFromCursor(t *testing.T) {
 	sweepTimedOutTasks(context.Background())
 	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+}
+
+func TestSweepTimedOutTasksDoesNotSpendBudgetOnTaskFinalizeOwnedTasks(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	originalScanBudget := timedOutTaskScanBudget
+	constant.TaskTimeoutMinutes = 1
+	timedOutTaskScanBudget = 1
+	t.Cleanup(func() {
+		constant.TaskTimeoutMinutes = originalTimeout
+		timedOutTaskScanBudget = originalScanBudget
+	})
+
+	now := time.Now().Unix()
+	submitTime := legacyTaskRefundCutoff - 2
+	protected := []model.Task{
+		{TaskID: "timeout-finalize-pending", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+		{TaskID: "timeout-finalize-manual", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+		{TaskID: "timeout-finalize-applied", Status: model.TaskStatusSubmitted, SubmitTime: submitTime},
+	}
+	require.NoError(t, model.DB.Create(&protected).Error)
+	statuses := []string{
+		model.BillingSettlementStatusPending,
+		model.BillingSettlementStatusManual,
+		model.BillingSettlementStatusApplied,
+	}
+	for i := range protected {
+		require.NoError(t, model.DB.Create(&model.BillingSettlement{
+			OperationKey: model.BillingTaskFinalizeOperationKey(protected[i].ID),
+			Source:       model.BillingSettlementSourceWallet,
+			TaskID:       protected[i].ID,
+			Status:       statuses[i],
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Revision:     1,
+		}).Error)
+	}
+	actionable := model.Task{
+		TaskID:     "timeout-after-finalize-backlog",
+		Status:     model.TaskStatusSubmitted,
+		SubmitTime: submitTime + 1,
+	}
+	require.NoError(t, model.DB.Create(&actionable).Error)
+
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, actionable.ID).Error)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	for i := range protected {
+		reloaded = model.Task{}
+		require.NoError(t, model.DB.First(&reloaded, protected[i].ID).Error)
+		if statuses[i] == model.BillingSettlementStatusApplied {
+			assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+			assert.Contains(t, reloaded.FailReason, "manual reconciliation")
+		} else {
+			assert.EqualValues(t, model.TaskStatusSubmitted, reloaded.Status)
+		}
+	}
+}
+
+func TestSweepTimedOutTasksRecoversAppliedFinalizeTerminalEvidence(t *testing.T) {
+	truncate(t)
+	resetTimedOutTaskSweepCursorForTest(t)
+	originalTimeout := constant.TaskTimeoutMinutes
+	constant.TaskTimeoutMinutes = 1
+	t.Cleanup(func() { constant.TaskTimeoutMinutes = originalTimeout })
+
+	task := &model.Task{
+		TaskID:     "task_applied_finalize_recovery",
+		Status:     model.TaskStatusInProgress,
+		Quota:      40,
+		SubmitTime: time.Now().Add(-2 * time.Minute).Unix(),
+		PrivateData: model.TaskPrivateData{
+			PendingTerminalStatus:     model.TaskStatusSuccess,
+			PendingTerminalProgress:   "100%",
+			PendingTerminalFinishTime: time.Now().Unix(),
+			PendingTerminalResultURL:  "https://cdn.example.com/recovered.mp4",
+		},
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.BillingSettlement{
+		OperationKey:        model.BillingTaskFinalizeOperationKey(task.ID),
+		TaskID:              task.ID,
+		TaskQuota:           40,
+		TaskQuotaTarget:     40,
+		Status:              model.BillingSettlementStatusApplied,
+		AppliedFundingDelta: 0,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+		Revision:            1,
+	}).Error)
+	candidates, err := model.GetAppliedTaskFinalizeRecoveryCandidates(time.Now().Unix(), 10)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+
+	sweepTimedOutTasks(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, "100%", reloaded.Progress)
+	assert.Equal(t, "https://cdn.example.com/recovered.mp4", reloaded.PrivateData.ResultURL)
+	assert.Equal(t, 40, reloaded.Quota)
+	var settlementCount int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("task_id = ?", task.ID).Count(&settlementCount).Error)
+	assert.EqualValues(t, 1, settlementCount)
 }
 
 func resetTimedOutTaskSweepCursorForTest(t *testing.T) {

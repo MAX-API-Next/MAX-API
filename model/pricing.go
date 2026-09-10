@@ -2,8 +2,9 @@ package model
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
-
 	"sync"
 	"time"
 
@@ -41,22 +42,37 @@ type Pricing struct {
 }
 
 type TaskRateCardPricing struct {
-	RuleKey         string                   `json:"rule_key,omitempty"`
-	Vendor          string                   `json:"vendor,omitempty"`
-	Unit            string                   `json:"unit,omitempty"`
-	QuantityField   string                   `json:"quantity_field,omitempty"`
-	DefaultQuantity float64                  `json:"default_quantity,omitempty"`
-	Strict          bool                     `json:"strict"`
-	Defaults        map[string]string        `json:"defaults,omitempty"`
-	MinUnitPrice    float64                  `json:"min_unit_price"`
-	MaxUnitPrice    float64                  `json:"max_unit_price"`
-	Rows            []TaskRateCardPricingRow `json:"rows"`
+	RuleKey         string                         `json:"rule_key,omitempty"`
+	Vendor          string                         `json:"vendor,omitempty"`
+	BillingType     string                         `json:"billing_type,omitempty"`
+	SchemaVersion   int                            `json:"schema_version,omitempty"`
+	Mode            string                         `json:"mode,omitempty"`
+	Currency        string                         `json:"currency,omitempty"`
+	Unit            string                         `json:"unit,omitempty"`
+	QuantityField   string                         `json:"quantity_field,omitempty"`
+	DefaultQuantity float64                        `json:"default_quantity,omitempty"`
+	Strict          bool                           `json:"strict"`
+	Defaults        map[string]string              `json:"defaults,omitempty"`
+	MinUnitPrice    float64                        `json:"min_unit_price"`
+	MaxUnitPrice    float64                        `json:"max_unit_price"`
+	Rows            []TaskRateCardPricingRow       `json:"rows"`
+	Components      []TaskRateCardPricingComponent `json:"components,omitempty"`
 }
 
 type TaskRateCardPricingRow struct {
 	ID        string            `json:"id,omitempty"`
 	Match     map[string]string `json:"match"`
 	UnitPrice float64           `json:"unit_price"`
+}
+
+type TaskRateCardPricingComponent struct {
+	Key          string `json:"key"`
+	Variant      string `json:"variant,omitempty"`
+	Unit         string `json:"unit"`
+	UnitPrice    string `json:"unit_price"`
+	FreeQuantity *int64 `json:"free_quantity,omitempty"`
+	MinQuantity  *int64 `json:"min_quantity,omitempty"`
+	MaxQuantity  *int64 `json:"max_quantity,omitempty"`
 }
 
 type PricingVendor struct {
@@ -452,9 +468,24 @@ func updatePricing() {
 }
 
 func newTaskRateCardPricing(ruleKey string, card *task_billing_setting.RateCard) *TaskRateCardPricing {
-	if card == nil || card.BillingType != "" {
+	if card == nil {
 		return nil
 	}
+	if card.BillingType == task_billing_setting.MinimaxBillingType {
+		if structured := newStructuredTaskRateCardPricing(ruleKey, card); structured != nil {
+			return structured
+		}
+		// A malformed structured card should not erase a valid legacy price
+		// payload that may still be present in persisted settings.
+		if len(card.Rows) == 0 {
+			return nil
+		}
+	}
+	if card.BillingType != "" && len(card.Rows) == 0 {
+		return nil
+	}
+	// Unknown structured types must not hide legacy row pricing. This keeps
+	// model pricing visible while the billing type is not yet supported.
 	rows := make([]TaskRateCardPricingRow, len(card.Rows))
 	var minUnitPrice float64
 	var maxUnitPrice float64
@@ -483,6 +514,113 @@ func newTaskRateCardPricing(ruleKey string, card *task_billing_setting.RateCard)
 		MaxUnitPrice:    maxUnitPrice,
 		Rows:            rows,
 	}
+}
+
+func newStructuredTaskRateCardPricing(ruleKey string, card *task_billing_setting.RateCard) *TaskRateCardPricing {
+	if card == nil || card.BillingType != task_billing_setting.MinimaxBillingType {
+		return nil
+	}
+	data, err := common.Marshal(card.BillingConfig)
+	if err != nil {
+		return nil
+	}
+	var config task_billing_setting.H3BillingConfig
+	if err := common.Unmarshal(data, &config); err != nil {
+		return nil
+	}
+
+	resolutions := []string{"768P", "2K"}
+	components := make([]TaskRateCardPricingComponent, 0, 6)
+	var minUnitPrice float64
+	var maxUnitPrice float64
+	for i, resolution := range resolutions {
+		priceText := config.OutputUnitPrice[resolution]
+		price, ok := parseTaskRateCardDisplayPrice(priceText)
+		if !ok {
+			return nil
+		}
+		if i == 0 || price < minUnitPrice {
+			minUnitPrice = price
+		}
+		if i == 0 || price > maxUnitPrice {
+			maxUnitPrice = price
+		}
+		components = append(components, TaskRateCardPricingComponent{
+			Key:         "output_video",
+			Variant:     resolution,
+			Unit:        "second",
+			UnitPrice:   priceText,
+			MinQuantity: pricingInt64Pointer(task_billing_setting.H3MinOutputDurationSeconds),
+			MaxQuantity: pricingInt64Pointer(task_billing_setting.H3MaxOutputDurationSeconds),
+		})
+	}
+	for _, resolution := range resolutions {
+		priceText := config.InputVideoUnitPrice[resolution]
+		if _, ok := parseTaskRateCardDisplayPrice(priceText); !ok {
+			return nil
+		}
+		components = append(components, TaskRateCardPricingComponent{
+			Key:         "input_video",
+			Variant:     resolution,
+			Unit:        "second",
+			UnitPrice:   priceText,
+			MaxQuantity: pricingQuantityLimit(config.InputVideoMaxSeconds),
+		})
+	}
+	if _, ok := parseTaskRateCardDisplayPrice(config.InputImageExtraUnitPrice); !ok {
+		return nil
+	}
+	components = append(components, TaskRateCardPricingComponent{
+		Key:          "input_image",
+		Unit:         "image",
+		UnitPrice:    config.InputImageExtraUnitPrice,
+		FreeQuantity: pricingInt64Pointer(config.InputImageFreeCount),
+		MaxQuantity:  pricingInt64Pointer(task_billing_setting.H3MaxInputImageCount),
+	})
+	if _, ok := parseTaskRateCardDisplayPrice(config.InputAudioUnitPrice); !ok {
+		return nil
+	}
+	components = append(components, TaskRateCardPricingComponent{
+		Key:         "input_audio",
+		Unit:        "second",
+		UnitPrice:   config.InputAudioUnitPrice,
+		MaxQuantity: pricingInt64Pointer(task_billing_setting.H3MaxInputMediaDurationSeconds),
+	})
+
+	return &TaskRateCardPricing{
+		RuleKey:       ruleKey,
+		Vendor:        card.Vendor,
+		BillingType:   card.BillingType,
+		SchemaVersion: config.SchemaVersion,
+		Mode:          config.Mode,
+		Currency:      config.Currency,
+		Unit:          "second",
+		QuantityField: "output_duration",
+		Strict:        true,
+		MinUnitPrice:  minUnitPrice,
+		MaxUnitPrice:  maxUnitPrice,
+		Rows:          make([]TaskRateCardPricingRow, 0),
+		Components:    components,
+	}
+}
+
+func parseTaskRateCardDisplayPrice(value string) (float64, bool) {
+	price, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+		return 0, false
+	}
+	return price, true
+}
+
+func pricingInt64Pointer(value int64) *int64 {
+	return &value
+}
+
+func pricingQuantityLimit(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	return pricingInt64Pointer(value)
 }
 
 func clonePricingStringMap(src map[string]string) map[string]string {

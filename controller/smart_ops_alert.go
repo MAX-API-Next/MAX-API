@@ -62,6 +62,12 @@ type billingSettlementBatchReviewRequest struct {
 	Items []model.BillingSettlementReviewTarget `json:"items"`
 }
 
+type manualTaskBillingCompletionRequest struct {
+	Revision    int64  `json:"revision"`
+	ActualQuota *int64 `json:"actual_quota"`
+	Note        string `json:"note"`
+}
+
 // ReviewBillingSettlements closes a bounded set of current reconciliation
 // alerts after the administrator acknowledges them.
 func ReviewBillingSettlements(c *gin.Context) {
@@ -84,6 +90,9 @@ func ReviewBillingSettlements(c *gin.Context) {
 		case errors.Is(err, model.ErrBillingSettlementReviewConflict):
 			status = http.StatusConflict
 			message = "one or more billing settlement alerts changed; refresh and review again"
+		case errors.Is(err, model.ErrBillingSettlementCompletionRequired):
+			status = http.StatusConflict
+			message = "one or more task settlements require an exact final quota and cannot be batch closed"
 		}
 		if status == http.StatusInternalServerError {
 			common.SysError(fmt.Sprintf("failed to review billing settlements: %v", err))
@@ -139,6 +148,9 @@ func ReviewBillingSettlement(c *gin.Context) {
 		case errors.Is(err, model.ErrBillingSettlementReviewConflict):
 			status = http.StatusConflict
 			message = "billing settlement is no longer pending manual reconciliation"
+		case errors.Is(err, model.ErrBillingSettlementCompletionRequired):
+			status = http.StatusConflict
+			message = "task settlement requires an exact final quota before it can be closed"
 		}
 		if status == http.StatusInternalServerError {
 			common.SysError(fmt.Sprintf("failed to review billing settlement %d: %v", id, err))
@@ -161,8 +173,71 @@ func ReviewBillingSettlement(c *gin.Context) {
 	})
 }
 
+// CompleteManualTaskBillingSettlement applies a root administrator's exact
+// final quota to a reconciliation-only task settlement. Zero is a valid and
+// explicit financial result; omission is rejected.
+func CompleteManualTaskBillingSettlement(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid billing settlement id"})
+		return
+	}
+	var request manualTaskBillingCompletionRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid manual task billing completion request"})
+		return
+	}
+	result, err := service.CompleteManualTaskBillingSettlement(
+		id,
+		request.Revision,
+		c.GetInt("id"),
+		request.ActualQuota,
+		request.Note,
+	)
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "failed to complete manual task billing settlement"
+		switch {
+		case errors.Is(err, service.ErrInvalidBillingSettlementReconciliationReview):
+			status = http.StatusBadRequest
+			message = err.Error()
+		case errors.Is(err, model.ErrBillingSettlementReviewConflict),
+			errors.Is(err, model.ErrBillingSettlementOperationConflict),
+			errors.Is(err, model.ErrBillingSettlementTaskConflict),
+			errors.Is(err, model.ErrBillingSettlementManualReview):
+			status = http.StatusConflict
+			message = "manual task billing settlement could not be applied safely; refresh and reconcile the current record"
+		case errors.Is(err, model.ErrTokenQuotaInsufficient):
+			status = http.StatusConflict
+			message = "the token quota mirror is inconsistent; repair the token record before completing this settlement"
+		case errors.Is(err, model.ErrSubscriptionRefundClamped):
+			status = http.StatusConflict
+			message = "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement"
+		case errors.Is(err, model.ErrSubscriptionSettlementUnbound),
+			errors.Is(err, model.ErrSubscriptionSettlementPeriodChanged):
+			status = http.StatusConflict
+			message = "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation"
+		}
+		if status == http.StatusInternalServerError {
+			common.SysError(fmt.Sprintf("failed to complete manual task billing settlement %d: %v", id, err))
+		}
+		c.JSON(status, gin.H{"success": false, "message": message})
+		return
+	}
+	recordManageAudit(c, "billing.manual_task_settlement_complete", map[string]interface{}{
+		"settlement_id":         result.SettlementID,
+		"task_id":               result.TaskID,
+		"target_user_id":        result.UserID,
+		"operation_key":         result.OperationKey,
+		"actual_quota":          result.ActualQuota,
+		"applied_funding_delta": result.AppliedFundingDelta,
+		"already_applied":       result.AlreadyApplied,
+	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
+}
+
 // GetBillingSettlementReconciliation exposes bounded, read-only evidence for
-// unresolved positive final settlements. It does not retry or mutate records.
+// open billing reconciliation records. It does not retry or mutate records.
 func GetBillingSettlementReconciliation(c *gin.Context) {
 	limit, err := parseIntQuery(c, "limit")
 	if err != nil {

@@ -68,6 +68,7 @@ type QueryTaskResponse struct {
 }
 
 type H3QueryResponse struct {
+	ID    string      `json:"id,omitempty"`
 	Task  *H3Task     `json:"task,omitempty"`
 	Error *H3APIError `json:"error,omitempty"`
 }
@@ -106,6 +107,32 @@ type H3Usage struct {
 	OutputSeconds     json.RawMessage `json:"output_seconds"`
 	InputImageCount   json.RawMessage `json:"input_image_count"`
 	InputAudioSeconds json.RawMessage `json:"input_audio_seconds"`
+}
+
+// GenericMiniMaxVideoResponse is used by compatible gateways that expose the
+// MiniMax H3 result at the response root instead of under the official task
+// envelope. Keep this shape deliberately narrow so legacy Hailuo responses do
+// not get reclassified accidentally.
+type GenericMiniMaxVideoResponse struct {
+	ID     string                     `json:"id"`
+	Object string                     `json:"object"`
+	Status string                     `json:"status"`
+	Data   []GenericMiniMaxVideoAsset `json:"data"`
+	Usage  json.RawMessage            `json:"usage,omitempty"`
+	Error  *GenericMiniMaxVideoError  `json:"error,omitempty"`
+}
+
+type GenericMiniMaxVideoAsset struct {
+	URL       string `json:"url,omitempty"`
+	VideoURL  string `json:"video_url,omitempty"`
+	OutputURL string `json:"output_url,omitempty"`
+}
+
+type GenericMiniMaxVideoError struct {
+	Type     string `json:"type,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Code     any    `json:"code,omitempty"`
+	HTTPCode any    `json:"http_code,omitempty"`
 }
 
 type ErrorInfo struct {

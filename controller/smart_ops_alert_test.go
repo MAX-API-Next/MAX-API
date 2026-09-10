@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
@@ -27,6 +28,346 @@ func TestBillingSettlementMutationRequestsPreserveExplicitFalse(t *testing.T) {
 	require.NoError(t, common.Unmarshal([]byte(`{"block_user":false,"note":"verified"}`), &review))
 	require.NotNil(t, review.BlockUser)
 	assert.False(t, *review.BlockUser)
+
+	var completion manualTaskBillingCompletionRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"revision":1,"actual_quota":0,"note":"verified"}`), &completion))
+	require.NotNil(t, completion.ActualQuota)
+	assert.Zero(t, *completion.ActualQuota)
+
+	var omittedCompletion manualTaskBillingCompletionRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"revision":1,"note":"verified"}`), &omittedCompletion))
+	assert.Nil(t, omittedCompletion.ActualQuota)
+}
+
+func TestCompleteManualTaskBillingSettlementAuditsExactCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.LogConsumeEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Task{},
+		&model.BillingSettlement{},
+		&model.CacheInvalidationTask{},
+		&model.Log{},
+	))
+	model.DB = db
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+	})
+
+	administrator := model.User{
+		Id:       7051,
+		Username: "manual-task-billing-root",
+		AffCode:  "manual-task-billing-root-aff",
+		Role:     common.RoleRootUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	owner := model.User{
+		Id:       7052,
+		Username: "manual-task-billing-owner",
+		AffCode:  "manual-task-billing-owner-aff",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+		Quota:    900,
+	}
+	require.NoError(t, db.Create(&administrator).Error)
+	require.NoError(t, db.Create(&owner).Error)
+	task := model.Task{
+		TaskID:    "controller-manual-task-completion",
+		UserId:    owner.Id,
+		Group:     "default",
+		Quota:     100,
+		Status:    model.TaskStatus(model.TaskStatusInProgress),
+		CreatedAt: 1,
+		UpdatedAt: 1,
+		PrivateData: model.TaskPrivateData{
+			BillingSource: "wallet",
+			BillingContext: &model.TaskBillingContext{
+				OriginModelName: "manual-task-model",
+			},
+		},
+	}
+	task.SetData(map[string]any{"provider_status": "complete"})
+	require.NoError(t, db.Create(&task).Error)
+	settlement := model.BillingSettlement{
+		OperationKey:    model.BillingTaskFinalizeOperationKey(task.ID),
+		Source:          model.BillingSettlementSourceWallet,
+		UserID:          owner.Id,
+		TaskID:          task.ID,
+		TaskQuota:       100,
+		TaskQuotaTarget: 100,
+		Status:          model.BillingSettlementStatusManual,
+		LastError:       "provider usage requires an exact quota",
+		CreatedAt:       1,
+		UpdatedAt:       1,
+		Revision:        1,
+	}
+	require.NoError(t, db.Create(&settlement).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/smart-ops/billing-settlements/%d/complete-task", settlement.ID),
+		bytes.NewBufferString(`{"revision":1,"actual_quota":40,"note":"Verified provider evidence and exact usage."}`),
+	)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", settlement.ID)}}
+	ctx.Set("id", administrator.Id)
+	ctx.Set("username", administrator.Username)
+	ctx.Set("role", administrator.Role)
+
+	CompleteManualTaskBillingSettlement(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"actual_quota":40`)
+	var storedOwner model.User
+	require.NoError(t, db.First(&storedOwner, owner.Id).Error)
+	assert.EqualValues(t, 960, storedOwner.Quota)
+	var storedTask model.Task
+	require.NoError(t, db.First(&storedTask, task.ID).Error)
+	assert.Equal(t, 40, storedTask.Quota)
+	var storedSettlement model.BillingSettlement
+	require.NoError(t, db.First(&storedSettlement, settlement.ID).Error)
+	assert.Equal(t, model.BillingSettlementStatusApplied, storedSettlement.Status)
+	assert.Equal(t, administrator.Id, storedSettlement.ReconciliationReviewedBy)
+
+	var audit model.Log
+	require.NoError(t, db.Where("type = ?", model.LogTypeManage).Order("id DESC").First(&audit).Error)
+	assert.Equal(t, administrator.Id, audit.UserId)
+	assert.Equal(t, administrator.Username, audit.Username)
+	var other struct {
+		Op struct {
+			Action string                 `json:"action"`
+			Params map[string]interface{} `json:"params"`
+		} `json:"op"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(audit.Other, &other))
+	assert.Equal(t, "billing.manual_task_settlement_complete", other.Op.Action)
+	assert.EqualValues(t, settlement.ID, other.Op.Params["settlement_id"])
+	assert.EqualValues(t, task.ID, other.Op.Params["task_id"])
+	assert.EqualValues(t, owner.Id, other.Op.Params["target_user_id"])
+	assert.EqualValues(t, 40, other.Op.Params["actual_quota"])
+	assert.Equal(t, model.BillingTaskManualCompletionOperationKey(task.ID), other.Op.Params["operation_key"])
+}
+
+func TestCompleteManualTaskBillingSettlementMapsTokenRefundConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.LogConsumeEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Token{},
+		&model.Task{},
+		&model.BillingSettlement{},
+		&model.CacheInvalidationTask{},
+		&model.Log{},
+	))
+	model.DB = db
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+	})
+
+	administrator := model.User{
+		Id: 7061, Username: "manual-task-token-root", AffCode: "manual-task-token-root-aff",
+		Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default",
+	}
+	owner := model.User{
+		Id: 7062, Username: "manual-task-token-owner", AffCode: "manual-task-token-owner-aff",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", Quota: 900,
+	}
+	token := model.Token{
+		Id: 7063, UserId: owner.Id, Key: "manual-task-token-conflict", Status: common.TokenStatusEnabled,
+		Name: "manual-task-token-conflict", RemainQuota: 100, UsedQuota: 10, Group: "default",
+	}
+	require.NoError(t, db.Create(&administrator).Error)
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&token).Error)
+	task := model.Task{
+		TaskID: "controller-manual-task-token-conflict", UserId: owner.Id, Group: "default", Quota: 100,
+		Status: model.TaskStatus(model.TaskStatusInProgress), CreatedAt: 1, UpdatedAt: 1,
+		PrivateData: model.TaskPrivateData{
+			TokenId: token.Id, BillingSource: "wallet",
+			BillingContext: &model.TaskBillingContext{OriginModelName: "manual-task-model"},
+		},
+	}
+	task.SetData(map[string]any{"provider_status": "complete"})
+	require.NoError(t, db.Create(&task).Error)
+	settlement := model.BillingSettlement{
+		OperationKey: model.BillingTaskFinalizeOperationKey(task.ID), Source: model.BillingSettlementSourceWallet,
+		UserID: owner.Id, TokenID: token.Id, TaskID: task.ID, TaskQuota: 100, TaskQuotaTarget: 100,
+		Status: model.BillingSettlementStatusManual, LastError: "provider usage requires an exact quota",
+		CreatedAt: 1, UpdatedAt: 1, Revision: 1,
+	}
+	require.NoError(t, db.Create(&settlement).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/smart-ops/billing-settlements/%d/complete-task", settlement.ID),
+		bytes.NewBufferString(`{"revision":1,"actual_quota":40,"note":"Verified provider evidence and exact usage."}`),
+	)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", settlement.ID)}}
+	ctx.Set("id", administrator.Id)
+	ctx.Set("username", administrator.Username)
+	ctx.Set("role", administrator.Role)
+
+	CompleteManualTaskBillingSettlement(ctx)
+
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "token quota mirror")
+	var storedOwner model.User
+	require.NoError(t, db.First(&storedOwner, owner.Id).Error)
+	assert.EqualValues(t, 900, storedOwner.Quota)
+	var storedToken model.Token
+	require.NoError(t, db.First(&storedToken, token.Id).Error)
+	assert.EqualValues(t, 100, storedToken.RemainQuota)
+	assert.EqualValues(t, 10, storedToken.UsedQuota)
+}
+
+func TestCompleteManualTaskBillingSettlementMapsClampedSubscriptionRefund(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.RedisEnabled = false
+	common.MemoryCacheEnabled = false
+	common.LogConsumeEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Token{},
+		&model.Task{},
+		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.BillingSettlement{},
+		&model.CacheInvalidationTask{},
+		&model.Log{},
+	))
+	model.DB = db
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.RedisEnabled = oldRedisEnabled
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+	})
+
+	administrator := model.User{
+		Id: 7071, Username: "manual-task-subscription-root", AffCode: "manual-task-subscription-root-aff",
+		Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default",
+	}
+	owner := model.User{
+		Id: 7072, Username: "manual-task-subscription-owner", AffCode: "manual-task-subscription-owner-aff",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default",
+	}
+	token := model.Token{
+		Id: 7073, UserId: owner.Id, Key: "manual-task-subscription-token", Status: common.TokenStatusEnabled,
+		Name: "manual-task-subscription-token", RemainQuota: 100, UsedQuota: 100, Group: "default",
+	}
+	subscription := model.UserSubscription{
+		Id: 7074, UserId: owner.Id, AmountTotal: 1000, AmountUsed: 50,
+		Status: "active", StartTime: 1, EndTime: time.Now().Add(24 * time.Hour).Unix(),
+	}
+	require.NoError(t, db.Create(&administrator).Error)
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&token).Error)
+	require.NoError(t, db.Create(&subscription).Error)
+	task := model.Task{
+		TaskID: "controller-manual-task-subscription-clamp", UserId: owner.Id, Group: "default", Quota: 100,
+		Status: model.TaskStatus(model.TaskStatusInProgress), CreatedAt: 1, UpdatedAt: 1,
+		PrivateData: model.TaskPrivateData{
+			TokenId: token.Id, SubscriptionId: subscription.Id, BillingSource: "subscription",
+			BillingRequestId: "controller-manual-task-subscription-clamp-preconsume",
+			BillingContext:   &model.TaskBillingContext{OriginModelName: "manual-task-model"},
+		},
+	}
+	task.SetData(map[string]any{"provider_status": "complete"})
+	require.NoError(t, db.Create(&task).Error)
+	require.NoError(t, db.Create(&model.SubscriptionPreConsumeRecord{
+		RequestId: task.PrivateData.BillingRequestId, UserId: owner.Id, TokenId: token.Id,
+		UserSubscriptionId: subscription.Id, PreConsumed: 100, Status: "consumed",
+	}).Error)
+	settlement := model.BillingSettlement{
+		OperationKey: model.BillingTaskFinalizeOperationKey(task.ID), Source: model.BillingSettlementSourceSubscription,
+		UserID: owner.Id, TokenID: token.Id, SubscriptionID: subscription.Id,
+		SubscriptionPreConsumeRequestID: task.PrivateData.BillingRequestId,
+		TaskID:                          task.ID, TaskQuota: 100, TaskQuotaTarget: 100,
+		Status: model.BillingSettlementStatusManual, LastError: "provider usage requires an exact quota",
+		CreatedAt: 1, UpdatedAt: 1, Revision: 1,
+	}
+	require.NoError(t, db.Create(&settlement).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("/api/smart-ops/billing-settlements/%d/complete-task", settlement.ID),
+		bytes.NewBufferString(`{"revision":1,"actual_quota":0,"note":"Verified provider evidence for a full refund."}`),
+	)
+	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", settlement.ID)}}
+	ctx.Set("id", administrator.Id)
+	ctx.Set("username", administrator.Username)
+	ctx.Set("role", administrator.Role)
+
+	CompleteManualTaskBillingSettlement(ctx)
+
+	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "subscription usage mirror")
+	var storedSubscription model.UserSubscription
+	require.NoError(t, db.First(&storedSubscription, subscription.Id).Error)
+	assert.EqualValues(t, 50, storedSubscription.AmountUsed)
+	var storedToken model.Token
+	require.NoError(t, db.First(&storedToken, token.Id).Error)
+	assert.EqualValues(t, 100, storedToken.RemainQuota)
+	assert.EqualValues(t, 100, storedToken.UsedQuota)
 }
 
 func TestReviewBillingSettlementAuditRecordsActingAdministrator(t *testing.T) {

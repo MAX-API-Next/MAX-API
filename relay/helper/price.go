@@ -237,6 +237,17 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+	return modelPriceHelperPerCall(c, info, false)
+}
+
+// ModelPriceHelperPerCallWithPlanCapability allows the selected task adaptor
+// to opt into structured task-plan pricing. Other callers remain on the
+// ordinary fixed-price or ratio path.
+func ModelPriceHelperPerCallWithPlanCapability(c *gin.Context, info *relaycommon.RelayInfo, taskPlanCapable bool) (types.PriceData, error) {
+	return modelPriceHelperPerCall(c, info, taskPlanCapable)
+}
+
+func modelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo, taskPlanCapable bool) (types.PriceData, error) {
 	if info == nil {
 		return types.PriceData{}, fmt.Errorf("relay info is nil")
 	}
@@ -253,6 +264,17 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		upstreamModelName = info.UpstreamModelName
 	}
 	rateCardPriced := task_billing_setting.HasRateCard(info.OriginModelName, upstreamModelName)
+	effectiveTaskModel := strings.TrimSpace(info.OriginModelName)
+	if strings.TrimSpace(upstreamModelName) != "" {
+		effectiveTaskModel = strings.TrimSpace(upstreamModelName)
+	}
+	taskPlanPriced := taskPlanCapable && task_billing_setting.HasH3BillingPlanForModel(effectiveTaskModel)
+	if taskPlanPriced {
+		// A structured task plan owns H3 pricing. Ignore a stale legacy card
+		// match so it cannot turn the request into per-call billing or a second
+		// generic task estimate.
+		rateCardPriced = false
+	}
 
 	if !success {
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
@@ -262,6 +284,11 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		} else if rateCardPriced {
 			modelPrice = 0
 			usePrice = true
+		} else if taskPlanPriced {
+			// Structured task plans own the actual estimate and reservation. This
+			// helper only supplies the selected group ratio and must not require or
+			// synthesize a legacy model price.
+			modelPrice = 0
 		} else if taskModelRequiresConfiguredPrice(info.OriginModelName) {
 			return types.PriceData{}, modelPriceNotConfiguredError(info.OriginModelName, info.UserId)
 		} else {
@@ -282,7 +309,12 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	var err error
 	freeModel := false
 
-	if usePrice {
+	if taskPlanPriced {
+		quota = 0
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+			freeModel = true
+		}
+	} else if usePrice {
 		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
 			return types.PriceData{}, err
@@ -311,7 +343,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	// Keep the model price in Quota for final settlement. The configured
 	// minimum belongs only to the reservation made before the request.
 	preConsumedQuota := quota
-	if !freeModel && groupRatioInfo.GroupRatio > 0 {
+	if !taskPlanPriced && !freeModel && groupRatioInfo.GroupRatio > 0 {
 		preConsumedQuota, err = ApplyPreConsumedQuotaFloor(quota, true)
 		if err != nil {
 			return types.PriceData{}, err
@@ -319,13 +351,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	}
 
 	priceData := types.PriceData{
-		FreeModel:         freeModel,
-		ModelPrice:        modelPrice,
-		ModelRatio:        modelRatio,
-		UsePrice:          usePrice,
-		Quota:             quota,
-		QuotaToPreConsume: preConsumedQuota,
-		GroupRatioInfo:    groupRatioInfo,
+		FreeModel:               freeModel,
+		ModelPrice:              modelPrice,
+		ModelRatio:              modelRatio,
+		UsePrice:                usePrice,
+		Quota:                   quota,
+		QuotaToPreConsume:       preConsumedQuota,
+		TaskBillingPlanRequired: taskPlanPriced,
+		GroupRatioInfo:          groupRatioInfo,
 	}
 	return priceData, nil
 }

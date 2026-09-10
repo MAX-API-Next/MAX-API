@@ -139,6 +139,13 @@ type TaskPrivateData struct {
 	TokenId          int                 `json:"token_id,omitempty"`           // 令牌 ID，用于令牌额度退款
 	NodeName         string              `json:"node_name,omitempty"`          // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext   *TaskBillingContext `json:"billing_context,omitempty"`    // 计费参数快照（用于轮询阶段重新计算）
+	// Pending terminal evidence is persisted before task-finalize funding is
+	// applied, so a crash cannot strand the task in a non-terminal state.
+	PendingTerminalStatus     TaskStatus `json:"pending_terminal_status,omitempty"`
+	PendingTerminalProgress   string     `json:"pending_terminal_progress,omitempty"`
+	PendingTerminalFinishTime int64      `json:"pending_terminal_finish_time,omitempty"`
+	PendingTerminalReason     string     `json:"pending_terminal_reason,omitempty"`
+	PendingTerminalResultURL  string     `json:"pending_terminal_result_url,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -149,6 +156,7 @@ type TaskBillingContext struct {
 	OtherRatios             map[string]float64       `json:"other_ratios,omitempty"` // 附加倍率（时长、分辨率等）
 	TaskBilling             *types.TaskBillingResult `json:"task_billing,omitempty"`
 	TaskBillingPlan         *types.TaskBillingPlan   `json:"task_billing_plan,omitempty"`
+	TaskUsage               *types.TaskUsage         `json:"task_usage,omitempty"`
 	OriginModelName         string                   `json:"origin_model_name,omitempty"`         // 模型名称，必须为OriginModelName
 	PerCallBilling          bool                     `json:"per_call_billing,omitempty"`          // 按次计费：跳过轮询阶段的差额结算
 	DeltaSettlementDisabled *bool                    `json:"delta_settlement_disabled,omitempty"` // 渠道关闭完成态差额结算时按提交快照跳过
@@ -354,12 +362,48 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
+func GetAppliedTaskFinalizeRecoveryCandidates(cutoffUnix int64, limit int) ([]*Task, error) {
+	var tasks []*Task
+	if limit <= 0 {
+		limit = 100
+	}
+	finalize := DB.Model(&BillingSettlement{}).Select("1").
+		Where("operation_key = "+taskFinalizeOperationKeySQL(common.UsingSQLite)).
+		Where("status = ?", BillingSettlementStatusApplied)
+	err := DB.Model(&Task{}).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Where("EXISTS (?)", finalize).
+		Order("submit_time ASC, id ASC").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
 // GetTimedOutUnfinishedTasksAfter returns timed-out non-terminal tasks after
 // the supplied (submit_time, id) cursor in stable ascending order.
 func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) ([]*Task, error) {
 	var tasks []*Task
-	query := DB.Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix)
+	err := timedOutUnfinishedTasksQuery(DB, common.UsingSQLite, cutoffUnix, afterSubmitTime, afterID, limit).
+		Find(&tasks).Error
+	if err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func timedOutUnfinishedTasksQuery(db *gorm.DB, usingSQLite bool, cutoffUnix int64, afterSubmitTime int64, afterID int64, limit int) *gorm.DB {
+	taskFinalizeOwned := db.Model(&BillingSettlement{}).
+		Select("1").
+		Where("operation_key = "+taskFinalizeOperationKeySQL(usingSQLite)).
+		Where("status IN ?", []string{
+			"",
+			BillingSettlementStatusPending,
+			BillingSettlementStatusManual,
+			BillingSettlementStatusApplied,
+		})
+	query := db.Model(&Task{}).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Where("NOT EXISTS (?)", taskFinalizeOwned)
 	if afterID > 0 {
 		query = query.Where(
 			"(submit_time > ? OR (submit_time = ? AND id > ?))",
@@ -368,13 +412,14 @@ func GetTimedOutUnfinishedTasksAfter(cutoffUnix int64, afterSubmitTime int64, af
 			afterID,
 		)
 	}
-	err := query.Order("submit_time ASC, id ASC").
-		Limit(limit).
-		Find(&tasks).Error
-	if err != nil {
-		return nil, err
+	return query.Order("submit_time ASC, id ASC").Limit(limit)
+}
+
+func taskFinalizeOperationKeySQL(usingSQLite bool) string {
+	if usingSQLite {
+		return fmt.Sprintf("'%s' || CAST(tasks.id AS TEXT) || '%s'", billingTaskOperationPrefix, billingRequestFinalizeSuffix)
 	}
-	return tasks, nil
+	return fmt.Sprintf("CONCAT('%s', tasks.id, '%s')", billingTaskOperationPrefix, billingRequestFinalizeSuffix)
 }
 
 func GetAllUnFinishSyncTasks(limit int) []*Task {
@@ -440,6 +485,20 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 		return nil, false, err
 	}
 	return task, exist, err
+}
+
+func GetTaskByID(id int64) (*Task, error) {
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	if id <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var task Task
+	if err := DB.First(&task, id).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
@@ -559,6 +618,46 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+// UpdateWithStatusAndPendingTerminalEvidence durably records terminal provider
+// evidence while keeping the task in fromStatus. The status and updated_at
+// guards prevent a stale poller from publishing evidence for another lifecycle.
+func (t *Task) UpdateWithStatusAndPendingTerminalEvidence(fromStatus TaskStatus, expectedUpdatedAt int64) (bool, error) {
+	if t == nil || t.ID <= 0 {
+		return false, errors.New("persisted task is required")
+	}
+	if t.Status != fromStatus {
+		return false, errors.New("terminal evidence must keep the task non-terminal")
+	}
+	if expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
+		if expectedUpdatedAt == 1<<63-1 {
+			return false, errors.New("task updated_at cannot advance")
+		}
+		updatedAt = expectedUpdatedAt + 1
+	}
+	updates := map[string]interface{}{
+		"private_data": t.PrivateData,
+		"updated_at":   updatedAt,
+	}
+	if t.Data != nil || t.includeDataInUpdate {
+		updates["data"] = t.Data
+	}
+	result := DB.Model(&Task{}).
+		Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
+}
+
 var errTaskStatusCASLost = errors.New("task status compare-and-swap lost")
 
 // UpdateWithStatusAndSettlement commits a terminal task transition and its
@@ -592,6 +691,124 @@ func (t *Task) UpdateWithStatusAndSettlement(fromStatus TaskStatus, input Billin
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// UpdateWithStatusAndSettlementIntent atomically freezes terminal billing
+// evidence and its durable settlement intent while deliberately keeping the
+// provider task non-terminal. Funding may then be applied safely; only an
+// applied funding state is allowed to advance the provider status to a
+// terminal value.
+func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput) (bool, error) {
+	if t == nil || t.ID <= 0 {
+		return false, errors.New("persisted task is required")
+	}
+	if t.Status != fromStatus {
+		return false, errors.New("settlement intent must keep the task non-terminal")
+	}
+	if expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
+	if input.TaskID != t.ID {
+		return false, fmt.Errorf("billing settlement task identity mismatch: task=%d input=%d", t.ID, input.TaskID)
+	}
+	if err := validateBillingSettlementInput(input); err != nil {
+		return false, err
+	}
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
+		if expectedUpdatedAt == 1<<63-1 {
+			return false, errors.New("task updated_at cannot advance")
+		}
+		updatedAt = expectedUpdatedAt + 1
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"private_data": t.PrivateData,
+			"updated_at":   updatedAt,
+		}
+		if t.Data != nil || t.includeDataInUpdate {
+			updates["data"] = t.Data
+		}
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errTaskStatusCASLost
+		}
+		return nil
+	})
+	if errors.Is(err, errTaskStatusCASLost) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
+}
+
+// UpdateWithStatusAndManualSettlement atomically records a reconciliation-only
+// finalize intent while keeping the provider task non-terminal and pollable.
+// The status plus updated_at guard prevents concurrent pollers from publishing
+// different terminal evidence for the same task lifecycle.
+func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expectedUpdatedAt int64, input BillingSettlementInput, reason string) (bool, error) {
+	if t == nil || t.ID <= 0 {
+		return false, errors.New("persisted task is required")
+	}
+	if t.Status != fromStatus {
+		return false, errors.New("manual settlement must keep the task non-terminal")
+	}
+	if expectedUpdatedAt < 0 {
+		return false, errors.New("task updated_at snapshot is invalid")
+	}
+	if input.TaskID != t.ID {
+		return false, fmt.Errorf("billing settlement task identity mismatch: task=%d input=%d", t.ID, input.TaskID)
+	}
+	updatedAt := t.UpdatedAt
+	if updatedAt <= expectedUpdatedAt {
+		if expectedUpdatedAt == 1<<63-1 {
+			return false, errors.New("task updated_at cannot advance")
+		}
+		updatedAt = expectedUpdatedAt + 1
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"private_data": t.PrivateData,
+			"updated_at":   updatedAt,
+		}
+		if t.Data != nil || t.includeDataInUpdate {
+			updates["data"] = t.Data
+		}
+		result := tx.Model(&Task{}).
+			Where("id = ? AND status = ? AND updated_at = ?", t.ID, fromStatus, expectedUpdatedAt).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errTaskStatusCASLost
+		}
+		return nil
+	})
+	if errors.Is(err, errTaskStatusCASLost) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	t.UpdatedAt = updatedAt
+	return true, nil
 }
 
 // UpdateWithSettlementIntent persists upstream task identity and the request's

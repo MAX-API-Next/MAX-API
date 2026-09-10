@@ -181,15 +181,91 @@ func TryHandleConfiguredSubmitResponse(c *gin.Context, responseBody []byte, info
 }
 
 func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSettings) (*relaycommon.TaskInfo, bool, error) {
+	return parseConfiguredTaskResult(respBody, settings, 0)
+}
+
+// MaxWrappedTaskUnwrapDepth bounds successful relay-envelope unwrapping so
+// task result and provider usage parsing apply the same resource limit.
+const MaxWrappedTaskUnwrapDepth = 4
+
+func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSettings, unwrapDepth int) (*relaycommon.TaskInfo, bool, error) {
 	if !UseConfiguredTaskProtocol(settings) {
 		return nil, false, nil
 	}
 	cfg := EffectiveTaskProtocolConfig(settings)
+	// Relay gateways may wrap the provider result in a successful MAX envelope
+	// ({"code":"success","data":{...}}). Parse the nested provider object
+	// first so the wrapper's local IN_PROGRESS status cannot hide a terminal
+	// upstream result. Configurations copied from the wrapper commonly prefix
+	// paths with data.; strip that prefix for this explicit nested candidate.
+	if unwrapDepth < MaxWrappedTaskUnwrapDepth {
+		if nested := WrappedTaskProviderPayload(respBody); nested != nil {
+			nestedCfg := cfg
+			nestedCfg.TaskIDPath = stripWrappedTaskPath(cfg.TaskIDPath)
+			nestedCfg.StatusPath = stripWrappedTaskPath(cfg.StatusPath)
+			nestedCfg.ProgressPath = stripWrappedTaskPath(cfg.ProgressPath)
+			nestedCfg.ErrorMessagePath = stripWrappedTaskPath(cfg.ErrorMessagePath)
+			nestedCfg.CreatedAtPath = stripWrappedTaskPath(cfg.CreatedAtPath)
+			nestedCfg.UpdatedAtPath = stripWrappedTaskPath(cfg.UpdatedAtPath)
+			nestedCfg.ResultURLPaths = make([]string, 0, len(cfg.ResultURLPaths))
+			for _, path := range cfg.ResultURLPaths {
+				nestedCfg.ResultURLPaths = append(nestedCfg.ResultURLPaths, stripWrappedTaskPath(path))
+			}
+			nestedSettings := settings
+			nestedSettings.TaskProtocolConfig = &nestedCfg
+			result, ok, err := parseConfiguredTaskResult(nested, nestedSettings, unwrapDepth+1)
+			if err != nil || ok {
+				return result, ok, err
+			}
+		}
+	}
+	// The official MiniMax H3 query response nests the task facts under
+	// `task`. Keep these envelope markers before compatibility fallbacks so
+	// unrelated providers cannot be mistaken for MiniMax responses.
+	officialTaskEnvelope := gjson.GetBytes(respBody, "task").IsObject()
+	// MiniMax-compatible gateways return the task facts at the root with an
+	// array-valued `data` field and the `video.generation` object marker. Keep
+	// this compatibility fallback explicit so unrelated providers cannot be
+	// mistaken for MiniMax responses.
+	rootObject := strings.TrimSpace(StringFromGJSONPath(respBody, "object"))
+	rootMiniMaxEnvelope := !officialTaskEnvelope &&
+		StringFromGJSONPath(respBody, "id") != "" &&
+		strings.EqualFold(rootObject, "video.generation") &&
+		gjson.GetBytes(respBody, "data").IsArray()
 	taskID := StringFromGJSONPath(respBody, cfg.TaskIDPath)
+	if taskID == "" && rootMiniMaxEnvelope {
+		// MiniMax-compatible gateways may return the task identifier at the
+		// response root even when a legacy nested path was configured.
+		taskID = StringFromGJSONPath(respBody, "id")
+	}
+	if taskID == "" && officialTaskEnvelope {
+		taskID = StringFromGJSONPath(respBody, "task.id")
+	}
 	statusRaw := StringFromGJSONPath(respBody, cfg.StatusPath)
+	if statusRaw == "" && (officialTaskEnvelope || rootMiniMaxEnvelope) {
+		statusRaw = StringFromGJSONPath(respBody, "status")
+	}
+	if statusRaw == "" && officialTaskEnvelope {
+		statusRaw = StringFromGJSONPath(respBody, "task.status")
+	}
 	progressRaw := StringFromGJSONPath(respBody, cfg.ProgressPath)
 	resultURL := ExtractConfiguredResultURL(respBody, cfg.ResultURLPaths)
+	if resultURL == "" && (officialTaskEnvelope || rootMiniMaxEnvelope) {
+		// The generic MiniMax video response uses data[0].url. Keep this
+		// compatibility fallback narrow so an explicitly configured provider
+		// path remains authoritative whenever it yields a value.
+		resultURL = ExtractConfiguredResultURL(respBody, []string{"data.0.url", "data.0.video_url", "data.0.output_url"})
+	}
+	if resultURL == "" && officialTaskEnvelope {
+		resultURL = ExtractConfiguredResultURL(respBody, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
+	}
 	reason := StringFromGJSONPath(respBody, cfg.ErrorMessagePath)
+	if reason == "" && (taskID != "" || statusRaw != "") {
+		reason = StringFromGJSONPath(respBody, "error.message")
+	}
+	if reason == "" && officialTaskEnvelope {
+		reason = StringFromGJSONPath(respBody, "task.error.message")
+	}
 
 	if taskID == "" && statusRaw == "" && progressRaw == "" && resultURL == "" && reason == "" {
 		return nil, false, nil
@@ -198,6 +274,13 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	status := MapConfiguredTaskStatus(statusRaw, cfg)
 	if statusRaw == "" {
 		status = inferConfiguredTaskStatus(resultURL, reason)
+	}
+	// MiniMax only has a retrievable result once `content.url` is present.
+	// Do not let a generic status map turn an intermediate succeeded envelope
+	// into a billable terminal task before the artifact is available.
+	if (officialTaskEnvelope || rootMiniMaxEnvelope) &&
+		status == string(model.TaskStatusSuccess) && resultURL == "" && reason == "" {
+		status = string(model.TaskStatusInProgress)
 	}
 	if resultURL != "" && status != string(model.TaskStatusFailure) {
 		status = string(model.TaskStatusSuccess)
@@ -218,6 +301,32 @@ func ParseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	}, true, nil
 }
 
+// WrappedTaskProviderPayload returns an explicit provider object from the
+// successful MAX relay envelope used by some task gateways. It is deliberately
+// narrow to avoid treating arbitrary `data.data` responses as this contract.
+func WrappedTaskProviderPayload(respBody []byte) []byte {
+	if !strings.EqualFold(strings.TrimSpace(StringFromGJSONPath(respBody, "code")), "success") {
+		return nil
+	}
+	nested := gjson.GetBytes(respBody, "data.data")
+	if !nested.Exists() || !nested.IsObject() {
+		return nil
+	}
+	if StringFromGJSONPath([]byte(nested.Raw), "id") == "" ||
+		StringFromGJSONPath([]byte(nested.Raw), "status") == "" {
+		return nil
+	}
+	return []byte(nested.Raw)
+}
+
+func stripWrappedTaskPath(path string) string {
+	path = strings.TrimSpace(path)
+	if strings.HasPrefix(path, "data.") {
+		return strings.TrimPrefix(path, "data.")
+	}
+	return path
+}
+
 func ConvertConfiguredTaskToOpenAIVideo(originTask *model.Task) ([]byte, bool, error) {
 	cfg, ok := TaskProtocolConfigFromTask(originTask)
 	if !ok {
@@ -231,6 +340,9 @@ func ConvertConfiguredTaskToOpenAIVideo(originTask *model.Task) ([]byte, bool, e
 	urlValue := originTask.GetResultURL()
 	if urlValue == "" {
 		urlValue = ExtractConfiguredResultURL(originTask.Data, cfg.ResultURLPaths)
+	}
+	if urlValue == "" && gjson.GetBytes(originTask.Data, "task").IsObject() {
+		urlValue = ExtractConfiguredResultURL(originTask.Data, []string{"task.content.url", "task.content.video_url", "task.content.output_url"})
 	}
 	openAIVideo.SetMetadata("url", urlValue)
 	openAIVideo.CreatedAt = firstTimestamp(originTask.CreatedAt, TimestampFromGJSONPath(originTask.Data, cfg.CreatedAtPath))

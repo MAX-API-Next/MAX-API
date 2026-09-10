@@ -248,6 +248,7 @@ func SetApiRouter(router *gin.Engine) {
 			smartOpsRoute.PUT("/billing-settlements/blocking-policy", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.UpdateBillingSettlementBlockingPolicy)
 			smartOpsRoute.POST("/billing-settlements/reviews", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.ReviewBillingSettlements)
 			smartOpsRoute.POST("/billing-settlements/:id/review", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.ReviewBillingSettlement)
+			smartOpsRoute.POST("/billing-settlements/:id/complete-task", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.CompleteManualTaskBillingSettlement)
 			smartOpsRoute.GET("/channel-performance", controller.GetChannelPerformance)
 			smartOpsRoute.GET("/channel-performance/detail", controller.GetChannelPerformanceDetail)
 			smartOpsRoute.GET("/model-performance", controller.GetModelPerformance)

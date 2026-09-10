@@ -44,6 +44,9 @@ function validData(): BillingSettlementReconciliationData {
         subscription_id: 0,
         token_id: 5,
         task_id: 0,
+        task_quota: 0,
+        task_quota_target: 0,
+        requires_manual_completion: false,
         funding_delta: 10,
         applied_funding_delta: 2,
         token_delta: 10,
@@ -108,6 +111,20 @@ describe('isBillingSettlementReconciliationData', () => {
       isBillingSettlementReconciliationData({
         ...validData(),
         items: [{ ...item, funding_delta: Number.NaN }],
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, task_quota: -1 }],
+      }),
+      false
+    )
+    assert.equal(
+      isBillingSettlementReconciliationData({
+        ...validData(),
+        items: [{ ...item, task_quota_target: -1 }],
       }),
       false
     )

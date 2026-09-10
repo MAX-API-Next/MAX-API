@@ -109,7 +109,7 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 			Threshold:    0,
 			ObservedAt:   observedAt,
 			Message: fmt.Sprintf(
-				"尚未核对的正向最终计费告警已全部关闭，此前共 %d 条。财务结算记录仍可能保持 pending/manual，请继续在对账列表中处理。",
+				"尚未核对的最终计费或任务用量告警已全部关闭，此前共 %d 条。财务结算记录仍可能保持 pending/manual，请继续在对账列表中处理。",
 				previousCount,
 			),
 		}
@@ -149,7 +149,7 @@ func updateBillingSettlementBacklogAlert(stats model.BillingSettlementBacklogSta
 		Threshold:    oldestAge.Seconds(),
 		ObservedAt:   observedAt,
 		Message: fmt.Sprintf(
-			"存在 %d 条尚未核对的正向最终计费对账，最早已等待 %s。是否阻止相关用户的新付费请求由管理员配置和单条核对策略决定，请尽快处理 pending/manual 记录。",
+			"存在 %d 条尚未核对的最终计费或任务用量对账，最早已等待 %s。只有未解决的正向资金差额可能阻止相关用户的新付费请求，请尽快处理 pending/manual 记录。",
 			stats.Count,
 			oldestAge.Round(time.Second),
 		),

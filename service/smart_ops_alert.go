@@ -15,6 +15,8 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
+	"github.com/MAX-API-Next/MAX-API/types"
+	"gorm.io/gorm"
 )
 
 var ErrInvalidBillingSettlementReconciliationQuery = errors.New("invalid billing settlement reconciliation query")
@@ -415,6 +417,155 @@ func ReviewBillingSettlements(targets []model.BillingSettlementReviewTarget, rev
 	}
 	refreshBillingSettlementBacklogAfterReview()
 	return records, nil
+}
+
+// ManualTaskBillingCompletionResult describes the durable child settlement
+// that completed a reconciliation-only task finalization. The operation key
+// can be used to trace the idempotent balance mutation and its effect replay.
+type ManualTaskBillingCompletionResult struct {
+	SettlementID        int64  `json:"settlement_id"`
+	TaskID              int64  `json:"task_id"`
+	UserID              int    `json:"user_id"`
+	OperationKey        string `json:"operation_key"`
+	ActualQuota         int64  `json:"actual_quota"`
+	AppliedFundingDelta int64  `json:"applied_funding_delta"`
+	AlreadyApplied      bool   `json:"already_applied"`
+}
+
+// CompleteManualTaskBillingSettlement applies an administrator-approved exact
+// final task quota. It never charges above the frozen reservation: the only
+// allowed balance mutation is an exact refund (including an explicit zero-cost
+// result) or a zero delta. Approval is persisted on the child operation before
+// the existing idempotent settlement transaction may mutate any balance.
+func CompleteManualTaskBillingSettlement(
+	id int64,
+	expectedRevision int64,
+	reviewerID int,
+	actualQuota *int64,
+	note string,
+) (ManualTaskBillingCompletionResult, error) {
+	if id <= 0 || expectedRevision <= 0 || reviewerID <= 0 || actualQuota == nil {
+		return ManualTaskBillingCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+	}
+	note = strings.TrimSpace(note)
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	note = strings.TrimSpace(common.SanitizePersistedLogContent(common.MaskSensitiveInfo(note)))
+	if err := validateBillingSettlementReviewNote(note); err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+
+	original, originalAlreadyResolved, err := model.GetManualTaskBillingSettlement(id, expectedRevision)
+	if err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	if originalAlreadyResolved &&
+		(original.ReconciliationReviewedBy != reviewerID || original.ReconciliationReviewNote != note) {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	}
+	if *actualQuota < 0 || *actualQuota > original.TaskQuota ||
+		original.TaskQuota < 0 || original.TaskQuotaTarget != original.TaskQuota ||
+		original.FundingDelta != 0 || original.TokenDelta != 0 {
+		return ManualTaskBillingCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+	}
+	if int64(int(original.TaskQuota)) != original.TaskQuota || int64(int(*actualQuota)) != *actualQuota {
+		return ManualTaskBillingCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+	}
+
+	task, err := model.GetTaskByID(original.TaskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+		}
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	expectedSource := model.BillingSettlementSourceWallet
+	if taskIsSubscription(task) {
+		expectedSource = model.BillingSettlementSourceSubscription
+	}
+	if original.Source != expectedSource ||
+		original.UserID != task.UserId ||
+		original.SubscriptionID != task.PrivateData.SubscriptionId ||
+		original.TokenID != task.PrivateData.TokenId ||
+		original.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	}
+
+	existingChild, childFound, err := model.GetManualTaskBillingCompletion(task.ID)
+	if err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	childWasApplied := childFound && existingChild.Status == model.BillingSettlementStatusApplied
+	if childFound && existingChild.TaskQuotaTarget != *actualQuota {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	}
+	if int64(task.Quota) != original.TaskQuota &&
+		(int64(task.Quota) != *actualQuota || !childWasApplied) {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	}
+
+	completionTask := *task
+	completionTask.Quota = int(original.TaskQuota)
+	var usage *types.TaskUsage
+	if completionTask.PrivateData.BillingContext != nil {
+		usage = types.CloneTaskUsage(completionTask.PrivateData.BillingContext.TaskUsage)
+	}
+	input := buildTaskExactFinalSettlementInput(
+		&completionTask,
+		int(*actualQuota),
+		usage,
+		"Administrator-approved manual task usage settlement",
+	)
+	if input == nil {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
+	}
+	input.OperationKey = model.BillingTaskManualCompletionOperationKey(task.ID)
+
+	if _, err := model.EnsureManualTaskBillingCompletion(*input, reviewerID, note); err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	appliedFundingDelta, childAlreadyApplied, err := model.ApplyBillingSettlementOnce(*input)
+	if err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	if appliedFundingDelta != input.FundingDelta {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementOperationConflict
+	}
+	settledTask, err := model.GetTaskByID(task.ID)
+	if err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	}
+	if int64(settledTask.Quota) != *actualQuota {
+		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementTaskConflict
+	}
+	if _, originalResolvedByReplay, err := model.ResolveManualTaskBillingSettlement(
+		id,
+		expectedRevision,
+		reviewerID,
+		note,
+	); err != nil {
+		return ManualTaskBillingCompletionResult{}, err
+	} else {
+		originalAlreadyResolved = originalAlreadyResolved || originalResolvedByReplay
+	}
+
+	// Funding and task quota are already durable. Effect replay is independently
+	// idempotent and may remain pending without hiding the completed financial
+	// state or blocking the provider-driven terminal task transition.
+	if effectErr := model.ProcessBillingSettlementEffect(input.OperationKey); effectErr != nil {
+		common.SysLog(fmt.Sprintf("manual task billing settlement effect remains pending: operation=%s error=%v", input.OperationKey, effectErr))
+	}
+	refreshBillingSettlementBacklogAfterReview()
+	return ManualTaskBillingCompletionResult{
+		SettlementID:        id,
+		TaskID:              task.ID,
+		UserID:              original.UserID,
+		OperationKey:        input.OperationKey,
+		ActualQuota:         *actualQuota,
+		AppliedFundingDelta: appliedFundingDelta,
+		AlreadyApplied:      originalAlreadyResolved || childWasApplied || childAlreadyApplied,
+	}, nil
 }
 
 type smartOpsAlertRecipient struct {

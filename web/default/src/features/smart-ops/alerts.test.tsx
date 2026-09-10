@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useMemo, useState, type ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
 import { waitFor, within } from '@testing-library/react'
@@ -23,6 +24,7 @@ import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { completeManualTaskBillingSettlement } from './api'
 import type { BillingSettlementReconciliationData } from './types'
 
 const LOAD_ERROR_KEY = 'We could not load active alerts.'
@@ -39,6 +41,8 @@ const testEnv = createReactTestEnvironment({
 
 await testEnv.setup()
 const { ActiveAlerts } = await import('./alerts')
+const { BillingSettlementEvidence } =
+  await import('./components/billing-settlement-evidence')
 
 after(() => testEnv.teardown())
 
@@ -67,7 +71,104 @@ function emptyReconciliationData(): BillingSettlementReconciliationData {
   }
 }
 
+function ManualSettlementEvidenceHarness(): ReactElement {
+  const [failed, setFailed] = useState(false)
+  const data = useMemo<BillingSettlementReconciliationData>(
+    () => ({
+      ...emptyReconciliationData(),
+      total_count: 1,
+      manual_count: 1,
+      open_alert_count: 1,
+      items: [
+        {
+          id: 701,
+          revision: 4,
+          operation_key: 'task:9701:finalize',
+          status: 'manual',
+          source: 'wallet',
+          user_id: 53,
+          subscription_id: 0,
+          token_id: 54,
+          task_id: 9701,
+          task_quota: 100,
+          task_quota_target: 100,
+          requires_manual_completion: true,
+          funding_delta: 0,
+          applied_funding_delta: 0,
+          token_delta: 0,
+          applied_token_delta: 0,
+          attempts: 0,
+          last_error: 'provider usage needs verification',
+          next_attempt: 0,
+          created_at: 1786032545,
+          updated_at: 1786032545,
+          reconciliation_reviewed_at: 0,
+          reconciliation_reviewed_by: 0,
+          reconciliation_review_note: '',
+          user_blocking_override: null,
+          record_blocks_user: false,
+          blocks_user: false,
+        },
+      ],
+    }),
+    []
+  )
+  const error = useMemo(() => new Error('temporary reconciliation failure'), [])
+
+  return (
+    <>
+      <button type='button' onClick={() => setFailed(true)}>
+        Cause reconciliation error
+      </button>
+      <BillingSettlementEvidence
+        canCompleteManualTask
+        canUpdateBlockingPolicy
+        data={failed ? undefined : data}
+        error={failed ? error : null}
+        loading={false}
+        onRetry={() => undefined}
+      />
+    </>
+  )
+}
+
 describe('SmartOps active alerts', () => {
+  test('posts the exact manual task settlement contract', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown; config: unknown }> = []
+    api.post = (async (
+      url: string,
+      data: unknown,
+      config: unknown
+    ): Promise<unknown> => {
+      writes.push({ url: String(url), data, config })
+      return { data: { success: true, data: { actual_quota: 0 } } }
+    }) as typeof api.post
+
+    try {
+      const response = await completeManualTaskBillingSettlement(93, {
+        revision: 2,
+        actual_quota: 0,
+        note: 'Verified provider evidence and exact usage.',
+      })
+
+      assert.equal(response.success, true)
+      assert.deepEqual(writes, [
+        {
+          url: '/api/smart-ops/billing-settlements/93/complete-task',
+          data: {
+            revision: 2,
+            actual_quota: 0,
+            note: 'Verified provider evidence and exact usage.',
+          },
+          config: { skipBusinessError: true, skipErrorHandler: true },
+        },
+      ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
   test('polls the administrator alert endpoint and renders active host pressure', async (): Promise<void> => {
     const originalGet = api.get
     const urls: string[] = []
@@ -195,6 +296,9 @@ describe('SmartOps active alerts', () => {
                   subscription_id: 0,
                   token_id: 84,
                   task_id: 0,
+                  task_quota: 0,
+                  task_quota_target: 0,
+                  requires_manual_completion: false,
                   funding_delta: 2500,
                   applied_funding_delta: 0,
                   token_delta: 2500,
@@ -360,6 +464,86 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('keeps the manual settlement dialog mounted when reconciliation fails', async (): Promise<void> => {
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    // React's async rendering path probes the legacy IE event API in this test
+    // environment; emulate it on the shared prototype and remove it below.
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ManualSettlementEvidenceHarness />
+      </QueryClientProvider>
+    )
+
+    try {
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Complete billing',
+          })
+        )
+      })
+      const causeErrorButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Complete billing',
+        })
+      )
+
+      const dialog = await waitFor(() => {
+        const currentDialog = document.body.querySelector(
+          '[role="dialog"]'
+        ) as HTMLElement
+        assert.ok(currentDialog)
+        return currentDialog
+      })
+      assert.ok(dialog.querySelector('#manual-task-actual-quota'))
+
+      await view.click(causeErrorButton)
+      await waitFor(() => {
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'We could not load billing reconciliation details.'
+          )
+        )
+      })
+
+      const currentDialog = document.body.querySelector(
+        '[role="dialog"]'
+      ) as HTMLElement
+      assert.ok(currentDialog)
+      assert.equal(currentDialog, dialog)
+      assert.ok(
+        (currentDialog.textContent ?? '').includes(
+          'This reconciliation record changed while the dialog was open.'
+        )
+      )
+      const submitButton = currentDialog.querySelector(
+        'button[type="submit"]'
+      ) as HTMLButtonElement
+      assert.ok(submitButton)
+      assert.equal(submitButton.hasAttribute('disabled'), true)
+    } finally {
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+      queryClient.clear()
+      await view.unmount()
+    }
+  })
+
   test('batch closes selected active reconciliation alerts without requesting notes', async (): Promise<void> => {
     const originalUser = useAuthStore.getState().auth.user
     useAuthStore.getState().auth.setUser({
@@ -398,6 +582,9 @@ describe('SmartOps active alerts', () => {
                   subscription_id: 0,
                   token_id: 0,
                   task_id: 0,
+                  task_quota: 0,
+                  task_quota_target: 0,
+                  requires_manual_completion: false,
                   funding_delta: 100,
                   applied_funding_delta: 0,
                   token_delta: 100,
@@ -424,6 +611,9 @@ describe('SmartOps active alerts', () => {
                   subscription_id: 0,
                   token_id: 0,
                   task_id: 0,
+                  task_quota: 0,
+                  task_quota_target: 0,
+                  requires_manual_completion: false,
                   funding_delta: 200,
                   applied_funding_delta: 0,
                   token_delta: 200,
@@ -546,6 +736,172 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('separates manual task completion from ordinary batch review', async (): Promise<void> => {
+    const originalUser = useAuthStore.getState().auth.user
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'root',
+      role: 100,
+    })
+    const originalGet = api.get
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    // React's async rendering path probes the legacy IE event API in this test
+    // environment; emulate it on the shared prototype and remove it below.
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const manualRevision = 2
+    const manualCompletionRequired = true
+    let includeManualItem = true
+    api.get = (async (url: string): Promise<unknown> => {
+      return {
+        data:
+          url === '/api/smart-ops/billing-settlements'
+            ? {
+                success: true,
+                data: {
+                  ...emptyReconciliationData(),
+                  total_count: includeManualItem ? 1 : 0,
+                  manual_count: includeManualItem ? 1 : 0,
+                  open_alert_count: includeManualItem ? 1 : 0,
+                  items: includeManualItem
+                    ? [
+                        {
+                          id: 93,
+                          revision: manualRevision,
+                          operation_key: 'task:7001:finalize',
+                          status: 'manual',
+                          source: 'wallet',
+                          user_id: 53,
+                          subscription_id: 0,
+                          token_id: 54,
+                          task_id: 7001,
+                          task_quota: 100,
+                          task_quota_target: 100,
+                          requires_manual_completion: manualCompletionRequired,
+                          funding_delta: 0,
+                          applied_funding_delta: 0,
+                          token_delta: 0,
+                          applied_token_delta: 0,
+                          attempts: 0,
+                          last_error: 'provider usage needs verification',
+                          next_attempt: 0,
+                          created_at: 1786032545,
+                          updated_at: 1786032545,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: false,
+                          blocks_user: false,
+                        },
+                      ]
+                    : [],
+                },
+              }
+            : { success: true, data: [] },
+      }
+    }) as typeof api.get
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      let completeButton: HTMLElement | undefined
+      await waitFor(() => {
+        const screen = within(view.container)
+        completeButton = screen.getByRole('button', {
+          name: 'Complete billing',
+        })
+        assert.equal(
+          screen
+            .getByRole('checkbox', {
+              name: 'Select billing reconciliation alert 93',
+            })
+            .hasAttribute('data-disabled'),
+          true
+        )
+        assert.equal(
+          screen
+            .getByRole('button', {
+              name: 'Review and close selected (0)',
+            })
+            .hasAttribute('disabled'),
+          true
+        )
+      })
+      assert.ok(completeButton)
+      await view.click(completeButton)
+
+      const dialog = await waitFor(() =>
+        within(document.body).getByRole('dialog')
+      )
+      const dialogScreen = within(dialog)
+      const quotaInput = dialogScreen.getByLabelText('Exact final quota')
+      const noteInput = dialogScreen.getByLabelText('Audit note')
+      const submitButton = dialogScreen.getByRole('button', {
+        name: 'Apply exact settlement',
+      })
+      assert.equal(submitButton.hasAttribute('disabled'), true)
+      assert.equal((quotaInput as HTMLInputElement).max, '100')
+      assert.equal((quotaInput as HTMLInputElement).min, '0')
+      assert.equal((noteInput as HTMLTextAreaElement).maxLength, 1000)
+      assert.ok(
+        (dialog.textContent ?? '').includes(
+          'This workflow cannot add a charge above the original reservation.'
+        )
+      )
+
+      includeManualItem = false
+      await queryClient.invalidateQueries({
+        queryKey: ['smart-ops', 'billing-settlement-reconciliation'],
+      })
+
+      const staleDialog = await waitFor(() => {
+        const currentDialog = within(document.body).getByRole('dialog')
+        assert.ok(
+          (currentDialog.textContent ?? '').includes(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+        return currentDialog
+      })
+      const staleDialogScreen = within(staleDialog)
+      assert.equal(staleDialog, dialog)
+      assert.equal(
+        staleDialog.querySelector('#manual-task-actual-quota'),
+        quotaInput
+      )
+      assert.equal(
+        staleDialog.querySelector('#manual-task-audit-note'),
+        noteInput
+      )
+      assert.equal(
+        staleDialogScreen
+          .getByRole('button', { name: 'Apply exact settlement' })
+          .hasAttribute('disabled'),
+        true
+      )
+    } finally {
+      api.get = originalGet
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+      await view.unmount()
+      queryClient.clear()
+      useAuthStore.getState().auth.setUser(originalUser)
+    }
+  })
+
   test('clears a selected alert when refresh changes its financial revision', async (): Promise<void> => {
     const originalGet = api.get
     const originalPost = api.post
@@ -574,6 +930,9 @@ describe('SmartOps active alerts', () => {
                 subscription_id: 0,
                 token_id: 0,
                 task_id: 0,
+                task_quota: 0,
+                task_quota_target: 0,
+                requires_manual_completion: false,
                 funding_delta: 100,
                 applied_funding_delta: 0,
                 token_delta: 100,

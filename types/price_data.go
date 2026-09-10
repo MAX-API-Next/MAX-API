@@ -31,7 +31,10 @@ type PriceData struct {
 	UsePrice             bool
 	Quota                int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume    int // 预消耗额度（真实估算额度应用预扣下限后）
-	GroupRatioInfo       GroupRatioInfo
+	// TaskBillingPlanRequired records that this pricing result deliberately
+	// deferred its estimate and reservation to a structured task plan.
+	TaskBillingPlanRequired bool
+	GroupRatioInfo          GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

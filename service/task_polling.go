@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/samber/lo"
 )
@@ -30,6 +31,14 @@ type TaskPollingAdaptor interface {
 	// AdjustBillingOnComplete 在任务到达终态（成功/失败）时由轮询循环调用。
 	// 返回正数触发差额结算（补扣/退还），返回 0 保持预扣费金额不变。
 	AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int
+}
+
+// taskUsageProvider is an optional provider-specific usage extractor. It is
+// deliberately local to service so the polling package does not import the
+// relay/channel host package and create an import cycle. Usage facts remain
+// evidence only; billing is still owned by the existing settlement path.
+type taskUsageProvider interface {
+	ExtractTaskUsage(responseBody []byte) (*types.TaskUsage, error)
 }
 
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
@@ -46,6 +55,14 @@ var timedOutTaskSweepCursor struct {
 	afterSubmitTime int64
 	afterID         int64
 }
+
+type appliedTaskRecoveryOutcome uint8
+
+const (
+	appliedTaskRecoveryNoEvidence appliedTaskRecoveryOutcome = iota
+	appliedTaskRecoveryUpdated
+	appliedTaskRecoveryCASLost
+)
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多转换 100 条、扫描 2000 条，剩余的从游标位置在下个周期继续处理。
@@ -64,6 +81,36 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 	remaining := timedOutTaskTransitionBudget
 	scanBudget := timedOutTaskScanBudget
+	if recovered, err := model.GetAppliedTaskFinalizeRecoveryCandidates(cutoff, remaining); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize recovery query error: %v", err))
+	} else {
+		for _, task := range recovered {
+			if remaining <= 0 {
+				break
+			}
+			recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(task)
+			if recoveryErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize terminal recovery error for task %s: %v", task.TaskID, recoveryErr))
+				continue
+			}
+			if recoveryOutcome == appliedTaskRecoveryCASLost {
+				continue
+			}
+			if recoveryOutcome == appliedTaskRecoveryNoEvidence {
+				recoveryOutcome, recoveryErr = markAppliedTaskEvidenceMissing(task, now)
+				if recoveryErr != nil {
+					logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize evidence disposition error for task %s: %v", task.TaskID, recoveryErr))
+					continue
+				}
+				if recoveryOutcome == appliedTaskRecoveryCASLost {
+					continue
+				}
+			}
+			if recoveryOutcome == appliedTaskRecoveryUpdated {
+				remaining--
+			}
+		}
+	}
 	afterSubmitTime := timedOutTaskSweepCursor.afterSubmitTime
 	afterID := timedOutTaskSweepCursor.afterID
 	for remaining > 0 && scanBudget > 0 {
@@ -88,17 +135,60 @@ func sweepTimedOutTasks(ctx context.Context) {
 			afterSubmitTime = task.SubmitTime
 			afterID = task.ID
 			scanBudget--
-			settlementPending, settlementErr := taskTerminalSettlementPending(task, true)
+			settlementPending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, true)
 			if settlementErr != nil {
 				logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks settlement lookup error for task %s: %v", task.TaskID, settlementErr))
 				continue
 			}
-			if settlementPending {
-				continue
+			if settlementPending || taskFinalizeApplied {
+				// Pending/manual funding remains operator/retry owned. Applied
+				// funding with durable terminal evidence only needs a status update;
+				// legacy applied rows without evidence retain the historical timeout
+				// path so they cannot be stranded.
+				if taskFinalizeApplied {
+					latestTask, reloadErr := model.GetTaskByID(task.ID)
+					if reloadErr != nil {
+						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize task reload error for task %s: %v", task.TaskID, reloadErr))
+						continue
+					}
+					if latestTask.Status == model.TaskStatusFailure || latestTask.Status == model.TaskStatusSuccess {
+						continue
+					}
+					recoveryOutcome, recoveryErr := recoverAppliedTaskTerminalEvidence(latestTask)
+					if recoveryErr != nil {
+						logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize terminal recovery error for task %s: %v", task.TaskID, recoveryErr))
+						continue
+					}
+					if recoveryOutcome == appliedTaskRecoveryNoEvidence {
+						recoveryOutcome, recoveryErr = markAppliedTaskEvidenceMissing(latestTask, now)
+						if recoveryErr != nil {
+							logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks applied-finalize evidence disposition error for task %s: %v", task.TaskID, recoveryErr))
+							continue
+						}
+					}
+					if recoveryOutcome == appliedTaskRecoveryUpdated {
+						remaining--
+					}
+					continue
+				} else {
+					continue
+				}
 			}
 			remaining--
 			isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskRefundCutoff
 			isUnconfirmedSubmit := task.PrivateData.AwaitingUpstreamID
+			terminalDecision := prepareTaskTerminalBillingDecision(ctx, nil, task, &relaycommon.TaskInfo{
+				Status: string(model.TaskStatusFailure), Reason: reason,
+			}, 0)
+			if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
+				won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, terminalDecision)
+				if err != nil {
+					logger.LogError(ctx, fmt.Sprintf("sweepTimedOutTasks manual settlement error for task %s: %v", task.TaskID, err))
+				} else if !won {
+					logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: task %s manual settlement CAS lost", task.TaskID))
+				}
+				continue
+			}
 
 			oldStatus := task.Status
 			task.Status = model.TaskStatusFailure
@@ -114,7 +204,11 @@ func sweepTimedOutTasks(ctx context.Context) {
 
 			var settlement *model.BillingSettlementInput
 			if !isLegacy && !isUnconfirmedSubmit {
-				settlement = BuildTaskRefundSettlementInput(task, reason)
+				if terminalDecision.UsesPlan {
+					settlement = terminalDecision.Settlement
+				} else {
+					settlement = BuildTaskRefundSettlementInput(task, reason)
+				}
 			}
 			var won bool
 			var err error
@@ -451,25 +545,37 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	logger.LogDebug(ctx, "updateVideoSingleTask response bytes: %d", len(responseBody))
 
 	snap := task.Snapshot()
+	expectedUpdatedAt := task.UpdatedAt
 
 	taskResult := &relaycommon.TaskInfo{}
-	// try parse as MAX API response format
-	var responseItems dto.TaskResponse[model.Task]
-	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
-		logger.LogDebug(ctx, "updateVideoSingleTask parsed as compatible response format: %+v", responseItems)
-		t := responseItems.Data
-		taskResult.TaskID = t.TaskID
-		taskResult.Status = string(t.Status)
-		taskResult.Url = t.GetResultURL()
-		taskResult.Progress = t.Progress
-		taskResult.Reason = t.FailReason
-		task.Data = t.Data
-	} else if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
+	// Configured task protocols take precedence over the MAX envelope. Relay
+	// gateways may return code=success while their nested data.data object is
+	// the actual provider result; consuming the outer wrapper first would keep
+	// the task in the gateway's local IN_PROGRESS state forever.
+	if configuredResult, ok, parseErr := taskcommon.ParseConfiguredTaskResult(responseBody, ch.GetOtherSettings()); parseErr != nil {
 		return fmt.Errorf("parse configured task result failed for task %s: %w", taskId, parseErr)
 	} else if ok {
 		taskResult = configuredResult
-	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
-		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+	} else {
+		// try parse as MAX API response format
+		var responseItems dto.TaskResponse[model.Task]
+		if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+			logger.LogDebug(ctx, "updateVideoSingleTask parsed as compatible response format: %+v", responseItems)
+			t := responseItems.Data
+			taskResult.TaskID = t.TaskID
+			taskResult.Status = string(t.Status)
+			taskResult.Url = t.GetResultURL()
+			taskResult.Progress = t.Progress
+			taskResult.Reason = t.FailReason
+			task.Data = t.Data
+		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
+			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+		} else if taskResult == nil {
+			return fmt.Errorf("parseTaskResult returned no result for task %s", taskId)
+		}
+	}
+	if err := applyTaskUsageFacts(adaptor, responseBody, taskResult); err != nil {
+		return fmt.Errorf("extract task usage failed for task %s: %w", taskId, err)
 	}
 
 	task.Data = redactVideoResponseBody(responseBody)
@@ -499,12 +605,60 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 	}
 	providerTerminal := taskResult.Status == string(model.TaskStatusSuccess) || taskResult.Status == string(model.TaskStatusFailure)
-	pending, settlementErr := taskTerminalSettlementPending(task, providerTerminal)
+	pending, taskFinalizeApplied, settlementErr := taskTerminalSettlementState(task, providerTerminal)
 	if settlementErr != nil {
 		return fmt.Errorf("load task submission settlement for task %s: %w", task.TaskID, settlementErr)
 	}
 	if pending {
-		return nil
+		// A task-finalize manual record created by incomplete H3 usage may be
+		// safely reopened when a later provider poll supplies complete,
+		// validated usage. Other manual reasons remain operator-gated.
+		if providerTerminal {
+			recoveryDecision := prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
+			recovered, recoveryErr := recoverManualTaskBillingSettlement(ctx, task, recoveryDecision, taskResult, snap.Status, expectedUpdatedAt)
+			if recoveryErr != nil {
+				return fmt.Errorf("recover manual task settlement for task %s: %w", task.TaskID, recoveryErr)
+			}
+			if recovered {
+				pending, taskFinalizeApplied, settlementErr = taskTerminalSettlementState(task, providerTerminal)
+				if settlementErr != nil {
+					return fmt.Errorf("reload recovered task settlement for task %s: %w", task.TaskID, settlementErr)
+				}
+			}
+		}
+		if pending {
+			return nil
+		}
+	}
+	terminalDecision := taskTerminalBillingDecision{}
+	if providerTerminal && !taskFinalizeApplied {
+		terminalDecision = prepareTaskTerminalBillingDecision(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
+		if terminalDecision.UsesPlan && terminalDecision.ManualReason != "" {
+			won, manualErr := persistTaskManualBillingDecision(task, snap.Status, expectedUpdatedAt, terminalDecision)
+			if manualErr != nil {
+				return fmt.Errorf("persist manual task settlement for task %s: %w", task.TaskID, manualErr)
+			}
+			if !won {
+				logger.LogWarn(ctx, fmt.Sprintf("Task %s manual settlement CAS lost", task.TaskID))
+			}
+			return nil
+		}
+		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
+			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
+			persistPendingTaskTerminalEvidence(task, taskResult, time.Now().Unix())
+			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
+			if intentErr != nil {
+				return fmt.Errorf("persist task settlement intent for task %s: %w", task.TaskID, intentErr)
+			}
+			if !won {
+				logger.LogWarn(ctx, fmt.Sprintf("Task %s settlement intent CAS lost", task.TaskID))
+				return nil
+			}
+			if !applyTaskBillingSettlement(ctx, task, terminalDecision.Settlement) {
+				return nil
+			}
+			taskFinalizeApplied = true
+		}
 	}
 
 	shouldRefund := false
@@ -562,7 +716,14 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	var settlement *model.BillingSettlementInput
 	transitionWon := false
 	if isDone && snap.Status != task.Status {
-		if shouldSettle {
+		if taskFinalizeApplied {
+			clearPendingTaskTerminalEvidence(task)
+		}
+		if taskFinalizeApplied {
+			settlement = nil
+		} else if terminalDecision.UsesPlan {
+			return fmt.Errorf("task %s terminal settlement was not applied", task.TaskID)
+		} else if shouldSettle {
 			settlement = prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, ch.Type, ch.GetOtherSettings())
 		} else if shouldRefund {
 			settlement = BuildTaskRefundSettlementInput(task, task.FailReason)
@@ -599,6 +760,179 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	return nil
+}
+
+func persistPendingTaskTerminalEvidence(task *model.Task, result *relaycommon.TaskInfo, now int64) {
+	if task == nil || result == nil {
+		return
+	}
+	task.PrivateData.PendingTerminalStatus = model.TaskStatus(result.Status)
+	task.PrivateData.PendingTerminalProgress = result.Progress
+	task.PrivateData.PendingTerminalFinishTime = now
+	task.PrivateData.PendingTerminalReason = common.SanitizePersistedLogContent(result.Reason)
+	task.PrivateData.PendingTerminalResultURL = result.Url
+	task.IncludePrivateDataInUpdate()
+}
+
+func recoverAppliedTaskTerminalEvidence(task *model.Task) (appliedTaskRecoveryOutcome, error) {
+	if task == nil || task.ID <= 0 {
+		return appliedTaskRecoveryNoEvidence, errors.New("applied-finalize task is required")
+	}
+	pending := task.PrivateData.PendingTerminalStatus
+	if pending != model.TaskStatusSuccess && pending != model.TaskStatusFailure {
+		return appliedTaskRecoveryNoEvidence, nil
+	}
+	// Stage all changes on a copy. A lost CAS must leave the caller's snapshot
+	// untouched so it cannot be mistaken for missing evidence and overwritten.
+	candidate := *task
+	oldStatus := candidate.Status
+	candidate.Status = pending
+	candidate.Progress = candidate.PrivateData.PendingTerminalProgress
+	if candidate.Progress == "" {
+		candidate.Progress = taskcommon.ProgressComplete
+	}
+	candidate.FinishTime = candidate.PrivateData.PendingTerminalFinishTime
+	if candidate.FinishTime == 0 {
+		candidate.FinishTime = time.Now().Unix()
+	}
+	candidate.FailReason = candidate.PrivateData.PendingTerminalReason
+	if pending == model.TaskStatusSuccess && candidate.PrivateData.PendingTerminalResultURL != "" {
+		candidate.PrivateData.ResultURL = candidate.PrivateData.PendingTerminalResultURL
+	}
+	clearPendingTaskTerminalEvidence(&candidate)
+	won, err := candidate.UpdateWithStatus(oldStatus)
+	if err != nil {
+		return appliedTaskRecoveryNoEvidence, err
+	}
+	if !won {
+		return appliedTaskRecoveryCASLost, nil
+	}
+	*task = candidate
+	return appliedTaskRecoveryUpdated, nil
+}
+
+func clearPendingTaskTerminalEvidence(task *model.Task) {
+	if task == nil {
+		return
+	}
+	task.PrivateData.PendingTerminalStatus = ""
+	task.PrivateData.PendingTerminalProgress = ""
+	task.PrivateData.PendingTerminalFinishTime = 0
+	task.PrivateData.PendingTerminalReason = ""
+	task.PrivateData.PendingTerminalResultURL = ""
+	task.IncludePrivateDataInUpdate()
+}
+
+func markAppliedTaskEvidenceMissing(task *model.Task, now int64) (appliedTaskRecoveryOutcome, error) {
+	if task == nil || task.ID <= 0 {
+		return appliedTaskRecoveryNoEvidence, errors.New("applied-finalize task is required")
+	}
+	// Use the same copy-and-CAS discipline as terminal recovery. This preserves
+	// a concurrently published terminal state when the CAS is lost.
+	candidate := *task
+	oldStatus := candidate.Status
+	candidate.Status = model.TaskStatusFailure
+	candidate.Progress = taskcommon.ProgressComplete
+	candidate.FinishTime = now
+	candidate.FailReason = "task settlement was already applied but terminal provider evidence is unavailable; manual reconciliation required"
+	clearPendingTaskTerminalEvidence(&candidate)
+	won, err := candidate.UpdateWithStatus(oldStatus)
+	if err != nil {
+		return appliedTaskRecoveryNoEvidence, err
+	}
+	if !won {
+		return appliedTaskRecoveryCASLost, nil
+	}
+	*task = candidate
+	return appliedTaskRecoveryUpdated, nil
+}
+
+func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskResult *relaycommon.TaskInfo) error {
+	if adaptor == nil || taskResult == nil {
+		return nil
+	}
+	provider, ok := adaptor.(taskUsageProvider)
+	if !ok {
+		return nil
+	}
+	usage, err := provider.ExtractTaskUsage(responseBody)
+	if err != nil {
+		return err
+	}
+	if usage != nil {
+		taskResult.Usage = usage
+	}
+	return nil
+}
+
+func recoverManualTaskBillingSettlement(
+	ctx context.Context,
+	task *model.Task,
+	decision taskTerminalBillingDecision,
+	providerResult *relaycommon.TaskInfo,
+	fromStatus model.TaskStatus,
+	expectedUpdatedAt int64,
+) (bool, error) {
+	if task == nil || task.ID <= 0 || !decision.UsesPlan || decision.ManualReason != "" || decision.Settlement == nil {
+		return false, nil
+	}
+	if providerResult == nil || (providerResult.Status != string(model.TaskStatusSuccess) && providerResult.Status != string(model.TaskStatusFailure)) {
+		return false, errors.New("terminal provider result is required for manual settlement recovery")
+	}
+	if submissionPending, err := taskFinalSettlementPending(task); err != nil || submissionPending {
+		return false, err
+	}
+	status, found, err := model.GetBillingSettlementStatus(model.BillingTaskFinalizeOperationKey(task.ID))
+	if err != nil || !found || (status != model.BillingSettlementStatusManual && status != model.BillingSettlementStatusPending) {
+		return false, err
+	}
+	// Persist the provider terminal facts before promoting the manual settlement
+	// to a funding operation. A crash after promotion must remain recoverable as
+	// the provider's terminal state, not be misclassified as missing evidence.
+	candidate := *task
+	if task.PrivateData.BillingContext != nil {
+		billingContext := *task.PrivateData.BillingContext
+		candidate.PrivateData.BillingContext = &billingContext
+		candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	}
+	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
+	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
+	if err != nil {
+		return false, fmt.Errorf("persist manual task terminal evidence: %w", err)
+	}
+	if !won {
+		return false, nil
+	}
+	*task = candidate
+	const h3UsageManualReasonPrefix = "H3 terminal usage requires manual reconciliation:"
+	recoveryNote := "H3 task settlement automatically recovered after a complete provider usage response"
+	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
+	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
+		// A different manual reason or a concurrent/permanent recovery failure
+		// must remain operator-gated; do not turn that durable state into a
+		// polling error or publish a terminal task status.
+		return false, nil
+	}
+	if err != nil || !ready {
+		return false, err
+	}
+	if !applyTaskBillingSettlement(ctx, task, decision.Settlement) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskStatus, expectedUpdatedAt int64, decision taskTerminalBillingDecision) (bool, error) {
+	if task == nil || !decision.UsesPlan || decision.ManualReason == "" || decision.Settlement == nil {
+		return false, errors.New("complete manual task billing decision is required")
+	}
+	if task.PrivateData.BillingContext == nil {
+		return false, errors.New("task billing context is required")
+	}
+	task.Status = fromStatus
+	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	task.UpdatedAt = time.Now().Unix()
+	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }
 
 func shouldApplyTaskResultProgress(taskResult *relaycommon.TaskInfo) bool {

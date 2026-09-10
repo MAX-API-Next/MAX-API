@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  type QueryClient,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { updateSystemOption } from '../api'
@@ -39,6 +43,21 @@ const STATUS_RELATED_KEYS = [
   'general_setting.custom_currency_exchange_rate',
 ]
 
+const PRICING_RELATED_KEYS = ['task_billing_setting.rate_cards']
+
+export function invalidateQueriesAfterOptionUpdate(
+  queryClient: QueryClient,
+  optionKey: string
+): void {
+  queryClient.invalidateQueries({ queryKey: ['system-options'] })
+  if (STATUS_RELATED_KEYS.includes(optionKey)) {
+    queryClient.invalidateQueries({ queryKey: ['status'] })
+  }
+  if (PRICING_RELATED_KEYS.includes(optionKey)) {
+    queryClient.invalidateQueries({ queryKey: ['pricing'] })
+  }
+}
+
 export function useUpdateOption() {
   const queryClient = useQueryClient()
 
@@ -46,12 +65,10 @@ export function useUpdateOption() {
     mutationFn: (request: UpdateOptionRequest) => updateSystemOption(request),
     onSuccess: (data, variables) => {
       if (data.success) {
-        // Always refresh system-options
-        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        invalidateQueriesAfterOptionUpdate(queryClient, variables.key)
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.includes(variables.key)) {
-          queryClient.invalidateQueries({ queryKey: ['status'] })
           try {
             window.localStorage.removeItem('status')
           } catch {

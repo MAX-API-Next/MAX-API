@@ -30,7 +30,7 @@ before(() => testEnv.setup())
 after(() => testEnv.teardown())
 
 describe('TaskRateCardSettings billing examples', () => {
-  test('keeps the MiniMax structured example preview-only', async () => {
+  test('allows the active MiniMax structured example to be loaded', async () => {
     const queryClient = new QueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
@@ -50,10 +50,8 @@ describe('TaskRateCardSettings billing examples', () => {
       const useButton = minimaxExample.getByRole('button', {
         name: 'Use example',
       }) as HTMLButtonElement
-      assert.equal(useButton.disabled, true)
-      minimaxExample.getByText(
-        'Preview only: structured MiniMax billing is not yet used for task admission or settlement. Configure a normal model price separately; requests without one are rejected.'
-      )
+      assert.equal(useButton.disabled, false)
+      assert.equal(minimaxExample.queryByRole('alert'), null)
 
       const exampleJson = minimaxExample.getByRole(
         'textbox'
@@ -64,6 +62,12 @@ describe('TaskRateCardSettings billing examples', () => {
         name: 'Copy to clipboard',
       }) as HTMLButtonElement
       assert.equal(copyButton.disabled, false)
+
+      await view.click(useButton)
+      const currentEditor = screen.getByRole('textbox', {
+        name: 'Current rate card JSON',
+      }) as HTMLTextAreaElement
+      assert.match(currentEditor.value, /"billing_type": "minimax"/)
 
       const klingHeading = screen.getByRole('heading', {
         name: 'Kling billing example',

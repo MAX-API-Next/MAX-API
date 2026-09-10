@@ -328,7 +328,11 @@ docker compose up -d
 
 ## 🤝 法律說明與二次開發
 
-如果你基於本專案進行二次開發或散布，請先完整閱讀 [NOTICE](./NOTICE) 和 [LICENSE](./LICENSE)，並依其中要求保留法律聲明、歸屬資訊、原專案連結和修改標記。
+如果你基於本專案進行二次開發或散布，請先完整閱讀 [NOTICE](./NOTICE) 和 [LICENSE](./LICENSE)，並依其中要求在專案明顯位置保留法律聲明、歸屬資訊、原專案連結和修改標記。
+
+除 AGPLv3 預設授權外，現階段，僅供自身使用的二次開發專案如持續在專案首頁、頁尾、「關於」、法律聲明或其他明顯位置清楚展示 [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) 專案連結，或對 [MAX-API-Next](https://github.com/MAX-API-Next) 社群的致謝，即自動免費取得 MAX API 專案方對其有權授權的新增與修改部分所提供的非永久臨時商用授權，無需另行申請或審批。
+
+此臨時授權不涵蓋、取代或免除 AGPLv3、One API、New API 或其他上游授權義務；展示條件不再符合，或專案方透過 NOTICE、README 或 MAX-API-Next 官方社群公告其到期、調整或終止時，此臨時授權即不再適用。AGPLv3 獨立授予的權利不受影響；超出臨時授權繼續使用時，須遵守 AGPLv3 或另行取得適用權利人的書面授權。完整條件以 [NOTICE](./NOTICE) 為準。
 
 ## 📜 許可證
 

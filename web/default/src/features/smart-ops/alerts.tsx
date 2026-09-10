@@ -202,6 +202,7 @@ export function ActiveAlerts(): ReactElement {
   const { t } = useTranslation()
   const userRole = useAuthStore((state) => state.auth.user?.role)
   const canUpdateBlockingPolicy = userRole === ROLE.SUPER_ADMIN
+  const canCompleteManualTask = userRole === ROLE.SUPER_ADMIN
   const loadErrorMessage = t('We could not load active alerts.')
   const reconciliationErrorMessage = t(
     'We could not load billing reconciliation details.'
@@ -309,6 +310,7 @@ export function ActiveAlerts(): ReactElement {
               onRetry={() => void alertsQuery.refetch()}
             />
             <BillingSettlementEvidence
+              canCompleteManualTask={canCompleteManualTask}
               canUpdateBlockingPolicy={canUpdateBlockingPolicy}
               data={reconciliationQuery.data}
               error={

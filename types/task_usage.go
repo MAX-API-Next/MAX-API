@@ -28,3 +28,25 @@ type TaskUsage struct {
 	Source               string `json:"source,omitempty"`
 	Completeness         string `json:"completeness,omitempty"`
 }
+
+func CloneTaskUsage(usage *TaskUsage) *TaskUsage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	cloned.OutputDurationMs = cloneInt64Pointer(usage.OutputDurationMs)
+	cloned.InputVideoDurationMs = cloneInt64Pointer(usage.InputVideoDurationMs)
+	cloned.InputAudioDurationMs = cloneInt64Pointer(usage.InputAudioDurationMs)
+	cloned.InputImageCount = cloneInt64Pointer(usage.InputImageCount)
+	cloned.InputVideoCount = cloneInt64Pointer(usage.InputVideoCount)
+	cloned.InputAudioCount = cloneInt64Pointer(usage.InputAudioCount)
+	return &cloned
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
