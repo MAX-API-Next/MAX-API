@@ -228,6 +228,7 @@ func TestApplyTaskUsageFactsAcceptsTrustedTaskPluginEnvelope(t *testing.T) {
 		Usage         *types.TaskUsage `json:"usage"`
 	}
 	require.NoError(t, common.Unmarshal(data, &fixture))
+	require.Equal(t, types.TaskUsageProducerKindTaskPlugin, fixture.ProducerKind)
 	contract := taskusage.MiniMaxH3Contract()
 	require.Equal(t, contract.SourceID, fixture.SourceID)
 	require.Equal(t, contract.SchemaVersion, fixture.SchemaVersion)
