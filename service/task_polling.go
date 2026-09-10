@@ -16,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -39,6 +40,11 @@ type TaskPollingAdaptor interface {
 // evidence only; billing is still owned by the existing settlement path.
 type taskUsageProvider interface {
 	ExtractTaskUsage(responseBody []byte) (*types.TaskUsage, error)
+}
+
+type taskUsageFactProvider interface {
+	UsageContract() types.TaskUsageContract
+	ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error)
 }
 
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
@@ -645,6 +651,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
 			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
+			task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(terminalDecision.UsageEnvelope)
 			persistPendingTaskTerminalEvidence(task, taskResult, time.Now().Unix())
 			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
 			if intentErr != nil {
@@ -851,6 +858,25 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 	if adaptor == nil || taskResult == nil {
 		return nil
 	}
+	if provider, ok := adaptor.(taskUsageFactProvider); ok {
+		contract := provider.UsageContract()
+		envelope := taskResult.UsageEnvelope
+		if envelope == nil {
+			var err error
+			envelope, err = provider.ProduceUsage(types.TaskUsageContext{
+				Stage: types.TaskUsageSourceProviderResponse, Payload: responseBody,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if err := taskusage.ValidateEnvelope(contract, envelope); err != nil {
+			return err
+		}
+		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)
+		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
+		return nil
+	}
 	provider, ok := adaptor.(taskUsageProvider)
 	if !ok {
 		return nil
@@ -894,6 +920,7 @@ func recoverManualTaskBillingSettlement(
 		billingContext := *task.PrivateData.BillingContext
 		candidate.PrivateData.BillingContext = &billingContext
 		candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+		candidate.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	}
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
 	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
@@ -931,6 +958,7 @@ func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskSta
 	}
 	task.Status = fromStatus
 	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	task.UpdatedAt = time.Now().Unix()
 	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }

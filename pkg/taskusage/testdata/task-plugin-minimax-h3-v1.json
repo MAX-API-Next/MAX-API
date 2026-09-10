@@ -1,0 +1,14 @@
+{
+  "producer_kind": "task_plugin",
+  "source_id": "minimax",
+  "schema_version": 1,
+  "stage": "provider_response",
+  "usage": {
+    "output_duration_ms": 5000,
+    "input_video_duration_ms": 0,
+    "input_audio_duration_ms": 0,
+    "input_image_count": 1,
+    "source": "provider_response",
+    "completeness": "complete"
+  }
+}

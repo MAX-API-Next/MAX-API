@@ -157,6 +157,7 @@ type TaskBillingContext struct {
 	TaskBilling             *types.TaskBillingResult `json:"task_billing,omitempty"`
 	TaskBillingPlan         *types.TaskBillingPlan   `json:"task_billing_plan,omitempty"`
 	TaskUsage               *types.TaskUsage         `json:"task_usage,omitempty"`
+	TaskUsageEnvelope       *types.TaskUsageEnvelope `json:"task_usage_envelope,omitempty"`
 	OriginModelName         string                   `json:"origin_model_name,omitempty"`         // 模型名称，必须为OriginModelName
 	PerCallBilling          bool                     `json:"per_call_billing,omitempty"`          // 按次计费：跳过轮询阶段的差额结算
 	DeltaSettlementDisabled *bool                    `json:"delta_settlement_disabled,omitempty"` // 渠道关闭完成态差额结算时按提交快照跳过

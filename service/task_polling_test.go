@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,13 @@ func (a *sunoPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relay
 type usagePollingResponseAdaptor struct {
 	usage    *types.TaskUsage
 	usageErr error
+}
+
+type usageFactPollingResponseAdaptor struct {
+	contract types.TaskUsageContract
+	envelope *types.TaskUsageEnvelope
+	err      error
+	calls    int
 }
 
 type configuredWrapperPollingAdaptor struct{}
@@ -96,6 +104,29 @@ func (a *usagePollingResponseAdaptor) ExtractTaskUsage([]byte) (*types.TaskUsage
 	return a.usage, a.usageErr
 }
 
+func (a *usageFactPollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a *usageFactPollingResponseAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+
+func (a *usageFactPollingResponseAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess)}, nil
+}
+
+func (a *usageFactPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *usageFactPollingResponseAdaptor) UsageContract() types.TaskUsageContract {
+	return a.contract
+}
+
+func (a *usageFactPollingResponseAdaptor) ProduceUsage(types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	a.calls++
+	return a.envelope, a.err
+}
+
 func TestApplyTaskUsageFactsAttachesProviderEvidence(t *testing.T) {
 	taskResult := &relaycommon.TaskInfo{}
 	usage := &types.TaskUsage{
@@ -115,6 +146,45 @@ func TestApplyTaskUsageFactsFailsClosedOnProviderError(t *testing.T) {
 
 	require.ErrorIs(t, err, providerErr)
 	assert.Nil(t, taskResult.Usage)
+}
+
+func TestApplyTaskUsageFactsPrefersValidatedEnvelopeAndProducesOnce(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{"usage":{}}`), taskResult))
+	require.Equal(t, 1, adaptor.calls)
+	require.NotNil(t, taskResult.UsageEnvelope)
+	require.Equal(t, types.TaskUsagePresencePresentZero, taskResult.UsageEnvelope.Presence)
+	require.NotNil(t, taskResult.Usage)
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{"usage":{}}`), taskResult))
+	require.Equal(t, 1, adaptor.calls, "an already validated envelope must not be produced twice")
+}
+
+func TestApplyTaskUsageFactsRejectsTamperedEnvelope(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	envelope.EvidenceDigest = "tampered"
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	err = applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult)
+	require.Error(t, err)
+	require.Nil(t, taskResult.Usage)
+	require.Nil(t, taskResult.UsageEnvelope)
 }
 
 func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {

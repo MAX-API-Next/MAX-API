@@ -18,6 +18,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	taskcommon "github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -35,6 +36,7 @@ type TaskAdaptor struct {
 }
 
 var _ channel.TaskUsageProvider = (*TaskAdaptor)(nil)
+var _ channel.TaskUsageFactProvider = (*TaskAdaptor)(nil)
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
@@ -308,10 +310,10 @@ func (a *TaskAdaptor) parseResolutionFromSize(size string, modelConfig ModelConf
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	if result, handled, err := parseH3TaskResult(respBody); handled {
-		return result, err
+		return attachH3UsageEnvelope(result, err)
 	}
 	if result, handled, err := parseGenericMiniMaxTaskResult(respBody); handled {
-		return result, err
+		return attachH3UsageEnvelope(result, err)
 	}
 
 	resTask := QueryTaskResponse{}
@@ -365,6 +367,38 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 func (a *TaskAdaptor) ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error) {
 	return a.extractTaskUsage(respBody, 0)
+}
+
+func (a *TaskAdaptor) UsageContract() types.TaskUsageContract {
+	return taskusage.MiniMaxH3Contract()
+}
+
+func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	if ctx.Stage != types.TaskUsageSourceProviderResponse {
+		return nil, fmt.Errorf("H3 task usage stage %q is not supported", ctx.Stage)
+	}
+	usage, err := a.ExtractTaskUsage(ctx.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, a.UsageContract(), ctx.Stage, usage)
+}
+
+func attachH3UsageEnvelope(result *relaycommon.TaskInfo, parseErr error) (*relaycommon.TaskInfo, error) {
+	if parseErr != nil || result == nil {
+		return result, parseErr
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		result.Usage,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result.UsageEnvelope = envelope
+	return result, nil
 }
 
 func (a *TaskAdaptor) extractTaskUsage(respBody []byte, unwrapDepth int) (*types.TaskUsage, error) {

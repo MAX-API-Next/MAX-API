@@ -507,6 +507,29 @@ func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, int64(1), *usage.InputImageCount)
 }
 
+func TestProduceUsageReturnsAuditableH3Envelope(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"id":"439499419230570",
+			"object":"video.generation",
+			"status":"completed",
+			"usage":{"input_seconds":0,"input_audio_seconds":0,"output_seconds":5,"input_image_count":1,"total_seconds":5}
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TaskUsageProducerKindGoAdapter, envelope.ProducerKind)
+	require.Equal(t, "minimax", envelope.SourceID)
+	require.Equal(t, 1, envelope.SchemaVersion)
+	require.Equal(t, types.TaskUsagePresencePresentValid, envelope.Presence)
+	require.NotEmpty(t, envelope.ContractDigest)
+	require.NotEmpty(t, envelope.EvidenceDigest)
+	require.NotNil(t, envelope.Usage.InputVideoDurationMs)
+	require.Zero(t, *envelope.Usage.InputVideoDurationMs)
+	require.NotNil(t, envelope.Usage.InputAudioDurationMs)
+	require.Zero(t, *envelope.Usage.InputAudioDurationMs)
+}
+
 func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
 	for _, value := range []string{`null`, `[]`, `"none"`, `123`} {
 		t.Run(value, func(t *testing.T) {

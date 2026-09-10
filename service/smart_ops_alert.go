@@ -520,6 +520,9 @@ func CompleteManualTaskBillingSettlement(
 	if input == nil {
 		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
 	}
+	if completionTask.PrivateData.BillingContext != nil {
+		attachTaskUsageEnvelopeMetadata(input, completionTask.PrivateData.BillingContext.TaskUsageEnvelope)
+	}
 	input.OperationKey = model.BillingTaskManualCompletionOperationKey(task.ID)
 
 	if _, err := model.EnsureManualTaskBillingCompletion(*input, reviewerID, note); err != nil {

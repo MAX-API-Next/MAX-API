@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -182,6 +183,41 @@ func TestUpdateWithStatusAndSettlementIntentKeepsTaskNonTerminal(t *testing.T) {
 	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
 	require.Equal(t, BillingSettlementStatusPending, settlement.Status)
 	require.EqualValues(t, -300, settlement.FundingDelta)
+}
+
+func TestTaskPrivateDataPersistsTaskUsageEnvelope(t *testing.T) {
+	truncateTables(t)
+	zero := int64(0)
+	task := &Task{
+		TaskID: "usage-envelope-round-trip",
+		Status: TaskStatusInProgress,
+		PrivateData: TaskPrivateData{BillingContext: &TaskBillingContext{
+			TaskUsage: &types.TaskUsage{
+				OutputDurationMs: &zero,
+				Source:           types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessPartial,
+			},
+			TaskUsageEnvelope: &types.TaskUsageEnvelope{
+				ProducerKind: types.TaskUsageProducerKindGoAdapter,
+				SourceID:     "minimax", SchemaVersion: 1,
+				ContractDigest: "contract-digest", Stage: types.TaskUsageSourceProviderResponse,
+				Presence: types.TaskUsagePresencePartial, Completeness: types.TaskUsageCompletenessPartial,
+				EvidenceDigest: "evidence-digest",
+				Usage: &types.TaskUsage{
+					OutputDurationMs: &zero,
+					Source:           types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessPartial,
+				},
+			},
+		}},
+	}
+	insertTask(t, task)
+
+	var stored Task
+	require.NoError(t, DB.First(&stored, task.ID).Error)
+	require.NotNil(t, stored.PrivateData.BillingContext)
+	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsageEnvelope)
+	require.Equal(t, "evidence-digest", stored.PrivateData.BillingContext.TaskUsageEnvelope.EvidenceDigest)
+	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsageEnvelope.Usage.OutputDurationMs)
+	require.Zero(t, *stored.PrivateData.BillingContext.TaskUsageEnvelope.Usage.OutputDurationMs)
 }
 
 func TestUpdateWithStatusAndSettlementIntentCASLossLeavesNoIntent(t *testing.T) {

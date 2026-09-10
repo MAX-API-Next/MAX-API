@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,21 @@ func TestBuildH3BillingPlanUsesOneAggregateInputVideoCap(t *testing.T) {
 	// 5 output seconds + one aggregate 15-second input-video cap.
 	require.EqualValues(t, 20, reserve.OutputSeconds+reserve.InputVideoSeconds)
 	require.EqualValues(t, 1600, reserve.Quota)
+	require.Equal(t, types.TaskUsageProducerKindGoAdapter, plan.UsageProducerKind)
+	require.Equal(t, H3BillingSource, plan.UsageSourceID)
+	require.Equal(t, taskusage.MiniMaxH3Contract().SchemaVersion, plan.UsageSchemaVersion)
+	require.NotEmpty(t, plan.UsageContractDigest)
+}
+
+func TestValidateH3BillingPlanSnapshotRejectsUsageContractTampering(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	plan, err := BuildH3BillingPlan(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+
+	plan.UsageSourceID = "client-controlled-source"
+	require.ErrorContains(t, ValidateH3BillingPlanSnapshot(plan), "usage contract identity")
 }
 
 func TestBuildH3BillingPlanReadsMinimaxRuleFromUnifiedRateCards(t *testing.T) {

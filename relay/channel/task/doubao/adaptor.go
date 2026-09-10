@@ -2,6 +2,7 @@ package doubao
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,10 +15,12 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -85,19 +88,18 @@ type responseTask struct {
 	Tools           []struct {
 		Type string `json:"type"`
 	} `json:"tools"`
-	Usage struct {
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-		ToolUsage        struct {
-			WebSearch int `json:"web_search"`
-		} `json:"tool_usage"`
-	} `json:"usage"`
+	Usage json.RawMessage `json:"usage"`
 	Error struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
+}
+
+type responseTaskUsage struct {
+	CompletionTokens *int `json:"completion_tokens"`
+	TotalTokens      *int `json:"total_tokens"`
 }
 
 // ============================
@@ -110,6 +112,8 @@ type TaskAdaptor struct {
 	apiKey      string
 	baseURL     string
 }
+
+var _ channel.TaskUsageFactProvider = (*TaskAdaptor)(nil)
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
@@ -565,6 +569,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		}); err != nil {
 			return nil, err
 		} else if ok {
+			if err := a.attachUsageEnvelope(respBody, taskResult); err != nil {
+				return nil, err
+			}
 			return taskResult, nil
 		}
 	}
@@ -572,6 +579,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	resTask := responseTask{}
 	if err := common.Unmarshal(respBody, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
+	}
+	envelope, err := buildDoubaoUsageEnvelope(resTask.Usage)
+	if err != nil {
+		return nil, err
 	}
 
 	taskResult := relaycommon.TaskInfo{
@@ -591,8 +602,12 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Progress = "100%"
 		taskResult.Url = resTask.Content.VideoURL
 		// 解析 usage 信息用于按倍率计费
-		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
-		taskResult.TotalTokens = resTask.Usage.TotalTokens
+		if envelope.Usage != nil && envelope.Usage.CompletionTokens != nil {
+			taskResult.CompletionTokens = int(*envelope.Usage.CompletionTokens)
+		}
+		if envelope.Usage != nil && envelope.Usage.TotalTokens != nil {
+			taskResult.TotalTokens = int(*envelope.Usage.TotalTokens)
+		}
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
@@ -602,8 +617,91 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusInProgress
 		taskResult.Progress = "30%"
 	}
+	taskResult.UsageEnvelope = envelope
+	if envelope != nil {
+		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
+	}
 
 	return &taskResult, nil
+}
+
+func (a *TaskAdaptor) UsageContract() types.TaskUsageContract {
+	return taskusage.DoubaoVideoContract()
+}
+
+func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	if ctx.Stage != types.TaskUsageSourceProviderResponse {
+		return nil, fmt.Errorf("Doubao task usage stage %q is not supported", ctx.Stage)
+	}
+	var response responseTask
+	if err := common.Unmarshal(ctx.Payload, &response); err != nil {
+		return nil, errors.Wrap(err, "unmarshal Doubao task usage failed")
+	}
+	return buildDoubaoUsageEnvelope(response.Usage)
+}
+
+func (a *TaskAdaptor) attachUsageEnvelope(respBody []byte, taskResult *relaycommon.TaskInfo) error {
+	envelope, err := a.ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse, Payload: respBody,
+	})
+	if err != nil {
+		return err
+	}
+	taskResult.UsageEnvelope = envelope
+	if envelope != nil {
+		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
+	}
+	return nil
+}
+
+func buildDoubaoUsageEnvelope(raw json.RawMessage) (*types.TaskUsageEnvelope, error) {
+	var parsed responseTaskUsage
+	completeness := types.TaskUsageCompletenessMissing
+	switch common.GetJsonType(raw) {
+	case "unknown", "null":
+		return taskusage.BuildEnvelope(
+			types.TaskUsageProducerKindGoAdapter,
+			taskusage.DoubaoVideoContract(),
+			types.TaskUsageSourceProviderResponse,
+			nil,
+		)
+	case "object":
+		if err := common.Unmarshal(raw, &parsed); err != nil {
+			completeness = types.TaskUsageCompletenessInvalid
+		}
+	default:
+		completeness = types.TaskUsageCompletenessInvalid
+	}
+	usage := &types.TaskUsage{
+		Source:       types.TaskUsageSourceProviderResponse,
+		Completeness: completeness,
+	}
+	if parsed.CompletionTokens != nil {
+		value := int64(*parsed.CompletionTokens)
+		usage.CompletionTokens = &value
+	}
+	if parsed.TotalTokens != nil {
+		value := int64(*parsed.TotalTokens)
+		usage.TotalTokens = &value
+	}
+	if completeness != types.TaskUsageCompletenessInvalid {
+		switch {
+		case parsed.CompletionTokens == nil && parsed.TotalTokens == nil:
+			usage = nil
+		case parsed.CompletionTokens == nil || parsed.TotalTokens == nil:
+			usage.Completeness = types.TaskUsageCompletenessPartial
+		case *parsed.CompletionTokens < 0 || *parsed.TotalTokens < 0 || *parsed.TotalTokens < *parsed.CompletionTokens:
+			usage.Completeness = types.TaskUsageCompletenessInvalid
+		default:
+			usage.Completeness = types.TaskUsageCompletenessComplete
+		}
+	}
+	return taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.DoubaoVideoContract(),
+		types.TaskUsageSourceProviderResponse,
+		usage,
+	)
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {

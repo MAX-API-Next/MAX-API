@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
@@ -153,6 +154,9 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		if bc.TaskUsage != nil {
 			other["task_usage"] = taskUsageLogMetadata(bc.TaskUsage)
 		}
+		if bc.TaskUsageEnvelope != nil {
+			other["task_usage_envelope"] = taskUsageEnvelopeLogMetadata(bc.TaskUsageEnvelope)
+		}
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
@@ -199,7 +203,29 @@ func taskUsageLogMetadata(usage *types.TaskUsage) map[string]interface{} {
 	if usage.InputAudioCount != nil {
 		metadata["input_audio_count"] = *usage.InputAudioCount
 	}
+	if usage.CompletionTokens != nil {
+		metadata["completion_tokens"] = *usage.CompletionTokens
+	}
+	if usage.TotalTokens != nil {
+		metadata["total_tokens"] = *usage.TotalTokens
+	}
 	return metadata
+}
+
+func taskUsageEnvelopeLogMetadata(envelope *types.TaskUsageEnvelope) map[string]interface{} {
+	if envelope == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"producer_kind":   envelope.ProducerKind,
+		"source_id":       envelope.SourceID,
+		"schema_version":  envelope.SchemaVersion,
+		"contract_digest": envelope.ContractDigest,
+		"stage":           envelope.Stage,
+		"presence":        envelope.Presence,
+		"completeness":    envelope.Completeness,
+		"evidence_digest": envelope.EvidenceDigest,
+	}
 }
 
 func taskSubmissionUsageIsDeferred(info *relaycommon.RelayInfo) bool {
@@ -350,10 +376,11 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 }
 
 type taskTerminalBillingDecision struct {
-	Settlement   *model.BillingSettlementInput
-	ManualReason string
-	Usage        *types.TaskUsage
-	UsesPlan     bool
+	Settlement    *model.BillingSettlementInput
+	ManualReason  string
+	Usage         *types.TaskUsage
+	UsageEnvelope *types.TaskUsageEnvelope
+	UsesPlan      bool
 }
 
 func prepareTaskTerminalBillingDecision(
@@ -374,11 +401,16 @@ func prepareTaskTerminalBillingDecision(
 		}
 	}
 
-	usage := frozenTaskUsage(task, taskResult)
+	var usageEnvelope *types.TaskUsageEnvelope
+	if taskBillingPlanHasUsageIdentity(plan) {
+		usageEnvelope = frozenTaskUsageEnvelope(task, taskResult)
+	}
+	usage := frozenTaskUsage(task, taskResult, usageEnvelope)
 	decision := taskTerminalBillingDecision{
-		Settlement: buildTaskManualSettlementInput(task),
-		Usage:      usage,
-		UsesPlan:   true,
+		Settlement:    buildTaskManualSettlementInput(task),
+		Usage:         usage,
+		UsageEnvelope: usageEnvelope,
+		UsesPlan:      true,
 	}
 	if task == nil || task.ID <= 0 || task.Quota < 0 {
 		decision.ManualReason = "H3 terminal billing task snapshot is invalid"
@@ -390,6 +422,10 @@ func prepareTaskTerminalBillingDecision(
 	}
 	if err := task_billing_setting.ValidateH3BillingPlanSnapshot(plan); err != nil {
 		decision.ManualReason = "H3 terminal billing frozen totals require manual reconciliation: " + err.Error()
+		return decision
+	}
+	if err := validateTaskUsageEnvelopeForPlan(plan, usageEnvelope); err != nil {
+		decision.ManualReason = "H3 terminal usage contract requires manual reconciliation: " + err.Error()
 		return decision
 	}
 	quote, err := task_billing_setting.QuoteH3Final(plan, usage)
@@ -406,6 +442,7 @@ func prepareTaskTerminalBillingDecision(
 		status = strings.ToLower(strings.TrimSpace(taskResult.Status))
 	}
 	decision.Settlement = buildTaskExactFinalSettlementInput(task, quote.Quota, usage, "H3 actual usage settlement (provider status: "+status+")")
+	attachTaskUsageEnvelopeMetadata(decision.Settlement, usageEnvelope)
 	return decision
 }
 
@@ -416,7 +453,27 @@ func taskBillingPlan(task *model.Task) *types.TaskBillingPlan {
 	return task.PrivateData.BillingContext.TaskBillingPlan
 }
 
-func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo) *types.TaskUsage {
+func frozenTaskUsageEnvelope(task *model.Task, taskResult *relaycommon.TaskInfo) *types.TaskUsageEnvelope {
+	if task != nil && task.PrivateData.BillingContext != nil && task.PrivateData.BillingContext.TaskUsageEnvelope != nil {
+		frozen := task.PrivateData.BillingContext.TaskUsageEnvelope
+		if frozen.Completeness == types.TaskUsageCompletenessMissing &&
+			taskResult != nil && taskResult.UsageEnvelope != nil &&
+			taskResult.UsageEnvelope.Stage == types.TaskUsageSourceProviderResponse &&
+			taskResult.UsageEnvelope.Completeness == types.TaskUsageCompletenessComplete {
+			return types.CloneTaskUsageEnvelope(taskResult.UsageEnvelope)
+		}
+		return types.CloneTaskUsageEnvelope(frozen)
+	}
+	if taskResult != nil && taskResult.UsageEnvelope != nil {
+		return types.CloneTaskUsageEnvelope(taskResult.UsageEnvelope)
+	}
+	return nil
+}
+
+func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo, envelope *types.TaskUsageEnvelope) *types.TaskUsage {
+	if envelope != nil {
+		return types.CloneTaskUsage(envelope.Usage)
+	}
 	if task != nil && task.PrivateData.BillingContext != nil && task.PrivateData.BillingContext.TaskUsage != nil {
 		frozen := task.PrivateData.BillingContext.TaskUsage
 		// A terminal poll may initially lack usage and create a manual hold while
@@ -439,6 +496,52 @@ func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo) *types.
 		Source:       types.TaskUsageSourceProviderResponse,
 		Completeness: types.TaskUsageCompletenessMissing,
 	}
+}
+
+func validateTaskUsageEnvelopeForPlan(plan *types.TaskBillingPlan, envelope *types.TaskUsageEnvelope) error {
+	if plan == nil {
+		return fmt.Errorf("task billing plan is required")
+	}
+	if !taskBillingPlanHasUsageIdentity(plan) {
+		return nil
+	}
+	if envelope == nil {
+		return fmt.Errorf("usage envelope is missing")
+	}
+	if envelope.ProducerKind != plan.UsageProducerKind ||
+		envelope.SourceID != plan.UsageSourceID ||
+		envelope.SchemaVersion != plan.UsageSchemaVersion ||
+		envelope.ContractDigest != plan.UsageContractDigest {
+		return fmt.Errorf("usage envelope identity does not match the frozen plan")
+	}
+	if envelope.Stage != types.TaskUsageSourceProviderResponse {
+		return fmt.Errorf("usage envelope stage must be %q", types.TaskUsageSourceProviderResponse)
+	}
+	contract, err := taskusage.ResolveContract(plan.UsageSourceID, plan.UsageSchemaVersion, plan.UsageContractDigest)
+	if err != nil {
+		return fmt.Errorf("resolve frozen usage contract: %w", err)
+	}
+	if err := taskusage.ValidateEnvelope(contract, envelope); err != nil {
+		return fmt.Errorf("usage envelope validation failed: %w", err)
+	}
+	return nil
+}
+
+func taskBillingPlanHasUsageIdentity(plan *types.TaskBillingPlan) bool {
+	return plan != nil && (plan.UsageProducerKind != "" ||
+		plan.UsageSourceID != "" ||
+		plan.UsageSchemaVersion != 0 ||
+		plan.UsageContractDigest != "")
+}
+
+func attachTaskUsageEnvelopeMetadata(input *model.BillingSettlementInput, envelope *types.TaskUsageEnvelope) {
+	if input == nil || input.Effect == nil || envelope == nil {
+		return
+	}
+	if input.Effect.Other == nil {
+		input.Effect.Other = make(map[string]interface{})
+	}
+	input.Effect.Other["task_usage_envelope"] = taskUsageEnvelopeLogMetadata(envelope)
 }
 
 func buildTaskManualSettlementInput(task *model.Task) *model.BillingSettlementInput {
