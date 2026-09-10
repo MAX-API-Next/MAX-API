@@ -203,10 +203,13 @@ func TestH3TerminalDecisionFailsClosedOnUsageEnvelopeIdentityDrift(t *testing.T)
 	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, result, constant.ChannelTypeMiniMax)
 	require.True(t, decision.UsesPlan)
 	require.True(t, strings.HasPrefix(decision.ManualReason, "H3 terminal usage requires manual reconciliation:"))
-	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope identity")
+	// The invalid first candidate is filtered before terminal validation, so the
+	// decision must fail closed on the absence of a plan-validated envelope.
+	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope is missing")
 	require.NotNil(t, decision.Settlement)
 	require.Zero(t, decision.Settlement.FundingDelta)
 	require.Nil(t, decision.Settlement.Effect)
+	require.Nil(t, decision.UsageEnvelope)
 }
 
 func TestFrozenTaskUsageEnvelopeKeepsMissingUntilReplacementMatchesPlan(t *testing.T) {
@@ -237,6 +240,35 @@ func TestFrozenTaskUsageEnvelopeKeepsMissingUntilReplacementMatchesPlan(t *testi
 
 	valid := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
 	selected = frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: valid})
+	require.Equal(t, valid.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessComplete, selected.Completeness)
+}
+
+func TestFrozenTaskUsageEnvelopeRejectsInvalidFirstCandidateUntilValidPoll(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(0),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+
+	mismatched := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	mismatched.SourceID = "unexpected-source"
+	selected := frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: mismatched})
+	require.Nil(t, selected)
+	mismatchDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: completeUsage, UsageEnvelope: mismatched,
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, mismatchDecision.ManualReason)
+	require.Nil(t, mismatchDecision.UsageEnvelope)
+
+	valid := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	selected = frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: valid})
+	require.NotNil(t, selected)
 	require.Equal(t, valid.EvidenceDigest, selected.EvidenceDigest)
 	require.Equal(t, types.TaskUsageCompletenessComplete, selected.Completeness)
 }
@@ -313,9 +345,12 @@ func TestH3TerminalDecisionRejectsNonProviderUsageStage(t *testing.T) {
 	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
 		Status: string(model.TaskStatusSuccess), Usage: usage, UsageEnvelope: envelope,
 	}, constant.ChannelTypeMiniMax)
-	require.ErrorContains(t, errors.New(decision.ManualReason), "provider_response")
+	// Non-provider evidence is rejected at the freezing boundary and therefore
+	// reaches terminal billing as a missing validated envelope.
+	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope is missing")
 	require.NotNil(t, decision.Settlement)
 	require.Zero(t, decision.Settlement.FundingDelta)
+	require.Nil(t, decision.UsageEnvelope)
 }
 
 func TestH3TerminalDecisionUsesValidatedEnvelopeOverDivergentCompatibilityUsage(t *testing.T) {
