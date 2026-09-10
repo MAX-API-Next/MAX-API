@@ -81,6 +81,21 @@ func TestParseTaskResultDoesNotLetNonObjectUsageHideTerminalResult(t *testing.T)
 	require.Equal(t, types.TaskUsageCompletenessInvalid, result.UsageEnvelope.Completeness)
 }
 
+func TestParseTaskResultDoesNotCopyInvalidUsageIntoLegacyBillingFields(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"status":"succeeded",
+		"content":{"video_url":"https://cdn.example.com/video.mp4"},
+		"usage":{"completion_tokens":100,"total_tokens":1}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, "SUCCESS", result.Status)
+	require.Equal(t, types.TaskUsageCompletenessInvalid, result.UsageEnvelope.Completeness)
+	// Invalid totals must not reach the compatibility fields used by legacy
+	// token-ratio settlement.
+	require.Zero(t, result.CompletionTokens)
+	require.Zero(t, result.TotalTokens)
+}
+
 func TestProduceUsageUnwrapsConfiguredRelayEnvelope(t *testing.T) {
 	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
 		Stage: types.TaskUsageSourceProviderResponse,
