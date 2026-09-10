@@ -873,6 +873,9 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 		if err := taskusage.ValidateEnvelope(contract, envelope, types.TaskUsageProducerKindGoAdapter); err != nil {
 			return err
 		}
+		if envelope.Stage != types.TaskUsageSourceProviderResponse {
+			return fmt.Errorf("task usage envelope stage %q is not supported for polling", envelope.Stage)
+		}
 		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)
 		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
 		return nil

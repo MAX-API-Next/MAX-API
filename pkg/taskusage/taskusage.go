@@ -89,10 +89,10 @@ func ResolveContract(sourceID string, schemaVersion int, contractDigest string) 
 	return contract, nil
 }
 
-func usageField(key, unit string, required bool, minValue int64, max *int64) types.TaskUsageFieldContract {
+func usageField(key, unit string, required bool, minValue int64, maxValue *int64) types.TaskUsageFieldContract {
 	return types.TaskUsageFieldContract{
 		Key: key, Unit: unit, RequiredForTerminal: required,
-		MinValue: int64Pointer(minValue), MaxValue: max,
+		MinValue: int64Pointer(minValue), MaxValue: maxValue,
 	}
 }
 

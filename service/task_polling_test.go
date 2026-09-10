@@ -187,6 +187,23 @@ func TestApplyTaskUsageFactsRejectsTamperedEnvelope(t *testing.T) {
 	require.Nil(t, taskResult.UsageEnvelope)
 }
 
+func TestApplyTaskUsageFactsRejectsNonProviderResponseEnvelope(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceRequestEstimate, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceRequestEstimate, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	err = applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult)
+	require.EqualError(t, err, `task usage envelope stage "request_estimate" is not supported for polling`)
+	require.Nil(t, taskResult.Usage)
+	require.Nil(t, taskResult.UsageEnvelope)
+}
+
 func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {
 	truncate(t)
 	baseURL := "https://upstream.example.com"
