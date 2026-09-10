@@ -666,6 +666,13 @@ func CompleteManualTaskBillingSettlementsZero(
 		); err != nil {
 			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
+			if code == "settlement_failed" {
+				common.SysError(fmt.Sprintf(
+					"manual task billing batch settlement failed: settlement_id=%d error=%s",
+					target.ID,
+					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
+				))
+			}
 			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
 				SettlementID: target.ID,
 				Code:         code,

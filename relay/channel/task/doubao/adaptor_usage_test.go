@@ -113,3 +113,20 @@ func TestProduceUsageUnwrapsConfiguredRelayEnvelope(t *testing.T) {
 	require.EqualValues(t, 12, *envelope.Usage.CompletionTokens)
 	require.EqualValues(t, 20, *envelope.Usage.TotalTokens)
 }
+
+func TestParseTaskResultUsesTheSameWrappedUsageAsProduceUsage(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"code":"success",
+		"data":{"data":{
+			"id":"task_wrapped",
+			"status":"succeeded",
+			"content":{"video_url":"https://cdn.example.com/wrapped.mp4"},
+			"usage":{"completion_tokens":12,"total_tokens":20}
+		}}
+	}`))
+	require.NoError(t, err)
+	require.NotNil(t, result.UsageEnvelope)
+	require.Equal(t, types.TaskUsagePresencePresentValid, result.UsageEnvelope.Presence)
+	require.EqualValues(t, 12, *result.UsageEnvelope.Usage.CompletionTokens)
+	require.EqualValues(t, 20, *result.UsageEnvelope.Usage.TotalTokens)
+}

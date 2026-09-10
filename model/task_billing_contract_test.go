@@ -297,8 +297,11 @@ func TestTaskBillingExternalDatabaseGuard(t *testing.T) {
 		name, dialect, dsn string
 		safe               bool
 	}{
-		{"mysql_safe", "mysql", "fixture@tcp(127.0.0.1:3306)/maxapi_task_billing_test_fixture", true},
-		{"postgres_safe", "postgres", "postgres://fixture@127.0.0.1/maxapi_task_billing_test_fixture", true},
+		{"mysql_safe", "mysql", "fixture@tcp(127.0.0.1:3306)/maxapi_task_billing_test_fixture?tls=true", true},
+		{"mysql_unix_socket", "mysql", "fixture@unix(/var/run/mysqld/mysqld.sock)/maxapi_task_billing_test_fixture", true},
+		{"mysql_plaintext", "mysql", "fixture@tcp(127.0.0.1:3306)/maxapi_task_billing_test_fixture", false},
+		{"postgres_safe", "postgres", "postgres://fixture@127.0.0.1/maxapi_task_billing_test_fixture?sslmode=verify-full", true},
+		{"postgres_plaintext_fallback", "postgres", "postgres://fixture@127.0.0.1/maxapi_task_billing_test_fixture?sslmode=prefer", false},
 		{"mysql_wrong_database", "mysql", "maxapi_task_billing_test_fixture@tcp(127.0.0.1:3306)/production", false},
 		{"postgres_wrong_database", "postgres", "postgres://maxapi_task_billing_test_fixture@127.0.0.1/production", false},
 		{"mysql_no_database", "mysql", "fixture@tcp(127.0.0.1:3306)/", false},

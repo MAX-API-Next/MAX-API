@@ -207,6 +207,7 @@ func TestCompleteManualTaskBillingSettlementsZeroReturnsPartialFailures(t *testi
 	seedChannel(t, channelID)
 	h3Task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
 	h3Task.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	h3Task.Properties.UpstreamModelName = constant.TaskModelMiniMaxH3
 	h3Task.PrivateData.BillingContext.OriginModelName = constant.TaskModelMiniMaxH3
 	persistTask(t, h3Task)
 	h3Manual := createManualTaskFinalizeSettlement(t, h3Task, "provider usage requires manual review")

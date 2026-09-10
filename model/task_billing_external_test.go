@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -80,6 +81,12 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		if !taskBillingTestDatabaseName.MatchString(config.DBName) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
+		// External contract tests may never put database credentials on a
+		// plaintext TCP connection. Unix sockets are local-only; TCP requires
+		// certificate-validating TLS and must not permit plaintext fallback.
+		if config.Net == "tcp" && (config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext) {
+			return nil, "", errTaskBillingUnsafeDatabase
+		}
 		config.Timeout, config.ReadTimeout, config.WriteTimeout = 5*time.Second, 10*time.Second, 10*time.Second
 		connector, err := mysqldriver.NewConnector(config)
 		if err != nil {
@@ -94,6 +101,19 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		if !taskBillingTestDatabaseName.MatchString(config.Database) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
+		sslMode := taskBillingPostgresSSLMode(dsn)
+		if sslMode != "verify-ca" && sslMode != "verify-full" &&
+			!(sslMode == "require" && config.TLSConfig != nil && config.TLSConfig.VerifyPeerCertificate != nil) {
+			return nil, "", errTaskBillingUnsafeDatabase
+		}
+		if config.TLSConfig == nil {
+			return nil, "", errTaskBillingUnsafeDatabase
+		}
+		for _, fallback := range config.Fallbacks {
+			if fallback.TLSConfig == nil {
+				return nil, "", errTaskBillingUnsafeDatabase
+			}
+		}
 		config.ConnectTimeout = 5 * time.Second
 		config.RuntimeParams["search_path"] = "public"
 		config.RuntimeParams["statement_timeout"] = "10000"
@@ -102,6 +122,19 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 	default:
 		return nil, "", errTaskBillingUnsafeDatabase
 	}
+}
+
+func taskBillingPostgresSSLMode(dsn string) string {
+	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
+		return strings.ToLower(strings.TrimSpace(parsed.Query().Get("sslmode")))
+	}
+	for _, field := range strings.Fields(dsn) {
+		parts := strings.SplitN(field, "=", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "sslmode") {
+			return strings.ToLower(strings.Trim(parts[1], "\"'"))
+		}
+	}
+	return ""
 }
 
 func runExternalTaskBillingSettlementContract(t *testing.T, dialect, envName string) {

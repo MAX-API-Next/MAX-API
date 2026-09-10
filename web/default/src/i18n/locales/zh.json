@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "任务 #{{id}} · 已预留 {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "仅允许使用经验证的供应商证据得出的精确额度。此流程不能在原预留额度之上追加扣费。",
     "Exact final quota": "精确最终额度",
-    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "请输入quota数值，{{quotaPerUnit}} quota = $1，允许范围：0 到 {{quota}}。",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "请输入额度数值。{{quotaPerUnit}} 额度 = $1。允许范围：0 至 {{quota}}。",
     "Apply exact settlement": "应用精确结算",
     "{{count}} attempt": "{{count}} 次尝试",
     "{{count}} attempts": "{{count}} 次尝试",

@@ -580,7 +580,9 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	if err := common.Unmarshal(respBody, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
 	}
-	envelope, err := buildDoubaoUsageEnvelope(resTask.Usage)
+	envelope, err := a.ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse, Payload: respBody,
+	})
 	if err != nil {
 		return nil, err
 	}

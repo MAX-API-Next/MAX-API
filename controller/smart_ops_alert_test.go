@@ -92,7 +92,7 @@ func TestCompleteManualTaskBillingSettlementsZeroReturnsSuccessAndPartialFailure
 		task := model.Task{
 			TaskID: taskID, UserId: owner.Id, Group: "default", ChannelId: 35, Quota: 100,
 			Status: model.TaskStatusInProgress, CreatedAt: 1, UpdatedAt: 1,
-			Properties: model.Properties{OriginModelName: modelName},
+			Properties: model.Properties{OriginModelName: modelName, UpstreamModelName: modelName},
 			PrivateData: model.TaskPrivateData{
 				TokenId: token.Id, BillingSource: "wallet",
 				BillingContext: &model.TaskBillingContext{OriginModelName: modelName},

@@ -73,24 +73,15 @@ type Task struct {
 	includePrivateDataInUpdate bool `gorm:"-"`
 }
 
-// IsMiniMaxH3Task reports whether the persisted task is bound to the
-// MiniMax-H3 upstream model. An explicit upstream model wins over client-side
-// aliases so an alias cannot authorize an H3-only administrative action.
+// IsMiniMaxH3Task reports whether the persisted task has an explicit,
+// trusted MiniMax-H3 upstream binding. Client-side origin aliases and legacy
+// billing-context names are intentionally not sufficient for H3-only actions.
 func IsMiniMaxH3Task(task *Task) bool {
 	if task == nil {
 		return false
 	}
 	if upstream := strings.TrimSpace(task.Properties.UpstreamModelName); upstream != "" {
 		return strings.EqualFold(upstream, constant.TaskModelMiniMaxH3)
-	}
-	names := []string{task.Properties.OriginModelName}
-	if billingContext := task.PrivateData.BillingContext; billingContext != nil {
-		names = append(names, billingContext.OriginModelName)
-	}
-	for _, name := range names {
-		if strings.EqualFold(strings.TrimSpace(name), constant.TaskModelMiniMaxH3) {
-			return true
-		}
 	}
 	return false
 }
