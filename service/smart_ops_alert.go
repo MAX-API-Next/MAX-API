@@ -501,10 +501,12 @@ func completeManualTaskBillingSettlement(
 	}
 	note = normalizedNote
 
-	original, originalAlreadyResolved, err := model.GetManualTaskBillingSettlement(id, expectedRevision)
+	eligibility, err := prepareManualTaskBillingCompletion(id, expectedRevision, *actualQuota, requireMiniMaxH3)
 	if err != nil {
 		return ManualTaskBillingCompletionResult{}, err
 	}
+	original := eligibility.original
+	originalAlreadyResolved := eligibility.originalAlreadyResolved
 	if originalAlreadyResolved {
 		if original.ReconciliationReviewedBy != reviewerID {
 			return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
@@ -519,72 +521,8 @@ func completeManualTaskBillingSettlement(
 			note = original.ReconciliationReviewNote
 		}
 	}
-	if *actualQuota < 0 || *actualQuota > original.TaskQuota ||
-		original.TaskQuota < 0 || original.TaskQuotaTarget != original.TaskQuota ||
-		original.FundingDelta != 0 || original.TokenDelta != 0 {
-		return ManualTaskBillingCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
-	}
-	if int64(int(original.TaskQuota)) != original.TaskQuota || int64(int(*actualQuota)) != *actualQuota {
-		return ManualTaskBillingCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
-	}
-
-	task, err := model.GetTaskByID(original.TaskID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-		}
-		return ManualTaskBillingCompletionResult{}, err
-	}
-	if requireMiniMaxH3 && !model.IsMiniMaxH3Task(task) {
-		return ManualTaskBillingCompletionResult{}, errors.Join(
-			model.ErrBillingSettlementReviewConflict,
-			errManualTaskBillingZeroQuotaRequiresMiniMaxH3,
-		)
-	}
-	expectedSource := model.BillingSettlementSourceWallet
-	if taskIsSubscription(task) {
-		expectedSource = model.BillingSettlementSourceSubscription
-	}
-	if original.Source != expectedSource ||
-		original.UserID != task.UserId ||
-		original.SubscriptionID != task.PrivateData.SubscriptionId ||
-		original.TokenID != task.PrivateData.TokenId ||
-		original.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
-		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-	}
-
-	existingChild, childFound, err := model.GetManualTaskBillingCompletion(task.ID)
-	if err != nil {
-		return ManualTaskBillingCompletionResult{}, err
-	}
-	childWasApplied := childFound && existingChild.Status == model.BillingSettlementStatusApplied
-	if childFound && existingChild.TaskQuotaTarget != *actualQuota {
-		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-	}
-	if int64(task.Quota) != original.TaskQuota &&
-		(int64(task.Quota) != *actualQuota || !childWasApplied) {
-		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-	}
-
-	completionTask := *task
-	completionTask.Quota = int(original.TaskQuota)
-	var usage *types.TaskUsage
-	if completionTask.PrivateData.BillingContext != nil {
-		usage = types.CloneTaskUsage(completionTask.PrivateData.BillingContext.TaskUsage)
-	}
-	input := buildTaskExactFinalSettlementInput(
-		&completionTask,
-		int(*actualQuota),
-		usage,
-		"Administrator-approved manual task usage settlement",
-	)
-	if input == nil {
-		return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-	}
-	if completionTask.PrivateData.BillingContext != nil {
-		attachTaskUsageEnvelopeMetadata(input, completionTask.PrivateData.BillingContext.TaskUsageEnvelope)
-	}
-	input.OperationKey = model.BillingTaskManualCompletionOperationKey(task.ID)
+	task := eligibility.task
+	input := eligibility.input
 
 	if _, err := model.EnsureManualTaskBillingCompletion(*input, reviewerID, note); err != nil {
 		return ManualTaskBillingCompletionResult{}, err
@@ -628,7 +566,7 @@ func completeManualTaskBillingSettlement(
 		OperationKey:        input.OperationKey,
 		ActualQuota:         *actualQuota,
 		AppliedFundingDelta: appliedFundingDelta,
-		AlreadyApplied:      originalAlreadyResolved || childWasApplied || childAlreadyApplied,
+		AlreadyApplied:      originalAlreadyResolved || eligibility.childWasApplied || childAlreadyApplied,
 	}, nil
 }
 
@@ -708,35 +646,44 @@ func ptrInt64(value int64) *int64 {
 	return &value
 }
 
-// validateManualTaskBillingZeroTarget performs the read-only portion of the
-// zero-quota completion contract. Batch callers run this for every target
-// before allowing any one target to mutate funding or task state.
-func validateManualTaskBillingZeroTarget(
-	target model.BillingSettlementReviewTarget,
-	reviewerID int,
-) error {
-	original, alreadyResolved, err := model.GetManualTaskBillingSettlement(target.ID, target.Revision)
+type manualTaskBillingEligibility struct {
+	original                model.BillingSettlement
+	originalAlreadyResolved bool
+	task                    *model.Task
+	input                   *model.BillingSettlementInput
+	childWasApplied         bool
+}
+
+// prepareManualTaskBillingCompletion validates the immutable task settlement
+// snapshot and builds the exact child input before any balance mutation. Both
+// single-record and batch callers use this same financial eligibility contract.
+func prepareManualTaskBillingCompletion(
+	id int64,
+	expectedRevision int64,
+	actualQuota int64,
+	requireMiniMaxH3 bool,
+) (manualTaskBillingEligibility, error) {
+	original, originalAlreadyResolved, err := model.GetManualTaskBillingSettlement(id, expectedRevision)
 	if err != nil {
-		return err
+		return manualTaskBillingEligibility{}, err
 	}
-	if alreadyResolved && original.ReconciliationReviewedBy != reviewerID {
-		return model.ErrBillingSettlementReviewConflict
-	}
-	if original.TaskQuota < 0 || original.TaskQuotaTarget != original.TaskQuota ||
+	if actualQuota < 0 || actualQuota > original.TaskQuota ||
+		original.TaskQuota < 0 || original.TaskQuotaTarget != original.TaskQuota ||
 		original.FundingDelta != 0 || original.TokenDelta != 0 ||
-		int64(int(original.TaskQuota)) != original.TaskQuota {
-		return ErrInvalidBillingSettlementReconciliationReview
+		int64(int(original.TaskQuota)) != original.TaskQuota ||
+		int64(int(actualQuota)) != actualQuota {
+		return manualTaskBillingEligibility{}, ErrInvalidBillingSettlementReconciliationReview
 	}
 
 	task, err := model.GetTaskByID(original.TaskID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return model.ErrBillingSettlementReviewConflict
+			return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
 		}
-		return err
+		return manualTaskBillingEligibility{}, err
 	}
-	if !model.IsMiniMaxH3Task(task) {
-		return errors.Join(
+	if requireMiniMaxH3 && !model.IsMiniMaxH3Task(task) {
+		return manualTaskBillingEligibility{}, errors.Join(
 			model.ErrBillingSettlementReviewConflict,
 			errManualTaskBillingZeroQuotaRequiresMiniMaxH3,
 		)
@@ -750,20 +697,20 @@ func validateManualTaskBillingZeroTarget(
 		original.SubscriptionID != task.PrivateData.SubscriptionId ||
 		original.TokenID != task.PrivateData.TokenId ||
 		original.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
-		return model.ErrBillingSettlementReviewConflict
+		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
 	}
 
 	existingChild, childFound, err := model.GetManualTaskBillingCompletion(task.ID)
 	if err != nil {
-		return err
+		return manualTaskBillingEligibility{}, err
 	}
 	childWasApplied := childFound && existingChild.Status == model.BillingSettlementStatusApplied
-	if childFound && existingChild.TaskQuotaTarget != 0 {
-		return model.ErrBillingSettlementReviewConflict
+	if childFound && existingChild.TaskQuotaTarget != actualQuota {
+		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
 	}
 	if int64(task.Quota) != original.TaskQuota &&
-		(int64(task.Quota) != 0 || !childWasApplied) {
-		return model.ErrBillingSettlementReviewConflict
+		(int64(task.Quota) != actualQuota || !childWasApplied) {
+		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
 	}
 
 	completionTask := *task
@@ -772,7 +719,40 @@ func validateManualTaskBillingZeroTarget(
 	if completionTask.PrivateData.BillingContext != nil {
 		usage = types.CloneTaskUsage(completionTask.PrivateData.BillingContext.TaskUsage)
 	}
-	if buildTaskExactFinalSettlementInput(&completionTask, 0, usage, "Administrator-approved manual task usage settlement") == nil {
+	input := buildTaskExactFinalSettlementInput(
+		&completionTask,
+		int(actualQuota),
+		usage,
+		"Administrator-approved manual task usage settlement",
+	)
+	if input == nil {
+		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
+	}
+	if completionTask.PrivateData.BillingContext != nil {
+		attachTaskUsageEnvelopeMetadata(input, completionTask.PrivateData.BillingContext.TaskUsageEnvelope)
+	}
+	input.OperationKey = model.BillingTaskManualCompletionOperationKey(task.ID)
+
+	return manualTaskBillingEligibility{
+		original:                original,
+		originalAlreadyResolved: originalAlreadyResolved,
+		task:                    task,
+		input:                   input,
+		childWasApplied:         childWasApplied,
+	}, nil
+}
+
+// validateManualTaskBillingZeroTarget performs reviewer-specific checks after
+// the shared completion eligibility contract has been evaluated.
+func validateManualTaskBillingZeroTarget(
+	target model.BillingSettlementReviewTarget,
+	reviewerID int,
+) error {
+	eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, 0, true)
+	if err != nil {
+		return err
+	}
+	if eligibility.originalAlreadyResolved && eligibility.original.ReconciliationReviewedBy != reviewerID {
 		return model.ErrBillingSettlementReviewConflict
 	}
 	return nil

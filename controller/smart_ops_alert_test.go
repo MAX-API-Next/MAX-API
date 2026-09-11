@@ -40,13 +40,13 @@ func TestBillingSettlementMutationRequestsPreserveExplicitFalse(t *testing.T) {
 	assert.Nil(t, omittedCompletion.ActualQuota)
 }
 
-func TestCompleteManualTaskBillingSettlementsZeroRejectsInvalidBatch(t *testing.T) {
+func TestCompleteManualTaskBillingSettlementsZeroDecodesEmptyBatch(t *testing.T) {
 	var request manualTaskBillingBatchCompletionRequest
 	require.NoError(t, common.Unmarshal([]byte(`{"items":[]}`), &request))
 	assert.Empty(t, request.Items)
 }
 
-func TestCompleteManualTaskBillingSettlementsZeroReturnsSuccessAndPartialFailure(t *testing.T) {
+func TestCompleteManualTaskBillingSettlementsZeroBlocksBatchWithIneligibleTarget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB

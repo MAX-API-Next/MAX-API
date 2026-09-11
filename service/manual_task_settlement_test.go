@@ -260,6 +260,7 @@ func TestZeroTaskSettlementRechecksMiniMaxH3AtCompletionBoundary(t *testing.T) {
 	)
 
 	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+	assert.ErrorIs(t, err, errManualTaskBillingZeroQuotaRequiresMiniMaxH3)
 	assert.EqualValues(t, 900, getUserQuota(t, userID))
 	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, 100, getTokenUsedQuota(t, tokenID))
