@@ -37,11 +37,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   completeManualTaskBillingSettlement,
-  completeManualTaskBillingSettlements,
-  completeManualTaskBillingSettlementsZero,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
+import { useManualTaskBatchSettlement } from '../hooks/use-manual-task-batch-settlement'
 import { formatCount, formatLocalizedCount } from '../lib/format'
 import { mutationErrorMessage } from '../lib/mutation-error'
 import {
@@ -52,7 +51,6 @@ import { classifyBillingSettlementReviewSelection } from '../lib/reconciliation-
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
-  ManualTaskBillingBatchCompletionData,
   ManualTaskBillingBatchFailure,
   BillingSettlementReviewTarget,
 } from '../types'
@@ -120,12 +118,16 @@ export function BillingSettlementEvidence(
   >(() => new Map())
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
-  const [manualTaskBatchItems, setManualTaskBatchItems] = useState<
-    BillingSettlementReconciliationItem[]
-  >([])
-  const [batchFailures, setBatchFailures] = useState<
-    ManualTaskBillingBatchFailure[]
-  >([])
+  const {
+    manualTaskBatchItems,
+    setManualTaskBatchItems,
+    batchFailures,
+    setBatchFailures,
+    zeroSettlementMutation,
+    manualTaskBatchCompletionMutation,
+  } = useManualTaskBatchSettlement({
+    onSelectionCleared: () => setSelectedTargets(new Map()),
+  })
   const reconciliationItems = props.data?.items
   const currentManualTaskItem = useMemo(() => {
     if (!manualTaskItem) return null
@@ -258,141 +260,6 @@ export function BillingSettlementEvidence(
         fallback: mutationErrorMessage(
           error,
           t('Failed to close reconciliation alerts.')
-        ),
-      })
-    },
-  })
-
-  const zeroSettlementMutation = useMutation({
-    mutationKey: ['smart-ops', 'manual-task-billing-zero-batch'],
-    mutationFn: async (
-      targets: BillingSettlementReviewTarget[]
-    ): Promise<ManualTaskBillingBatchCompletionData | undefined> => {
-      const response = await completeManualTaskBillingSettlementsZero({
-        items: targets,
-      })
-      if (!response.success) {
-        throw new Error(
-          response.message || t('Failed to complete manual task billing.')
-        )
-      }
-      return response.data
-    },
-    onSuccess: (data) => {
-      setSelectedTargets(new Map())
-      const completed = data?.completed_count ?? 0
-      const failed = data?.failed_count ?? 0
-      const failures = data?.failed ?? []
-      setBatchFailures(failures)
-      if (completed === 0) {
-        toast.error(t('No selected task settlements were completed.'))
-      } else if (failed > 0) {
-        toast.warning(
-          t(
-            'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
-            { completed, failed }
-          )
-        )
-      } else {
-        toast.success(
-          t(
-            'Completed selected task settlements with zero final quota: {{count}}.',
-            { count: completed }
-          )
-        )
-      }
-      if (failures.length > 0) {
-        toast.warning(
-          t('Some settlements remain for review: {{ids}}', {
-            ids: failures
-              .map((failure) => `#${failure.settlement_id}`)
-              .join(', '),
-          })
-        )
-      }
-    },
-    onSettled: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
-        }),
-      ])
-    },
-    onError: (error) => {
-      handleServerError(error, {
-        fallback: mutationErrorMessage(
-          error,
-          t('Failed to complete manual task billing.')
-        ),
-      })
-    },
-  })
-
-  const manualTaskBatchCompletionMutation = useMutation({
-    mutationKey: ['smart-ops', 'manual-task-billing-exact-batch'],
-    mutationFn: async ({
-      items,
-      actualQuotas,
-    }: {
-      items: BillingSettlementReconciliationItem[]
-      actualQuotas: Record<number, number>
-    }): Promise<ManualTaskBillingBatchCompletionData | undefined> => {
-      const response = await completeManualTaskBillingSettlements({
-        items: items.map((item) => ({
-          id: item.id,
-          revision: item.revision,
-          actual_quota: actualQuotas[item.id],
-        })),
-      })
-      if (!response.success) {
-        throw new Error(
-          response.message || t('Failed to complete manual task billing.')
-        )
-      }
-      return response.data
-    },
-    onSuccess: (data) => {
-      setManualTaskBatchItems([])
-      setSelectedTargets(new Map())
-      const completed = data?.completed_count ?? 0
-      const failed = data?.failed_count ?? 0
-      const failures = data?.failed ?? []
-      setBatchFailures(failures)
-      if (completed === 0) {
-        toast.error(t('No selected task settlements were completed.'))
-      } else if (failed > 0) {
-        toast.warning(
-          t(
-            'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
-            { completed, failed }
-          )
-        )
-      } else {
-        toast.success(
-          t('Completed selected task settlements: {{count}}.', {
-            count: completed,
-          })
-        )
-      }
-    },
-    onSettled: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
-        }),
-        queryClient.invalidateQueries({
-          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
-        }),
-      ])
-    },
-    onError: (error) => {
-      handleServerError(error, {
-        fallback: mutationErrorMessage(
-          error,
-          t('Failed to complete manual task billing.')
         ),
       })
     },
