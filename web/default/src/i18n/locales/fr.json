@@ -5678,6 +5678,7 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "{{completed_count}} règlements manuels de tâches terminés avec un quota nul ({{failed_count}} échec(s))",
     "Completed selected task settlements: {{count}}.": "Règlements de tâches sélectionnés terminés : {{count}}.",
     "Enter exact quotas ({{count}})": "Saisir les quotas exacts ({{count}})",
+    "Manually settle selected task quotas ({{count}})": "Régler manuellement les quotas sélectionnés ({{count}})",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Saisissez un quota final exact pour chaque tâche sélectionnée. Chaque valeur est vérifiée par rapport à son propre quota réservé.",
     "Apply exact settlements": "Appliquer les règlements exacts",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Plage autorisée : de 0 à {{quota}} ({{quotaPerUnit}} quota = 1 $)."

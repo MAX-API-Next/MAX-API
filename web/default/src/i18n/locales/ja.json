@@ -5678,6 +5678,7 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "クォータ 0 の手動タスク精算を {{completed_count}} 件完了しました（失敗 {{failed_count}} 件）",
     "Completed selected task settlements: {{count}}.": "選択したタスクの精算を完了しました：{{count}} 件。",
     "Enter exact quotas ({{count}})": "正確なクォータを入力 ({{count}} 件)",
+    "Manually settle selected task quotas ({{count}})": "選択したタスクのクォータを手動精算 ({{count}} 件)",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "選択した各タスクの正確な最終クォータを入力してください。各値はタスク固有の予約クォータと照合されます。",
     "Apply exact settlements": "正確な精算を適用",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "許可範囲：0 ～ {{quota}}（{{quotaPerUnit}} クォータ = $1）。"

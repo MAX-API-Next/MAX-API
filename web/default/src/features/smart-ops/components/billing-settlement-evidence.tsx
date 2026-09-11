@@ -557,7 +557,7 @@ export function BillingSettlementEvidence(
                       manualTaskBatchCompletionMutation.isPending
                     }
                   >
-                    {t('Enter exact quotas ({{count}})', {
+                    {t('Manually settle selected task quotas ({{count}})', {
                       count: formatCount(
                         activeSelectedTargets.length,
                         i18n.language
