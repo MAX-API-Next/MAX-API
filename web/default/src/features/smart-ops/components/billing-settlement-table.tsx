@@ -81,7 +81,10 @@ function BillingSettlementActionsCell(
   const { t } = useTranslation()
 
   if (props.item.requires_manual_completion) {
-    if (props.item.zero_quota_eligible === true && props.canCompleteManualTask) {
+    if (
+      props.item.zero_quota_eligible === true &&
+      props.canCompleteManualTask
+    ) {
       return (
         <Button
           type='button'
@@ -94,7 +97,7 @@ function BillingSettlementActionsCell(
           }
           disabled={props.reviewPending}
         >
-          {t('Review and close')}
+          {t('Confirm zero-quota settlement')}
         </Button>
       )
     }
@@ -232,11 +235,12 @@ export function BillingSettlementTable(
                       {item.status === 'manual' ? t('Manual') : t('Pending')}
                     </Badge>
                     <Badge variant='destructive'>{t('Open alert')}</Badge>
-                    {item.requires_manual_completion && (
-                      <Badge variant='outline'>
-                        {t('Exact quota required')}
-                      </Badge>
-                    )}
+                    {item.requires_manual_completion &&
+                      item.zero_quota_eligible !== true && (
+                        <Badge variant='outline'>
+                          {t('Exact quota required')}
+                        </Badge>
+                      )}
                   </div>
                 </TableCell>
                 <TableCell>

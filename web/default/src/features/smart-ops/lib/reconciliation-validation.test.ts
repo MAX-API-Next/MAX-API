@@ -19,7 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { BillingSettlementReconciliationData } from '../types'
-import { isBillingSettlementReconciliationData } from './reconciliation-validation'
+import {
+  classifyBillingSettlementReviewSelection,
+  isBillingSettlementReconciliationData,
+} from './reconciliation-validation'
 
 function validData(): BillingSettlementReconciliationData {
   return {
@@ -127,6 +130,44 @@ describe('isBillingSettlementReconciliationData', () => {
         items: [{ ...item, task_quota_target: -1 }],
       }),
       false
+    )
+  })
+})
+
+describe('classifyBillingSettlementReviewSelection', () => {
+  test('rejects a stale exact-quota task before ordinary review', () => {
+    assert.equal(
+      classifyBillingSettlementReviewSelection([
+        {
+          ...validData().items[0],
+          requires_manual_completion: true,
+          zero_quota_eligible: false,
+        },
+      ]),
+      'exact_quota_required'
+    )
+  })
+
+  test('keeps ordinary and zero-quota selections separate', () => {
+    const ordinary = validData().items[0]
+    const zeroQuotaTask = {
+      ...ordinary,
+      id: 4,
+      requires_manual_completion: true,
+      zero_quota_eligible: true,
+    }
+
+    assert.equal(
+      classifyBillingSettlementReviewSelection([ordinary]),
+      'ordinary'
+    )
+    assert.equal(
+      classifyBillingSettlementReviewSelection([zeroQuotaTask]),
+      'zero_quota'
+    )
+    assert.equal(
+      classifyBillingSettlementReviewSelection([ordinary, zeroQuotaTask]),
+      'mixed'
     )
   })
 })

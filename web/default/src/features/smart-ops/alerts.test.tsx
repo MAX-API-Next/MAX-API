@@ -843,7 +843,7 @@ describe('SmartOps active alerts', () => {
         const screen = within(view.container)
         assert.ok(
           screen.getByRole('button', {
-            name: 'Review and close',
+            name: 'Confirm zero-quota settlement',
           })
         )
         assert.equal(
@@ -865,7 +865,7 @@ describe('SmartOps active alerts', () => {
       })
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Review and close',
+          name: 'Confirm zero-quota settlement',
         })
       )
       await waitFor(() => {

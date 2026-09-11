@@ -52,6 +52,21 @@ export function isManualSettlementSelectable(
   )
 }
 
+export function getBillingSettlementSelectionPartition(
+  items: BillingSettlementReconciliationItem[],
+  canSelectManualTask: boolean
+): BillingSettlementReconciliationItem[] {
+  const selectableItems = items.filter((item) =>
+    isManualSettlementSelectable(item, canSelectManualTask)
+  )
+  const ordinaryItems = selectableItems.filter(
+    (item) => item.zero_quota_eligible !== true
+  )
+  return ordinaryItems.length > 0
+    ? ordinaryItems
+    : selectableItems.filter((item) => item.zero_quota_eligible === true)
+}
+
 export function useBillingSettlementSelection(
   params: UseBillingSettlementSelectionParams
 ): UseBillingSettlementSelectionResult {
@@ -63,6 +78,11 @@ export function useBillingSettlementSelection(
       isManualSettlementSelectable(item, params.canSelectManualTask),
     [params.canSelectManualTask]
   )
+  const selectionPartition = useMemo(
+    () =>
+      getBillingSettlementSelectionPartition(items, params.canSelectManualTask),
+    [items, params.canSelectManualTask]
+  )
   const isSelected = useCallback(
     (item: BillingSettlementReconciliationItem): boolean =>
       selectable(item) &&
@@ -72,10 +92,10 @@ export function useBillingSettlementSelection(
   const { allSelected, someSelected } = useMemo(() => {
     return {
       allSelected:
-        items.some(selectable) && items.filter(selectable).every(isSelected),
+        selectionPartition.length > 0 && selectionPartition.every(isSelected),
       someSelected: items.some(isSelected),
     }
-  }, [isSelected, items, selectable])
+  }, [isSelected, items, selectionPartition])
 
   const toggleAll = useCallback(
     (checked: boolean): void => {
@@ -83,24 +103,16 @@ export function useBillingSettlementSelection(
         onSelectedTargetsChange(new Map())
         return
       }
-      const selectableItems = items.filter(selectable)
-      const ordinaryItems = selectableItems.filter(
-        (item) => item.zero_quota_eligible !== true
-      )
-      const zeroItems = selectableItems.filter(
-        (item) => item.zero_quota_eligible === true
-      )
-      const partition = ordinaryItems.length > 0 ? ordinaryItems : zeroItems
       onSelectedTargetsChange(
         new Map(
-          partition.map((item) => [
+          selectionPartition.map((item) => [
             item.id,
             { id: item.id, revision: item.revision },
           ])
         )
       )
     },
-    [items, onSelectedTargetsChange, selectable]
+    [onSelectedTargetsChange, selectionPartition]
   )
 
   const toggleItem = useCallback(

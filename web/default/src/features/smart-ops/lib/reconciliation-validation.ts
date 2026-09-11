@@ -69,6 +69,34 @@ const billingSettlementReconciliationDataSchema: z.ZodType<BillingSettlementReco
     items: z.array(billingSettlementReconciliationItemSchema),
   })
 
+export type BillingSettlementReviewSelection =
+  | 'empty'
+  | 'ordinary'
+  | 'zero_quota'
+  | 'mixed'
+  | 'exact_quota_required'
+
+export function classifyBillingSettlementReviewSelection(
+  items: BillingSettlementReconciliationItem[]
+): BillingSettlementReviewSelection {
+  const exactQuotaOnly = items.some(
+    (item) =>
+      item.requires_manual_completion && item.zero_quota_eligible !== true
+  )
+  if (exactQuotaOnly) return 'exact_quota_required'
+
+  const hasZeroQuotaTasks = items.some(
+    (item) => item.zero_quota_eligible === true
+  )
+  const hasOrdinaryAlerts = items.some(
+    (item) => !item.requires_manual_completion
+  )
+  if (hasZeroQuotaTasks && hasOrdinaryAlerts) return 'mixed'
+  if (hasZeroQuotaTasks) return 'zero_quota'
+  if (hasOrdinaryAlerts) return 'ordinary'
+  return 'empty'
+}
+
 export function isBillingSettlementReconciliationData(
   value: unknown
 ): value is BillingSettlementReconciliationData {

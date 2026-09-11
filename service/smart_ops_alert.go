@@ -723,7 +723,7 @@ func prepareManualTaskBillingCompletion(
 		&completionTask,
 		int(actualQuota),
 		usage,
-		"Administrator-approved manual task usage settlement",
+		manualTaskBillingDefaultNote,
 	)
 	if input == nil {
 		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict

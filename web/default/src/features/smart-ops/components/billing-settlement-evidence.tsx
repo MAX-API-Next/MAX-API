@@ -47,6 +47,7 @@ import {
   SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
   SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
 } from '../lib/query-keys'
+import { classifyBillingSettlementReviewSelection } from '../lib/reconciliation-validation'
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
@@ -303,22 +304,25 @@ export function BillingSettlementEvidence(
         (target) => target.id === item.id && target.revision === item.revision
       )
     )
-    const manual = selectedItems.filter(
-      (item) => item.zero_quota_eligible === true
-    )
-    const ordinary = selectedItems.filter(
-      (item) => !item.requires_manual_completion
-    )
-    if (manual.length > 0 && ordinary.length > 0) {
-      toast.error(
-        t('Select either task settlements or ordinary alerts, not both.')
-      )
-      return
-    }
-    if (manual.length > 0) {
-      zeroSettlementMutation.mutate(targets)
-    } else {
-      reviewMutation.mutate(targets)
+    switch (classifyBillingSettlementReviewSelection(selectedItems)) {
+      case 'exact_quota_required':
+        toast.error(
+          t('Some selected task settlements still require an exact quota.')
+        )
+        return
+      case 'mixed':
+        toast.error(
+          t('Select either task settlements or ordinary alerts, not both.')
+        )
+        return
+      case 'zero_quota':
+        zeroSettlementMutation.mutate(targets)
+        return
+      case 'ordinary':
+        reviewMutation.mutate(targets)
+        return
+      default:
+        return
     }
   }
 
