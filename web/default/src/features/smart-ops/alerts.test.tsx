@@ -128,7 +128,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
       <BillingSettlementEvidence
         canCompleteManualTask
         canUpdateBlockingPolicy
-        data={failed ? undefined : data}
+        data={data}
         error={failed ? error : null}
         loading={false}
         onRetry={() => undefined}
@@ -606,6 +606,99 @@ describe('SmartOps active alerts', () => {
       delete htmlElementPrototype.detachEvent
       queryClient.clear()
       await view.unmount()
+    }
+  })
+
+  test('blocks batch exact settlement after reconciliation refresh fails', async (): Promise<void> => {
+    const originalUser = useAuthStore.getState().auth.user
+    const originalSystemConfigLoading = useSystemConfigStore.getState().loading
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'root',
+      role: 100,
+    })
+    useSystemConfigStore.getState().setLoading(false)
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ManualSettlementEvidenceHarness />
+      </QueryClientProvider>
+    )
+
+    try {
+      await view.click(
+        await waitFor(() =>
+          within(view.container).getByRole('checkbox', {
+            name: 'Select billing reconciliation alert 701',
+          })
+        )
+      )
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Enter exact quotas (1)',
+        })
+      )
+      const input = await waitFor(() => {
+        const element = document.getElementById(
+          'manual-task-actual-quota-701'
+        ) as HTMLInputElement | null
+        assert.ok(element)
+        return element
+      })
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )?.set
+      assert.ok(setter)
+      await act(async () => {
+        setter.call(input, '40')
+        fireEvent.input(input)
+        fireEvent.change(input)
+      })
+      const submitButton = await waitFor(() => {
+        const button = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        })
+        assert.equal((button as HTMLButtonElement).disabled, false)
+        return button
+      })
+
+      const causeErrorButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(causeErrorButton)
+      await waitFor(() => {
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'We could not load billing reconciliation details.'
+          )
+        )
+        assert.ok(
+          (document.body.querySelector('[role="dialog"]')?.textContent ?? '').includes(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+      })
+      assert.equal((submitButton as HTMLButtonElement).disabled, true)
+    } finally {
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+      queryClient.clear()
+      await view.unmount()
+      useAuthStore.getState().auth.setUser(originalUser)
+      useSystemConfigStore.getState().setLoading(originalSystemConfigLoading)
     }
   })
 

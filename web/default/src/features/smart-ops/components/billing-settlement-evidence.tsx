@@ -148,12 +148,14 @@ export function BillingSettlementEvidence(
         (item) => item.id === selected.id
       )
       return (
+        Boolean(props.error) ||
+        !props.data ||
         !current ||
         current.revision !== selected.revision ||
         !current.requires_manual_completion
       )
     })
-  }, [manualTaskBatchItems, reconciliationItems])
+  }, [manualTaskBatchItems, props.data, props.error, reconciliationItems])
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []

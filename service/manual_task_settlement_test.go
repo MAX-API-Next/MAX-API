@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -197,6 +198,11 @@ func TestCompleteManualTaskBillingSettlementsZeroIsIdempotent(t *testing.T) {
 	assert.EqualValues(t, 1000, getUserQuota(t, userID))
 	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
 	assert.EqualValues(t, 1, countLogs(t))
+	var completion model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskManualCompletionOperationKey(task.ID)).First(&completion).Error)
+	var effect model.BillingSettlementEffect
+	require.NoError(t, common.Unmarshal([]byte(completion.EffectPayload), &effect))
+	assert.Equal(t, manualTaskBillingZeroNote, effect.Content)
 }
 
 func TestCompleteManualTaskBillingSettlementsAppliesDifferentExactQuotas(t *testing.T) {

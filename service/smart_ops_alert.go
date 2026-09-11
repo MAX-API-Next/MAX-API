@@ -510,7 +510,7 @@ func completeManualTaskBillingSettlement(
 	}
 	note = normalizedNote
 
-	eligibility, err := prepareManualTaskBillingCompletion(id, expectedRevision, *actualQuota, requireMiniMaxH3)
+	eligibility, err := prepareManualTaskBillingCompletion(id, expectedRevision, *actualQuota, requireMiniMaxH3, note)
 	if err != nil {
 		return ManualTaskBillingCompletionResult{}, err
 	}
@@ -676,7 +676,7 @@ func CompleteManualTaskBillingSettlements(
 		Failed:        make([]ManualTaskBillingBatchFailure, 0),
 	}
 	for _, target := range targets {
-		eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false)
+		eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false, manualTaskBillingDefaultNote)
 		if err == nil {
 			_, err = validateManualTaskBillingCompletionReplay(eligibility, reviewerID, manualTaskBillingDefaultNote)
 		}
@@ -751,6 +751,7 @@ func prepareManualTaskBillingCompletion(
 	expectedRevision int64,
 	actualQuota int64,
 	requireMiniMaxH3 bool,
+	note string,
 ) (manualTaskBillingEligibility, error) {
 	original, originalAlreadyResolved, err := model.GetManualTaskBillingSettlement(id, expectedRevision)
 	if err != nil {
@@ -812,7 +813,7 @@ func prepareManualTaskBillingCompletion(
 		&completionTask,
 		int(actualQuota),
 		usage,
-		manualTaskBillingDefaultNote,
+		note,
 	)
 	if input == nil {
 		return manualTaskBillingEligibility{}, model.ErrBillingSettlementReviewConflict
@@ -862,7 +863,7 @@ func validateManualTaskBillingZeroTarget(
 	target model.BillingSettlementReviewTarget,
 	reviewerID int,
 ) error {
-	eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, 0, true)
+	eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, 0, true, manualTaskBillingZeroNote)
 	if err != nil {
 		return err
 	}
