@@ -79,6 +79,10 @@ function formatBatchFailureMessage(
       return t(
         'manual task billing settlement could not be applied safely; refresh and reconcile the current record'
       )
+    case 'invalid_settlement_request':
+      return t(
+        'the supplied final quota or the settlement snapshot is invalid for this record'
+      )
     case 'token_quota_inconsistent':
       return t(
         'the token quota mirror is inconsistent; repair the token record before completing this settlement'
@@ -278,17 +282,23 @@ export function BillingSettlementEvidence(
       const failed = data?.failed_count ?? 0
       const failures = data?.failed ?? []
       setBatchFailures(failures)
-      toast.success(
-        failed > 0
-          ? t(
-              'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
-              { completed, failed }
-            )
-          : t(
-              'Completed selected task settlements with zero final quota: {{count}}.',
-              { count: completed }
-            )
-      )
+      if (completed === 0) {
+        toast.error(t('No selected task settlements were completed.'))
+      } else if (failed > 0) {
+        toast.warning(
+          t(
+            'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
+            { completed, failed }
+          )
+        )
+      } else {
+        toast.success(
+          t(
+            'Completed selected task settlements with zero final quota: {{count}}.',
+            { count: completed }
+          )
+        )
+      }
       if (failures.length > 0) {
         toast.warning(
           t('Some settlements remain for review: {{ids}}', {
@@ -349,16 +359,22 @@ export function BillingSettlementEvidence(
       const failed = data?.failed_count ?? 0
       const failures = data?.failed ?? []
       setBatchFailures(failures)
-      toast.success(
-        failed > 0
-          ? t(
-              'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
-              { completed, failed }
-            )
-          : t('Completed selected task settlements: {{count}}.', {
-              count: completed,
-            })
-      )
+      if (completed === 0) {
+        toast.error(t('No selected task settlements were completed.'))
+      } else if (failed > 0) {
+        toast.warning(
+          t(
+            'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
+            { completed, failed }
+          )
+        )
+      } else {
+        toast.success(
+          t('Completed selected task settlements: {{count}}.', {
+            count: completed,
+          })
+        )
+      }
     },
     onSettled: async () => {
       await Promise.all([

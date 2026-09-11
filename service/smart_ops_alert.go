@@ -857,6 +857,8 @@ func validateManualTaskBillingZeroTarget(
 
 func manualTaskBillingBatchErrorCode(err error) string {
 	switch {
+	case errors.Is(err, ErrInvalidBillingSettlementReconciliationReview):
+		return "invalid_settlement_request"
 	case errors.Is(err, errManualTaskBillingZeroQuotaRequiresMiniMaxH3):
 		return "minimax_h3_required"
 	case errors.Is(err, model.ErrBillingSettlementReviewConflict),
@@ -879,6 +881,8 @@ func manualTaskBillingBatchErrorCode(err error) string {
 
 func manualTaskBillingBatchErrorMessage(code string) string {
 	switch code {
+	case "invalid_settlement_request":
+		return "the supplied final quota or the settlement snapshot is invalid for this record"
 	case "minimax_h3_required":
 		return "only MiniMax-H3 task settlements can use the zero-quota batch action"
 	case "record_conflict":

@@ -835,9 +835,9 @@ describe('SmartOps active alerts', () => {
                 success: true,
                 data: {
                   ...emptyReconciliationData(),
-                  total_count: includeManualItem ? 1 : 0,
-                  manual_count: includeManualItem ? 1 : 0,
-                  open_alert_count: includeManualItem ? 1 : 0,
+                  total_count: includeManualItem ? 2 : 0,
+                  manual_count: includeManualItem ? 2 : 0,
+                  open_alert_count: includeManualItem ? 2 : 0,
                   items: includeManualItem
                     ? [
                         {
@@ -852,6 +852,36 @@ describe('SmartOps active alerts', () => {
                           task_id: 7001,
                           task_quota: 100,
                           task_quota_target: 100,
+                          requires_manual_completion: manualCompletionRequired,
+                          zero_quota_eligible: manualCompletionRequired,
+                          funding_delta: 0,
+                          applied_funding_delta: 0,
+                          token_delta: 0,
+                          applied_token_delta: 0,
+                          attempts: 0,
+                          last_error: 'provider usage needs verification',
+                          next_attempt: 0,
+                          created_at: 1786032545,
+                          updated_at: 1786032545,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: false,
+                          blocks_user: false,
+                        },
+                        {
+                          id: 94,
+                          revision: manualRevision,
+                          operation_key: 'task:7002:finalize',
+                          status: 'manual',
+                          source: 'wallet',
+                          user_id: 53,
+                          subscription_id: 0,
+                          token_id: 54,
+                          task_id: 7002,
+                          task_quota: 120,
+                          task_quota_target: 120,
                           requires_manual_completion: manualCompletionRequired,
                           zero_quota_eligible: manualCompletionRequired,
                           funding_delta: 0,
@@ -889,6 +919,7 @@ describe('SmartOps active alerts', () => {
             failed: [
               {
                 settlement_id: 94,
+                code: 'record_conflict',
                 message:
                   'record changed or could not be applied safely; refresh and reconcile it',
               },
@@ -908,9 +939,9 @@ describe('SmartOps active alerts', () => {
       await waitFor(() => {
         const screen = within(view.container)
         assert.ok(
-          screen.getByRole('button', {
+          screen.getAllByRole('button', {
             name: 'Confirm zero-quota settlement',
-          })
+          }).length > 0
         )
         assert.equal(
           screen
@@ -930,9 +961,9 @@ describe('SmartOps active alerts', () => {
         )
       })
       await view.click(
-        within(view.container).getByRole('button', {
+        within(view.container).getAllByRole('button', {
           name: 'Confirm zero-quota settlement',
-        })
+        })[0]
       )
       await waitFor(() => {
         assert.deepEqual(writes[0], {
@@ -944,15 +975,25 @@ describe('SmartOps active alerts', () => {
         name: 'Select billing reconciliation alert 93',
       })
       await view.click(taskCheckbox)
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 94',
+        })
+      )
       const zeroBatchButton = within(view.container).getByRole('button', {
-        name: 'Review and close selected (1)',
+        name: 'Review and close selected (2)',
       })
       assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
       await view.click(zeroBatchButton)
       await waitFor(() => {
         assert.deepEqual(writes[1], {
           url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
-          data: { items: [{ id: 93, revision: manualRevision }] },
+          data: {
+            items: [
+              { id: 93, revision: manualRevision },
+              { id: 94, revision: manualRevision },
+            ],
+          },
         })
         assert.ok(
           (view.container.textContent ?? '').includes('Settlement #94:')
@@ -960,18 +1001,18 @@ describe('SmartOps active alerts', () => {
       })
       assert.equal(within(document.body).queryByRole('dialog'), null)
       assert.ok(
-        within(view.container).getByRole('button', {
+        within(view.container).getAllByRole('button', {
           name: 'Enter exact quota',
-        })
+        }).length > 0
       )
 
       // The H3 zero-quota shortcut must not hide the exact settlement path.
       // Open the real dialog and verify that the exact input remains available
       // instead of being replaced by the zero-quota batch action.
       await view.click(
-        within(view.container).getByRole('button', {
+        within(view.container).getAllByRole('button', {
           name: 'Enter exact quota',
-        })
+        })[0]
       )
       const exactQuotaInput = document.getElementById(
         'manual-task-actual-quota'

@@ -607,6 +607,9 @@ func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
 	if plan.UsageContractDigest != "" {
 		usageIdentityFields++
 	}
+	if plan.Source == H3BillingSource && usageIdentityFields != 4 {
+		return fmt.Errorf("H3 billing plan usage contract identity is required")
+	}
 	if usageIdentityFields != 0 {
 		if usageIdentityFields != 4 {
 			return fmt.Errorf("H3 billing plan usage contract identity is incomplete")

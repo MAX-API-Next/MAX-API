@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useRef, useState, type ReactElement } from 'react'
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatNumber, formatQuota } from '@/lib/format'
@@ -67,25 +73,42 @@ export function ManualTaskSettlementBatchDialog(
   const inputRefs = useRef<Record<number, HTMLInputElement | null>>({})
   const [submitted, setSubmitted] = useState(false)
 
-  const getValidationErrors = (
-    nextValues: Record<number, string>
-  ): Record<number, string | undefined> => {
-    const next: Record<number, string | undefined> = {}
+  const schemas = useMemo(() => {
+    const next = new Map<
+      number,
+      ReturnType<typeof getManualTaskSettlementSchema>
+    >()
     for (const item of props.items) {
-      const result = getManualTaskSettlementSchema(
-        t,
-        item.task_quota
-      ).safeParse({
-        actualQuota: nextValues[item.id] ?? '',
-      })
-      next[item.id] = result.success
-        ? undefined
-        : result.error.issues[0]?.message
+      next.set(
+        item.task_quota,
+        getManualTaskSettlementSchema(t, item.task_quota)
+      )
     }
     return next
-  }
+  }, [props.items, t])
 
-  const errors = getValidationErrors(values)
+  const getValidationErrors = useCallback(
+    (
+      nextValues: Record<number, string>
+    ): Record<number, string | undefined> => {
+      const next: Record<number, string | undefined> = {}
+      for (const item of props.items) {
+        const result = schemas.get(item.task_quota)?.safeParse({
+          actualQuota: nextValues[item.id] ?? '',
+        })
+        next[item.id] = result?.success
+          ? undefined
+          : result?.error.issues[0]?.message
+      }
+      return next
+    },
+    [props.items, schemas]
+  )
+
+  const errors = useMemo(
+    () => getValidationErrors(values),
+    [getValidationErrors, values]
+  )
 
   const canSubmit =
     props.items.length > 0 &&

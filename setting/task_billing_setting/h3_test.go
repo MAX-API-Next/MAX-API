@@ -61,6 +61,36 @@ func TestValidateH3BillingPlanSnapshotRejectsUsageContractTampering(t *testing.T
 	require.ErrorContains(t, ValidateH3BillingPlanSnapshot(plan), "usage contract identity")
 }
 
+func TestValidateH3BillingPlanSnapshotRequiresUsageIdentityForCurrentH3Plans(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	plan, err := BuildH3BillingPlan(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+	plan.Source = H3BillingSource
+	plan.UsageProducerKind = ""
+	plan.UsageSourceID = ""
+	plan.UsageSchemaVersion = 0
+	plan.UsageContractDigest = ""
+
+	require.ErrorContains(t, ValidateH3BillingPlanSnapshot(plan), "usage contract identity is required")
+}
+
+func TestValidateH3BillingPlanSnapshotKeepsLegacyIdentityCompatibility(t *testing.T) {
+	withQuotaPerUnit(t, 1000)
+	plan, err := BuildH3BillingPlan(H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	}, 1)
+	require.NoError(t, err)
+	plan.Source = LegacyH3BillingSource
+	plan.UsageProducerKind = ""
+	plan.UsageSourceID = ""
+	plan.UsageSchemaVersion = 0
+	plan.UsageContractDigest = ""
+
+	require.NoError(t, ValidateH3BillingPlanSnapshot(plan))
+}
+
 func TestBuildH3BillingPlanReadsMinimaxRuleFromUnifiedRateCards(t *testing.T) {
 	withQuotaPerUnit(t, 1000)
 	original := GetRateCardsCopy()

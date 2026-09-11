@@ -23,6 +23,8 @@
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "Bản sao hạn mức token không nhất quán; hãy sửa bản ghi token trước khi hoàn tất quyết toán.",
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "Bản sao mức sử dụng gói đăng ký thấp hơn khoản hoàn tiền; hãy sửa bản ghi gói đăng ký trước khi hoàn tất quyết toán.",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "Khoản dự phòng gói đăng ký chưa được liên kết hoặc kỳ hạn đã thay đổi; hãy chuyển bản ghi này để đối soát thủ công.",
+    "the supplied final quota or the settlement snapshot is invalid for this record": "Hạn mức cuối cùng hoặc ảnh chụp quyết toán được cung cấp không hợp lệ cho bản ghi này.",
+    "No selected task settlements were completed.": "Không có quyết toán tác vụ nào được chọn hoàn tất.",
     "Enter the exact final quota.": "Nhập hạn mức cuối cùng chính xác.",
     "Final quota must be a non-negative safe integer.": "Hạn mức cuối cùng phải là số nguyên an toàn không âm.",
     "Final quota cannot exceed the reserved quota.": "Hạn mức cuối cùng không được vượt quá hạn mức đã dự phòng.",

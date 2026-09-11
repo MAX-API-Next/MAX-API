@@ -23,6 +23,8 @@
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "The token quota mirror is inconsistent; repair the token record before completing this settlement.",
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "The subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement.",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "The subscription reservation is unbound or its period changed; escalate this record for manual reconciliation.",
+    "the supplied final quota or the settlement snapshot is invalid for this record": "The supplied final quota or the settlement snapshot is invalid for this record.",
+    "No selected task settlements were completed.": "No selected task settlements were completed.",
     "Enter the exact final quota.": "Enter the exact final quota.",
     "Final quota must be a non-negative safe integer.": "Final quota must be a non-negative safe integer.",
     "Final quota cannot exceed the reserved quota.": "Final quota cannot exceed the reserved quota.",

@@ -84,6 +84,11 @@ describe('billing settlement selection partition', () => {
     })
 
     assert.equal(isManualSettlementSelectable(exact, true), true)
+    assert.equal(isManualSettlementSelectable(exact, false), false)
+    assert.deepEqual(
+      getBillingSettlementSelectionPartition([exact, zero], false),
+      []
+    )
     assert.deepEqual(
       getBillingSettlementSelectionPartition([exact, zero], true).map(
         (value) => value.id

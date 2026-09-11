@@ -155,6 +155,22 @@ func TestH3TerminalDecisionUsesFrozenPlanForNegativeAndZeroDelta(t *testing.T) {
 	require.EqualValues(t, plan.ReserveQuota, zeroDeltaDecision.Settlement.TaskQuotaTarget)
 }
 
+func TestPrepareTaskTerminalBillingDecisionKeepsMissingUsageSentinel(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), nil),
+		constant.ChannelTypeMiniMax,
+	)
+
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
+	require.NotEmpty(t, decision.ManualReason)
+}
+
 func TestH3TerminalDecisionPreservesExplicitZeroFinalQuota(t *testing.T) {
 	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
 		Resolution: "768P", OutputDurationSeconds: 5,

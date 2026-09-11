@@ -23,6 +23,8 @@
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "Token 额度镜像不一致；请先修复 Token 记录，再完成此结算。",
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "订阅用量镜像低于退款额度；请先修复订阅记录，再完成此结算。",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "订阅预留未绑定或所属周期已变化；请将此记录升级为人工对账。",
+    "the supplied final quota or the settlement snapshot is invalid for this record": "该记录提供的最终额度或结算快照无效。",
+    "No selected task settlements were completed.": "没有完成所选任务结算。",
     "Enter the exact final quota.": "请输入精确的最终额度。",
     "Final quota must be a non-negative safe integer.": "最终额度必须是非负安全整数。",
     "Final quota cannot exceed the reserved quota.": "最终额度不能超过预留额度。",

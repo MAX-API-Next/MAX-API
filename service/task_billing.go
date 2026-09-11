@@ -478,7 +478,13 @@ func frozenTaskUsageEnvelope(task *model.Task, taskResult *relaycommon.TaskInfo)
 
 func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo, envelope *types.TaskUsageEnvelope) *types.TaskUsage {
 	if envelope != nil {
-		return types.CloneTaskUsage(envelope.Usage)
+		if usage := types.CloneTaskUsage(envelope.Usage); usage != nil {
+			return usage
+		}
+		return &types.TaskUsage{
+			Source:       types.TaskUsageSourceProviderResponse,
+			Completeness: types.TaskUsageCompletenessMissing,
+		}
 	}
 	if task != nil && task.PrivateData.BillingContext != nil && task.PrivateData.BillingContext.TaskUsage != nil {
 		frozen := task.PrivateData.BillingContext.TaskUsage
@@ -534,10 +540,16 @@ func validateTaskUsageEnvelopeForPlan(plan *types.TaskBillingPlan, envelope *typ
 }
 
 func taskBillingPlanHasUsageIdentity(plan *types.TaskBillingPlan) bool {
-	return plan != nil && (plan.UsageProducerKind != "" ||
+	if plan == nil {
+		return false
+	}
+	if plan.Source == task_billing_setting.H3BillingSource {
+		return true
+	}
+	return plan.UsageProducerKind != "" ||
 		plan.UsageSourceID != "" ||
 		plan.UsageSchemaVersion != 0 ||
-		plan.UsageContractDigest != "")
+		plan.UsageContractDigest != ""
 }
 
 func attachTaskUsageEnvelopeMetadata(input *model.BillingSettlementInput, envelope *types.TaskUsageEnvelope) {

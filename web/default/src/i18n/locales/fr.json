@@ -23,6 +23,8 @@
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "Le miroir du quota du jeton est incohérent ; corrigez l’enregistrement du jeton avant de finaliser ce règlement.",
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "Le miroir de l’utilisation de l’abonnement est inférieur au remboursement ; corrigez l’enregistrement de l’abonnement avant de finaliser ce règlement.",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "La réservation d’abonnement n’est pas liée ou sa période a changé ; transmettez cet enregistrement pour un rapprochement manuel.",
+    "the supplied final quota or the settlement snapshot is invalid for this record": "Le quota final fourni ou l’instantané de règlement n’est pas valide pour cet enregistrement.",
+    "No selected task settlements were completed.": "Aucun règlement de tâche sélectionné n’a été effectué.",
     "Enter the exact final quota.": "Saisissez le quota final exact.",
     "Final quota must be a non-negative safe integer.": "Le quota final doit être un entier sûr positif ou nul.",
     "Final quota cannot exceed the reserved quota.": "Le quota final ne peut pas dépasser le quota réservé.",
