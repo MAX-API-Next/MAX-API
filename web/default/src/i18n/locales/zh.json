@@ -17,7 +17,7 @@
     "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "审核后可批量关闭普通告警。根管理员可选择 MiniMax-H3 任务终结告警并明确按最终额度 0 结算；其他任务记录仍需录入精确额度。",
     "Exact quota required": "需要精确额度",
     "Confirm zero-quota settlement": "确认零额度结算",
-    "Complete billing": "完成结算",
+    "Enter exact quota": "手动输入精确额度",
     "Root administrator required": "需要根管理员",
     "manual task billing settlement could not be applied safely; refresh and reconcile the current record": "无法安全应用人工任务计费结算；请刷新并重新对账当前记录。",
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "Token 额度镜像不一致；请先修复 Token 记录，再完成此结算。",

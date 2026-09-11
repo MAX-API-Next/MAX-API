@@ -106,7 +106,7 @@ function BillingSettlementActionsCell(
             onClick={() => props.onCompleteManualTask(props.item)}
             disabled={props.reviewPending}
           >
-            {t('Complete billing')}
+            {t('Enter exact quota')}
           </Button>
         </div>
       )
@@ -119,7 +119,7 @@ function BillingSettlementActionsCell(
           onClick={() => props.onCompleteManualTask(props.item)}
           disabled={props.reviewPending || !props.canCompleteManualTask}
         >
-          {t('Complete billing')}
+          {t('Enter exact quota')}
         </Button>
         {!props.canCompleteManualTask && (
           <span className='text-muted-foreground text-xs'>

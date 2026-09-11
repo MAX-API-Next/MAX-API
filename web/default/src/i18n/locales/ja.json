@@ -17,7 +17,7 @@
     "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "レビュー後、通常のアラートを一括で閉じます。ルート管理者は MiniMax-H3 タスク完了アラートを選択して最終クォータ 0 で精算できます。他のタスクには正確なクォータが必要です。",
     "Exact quota required": "正確なクォータが必要",
     "Confirm zero-quota settlement": "ゼロクォータ精算を確認",
-    "Complete billing": "課金を完了",
+    "Enter exact quota": "正確なクォータを入力",
     "Root administrator required": "ルート管理者が必要",
     "manual task billing settlement could not be applied safely; refresh and reconcile the current record": "タスクの手動課金精算を安全に適用できません。最新のレコードを更新して照合してください。",
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "トークンのクォータミラーに不整合があります。精算を完了する前にトークンレコードを修復してください。",

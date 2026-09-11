@@ -17,7 +17,7 @@
     "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.",
     "Exact quota required": "Exact quota required",
     "Confirm zero-quota settlement": "Confirm zero-quota settlement",
-    "Complete billing": "Complete billing",
+    "Enter exact quota": "Enter exact quota",
     "Root administrator required": "Root administrator required",
     "manual task billing settlement could not be applied safely; refresh and reconcile the current record": "Manual task billing settlement could not be applied safely; refresh and reconcile the current record.",
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "The token quota mirror is inconsistent; repair the token record before completing this settlement.",

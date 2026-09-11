@@ -17,7 +17,7 @@
     "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "Đóng hàng loạt các cảnh báo thông thường sau khi xem xét. Quản trị viên gốc có thể chọn cảnh báo hoàn tất MiniMax-H3 để quyết toán rõ ràng với hạn mức cuối bằng 0; các tác vụ khác vẫn yêu cầu hạn mức chính xác.",
     "Exact quota required": "Yêu cầu hạn mức chính xác",
     "Confirm zero-quota settlement": "Xác nhận quyết toán hạn mức bằng không",
-    "Complete billing": "Hoàn tất tính phí",
+    "Enter exact quota": "Nhập hạn mức chính xác",
     "Root administrator required": "Yêu cầu quản trị viên gốc",
     "manual task billing settlement could not be applied safely; refresh and reconcile the current record": "Không thể áp dụng an toàn quyết toán tính phí thủ công cho tác vụ; hãy làm mới và đối soát bản ghi hiện tại.",
     "the token quota mirror is inconsistent; repair the token record before completing this settlement": "Bản sao hạn mức token không nhất quán; hãy sửa bản ghi token trước khi hoàn tất quyết toán.",
