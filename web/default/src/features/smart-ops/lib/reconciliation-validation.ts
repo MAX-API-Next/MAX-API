@@ -73,24 +73,27 @@ export type BillingSettlementReviewSelection =
   | 'empty'
   | 'ordinary'
   | 'zero_quota'
+  | 'exact_quota'
   | 'mixed'
   | 'exact_quota_required'
 
 export function classifyBillingSettlementReviewSelection(
   items: BillingSettlementReconciliationItem[]
 ): BillingSettlementReviewSelection {
-  const exactQuotaOnly = items.some(
+  const hasExactQuotaTasks = items.some(
     (item) =>
       item.requires_manual_completion && item.zero_quota_eligible !== true
   )
-  if (exactQuotaOnly) return 'exact_quota_required'
-
   const hasZeroQuotaTasks = items.some(
     (item) => item.zero_quota_eligible === true
   )
   const hasOrdinaryAlerts = items.some(
     (item) => !item.requires_manual_completion
   )
+  if (hasOrdinaryAlerts && (hasExactQuotaTasks || hasZeroQuotaTasks)) {
+    return 'mixed'
+  }
+  if (hasExactQuotaTasks) return 'exact_quota'
   if (hasZeroQuotaTasks && hasOrdinaryAlerts) return 'mixed'
   if (hasZeroQuotaTasks) return 'zero_quota'
   if (hasOrdinaryAlerts) return 'ordinary'

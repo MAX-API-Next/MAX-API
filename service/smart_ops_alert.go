@@ -450,6 +450,15 @@ type ManualTaskBillingBatchCompletionResult struct {
 	Failed         []ManualTaskBillingBatchFailure `json:"failed"`
 }
 
+// ManualTaskBillingCompletionTarget carries the immutable alert snapshot and
+// the exact final quota supplied for that task. ActualQuota is a pointer so an
+// omitted amount cannot be confused with an explicit zero-cost settlement.
+type ManualTaskBillingCompletionTarget struct {
+	ID          int64
+	Revision    int64
+	ActualQuota *int64
+}
+
 func normalizeManualTaskBillingNote(note string) (string, error) {
 	note = strings.TrimSpace(note)
 	if note == "" {
@@ -625,6 +634,76 @@ func CompleteManualTaskBillingSettlementsZero(
 			if code == "settlement_failed" {
 				common.SysError(fmt.Sprintf(
 					"manual task billing batch settlement failed: settlement_id=%d error=%s",
+					target.ID,
+					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
+				))
+			}
+			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
+				SettlementID: target.ID,
+				Code:         code,
+				Message:      manualTaskBillingBatchErrorMessage(code),
+			})
+			continue
+		}
+		result.CompletedCount++
+		result.SettlementIDs = append(result.SettlementIDs, target.ID)
+	}
+	return result, nil
+}
+
+// CompleteManualTaskBillingSettlements applies administrator-supplied exact
+// final quotas to a bounded set of task-finalization records. Validation of
+// every item runs before the first balance mutation; each mutation then uses
+// the existing idempotent single-record path and reports per-item failures.
+func CompleteManualTaskBillingSettlements(
+	targets []ManualTaskBillingCompletionTarget,
+	reviewerID int,
+) (ManualTaskBillingBatchCompletionResult, error) {
+	if reviewerID <= 0 || len(targets) == 0 || len(targets) > 200 {
+		return ManualTaskBillingBatchCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+	}
+	seen := make(map[int64]struct{}, len(targets))
+	for _, target := range targets {
+		if target.ID <= 0 || target.Revision <= 0 || target.ActualQuota == nil {
+			return ManualTaskBillingBatchCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+		}
+		if _, exists := seen[target.ID]; exists {
+			return ManualTaskBillingBatchCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
+		}
+		seen[target.ID] = struct{}{}
+	}
+	result := ManualTaskBillingBatchCompletionResult{
+		SettlementIDs: make([]int64, 0, len(targets)),
+		Failed:        make([]ManualTaskBillingBatchFailure, 0),
+	}
+	for _, target := range targets {
+		if _, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false); err != nil {
+			result.FailedCount++
+			code := manualTaskBillingBatchErrorCode(err)
+			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
+				SettlementID: target.ID,
+				Code:         code,
+				Message:      manualTaskBillingBatchErrorMessage(code),
+			})
+		}
+	}
+	if result.FailedCount > 0 {
+		return result, nil
+	}
+	for _, target := range targets {
+		if _, err := completeManualTaskBillingSettlement(
+			target.ID,
+			target.Revision,
+			reviewerID,
+			target.ActualQuota,
+			manualTaskBillingDefaultNote,
+			false,
+		); err != nil {
+			result.FailedCount++
+			code := manualTaskBillingBatchErrorCode(err)
+			if code == "settlement_failed" {
+				common.SysError(fmt.Sprintf(
+					"manual task billing exact batch settlement failed: settlement_id=%d error=%s",
 					target.ID,
 					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
 				))

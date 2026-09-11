@@ -5671,6 +5671,13 @@
     "Schema": "Schema",
     "Rule key": "Rule key",
     "Free": "Free",
-    "Save H3 billing profile": "Save H3 billing profile"
+    "Save H3 billing profile": "Save H3 billing profile",
+    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)",
+    "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)",
+    "Completed selected task settlements: {{count}}.": "Completed selected task settlements: {{count}}.",
+    "Enter exact quotas ({{count}})": "Enter exact quotas ({{count}})",
+    "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.",
+    "Apply exact settlements": "Apply exact settlements",
+    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1)."
   }
 }

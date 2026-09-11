@@ -51,4 +51,24 @@ describe('renderAuditContent', () => {
     assert.match(translated, /{{settlement_id}}/)
     assert.match(translated, /{{actual_quota}}/)
   })
+
+  test('localizes batch manual task billing settlements', () => {
+    const rendered = renderAuditContent(
+      {
+        op: {
+          action: 'billing.manual_task_settlement_batch_complete',
+          params: { completed_count: 2, failed_count: 1 },
+        },
+      },
+      (key: string, opts?: Record<string, unknown>): string =>
+        key
+          .replace('{{completed_count}}', String(opts?.completed_count))
+          .replace('{{failed_count}}', String(opts?.failed_count))
+    )
+
+    assert.equal(
+      rendered,
+      'Completed 2 manual task billing settlements (1 failed)'
+    )
+  })
 })

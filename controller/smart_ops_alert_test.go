@@ -46,6 +46,21 @@ func TestCompleteManualTaskBillingSettlementsZeroDecodesEmptyBatch(t *testing.T)
 	assert.Empty(t, request.Items)
 }
 
+func TestCompleteManualTaskBillingSettlementsDecodesPerItemExplicitZero(t *testing.T) {
+	var request manualTaskBillingBatchCompletionRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"items":[{"id":9,"revision":2,"actual_quota":0},{"id":10,"revision":3,"actual_quota":40}]}`), &request))
+	require.Len(t, request.Items, 2)
+	require.NotNil(t, request.Items[0].ActualQuota)
+	assert.Zero(t, *request.Items[0].ActualQuota)
+	require.NotNil(t, request.Items[1].ActualQuota)
+	assert.EqualValues(t, 40, *request.Items[1].ActualQuota)
+
+	var omitted manualTaskBillingBatchCompletionRequest
+	require.NoError(t, common.Unmarshal([]byte(`{"items":[{"id":9,"revision":2}]}`), &omitted))
+	require.Len(t, omitted.Items, 1)
+	assert.Nil(t, omitted.Items[0].ActualQuota)
+}
+
 func TestCompleteManualTaskBillingSettlementsZeroBlocksBatchWithIneligibleTarget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	oldDB := model.DB

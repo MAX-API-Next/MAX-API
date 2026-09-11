@@ -46,10 +46,7 @@ export function isManualSettlementSelectable(
   item: BillingSettlementReconciliationItem,
   canSelectManualTask: boolean
 ): boolean {
-  return (
-    !item.requires_manual_completion ||
-    (item.zero_quota_eligible === true && canSelectManualTask)
-  )
+  return !item.requires_manual_completion || canSelectManualTask
 }
 
 export function getBillingSettlementSelectionPartition(
@@ -60,11 +57,11 @@ export function getBillingSettlementSelectionPartition(
     isManualSettlementSelectable(item, canSelectManualTask)
   )
   const ordinaryItems = selectableItems.filter(
-    (item) => item.zero_quota_eligible !== true
+    (item) => !item.requires_manual_completion
   )
   return ordinaryItems.length > 0
     ? ordinaryItems
-    : selectableItems.filter((item) => item.zero_quota_eligible === true)
+    : selectableItems.filter((item) => item.requires_manual_completion)
 }
 
 export function useBillingSettlementSelection(

@@ -5671,6 +5671,13 @@
     "Schema": "架构版本",
     "Rule key": "规则键",
     "Free": "免费",
-    "Save H3 billing profile": "保存 H3 计费配置"
+    "Save H3 billing profile": "保存 H3 计费配置",
+    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "已完成人工任务计费结算 {{completed_count}} 个（失败 {{failed_count}} 个）",
+    "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "已按零额度完成人工任务结算 {{completed_count}} 个（失败 {{failed_count}} 个）",
+    "Completed selected task settlements: {{count}}.": "已完成所选任务结算：{{count}} 个。",
+    "Enter exact quotas ({{count}})": "输入精确额度（{{count}} 个）",
+    "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "为每个所选任务输入精确最终额度。每个数值都会按照该任务自身的预留额度校验。",
+    "Apply exact settlements": "应用精确结算",
+    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "允许范围：0 至 {{quota}}（{{quotaPerUnit}} 额度 = $1）。"
   }
 }

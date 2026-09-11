@@ -63,7 +63,7 @@ export function ManualTaskSettlementDialog(
   props: ManualTaskSettlementDialogProps
 ): ReactElement {
   const { t } = useTranslation()
-  const { currency } = useSystemConfig()
+  const { currency, loading: configLoading } = useSystemConfig()
   const item = props.item
   const form = useForm<ManualTaskSettlementFormValues>({
     resolver: zodResolver(
@@ -73,7 +73,10 @@ export function ManualTaskSettlementDialog(
     mode: 'onChange',
   })
   const canSubmit =
-    Boolean(props.item) && !props.stale && form.formState.isValid
+    Boolean(props.item) &&
+    !props.stale &&
+    !configLoading &&
+    form.formState.isValid
 
   const handleSubmit = form.handleSubmit((values) => {
     if (props.item && !props.stale) {
@@ -143,7 +146,9 @@ export function ManualTaskSettlementDialog(
                           min={0}
                           max={item.task_quota}
                           step={1}
-                          disabled={props.pending || props.stale}
+                          disabled={
+                            props.pending || props.stale || configLoading
+                          }
                           aria-invalid={fieldState.invalid}
                         />
                         <FieldDescription>

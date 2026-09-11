@@ -37,6 +37,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
   completeManualTaskBillingSettlement,
+  completeManualTaskBillingSettlements,
   completeManualTaskBillingSettlementsZero,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
@@ -56,6 +57,7 @@ import type {
   BillingSettlementReviewTarget,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
+import { ManualTaskSettlementBatchDialog } from './manual-task-settlement-batch-dialog'
 import { ManualTaskSettlementDialog } from './manual-task-settlement-dialog'
 
 function formatBatchFailureMessage(
@@ -114,6 +116,9 @@ export function BillingSettlementEvidence(
   >(() => new Map())
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
+  const [manualTaskBatchItems, setManualTaskBatchItems] = useState<
+    BillingSettlementReconciliationItem[]
+  >([])
   const [batchFailures, setBatchFailures] = useState<
     ManualTaskBillingBatchFailure[]
   >([])
@@ -132,6 +137,19 @@ export function BillingSettlementEvidence(
       currentManualTaskItem.revision !== manualTaskItem.revision ||
       !currentManualTaskItem.requires_manual_completion)
   )
+  const manualTaskBatchStale = useMemo(() => {
+    if (manualTaskBatchItems.length === 0) return false
+    return manualTaskBatchItems.some((selected) => {
+      const current = reconciliationItems?.find(
+        (item) => item.id === selected.id
+      )
+      return (
+        !current ||
+        current.revision !== selected.revision ||
+        !current.requires_manual_completion
+      )
+    })
+  }, [manualTaskBatchItems, reconciliationItems])
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
@@ -146,6 +164,15 @@ export function BillingSettlementEvidence(
       ),
     }
   }, [reconciliationItems, selectedTargets])
+  const selectedManualItems = useMemo(
+    () =>
+      (reconciliationItems ?? []).filter(
+        (item) =>
+          item.requires_manual_completion &&
+          activeSelectedTargetMap.get(item.id)?.revision === item.revision
+      ),
+    [activeSelectedTargetMap, reconciliationItems]
+  )
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const queryClient = useQueryClient()
   const policyValue =
@@ -292,12 +319,74 @@ export function BillingSettlementEvidence(
     },
   })
 
+  const manualTaskBatchCompletionMutation = useMutation({
+    mutationKey: ['smart-ops', 'manual-task-billing-exact-batch'],
+    mutationFn: async ({
+      items,
+      actualQuotas,
+    }: {
+      items: BillingSettlementReconciliationItem[]
+      actualQuotas: Record<number, number>
+    }): Promise<ManualTaskBillingBatchCompletionData | undefined> => {
+      const response = await completeManualTaskBillingSettlements({
+        items: items.map((item) => ({
+          id: item.id,
+          revision: item.revision,
+          actual_quota: actualQuotas[item.id],
+        })),
+      })
+      if (!response.success) {
+        throw new Error(
+          response.message || t('Failed to complete manual task billing.')
+        )
+      }
+      return response.data
+    },
+    onSuccess: (data) => {
+      setManualTaskBatchItems([])
+      setSelectedTargets(new Map())
+      const completed = data?.completed_count ?? 0
+      const failed = data?.failed_count ?? 0
+      const failures = data?.failed ?? []
+      setBatchFailures(failures)
+      toast.success(
+        failed > 0
+          ? t(
+              'Completed {{completed}} selected task settlements; {{failed}} remain for review.',
+              { completed, failed }
+            )
+          : t('Completed selected task settlements: {{count}}.', {
+              count: completed,
+            })
+      )
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
+      handleServerError(error, {
+        fallback: mutationErrorMessage(
+          error,
+          t('Failed to complete manual task billing.')
+        ),
+      })
+    },
+  })
+
   const reviewTargets = (targets: BillingSettlementReviewTarget[]): void => {
     if (
       targets.length === 0 ||
       reviewMutation.isPending ||
       zeroSettlementMutation.isPending ||
-      manualTaskCompletionMutation.isPending
+      manualTaskCompletionMutation.isPending ||
+      manualTaskBatchCompletionMutation.isPending
     )
       return
     const selectedItems = (reconciliationItems ?? []).filter((item) =>
@@ -310,6 +399,9 @@ export function BillingSettlementEvidence(
         toast.error(
           t('Some selected task settlements still require an exact quota.')
         )
+        return
+      case 'exact_quota':
+        setManualTaskBatchItems(selectedItems)
         return
       case 'mixed':
         toast.error(
@@ -385,6 +477,24 @@ export function BillingSettlementEvidence(
       }
     />
   ) : null
+
+  const manualTaskBatchDialog =
+    manualTaskBatchItems.length > 0 ? (
+      <ManualTaskSettlementBatchDialog
+        key={manualTaskBatchItems
+          .map((item) => `${item.id}:${item.revision}`)
+          .join(',')}
+        items={manualTaskBatchItems}
+        pending={manualTaskBatchCompletionMutation.isPending}
+        stale={manualTaskBatchStale}
+        onOpenChange={(open) => {
+          if (!open) setManualTaskBatchItems([])
+        }}
+        onSubmit={(items, actualQuotas) =>
+          manualTaskBatchCompletionMutation.mutate({ items, actualQuotas })
+        }
+      />
+    ) : null
 
   const replaceSelectedTargets = (
     targets: Map<number, BillingSettlementReviewTarget>
@@ -531,7 +641,8 @@ export function BillingSettlementEvidence(
                   activeSelectedTargets.length === 0 ||
                   reviewMutation.isPending ||
                   zeroSettlementMutation.isPending ||
-                  manualTaskCompletionMutation.isPending
+                  manualTaskCompletionMutation.isPending ||
+                  manualTaskBatchCompletionMutation.isPending
                 }
               >
                 {(reviewMutation.isPending ||
@@ -549,6 +660,28 @@ export function BillingSettlementEvidence(
                   ),
                 })}
               </Button>
+              {selectedManualItems.length > 0 &&
+                selectedManualItems.length === activeSelectedTargets.length && (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() => setManualTaskBatchItems(selectedManualItems)}
+                    disabled={
+                      reviewMutation.isPending ||
+                      zeroSettlementMutation.isPending ||
+                      manualTaskCompletionMutation.isPending ||
+                      manualTaskBatchCompletionMutation.isPending
+                    }
+                  >
+                    {t('Enter exact quotas ({{count}})', {
+                      count: formatCount(
+                        activeSelectedTargets.length,
+                        i18n.language
+                      ),
+                    })}
+                  </Button>
+                )}
             </div>
             {batchFailures.length > 0 && (
               <Alert variant='destructive'>
@@ -577,7 +710,8 @@ export function BillingSettlementEvidence(
               reviewPending={
                 reviewMutation.isPending ||
                 zeroSettlementMutation.isPending ||
-                manualTaskCompletionMutation.isPending
+                manualTaskCompletionMutation.isPending ||
+                manualTaskBatchCompletionMutation.isPending
               }
               onSelectedTargetsChange={replaceSelectedTargets}
               onReviewTargets={reviewTargets}
@@ -612,6 +746,7 @@ export function BillingSettlementEvidence(
     <>
       {content}
       {manualTaskDialog}
+      {manualTaskBatchDialog}
     </>
   )
 }

@@ -199,6 +199,78 @@ func TestCompleteManualTaskBillingSettlementsZeroIsIdempotent(t *testing.T) {
 	assert.EqualValues(t, 1, countLogs(t))
 }
 
+func TestCompleteManualTaskBillingSettlementsAppliesDifferentExactQuotas(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8171, 8172, 8173
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-exact-batch", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	firstQuota := int64(25)
+	secondQuota := int64(60)
+
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9181)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.CompletedCount)
+	assert.Zero(t, result.FailedCount)
+	assert.ElementsMatch(t, []int64{firstManual.ID, secondManual.ID}, result.SettlementIDs)
+	assert.EqualValues(t, 2095, getUserQuota(t, userID))
+	assert.Equal(t, 295, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 105, getTokenUsedQuota(t, tokenID))
+	var storedFirst, storedSecond model.Task
+	require.NoError(t, model.DB.First(&storedFirst, first.ID).Error)
+	require.NoError(t, model.DB.First(&storedSecond, second.ID).Error)
+	assert.Equal(t, 25, storedFirst.Quota)
+	assert.Equal(t, 60, storedSecond.Quota)
+
+	replay, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9181)
+	require.NoError(t, err)
+	assert.Equal(t, 2, replay.CompletedCount)
+	assert.Zero(t, replay.FailedCount)
+	assert.EqualValues(t, 2, countLogs(t))
+}
+
+func TestCompleteManualTaskBillingSettlementsPrevalidatesEveryItem(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8181, 8182, 8183
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-exact-batch-validation", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	firstQuota := int64(25)
+	invalidQuota := int64(81)
+
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &invalidQuota},
+	}, 9182)
+
+	require.NoError(t, err)
+	assert.Zero(t, result.CompletedCount)
+	assert.Equal(t, 1, result.FailedCount)
+	assert.Empty(t, result.SettlementIDs)
+	assert.EqualValues(t, 2000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, countLogs(t))
+}
+
 func TestCompleteManualTaskBillingSettlementsZeroPrevalidatesSelection(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID = 819, 820, 821

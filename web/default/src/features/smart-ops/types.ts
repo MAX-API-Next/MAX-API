@@ -108,6 +108,16 @@ export type ManualTaskBillingCompletionRequest = {
   actual_quota: number
 }
 
+export type ManualTaskBillingCompletionTarget = {
+  id: number
+  revision: number
+  actual_quota: number
+}
+
+export type ManualTaskBillingBatchCompletionRequest = {
+  items: ManualTaskBillingCompletionTarget[]
+}
+
 export type ManualTaskBillingBatchCompletionData = {
   completed_count: number
   failed_count: number

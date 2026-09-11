@@ -5671,6 +5671,13 @@
     "Schema": "Schema",
     "Rule key": "Khóa quy tắc",
     "Free": "Miễn phí",
-    "Save H3 billing profile": "Lưu hồ sơ tính phí H3"
+    "Save H3 billing profile": "Lưu hồ sơ tính phí H3",
+    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "Đã hoàn tất {{completed_count}} quyết toán tính phí tác vụ thủ công ({{failed_count}} lỗi)",
+    "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Đã hoàn tất {{completed_count}} quyết toán tác vụ thủ công với hạn mức 0 ({{failed_count}} lỗi)",
+    "Completed selected task settlements: {{count}}.": "Đã hoàn tất các quyết toán tác vụ đã chọn: {{count}}.",
+    "Enter exact quotas ({{count}})": "Nhập các hạn mức chính xác ({{count}})",
+    "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Nhập hạn mức cuối chính xác cho từng tác vụ đã chọn. Mỗi giá trị sẽ được kiểm tra theo hạn mức đã giữ riêng của tác vụ đó.",
+    "Apply exact settlements": "Áp dụng các quyết toán chính xác",
+    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Phạm vi cho phép: từ 0 đến {{quota}} ({{quotaPerUnit}} đơn vị hạn mức = $1)."
   }
 }

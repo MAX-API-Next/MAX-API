@@ -144,7 +144,7 @@ describe('classifyBillingSettlementReviewSelection', () => {
           zero_quota_eligible: false,
         },
       ]),
-      'exact_quota_required'
+      'exact_quota'
     )
   })
 
@@ -168,6 +168,26 @@ describe('classifyBillingSettlementReviewSelection', () => {
     assert.equal(
       classifyBillingSettlementReviewSelection([ordinary, zeroQuotaTask]),
       'mixed'
+    )
+  })
+
+  test('routes zero and exact task selections to exact quota entry', () => {
+    const ordinary = validData().items[0]
+    const zeroQuotaTask = {
+      ...ordinary,
+      id: 4,
+      requires_manual_completion: true,
+      zero_quota_eligible: true,
+    }
+    const exactQuotaTask = {
+      ...ordinary,
+      id: 5,
+      requires_manual_completion: true,
+      zero_quota_eligible: false,
+    }
+    assert.equal(
+      classifyBillingSettlementReviewSelection([zeroQuotaTask, exactQuotaTask]),
+      'exact_quota'
     )
   })
 })

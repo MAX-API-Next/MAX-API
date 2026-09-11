@@ -76,19 +76,19 @@ describe('billing settlement selection partition', () => {
     )
   })
 
-  test('selects zero-quota alerts when they are the only selectable partition', () => {
+  test('selects all manual task alerts when they are the only selectable partition', () => {
     const exact = item(1, { requires_manual_completion: true })
     const zero = item(2, {
       requires_manual_completion: true,
       zero_quota_eligible: true,
     })
 
-    assert.equal(isManualSettlementSelectable(exact, true), false)
+    assert.equal(isManualSettlementSelectable(exact, true), true)
     assert.deepEqual(
       getBillingSettlementSelectionPartition([exact, zero], true).map(
         (value) => value.id
       ),
-      [2]
+      [1, 2]
     )
   })
 })

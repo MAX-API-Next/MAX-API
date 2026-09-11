@@ -5671,6 +5671,13 @@
     "Schema": "Схема",
     "Rule key": "Ключ правила",
     "Free": "Бесплатно",
-    "Save H3 billing profile": "Сохранить профиль тарификации H3"
+    "Save H3 billing profile": "Сохранить профиль тарификации H3",
+    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "Завершено расчётов ручной тарификации задач: {{completed_count}} (ошибок: {{failed_count}})",
+    "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Завершено ручных расчётов задач с нулевой квотой: {{completed_count}} (ошибок: {{failed_count}})",
+    "Completed selected task settlements: {{count}}.": "Выбранные расчёты задач завершены: {{count}}.",
+    "Enter exact quotas ({{count}})": "Ввести точные квоты ({{count}})",
+    "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Введите точную итоговую квоту для каждой выбранной задачи. Каждое значение проверяется относительно собственного резерва задачи.",
+    "Apply exact settlements": "Применить точные расчёты",
+    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Допустимый диапазон: от 0 до {{quota}} ({{quotaPerUnit}} ед. квоты = $1)."
   }
 }
