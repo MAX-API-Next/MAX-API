@@ -821,6 +821,28 @@ func TestParseH3UsageMarksInvalidProviderValues(t *testing.T) {
 	require.Nil(t, result.Usage.InputImageCount)
 }
 
+func TestAttachH3UsageEnvelopePreservesParsedResultOnBindingError(t *testing.T) {
+	result := &relaycommon.TaskInfo{
+		TaskID:   "task-envelope-binding-error",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Url:      "https://cdn.example.com/video.mp4",
+		Usage: &types.TaskUsage{
+			Source:       types.TaskUsageSourceCallback,
+			Completeness: types.TaskUsageCompletenessComplete,
+		},
+	}
+
+	parsed, err := attachH3UsageEnvelope(result, nil)
+
+	require.NoError(t, err)
+	require.Same(t, result, parsed)
+	require.Equal(t, model.TaskStatusSuccess, parsed.Status)
+	require.Equal(t, "https://cdn.example.com/video.mp4", parsed.Url)
+	require.NotNil(t, parsed.UsageEnvelope)
+	require.Equal(t, types.TaskUsageCompletenessInvalid, parsed.UsageEnvelope.Completeness)
+}
+
 func TestParseH3UsagePreservesFractionalVideoAndAudioSeconds(t *testing.T) {
 	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
 		"task": {

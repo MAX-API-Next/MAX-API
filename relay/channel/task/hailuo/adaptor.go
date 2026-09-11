@@ -399,7 +399,29 @@ func attachH3UsageEnvelope(result *relaycommon.TaskInfo, parseErr error) (*relay
 		result.Usage,
 	)
 	if err != nil {
-		return nil, err
+		// Keep the parsed task state available to polling even when the
+		// provider usage cannot be bound to the host contract. Mark the
+		// evidence invalid so the task remains reconciliation-gated instead
+		// of allowing an unverified usage value to settle billing.
+		invalidUsage := &types.TaskUsage{
+			Source:       types.TaskUsageSourceProviderResponse,
+			Completeness: types.TaskUsageCompletenessInvalid,
+		}
+		invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
+			types.TaskUsageProducerKindGoAdapter,
+			taskusage.MiniMaxH3Contract(),
+			types.TaskUsageSourceProviderResponse,
+			invalidUsage,
+		)
+		if fallbackErr == nil {
+			result.Usage = invalidUsage
+			result.UsageEnvelope = invalidEnvelope
+			return result, nil
+		}
+		// The fallback contract is host-owned and should always be valid. If
+		// that invariant is ever broken, retain the result and surface the
+		// original binding error for the caller's retry/reconciliation path.
+		return result, err
 	}
 	result.UsageEnvelope = envelope
 	return result, nil

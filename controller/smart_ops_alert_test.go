@@ -41,7 +41,7 @@ func TestBillingSettlementMutationRequestsPreserveExplicitFalse(t *testing.T) {
 }
 
 func TestCompleteManualTaskBillingSettlementsZeroDecodesEmptyBatch(t *testing.T) {
-	var request manualTaskBillingBatchCompletionRequest
+	var request billingSettlementBatchReviewRequest
 	require.NoError(t, common.Unmarshal([]byte(`{"items":[]}`), &request))
 	assert.Empty(t, request.Items)
 }
