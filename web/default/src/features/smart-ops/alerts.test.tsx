@@ -1060,6 +1060,20 @@ describe('SmartOps active alerts', () => {
           name: 'Confirm zero-quota settlement',
         })[0]
       )
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      assert.deepEqual(writes, [])
+      await view.click(
+        within(view.container).getAllByRole('button', {
+          name: 'Confirm zero-quota settlement',
+        })[0]
+      )
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
       await waitFor(() => {
         assert.deepEqual(writes[0], {
           url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
@@ -1081,10 +1095,15 @@ describe('SmartOps active alerts', () => {
         })
       )
       const zeroBatchButton = within(view.container).getByRole('button', {
-        name: 'Review and close selected (2)',
+        name: 'Confirm zero-quota settlements (2)',
       })
       assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
       await view.click(zeroBatchButton)
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
       await waitFor(() => {
         assert.deepEqual(writes[1], {
           url: '/api/smart-ops/billing-settlements/complete-tasks-zero',

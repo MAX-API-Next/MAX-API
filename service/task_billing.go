@@ -559,9 +559,6 @@ func taskBillingPlanHasUsageIdentity(plan *types.TaskBillingPlan) bool {
 	if plan == nil {
 		return false
 	}
-	if plan.Source == task_billing_setting.H3BillingSource {
-		return true
-	}
 	return plan.UsageProducerKind != "" ||
 		plan.UsageSourceID != "" ||
 		plan.UsageSchemaVersion != 0 ||

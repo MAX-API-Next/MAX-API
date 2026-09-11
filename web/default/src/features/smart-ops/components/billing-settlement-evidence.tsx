@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   completeManualTaskBillingSettlement,
   reviewBillingSettlements,
@@ -118,6 +119,9 @@ export function BillingSettlementEvidence(
   >(() => new Map())
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
+  const [zeroSettlementTargets, setZeroSettlementTargets] = useState<
+    BillingSettlementReviewTarget[]
+  >([])
   const {
     manualTaskBatchItems,
     setManualTaskBatchItems,
@@ -178,6 +182,15 @@ export function BillingSettlementEvidence(
         (item) =>
           item.requires_manual_completion &&
           activeSelectedTargetMap.get(item.id)?.revision === item.revision
+      ),
+    [activeSelectedTargetMap, reconciliationItems]
+  )
+  const selectedReviewKind = useMemo(
+    () =>
+      classifyBillingSettlementReviewSelection(
+        (reconciliationItems ?? []).filter((item) =>
+          activeSelectedTargetMap.has(item.id)
+        )
       ),
     [activeSelectedTargetMap, reconciliationItems]
   )
@@ -289,7 +302,7 @@ export function BillingSettlementEvidence(
         )
         return
       case 'zero_quota':
-        zeroSettlementMutation.mutate(targets)
+        setZeroSettlementTargets(targets)
         return
       case 'ordinary':
         reviewMutation.mutate(targets)
@@ -378,6 +391,12 @@ export function BillingSettlementEvidence(
         }
       />
     ) : null
+
+  const confirmZeroSettlement = (): void => {
+    const targets = zeroSettlementTargets
+    setZeroSettlementTargets([])
+    if (targets.length > 0) zeroSettlementMutation.mutate(targets)
+  }
 
   const replaceSelectedTargets = (
     targets: Map<number, BillingSettlementReviewTarget>
@@ -536,14 +555,22 @@ export function BillingSettlementEvidence(
                     aria-hidden='true'
                   />
                 )}
-                {t('Review and close selected ({{count}})', {
-                  count: formatCount(
-                    activeSelectedTargets.length,
-                    i18n.language
-                  ),
-                })}
+                {t(
+                  selectedReviewKind === 'zero_quota'
+                    ? 'Confirm zero-quota settlements ({{count}})'
+                    : selectedReviewKind === 'exact_quota'
+                      ? 'Manually settle selected task quotas ({{count}})'
+                      : 'Review and close selected ({{count}})',
+                  {
+                    count: formatCount(
+                      activeSelectedTargets.length,
+                      i18n.language
+                    ),
+                  }
+                )}
               </Button>
-              {selectedManualItems.length > 0 &&
+              {selectedReviewKind === 'zero_quota' &&
+                selectedManualItems.length > 0 &&
                 selectedManualItems.length === activeSelectedTargets.length && (
                   <Button
                     type='button'
@@ -630,6 +657,22 @@ export function BillingSettlementEvidence(
       {content}
       {manualTaskDialog}
       {manualTaskBatchDialog}
+      <ConfirmDialog
+        open={zeroSettlementTargets.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !zeroSettlementMutation.isPending) {
+            setZeroSettlementTargets([])
+          }
+        }}
+        title={t('Confirm zero-quota settlement')}
+        desc={t(
+          'This will settle {{count}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.',
+          { count: formatCount(zeroSettlementTargets.length, i18n.language) }
+        )}
+        confirmText={t('Apply zero-quota settlements')}
+        handleConfirm={confirmZeroSettlement}
+        isLoading={zeroSettlementMutation.isPending}
+      />
     </>
   )
 }
