@@ -97,6 +97,20 @@ type responseTask struct {
 	UpdatedAt int64 `json:"updated_at"`
 }
 
+// responseTaskResult contains only the fields needed by the polling state
+// machine. Provider gateways sometimes add fields with incompatible JSON
+// types; keeping those fields out of this decode lets status and media URL
+// parsing remain independent from unrelated metadata.
+type responseTaskResult struct {
+	Status  string `json:"status"`
+	Content struct {
+		VideoURL string `json:"video_url"`
+	} `json:"content"`
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 type responseTaskUsage struct {
 	CompletionTokens *int `json:"completion_tokens"`
 	TotalTokens      *int `json:"total_tokens"`
@@ -576,12 +590,13 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		}
 	}
 
-	resTask := responseTask{}
-	if err := common.Unmarshal(respBody, &resTask); err != nil {
+	payload := unwrapProviderPayload(respBody)
+	resTask := responseTaskResult{}
+	if err := common.Unmarshal(payload, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
 	}
 	envelope, err := a.ProduceUsage(types.TaskUsageContext{
-		Stage: types.TaskUsageSourceProviderResponse, Payload: respBody,
+		Stage: types.TaskUsageSourceProviderResponse, Payload: payload,
 	})
 	if err != nil {
 		return nil, err
@@ -643,14 +658,7 @@ func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsage
 	if ctx.Stage != types.TaskUsageSourceProviderResponse {
 		return nil, fmt.Errorf("Doubao task usage stage %q is not supported", ctx.Stage)
 	}
-	payload := ctx.Payload
-	for depth := 0; depth < taskcommon.MaxWrappedTaskUnwrapDepth; depth++ {
-		nested := taskcommon.WrappedTaskProviderPayload(payload)
-		if nested == nil {
-			break
-		}
-		payload = nested
-	}
+	payload := unwrapProviderPayload(ctx.Payload)
 	// Only decode the usage member here. Configured providers may include
 	// otherwise valid fields with types that are incompatible with the native
 	// Doubao responseTask shape (for example string timestamps or durations).
@@ -675,6 +683,18 @@ func (a *TaskAdaptor) attachUsageEnvelope(respBody []byte, taskResult *relaycomm
 		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
 	}
 	return nil
+}
+
+func unwrapProviderPayload(respBody []byte) []byte {
+	payload := respBody
+	for depth := 0; depth < taskcommon.MaxWrappedTaskUnwrapDepth; depth++ {
+		nested := taskcommon.WrappedTaskProviderPayload(payload)
+		if nested == nil {
+			break
+		}
+		payload = nested
+	}
+	return payload
 }
 
 func buildDoubaoUsageEnvelope(raw json.RawMessage) (*types.TaskUsageEnvelope, error) {
@@ -773,7 +793,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
-	openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	resultURL := dResp.Content.VideoURL
+	if resultURL == "" {
+		// Configured or relay-wrapped polling responses may persist the
+		// provider URL in the task snapshot while the raw response has no
+		// top-level Doubao content field.
+		resultURL = originTask.GetResultURL()
+	}
+	openAIVideo.SetMetadata("url", resultURL)
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName

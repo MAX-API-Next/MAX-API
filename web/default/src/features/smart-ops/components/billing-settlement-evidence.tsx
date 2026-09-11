@@ -162,6 +162,20 @@ export function BillingSettlementEvidence(
       )
     })
   }, [manualTaskBatchItems, props.data, props.error, reconciliationItems])
+  const zeroSettlementStale = useMemo(() => {
+    if (zeroSettlementTargets.length === 0) return false
+    return zeroSettlementTargets.some((target) => {
+      const current = reconciliationItems?.find((item) => item.id === target.id)
+      return (
+        Boolean(props.error) ||
+        !props.data ||
+        !current ||
+        current.revision !== target.revision ||
+        !current.requires_manual_completion ||
+        current.zero_quota_eligible !== true
+      )
+    })
+  }, [props.data, props.error, reconciliationItems, zeroSettlementTargets])
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
@@ -393,6 +407,7 @@ export function BillingSettlementEvidence(
     ) : null
 
   const confirmZeroSettlement = (): void => {
+    if (zeroSettlementStale) return
     const targets = zeroSettlementTargets
     setZeroSettlementTargets([])
     if (targets.length > 0) zeroSettlementMutation.mutate(targets)
@@ -671,8 +686,24 @@ export function BillingSettlementEvidence(
         )}
         confirmText={t('Apply zero-quota settlements')}
         handleConfirm={confirmZeroSettlement}
+        disabled={zeroSettlementStale}
         isLoading={zeroSettlementMutation.isPending}
-      />
+      >
+        {zeroSettlementStale && (
+          <Alert variant='destructive'>
+            <AlertTitle>
+              {t(
+                'This reconciliation record changed while the dialog was open.'
+              )}
+            </AlertTitle>
+            <AlertDescription>
+              {t(
+                'Close this dialog and reopen the latest record before submitting.'
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+      </ConfirmDialog>
     </>
   )
 }

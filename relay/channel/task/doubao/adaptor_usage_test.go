@@ -152,4 +152,23 @@ func TestParseTaskResultUsesTheSameWrappedUsageAsProduceUsage(t *testing.T) {
 	require.Equal(t, types.TaskUsagePresencePresentValid, result.UsageEnvelope.Presence)
 	require.EqualValues(t, 12, *result.UsageEnvelope.Usage.CompletionTokens)
 	require.EqualValues(t, 20, *result.UsageEnvelope.Usage.TotalTokens)
+	require.Equal(t, "SUCCESS", result.Status)
+	require.Equal(t, "https://cdn.example.com/wrapped.mp4", result.Url)
+}
+
+func TestParseTaskResultUnwrapsNestedProviderPayloadForStatusAndURL(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"code":"success",
+		"data":{"data":{
+			"id":"task_wrapped",
+			"status":"succeeded",
+			"content":{"video_url":"https://cdn.example.com/nested.mp4"},
+			"usage":{"completion_tokens":12,"total_tokens":20}
+		}}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, "SUCCESS", result.Status)
+	require.Equal(t, "https://cdn.example.com/nested.mp4", result.Url)
+	require.EqualValues(t, 12, result.CompletionTokens)
+	require.EqualValues(t, 20, result.TotalTokens)
 }

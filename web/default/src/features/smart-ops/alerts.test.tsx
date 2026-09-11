@@ -1366,6 +1366,169 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('blocks zero-quota settlement when the confirmation revision becomes stale', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return { data: { success: true } }
+    }) as typeof api.post
+
+    const taskItem = (revision: number) => ({
+      id: 111,
+      revision,
+      operation_key: 'task:7111:finalize',
+      status: 'manual' as const,
+      source: 'wallet' as const,
+      user_id: 53,
+      subscription_id: 0,
+      token_id: 54,
+      task_id: 7111,
+      task_quota: 100,
+      task_quota_target: 100,
+      requires_manual_completion: true,
+      zero_quota_eligible: true,
+      funding_delta: 0,
+      applied_funding_delta: 0,
+      token_delta: 0,
+      applied_token_delta: 0,
+      attempts: 0,
+      last_error: 'provider usage needs verification',
+      next_attempt: 0,
+      created_at: 1786032545,
+      updated_at: 1786032545,
+      reconciliation_reviewed_at: 0,
+      reconciliation_reviewed_by: 0,
+      reconciliation_review_note: '',
+      user_blocking_override: null,
+      record_blocks_user: false,
+      blocks_user: false,
+    })
+
+    function Harness(): ReactElement {
+      const [revision, setRevision] = useState(2)
+      const data = useMemo<BillingSettlementReconciliationData>(
+        () => ({
+          ...emptyReconciliationData(),
+          total_count: 1,
+          manual_count: 1,
+          open_alert_count: 1,
+          items: [taskItem(revision)],
+        }),
+        [revision]
+      )
+      return (
+        <>
+          <button type='button' onClick={() => setRevision(3)}>
+            Refresh reconciliation
+          </button>
+          <BillingSettlementEvidence
+            canCompleteManualTask
+            canUpdateBlockingPolicy
+            data={data}
+            error={null}
+            loading={false}
+            onRetry={() => undefined}
+          />
+        </>
+      )
+    }
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <Harness />
+      </QueryClientProvider>
+    )
+
+    try {
+      const checkbox = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 111',
+      })
+      await view.click(checkbox)
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Confirm zero-quota settlements (1)',
+          })
+        )
+      })
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Confirm zero-quota settlements (1)',
+        })
+      )
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByRole('button', {
+            name: 'Apply zero-quota settlements',
+          })
+        )
+      })
+
+      const refreshButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement | null
+      assert.ok(refreshButton)
+      fireEvent.click(refreshButton)
+      await waitFor(() => {
+        const confirm = within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        }) as HTMLButtonElement
+        assert.equal(confirm.disabled, true)
+        assert.ok(
+          within(document.body).getByText(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+      })
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      assert.deepEqual(writes, [])
+
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 111',
+        })
+      )
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Confirm zero-quota settlements (1)',
+          })
+        )
+      })
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Confirm zero-quota settlements (1)',
+        })
+      )
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes, [
+          {
+            url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+            data: { items: [{ id: 111, revision: 3 }] },
+          },
+        ])
+      })
+    } finally {
+      api.post = originalPost
+      await view.unmount()
+      queryClient.clear()
+    }
+  })
+
   test('clears a selected alert when refresh changes its financial revision', async (): Promise<void> => {
     const originalGet = api.get
     const originalPost = api.post
