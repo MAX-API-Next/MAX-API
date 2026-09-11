@@ -159,6 +159,15 @@ func runTaskBillingSettlementContracts(t *testing.T, db *gorm.DB) {
 	}
 
 	t.Run("concurrent_duplicate_funding", func(t *testing.T) {
+		sqlDB, err := db.DB()
+		taskBillingTestCheck(t, err, "access SQLite connection pool")
+		previousMaxOpenConns := sqlDB.Stats().MaxOpenConnections
+		if previousMaxOpenConns < 2 {
+			sqlDB.SetMaxOpenConns(4)
+			t.Cleanup(func() { sqlDB.SetMaxOpenConns(previousMaxOpenConns) })
+		}
+		require.GreaterOrEqual(t, sqlDB.Stats().MaxOpenConnections, 2,
+			"the duplicate-settlement contract must exercise multiple database connections")
 		f := fixture(t, BillingSettlementSourceWallet, -20)
 		type result struct {
 			delta  int64

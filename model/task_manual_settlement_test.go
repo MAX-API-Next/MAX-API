@@ -214,10 +214,21 @@ func TestTaskPrivateDataPersistsTaskUsageEnvelope(t *testing.T) {
 	var stored Task
 	require.NoError(t, DB.First(&stored, task.ID).Error)
 	require.NotNil(t, stored.PrivateData.BillingContext)
-	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsageEnvelope)
-	require.Equal(t, "evidence-digest", stored.PrivateData.BillingContext.TaskUsageEnvelope.EvidenceDigest)
-	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsageEnvelope.Usage.OutputDurationMs)
-	require.Zero(t, *stored.PrivateData.BillingContext.TaskUsageEnvelope.Usage.OutputDurationMs)
+	envelope := stored.PrivateData.BillingContext.TaskUsageEnvelope
+	require.NotNil(t, envelope)
+	require.Equal(t, types.TaskUsageProducerKindGoAdapter, envelope.ProducerKind)
+	require.Equal(t, "minimax", envelope.SourceID)
+	require.Equal(t, 1, envelope.SchemaVersion)
+	require.Equal(t, "contract-digest", envelope.ContractDigest)
+	require.Equal(t, types.TaskUsageSourceProviderResponse, envelope.Stage)
+	require.Equal(t, types.TaskUsagePresencePartial, envelope.Presence)
+	require.Equal(t, types.TaskUsageCompletenessPartial, envelope.Completeness)
+	require.Equal(t, "evidence-digest", envelope.EvidenceDigest)
+	require.NotNil(t, envelope.Usage)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	require.Zero(t, *envelope.Usage.OutputDurationMs)
+	require.Equal(t, types.TaskUsageSourceProviderResponse, envelope.Usage.Source)
+	require.Equal(t, types.TaskUsageCompletenessPartial, envelope.Usage.Completeness)
 }
 
 func TestUpdateWithStatusAndSettlementIntentCASLossLeavesNoIntent(t *testing.T) {

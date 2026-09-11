@@ -45,7 +45,7 @@ func TestBuildH3BillingPlanUsesOneAggregateInputVideoCap(t *testing.T) {
 	require.EqualValues(t, 20, reserve.OutputSeconds+reserve.InputVideoSeconds)
 	require.EqualValues(t, 1600, reserve.Quota)
 	require.Equal(t, types.TaskUsageProducerKindGoAdapter, plan.UsageProducerKind)
-	require.Equal(t, H3BillingSource, plan.UsageSourceID)
+	require.Equal(t, taskusage.MiniMaxH3Contract().SourceID, plan.UsageSourceID)
 	require.Equal(t, taskusage.MiniMaxH3Contract().SchemaVersion, plan.UsageSchemaVersion)
 	require.NotEmpty(t, plan.UsageContractDigest)
 }
