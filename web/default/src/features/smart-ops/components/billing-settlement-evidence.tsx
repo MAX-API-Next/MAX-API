@@ -48,7 +48,10 @@ import {
   SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
   SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
 } from '../lib/query-keys'
-import { classifyBillingSettlementReviewSelection } from '../lib/reconciliation-validation'
+import {
+  classifyBillingSettlementReviewSelection,
+  type BillingSettlementReviewSelection,
+} from '../lib/reconciliation-validation'
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
@@ -99,6 +102,18 @@ function formatBatchFailureMessage(
     default:
       return t('Failed to complete manual task billing.')
   }
+}
+
+function getBatchReviewActionKey(
+  kind: BillingSettlementReviewSelection
+): string {
+  if (kind === 'zero_quota') {
+    return 'Confirm zero-quota settlements ({{count}})'
+  }
+  if (kind === 'exact_quota') {
+    return 'Manually settle selected task quotas ({{count}})'
+  }
+  return 'Review and close selected ({{count}})'
 }
 
 interface BillingSettlementEvidenceProps {
@@ -570,19 +585,12 @@ export function BillingSettlementEvidence(
                     aria-hidden='true'
                   />
                 )}
-                {t(
-                  selectedReviewKind === 'zero_quota'
-                    ? 'Confirm zero-quota settlements ({{count}})'
-                    : selectedReviewKind === 'exact_quota'
-                      ? 'Manually settle selected task quotas ({{count}})'
-                      : 'Review and close selected ({{count}})',
-                  {
-                    count: formatCount(
-                      activeSelectedTargets.length,
-                      i18n.language
-                    ),
-                  }
-                )}
+                {t(getBatchReviewActionKey(selectedReviewKind), {
+                  count: formatCount(
+                    activeSelectedTargets.length,
+                    i18n.language
+                  ),
+                })}
               </Button>
               {selectedReviewKind === 'zero_quota' &&
                 selectedManualItems.length > 0 &&
