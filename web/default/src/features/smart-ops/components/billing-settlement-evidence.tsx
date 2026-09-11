@@ -395,11 +395,6 @@ export function BillingSettlementEvidence(
       )
     )
     switch (classifyBillingSettlementReviewSelection(selectedItems)) {
-      case 'exact_quota_required':
-        toast.error(
-          t('Some selected task settlements still require an exact quota.')
-        )
-        return
       case 'exact_quota':
         setManualTaskBatchItems(selectedItems)
         return
@@ -438,8 +433,11 @@ export function BillingSettlementEvidence(
         )
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       setManualTaskItem(null)
+      setBatchFailures((current) =>
+        current.filter((failure) => failure.settlement_id !== variables.item.id)
+      )
       toast.success(t('Manual task billing completed.'))
     },
     onSettled: async () => {

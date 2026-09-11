@@ -516,20 +516,11 @@ func completeManualTaskBillingSettlement(
 	}
 	original := eligibility.original
 	originalAlreadyResolved := eligibility.originalAlreadyResolved
-	if originalAlreadyResolved {
-		if original.ReconciliationReviewedBy != reviewerID {
-			return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-		}
-		// The note field was removed from the UI. Treat a generated note on a
-		// replay as an omitted value and retain the first durable audit note,
-		// while still rejecting an explicit attempt to rewrite that note.
-		if note != original.ReconciliationReviewNote {
-			if !isGeneratedManualTaskBillingNote(note) || strings.TrimSpace(original.ReconciliationReviewNote) == "" {
-				return ManualTaskBillingCompletionResult{}, model.ErrBillingSettlementReviewConflict
-			}
-			note = original.ReconciliationReviewNote
-		}
+	validatedNote, replayErr := validateManualTaskBillingCompletionReplay(eligibility, reviewerID, note)
+	if replayErr != nil {
+		return ManualTaskBillingCompletionResult{}, replayErr
 	}
+	note = validatedNote
 	task := eligibility.task
 	input := eligibility.input
 
@@ -677,7 +668,11 @@ func CompleteManualTaskBillingSettlements(
 		Failed:        make([]ManualTaskBillingBatchFailure, 0),
 	}
 	for _, target := range targets {
-		if _, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false); err != nil {
+		eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false)
+		if err == nil {
+			_, err = validateManualTaskBillingCompletionReplay(eligibility, reviewerID, manualTaskBillingDefaultNote)
+		}
+		if err != nil {
 			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
 			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
@@ -821,6 +816,31 @@ func prepareManualTaskBillingCompletion(
 	}, nil
 }
 
+// validateManualTaskBillingCompletionReplay keeps the batch pre-validation
+// contract identical to the single-item replay path. A generated note may be
+// replaced by the durable note on replay, but a different reviewer or a
+// missing durable note is always a conflict.
+func validateManualTaskBillingCompletionReplay(
+	eligibility manualTaskBillingEligibility,
+	reviewerID int,
+	note string,
+) (string, error) {
+	if !eligibility.originalAlreadyResolved {
+		return note, nil
+	}
+	original := eligibility.original
+	if original.ReconciliationReviewedBy != reviewerID {
+		return "", model.ErrBillingSettlementReviewConflict
+	}
+	if note != original.ReconciliationReviewNote {
+		if !isGeneratedManualTaskBillingNote(note) || strings.TrimSpace(original.ReconciliationReviewNote) == "" {
+			return "", model.ErrBillingSettlementReviewConflict
+		}
+		note = original.ReconciliationReviewNote
+	}
+	return note, nil
+}
+
 // validateManualTaskBillingZeroTarget performs reviewer-specific checks after
 // the shared completion eligibility contract has been evaluated.
 func validateManualTaskBillingZeroTarget(
@@ -831,10 +851,8 @@ func validateManualTaskBillingZeroTarget(
 	if err != nil {
 		return err
 	}
-	if eligibility.originalAlreadyResolved && eligibility.original.ReconciliationReviewedBy != reviewerID {
-		return model.ErrBillingSettlementReviewConflict
-	}
-	return nil
+	_, err = validateManualTaskBillingCompletionReplay(eligibility, reviewerID, manualTaskBillingZeroNote)
+	return err
 }
 
 func manualTaskBillingBatchErrorCode(err error) string {

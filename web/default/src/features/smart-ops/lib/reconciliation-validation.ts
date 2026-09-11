@@ -75,7 +75,6 @@ export type BillingSettlementReviewSelection =
   | 'zero_quota'
   | 'exact_quota'
   | 'mixed'
-  | 'exact_quota_required'
 
 export function classifyBillingSettlementReviewSelection(
   items: BillingSettlementReconciliationItem[]
@@ -94,7 +93,6 @@ export function classifyBillingSettlementReviewSelection(
     return 'mixed'
   }
   if (hasExactQuotaTasks) return 'exact_quota'
-  if (hasZeroQuotaTasks && hasOrdinaryAlerts) return 'mixed'
   if (hasZeroQuotaTasks) return 'zero_quota'
   if (hasOrdinaryAlerts) return 'ordinary'
   return 'empty'

@@ -91,7 +91,8 @@ export function ManualTaskSettlementBatchDialog(
     props.items.length > 0 &&
     !props.pending &&
     !props.stale &&
-    !configLoading
+    !configLoading &&
+    !Object.values(errors).some(Boolean)
 
   const handleSubmit = (): void => {
     setSubmitted(true)
@@ -111,6 +112,13 @@ export function ManualTaskSettlementBatchDialog(
       props.items.map((item) => [item.id, Number(submittedValues[item.id])])
     ) as Record<number, number>
     props.onSubmit(props.items, actualQuotas)
+  }
+
+  const updateValue = (id: number, value: string): void => {
+    setValues((current) => ({
+      ...current,
+      [id]: value,
+    }))
   }
 
   return (
@@ -175,13 +183,13 @@ export function ManualTaskSettlementBatchDialog(
                 ref={(element) => {
                   inputRefs.current[item.id] = element
                 }}
-                disabled={props.pending || configLoading}
+                disabled={props.pending || props.stale || configLoading}
                 aria-invalid={submitted && Boolean(errors[item.id])}
+                onInput={(event) =>
+                  updateValue(item.id, (event.target as HTMLInputElement).value)
+                }
                 onChange={(event) =>
-                  setValues((current) => ({
-                    ...current,
-                    [item.id]: event.currentTarget.value,
-                  }))
+                  updateValue(item.id, (event.target as HTMLInputElement).value)
                 }
               />
               <FieldDescription>

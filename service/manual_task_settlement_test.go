@@ -266,9 +266,88 @@ func TestCompleteManualTaskBillingSettlementsPrevalidatesEveryItem(t *testing.T)
 	assert.Zero(t, result.CompletedCount)
 	assert.Equal(t, 1, result.FailedCount)
 	assert.Empty(t, result.SettlementIDs)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, secondManual.ID, result.Failed[0].SettlementID)
 	assert.EqualValues(t, 2000, getUserQuota(t, userID))
 	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
 	assert.Zero(t, countLogs(t))
+}
+
+func TestCompleteManualTaskBillingSettlementsPrevalidatesReplayReviewer(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8184, 8185, 8186
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-replay-validation", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	secondQuota := int64(40)
+	_, err := CompleteManualTaskBillingSettlement(
+		secondManual.ID,
+		secondManual.Revision,
+		9300,
+		&secondQuota,
+		"Approved by the original reviewer.",
+	)
+	require.NoError(t, err)
+
+	firstQuota := int64(25)
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9301)
+
+	require.NoError(t, err)
+	assert.Zero(t, result.CompletedCount)
+	assert.Equal(t, 1, result.FailedCount)
+	assert.Empty(t, result.SettlementIDs)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, secondManual.ID, result.Failed[0].SettlementID)
+	assert.EqualValues(t, 2040, getUserQuota(t, userID), "the earlier completed settlement is the only funding mutation")
+	var storedFirst model.Task
+	var storedSecond model.Task
+	require.NoError(t, model.DB.First(&storedFirst, first.ID).Error)
+	require.NoError(t, model.DB.First(&storedSecond, second.ID).Error)
+	assert.Equal(t, 100, storedFirst.Quota)
+	assert.Equal(t, 40, storedSecond.Quota)
+}
+
+func TestValidateManualTaskBillingCompletionReplay(t *testing.T) {
+	original := model.BillingSettlement{
+		ReconciliationReviewedBy: 9302,
+		ReconciliationReviewNote: "durable review note",
+	}
+	eligibility := manualTaskBillingEligibility{
+		original:                original,
+		originalAlreadyResolved: true,
+	}
+
+	note, err := validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9302,
+		manualTaskBillingDefaultNote,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, original.ReconciliationReviewNote, note)
+
+	_, err = validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9303,
+		manualTaskBillingDefaultNote,
+	)
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+
+	eligibility.original.ReconciliationReviewNote = ""
+	_, err = validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9302,
+		manualTaskBillingDefaultNote,
+	)
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
 }
 
 func TestCompleteManualTaskBillingSettlementsZeroPrevalidatesSelection(t *testing.T) {
