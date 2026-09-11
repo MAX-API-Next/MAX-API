@@ -29,7 +29,10 @@ import {
   completeManualTaskBillingSettlement,
   completeManualTaskBillingSettlements,
 } from './api'
-import type { BillingSettlementReconciliationData } from './types'
+import type {
+  BillingSettlementReconciliationData,
+  BillingSettlementReconciliationItem,
+} from './types'
 
 const LOAD_ERROR_KEY = 'We could not load active alerts.'
 const testEnv = createReactTestEnvironment({
@@ -1371,10 +1374,22 @@ describe('SmartOps active alerts', () => {
     const writes: Array<{ url: string; data: unknown }> = []
     api.post = (async (url: string, data: unknown): Promise<unknown> => {
       writes.push({ url: String(url), data })
-      return { data: { success: true } }
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 1,
+            failed_count: 0,
+            settlement_ids: [111],
+            failed: [],
+          },
+        },
+      }
     }) as typeof api.post
 
-    const taskItem = (revision: number) => ({
+    const taskItem = (
+      revision: number
+    ): BillingSettlementReconciliationItem => ({
       id: 111,
       revision,
       operation_key: 'task:7111:finalize',
