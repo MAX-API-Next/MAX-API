@@ -110,6 +110,9 @@ export function ManualTaskSettlementBatchDialog(
     [getValidationErrors, values]
   )
 
+  const showError = (id: number): boolean =>
+    (submitted || (values[id] ?? '') !== '') && Boolean(errors[id])
+
   const canSubmit =
     props.items.length > 0 &&
     !props.pending &&
@@ -187,7 +190,7 @@ export function ManualTaskSettlementBatchDialog(
           {props.items.map((item) => (
             <Field
               key={`${item.id}:${item.revision}`}
-              data-invalid={submitted && Boolean(errors[item.id])}
+              data-invalid={showError(item.id)}
             >
               <FieldLabel htmlFor={`manual-task-actual-quota-${item.id}`}>
                 {t('Task #{{id}} · reserved {{quota}}', {
@@ -207,7 +210,7 @@ export function ManualTaskSettlementBatchDialog(
                   inputRefs.current[item.id] = element
                 }}
                 disabled={props.pending || props.stale || configLoading}
-                aria-invalid={submitted && Boolean(errors[item.id])}
+                aria-invalid={showError(item.id)}
                 onInput={(event) =>
                   updateValue(item.id, (event.target as HTMLInputElement).value)
                 }
@@ -224,7 +227,7 @@ export function ManualTaskSettlementBatchDialog(
                   }
                 )}
               </FieldDescription>
-              {submitted && errors[item.id] && (
+              {showError(item.id) && errors[item.id] && (
                 <FieldError>{errors[item.id]}</FieldError>
               )}
             </Field>

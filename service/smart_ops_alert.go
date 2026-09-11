@@ -600,11 +600,19 @@ func CompleteManualTaskBillingSettlementsZero(
 	// settled while the batch request reports a later validation failure.
 	for _, target := range targets {
 		if err := validateManualTaskBillingZeroTarget(target, reviewerID); err != nil {
+			code := manualTaskBillingBatchErrorCode(err)
+			if code == "settlement_failed" {
+				common.SysError(fmt.Sprintf(
+					"manual task billing batch pre-validation failed: settlement_id=%d error=%s",
+					target.ID,
+					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
+				))
+			}
 			result.FailedCount++
 			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
 				SettlementID: target.ID,
-				Code:         manualTaskBillingBatchErrorCode(err),
-				Message:      manualTaskBillingBatchErrorMessage(manualTaskBillingBatchErrorCode(err)),
+				Code:         code,
+				Message:      manualTaskBillingBatchErrorMessage(code),
 			})
 		}
 	}
@@ -675,6 +683,13 @@ func CompleteManualTaskBillingSettlements(
 		if err != nil {
 			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
+			if code == "settlement_failed" {
+				common.SysError(fmt.Sprintf(
+					"manual task billing exact batch pre-validation failed: settlement_id=%d error=%s",
+					target.ID,
+					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
+				))
+			}
 			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
 				SettlementID: target.ID,
 				Code:         code,

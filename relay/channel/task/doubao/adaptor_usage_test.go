@@ -36,6 +36,8 @@ func TestProduceUsageClassifiesDoubaoMissingPartialAndInvalid(t *testing.T) {
 		{name: "single negative total", body: `{"status":"succeeded","usage":{"total_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
 		{name: "negative", body: `{"status":"succeeded","usage":{"completion_tokens":-1,"total_tokens":2}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
 		{name: "inconsistent", body: `{"status":"succeeded","usage":{"completion_tokens":4,"total_tokens":3}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
+		{name: "non numeric token", body: `{"status":"succeeded","usage":{"completion_tokens":"many"}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
+		{name: "null usage", body: `{"status":"succeeded","usage":null}`, presence: types.TaskUsagePresenceNotPresent, completeness: types.TaskUsageCompletenessMissing},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -47,6 +49,27 @@ func TestProduceUsageClassifiesDoubaoMissingPartialAndInvalid(t *testing.T) {
 			require.Equal(t, test.completeness, envelope.Completeness)
 		})
 	}
+}
+
+func TestProduceUsageConfiguredResponseIgnoresIncompatibleUnrelatedFields(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"code":"success",
+			"data":{"data":{
+				"id":"task_wrapped",
+				"status":"succeeded",
+				"duration":"5",
+				"created_at":"not-a-timestamp",
+				"updated_at":false,
+				"usage":{"completion_tokens":12,"total_tokens":20}
+			}}
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TaskUsagePresencePresentValid, envelope.Presence)
+	require.EqualValues(t, 12, *envelope.Usage.CompletionTokens)
+	require.EqualValues(t, 20, *envelope.Usage.TotalTokens)
 }
 
 func TestParseTaskResultAttachesDoubaoUsageEnvelopeWithoutChangingLegacyTokens(t *testing.T) {

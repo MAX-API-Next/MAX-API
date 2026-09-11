@@ -1191,6 +1191,20 @@ describe('SmartOps active alerts', () => {
         fireEvent.change(input)
       }
       await act(async () => {
+        setInputValue(firstInput, '101')
+      })
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByText(
+            'Final quota cannot exceed the reserved quota.'
+          )
+        )
+        const submitButton = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        }) as HTMLButtonElement
+        assert.equal(submitButton.disabled, true)
+      })
+      await act(async () => {
         setInputValue(firstInput, '0')
         setInputValue(secondInput, '40')
       })

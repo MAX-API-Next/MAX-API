@@ -651,7 +651,12 @@ func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsage
 		}
 		payload = nested
 	}
-	var response responseTask
+	// Only decode the usage member here. Configured providers may include
+	// otherwise valid fields with types that are incompatible with the native
+	// Doubao responseTask shape (for example string timestamps or durations).
+	var response struct {
+		Usage json.RawMessage `json:"usage"`
+	}
 	if err := common.Unmarshal(payload, &response); err != nil {
 		return nil, errors.Wrap(err, "unmarshal Doubao task usage failed")
 	}
