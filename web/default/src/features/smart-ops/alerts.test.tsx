@@ -168,6 +168,35 @@ describe('SmartOps active alerts', () => {
     }
   })
 
+  test('passes a non-zero exact quota to the manual settlement endpoint', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return { data: { success: true, data: { actual_quota: 40 } } }
+    }) as typeof api.post
+
+    try {
+      const response = await completeManualTaskBillingSettlement(93, {
+        revision: 2,
+        actual_quota: 40,
+      })
+
+      assert.equal(response.success, true)
+      assert.deepEqual(writes, [
+        {
+          url: '/api/smart-ops/billing-settlements/93/complete-task',
+          data: {
+            revision: 2,
+            actual_quota: 40,
+          },
+        },
+      ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
   test('polls the administrator alert endpoint and renders active host pressure', async (): Promise<void> => {
     const originalGet = api.get
     const urls: string[] = []
@@ -914,6 +943,7 @@ describe('SmartOps active alerts', () => {
       assert.equal(exactQuotaInput.type, 'number')
       assert.equal(exactQuotaInput.min, '0')
       assert.equal(exactQuotaInput.max, '100')
+
       // Opening the exact-settlement path must not issue another zero-quota
       // request. The exact endpoint contract is covered by the API test.
       assert.equal(writes.length, 2)
