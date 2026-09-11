@@ -93,7 +93,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
           task_quota: 100,
           task_quota_target: 100,
           requires_manual_completion: true,
-          zero_quota_eligible: true,
+          zero_quota_eligible: false,
           funding_delta: 0,
           applied_funding_delta: 0,
           token_delta: 0,
@@ -839,12 +839,13 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      let completeButton: HTMLElement | undefined
       await waitFor(() => {
         const screen = within(view.container)
-        completeButton = screen.getByRole('button', {
-          name: 'Complete billing',
-        })
+        assert.ok(
+          screen.getByRole('button', {
+            name: 'Review and close',
+          })
+        )
         assert.equal(
           screen
             .getByRole('checkbox', {
@@ -862,6 +863,17 @@ describe('SmartOps active alerts', () => {
           true
         )
       })
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Review and close',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes[0], {
+          url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+          data: { items: [{ id: 93, revision: manualRevision }] },
+        })
+      })
       const taskCheckbox = within(view.container).getByRole('checkbox', {
         name: 'Select billing reconciliation alert 93',
       })
@@ -872,7 +884,7 @@ describe('SmartOps active alerts', () => {
       assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
       await view.click(zeroBatchButton)
       await waitFor(() => {
-        assert.deepEqual(writes[0], {
+        assert.deepEqual(writes[1], {
           url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
           data: { items: [{ id: 93, revision: manualRevision }] },
         })
@@ -880,53 +892,12 @@ describe('SmartOps active alerts', () => {
           (view.container.textContent ?? '').includes('Settlement #94:')
         )
       })
-      assert.ok(completeButton)
-      await view.click(completeButton)
-
-      const dialog = await waitFor(() =>
-        within(document.body).getByRole('dialog')
-      )
-      const dialogScreen = within(dialog)
-      const quotaInput = dialogScreen.getByLabelText('Exact final quota')
-      const submitButton = dialogScreen.getByRole('button', {
-        name: 'Apply exact settlement',
-      })
-      assert.equal(submitButton.hasAttribute('disabled'), true)
-      assert.equal((quotaInput as HTMLInputElement).max, '100')
-      assert.equal((quotaInput as HTMLInputElement).min, '0')
-      assert.equal(dialogScreen.queryByLabelText('Audit note'), null)
-      assert.ok(
-        (dialog.textContent ?? '').includes(
-          'This workflow cannot add a charge above the original reservation.'
-        )
-      )
-
-      includeManualItem = false
-      await queryClient.invalidateQueries({
-        queryKey: ['smart-ops', 'billing-settlement-reconciliation'],
-      })
-
-      const staleDialog = await waitFor(() => {
-        const currentDialog = within(document.body).getByRole('dialog')
-        assert.ok(
-          (currentDialog.textContent ?? '').includes(
-            'This reconciliation record changed while the dialog was open.'
-          )
-        )
-        return currentDialog
-      })
-      const staleDialogScreen = within(staleDialog)
-      assert.equal(staleDialog, dialog)
+      assert.equal(within(document.body).queryByRole('dialog'), null)
       assert.equal(
-        staleDialog.querySelector('#manual-task-actual-quota'),
-        quotaInput
-      )
-      assert.equal(staleDialog.querySelector('#manual-task-audit-note'), null)
-      assert.equal(
-        staleDialogScreen
-          .getByRole('button', { name: 'Apply exact settlement' })
-          .hasAttribute('disabled'),
-        true
+        within(view.container).queryByRole('button', {
+          name: 'Complete billing',
+        }),
+        null
       )
     } finally {
       api.get = originalGet

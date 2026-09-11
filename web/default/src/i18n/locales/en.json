@@ -9,6 +9,7 @@
     "Completed selected task settlements with zero final quota: {{count}}.": "Completed selected task settlements with zero final quota: {{count}}.",
     "Select either task settlements or ordinary alerts, not both.": "Select either task settlements or ordinary alerts, not both.",
     "Some settlements remain for review: {{ids}}": "Some settlements remain for review: {{ids}}",
+    "record still requires a manual financial review": "record still requires a manual financial review",
     "Some task settlements still need review.": "Some task settlements still need review.",
     "Settlement #{{id}}: {{message}}": "Settlement #{{id}}: {{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "Only MiniMax-H3 task settlements can use the zero-quota batch action",

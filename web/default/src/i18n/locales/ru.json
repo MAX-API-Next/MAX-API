@@ -31,7 +31,7 @@
     "Task #{{id}} · reserved {{quota}}": "Задача № {{id}} · зарезервировано {{quota}}",
     "Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.": "Разрешена только точная квота, основанная на проверенных данных провайдера. Этот процесс не может начислить сумму сверх исходного резерва.",
     "Exact final quota": "Точная итоговая квота",
-    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "Введите значение квоты. {{quotaPerUnit}} квоты = $1. Допустимый диапазон: от 0 до {{quota}}.",
+    "Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.": "Введите значение квоты. {{quotaPerUnit}} ед. квоты = $1. Допустимый диапазон: от 0 до {{quota}}.",
     "Apply exact settlement": "Применить точный расчет",
     "{{count}} attempt": "Попыток: {{count}}",
     "{{count}} attempts": "Попыток: {{count}}",

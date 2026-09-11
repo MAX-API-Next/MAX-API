@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -82,9 +83,10 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
 		// External contract tests may never put database credentials on a
-		// plaintext TCP connection. Unix sockets are local-only; TCP requires
-		// certificate-validating TLS and must not permit plaintext fallback.
-		if config.Net == "tcp" && (config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext) {
+		// plaintext network connection. Unix sockets are local-only; every
+		// other network type (including tcp4/tcp6) requires certificate-
+		// validating TLS and must not permit plaintext fallback.
+		if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
 		config.Timeout, config.ReadTimeout, config.WriteTimeout = 5*time.Second, 10*time.Second, 10*time.Second
@@ -121,6 +123,20 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		return stdlib.OpenDB(*config), config.Database, nil
 	default:
 		return nil, "", errTaskBillingUnsafeDatabase
+	}
+}
+
+func TestOpenTaskBillingTestSQLRejectsPlaintextNetworkVariants(t *testing.T) {
+	for _, network := range []string{"tcp", "tcp4", "tcp6"} {
+		t.Run(network, func(t *testing.T) {
+			_, _, err := openTaskBillingTestSQL(
+				"mysql",
+				fmt.Sprintf("user:password@%s(127.0.0.1:3306)/maxapi_task_billing_test_tls", network),
+			)
+			if !errors.Is(err, errTaskBillingUnsafeDatabase) {
+				t.Fatalf("expected plaintext %s DSN to be rejected", network)
+			}
+		})
 	}
 }
 

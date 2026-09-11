@@ -199,7 +199,7 @@ func TestCompleteManualTaskBillingSettlementsZeroIsIdempotent(t *testing.T) {
 	assert.EqualValues(t, 1, countLogs(t))
 }
 
-func TestCompleteManualTaskBillingSettlementsZeroReturnsPartialFailures(t *testing.T) {
+func TestCompleteManualTaskBillingSettlementsZeroPrevalidatesSelection(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, channelID = 819, 820, 821
 	seedUser(t, userID, 900)
@@ -226,12 +226,14 @@ func TestCompleteManualTaskBillingSettlementsZeroReturnsPartialFailures(t *testi
 		9019,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.CompletedCount)
+	assert.Zero(t, result.CompletedCount)
 	assert.Equal(t, 1, result.FailedCount)
-	assert.Equal(t, []int64{h3Manual.ID}, result.SettlementIDs)
+	assert.Empty(t, result.SettlementIDs)
 	require.Len(t, result.Failed, 1)
 	assert.Equal(t, ordinaryManual.ID, result.Failed[0].SettlementID)
 	assert.Contains(t, result.Failed[0].Message, "MiniMax-H3")
+	assert.EqualValues(t, 900, getUserQuota(t, userID), "no target may settle before the complete selection validates")
+	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
 }
 
 func TestZeroTaskSettlementRechecksMiniMaxH3AtCompletionBoundary(t *testing.T) {

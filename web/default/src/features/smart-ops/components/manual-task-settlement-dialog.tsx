@@ -107,11 +107,6 @@ export function ManualTaskSettlementDialog(
                   quota: formatQuota(item.task_quota),
                 })}
               </AlertTitle>
-              <AlertDescription>
-                {t(
-                  'Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.'
-                )}
-              </AlertDescription>
             </Alert>
 
             {props.stale && (

@@ -656,6 +656,24 @@ func CompleteManualTaskBillingSettlementsZero(
 			return ManualTaskBillingBatchCompletionResult{}, ErrInvalidBillingSettlementReconciliationReview
 		}
 		seen[target.ID] = struct{}{}
+	}
+	// Validate the complete selection before the first completion can mutate
+	// balances. A stale or non-H3 item therefore cannot leave earlier items
+	// settled while the batch request reports a later validation failure.
+	for _, target := range targets {
+		if err := validateManualTaskBillingZeroTarget(target, reviewerID); err != nil {
+			result.FailedCount++
+			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
+				SettlementID: target.ID,
+				Code:         manualTaskBillingBatchErrorCode(err),
+				Message:      manualTaskBillingBatchErrorMessage(manualTaskBillingBatchErrorCode(err)),
+			})
+		}
+	}
+	if result.FailedCount > 0 {
+		return result, nil
+	}
+	for _, target := range targets {
 		if _, err := completeManualTaskBillingSettlement(
 			target.ID,
 			target.Revision,
@@ -688,6 +706,76 @@ func CompleteManualTaskBillingSettlementsZero(
 
 func ptrInt64(value int64) *int64 {
 	return &value
+}
+
+// validateManualTaskBillingZeroTarget performs the read-only portion of the
+// zero-quota completion contract. Batch callers run this for every target
+// before allowing any one target to mutate funding or task state.
+func validateManualTaskBillingZeroTarget(
+	target model.BillingSettlementReviewTarget,
+	reviewerID int,
+) error {
+	original, alreadyResolved, err := model.GetManualTaskBillingSettlement(target.ID, target.Revision)
+	if err != nil {
+		return err
+	}
+	if alreadyResolved && original.ReconciliationReviewedBy != reviewerID {
+		return model.ErrBillingSettlementReviewConflict
+	}
+	if original.TaskQuota < 0 || original.TaskQuotaTarget != original.TaskQuota ||
+		original.FundingDelta != 0 || original.TokenDelta != 0 ||
+		int64(int(original.TaskQuota)) != original.TaskQuota {
+		return ErrInvalidBillingSettlementReconciliationReview
+	}
+
+	task, err := model.GetTaskByID(original.TaskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.ErrBillingSettlementReviewConflict
+		}
+		return err
+	}
+	if !model.IsMiniMaxH3Task(task) {
+		return errors.Join(
+			model.ErrBillingSettlementReviewConflict,
+			errManualTaskBillingZeroQuotaRequiresMiniMaxH3,
+		)
+	}
+	expectedSource := model.BillingSettlementSourceWallet
+	if taskIsSubscription(task) {
+		expectedSource = model.BillingSettlementSourceSubscription
+	}
+	if original.Source != expectedSource ||
+		original.UserID != task.UserId ||
+		original.SubscriptionID != task.PrivateData.SubscriptionId ||
+		original.TokenID != task.PrivateData.TokenId ||
+		original.SubscriptionPreConsumeRequestID != task.PrivateData.BillingRequestId {
+		return model.ErrBillingSettlementReviewConflict
+	}
+
+	existingChild, childFound, err := model.GetManualTaskBillingCompletion(task.ID)
+	if err != nil {
+		return err
+	}
+	childWasApplied := childFound && existingChild.Status == model.BillingSettlementStatusApplied
+	if childFound && existingChild.TaskQuotaTarget != 0 {
+		return model.ErrBillingSettlementReviewConflict
+	}
+	if int64(task.Quota) != original.TaskQuota &&
+		(int64(task.Quota) != 0 || !childWasApplied) {
+		return model.ErrBillingSettlementReviewConflict
+	}
+
+	completionTask := *task
+	completionTask.Quota = int(original.TaskQuota)
+	var usage *types.TaskUsage
+	if completionTask.PrivateData.BillingContext != nil {
+		usage = types.CloneTaskUsage(completionTask.PrivateData.BillingContext.TaskUsage)
+	}
+	if buildTaskExactFinalSettlementInput(&completionTask, 0, usage, "Administrator-approved manual task usage settlement") == nil {
+		return model.ErrBillingSettlementReviewConflict
+	}
+	return nil
 }
 
 func manualTaskBillingBatchErrorCode(err error) string {

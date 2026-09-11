@@ -42,6 +42,16 @@ interface UseBillingSettlementSelectionResult {
   ) => void
 }
 
+export function isManualSettlementSelectable(
+  item: BillingSettlementReconciliationItem,
+  canSelectManualTask: boolean
+): boolean {
+  return (
+    !item.requires_manual_completion ||
+    (item.zero_quota_eligible === true && canSelectManualTask)
+  )
+}
+
 export function useBillingSettlementSelection(
   params: UseBillingSettlementSelectionParams
 ): UseBillingSettlementSelectionResult {
@@ -50,8 +60,7 @@ export function useBillingSettlementSelection(
   const onSelectedTargetsChange = params.onSelectedTargetsChange
   const selectable = useCallback(
     (item: BillingSettlementReconciliationItem): boolean =>
-      !item.requires_manual_completion ||
-      (item.zero_quota_eligible === true && params.canSelectManualTask),
+      isManualSettlementSelectable(item, params.canSelectManualTask),
     [params.canSelectManualTask]
   )
   const isSelected = useCallback(

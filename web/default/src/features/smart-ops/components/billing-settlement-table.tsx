@@ -35,7 +35,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useBillingSettlementSelection } from '../hooks/use-billing-settlement-selection'
+import {
+  isManualSettlementSelectable,
+  useBillingSettlementSelection,
+} from '../hooks/use-billing-settlement-selection'
 import { formatLocalizedCount } from '../lib/format'
 import type {
   BillingSettlementReconciliationItem,
@@ -78,6 +81,23 @@ function BillingSettlementActionsCell(
   const { t } = useTranslation()
 
   if (props.item.requires_manual_completion) {
+    if (props.item.zero_quota_eligible === true && props.canCompleteManualTask) {
+      return (
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={() =>
+            props.onReviewTargets([
+              { id: props.item.id, revision: props.item.revision },
+            ])
+          }
+          disabled={props.reviewPending}
+        >
+          {t('Review and close')}
+        </Button>
+      )
+    }
     return (
       <div className='flex flex-col items-end gap-1'>
         <Button
@@ -130,10 +150,8 @@ export function BillingSettlementTable(
   props: BillingSettlementTableProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
-  const hasReviewableItems = props.items.some(
-    (item) =>
-      !item.requires_manual_completion ||
-      (item.zero_quota_eligible === true && props.canCompleteManualTask)
+  const hasReviewableItems = props.items.some((item) =>
+    isManualSettlementSelectable(item, props.canCompleteManualTask)
   )
   const { allSelected, someSelected, isSelected, toggleAll, toggleItem } =
     useBillingSettlementSelection({
@@ -186,9 +204,10 @@ export function BillingSettlementTable(
                     }
                     disabled={
                       props.reviewPending ||
-                      (item.requires_manual_completion &&
-                        (!props.canCompleteManualTask ||
-                          item.zero_quota_eligible !== true))
+                      !isManualSettlementSelectable(
+                        item,
+                        props.canCompleteManualTask
+                      )
                     }
                     aria-label={t(
                       'Select billing reconciliation alert {{id}}',

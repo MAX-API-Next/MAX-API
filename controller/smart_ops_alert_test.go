@@ -126,19 +126,19 @@ func TestCompleteManualTaskBillingSettlementsZeroReturnsSuccessAndPartialFailure
 	CompleteManualTaskBillingSettlementsZero(ctx)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Contains(t, recorder.Body.String(), `"completed_count":1`)
+	assert.Contains(t, recorder.Body.String(), `"completed_count":0`)
 	assert.Contains(t, recorder.Body.String(), `"failed_count":1`)
 	assert.Contains(t, recorder.Body.String(), fmt.Sprintf(`"settlement_id":%d`, ordinarySettlement.ID))
 	var settled model.BillingSettlement
 	require.NoError(t, db.First(&settled, h3Settlement.ID).Error)
-	assert.Equal(t, model.BillingSettlementStatusApplied, settled.Status)
-	assert.Equal(t, admin.Id, settled.ReconciliationReviewedBy)
+	assert.Equal(t, model.BillingSettlementStatusManual, settled.Status)
+	assert.Zero(t, settled.ReconciliationReviewedBy)
 	var rejected model.BillingSettlement
 	require.NoError(t, db.First(&rejected, ordinarySettlement.ID).Error)
 	assert.Equal(t, model.BillingSettlementStatusManual, rejected.Status)
 	var storedOwner model.User
 	require.NoError(t, db.First(&storedOwner, owner.Id).Error)
-	assert.EqualValues(t, 1000, storedOwner.Quota)
+	assert.EqualValues(t, 900, storedOwner.Quota)
 }
 
 func TestCompleteManualTaskBillingSettlementAuditsExactCompletion(t *testing.T) {

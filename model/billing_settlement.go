@@ -470,7 +470,7 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 		tasksByID := make(map[int64]*Task, len(taskIDs))
 		if len(taskIDs) > 0 {
 			var tasks []Task
-			if err := tx.Select("id", "properties", "private_data").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
+			if err := tx.Select("id", "properties").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
 				return err
 			}
 			for index := range tasks {

@@ -50,6 +50,7 @@ import {
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
+  ManualTaskBillingBatchCompletionData,
   ManualTaskBillingBatchFailure,
   BillingSettlementReviewTarget,
 } from '../types'
@@ -230,7 +231,9 @@ export function BillingSettlementEvidence(
 
   const zeroSettlementMutation = useMutation({
     mutationKey: ['smart-ops', 'manual-task-billing-zero-batch'],
-    mutationFn: async (targets: BillingSettlementReviewTarget[]) => {
+    mutationFn: async (
+      targets: BillingSettlementReviewTarget[]
+    ): Promise<ManualTaskBillingBatchCompletionData | undefined> => {
       const response = await completeManualTaskBillingSettlementsZero({
         items: targets,
       })
