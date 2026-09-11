@@ -296,7 +296,8 @@ export function BillingSettlementEvidence(
     if (
       targets.length === 0 ||
       reviewMutation.isPending ||
-      zeroSettlementMutation.isPending
+      zeroSettlementMutation.isPending ||
+      manualTaskCompletionMutation.isPending
     )
       return
     const selectedItems = (reconciliationItems ?? []).filter((item) =>
@@ -529,7 +530,8 @@ export function BillingSettlementEvidence(
                 disabled={
                   activeSelectedTargets.length === 0 ||
                   reviewMutation.isPending ||
-                  zeroSettlementMutation.isPending
+                  zeroSettlementMutation.isPending ||
+                  manualTaskCompletionMutation.isPending
                 }
               >
                 {(reviewMutation.isPending ||
