@@ -5678,7 +5678,7 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Đã hoàn tất {{completed_count}} quyết toán tác vụ thủ công với hạn mức 0 ({{failed_count}} quyết toán thất bại)",
     "Completed selected task settlements: {{count}}.": "Đã hoàn tất các quyết toán tác vụ đã chọn: {{count}}.",
     "Enter exact quotas ({{count}})": "Nhập các hạn mức chính xác ({{count}})",
-    "Manually settle selected task quotas ({{count}})": "Tính hạn mức thủ công cho các tác vụ đã chọn ({{count}})",
+    "Manually settle selected task quotas ({{count}})": "Quyết toán thủ công hạn mức cho các tác vụ đã chọn ({{count}})",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Nhập hạn mức cuối chính xác cho từng tác vụ đã chọn. Mỗi giá trị sẽ được kiểm tra theo hạn mức đã giữ riêng của tác vụ đó.",
     "Apply exact settlements": "Áp dụng các quyết toán chính xác",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Phạm vi cho phép: từ 0 đến {{quota}} ({{quotaPerUnit}} đơn vị hạn mức = $1)."

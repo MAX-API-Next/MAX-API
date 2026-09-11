@@ -71,4 +71,24 @@ describe('renderAuditContent', () => {
       'Completed 2 manual task billing settlements (1 failed)'
     )
   })
+
+  test('localizes zero-quota batch manual task billing settlements', () => {
+    const rendered = renderAuditContent(
+      {
+        op: {
+          action: 'billing.manual_task_settlement_batch_zero',
+          params: { completed_count: 3, failed_count: 0 },
+        },
+      },
+      (key: string, opts?: Record<string, unknown>): string =>
+        key
+          .replace('{{completed_count}}', String(opts?.completed_count))
+          .replace('{{failed_count}}', String(opts?.failed_count))
+    )
+
+    assert.equal(
+      rendered,
+      'Completed 3 manual task settlements with zero quota (0 failed)'
+    )
+  })
 })

@@ -5674,7 +5674,7 @@
     "Rule key": "Ключ правила",
     "Free": "Бесплатно",
     "Save H3 billing profile": "Сохранить профиль тарификации H3",
-    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "Завершено расчётов ручной тарификации задач: {{completed_count}} (ошибок: {{failed_count}})",
+    "Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)": "Завершено операций ручного биллинга задач: {{completed_count}} (ошибок: {{failed_count}})",
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Завершено ручных расчётов задач с нулевой квотой: {{completed_count}} (ошибок: {{failed_count}})",
     "Completed selected task settlements: {{count}}.": "Выбранные расчёты задач завершены: {{count}}.",
     "Enter exact quotas ({{count}})": "Ввести точные квоты ({{count}})",
