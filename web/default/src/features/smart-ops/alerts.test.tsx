@@ -1073,6 +1073,11 @@ describe('SmartOps active alerts', () => {
           name: 'Select billing reconciliation alert 94',
         })
       )
+      assert.ok(
+        within(view.container).getByRole('button', {
+          name: 'Enter exact quotas (2)',
+        })
+      )
       const zeroBatchButton = within(view.container).getByRole('button', {
         name: 'Review and close selected (2)',
       })

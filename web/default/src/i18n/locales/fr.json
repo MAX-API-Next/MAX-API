@@ -14,7 +14,7 @@
     "Some task settlements still need review.": "Certains règlements de tâches nécessitent encore un examen.",
     "Settlement #{{id}}: {{message}}": "Règlement n°{{id}} : {{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "Seuls les règlements de tâches MiniMax-H3 peuvent utiliser l’action groupée avec quota nul",
-    "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "Fermez par lot les alertes ordinaires après examen. Les administrateurs racine peuvent sélectionner les alertes de finalisation MiniMax-H3 pour un règlement explicite avec quota nul ; les autres tâches exigent toujours un quota exact.",
+    "After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.": "Après sélection des alertes, les administrateurs racine peuvent régler les tâches MiniMax-H3 éligibles avec un quota final explicite de 0 ou saisir un quota final exact pour chaque tâche sélectionnée. Les alertes ordinaires peuvent être fermées directement après examen.",
     "Exact quota required": "Quota exact requis",
     "Confirm zero-quota settlement": "Confirmer le règlement à quota zéro",
     "Enter exact quota": "Saisir le quota exact",

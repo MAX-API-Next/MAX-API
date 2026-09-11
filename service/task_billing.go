@@ -405,7 +405,12 @@ func prepareTaskTerminalBillingDecision(
 	if taskBillingPlanHasUsageIdentity(plan) {
 		usageEnvelope = frozenTaskUsageEnvelope(task, taskResult)
 	}
-	usage := frozenTaskUsage(task, taskResult, usageEnvelope)
+	usage := frozenTaskUsage(
+		task,
+		taskResult,
+		usageEnvelope,
+		taskBillingPlanHasUsageIdentity(plan),
+	)
 	decision := taskTerminalBillingDecision{
 		Settlement:    buildTaskManualSettlementInput(task),
 		Usage:         usage,
@@ -476,11 +481,22 @@ func frozenTaskUsageEnvelope(task *model.Task, taskResult *relaycommon.TaskInfo)
 	return nil
 }
 
-func frozenTaskUsage(task *model.Task, taskResult *relaycommon.TaskInfo, envelope *types.TaskUsageEnvelope) *types.TaskUsage {
+func frozenTaskUsage(
+	task *model.Task,
+	taskResult *relaycommon.TaskInfo,
+	envelope *types.TaskUsageEnvelope,
+	requireValidatedEnvelope bool,
+) *types.TaskUsage {
 	if envelope != nil {
 		if usage := types.CloneTaskUsage(envelope.Usage); usage != nil {
 			return usage
 		}
+		return &types.TaskUsage{
+			Source:       types.TaskUsageSourceProviderResponse,
+			Completeness: types.TaskUsageCompletenessMissing,
+		}
+	}
+	if requireValidatedEnvelope {
 		return &types.TaskUsage{
 			Source:       types.TaskUsageSourceProviderResponse,
 			Completeness: types.TaskUsageCompletenessMissing,

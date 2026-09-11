@@ -565,7 +565,7 @@ export function BillingSettlementEvidence(
             </h4>
             <p className='text-muted-foreground mt-0.5 text-xs'>
               {t(
-                'Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.'
+                'After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.'
               )}
             </p>
           </div>

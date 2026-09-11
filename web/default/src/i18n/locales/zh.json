@@ -14,7 +14,7 @@
     "Some task settlements still need review.": "部分任务结算仍需复核。",
     "Settlement #{{id}}: {{message}}": "结算 #{{id}}：{{message}}",
     "Only MiniMax-H3 task settlements can use the zero-quota batch action": "仅 MiniMax-H3 任务结算可使用零额度批量操作",
-    "Batch-close ordinary alerts after review. Root administrators can select MiniMax-H3 task-finalization alerts for an explicit zero-quota settlement; other task records still require an exact quota.": "审核后可批量关闭普通告警。根管理员可选择 MiniMax-H3 任务终结告警并明确按最终额度 0 结算；其他任务记录仍需录入精确额度。",
+    "After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.": "选择告警后，根管理员可以将符合条件的 MiniMax-H3 任务按最终额度 0 结算，也可以为每个所选任务手动输入精确最终额度；普通告警审核后可直接关闭。",
     "Exact quota required": "需要精确额度",
     "Confirm zero-quota settlement": "确认零额度结算",
     "Enter exact quota": "手动输入精确额度",

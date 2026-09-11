@@ -226,6 +226,8 @@ func TestH3TerminalDecisionFailsClosedOnUsageEnvelopeIdentityDrift(t *testing.T)
 	require.Zero(t, decision.Settlement.FundingDelta)
 	require.Nil(t, decision.Settlement.Effect)
 	require.Nil(t, decision.UsageEnvelope)
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
 }
 
 func TestFrozenTaskUsageEnvelopeKeepsMissingUntilReplacementMatchesPlan(t *testing.T) {
@@ -367,6 +369,8 @@ func TestH3TerminalDecisionRejectsNonProviderUsageStage(t *testing.T) {
 	require.NotNil(t, decision.Settlement)
 	require.Zero(t, decision.Settlement.FundingDelta)
 	require.Nil(t, decision.UsageEnvelope)
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
 }
 
 func TestH3TerminalDecisionUsesValidatedEnvelopeOverDivergentCompatibilityUsage(t *testing.T) {
