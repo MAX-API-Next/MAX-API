@@ -66,12 +66,7 @@ function formatBatchFailureMessage(
   failure: ManualTaskBillingBatchFailure,
   t: TFunction
 ): string {
-  const code =
-    failure.code ??
-    (failure.message ===
-    'record changed or could not be applied safely; refresh and reconcile it'
-      ? 'record_conflict'
-      : undefined)
+  const code = failure.code
   switch (code) {
     case 'minimax_h3_required':
       return t(
