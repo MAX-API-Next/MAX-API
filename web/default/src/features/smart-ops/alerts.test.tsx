@@ -893,12 +893,30 @@ describe('SmartOps active alerts', () => {
         )
       })
       assert.equal(within(document.body).queryByRole('dialog'), null)
-      assert.equal(
-        within(view.container).queryByRole('button', {
+      assert.ok(
+        within(view.container).getByRole('button', {
           name: 'Complete billing',
-        }),
-        null
+        })
       )
+
+      // The H3 zero-quota shortcut must not hide the exact settlement path.
+      // Mount the real dialog and verify that opening it does not accidentally
+      // call the zero batch API. The exact API payload is covered above.
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Complete billing',
+        })
+      )
+      const exactQuotaInput = document.getElementById(
+        'manual-task-actual-quota'
+      ) as HTMLInputElement
+      assert.ok(exactQuotaInput)
+      assert.equal(exactQuotaInput.type, 'number')
+      assert.equal(exactQuotaInput.min, '0')
+      assert.equal(exactQuotaInput.max, '100')
+      // Opening the exact-settlement path must not issue another zero-quota
+      // request; submission uses the existing exact API contract covered above.
+      assert.equal(writes.length, 2)
     } finally {
       api.get = originalGet
       api.post = originalPost

@@ -86,19 +86,29 @@ function BillingSettlementActionsCell(
       props.canCompleteManualTask
     ) {
       return (
-        <Button
-          type='button'
-          variant='outline'
-          size='sm'
-          onClick={() =>
-            props.onReviewTargets([
-              { id: props.item.id, revision: props.item.revision },
-            ])
-          }
-          disabled={props.reviewPending}
-        >
-          {t('Confirm zero-quota settlement')}
-        </Button>
+        <div className='flex flex-wrap justify-end gap-2'>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() =>
+              props.onReviewTargets([
+                { id: props.item.id, revision: props.item.revision },
+              ])
+            }
+            disabled={props.reviewPending}
+          >
+            {t('Confirm zero-quota settlement')}
+          </Button>
+          <Button
+            type='button'
+            size='sm'
+            onClick={() => props.onCompleteManualTask(props.item)}
+            disabled={props.reviewPending}
+          >
+            {t('Complete billing')}
+          </Button>
+        </div>
       )
     }
     return (
