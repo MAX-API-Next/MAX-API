@@ -69,6 +69,31 @@ interface UseManualTaskBatchSettlementResult {
   >
 }
 
+export function mergeManualTaskBatchFailures(
+  current: ManualTaskBillingBatchFailure[],
+  data?: ManualTaskBillingBatchCompletionData
+): ManualTaskBillingBatchFailure[] {
+  if (!data) return current
+
+  const completedIDs = new Set(data.settlement_ids)
+  const next = current.filter(
+    (failure) => !completedIDs.has(failure.settlement_id)
+  )
+  const indexes = new Map(
+    next.map((failure, index) => [failure.settlement_id, index])
+  )
+  for (const failure of data.failed) {
+    const index = indexes.get(failure.settlement_id)
+    if (index === undefined) {
+      indexes.set(failure.settlement_id, next.length)
+      next.push(failure)
+    } else {
+      next[index] = failure
+    }
+  }
+  return next
+}
+
 export function useManualTaskBatchSettlement(
   params: UseManualTaskBatchSettlementParams
 ): UseManualTaskBatchSettlementResult {
@@ -112,7 +137,7 @@ export function useManualTaskBatchSettlement(
       const completed = data?.completed_count ?? 0
       const failed = data?.failed_count ?? 0
       const failures = data?.failed ?? []
-      setBatchFailures(failures)
+      setBatchFailures((current) => mergeManualTaskBatchFailures(current, data))
       if (completed === 0) {
         toast.error(t('No selected task settlements were completed.'))
       } else if (failed > 0) {
@@ -179,8 +204,7 @@ export function useManualTaskBatchSettlement(
       params.onSelectionCleared()
       const completed = data?.completed_count ?? 0
       const failed = data?.failed_count ?? 0
-      const failures = data?.failed ?? []
-      setBatchFailures(failures)
+      setBatchFailures((current) => mergeManualTaskBatchFailures(current, data))
       if (completed === 0) {
         toast.error(t('No selected task settlements were completed.'))
       } else if (failed > 0) {

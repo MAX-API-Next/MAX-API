@@ -5,6 +5,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,6 +118,18 @@ func TestParseTaskResultDoesNotCopyInvalidUsageIntoLegacyBillingFields(t *testin
 	// token-ratio settlement.
 	require.Zero(t, result.CompletionTokens)
 	require.Zero(t, result.TotalTokens)
+}
+
+func TestParseTaskResultDoesNotCopyPartialUsageIntoLegacyBillingFields(t *testing.T) {
+	result, err := (&TaskAdaptor{}).ParseTaskResult([]byte(`{
+		"status":"succeeded",
+		"content":{"video_url":"https://cdn.example.com/video.mp4"},
+		"usage":{"total_tokens":20}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, types.TaskUsageCompletenessPartial, result.UsageEnvelope.Completeness)
+	assert.Zero(t, result.CompletionTokens)
+	assert.Zero(t, result.TotalTokens)
 }
 
 func TestProduceUsageUnwrapsConfiguredRelayEnvelope(t *testing.T) {

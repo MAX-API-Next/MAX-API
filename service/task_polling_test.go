@@ -236,6 +236,25 @@ func TestApplyTaskUsageFactsRejectsNonProviderResponseEnvelope(t *testing.T) {
 	require.Nil(t, taskResult.UsageEnvelope)
 }
 
+func TestApplyTaskUsageFactsDoesNotCopyPartialDoubaoUsageToLegacyFields(t *testing.T) {
+	completion := int64(12)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &completion,
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessPartial,
+	})
+	require.NoError(t, err)
+	taskResult := &relaycommon.TaskInfo{}
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult))
+	assert.Zero(t, taskResult.CompletionTokens)
+	assert.Zero(t, taskResult.TotalTokens)
+	require.NotNil(t, taskResult.UsageEnvelope)
+	assert.Equal(t, types.TaskUsageCompletenessPartial, taskResult.UsageEnvelope.Completeness)
+}
+
 func TestApplyTaskUsageFactsAcceptsTrustedTaskPluginEnvelope(t *testing.T) {
 	_, sourceFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)

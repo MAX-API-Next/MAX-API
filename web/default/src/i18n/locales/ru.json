@@ -34,7 +34,7 @@
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "Зеркало использования подписки меньше суммы возврата; исправьте запись подписки перед завершением этого расчёта.",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "Резерв подписки не связан или его период изменился; передайте запись на ручную сверку.",
     "the supplied final quota or the settlement snapshot is invalid for this record": "Указанная итоговая квота или снимок расчёта недействительны для этой записи.",
-    "not attempted because another selected settlement failed validation": "Не выполнено: другое выбранное начисление не прошло проверку",
+    "not attempted because another selected settlement failed validation": "Не выполнено: другой выбранный расчёт не прошёл проверку",
     "No selected task settlements were completed.": "Выбранные расчёты задач не завершены.",
     "Enter the exact final quota.": "Введите точную итоговую квоту.",
     "Final quota must be a non-negative safe integer.": "Итоговая квота должна быть неотрицательным безопасным целым числом.",

@@ -621,7 +621,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		// 解析 usage 信息用于按倍率计费
 		// Invalid structured facts must not leak into the legacy billing fields:
 		// the legacy path may use TotalTokens for a quota recalculation.
-		if envelope.Completeness != types.TaskUsageCompletenessInvalid && envelope.Usage != nil {
+		if envelope.Completeness == types.TaskUsageCompletenessComplete && envelope.Usage != nil {
 			if envelope.Usage.CompletionTokens != nil {
 				taskResult.CompletionTokens = int(*envelope.Usage.CompletionTokens)
 			}

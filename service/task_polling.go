@@ -879,8 +879,15 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 		if envelope.Stage != types.TaskUsageSourceProviderResponse {
 			return fmt.Errorf("task usage envelope stage %q is not supported for polling", envelope.Stage)
 		}
-		if err := applyLegacyTaskUsageFields(taskResult, envelope); err != nil {
-			return err
+		// Doubao's legacy token fields feed the historical token-ratio
+		// settlement path. Partial provider evidence must not become a billing
+		// input, while other legacy providers retain their documented partial
+		// compatibility behavior.
+		if contract.SourceID != taskusage.SourceIDDoubaoVideo ||
+			envelope.Completeness == types.TaskUsageCompletenessComplete {
+			if err := applyLegacyTaskUsageFields(taskResult, envelope); err != nil {
+				return err
+			}
 		}
 		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)
 		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
