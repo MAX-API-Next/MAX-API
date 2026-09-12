@@ -138,6 +138,22 @@ function countLeafKeys(obj) {
   return count
 }
 
+function validateEnglishBase(parsedByLocale, baseLocale) {
+  if (baseLocale !== 'en') return
+  const englishLeafCount = countLeafKeys(parsedByLocale.en?.translation ?? {})
+  if (englishLeafCount > 0) return
+
+  const localesWithKeys = Object.entries(parsedByLocale)
+    .filter(([locale]) => locale !== 'en')
+    .filter(([, json]) => countLeafKeys(json?.translation ?? {}) > 0)
+    .map(([locale]) => locale)
+  if (localesWithKeys.length > 0) {
+    throw new Error(
+      `English locale has no translation keys while other locales contain keys: ${localesWithKeys.join(', ')}`
+    )
+  }
+}
+
 function isPluralVariantOfBaseKey(key, base) {
   const match = key.match(/^(.*)_(zero|one|two|few|many|other)$/)
   return (
@@ -257,6 +273,9 @@ async function main() {
         .sort((a, b) => b.score - a.score || a.locale.localeCompare(b.locale))[0]?.locale
 
   if (!baseLocale) throw new Error('No locale files found.')
+
+  // Never rewrite translated locale files from an empty English schema.
+  validateEnglishBase(parsedByLocale, baseLocale)
 
   const baseFile = `${baseLocale}.json`
   const baseJson = parsedByLocale[baseLocale]

@@ -549,6 +549,9 @@ func TestProduceUsageKeepsOutOfRangeFactsAsInvalidEnvelope(t *testing.T) {
 	require.NotNil(t, envelope)
 	assert.Equal(t, types.TaskUsageCompletenessInvalid, envelope.Completeness)
 	assert.Equal(t, types.TaskUsagePresenceInvalid, envelope.Presence)
+	require.NotNil(t, envelope.Usage)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	assert.EqualValues(t, 16_000, *envelope.Usage.OutputDurationMs)
 }
 
 func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
@@ -845,8 +848,9 @@ func TestAttachH3UsageEnvelopePreservesParsedResultOnBindingError(t *testing.T) 
 		Progress: "100%",
 		Url:      "https://cdn.example.com/video.mp4",
 		Usage: &types.TaskUsage{
-			Source:       types.TaskUsageSourceCallback,
-			Completeness: types.TaskUsageCompletenessComplete,
+			Source:           types.TaskUsageSourceCallback,
+			Completeness:     types.TaskUsageCompletenessComplete,
+			OutputDurationMs: ptrInt64ForTest(16_000),
 		},
 	}
 
@@ -858,6 +862,13 @@ func TestAttachH3UsageEnvelopePreservesParsedResultOnBindingError(t *testing.T) 
 	require.Equal(t, "https://cdn.example.com/video.mp4", parsed.Url)
 	require.NotNil(t, parsed.UsageEnvelope)
 	require.Equal(t, types.TaskUsageCompletenessInvalid, parsed.UsageEnvelope.Completeness)
+	require.NotNil(t, parsed.Usage)
+	require.NotNil(t, parsed.Usage.OutputDurationMs)
+	assert.EqualValues(t, 16_000, *parsed.Usage.OutputDurationMs)
+}
+
+func ptrInt64ForTest(value int64) *int64 {
+	return &value
 }
 
 func TestParseH3UsagePreservesFractionalVideoAndAudioSeconds(t *testing.T) {

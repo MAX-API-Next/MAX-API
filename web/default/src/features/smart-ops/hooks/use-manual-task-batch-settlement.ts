@@ -135,6 +135,9 @@ export function useManualTaskBatchSettlement(
           response.message || t('Failed to complete manual task billing.')
         )
       }
+      if (!response.data) {
+        throw new Error(t('Failed to complete manual task billing.'))
+      }
       return response.data
     },
     onSuccess: (data) => {
@@ -201,6 +204,9 @@ export function useManualTaskBatchSettlement(
         throw new Error(
           response.message || t('Failed to complete manual task billing.')
         )
+      }
+      if (!response.data) {
+        throw new Error(t('Failed to complete manual task billing.'))
       }
       return response.data
     },

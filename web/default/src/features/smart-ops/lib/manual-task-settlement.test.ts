@@ -19,7 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import type { TFunction } from 'i18next'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { getManualTaskSettlementSchema } from './manual-task-settlement'
+import {
+  getManualTaskSettlementBatchSchema,
+  getManualTaskSettlementSchema,
+} from './manual-task-settlement'
 
 const t = ((value: string) => value) as unknown as TFunction
 
@@ -88,5 +91,54 @@ describe('manual task settlement schema', () => {
     })
 
     assert.equal(result.success, true)
+  })
+
+  test('binds each batch item to its positional reservation cap', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    assert.equal(
+      batch.safeParse({
+        items: [{ actualQuota: '40' }, { actualQuota: '80' }],
+      }).success,
+      true
+    )
+    assert.equal(
+      batch.safeParse({
+        items: [{ actualQuota: '41' }, { actualQuota: '80' }],
+      }).success,
+      false
+    )
+  })
+
+  test('rejects batch arrays with incorrect cardinality', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    assert.equal(
+      batch.safeParse({ items: [{ actualQuota: '0' }] }).success,
+      false
+    )
+    assert.equal(
+      batch.safeParse({
+        items: [
+          { actualQuota: '0' },
+          { actualQuota: '0' },
+          { actualQuota: '0' },
+        ],
+      }).success,
+      false
+    )
+  })
+
+  test('reports an invalid second item at its indexed path', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    const result = batch.safeParse({
+      items: [{ actualQuota: '0' }, { actualQuota: '81' }],
+    })
+    assert.equal(result.success, false)
+    if (!result.success) {
+      assert.ok(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'items.1.actualQuota'
+        )
+      )
+    }
   })
 })

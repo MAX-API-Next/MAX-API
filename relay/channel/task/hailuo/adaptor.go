@@ -396,10 +396,12 @@ func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsage
 	}
 	// Preserve the provider response as an auditable invalid fact so polling
 	// can reach a terminal state while billing remains reconciliation-gated.
-	invalidUsage := &types.TaskUsage{
-		Source:       types.TaskUsageSourceProviderResponse,
-		Completeness: types.TaskUsageCompletenessInvalid,
+	invalidUsage := types.CloneTaskUsage(usage)
+	if invalidUsage == nil {
+		invalidUsage = &types.TaskUsage{}
 	}
+	invalidUsage.Source = ctx.Stage
+	invalidUsage.Completeness = types.TaskUsageCompletenessInvalid
 	invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
 		types.TaskUsageProducerKindGoAdapter,
 		a.UsageContract(),
@@ -427,10 +429,12 @@ func attachH3UsageEnvelope(result *relaycommon.TaskInfo, parseErr error) (*relay
 		// provider usage cannot be bound to the host contract. Mark the
 		// evidence invalid so the task remains reconciliation-gated instead
 		// of allowing an unverified usage value to settle billing.
-		invalidUsage := &types.TaskUsage{
-			Source:       types.TaskUsageSourceProviderResponse,
-			Completeness: types.TaskUsageCompletenessInvalid,
+		invalidUsage := types.CloneTaskUsage(result.Usage)
+		if invalidUsage == nil {
+			invalidUsage = &types.TaskUsage{}
 		}
+		invalidUsage.Source = types.TaskUsageSourceProviderResponse
+		invalidUsage.Completeness = types.TaskUsageCompletenessInvalid
 		invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
 			types.TaskUsageProducerKindGoAdapter,
 			taskusage.MiniMaxH3Contract(),
