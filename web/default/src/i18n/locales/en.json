@@ -10,7 +10,6 @@
     "Completed selected task settlements with zero final quota: {{count}}._one": "Completed selected task settlement with zero final quota: {{count}}.",
     "Completed selected task settlements with zero final quota: {{count}}._other": "Completed selected task settlements with zero final quota: {{count}}.",
     "Select either task settlements or ordinary alerts, not both.": "Select either task settlements or ordinary alerts, not both.",
-    "Some selected task settlements still require an exact quota.": "Some selected task settlements still require an exact quota.",
     "Some settlements remain for review: {{ids}}": "Some settlements remain for review: {{ids}}",
     "record still requires a manual financial review": "record still requires a manual financial review",
     "Some task settlements still need review.": "Some task settlements still need review.",
@@ -5695,9 +5694,6 @@
     "Enter exact quotas ({{count}})": "Enter exact quotas ({{count}})",
     "Enter exact quotas ({{count}})_one": "Enter exact quota ({{count}})",
     "Enter exact quotas ({{count}})_other": "Enter exact quotas ({{count}})",
-    "Manually settle selected task quotas ({{count}})": "Manually settle selected task quotas ({{count}})",
-    "Manually settle selected task quotas ({{count}})_one": "Manually settle selected task quota ({{count}})",
-    "Manually settle selected task quotas ({{count}})_other": "Manually settle selected task quotas ({{count}})",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.",
     "Apply exact settlements": "Apply exact settlements",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1)."

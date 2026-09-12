@@ -10,7 +10,6 @@
     "Completed selected task settlements with zero final quota: {{count}}._one": "Завершён расчёт выбранной задачи с итоговой квотой 0: {{count}}.",
     "Completed selected task settlements with zero final quota: {{count}}._other": "Завершены расчёты выбранных задач с итоговой квотой 0: {{count}}.",
     "Select either task settlements or ordinary alerts, not both.": "Выберите только расчеты задач или обычные оповещения, но не оба типа.",
-    "Some selected task settlements still require an exact quota.": "Для некоторых выбранных расчетов задач по-прежнему требуется точная квота.",
     "Some settlements remain for review: {{ids}}": "Некоторые расчеты требуют проверки: {{ids}}",
     "record still requires a manual financial review": "Для записи по-прежнему требуется ручная финансовая проверка",
     "Some task settlements still need review.": "Некоторые расчеты задач все еще требуют проверки.",
@@ -5695,11 +5694,16 @@
     "Enter exact quotas ({{count}})": "Ввести точные квоты ({{count}})",
     "Enter exact quotas ({{count}})_one": "Ввести точную квоту ({{count}})",
     "Enter exact quotas ({{count}})_other": "Ввести точные квоты ({{count}})",
-    "Manually settle selected task quotas ({{count}})": "Вручную завершить расчёты по квотам выбранных задач ({{count}})",
-    "Manually settle selected task quotas ({{count}})_one": "Вручную завершить расчёт по квоте выбранной задачи ({{count}})",
-    "Manually settle selected task quotas ({{count}})_other": "Вручную завершить расчёты по квотам выбранных задач ({{count}})",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Введите точную итоговую квоту для каждой выбранной задачи. Каждое значение проверяется относительно собственного резерва задачи.",
     "Apply exact settlements": "Применить точные расчёты",
-    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Допустимый диапазон: от 0 до {{quota}} ({{quotaPerUnit}} ед. квоты = $1)."
+    "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Допустимый диапазон: от 0 до {{quota}} ({{quotaPerUnit}} ед. квоты = $1).",
+    "Completed selected task settlements with zero final quota: {{count}}._few": "Завершены расчёты выбранных задач с итоговой квотой 0: {{count}}.",
+    "Completed selected task settlements with zero final quota: {{count}}._many": "Завершены расчёты выбранных задач с итоговой квотой 0: {{count}}.",
+    "Confirm zero-quota settlements ({{count}})_few": "Подтвердить расчёты с нулевой квотой ({{count}})",
+    "Confirm zero-quota settlements ({{count}})_many": "Подтвердить расчёты с нулевой квотой ({{count}})",
+    "This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result._few": "Будут выполнены расчёты {{displayCount}} выбранных задач MiniMax-H3 с явной итоговой квотой 0 и возвращён неиспользованный резерв. Продолжайте только после проверки результата провайдера.",
+    "This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result._many": "Будут выполнены расчёты {{displayCount}} выбранных задач MiniMax-H3 с явной итоговой квотой 0 и возвращён неиспользованный резерв. Продолжайте только после проверки результата провайдера.",
+    "Enter exact quotas ({{count}})_few": "Ввести точные квоты ({{count}})",
+    "Enter exact quotas ({{count}})_many": "Ввести точные квоты ({{count}})"
   }
 }

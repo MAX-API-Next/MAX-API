@@ -10,7 +10,6 @@
     "Completed selected task settlements with zero final quota: {{count}}._one": "Đã hoàn tất quyết toán tác vụ đã chọn với hạn mức cuối bằng 0: {{count}} tác vụ.",
     "Completed selected task settlements with zero final quota: {{count}}._other": "Đã hoàn tất quyết toán các tác vụ đã chọn với hạn mức cuối bằng 0: {{count}} tác vụ.",
     "Select either task settlements or ordinary alerts, not both.": "Chỉ chọn quyết toán tác vụ hoặc cảnh báo thông thường, không chọn cả hai.",
-    "Some selected task settlements still require an exact quota.": "Một số quyết toán tác vụ đã chọn vẫn cần hạn mức chính xác.",
     "Some settlements remain for review: {{ids}}": "Một số quyết toán vẫn cần xem xét: {{ids}}",
     "record still requires a manual financial review": "Bản ghi vẫn cần được xem xét tài chính thủ công",
     "Some task settlements still need review.": "Một số quyết toán tác vụ vẫn cần xem xét.",
@@ -5695,9 +5694,6 @@
     "Enter exact quotas ({{count}})": "Nhập các hạn mức chính xác ({{count}})",
     "Enter exact quotas ({{count}})_one": "Nhập hạn mức chính xác ({{count}} tác vụ)",
     "Enter exact quotas ({{count}})_other": "Nhập các hạn mức chính xác ({{count}} tác vụ)",
-    "Manually settle selected task quotas ({{count}})": "Quyết toán thủ công hạn mức cho các tác vụ đã chọn ({{count}})",
-    "Manually settle selected task quotas ({{count}})_one": "Quyết toán thủ công hạn mức cho tác vụ đã chọn ({{count}})",
-    "Manually settle selected task quotas ({{count}})_other": "Quyết toán thủ công hạn mức cho các tác vụ đã chọn ({{count}})",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "Nhập hạn mức cuối chính xác cho từng tác vụ đã chọn. Mỗi giá trị sẽ được kiểm tra theo hạn mức đã giữ riêng của tác vụ đó.",
     "Apply exact settlements": "Áp dụng các quyết toán chính xác",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "Phạm vi cho phép: từ 0 đến {{quota}} ({{quotaPerUnit}} đơn vị hạn mức = $1)."

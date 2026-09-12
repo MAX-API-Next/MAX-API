@@ -10,7 +10,6 @@
     "Completed selected task settlements with zero final quota: {{count}}._one": "選択したタスク精算を最終クォータ 0 で完了しました：{{count}} 件。",
     "Completed selected task settlements with zero final quota: {{count}}._other": "選択したタスク精算を最終クォータ 0 で完了しました：{{count}} 件。",
     "Select either task settlements or ordinary alerts, not both.": "タスク精算または通常のアラートのどちらか一方だけを選択してください。",
-    "Some selected task settlements still require an exact quota.": "選択したタスク精算の一部には正確なクォータが必要です。",
     "Some settlements remain for review: {{ids}}": "確認が必要な精算が残っています：{{ids}}",
     "record still requires a manual financial review": "このレコードには引き続き手動の財務確認が必要です",
     "Some task settlements still need review.": "一部のタスク精算は引き続き確認が必要です。",
@@ -5695,9 +5694,6 @@
     "Enter exact quotas ({{count}})": "正確なクォータを入力 ({{count}} 件)",
     "Enter exact quotas ({{count}})_one": "正確なクォータを入力（{{count}} 件）",
     "Enter exact quotas ({{count}})_other": "正確なクォータを入力（{{count}} 件）",
-    "Manually settle selected task quotas ({{count}})": "選択したタスクのクォータを手動精算 ({{count}} 件)",
-    "Manually settle selected task quotas ({{count}})_one": "選択したタスクのクォータを手動精算（{{count}} 件）",
-    "Manually settle selected task quotas ({{count}})_other": "選択したタスクのクォータを手動精算（{{count}} 件）",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "選択した各タスクの正確な最終クォータを入力してください。各値はタスク固有の予約クォータと照合されます。",
     "Apply exact settlements": "正確な精算を適用",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "許可範囲：0 ～ {{quota}}（{{quotaPerUnit}} クォータ = $1）。"

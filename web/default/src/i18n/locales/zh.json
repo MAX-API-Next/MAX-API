@@ -10,7 +10,6 @@
     "Completed selected task settlements with zero final quota: {{count}}._one": "已按最终额度 0 完成所选任务结算：{{count}} 个。",
     "Completed selected task settlements with zero final quota: {{count}}._other": "已按最终额度 0 完成所选任务结算：{{count}} 个。",
     "Select either task settlements or ordinary alerts, not both.": "请仅选择任务结算告警或普通告警，不能混合选择。",
-    "Some selected task settlements still require an exact quota.": "所选任务结算中仍有记录需要精确额度。",
     "Some settlements remain for review: {{ids}}": "仍有以下结算需要复核：{{ids}}",
     "record still requires a manual financial review": "该记录仍需要人工财务复核",
     "Some task settlements still need review.": "部分任务结算仍需复核。",
@@ -5695,9 +5694,6 @@
     "Enter exact quotas ({{count}})": "输入精确额度（{{count}} 个）",
     "Enter exact quotas ({{count}})_one": "输入精确额度（{{count}} 个）",
     "Enter exact quotas ({{count}})_other": "输入精确额度（{{count}} 个）",
-    "Manually settle selected task quotas ({{count}})": "手动结算所选任务额度（{{count}} 个）",
-    "Manually settle selected task quotas ({{count}})_one": "手动结算所选任务额度（{{count}} 个）",
-    "Manually settle selected task quotas ({{count}})_other": "手动结算所选任务额度（{{count}} 个）",
     "Enter an exact final quota for each selected task. Each value is checked against its own reserved quota.": "为每个所选任务输入精确最终额度。每个数值都会按照该任务自身的预留额度校验。",
     "Apply exact settlements": "应用精确结算",
     "Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).": "允许范围：0 至 {{quota}}（{{quotaPerUnit}} 额度 = $1）。"

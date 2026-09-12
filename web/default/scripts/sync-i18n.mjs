@@ -138,6 +138,14 @@ function countLeafKeys(obj) {
   return count
 }
 
+function isPluralVariantOfBaseKey(key, base) {
+  const match = key.match(/^(.*)_(zero|one|two|few|many|other)$/)
+  return (
+    match !== null &&
+    Object.prototype.hasOwnProperty.call(base, match[1])
+  )
+}
+
 function reorderLikeBase(base, target, fill, extras, missing, currentPath = []) {
   // If base is an object, we keep base's key order and recurse.
   if (isPlainObject(base)) {
@@ -157,8 +165,16 @@ function reorderLikeBase(base, target, fill, extras, missing, currentPath = []) 
 
     for (const key of Object.keys(t)) {
       if (!Object.prototype.hasOwnProperty.call(base, key)) {
-        const nextPath = [...currentPath, key].join('.')
-        extras[nextPath] = t[key]
+        if (isPluralVariantOfBaseKey(key, base)) {
+          // Plural categories can differ by locale (for example, Russian
+          // needs _few and _many while English does not). Keep those runtime
+          // variants beside their existing base key instead of classifying
+          // them as unrelated extras.
+          out[key] = t[key]
+        } else {
+          const nextPath = [...currentPath, key].join('.')
+          extras[nextPath] = t[key]
+        }
       }
     }
 
