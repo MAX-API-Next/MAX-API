@@ -106,7 +106,7 @@ function getBatchReviewActionKey(
     return 'Confirm zero-quota settlements ({{count}})'
   }
   if (kind === 'exact_quota') {
-    return 'Manually settle selected task quotas ({{count}})'
+    return 'Enter exact quotas ({{count}})'
   }
   return 'Review and close selected ({{count}})'
 }
@@ -601,7 +601,7 @@ export function BillingSettlementEvidence(
                       manualTaskBatchCompletionMutation.isPending
                     }
                   >
-                    {t('Manually settle selected task quotas ({{count}})', {
+                    {t('Enter exact quotas ({{count}})', {
                       count: formatCount(
                         activeSelectedTargets.length,
                         i18n.language

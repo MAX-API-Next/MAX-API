@@ -679,7 +679,7 @@ describe('SmartOps active alerts', () => {
       )
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (1)',
+          name: 'Enter exact quotas (1)',
         })
       )
       const input = await waitFor(() => {
@@ -1154,7 +1154,7 @@ describe('SmartOps active alerts', () => {
       )
       assert.ok(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (2)',
+          name: 'Enter exact quotas (2)',
         })
       )
       const zeroBatchButton = within(view.container).getByRole('button', {
@@ -1363,7 +1363,7 @@ describe('SmartOps active alerts', () => {
       await view.click(checkboxes[1])
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (2)',
+          name: 'Enter exact quotas (2)',
         })
       )
 
