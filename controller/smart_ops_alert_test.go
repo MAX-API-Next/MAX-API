@@ -144,6 +144,7 @@ func TestCompleteManualTaskBillingSettlementsZeroBlocksBatchWithIneligibleTarget
 	assert.Contains(t, recorder.Body.String(), `"completed_count":0`)
 	assert.Contains(t, recorder.Body.String(), `"failed_count":1`)
 	assert.Contains(t, recorder.Body.String(), fmt.Sprintf(`"settlement_id":%d`, ordinarySettlement.ID))
+	assert.Contains(t, recorder.Body.String(), `"code":"minimax_h3_required"`)
 	var settled model.BillingSettlement
 	require.NoError(t, db.First(&settled, h3Settlement.ID).Error)
 	assert.Equal(t, model.BillingSettlementStatusManual, settled.Status)

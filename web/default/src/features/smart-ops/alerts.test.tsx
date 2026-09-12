@@ -167,6 +167,9 @@ describe('SmartOps active alerts', () => {
         })
         assert.ok(message.includes(String(count)))
         assert.doesNotMatch(message, /task\(s\)/)
+        if (lng === 'ru' && count === 2) {
+          assert.match(message, /выбранных задач MiniMax-H3/)
+        }
       }
     }
   })
@@ -236,9 +239,17 @@ describe('SmartOps active alerts', () => {
 
   test('passes per-task exact quotas, including an explicit zero, to the batch endpoint', async (): Promise<void> => {
     const originalPost = api.post
-    const writes: Array<{ url: string; data: unknown }> = []
-    api.post = (async (url: string, data: unknown): Promise<unknown> => {
-      writes.push({ url: String(url), data })
+    const writes: Array<{
+      url: string
+      data: unknown
+      config: unknown
+    }> = []
+    api.post = (async (
+      url: string,
+      data: unknown,
+      config: unknown
+    ): Promise<unknown> => {
+      writes.push({ url: String(url), data, config })
       return { data: { success: true, data: { completed_count: 2 } } }
     }) as typeof api.post
 
@@ -260,6 +271,7 @@ describe('SmartOps active alerts', () => {
               { id: 94, revision: 7, actual_quota: 40 },
             ],
           },
+          config: { skipBusinessError: true, skipErrorHandler: true },
         },
       ])
     } finally {
@@ -1212,7 +1224,22 @@ describe('SmartOps active alerts', () => {
       // completion remains separate from ordinary batch review.
       await view.click(
         within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 93',
+        })
+      )
+      await view.click(
+        within(view.container).getByRole('checkbox', {
           name: 'Select billing reconciliation alert 95',
+        })
+      )
+      const mixedSelectionButton = within(view.container).getByRole('button', {
+        name: 'Select either task settlements or ordinary alerts, not both.',
+      }) as HTMLButtonElement
+      assert.equal(mixedSelectionButton.disabled, true)
+      assert.equal(writes.length, 2)
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 93',
         })
       )
       await view.click(
@@ -1267,48 +1294,60 @@ describe('SmartOps active alerts', () => {
     const originalGet = api.get
     const originalPost = api.post
     const writes: Array<{ url: string; data: unknown }> = []
-    const taskItems = [
-      {
-        id: 101,
-        revision: 2,
-        operation_key: 'task:7101:finalize',
-        task_id: 7101,
-        task_quota: 100,
-        zero_quota_eligible: true,
-      },
-      {
-        id: 102,
-        revision: 3,
-        operation_key: 'task:7102:finalize',
-        task_id: 7102,
-        task_quota: 80,
-        zero_quota_eligible: true,
-      },
-    ].map((item) => ({
-      ...item,
-      status: 'manual' as const,
-      source: 'wallet' as const,
-      user_id: 53,
-      subscription_id: 0,
-      token_id: 54,
-      task_quota_target: item.task_quota,
-      requires_manual_completion: true,
-      funding_delta: 0,
-      applied_funding_delta: 0,
-      token_delta: 0,
-      applied_token_delta: 0,
-      attempts: 0,
-      last_error: 'provider usage needs verification',
-      next_attempt: 0,
-      created_at: 1786032545,
-      updated_at: 1786032545,
-      reconciliation_reviewed_at: 0,
-      reconciliation_reviewed_by: 0,
-      reconciliation_review_note: '',
-      user_blocking_override: null,
-      record_blocks_user: false,
-      blocks_user: false,
-    }))
+    type TaskItemSeed = {
+      id: number
+      revision: number
+      operation_key: string
+      task_id: number
+      task_quota: number
+      zero_quota_eligible: boolean
+    }
+    const taskItems = (
+      [
+        {
+          id: 101,
+          revision: 2,
+          operation_key: 'task:7101:finalize',
+          task_id: 7101,
+          task_quota: 100,
+          zero_quota_eligible: true,
+        },
+        {
+          id: 102,
+          revision: 3,
+          operation_key: 'task:7102:finalize',
+          task_id: 7102,
+          task_quota: 80,
+          zero_quota_eligible: true,
+        },
+      ] satisfies TaskItemSeed[]
+    ).map(
+      (item: TaskItemSeed): BillingSettlementReconciliationItem => ({
+        ...item,
+        status: 'manual' as const,
+        source: 'wallet' as const,
+        user_id: 53,
+        subscription_id: 0,
+        token_id: 54,
+        task_quota_target: item.task_quota,
+        requires_manual_completion: true,
+        funding_delta: 0,
+        applied_funding_delta: 0,
+        token_delta: 0,
+        applied_token_delta: 0,
+        attempts: 0,
+        last_error: 'provider usage needs verification',
+        next_attempt: 0,
+        created_at: 1786032545,
+        updated_at: 1786032545,
+        reconciliation_reviewed_at: 0,
+        reconciliation_reviewed_by: 0,
+        reconciliation_review_note: '',
+        user_blocking_override: null,
+        record_blocks_user: false,
+        blocks_user: false,
+      })
+    )
     api.get = (async (url: string): Promise<unknown> => ({
       data:
         url === '/api/smart-ops/billing-settlements'
@@ -1554,11 +1593,26 @@ describe('SmartOps active alerts', () => {
           })
         )
       })
-      await view.click(
-        within(view.container).getByRole('button', {
-          name: 'Confirm zero-quota settlements (1)',
-        })
+      const exactQuotaBatchButton = within(view.container).getByRole('button', {
+        name: 'Enter exact quotas (1)',
+      })
+      const zeroQuotaBatchButton = within(view.container).getByRole('button', {
+        name: 'Confirm zero-quota settlements (1)',
+      })
+      const actionButtons = Array.from(
+        view.container.querySelectorAll('button')
+      ).filter((button) =>
+        [exactQuotaBatchButton, zeroQuotaBatchButton].includes(button)
       )
+      assert.equal(actionButtons[0], exactQuotaBatchButton)
+      await view.click(exactQuotaBatchButton)
+      await waitFor(() => {
+        assert.ok(document.getElementById('manual-task-actual-quota-111'))
+      })
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      await view.click(zeroQuotaBatchButton)
       await waitFor(() => {
         assert.ok(
           within(document.body).getByRole('button', {

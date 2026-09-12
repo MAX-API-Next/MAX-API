@@ -102,10 +102,10 @@ function formatBatchFailureMessage(
 function getBatchReviewActionKey(
   kind: BillingSettlementReviewSelection
 ): string {
-  if (kind === 'zero_quota') {
-    return 'Confirm zero-quota settlements ({{count}})'
+  if (kind === 'mixed') {
+    return 'Select either task settlements or ordinary alerts, not both.'
   }
-  if (kind === 'exact_quota') {
+  if (kind === 'zero_quota' || kind === 'exact_quota') {
     return 'Enter exact quotas ({{count}})'
   }
   return 'Review and close selected ({{count}})'
@@ -562,9 +562,16 @@ export function BillingSettlementEvidence(
               <Button
                 type='button'
                 size='sm'
-                onClick={() => reviewTargets(activeSelectedTargets)}
+                onClick={() => {
+                  if (selectedReviewKind === 'zero_quota') {
+                    setManualTaskBatchItems(selectedManualItems)
+                    return
+                  }
+                  reviewTargets(activeSelectedTargets)
+                }}
                 disabled={
                   activeSelectedTargets.length === 0 ||
+                  selectedReviewKind === 'mixed' ||
                   reviewMutation.isPending ||
                   zeroSettlementMutation.isPending ||
                   manualTaskCompletionMutation.isPending ||
@@ -593,7 +600,7 @@ export function BillingSettlementEvidence(
                     type='button'
                     variant='outline'
                     size='sm'
-                    onClick={() => setManualTaskBatchItems(selectedManualItems)}
+                    onClick={() => reviewTargets(activeSelectedTargets)}
                     disabled={
                       reviewMutation.isPending ||
                       zeroSettlementMutation.isPending ||
@@ -601,7 +608,7 @@ export function BillingSettlementEvidence(
                       manualTaskBatchCompletionMutation.isPending
                     }
                   >
-                    {t('Enter exact quotas ({{count}})', {
+                    {t('Confirm zero-quota settlements ({{count}})', {
                       count: formatCount(
                         activeSelectedTargets.length,
                         i18n.language

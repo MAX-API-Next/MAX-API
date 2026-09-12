@@ -59,7 +59,12 @@ type usageFactPollingResponseAdaptor struct {
 	producerKind string
 }
 
-type configuredWrapperPollingAdaptor struct{}
+type configuredWrapperPollingAdaptor struct {
+	envelope                 *types.TaskUsageEnvelope
+	adjustedPromptTokens     int
+	adjustedCompletionTokens int
+	adjustedTotalTokens      int
+}
 
 func (a *configuredWrapperPollingAdaptor) Init(*relaycommon.RelayInfo) {}
 
@@ -75,7 +80,8 @@ func (a *configuredWrapperPollingAdaptor) FetchTask(string, string, map[string]a
 					"id":"439499419230570",
 					"object":"video.generation",
 					"status":"completed",
-					"data":[{"url":"https://cdn.example.com/polled.mp4"}]
+					"data":[{"url":"https://cdn.example.com/polled.mp4"}],
+					"usage":{"prompt_tokens":8,"completion_tokens":12,"total_tokens":20}
 				}
 			}
 		}`)),
@@ -86,8 +92,23 @@ func (a *configuredWrapperPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.
 	return nil, errors.New("configured parser should handle wrapper response")
 }
 
-func (a *configuredWrapperPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+func (a *configuredWrapperPollingAdaptor) AdjustBillingOnComplete(_ *model.Task, taskResult *relaycommon.TaskInfo) int {
+	a.adjustedPromptTokens = taskResult.PromptTokens
+	a.adjustedCompletionTokens = taskResult.CompletionTokens
+	a.adjustedTotalTokens = taskResult.TotalTokens
 	return 0
+}
+
+func (a *configuredWrapperPollingAdaptor) UsageContract() types.TaskUsageContract {
+	return taskusage.DoubaoVideoContract()
+}
+
+func (a *configuredWrapperPollingAdaptor) UsageProducerKind() string {
+	return types.TaskUsageProducerKindGoAdapter
+}
+
+func (a *configuredWrapperPollingAdaptor) ProduceUsage(types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	return a.envelope, nil
 }
 
 func (a *usagePollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -248,6 +269,20 @@ func TestApplyTaskUsageFactsAcceptsTrustedTaskPluginEnvelope(t *testing.T) {
 func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {
 	truncate(t)
 	baseURL := "https://upstream.example.com"
+	completionTokens := int64(12)
+	totalTokens := int64(20)
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.DoubaoVideoContract(),
+		types.TaskUsageSourceProviderResponse,
+		&types.TaskUsage{
+			CompletionTokens: &completionTokens,
+			TotalTokens:      &totalTokens,
+			Source:           types.TaskUsageSourceProviderResponse,
+			Completeness:     types.TaskUsageCompletenessComplete,
+		},
+	)
+	require.NoError(t, err)
 	task := &model.Task{
 		TaskID:      "task_wrapped_polling",
 		Status:      model.TaskStatusInProgress,
@@ -266,13 +301,17 @@ func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *te
 	task.ChannelId = channel.Id
 	require.NoError(t, model.DB.Create(channel).Error)
 
-	err := updateVideoSingleTask(context.Background(), &configuredWrapperPollingAdaptor{}, channel, task.TaskID, map[string]*model.Task{task.TaskID: task})
+	adaptor := &configuredWrapperPollingAdaptor{envelope: envelope}
+	err = updateVideoSingleTask(context.Background(), adaptor, channel, task.TaskID, map[string]*model.Task{task.TaskID: task})
 
 	require.NoError(t, err)
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
 	assert.Equal(t, "https://cdn.example.com/polled.mp4", reloaded.PrivateData.ResultURL)
+	assert.Equal(t, 8, adaptor.adjustedPromptTokens)
+	assert.Equal(t, 12, adaptor.adjustedCompletionTokens)
+	assert.Equal(t, 20, adaptor.adjustedTotalTokens)
 }
 
 func TestAppliedTaskRecoveryPreservesSnapshotOnCASLoss(t *testing.T) {

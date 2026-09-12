@@ -288,6 +288,7 @@ func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	progress := NormalizeConfiguredProgress(progressRaw, status)
 	completionTokens := int(gjson.GetBytes(respBody, "usage.completion_tokens").Int())
 	totalTokens := int(gjson.GetBytes(respBody, "usage.total_tokens").Int())
+	promptTokens := int(gjson.GetBytes(respBody, "usage.prompt_tokens").Int())
 
 	return &relaycommon.TaskInfo{
 		Code:             0,
@@ -296,6 +297,7 @@ func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 		Progress:         progress,
 		Url:              resultURL,
 		Reason:           reason,
+		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		TotalTokens:      totalTokens,
 	}, true, nil

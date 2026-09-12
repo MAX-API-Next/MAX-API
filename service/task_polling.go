@@ -879,6 +879,9 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 		if envelope.Stage != types.TaskUsageSourceProviderResponse {
 			return fmt.Errorf("task usage envelope stage %q is not supported for polling", envelope.Stage)
 		}
+		if err := applyLegacyTaskUsageFields(taskResult, envelope); err != nil {
+			return err
+		}
 		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)
 		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
 		return nil
@@ -893,6 +896,46 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 	}
 	if usage != nil {
 		taskResult.Usage = usage
+	}
+	return nil
+}
+
+// applyLegacyTaskUsageFields keeps the historical token fields synchronized
+// with validated provider usage. Only complete or partial envelopes are
+// eligible; invalid and missing usage must never become billing inputs.
+func applyLegacyTaskUsageFields(taskResult *relaycommon.TaskInfo, envelope *types.TaskUsageEnvelope) error {
+	if taskResult == nil || envelope == nil || envelope.Usage == nil {
+		return nil
+	}
+	if envelope.Completeness != types.TaskUsageCompletenessComplete &&
+		envelope.Completeness != types.TaskUsageCompletenessPartial {
+		return nil
+	}
+	usage := envelope.Usage
+	if usage.CompletionTokens != nil {
+		value := int(*usage.CompletionTokens)
+		if int64(value) != *usage.CompletionTokens {
+			return fmt.Errorf("completion token usage exceeds platform integer range")
+		}
+		taskResult.CompletionTokens = value
+	}
+	if usage.TotalTokens != nil {
+		value := int(*usage.TotalTokens)
+		if int64(value) != *usage.TotalTokens {
+			return fmt.Errorf("total token usage exceeds platform integer range")
+		}
+		taskResult.TotalTokens = value
+	}
+	if usage.CompletionTokens != nil && usage.TotalTokens != nil {
+		promptTokens := *usage.TotalTokens - *usage.CompletionTokens
+		if promptTokens < 0 {
+			return fmt.Errorf("total token usage cannot be less than completion token usage")
+		}
+		value := int(promptTokens)
+		if int64(value) != promptTokens {
+			return fmt.Errorf("prompt token usage exceeds platform integer range")
+		}
+		taskResult.PromptTokens = value
 	}
 	return nil
 }
