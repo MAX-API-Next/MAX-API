@@ -45,6 +45,14 @@ var (
 	ErrSubscriptionRefundClamped           = errors.New("subscription refund was clamped")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
+
+	// SQLite permits only one writer and does not support the row-level lock
+	// clause used by the other supported databases. Serializing the complete
+	// settlement lifecycle prevents two local connections from both reading a
+	// pending record and then racing while upgrading their deferred transaction
+	// to a write transaction. The operation key remains the durable idempotency
+	// boundary for retries from other processes or after a restart.
+	billingSettlementSQLiteWriteMu sync.Mutex
 )
 
 type permanentBillingSettlementError struct {
@@ -1073,6 +1081,10 @@ func GetBillingSettlementStatus(operationKey string) (status string, found bool,
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
+	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 
 	record, alreadyApplied, err := ensureBillingSettlementRecord(input)
