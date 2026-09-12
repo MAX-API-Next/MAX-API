@@ -560,7 +560,8 @@ func TestParseConfiguredTaskResultSupportsOfficialMiniMaxTaskEnvelope(t *testing
 			"id": "424010985738629",
 			"model": "MiniMax-H3",
 			"status": "succeeded",
-			"content": {"url": "https://cdn.example.com/h3.mp4"}
+			"content": {"url": "https://cdn.example.com/h3.mp4"},
+			"usage": {"prompt_tokens": 1234}
 		}
 	}`)
 
@@ -572,6 +573,27 @@ func TestParseConfiguredTaskResultSupportsOfficialMiniMaxTaskEnvelope(t *testing
 	assert.Equal(t, "424010985738629", result.TaskID)
 	assert.Equal(t, string(model.TaskStatusSuccess), result.Status)
 	assert.Equal(t, "https://cdn.example.com/h3.mp4", result.Url)
+	assert.Equal(t, 1234, result.PromptTokens)
+}
+
+func TestParseConfiguredTaskResultPreservesOfficialPromptTokenZero(t *testing.T) {
+	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
+	body := []byte(`{
+		"task": {
+			"id": "424010985738629",
+			"model": "MiniMax-H3",
+			"status": "succeeded",
+			"content": {"url": "https://cdn.example.com/h3.mp4"},
+			"usage": {"prompt_tokens": 0}
+		}
+	}`)
+
+	result, parsed, err := ParseConfiguredTaskResult(body, settings)
+
+	require.NoError(t, err)
+	require.True(t, parsed)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.PromptTokens)
 }
 
 func TestParseConfiguredTaskResultKeepsOfficialMiniMaxTaskPendingWithoutURL(t *testing.T) {

@@ -288,7 +288,11 @@ func parseConfiguredTaskResult(respBody []byte, settings dto.ChannelOtherSetting
 	progress := NormalizeConfiguredProgress(progressRaw, status)
 	completionTokens := int(gjson.GetBytes(respBody, "usage.completion_tokens").Int())
 	totalTokens := int(gjson.GetBytes(respBody, "usage.total_tokens").Int())
-	promptTokens := int(gjson.GetBytes(respBody, "usage.prompt_tokens").Int())
+	promptTokenResult := gjson.GetBytes(respBody, "usage.prompt_tokens")
+	if !promptTokenResult.Exists() && officialTaskEnvelope {
+		promptTokenResult = gjson.GetBytes(respBody, "task.usage.prompt_tokens")
+	}
+	promptTokens := int(promptTokenResult.Int())
 
 	return &relaycommon.TaskInfo{
 		Code:             0,

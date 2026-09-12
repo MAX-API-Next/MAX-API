@@ -150,7 +150,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
 describe('SmartOps active alerts', () => {
   test('keeps zero-quota confirmation wording pluralized in every locale', async (): Promise<void> => {
     const key =
-      'This will settle {{count}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.'
+      'This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.'
     const locales = { en, fr, ja, ru, vi, zh }
     for (const [lng, resource] of Object.entries(locales)) {
       const instance = i18next.createInstance()
@@ -160,7 +160,18 @@ describe('SmartOps active alerts', () => {
         resources: { [lng]: resource },
         interpolation: { escapeValue: false },
       })
-      for (const count of [0, 1, 2]) {
+      const zeroMessage = instance.t(key, {
+        count: 0,
+        displayCount: '0',
+      })
+      const distinctMessage = instance.t(key, {
+        count: 3,
+        displayCount: '3',
+      })
+      assert.notEqual(zeroMessage, distinctMessage)
+      assert.ok(zeroMessage.includes('0'))
+      assert.ok(distinctMessage.includes('3'))
+      for (const count of [1, 2]) {
         const message = instance.t(key, {
           count,
           displayCount: String(count),
@@ -691,7 +702,7 @@ describe('SmartOps active alerts', () => {
       )
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Enter exact quotas (1)',
+          name: 'Manually settle selected task quotas (1)',
         })
       )
       const input = await waitFor(() => {
@@ -1166,7 +1177,7 @@ describe('SmartOps active alerts', () => {
       )
       assert.ok(
         within(view.container).getByRole('button', {
-          name: 'Enter exact quotas (2)',
+          name: 'Manually settle selected task quotas (2)',
         })
       )
       const zeroBatchButton = within(view.container).getByRole('button', {
@@ -1402,7 +1413,7 @@ describe('SmartOps active alerts', () => {
       await view.click(checkboxes[1])
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Enter exact quotas (2)',
+          name: 'Manually settle selected task quotas (2)',
         })
       )
 
@@ -1594,7 +1605,7 @@ describe('SmartOps active alerts', () => {
         )
       })
       const exactQuotaBatchButton = within(view.container).getByRole('button', {
-        name: 'Enter exact quotas (1)',
+        name: 'Manually settle selected task quotas (1)',
       })
       const zeroQuotaBatchButton = within(view.container).getByRole('button', {
         name: 'Confirm zero-quota settlements (1)',

@@ -534,6 +534,23 @@ func TestProduceUsageReturnsAuditableH3Envelope(t *testing.T) {
 	require.EqualValues(t, 1, *envelope.Usage.InputImageCount)
 }
 
+func TestProduceUsageKeepsOutOfRangeFactsAsInvalidEnvelope(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"id":"439499419230570",
+			"object":"video.generation",
+			"status":"completed",
+			"usage":{"input_seconds":0,"output_seconds":16,"input_image_count":0,"total_seconds":16}
+		}`),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, envelope)
+	assert.Equal(t, types.TaskUsageCompletenessInvalid, envelope.Completeness)
+	assert.Equal(t, types.TaskUsagePresenceInvalid, envelope.Presence)
+}
+
 func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
 	for _, value := range []string{`null`, `[]`, `"none"`, `123`} {
 		t.Run(value, func(t *testing.T) {

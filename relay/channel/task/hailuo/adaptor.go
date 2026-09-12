@@ -385,7 +385,31 @@ func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsage
 	if err != nil {
 		return nil, err
 	}
-	return taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, a.UsageContract(), ctx.Stage, usage)
+	envelope, buildErr := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		a.UsageContract(),
+		ctx.Stage,
+		usage,
+	)
+	if buildErr == nil {
+		return envelope, nil
+	}
+	// Preserve the provider response as an auditable invalid fact so polling
+	// can reach a terminal state while billing remains reconciliation-gated.
+	invalidUsage := &types.TaskUsage{
+		Source:       types.TaskUsageSourceProviderResponse,
+		Completeness: types.TaskUsageCompletenessInvalid,
+	}
+	invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		a.UsageContract(),
+		ctx.Stage,
+		invalidUsage,
+	)
+	if fallbackErr != nil {
+		return nil, buildErr
+	}
+	return invalidEnvelope, nil
 }
 
 func attachH3UsageEnvelope(result *relaycommon.TaskInfo, parseErr error) (*relaycommon.TaskInfo, error) {

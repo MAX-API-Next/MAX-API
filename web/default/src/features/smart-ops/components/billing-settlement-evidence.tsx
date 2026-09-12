@@ -106,7 +106,7 @@ function getBatchReviewActionKey(
     return 'Select either task settlements or ordinary alerts, not both.'
   }
   if (kind === 'zero_quota' || kind === 'exact_quota') {
-    return 'Enter exact quotas ({{count}})'
+    return 'Manually settle selected task quotas ({{count}})'
   }
   return 'Review and close selected ({{count}})'
 }
@@ -690,7 +690,7 @@ export function BillingSettlementEvidence(
         }}
         title={t('Confirm zero-quota settlement')}
         desc={t(
-          'This will settle {{count}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.',
+          'This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.',
           {
             count: zeroSettlementTargets.length,
             displayCount: formatCount(
