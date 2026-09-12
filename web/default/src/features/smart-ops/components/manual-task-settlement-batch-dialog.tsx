@@ -71,7 +71,6 @@ export function ManualTaskSettlementBatchDialog(
       >
   )
   const inputRefs = useRef<Record<number, HTMLInputElement | null>>({})
-  const [submitted, setSubmitted] = useState(false)
 
   const schemas = useMemo(() => {
     const next = new Map<
@@ -110,8 +109,7 @@ export function ManualTaskSettlementBatchDialog(
     [getValidationErrors, values]
   )
 
-  const showError = (id: number): boolean =>
-    (submitted || (values[id] ?? '') !== '') && Boolean(errors[id])
+  const showError = (id: number): boolean => Boolean(errors[id])
 
   const canSubmit =
     props.items.length > 0 &&
@@ -121,7 +119,6 @@ export function ManualTaskSettlementBatchDialog(
     !Object.values(errors).some(Boolean)
 
   const handleSubmit = (): void => {
-    setSubmitted(true)
     if (!canSubmit) return
     const submittedValues = Object.fromEntries(
       props.items.map((item) => [

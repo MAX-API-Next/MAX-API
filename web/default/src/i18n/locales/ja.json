@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "クォータ 0 の手動タスク精算を {{completed_count}} 件完了しました（失敗 {{failed_count}} 件）",
     "Completed selected task settlements: {{count}}.": "選択したタスクの精算を完了しました：{{count}} 件。",
     "Completed selected task settlements: {{count}}._one": "選択したタスクの精算を完了しました：{{count}} 件。",
+    "Completed selected task settlements: {{count}}._few": "選択したタスクの精算を完了しました：{{count}} 件。",
+    "Completed selected task settlements: {{count}}._many": "選択したタスクの精算を完了しました：{{count}} 件。",
     "Completed selected task settlements: {{count}}._other": "選択したタスクの精算を完了しました：{{count}} 件。",
     "Enter exact quotas ({{count}})": "正確なクォータを入力 ({{count}} 件)",
     "Enter exact quotas ({{count}})_one": "正確なクォータを入力（{{count}} 件）",

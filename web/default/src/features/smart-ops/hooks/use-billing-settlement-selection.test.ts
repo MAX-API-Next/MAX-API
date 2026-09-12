@@ -85,6 +85,7 @@ describe('billing settlement selection partition', () => {
 
     assert.equal(isManualSettlementSelectable(exact, true), true)
     assert.equal(isManualSettlementSelectable(exact, false), false)
+    assert.equal(isManualSettlementSelectable(item(3), false), true)
     assert.deepEqual(
       getBillingSettlementSelectionPartition([exact, zero], false),
       []

@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "已按零额度完成人工任务结算 {{completed_count}} 个（失败 {{failed_count}} 个）",
     "Completed selected task settlements: {{count}}.": "已完成所选任务结算：{{count}} 个。",
     "Completed selected task settlements: {{count}}._one": "已完成所选任务结算：{{count}} 个。",
+    "Completed selected task settlements: {{count}}._few": "已完成所选任务结算：{{count}} 个。",
+    "Completed selected task settlements: {{count}}._many": "已完成所选任务结算：{{count}} 个。",
     "Completed selected task settlements: {{count}}._other": "已完成所选任务结算：{{count}} 个。",
     "Enter exact quotas ({{count}})": "输入精确额度（{{count}} 个）",
     "Enter exact quotas ({{count}})_one": "输入精确额度（{{count}} 个）",

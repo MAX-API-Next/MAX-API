@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "{{completed_count}} règlements manuels de tâches terminés avec un quota nul ({{failed_count}} échec(s))",
     "Completed selected task settlements: {{count}}.": "Règlements de tâches sélectionnés terminés : {{count}}.",
     "Completed selected task settlements: {{count}}._one": "Règlement de tâche sélectionné terminé : {{count}}.",
+    "Completed selected task settlements: {{count}}._few": "Règlements de tâches sélectionnés terminés : {{count}}.",
+    "Completed selected task settlements: {{count}}._many": "Règlements de tâches sélectionnés terminés : {{count}}.",
     "Completed selected task settlements: {{count}}._other": "Règlements de tâches sélectionnés terminés : {{count}}.",
     "Enter exact quotas ({{count}})": "Saisir les quotas exacts ({{count}})",
     "Enter exact quotas ({{count}})_one": "Saisir le quota exact ({{count}})",

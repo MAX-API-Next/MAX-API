@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Đã hoàn tất {{completed_count}} quyết toán tác vụ thủ công với hạn mức 0 ({{failed_count}} quyết toán thất bại)",
     "Completed selected task settlements: {{count}}.": "Đã hoàn tất {{count}} quyết toán tác vụ đã chọn.",
     "Completed selected task settlements: {{count}}._one": "Đã hoàn tất quyết toán tác vụ đã chọn: {{count}} tác vụ.",
+    "Completed selected task settlements: {{count}}._few": "Đã hoàn tất quyết toán các tác vụ đã chọn: {{count}} tác vụ.",
+    "Completed selected task settlements: {{count}}._many": "Đã hoàn tất quyết toán các tác vụ đã chọn: {{count}} tác vụ.",
     "Completed selected task settlements: {{count}}._other": "Đã hoàn tất quyết toán các tác vụ đã chọn: {{count}} tác vụ.",
     "Enter exact quotas ({{count}})": "Nhập các hạn mức chính xác ({{count}})",
     "Enter exact quotas ({{count}})_one": "Nhập hạn mức chính xác ({{count}} tác vụ)",

@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)",
     "Completed selected task settlements: {{count}}.": "Completed selected task settlements: {{count}}.",
     "Completed selected task settlements: {{count}}._one": "Completed selected task settlement: {{count}}.",
+    "Completed selected task settlements: {{count}}._few": "Completed selected task settlements: {{count}}.",
+    "Completed selected task settlements: {{count}}._many": "Completed selected task settlements: {{count}}.",
     "Completed selected task settlements: {{count}}._other": "Completed selected task settlements: {{count}}.",
     "Enter exact quotas ({{count}})": "Enter exact quotas ({{count}})",
     "Enter exact quotas ({{count}})_one": "Enter exact quota ({{count}})",

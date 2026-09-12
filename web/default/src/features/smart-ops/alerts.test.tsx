@@ -1468,6 +1468,19 @@ describe('SmartOps active alerts', () => {
         fireEvent.change(input)
       }
       await act(async () => {
+        setInputValue(firstInput, '')
+      })
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByText('Enter the exact final quota.')
+        )
+        assert.equal(firstInput.getAttribute('aria-invalid'), 'true')
+        const submitButton = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        }) as HTMLButtonElement
+        assert.equal(submitButton.disabled, true)
+      })
+      await act(async () => {
         setInputValue(firstInput, '101')
       })
       await waitFor(() => {

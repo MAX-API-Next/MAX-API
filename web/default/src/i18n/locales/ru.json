@@ -5689,6 +5689,8 @@
     "Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)": "Завершено ручных расчётов задач с нулевой квотой: {{completed_count}} (не завершено: {{failed_count}})",
     "Completed selected task settlements: {{count}}.": "Выбранные расчёты задач завершены: {{count}}.",
     "Completed selected task settlements: {{count}}._one": "Завершён расчёт выбранной задачи: {{count}}.",
+    "Completed selected task settlements: {{count}}._few": "Завершены расчёты выбранных задач: {{count}}.",
+    "Completed selected task settlements: {{count}}._many": "Завершены расчёты выбранных задач: {{count}}.",
     "Completed selected task settlements: {{count}}._other": "Завершены расчёты выбранных задач: {{count}}.",
     "Enter exact quotas ({{count}})": "Ввести точные квоты ({{count}})",
     "Enter exact quotas ({{count}})_one": "Ввести точную квоту ({{count}})",
