@@ -702,7 +702,7 @@ describe('SmartOps active alerts', () => {
       )
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (1)',
+          name: 'Enter exact quotas (1)',
         })
       )
       const input = await waitFor(() => {
@@ -1090,6 +1090,22 @@ describe('SmartOps active alerts', () => {
     }) as typeof api.get
     api.post = (async (url: string, data: unknown): Promise<unknown> => {
       writes.push({ url: String(url), data })
+      if (url === '/api/smart-ops/billing-settlements/reviews') {
+        return { data: { success: true, data: [] } }
+      }
+      if (url !== '/api/smart-ops/billing-settlements/complete-tasks-zero') {
+        return {
+          data: {
+            success: true,
+            data: {
+              completed_count: 2,
+              failed_count: 0,
+              settlement_ids: [93, 94],
+              failed: [],
+            },
+          },
+        }
+      }
       return {
         data: {
           success: true,
@@ -1177,7 +1193,7 @@ describe('SmartOps active alerts', () => {
       )
       assert.ok(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (2)',
+          name: 'Enter exact quotas (2)',
         })
       )
       const zeroBatchButton = within(view.container).getByRole('button', {
@@ -1413,7 +1429,7 @@ describe('SmartOps active alerts', () => {
       await view.click(checkboxes[1])
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Manually settle selected task quotas (2)',
+          name: 'Enter exact quotas (2)',
         })
       )
 
@@ -1605,7 +1621,7 @@ describe('SmartOps active alerts', () => {
         )
       })
       const exactQuotaBatchButton = within(view.container).getByRole('button', {
-        name: 'Manually settle selected task quotas (1)',
+        name: 'Enter exact quotas (1)',
       })
       const zeroQuotaBatchButton = within(view.container).getByRole('button', {
         name: 'Confirm zero-quota settlements (1)',

@@ -68,6 +68,10 @@ function formatBatchFailureMessage(
 ): string {
   const code = failure.code
   switch (code) {
+    case 'not_attempted':
+      return t(
+        'not attempted because another selected settlement failed validation'
+      )
     case 'minimax_h3_required':
       return t(
         'Only MiniMax-H3 task settlements can use the zero-quota batch action'
@@ -106,7 +110,7 @@ function getBatchReviewActionKey(
     return 'Select either task settlements or ordinary alerts, not both.'
   }
   if (kind === 'zero_quota' || kind === 'exact_quota') {
-    return 'Manually settle selected task quotas ({{count}})'
+    return 'Enter exact quotas ({{count}})'
   }
   return 'Review and close selected ({{count}})'
 }

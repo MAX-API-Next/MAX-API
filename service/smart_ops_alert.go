@@ -598,6 +598,7 @@ func CompleteManualTaskBillingSettlementsZero(
 	// Validate the complete selection before the first completion can mutate
 	// balances. A stale or non-H3 item therefore cannot leave earlier items
 	// settled while the batch request reports a later validation failure.
+	validationFailures := make(map[int64]string, len(targets))
 	for _, target := range targets {
 		if err := validateManualTaskBillingZeroTarget(target, reviewerID); err != nil {
 			code := manualTaskBillingBatchErrorCode(err)
@@ -608,15 +609,17 @@ func CompleteManualTaskBillingSettlementsZero(
 					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
 				))
 			}
-			result.FailedCount++
-			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-				SettlementID: target.ID,
-				Code:         code,
-				Message:      manualTaskBillingBatchErrorMessage(code),
-			})
+			validationFailures[target.ID] = code
 		}
 	}
-	if result.FailedCount > 0 {
+	if len(validationFailures) > 0 {
+		for _, target := range targets {
+			code, failed := validationFailures[target.ID]
+			if !failed {
+				code = "not_attempted"
+			}
+			appendManualTaskBillingBatchFailure(&result, target.ID, code)
+		}
 		return result, nil
 	}
 	for _, target := range targets {
@@ -628,7 +631,6 @@ func CompleteManualTaskBillingSettlementsZero(
 			manualTaskBillingZeroNote,
 			true,
 		); err != nil {
-			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
 			if code == "settlement_failed" {
 				common.SysError(fmt.Sprintf(
@@ -637,11 +639,7 @@ func CompleteManualTaskBillingSettlementsZero(
 					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
 				))
 			}
-			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-				SettlementID: target.ID,
-				Code:         code,
-				Message:      manualTaskBillingBatchErrorMessage(code),
-			})
+			appendManualTaskBillingBatchFailure(&result, target.ID, code)
 			continue
 		}
 		result.CompletedCount++
@@ -675,13 +673,13 @@ func CompleteManualTaskBillingSettlements(
 		SettlementIDs: make([]int64, 0, len(targets)),
 		Failed:        make([]ManualTaskBillingBatchFailure, 0),
 	}
+	validationFailures := make(map[int64]string, len(targets))
 	for _, target := range targets {
 		eligibility, err := prepareManualTaskBillingCompletion(target.ID, target.Revision, *target.ActualQuota, false, manualTaskBillingDefaultNote)
 		if err == nil {
 			_, err = validateManualTaskBillingCompletionReplay(eligibility, reviewerID, manualTaskBillingDefaultNote)
 		}
 		if err != nil {
-			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
 			if code == "settlement_failed" {
 				common.SysError(fmt.Sprintf(
@@ -690,14 +688,17 @@ func CompleteManualTaskBillingSettlements(
 					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
 				))
 			}
-			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-				SettlementID: target.ID,
-				Code:         code,
-				Message:      manualTaskBillingBatchErrorMessage(code),
-			})
+			validationFailures[target.ID] = code
 		}
 	}
-	if result.FailedCount > 0 {
+	if len(validationFailures) > 0 {
+		for _, target := range targets {
+			code, failed := validationFailures[target.ID]
+			if !failed {
+				code = "not_attempted"
+			}
+			appendManualTaskBillingBatchFailure(&result, target.ID, code)
+		}
 		return result, nil
 	}
 	for _, target := range targets {
@@ -709,7 +710,6 @@ func CompleteManualTaskBillingSettlements(
 			manualTaskBillingDefaultNote,
 			false,
 		); err != nil {
-			result.FailedCount++
 			code := manualTaskBillingBatchErrorCode(err)
 			if code == "settlement_failed" {
 				common.SysError(fmt.Sprintf(
@@ -718,11 +718,7 @@ func CompleteManualTaskBillingSettlements(
 					common.SanitizePersistedLogContent(common.MaskSensitiveInfo(err.Error())),
 				))
 			}
-			result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
-				SettlementID: target.ID,
-				Code:         code,
-				Message:      manualTaskBillingBatchErrorMessage(code),
-			})
+			appendManualTaskBillingBatchFailure(&result, target.ID, code)
 			continue
 		}
 		result.CompletedCount++
@@ -733,6 +729,19 @@ func CompleteManualTaskBillingSettlements(
 
 func ptrInt64(value int64) *int64 {
 	return &value
+}
+
+func appendManualTaskBillingBatchFailure(
+	result *ManualTaskBillingBatchCompletionResult,
+	settlementID int64,
+	code string,
+) {
+	result.Failed = append(result.Failed, ManualTaskBillingBatchFailure{
+		SettlementID: settlementID,
+		Code:         code,
+		Message:      manualTaskBillingBatchErrorMessage(code),
+	})
+	result.FailedCount = len(result.Failed)
 }
 
 type manualTaskBillingEligibility struct {
@@ -897,6 +906,8 @@ func manualTaskBillingBatchErrorCode(err error) string {
 
 func manualTaskBillingBatchErrorMessage(code string) string {
 	switch code {
+	case "not_attempted":
+		return "not attempted because another selected settlement failed validation"
 	case "invalid_settlement_request":
 		return "the supplied final quota or the settlement snapshot is invalid for this record"
 	case "minimax_h3_required":
