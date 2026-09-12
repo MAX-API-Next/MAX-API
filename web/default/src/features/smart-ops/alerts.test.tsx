@@ -1240,6 +1240,7 @@ describe('SmartOps active alerts', () => {
       ) as HTMLInputElement
       assert.ok(exactQuotaInput)
       assert.equal(exactQuotaInput.type, 'number')
+      assert.equal(exactQuotaInput.value, '0')
       assert.equal(exactQuotaInput.min, '0')
       assert.equal(exactQuotaInput.max, '100')
 
@@ -1447,6 +1448,8 @@ describe('SmartOps active alerts', () => {
       assert.equal(useSystemConfigStore.getState().loading, false)
       assert.equal(firstInput.disabled, false)
       assert.equal(secondInput.disabled, false)
+      assert.equal(firstInput.value, '0')
+      assert.equal(secondInput.value, '0')
       assert.equal(within(document.body).queryByText('Loading...'), null)
       assert.equal(
         within(document.body).queryByText(

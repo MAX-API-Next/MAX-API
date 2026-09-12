@@ -69,7 +69,7 @@ export function ManualTaskSettlementDialog(
     resolver: zodResolver(
       getManualTaskSettlementSchema(t, props.item?.task_quota ?? 0)
     ),
-    defaultValues: { actualQuota: '' },
+    defaultValues: { actualQuota: '0' },
     mode: 'onChange',
   })
   const canSubmit =

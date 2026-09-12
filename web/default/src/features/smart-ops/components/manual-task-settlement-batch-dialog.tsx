@@ -65,7 +65,7 @@ export function ManualTaskSettlementBatchDialog(
   const { currency, loading: configLoading } = useSystemConfig()
   const [values, setValues] = useState<Record<number, string>>(
     () =>
-      Object.fromEntries(props.items.map((item) => [item.id, ''])) as Record<
+      Object.fromEntries(props.items.map((item) => [item.id, '0'])) as Record<
         number,
         string
       >
