@@ -30,15 +30,19 @@ func TestProduceUsageClassifiesDoubaoMissingPartialAndInvalid(t *testing.T) {
 		body         string
 		presence     string
 		completeness string
+		usageNonNil  bool
 	}{
 		{name: "missing", body: `{"status":"succeeded"}`, presence: types.TaskUsagePresenceNotPresent, completeness: types.TaskUsageCompletenessMissing},
-		{name: "partial", body: `{"status":"succeeded","usage":{"completion_tokens":3}}`, presence: types.TaskUsagePresencePartial, completeness: types.TaskUsageCompletenessPartial},
-		{name: "single negative completion", body: `{"status":"succeeded","usage":{"completion_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
-		{name: "single negative total", body: `{"status":"succeeded","usage":{"total_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
-		{name: "negative", body: `{"status":"succeeded","usage":{"completion_tokens":-1,"total_tokens":2}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
-		{name: "inconsistent", body: `{"status":"succeeded","usage":{"completion_tokens":4,"total_tokens":3}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
-		{name: "non numeric token", body: `{"status":"succeeded","usage":{"completion_tokens":"many"}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid},
-		{name: "null usage", body: `{"status":"succeeded","usage":null}`, presence: types.TaskUsagePresenceNotPresent, completeness: types.TaskUsageCompletenessMissing},
+		{name: "partial", body: `{"status":"succeeded","usage":{"completion_tokens":3}}`, presence: types.TaskUsagePresencePartial, completeness: types.TaskUsageCompletenessPartial, usageNonNil: true},
+		{name: "empty object", body: `{"status":"succeeded","usage":{}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "null token fields", body: `{"status":"succeeded","usage":{"completion_tokens":null,"total_tokens":null}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "unrecognized fields", body: `{"status":"succeeded","usage":{"prompt_tokens":12}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "single negative completion", body: `{"status":"succeeded","usage":{"completion_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "single negative total", body: `{"status":"succeeded","usage":{"total_tokens":-1}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "negative", body: `{"status":"succeeded","usage":{"completion_tokens":-1,"total_tokens":2}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "inconsistent", body: `{"status":"succeeded","usage":{"completion_tokens":4,"total_tokens":3}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "non numeric token", body: `{"status":"succeeded","usage":{"completion_tokens":"many"}}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
+		{name: "null usage", body: `{"status":"succeeded","usage":null}`, presence: types.TaskUsagePresenceInvalid, completeness: types.TaskUsageCompletenessInvalid, usageNonNil: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -48,6 +52,11 @@ func TestProduceUsageClassifiesDoubaoMissingPartialAndInvalid(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.presence, envelope.Presence)
 			require.Equal(t, test.completeness, envelope.Completeness)
+			if test.usageNonNil {
+				assert.NotNil(t, envelope.Usage)
+			} else {
+				assert.Nil(t, envelope.Usage)
+			}
 		})
 	}
 }

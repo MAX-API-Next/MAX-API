@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, type Dispatch, type SetStateAction } from 'react'
+import {
+  useCallback,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react'
 import {
   useMutation,
   useQueryClient,
@@ -106,7 +111,7 @@ export function useManualTaskBatchSettlement(
     ManualTaskBillingBatchFailure[]
   >([])
 
-  const invalidateSettlementQueries = async (): Promise<void> => {
+  const invalidateSettlementQueries = useCallback(async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
@@ -115,7 +120,7 @@ export function useManualTaskBatchSettlement(
         queryKey: SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
       }),
     ])
-  }
+  }, [queryClient])
 
   const zeroSettlementMutation = useMutation({
     mutationKey: ['smart-ops', 'manual-task-billing-zero-batch'],

@@ -28,6 +28,15 @@ type ManualTaskSettlementSchema = z.ZodType<
   ManualTaskSettlementSchemaShape
 >
 
+type ManualTaskSettlementBatchSchemaShape = {
+  items: ManualTaskSettlementSchemaShape[]
+}
+
+type ManualTaskSettlementBatchSchema = z.ZodType<
+  ManualTaskSettlementBatchSchemaShape,
+  ManualTaskSettlementBatchSchemaShape
+>
+
 export function getManualTaskSettlementSchema(
   t: TFunction,
   maxQuota: number
@@ -50,3 +59,36 @@ export function getManualTaskSettlementSchema(
 }
 
 export type ManualTaskSettlementFormValues = z.infer<ManualTaskSettlementSchema>
+
+export function getManualTaskSettlementBatchSchema(
+  t: TFunction,
+  maxQuotas: number[]
+): ManualTaskSettlementBatchSchema {
+  const itemSchemas = maxQuotas.map((maxQuota) =>
+    getManualTaskSettlementSchema(t, maxQuota)
+  )
+
+  return z.object({
+    items: z
+      .array(z.object({ actualQuota: z.string() }))
+      .length(maxQuotas.length)
+      .superRefine((items, context) => {
+        items.forEach((item, index) => {
+          const schema = itemSchemas[index]
+          if (!schema) return
+          const result = schema.safeParse(item)
+          if (result.success) return
+          result.error.issues.forEach((issue) => {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, ...issue.path],
+              message: issue.message,
+            })
+          })
+        })
+      }),
+  })
+}
+
+export type ManualTaskSettlementBatchFormValues =
+  z.infer<ManualTaskSettlementBatchSchema>

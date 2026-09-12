@@ -16,13 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react'
+import { type ReactElement } from 'react'
+import { useFieldArray, useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatNumber, formatQuota } from '@/lib/format'
@@ -41,10 +37,15 @@ import {
   Field,
   FieldDescription,
   FieldError,
+  FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { Form, FormField } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { getManualTaskSettlementSchema } from '../lib/manual-task-settlement'
+import {
+  getManualTaskSettlementBatchSchema,
+  type ManualTaskSettlementBatchFormValues,
+} from '../lib/manual-task-settlement'
 import type { BillingSettlementReconciliationItem } from '../types'
 
 interface ManualTaskSettlementBatchDialogProps {
@@ -63,86 +64,35 @@ export function ManualTaskSettlementBatchDialog(
 ): ReactElement {
   const { t } = useTranslation()
   const { currency, loading: configLoading } = useSystemConfig()
-  const [values, setValues] = useState<Record<number, string>>(
-    () =>
-      Object.fromEntries(props.items.map((item) => [item.id, '0'])) as Record<
-        number,
-        string
-      >
-  )
-  const inputRefs = useRef<Record<number, HTMLInputElement | null>>({})
-
-  const schemas = useMemo(() => {
-    const next = new Map<
-      number,
-      ReturnType<typeof getManualTaskSettlementSchema>
-    >()
-    for (const item of props.items) {
-      next.set(
-        item.task_quota,
-        getManualTaskSettlementSchema(t, item.task_quota)
-      )
-    }
-    return next
-  }, [props.items, t])
-
-  const getValidationErrors = useCallback(
-    (
-      nextValues: Record<number, string>
-    ): Record<number, string | undefined> => {
-      const next: Record<number, string | undefined> = {}
-      for (const item of props.items) {
-        const result = schemas.get(item.task_quota)?.safeParse({
-          actualQuota: nextValues[item.id] ?? '',
-        })
-        next[item.id] = result?.success
-          ? undefined
-          : result?.error.issues[0]?.message
-      }
-      return next
+  const maxQuotas = props.items.map((item) => item.task_quota)
+  const form = useForm<ManualTaskSettlementBatchFormValues>({
+    resolver: zodResolver(getManualTaskSettlementBatchSchema(t, maxQuotas)),
+    defaultValues: {
+      items: props.items.map(() => ({ actualQuota: '0' })),
     },
-    [props.items, schemas]
-  )
-
-  const errors = useMemo(
-    () => getValidationErrors(values),
-    [getValidationErrors, values]
-  )
-
-  const showError = (id: number): boolean => Boolean(errors[id])
+    mode: 'onChange',
+  })
+  const { fields } = useFieldArray({
+    control: form.control,
+    name: 'items',
+  })
 
   const canSubmit =
     props.items.length > 0 &&
     !props.pending &&
     !props.stale &&
     !configLoading &&
-    !Object.values(errors).some(Boolean)
+    form.formState.isValid
 
-  const handleSubmit = (): void => {
-    if (!canSubmit) return
-    const submittedValues = Object.fromEntries(
-      props.items.map((item) => [
-        item.id,
-        inputRefs.current[item.id]?.value ?? values[item.id] ?? '',
-      ])
-    ) as Record<number, string>
-    const submittedErrors = getValidationErrors(submittedValues)
-    if (props.items.some((item) => submittedErrors[item.id])) {
-      setValues(submittedValues)
-      return
-    }
+  const handleSubmit = form.handleSubmit((values) => {
     const actualQuotas = Object.fromEntries(
-      props.items.map((item) => [item.id, Number(submittedValues[item.id])])
+      props.items.map((item, index) => [
+        item.id,
+        Number(values.items[index]?.actualQuota),
+      ])
     ) as Record<number, number>
     props.onSubmit(props.items, actualQuotas)
-  }
-
-  const updateValue = (id: number, value: string): void => {
-    setValues((current) => ({
-      ...current,
-      [id]: value,
-    }))
-  }
+  })
 
   return (
     <Dialog
@@ -183,53 +133,62 @@ export function ManualTaskSettlementBatchDialog(
             </AlertDescription>
           </Alert>
         )}
-        <div className='flex flex-col gap-3'>
-          {props.items.map((item) => (
-            <Field
-              key={`${item.id}:${item.revision}`}
-              data-invalid={showError(item.id)}
-            >
-              <FieldLabel htmlFor={`manual-task-actual-quota-${item.id}`}>
-                {t('Task #{{id}} · reserved {{quota}}', {
-                  id: item.task_id,
-                  quota: formatQuota(item.task_quota),
-                })}
-              </FieldLabel>
-              <Input
-                id={`manual-task-actual-quota-${item.id}`}
-                type='number'
-                inputMode='numeric'
-                min={0}
-                max={item.task_quota}
-                step={1}
-                value={values[item.id] ?? ''}
-                ref={(element) => {
-                  inputRefs.current[item.id] = element
-                }}
-                disabled={props.pending || props.stale || configLoading}
-                aria-invalid={showError(item.id)}
-                onInput={(event) =>
-                  updateValue(item.id, (event.target as HTMLInputElement).value)
-                }
-                onChange={(event) =>
-                  updateValue(item.id, (event.target as HTMLInputElement).value)
-                }
-              />
-              <FieldDescription>
-                {t(
-                  'Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).',
-                  {
-                    quota: formatQuota(item.task_quota),
-                    quotaPerUnit: formatNumber(currency.quotaPerUnit),
-                  }
-                )}
-              </FieldDescription>
-              {showError(item.id) && errors[item.id] && (
-                <FieldError>{errors[item.id]}</FieldError>
-              )}
-            </Field>
-          ))}
-        </div>
+
+        <Form {...form}>
+          <form id='manual-task-settlement-batch-form' onSubmit={handleSubmit}>
+            <FieldGroup>
+              {fields.map((field, index) => {
+                const item = props.items[index]
+                if (!item) return null
+                return (
+                  <FormField
+                    key={field.id}
+                    control={form.control}
+                    name={`items.${index}.actualQuota` as const}
+                    render={({ field: inputField, fieldState }) => (
+                      <Field data-invalid={fieldState.invalid}>
+                        <FieldLabel
+                          htmlFor={`manual-task-actual-quota-${item.id}`}
+                        >
+                          {t('Task #{{id}} · reserved {{quota}}', {
+                            id: item.task_id,
+                            quota: formatQuota(item.task_quota),
+                          })}
+                        </FieldLabel>
+                        <Input
+                          {...inputField}
+                          id={`manual-task-actual-quota-${item.id}`}
+                          type='number'
+                          inputMode='numeric'
+                          min={0}
+                          max={item.task_quota}
+                          step={1}
+                          disabled={
+                            props.pending || props.stale || configLoading
+                          }
+                          aria-invalid={fieldState.invalid}
+                          onInput={(event) => inputField.onChange(event)}
+                        />
+                        <FieldDescription>
+                          {t(
+                            'Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).',
+                            {
+                              quota: formatQuota(item.task_quota),
+                              quotaPerUnit: formatNumber(currency.quotaPerUnit),
+                            }
+                          )}
+                        </FieldDescription>
+                        {fieldState.error && (
+                          <FieldError>{fieldState.error.message}</FieldError>
+                        )}
+                      </Field>
+                    )}
+                  />
+                )
+              })}
+            </FieldGroup>
+          </form>
+        </Form>
 
         <DialogFooter>
           <Button
@@ -240,7 +199,11 @@ export function ManualTaskSettlementBatchDialog(
           >
             {t('Cancel')}
           </Button>
-          <Button type='button' onClick={handleSubmit} disabled={!canSubmit}>
+          <Button
+            type='submit'
+            form='manual-task-settlement-batch-form'
+            disabled={!canSubmit}
+          >
             {props.pending && (
               <Loader2
                 data-icon='inline-start'

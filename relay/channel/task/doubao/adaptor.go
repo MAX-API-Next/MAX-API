@@ -701,13 +701,15 @@ func buildDoubaoUsageEnvelope(raw json.RawMessage) (*types.TaskUsageEnvelope, er
 	var parsed responseTaskUsage
 	completeness := types.TaskUsageCompletenessMissing
 	switch common.GetJsonType(raw) {
-	case "unknown", "null":
+	case "unknown":
 		return taskusage.BuildEnvelope(
 			types.TaskUsageProducerKindGoAdapter,
 			taskusage.DoubaoVideoContract(),
 			types.TaskUsageSourceProviderResponse,
 			nil,
 		)
+	case "null":
+		completeness = types.TaskUsageCompletenessInvalid
 	case "object":
 		if err := common.Unmarshal(raw, &parsed); err != nil {
 			completeness = types.TaskUsageCompletenessInvalid
@@ -730,7 +732,7 @@ func buildDoubaoUsageEnvelope(raw json.RawMessage) (*types.TaskUsageEnvelope, er
 	if completeness != types.TaskUsageCompletenessInvalid {
 		switch {
 		case parsed.CompletionTokens == nil && parsed.TotalTokens == nil:
-			usage = nil
+			usage.Completeness = types.TaskUsageCompletenessInvalid
 		case (parsed.CompletionTokens != nil && *parsed.CompletionTokens < 0) ||
 			(parsed.TotalTokens != nil && *parsed.TotalTokens < 0):
 			usage.Completeness = types.TaskUsageCompletenessInvalid
