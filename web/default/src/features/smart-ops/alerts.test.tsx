@@ -18,8 +18,15 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act, useMemo, useState, type ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import en from '@/i18n/locales/en.json'
+import fr from '@/i18n/locales/fr.json'
+import ja from '@/i18n/locales/ja.json'
+import ru from '@/i18n/locales/ru.json'
+import vi from '@/i18n/locales/vi.json'
+import zh from '@/i18n/locales/zh.json'
 import { createReactTestEnvironment } from '@/test/react'
 import { fireEvent, waitFor, within } from '@testing-library/react'
+import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
 import { useAuthStore } from '@/stores/auth-store'
@@ -141,6 +148,29 @@ function ManualSettlementEvidenceHarness(): ReactElement {
 }
 
 describe('SmartOps active alerts', () => {
+  test('keeps zero-quota confirmation wording pluralized in every locale', async (): Promise<void> => {
+    const key =
+      'This will settle {{count}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.'
+    const locales = { en, fr, ja, ru, vi, zh }
+    for (const [lng, resource] of Object.entries(locales)) {
+      const instance = i18next.createInstance()
+      await instance.init({
+        lng,
+        fallbackLng: false,
+        resources: { [lng]: resource },
+        interpolation: { escapeValue: false },
+      })
+      for (const count of [0, 1, 2]) {
+        const message = instance.t(key, {
+          count,
+          displayCount: String(count),
+        })
+        assert.ok(message.includes(String(count)))
+        assert.doesNotMatch(message, /task\(s\)/)
+      }
+    }
+  })
+
   test('posts the exact manual task settlement contract', async (): Promise<void> => {
     const originalPost = api.post
     const writes: Array<{ url: string; data: unknown; config: unknown }> = []
@@ -933,9 +963,9 @@ describe('SmartOps active alerts', () => {
                 success: true,
                 data: {
                   ...emptyReconciliationData(),
-                  total_count: includeManualItem ? 2 : 0,
+                  total_count: includeManualItem ? 3 : 0,
                   manual_count: includeManualItem ? 2 : 0,
-                  open_alert_count: includeManualItem ? 2 : 0,
+                  open_alert_count: includeManualItem ? 3 : 0,
                   items: includeManualItem
                     ? [
                         {
@@ -997,6 +1027,36 @@ describe('SmartOps active alerts', () => {
                           user_blocking_override: null,
                           record_blocks_user: false,
                           blocks_user: false,
+                        },
+                        {
+                          id: 95,
+                          revision: 1,
+                          operation_key: 'request:billing-request-95:finalize',
+                          status: 'pending',
+                          source: 'wallet',
+                          user_id: 54,
+                          subscription_id: 0,
+                          token_id: 0,
+                          task_id: 0,
+                          task_quota: 0,
+                          task_quota_target: 0,
+                          requires_manual_completion: false,
+                          zero_quota_eligible: false,
+                          funding_delta: 100,
+                          applied_funding_delta: 0,
+                          token_delta: 100,
+                          applied_token_delta: 0,
+                          attempts: 1,
+                          last_error: 'ordinary alert needs review',
+                          next_attempt: 0,
+                          created_at: 1786032546,
+                          updated_at: 1786032546,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: true,
+                          blocks_user: true,
                         },
                       ]
                     : [],
@@ -1144,9 +1204,35 @@ describe('SmartOps active alerts', () => {
       assert.equal(exactQuotaInput.min, '0')
       assert.equal(exactQuotaInput.max, '100')
 
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      // The exact dialog was opened from the manual-task rows above. After it
+      // closes, select only the ordinary alert to verify that manual task
+      // completion remains separate from ordinary batch review.
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 95',
+        })
+      )
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Review and close selected (1)',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes[2], {
+          url: '/api/smart-ops/billing-settlements/reviews',
+          data: { items: [{ id: 95, revision: 1 }] },
+        })
+        assert.ok(
+          (view.container.textContent ?? '').includes('Settlement #94:')
+        )
+      })
+
       // Opening the exact-settlement path must not issue another zero-quota
       // request. The exact endpoint contract is covered by the API test.
-      assert.equal(writes.length, 2)
+      assert.equal(writes.length, 3)
     } finally {
       api.get = originalGet
       api.post = originalPost

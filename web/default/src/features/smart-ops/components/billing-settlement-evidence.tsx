@@ -277,7 +277,6 @@ export function BillingSettlementEvidence(
     },
     onSuccess: async (count: number): Promise<void> => {
       setSelectedTargets(new Map())
-      setBatchFailures([])
       toast.success(
         t('Billing reconciliation alerts closed: {{count}}', { count })
       )
@@ -685,7 +684,13 @@ export function BillingSettlementEvidence(
         title={t('Confirm zero-quota settlement')}
         desc={t(
           'This will settle {{count}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.',
-          { count: formatCount(zeroSettlementTargets.length, i18n.language) }
+          {
+            count: zeroSettlementTargets.length,
+            displayCount: formatCount(
+              zeroSettlementTargets.length,
+              i18n.language
+            ),
+          }
         )}
         confirmText={t('Apply zero-quota settlements')}
         handleConfirm={confirmZeroSettlement}
