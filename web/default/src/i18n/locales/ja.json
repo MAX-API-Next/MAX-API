@@ -33,7 +33,7 @@
     "the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement": "サブスクリプション使用量ミラーが返金額を下回っています。精算前にサブスクリプションレコードを修復してください。",
     "the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation": "サブスクリプション予約の紐付けがないか期間が変更されています。このレコードを手動照合へエスカレーションしてください。",
     "the supplied final quota or the settlement snapshot is invalid for this record": "指定された最終クォータまたは精算スナップショットがこの記録に対して無効です。",
-    "not attempted because another selected settlement failed validation": "別の選択した精算の検証に失敗したため未実行",
+    "not attempted because another selected settlement failed validation": "別の選択済み精算の検証に失敗したため、実行されませんでした。",
     "No selected task settlements were completed.": "選択したタスク精算は完了しませんでした。",
     "Enter the exact final quota.": "正確な最終クォータを入力してください。",
     "Final quota must be a non-negative safe integer.": "最終クォータは 0 以上の安全な整数である必要があります。",
