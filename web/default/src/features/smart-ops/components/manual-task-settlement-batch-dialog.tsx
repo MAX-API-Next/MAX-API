@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, type ReactElement } from 'react'
+import { useMemo, useRef, type ReactElement, type SyntheticEvent } from 'react'
 import { useFieldArray, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
@@ -79,6 +79,10 @@ export function ManualTaskSettlementBatchDialog(
     },
     mode: 'onChange',
   })
+  // Base UI emits native input events in the jsdom/test path while React's
+  // controlled-input contract expects onChange. Share one deduplicated
+  // handler so both paths update RHF without validating the same event twice.
+  const handledNativeEvents = useRef(new WeakSet<Event>())
   const { fields } = useFieldArray({
     control: form.control,
     name: 'items',
@@ -154,6 +158,16 @@ export function ManualTaskSettlementBatchDialog(
                     name={`items.${index}.actualQuota` as const}
                     render={({ field: inputField, fieldState }) => {
                       const { onChange, ...fieldProps } = inputField
+                      const handleFieldChange = (
+                        event: SyntheticEvent<HTMLInputElement>
+                      ): void => {
+                        const nativeEvent = event.nativeEvent
+                        if (handledNativeEvents.current.has(nativeEvent)) {
+                          return
+                        }
+                        handledNativeEvents.current.add(nativeEvent)
+                        onChange(event)
+                      }
                       return (
                         <Field data-invalid={fieldState.invalid}>
                           <FieldLabel
@@ -176,7 +190,8 @@ export function ManualTaskSettlementBatchDialog(
                               props.pending || props.stale || configLoading
                             }
                             aria-invalid={fieldState.invalid}
-                            onInput={onChange}
+                            onChange={handleFieldChange}
+                            onInput={handleFieldChange}
                           />
                           <FieldDescription>
                             {t(
