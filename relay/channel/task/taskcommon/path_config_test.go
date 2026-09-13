@@ -598,11 +598,12 @@ func TestParseConfiguredTaskResultReadsAllOfficialTaskUsageTokens(t *testing.T) 
 func TestParseConfiguredTaskResultPreservesExplicitOfficialTokenZeros(t *testing.T) {
 	settings := dto.ChannelOtherSettings{TaskProtocol: TaskProtocolGenericVideo}
 	result, parsed, err := ParseConfiguredTaskResult([]byte(`{
+		"usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
 		"task": {
 			"id": "424010985738629",
 			"status": "succeeded",
 			"content": {"url": "https://cdn.example.com/h3.mp4"},
-			"usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+			"usage": {"prompt_tokens": 1234, "completion_tokens": 567, "total_tokens": 1801}
 		}
 	}`), settings)
 
