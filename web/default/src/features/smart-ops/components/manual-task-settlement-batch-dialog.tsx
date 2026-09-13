@@ -152,44 +152,49 @@ export function ManualTaskSettlementBatchDialog(
                     key={field.id}
                     control={form.control}
                     name={`items.${index}.actualQuota` as const}
-                    render={({ field: inputField, fieldState }) => (
-                      <Field data-invalid={fieldState.invalid}>
-                        <FieldLabel
-                          htmlFor={`manual-task-actual-quota-${item.id}`}
-                        >
-                          {t('Task #{{id}} · reserved {{quota}}', {
-                            id: item.task_id,
-                            quota: formatQuota(item.task_quota),
-                          })}
-                        </FieldLabel>
-                        <Input
-                          {...inputField}
-                          id={`manual-task-actual-quota-${item.id}`}
-                          type='number'
-                          inputMode='numeric'
-                          min={0}
-                          max={item.task_quota}
-                          step={1}
-                          disabled={
-                            props.pending || props.stale || configLoading
-                          }
-                          aria-invalid={fieldState.invalid}
-                          onInput={(event) => inputField.onChange(event)}
-                        />
-                        <FieldDescription>
-                          {t(
-                            'Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).',
-                            {
+                    render={({ field: inputField, fieldState }) => {
+                      const { onChange, ...fieldProps } = inputField
+                      return (
+                        <Field data-invalid={fieldState.invalid}>
+                          <FieldLabel
+                            htmlFor={`manual-task-actual-quota-${item.id}`}
+                          >
+                            {t('Task #{{id}} · reserved {{quota}}', {
+                              id: item.task_id,
                               quota: formatQuota(item.task_quota),
-                              quotaPerUnit: formatNumber(currency.quotaPerUnit),
+                            })}
+                          </FieldLabel>
+                          <Input
+                            {...fieldProps}
+                            id={`manual-task-actual-quota-${item.id}`}
+                            type='number'
+                            inputMode='numeric'
+                            min={0}
+                            max={item.task_quota}
+                            step={1}
+                            disabled={
+                              props.pending || props.stale || configLoading
                             }
+                            aria-invalid={fieldState.invalid}
+                            onInput={onChange}
+                          />
+                          <FieldDescription>
+                            {t(
+                              'Allowed range: 0 to {{quota}} ({{quotaPerUnit}} quota = $1).',
+                              {
+                                quota: formatQuota(item.task_quota),
+                                quotaPerUnit: formatNumber(
+                                  currency.quotaPerUnit
+                                ),
+                              }
+                            )}
+                          </FieldDescription>
+                          {fieldState.error && (
+                            <FieldError>{fieldState.error.message}</FieldError>
                           )}
-                        </FieldDescription>
-                        {fieldState.error && (
-                          <FieldError>{fieldState.error.message}</FieldError>
-                        )}
-                      </Field>
-                    )}
+                        </Field>
+                      )
+                    }}
                   />
                 )
               })}

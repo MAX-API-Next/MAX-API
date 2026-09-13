@@ -1514,7 +1514,6 @@ describe('SmartOps active alerts', () => {
         assert.ok(setter)
         setter.call(input, value)
         fireEvent.input(input)
-        fireEvent.change(input)
       }
       await act(async () => {
         setInputValue(firstInput, '')
