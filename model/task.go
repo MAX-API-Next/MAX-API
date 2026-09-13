@@ -737,6 +737,10 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		updatedAt = expectedUpdatedAt + 1
 	}
 
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
@@ -794,6 +798,10 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		updatedAt = expectedUpdatedAt + 1
 	}
 
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
 			return err

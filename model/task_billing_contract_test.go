@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -193,6 +194,83 @@ func runTaskBillingSettlementContracts(t *testing.T, db *gorm.DB) {
 		require.NotEqual(t, first.replay, second.replay)
 		f.assertBalances(t, db, -20)
 		require.Equal(t, BillingSettlementStatusApplied, taskBillingContractRecord(t, db, f.input.OperationKey).Status)
+	})
+
+	t.Run("concurrent_settlement_intent", func(t *testing.T) {
+		if !common.UsingSQLite {
+			t.Skip("SQLite-specific settlement intent serialization")
+		}
+		sqlDB, err := db.DB()
+		taskBillingTestCheck(t, err, "access database connection pool")
+		previousMaxOpenConns := sqlDB.Stats().MaxOpenConnections
+		if previousMaxOpenConns < 2 {
+			sqlDB.SetMaxOpenConns(4)
+			t.Cleanup(func() { sqlDB.SetMaxOpenConns(previousMaxOpenConns) })
+		}
+		require.GreaterOrEqual(t, sqlDB.Stats().MaxOpenConnections, 2,
+			"the concurrent intent contract must exercise multiple database connections")
+
+		for _, manual := range []bool{false, true} {
+			t.Run(map[bool]string{false: "pending", true: "manual"}[manual], func(t *testing.T) {
+				f := fixture(t, BillingSettlementSourceWallet, -20)
+				input := f.input
+				if manual {
+					input.FundingDelta = 0
+					input.TokenDelta = 0
+					input.TaskQuotaTarget = input.TaskQuota
+					input.Effect = nil
+				}
+
+				first, second := f.task, f.task
+				type result struct {
+					won bool
+					err error
+				}
+				results := make(chan result, 2)
+				start := make(chan struct{})
+				call := func(task Task) {
+					<-start
+					var won bool
+					var err error
+					if manual {
+						won, err = task.UpdateWithStatusAndManualSettlement(
+							TaskStatusInProgress,
+							f.task.UpdatedAt,
+							input,
+							"provider usage is missing",
+						)
+					} else {
+						won, err = task.UpdateWithStatusAndSettlementIntent(
+							TaskStatusInProgress,
+							f.task.UpdatedAt,
+							input,
+						)
+					}
+					results <- result{won: won, err: err}
+				}
+				go call(first)
+				go call(second)
+				close(start)
+				firstResult, secondResult := <-results, <-results
+
+				for _, got := range []result{firstResult, secondResult} {
+					taskBillingTestCheck(t, got.err, "concurrent settlement intent")
+				}
+				require.NotEqual(t, firstResult.won, secondResult.won,
+					"exactly one poller must win the task CAS")
+				record := taskBillingContractRecord(t, db, input.OperationKey)
+				if manual {
+					require.Equal(t, BillingSettlementStatusManual, record.Status)
+				} else {
+					require.Equal(t, BillingSettlementStatusPending, record.Status)
+				}
+				var count int64
+				taskBillingTestCheck(t, db.Model(&BillingSettlement{}).
+					Where("operation_key = ?", input.OperationKey).Count(&count).Error,
+					"count concurrent settlement intents")
+				require.EqualValues(t, 1, count)
+			})
+		}
 	})
 
 	t.Run("cas_winner_stale_loser", func(t *testing.T) {

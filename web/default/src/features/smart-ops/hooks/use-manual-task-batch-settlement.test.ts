@@ -48,4 +48,16 @@ describe('manual task batch failure state', () => {
       failure(94, 'invalid_settlement_request'),
     ])
   })
+
+  test('retains failures absent from the latest response', () => {
+    const current = [failure(94, 'record_conflict')]
+    const data: ManualTaskBillingBatchCompletionData = {
+      completed_count: 1,
+      failed_count: 0,
+      settlement_ids: [96],
+      failed: [],
+    }
+
+    assert.deepEqual(mergeManualTaskBatchFailures(current, data), current)
+  })
 })
