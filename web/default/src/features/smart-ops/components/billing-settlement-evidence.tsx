@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useMemo, useState, type ReactElement } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { CheckCircle2, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -34,24 +35,85 @@ import {
 } from '@/components/ui/field'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   completeManualTaskBillingSettlement,
   reviewBillingSettlements,
   updateBillingSettlementBlockingPolicy,
 } from '../api'
+import { useManualTaskBatchSettlement } from '../hooks/use-manual-task-batch-settlement'
 import { formatCount, formatLocalizedCount } from '../lib/format'
 import { mutationErrorMessage } from '../lib/mutation-error'
 import {
   SMART_OPS_ACTIVE_ALERTS_QUERY_KEY,
   SMART_OPS_BILLING_RECONCILIATION_QUERY_KEY,
 } from '../lib/query-keys'
+import {
+  classifyBillingSettlementReviewSelection,
+  type BillingSettlementReviewSelection,
+} from '../lib/reconciliation-validation'
 import type {
   BillingSettlementReconciliationData,
   BillingSettlementReconciliationItem,
+  ManualTaskBillingBatchFailure,
   BillingSettlementReviewTarget,
 } from '../types'
 import { BillingSettlementTable } from './billing-settlement-table'
+import { ManualTaskSettlementBatchDialog } from './manual-task-settlement-batch-dialog'
 import { ManualTaskSettlementDialog } from './manual-task-settlement-dialog'
+
+function formatBatchFailureMessage(
+  failure: ManualTaskBillingBatchFailure,
+  t: TFunction
+): string {
+  const code = failure.code
+  switch (code) {
+    case 'not_attempted':
+      return t(
+        'not attempted because another selected settlement failed validation'
+      )
+    case 'minimax_h3_required':
+      return t(
+        'Only MiniMax-H3 task settlements can use the zero-quota batch action'
+      )
+    case 'record_conflict':
+      return t(
+        'manual task billing settlement could not be applied safely; refresh and reconcile the current record'
+      )
+    case 'invalid_settlement_request':
+      return t(
+        'the supplied final quota or the settlement snapshot is invalid for this record'
+      )
+    case 'token_quota_inconsistent':
+      return t(
+        'the token quota mirror is inconsistent; repair the token record before completing this settlement'
+      )
+    case 'subscription_refund_clamped':
+      return t(
+        'the subscription usage mirror is lower than the refund; repair the subscription record before completing this settlement'
+      )
+    case 'subscription_reservation_invalid':
+      return t(
+        'the subscription reservation is unbound or its period changed; escalate this record for manual reconciliation'
+      )
+    case 'manual_review_required':
+      return t('record still requires a manual financial review')
+    default:
+      return t('Failed to complete manual task billing.')
+  }
+}
+
+function getBatchReviewActionKey(
+  kind: BillingSettlementReviewSelection
+): string {
+  if (kind === 'mixed') {
+    return 'Select either task settlements or ordinary alerts, not both.'
+  }
+  if (kind === 'zero_quota' || kind === 'exact_quota') {
+    return 'Enter exact quotas ({{count}})'
+  }
+  return 'Review and close selected ({{count}})'
+}
 
 interface BillingSettlementEvidenceProps {
   canCompleteManualTask: boolean
@@ -71,6 +133,19 @@ export function BillingSettlementEvidence(
   >(() => new Map())
   const [manualTaskItem, setManualTaskItem] =
     useState<BillingSettlementReconciliationItem | null>(null)
+  const [zeroSettlementTargets, setZeroSettlementTargets] = useState<
+    BillingSettlementReviewTarget[]
+  >([])
+  const {
+    manualTaskBatchItems,
+    setManualTaskBatchItems,
+    batchFailures,
+    setBatchFailures,
+    zeroSettlementMutation,
+    manualTaskBatchCompletionMutation,
+  } = useManualTaskBatchSettlement({
+    onSelectionCleared: () => setSelectedTargets(new Map()),
+  })
   const reconciliationItems = props.data?.items
   const currentManualTaskItem = useMemo(() => {
     if (!manualTaskItem) return null
@@ -86,6 +161,35 @@ export function BillingSettlementEvidence(
       currentManualTaskItem.revision !== manualTaskItem.revision ||
       !currentManualTaskItem.requires_manual_completion)
   )
+  const manualTaskBatchStale = useMemo(() => {
+    if (manualTaskBatchItems.length === 0) return false
+    return manualTaskBatchItems.some((selected) => {
+      const current = reconciliationItems?.find(
+        (item) => item.id === selected.id
+      )
+      return (
+        Boolean(props.error) ||
+        !props.data ||
+        !current ||
+        current.revision !== selected.revision ||
+        !current.requires_manual_completion
+      )
+    })
+  }, [manualTaskBatchItems, props.data, props.error, reconciliationItems])
+  const zeroSettlementStale = useMemo(() => {
+    if (zeroSettlementTargets.length === 0) return false
+    return zeroSettlementTargets.some((target) => {
+      const current = reconciliationItems?.find((item) => item.id === target.id)
+      return (
+        Boolean(props.error) ||
+        !props.data ||
+        !current ||
+        current.revision !== target.revision ||
+        !current.requires_manual_completion ||
+        current.zero_quota_eligible !== true
+      )
+    })
+  }, [props.data, props.error, reconciliationItems, zeroSettlementTargets])
   const { activeSelectedTargets, activeSelectedTargetMap } = useMemo(() => {
     const currentRevisions = new Map(
       reconciliationItems?.map((item) => [item.id, item.revision]) ?? []
@@ -100,6 +204,24 @@ export function BillingSettlementEvidence(
       ),
     }
   }, [reconciliationItems, selectedTargets])
+  const selectedManualItems = useMemo(
+    () =>
+      (reconciliationItems ?? []).filter(
+        (item) =>
+          item.requires_manual_completion &&
+          activeSelectedTargetMap.get(item.id)?.revision === item.revision
+      ),
+    [activeSelectedTargetMap, reconciliationItems]
+  )
+  const selectedReviewKind = useMemo(
+    () =>
+      classifyBillingSettlementReviewSelection(
+        (reconciliationItems ?? []).filter((item) =>
+          activeSelectedTargetMap.has(item.id)
+        )
+      ),
+    [activeSelectedTargetMap, reconciliationItems]
+  )
   const [policyOverride, setPolicyOverride] = useState<boolean | null>(null)
   const queryClient = useQueryClient()
   const policyValue =
@@ -184,8 +306,36 @@ export function BillingSettlementEvidence(
   })
 
   const reviewTargets = (targets: BillingSettlementReviewTarget[]): void => {
-    if (targets.length > 0 && !reviewMutation.isPending) {
-      reviewMutation.mutate(targets)
+    if (
+      targets.length === 0 ||
+      reviewMutation.isPending ||
+      zeroSettlementMutation.isPending ||
+      manualTaskCompletionMutation.isPending ||
+      manualTaskBatchCompletionMutation.isPending
+    )
+      return
+    const selectedItems = (reconciliationItems ?? []).filter((item) =>
+      targets.some(
+        (target) => target.id === item.id && target.revision === item.revision
+      )
+    )
+    switch (classifyBillingSettlementReviewSelection(selectedItems)) {
+      case 'exact_quota':
+        setManualTaskBatchItems(selectedItems)
+        return
+      case 'mixed':
+        toast.error(
+          t('Select either task settlements or ordinary alerts, not both.')
+        )
+        return
+      case 'zero_quota':
+        setZeroSettlementTargets(targets)
+        return
+      case 'ordinary':
+        reviewMutation.mutate(targets)
+        return
+      default:
+        return
     }
   }
 
@@ -194,16 +344,13 @@ export function BillingSettlementEvidence(
     mutationFn: async ({
       item,
       actualQuota,
-      note,
     }: {
       item: BillingSettlementReconciliationItem
       actualQuota: number
-      note: string
     }): Promise<void> => {
       const response = await completeManualTaskBillingSettlement(item.id, {
         revision: item.revision,
         actual_quota: actualQuota,
-        note,
       })
       if (!response.success) {
         throw new Error(
@@ -211,8 +358,11 @@ export function BillingSettlementEvidence(
         )
       }
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       setManualTaskItem(null)
+      setBatchFailures((current) =>
+        current.filter((failure) => failure.settlement_id !== variables.item.id)
+      )
       toast.success(t('Manual task billing completed.'))
     },
     onSettled: async () => {
@@ -245,11 +395,36 @@ export function BillingSettlementEvidence(
       onOpenChange={(open) => {
         if (!open) setManualTaskItem(null)
       }}
-      onSubmit={(item, actualQuota, note) =>
-        manualTaskCompletionMutation.mutate({ item, actualQuota, note })
+      onSubmit={(item, actualQuota) =>
+        manualTaskCompletionMutation.mutate({ item, actualQuota })
       }
     />
   ) : null
+
+  const manualTaskBatchDialog =
+    manualTaskBatchItems.length > 0 ? (
+      <ManualTaskSettlementBatchDialog
+        key={manualTaskBatchItems
+          .map((item) => `${item.id}:${item.revision}`)
+          .join(',')}
+        items={manualTaskBatchItems}
+        pending={manualTaskBatchCompletionMutation.isPending}
+        stale={manualTaskBatchStale}
+        onOpenChange={(open) => {
+          if (!open) setManualTaskBatchItems([])
+        }}
+        onSubmit={(items, actualQuotas) =>
+          manualTaskBatchCompletionMutation.mutate({ items, actualQuotas })
+        }
+      />
+    ) : null
+
+  const confirmZeroSettlement = (): void => {
+    if (zeroSettlementStale) return
+    const targets = zeroSettlementTargets
+    setZeroSettlementTargets([])
+    if (targets.length > 0) zeroSettlementMutation.mutate(targets)
+  }
 
   const replaceSelectedTargets = (
     targets: Map<number, BillingSettlementReviewTarget>
@@ -304,7 +479,7 @@ export function BillingSettlementEvidence(
             </h4>
             <p className='text-muted-foreground mt-0.5 text-xs'>
               {t(
-                'Batch-close ordinary alerts after review. Task-finalization alerts require a root administrator to enter the exact provider-backed quota before they can close.'
+                'After selecting alerts, root administrators can either close eligible MiniMax-H3 task settlements with an explicit final quota of 0 or enter an exact final quota for each selected task. Ordinary alerts can be closed directly after review.'
               )}
             </p>
           </div>
@@ -391,33 +566,90 @@ export function BillingSettlementEvidence(
               <Button
                 type='button'
                 size='sm'
-                onClick={() => reviewTargets(activeSelectedTargets)}
+                onClick={() => {
+                  if (selectedReviewKind === 'zero_quota') {
+                    setManualTaskBatchItems(selectedManualItems)
+                    return
+                  }
+                  reviewTargets(activeSelectedTargets)
+                }}
                 disabled={
-                  activeSelectedTargets.length === 0 || reviewMutation.isPending
+                  activeSelectedTargets.length === 0 ||
+                  selectedReviewKind === 'mixed' ||
+                  reviewMutation.isPending ||
+                  zeroSettlementMutation.isPending ||
+                  manualTaskCompletionMutation.isPending ||
+                  manualTaskBatchCompletionMutation.isPending
                 }
               >
-                {reviewMutation.isPending && (
+                {(reviewMutation.isPending ||
+                  zeroSettlementMutation.isPending) && (
                   <Loader2
                     data-icon='inline-start'
                     className='animate-spin'
                     aria-hidden='true'
                   />
                 )}
-                {t('Review and close selected ({{count}})', {
+                {t(getBatchReviewActionKey(selectedReviewKind), {
                   count: formatCount(
                     activeSelectedTargets.length,
                     i18n.language
                   ),
                 })}
               </Button>
+              {selectedReviewKind === 'zero_quota' &&
+                selectedManualItems.length > 0 &&
+                selectedManualItems.length === activeSelectedTargets.length && (
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() => reviewTargets(activeSelectedTargets)}
+                    disabled={
+                      reviewMutation.isPending ||
+                      zeroSettlementMutation.isPending ||
+                      manualTaskCompletionMutation.isPending ||
+                      manualTaskBatchCompletionMutation.isPending
+                    }
+                  >
+                    {t('Confirm zero-quota settlements ({{count}})', {
+                      count: formatCount(
+                        activeSelectedTargets.length,
+                        i18n.language
+                      ),
+                    })}
+                  </Button>
+                )}
             </div>
+            {batchFailures.length > 0 && (
+              <Alert variant='destructive'>
+                <TriangleAlert aria-hidden='true' />
+                <AlertTitle>
+                  {t('Some task settlements still need review.')}
+                </AlertTitle>
+                <AlertDescription>
+                  <ul className='list-disc space-y-1 pl-4'>
+                    {batchFailures.map((failure) => (
+                      <li key={`${failure.settlement_id}:${failure.message}`}>
+                        {t('Settlement #{{id}}: {{message}}', {
+                          id: failure.settlement_id,
+                          message: formatBatchFailureMessage(failure, t),
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
             <BillingSettlementTable
               items={props.data.items}
               canCompleteManualTask={props.canCompleteManualTask}
               selectedTargets={activeSelectedTargetMap}
               reviewPending={
                 reviewMutation.isPending ||
-                manualTaskCompletionMutation.isPending
+                zeroSettlementMutation.isPending ||
+                manualTaskCompletionMutation.isPending ||
+                manualTaskBatchCompletionMutation.isPending
               }
               onSelectedTargetsChange={replaceSelectedTargets}
               onReviewTargets={reviewTargets}
@@ -452,6 +684,45 @@ export function BillingSettlementEvidence(
     <>
       {content}
       {manualTaskDialog}
+      {manualTaskBatchDialog}
+      <ConfirmDialog
+        open={zeroSettlementTargets.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !zeroSettlementMutation.isPending) {
+            setZeroSettlementTargets([])
+          }
+        }}
+        title={t('Confirm zero-quota settlement')}
+        desc={t(
+          'This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.',
+          {
+            count: zeroSettlementTargets.length,
+            displayCount: formatCount(
+              zeroSettlementTargets.length,
+              i18n.language
+            ),
+          }
+        )}
+        confirmText={t('Apply zero-quota settlements')}
+        handleConfirm={confirmZeroSettlement}
+        disabled={zeroSettlementStale}
+        isLoading={zeroSettlementMutation.isPending}
+      >
+        {zeroSettlementStale && (
+          <Alert variant='destructive'>
+            <AlertTitle>
+              {t(
+                'This reconciliation record changed while the dialog was open.'
+              )}
+            </AlertTitle>
+            <AlertDescription>
+              {t(
+                'Close this dialog and reopen the latest record before submitting.'
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+      </ConfirmDialog>
     </>
   )
 }

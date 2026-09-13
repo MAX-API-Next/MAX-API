@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
@@ -94,6 +96,21 @@ func TestCompleteManualTaskBillingSettlementRefundsWalletAndReplays(t *testing.T
 	assert.Equal(t, 160, getTokenRemainQuota(t, tokenID))
 	assert.EqualValues(t, 1, countLogs(t))
 
+	// The current UI no longer submits an audit note. A retry of a settlement
+	// created by the previous UI must retain its durable note rather than fail
+	// solely because the generated default differs.
+	replayedWithoutNote, err := CompleteManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9001,
+		&actualQuota,
+		"",
+	)
+	require.NoError(t, err)
+	assert.True(t, replayedWithoutNote.AlreadyApplied)
+	assert.EqualValues(t, -60, replayedWithoutNote.AppliedFundingDelta)
+	assert.EqualValues(t, 1, countLogs(t))
+
 	differentQuota := int64(30)
 	_, err = CompleteManualTaskBillingSettlement(
 		manual.ID,
@@ -124,7 +141,7 @@ func TestCompleteManualTaskBillingSettlementPreservesExplicitZero(t *testing.T) 
 		manual.Revision,
 		9011,
 		&actualQuota,
-		"Verified that the provider produced no billable output.",
+		"",
 	)
 
 	require.NoError(t, err)
@@ -139,6 +156,279 @@ func TestCompleteManualTaskBillingSettlementPreservesExplicitZero(t *testing.T) 
 	assert.Zero(t, user.UsedQuota)
 	assert.EqualValues(t, 1, user.RequestCount)
 	assert.EqualValues(t, 1, countLogs(t))
+	var storedManual model.BillingSettlement
+	require.NoError(t, model.DB.First(&storedManual, manual.ID).Error)
+	assert.Equal(t, "Administrator-approved manual task usage settlement", storedManual.ReconciliationReviewNote)
+}
+
+func TestCompleteManualTaskBillingSettlementsZeroIsIdempotent(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 816, 817, 818
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-batch", 100)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	// The client model may be an alias while the persisted channel mapping
+	// records the effective MiniMax-H3 upstream model.
+	task.Properties.OriginModelName = "minimax-h3-alias"
+	task.Properties.UpstreamModelName = constant.TaskModelMiniMaxH3
+	task.PrivateData.BillingContext.OriginModelName = "minimax-h3-alias"
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider usage requires manual review")
+
+	result, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{{ID: manual.ID, Revision: manual.Revision}},
+		9016,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.CompletedCount)
+	assert.Zero(t, result.FailedCount)
+	assert.Equal(t, []int64{manual.ID}, result.SettlementIDs)
+	assert.EqualValues(t, 1000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTokenUsedQuota(t, tokenID))
+
+	replay, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{{ID: manual.ID, Revision: manual.Revision}},
+		9016,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, replay.CompletedCount)
+	assert.Zero(t, replay.FailedCount)
+	assert.EqualValues(t, 1000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, 1, countLogs(t))
+	var completion model.BillingSettlement
+	require.NoError(t, model.DB.Where("operation_key = ?", model.BillingTaskManualCompletionOperationKey(task.ID)).First(&completion).Error)
+	var effect model.BillingSettlementEffect
+	require.NoError(t, common.Unmarshal([]byte(completion.EffectPayload), &effect))
+	assert.Equal(t, manualTaskBillingZeroNote, effect.Content)
+}
+
+func TestCompleteManualTaskBillingSettlementsAppliesDifferentExactQuotas(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8171, 8172, 8173
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-exact-batch", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	firstQuota := int64(25)
+	secondQuota := int64(60)
+
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9181)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.CompletedCount)
+	assert.Zero(t, result.FailedCount)
+	assert.ElementsMatch(t, []int64{firstManual.ID, secondManual.ID}, result.SettlementIDs)
+	assert.EqualValues(t, 2095, getUserQuota(t, userID))
+	assert.Equal(t, 295, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 105, getTokenUsedQuota(t, tokenID))
+	var storedFirst, storedSecond model.Task
+	require.NoError(t, model.DB.First(&storedFirst, first.ID).Error)
+	require.NoError(t, model.DB.First(&storedSecond, second.ID).Error)
+	assert.Equal(t, 25, storedFirst.Quota)
+	assert.Equal(t, 60, storedSecond.Quota)
+
+	replay, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9181)
+	require.NoError(t, err)
+	assert.Equal(t, 2, replay.CompletedCount)
+	assert.Zero(t, replay.FailedCount)
+	assert.EqualValues(t, 2, countLogs(t))
+}
+
+func TestCompleteManualTaskBillingSettlementsPrevalidatesEveryItem(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8181, 8182, 8183
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-exact-batch-validation", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	firstQuota := int64(25)
+	invalidQuota := int64(81)
+
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &invalidQuota},
+	}, 9182)
+
+	require.NoError(t, err)
+	assert.Zero(t, result.CompletedCount)
+	assert.Equal(t, 2, result.FailedCount)
+	assert.Empty(t, result.SettlementIDs)
+	require.Len(t, result.Failed, 2)
+	assert.Equal(t, firstManual.ID, result.Failed[0].SettlementID)
+	assert.Equal(t, "not_attempted", result.Failed[0].Code)
+	assert.Equal(t, secondManual.ID, result.Failed[1].SettlementID)
+	assert.Equal(t, "invalid_settlement_request", result.Failed[1].Code)
+	assert.EqualValues(t, 2000, getUserQuota(t, userID))
+	assert.Equal(t, 200, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, countLogs(t))
+}
+
+func TestCompleteManualTaskBillingSettlementsPrevalidatesReplayReviewer(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 8184, 8185, 8186
+	seedUser(t, userID, 2000)
+	seedToken(t, tokenID, userID, "manual-completion-replay-validation", 200)
+	seedChannel(t, channelID)
+	first := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	second := makeTask(userID, channelID, 80, tokenID, BillingSourceWallet, 0)
+	persistTask(t, first)
+	persistTask(t, second)
+	firstManual := createManualTaskFinalizeSettlement(t, first, "provider usage requires exact review")
+	secondManual := createManualTaskFinalizeSettlement(t, second, "provider usage requires exact review")
+	secondQuota := int64(40)
+	_, err := CompleteManualTaskBillingSettlement(
+		secondManual.ID,
+		secondManual.Revision,
+		9300,
+		&secondQuota,
+		"Approved by the original reviewer.",
+	)
+	require.NoError(t, err)
+
+	firstQuota := int64(25)
+	result, err := CompleteManualTaskBillingSettlements([]ManualTaskBillingCompletionTarget{
+		{ID: firstManual.ID, Revision: firstManual.Revision, ActualQuota: &firstQuota},
+		{ID: secondManual.ID, Revision: secondManual.Revision, ActualQuota: &secondQuota},
+	}, 9301)
+
+	require.NoError(t, err)
+	assert.Zero(t, result.CompletedCount)
+	assert.Equal(t, 2, result.FailedCount)
+	assert.Empty(t, result.SettlementIDs)
+	require.Len(t, result.Failed, 2)
+	assert.Equal(t, firstManual.ID, result.Failed[0].SettlementID)
+	assert.Equal(t, "not_attempted", result.Failed[0].Code)
+	assert.Equal(t, secondManual.ID, result.Failed[1].SettlementID)
+	assert.Equal(t, "record_conflict", result.Failed[1].Code)
+	assert.EqualValues(t, 2040, getUserQuota(t, userID), "the earlier completed settlement is the only funding mutation")
+	var storedFirst model.Task
+	var storedSecond model.Task
+	require.NoError(t, model.DB.First(&storedFirst, first.ID).Error)
+	require.NoError(t, model.DB.First(&storedSecond, second.ID).Error)
+	assert.Equal(t, 100, storedFirst.Quota)
+	assert.Equal(t, 40, storedSecond.Quota)
+}
+
+func TestValidateManualTaskBillingCompletionReplay(t *testing.T) {
+	original := model.BillingSettlement{
+		ReconciliationReviewedBy: 9302,
+		ReconciliationReviewNote: "durable review note",
+	}
+	eligibility := manualTaskBillingEligibility{
+		original:                original,
+		originalAlreadyResolved: true,
+	}
+
+	note, err := validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9302,
+		manualTaskBillingDefaultNote,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, original.ReconciliationReviewNote, note)
+
+	_, err = validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9303,
+		manualTaskBillingDefaultNote,
+	)
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+
+	eligibility.original.ReconciliationReviewNote = ""
+	_, err = validateManualTaskBillingCompletionReplay(
+		eligibility,
+		9302,
+		manualTaskBillingDefaultNote,
+	)
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+}
+
+func TestCompleteManualTaskBillingSettlementsZeroPrevalidatesSelection(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 819, 820, 821
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-partial", 100)
+	seedChannel(t, channelID)
+	h3Task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	h3Task.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	h3Task.Properties.UpstreamModelName = constant.TaskModelMiniMaxH3
+	h3Task.PrivateData.BillingContext.OriginModelName = constant.TaskModelMiniMaxH3
+	persistTask(t, h3Task)
+	h3Manual := createManualTaskFinalizeSettlement(t, h3Task, "provider usage requires manual review")
+
+	ordinaryTask := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	ordinaryTask.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	ordinaryTask.Properties.UpstreamModelName = "legacy-video-model"
+	persistTask(t, ordinaryTask)
+	ordinaryManual := createManualTaskFinalizeSettlement(t, ordinaryTask, "provider usage requires manual review")
+
+	result, err := CompleteManualTaskBillingSettlementsZero(
+		[]model.BillingSettlementReviewTarget{
+			{ID: h3Manual.ID, Revision: h3Manual.Revision},
+			{ID: ordinaryManual.ID, Revision: ordinaryManual.Revision},
+		},
+		9019,
+	)
+	require.NoError(t, err)
+	assert.Zero(t, result.CompletedCount)
+	assert.Equal(t, 2, result.FailedCount)
+	assert.Empty(t, result.SettlementIDs)
+	require.Len(t, result.Failed, 2)
+	assert.Equal(t, h3Manual.ID, result.Failed[0].SettlementID)
+	assert.Equal(t, "not_attempted", result.Failed[0].Code)
+	assert.Equal(t, ordinaryManual.ID, result.Failed[1].SettlementID)
+	assert.Contains(t, result.Failed[1].Message, "MiniMax-H3")
+	assert.EqualValues(t, 900, getUserQuota(t, userID), "no target may settle before the complete selection validates")
+	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+}
+
+func TestZeroTaskSettlementRechecksMiniMaxH3AtCompletionBoundary(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 825, 826, 827
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "manual-completion-zero-boundary", 100)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, 100, tokenID, BillingSourceWallet, 0)
+	task.Properties.OriginModelName = constant.TaskModelMiniMaxH3
+	task.Properties.UpstreamModelName = "legacy-video-model"
+	task.PrivateData.BillingContext.OriginModelName = constant.TaskModelMiniMaxH3
+	persistTask(t, task)
+	manual := createManualTaskFinalizeSettlement(t, task, "provider usage requires manual review")
+	actualQuota := int64(0)
+
+	_, err := completeManualTaskBillingSettlement(
+		manual.ID,
+		manual.Revision,
+		9020,
+		&actualQuota,
+		manualTaskBillingZeroNote,
+		true,
+	)
+
+	assert.ErrorIs(t, err, model.ErrBillingSettlementReviewConflict)
+	assert.ErrorIs(t, err, errManualTaskBillingZeroQuotaRequiresMiniMaxH3)
+	assert.EqualValues(t, 900, getUserQuota(t, userID))
+	assert.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 100, getTokenUsedQuota(t, tokenID))
 }
 
 func TestCompleteManualTaskBillingSettlementRefundsSubscriptionWithDeletedToken(t *testing.T) {

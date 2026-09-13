@@ -36,6 +36,7 @@ const billingSettlementReconciliationItemSchema: z.ZodType<BillingSettlementReco
     task_quota: z.number().int().safe().nonnegative(),
     task_quota_target: z.number().int().safe().nonnegative(),
     requires_manual_completion: z.boolean(),
+    zero_quota_eligible: z.boolean().optional(),
     funding_delta: z.number().int().safe(),
     applied_funding_delta: z.number().int().safe(),
     token_delta: z.number().int().safe(),
@@ -67,6 +68,36 @@ const billingSettlementReconciliationDataSchema: z.ZodType<BillingSettlementReco
     generated_at: z.number(),
     items: z.array(billingSettlementReconciliationItemSchema),
   })
+
+export type BillingSettlementReviewSelection =
+  | 'empty'
+  | 'ordinary'
+  | 'zero_quota'
+  | 'exact_quota'
+  | 'mixed'
+
+export function classifyBillingSettlementReviewSelection(
+  items: BillingSettlementReconciliationItem[]
+): BillingSettlementReviewSelection {
+  const hasExactQuotaTasks = items.some(
+    (item) =>
+      item.requires_manual_completion && item.zero_quota_eligible !== true
+  )
+  const hasZeroQuotaTasks = items.some(
+    (item) =>
+      item.requires_manual_completion && item.zero_quota_eligible === true
+  )
+  const hasOrdinaryAlerts = items.some(
+    (item) => !item.requires_manual_completion
+  )
+  if (hasOrdinaryAlerts && (hasExactQuotaTasks || hasZeroQuotaTasks)) {
+    return 'mixed'
+  }
+  if (hasExactQuotaTasks) return 'exact_quota'
+  if (hasZeroQuotaTasks) return 'zero_quota'
+  if (hasOrdinaryAlerts) return 'ordinary'
+  return 'empty'
+}
 
 export function isBillingSettlementReconciliationData(
   value: unknown

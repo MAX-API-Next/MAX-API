@@ -24,6 +24,7 @@ import type {
 
 interface UseBillingSettlementSelectionParams {
   items: BillingSettlementReconciliationItem[]
+  canSelectManualTask: boolean
   selectedTargets: ReadonlyMap<number, BillingSettlementReviewTarget>
   onSelectedTargetsChange: (
     targets: Map<number, BillingSettlementReviewTarget>
@@ -41,53 +42,80 @@ interface UseBillingSettlementSelectionResult {
   ) => void
 }
 
+export function isManualSettlementSelectable(
+  item: BillingSettlementReconciliationItem,
+  canSelectManualTask: boolean
+): boolean {
+  return !item.requires_manual_completion || canSelectManualTask
+}
+
+export function getBillingSettlementSelectionPartition(
+  items: BillingSettlementReconciliationItem[],
+  canSelectManualTask: boolean
+): BillingSettlementReconciliationItem[] {
+  const selectableItems = items.filter((item) =>
+    isManualSettlementSelectable(item, canSelectManualTask)
+  )
+  const ordinaryItems = selectableItems.filter(
+    (item) => !item.requires_manual_completion
+  )
+  return ordinaryItems.length > 0
+    ? ordinaryItems
+    : selectableItems.filter((item) => item.requires_manual_completion)
+}
+
 export function useBillingSettlementSelection(
   params: UseBillingSettlementSelectionParams
 ): UseBillingSettlementSelectionResult {
   const items = params.items
   const selectedTargets = params.selectedTargets
   const onSelectedTargetsChange = params.onSelectedTargetsChange
+  const selectable = useCallback(
+    (item: BillingSettlementReconciliationItem): boolean =>
+      isManualSettlementSelectable(item, params.canSelectManualTask),
+    [params.canSelectManualTask]
+  )
+  const selectionPartition = useMemo(
+    () =>
+      getBillingSettlementSelectionPartition(items, params.canSelectManualTask),
+    [items, params.canSelectManualTask]
+  )
   const isSelected = useCallback(
     (item: BillingSettlementReconciliationItem): boolean =>
-      !item.requires_manual_completion &&
+      selectable(item) &&
       selectedTargets.get(item.id)?.revision === item.revision,
-    [selectedTargets]
+    [selectable, selectedTargets]
   )
   const { allSelected, someSelected } = useMemo(() => {
     return {
       allSelected:
-        items.some((item) => !item.requires_manual_completion) &&
-        items
-          .filter((item) => !item.requires_manual_completion)
-          .every((item) => isSelected(item)),
-      someSelected: items.some(
-        (item) => !item.requires_manual_completion && isSelected(item)
-      ),
+        selectionPartition.length > 0 && selectionPartition.every(isSelected),
+      someSelected: items.some(isSelected),
     }
-  }, [isSelected, items])
+  }, [isSelected, items, selectionPartition])
 
   const toggleAll = useCallback(
     (checked: boolean): void => {
+      if (!checked) {
+        onSelectedTargetsChange(new Map())
+        return
+      }
       onSelectedTargetsChange(
-        checked
-          ? new Map(
-              items
-                .filter((item) => !item.requires_manual_completion)
-                .map((item) => [
-                  item.id,
-                  { id: item.id, revision: item.revision },
-                ])
-            )
-          : new Map()
+        new Map(
+          selectionPartition.map((item) => [
+            item.id,
+            { id: item.id, revision: item.revision },
+          ])
+        )
       )
     },
-    [items, onSelectedTargetsChange]
+    [onSelectedTargetsChange, selectionPartition]
   )
 
   const toggleItem = useCallback(
     (item: BillingSettlementReconciliationItem, checked: boolean): void => {
       const next = new Map(selectedTargets)
-      if (item.requires_manual_completion) {
+      if (!selectable(item)) {
         next.delete(item.id)
         onSelectedTargetsChange(next)
         return
@@ -99,7 +127,7 @@ export function useBillingSettlementSelection(
       }
       onSelectedTargetsChange(next)
     },
-    [onSelectedTargetsChange, selectedTargets]
+    [onSelectedTargetsChange, selectable, selectedTargets]
   )
 
   return { allSelected, someSelected, isSelected, toggleAll, toggleItem }

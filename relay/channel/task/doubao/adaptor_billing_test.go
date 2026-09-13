@@ -542,3 +542,20 @@ func TestConvertSeedanceMediaTaskToOpenAIVideoByShape(t *testing.T) {
 	assert.Contains(t, string(body), `"url":"https://example.com/result.mp4"`)
 	assert.Contains(t, string(body), `"task_id":"task_123"`)
 }
+
+func TestConvertDoubaoWrappedTaskUsesPersistedResultURL(t *testing.T) {
+	body, err := (&TaskAdaptor{}).ConvertToOpenAIVideo(&model.Task{
+		TaskID:   "task_wrapped_123",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Data:     []byte(`{"code":"success","data":{"data":{"status":"succeeded"}}}`),
+		PrivateData: model.TaskPrivateData{
+			ResultURL: "https://cdn.example.com/wrapped-result.mp4",
+		},
+		CreatedAt: 1710000000,
+		UpdatedAt: 1710000100,
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"url":"https://cdn.example.com/wrapped-result.mp4"`)
+}

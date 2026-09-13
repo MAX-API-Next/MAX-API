@@ -138,6 +138,30 @@ function countLeafKeys(obj) {
   return count
 }
 
+function validateEnglishBase(parsedByLocale, baseLocale) {
+  if (baseLocale !== 'en') return
+  const englishLeafCount = countLeafKeys(parsedByLocale.en?.translation ?? {})
+  if (englishLeafCount > 0) return
+
+  const localesWithKeys = Object.entries(parsedByLocale)
+    .filter(([locale]) => locale !== 'en')
+    .filter(([, json]) => countLeafKeys(json?.translation ?? {}) > 0)
+    .map(([locale]) => locale)
+  if (localesWithKeys.length > 0) {
+    throw new Error(
+      `English locale has no translation keys while other locales contain keys: ${localesWithKeys.join(', ')}`
+    )
+  }
+}
+
+function isPluralVariantOfBaseKey(key, base) {
+  const match = key.match(/^(.*)_(zero|one|two|few|many|other)$/)
+  return (
+    match !== null &&
+    Object.prototype.hasOwnProperty.call(base, match[1])
+  )
+}
+
 function reorderLikeBase(base, target, fill, extras, missing, currentPath = []) {
   // If base is an object, we keep base's key order and recurse.
   if (isPlainObject(base)) {
@@ -157,8 +181,16 @@ function reorderLikeBase(base, target, fill, extras, missing, currentPath = []) 
 
     for (const key of Object.keys(t)) {
       if (!Object.prototype.hasOwnProperty.call(base, key)) {
-        const nextPath = [...currentPath, key].join('.')
-        extras[nextPath] = t[key]
+        if (isPluralVariantOfBaseKey(key, base)) {
+          // Plural categories can differ by locale (for example, Russian
+          // needs _few and _many while English does not). Keep those runtime
+          // variants beside their existing base key instead of classifying
+          // them as unrelated extras.
+          out[key] = t[key]
+        } else {
+          const nextPath = [...currentPath, key].join('.')
+          extras[nextPath] = t[key]
+        }
       }
     }
 
@@ -220,7 +252,9 @@ async function main() {
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b))
 
-  // Auto-pick base locale as the one with the most leaf keys under translation (most "rich").
+  // English is the source of truth for runtime keys. A translated locale can
+  // contain plural variants or provider-specific additions and must not become
+  // the schema base merely because it has more leaf keys.
   const parsedByLocale = {}
   for (const filename of localeFiles) {
     const locale = filename.replace(/\.json$/i, '')
@@ -228,15 +262,20 @@ async function main() {
     parsedByLocale[locale] = JSON.parse(raw)
   }
 
-  const baseLocale = Object.keys(parsedByLocale)
-    .map((locale) => {
-      const json = parsedByLocale[locale]
-      const trans = json?.translation ?? {}
-      return { locale, score: countLeafKeys(trans) }
-    })
-    .sort((a, b) => b.score - a.score || a.locale.localeCompare(b.locale))[0]?.locale
+  const baseLocale = parsedByLocale.en
+    ? 'en'
+    : Object.keys(parsedByLocale)
+        .map((locale) => {
+          const json = parsedByLocale[locale]
+          const trans = json?.translation ?? {}
+          return { locale, score: countLeafKeys(trans) }
+        })
+        .sort((a, b) => b.score - a.score || a.locale.localeCompare(b.locale))[0]?.locale
 
   if (!baseLocale) throw new Error('No locale files found.')
+
+  // Never rewrite translated locale files from an empty English schema.
+  validateEnglishBase(parsedByLocale, baseLocale)
 
   const baseFile = `${baseLocale}.json`
   const baseJson = parsedByLocale[baseLocale]

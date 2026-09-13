@@ -16,16 +16,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useMemo, useState, type ReactElement } from 'react'
+import { act, useMemo, useState, type ReactElement } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import en from '@/i18n/locales/en.json'
+import fr from '@/i18n/locales/fr.json'
+import ja from '@/i18n/locales/ja.json'
+import ru from '@/i18n/locales/ru.json'
+import vi from '@/i18n/locales/vi.json'
+import zh from '@/i18n/locales/zh.json'
 import { createReactTestEnvironment } from '@/test/react'
-import { waitFor, within } from '@testing-library/react'
+import { fireEvent, waitFor, within } from '@testing-library/react'
+import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { after, describe, test } from 'node:test'
 import { useAuthStore } from '@/stores/auth-store'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 import { api } from '@/lib/api'
-import { completeManualTaskBillingSettlement } from './api'
-import type { BillingSettlementReconciliationData } from './types'
+import {
+  completeManualTaskBillingSettlement,
+  completeManualTaskBillingSettlements,
+  completeManualTaskBillingSettlementsZero,
+} from './api'
+import type {
+  BillingSettlementReconciliationData,
+  BillingSettlementReconciliationItem,
+} from './types'
 
 const LOAD_ERROR_KEY = 'We could not load active alerts.'
 const testEnv = createReactTestEnvironment({
@@ -93,6 +108,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
           task_quota: 100,
           task_quota_target: 100,
           requires_manual_completion: true,
+          zero_quota_eligible: false,
           funding_delta: 0,
           applied_funding_delta: 0,
           token_delta: 0,
@@ -123,7 +139,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
       <BillingSettlementEvidence
         canCompleteManualTask
         canUpdateBlockingPolicy
-        data={failed ? undefined : data}
+        data={data}
         error={failed ? error : null}
         loading={false}
         onRetry={() => undefined}
@@ -133,6 +149,43 @@ function ManualSettlementEvidenceHarness(): ReactElement {
 }
 
 describe('SmartOps active alerts', () => {
+  test('keeps zero-quota confirmation wording pluralized in every locale', async (): Promise<void> => {
+    const key =
+      'This will settle {{displayCount}} selected MiniMax-H3 task(s) with an explicit final quota of 0 and refund the unused reservation. Continue only after verifying the provider result.'
+    const locales = { en, fr, ja, ru, vi, zh }
+    for (const [lng, resource] of Object.entries(locales)) {
+      const instance = i18next.createInstance()
+      await instance.init({
+        lng,
+        fallbackLng: false,
+        resources: { [lng]: resource },
+        interpolation: { escapeValue: false },
+      })
+      const zeroMessage = instance.t(key, {
+        count: 0,
+        displayCount: '7',
+      })
+      const distinctMessage = instance.t(key, {
+        count: 3,
+        displayCount: '3',
+      })
+      assert.notEqual(zeroMessage, distinctMessage)
+      assert.ok(zeroMessage.includes('7'))
+      assert.ok(distinctMessage.includes('3'))
+      for (const count of [1, 2]) {
+        const message = instance.t(key, {
+          count,
+          displayCount: String(count),
+        })
+        assert.ok(message.includes(String(count)))
+        assert.doesNotMatch(message, /task\(s\)/)
+        if (lng === 'ru' && count === 2) {
+          assert.match(message, /выбранных задач MiniMax-H3/)
+        }
+      }
+    }
+  })
+
   test('posts the exact manual task settlement contract', async (): Promise<void> => {
     const originalPost = api.post
     const writes: Array<{ url: string; data: unknown; config: unknown }> = []
@@ -149,7 +202,6 @@ describe('SmartOps active alerts', () => {
       const response = await completeManualTaskBillingSettlement(93, {
         revision: 2,
         actual_quota: 0,
-        note: 'Verified provider evidence and exact usage.',
       })
 
       assert.equal(response.success, true)
@@ -159,11 +211,121 @@ describe('SmartOps active alerts', () => {
           data: {
             revision: 2,
             actual_quota: 0,
-            note: 'Verified provider evidence and exact usage.',
           },
           config: { skipBusinessError: true, skipErrorHandler: true },
         },
       ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
+  test('passes a non-zero exact quota to the manual settlement endpoint', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return { data: { success: true, data: { actual_quota: 40 } } }
+    }) as typeof api.post
+
+    try {
+      const response = await completeManualTaskBillingSettlement(93, {
+        revision: 2,
+        actual_quota: 40,
+      })
+
+      assert.equal(response.success, true)
+      assert.deepEqual(writes, [
+        {
+          url: '/api/smart-ops/billing-settlements/93/complete-task',
+          data: {
+            revision: 2,
+            actual_quota: 40,
+          },
+        },
+      ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
+  test('passes per-task exact quotas, including an explicit zero, to the batch endpoint', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{
+      url: string
+      data: unknown
+      config: unknown
+    }> = []
+    api.post = (async (
+      url: string,
+      data: unknown,
+      config: unknown
+    ): Promise<unknown> => {
+      writes.push({ url: String(url), data, config })
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 2,
+            failed_count: 0,
+            settlement_ids: [93, 94],
+            failed: [],
+          },
+        },
+      }
+    }) as typeof api.post
+
+    try {
+      const response = await completeManualTaskBillingSettlements({
+        items: [
+          { id: 93, revision: 2, actual_quota: 0 },
+          { id: 94, revision: 7, actual_quota: 40 },
+        ],
+      })
+
+      assert.equal(response.success, true)
+      assert.deepEqual(writes, [
+        {
+          url: '/api/smart-ops/billing-settlements/complete-tasks',
+          data: {
+            items: [
+              { id: 93, revision: 2, actual_quota: 0 },
+              { id: 94, revision: 7, actual_quota: 40 },
+            ],
+          },
+          config: { skipBusinessError: true, skipErrorHandler: true },
+        },
+      ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
+  test('rejects malformed batch settlement responses at the API boundary', async (): Promise<void> => {
+    const originalPost = api.post
+    api.post = (async (): Promise<unknown> => ({
+      data: {
+        success: true,
+        data: {
+          completed_count: 1,
+          failed_count: 0,
+          settlement_ids: 'not-an-array',
+          failed: [],
+        },
+      },
+    })) as typeof api.post
+
+    try {
+      await assert.rejects(
+        completeManualTaskBillingSettlements({
+          items: [{ id: 93, revision: 2, actual_quota: 40 }],
+        })
+      )
+      await assert.rejects(
+        completeManualTaskBillingSettlementsZero({
+          items: [{ id: 93, revision: 2 }],
+        })
+      )
     } finally {
       api.post = originalPost
     }
@@ -489,7 +651,7 @@ describe('SmartOps active alerts', () => {
       await waitFor(() => {
         assert.ok(
           within(view.container).getByRole('button', {
-            name: 'Complete billing',
+            name: 'Enter exact quota',
           })
         )
       })
@@ -499,7 +661,7 @@ describe('SmartOps active alerts', () => {
       assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
       await view.click(
         within(view.container).getByRole('button', {
-          name: 'Complete billing',
+          name: 'Enter exact quota',
         })
       )
 
@@ -541,6 +703,101 @@ describe('SmartOps active alerts', () => {
       delete htmlElementPrototype.detachEvent
       queryClient.clear()
       await view.unmount()
+    }
+  })
+
+  test('blocks batch exact settlement after reconciliation refresh fails', async (): Promise<void> => {
+    const originalUser = useAuthStore.getState().auth.user
+    const originalSystemConfigLoading = useSystemConfigStore.getState().loading
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'root',
+      role: 100,
+    })
+    useSystemConfigStore.getState().setLoading(false)
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ManualSettlementEvidenceHarness />
+      </QueryClientProvider>
+    )
+
+    try {
+      await view.click(
+        await waitFor(() =>
+          within(view.container).getByRole('checkbox', {
+            name: 'Select billing reconciliation alert 701',
+          })
+        )
+      )
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Enter exact quotas (1)',
+        })
+      )
+      const input = await waitFor(() => {
+        const element = document.getElementById(
+          'manual-task-actual-quota-701'
+        ) as HTMLInputElement | null
+        assert.ok(element)
+        return element
+      })
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )?.set
+      assert.ok(setter)
+      await act(async () => {
+        setter.call(input, '40')
+        fireEvent.input(input)
+        fireEvent.change(input)
+      })
+      const submitButton = await waitFor(() => {
+        const button = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        })
+        assert.equal((button as HTMLButtonElement).disabled, false)
+        return button
+      })
+
+      const causeErrorButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(causeErrorButton)
+      await waitFor(() => {
+        assert.ok(
+          (view.container.textContent ?? '').includes(
+            'We could not load billing reconciliation details.'
+          )
+        )
+        assert.ok(
+          (
+            document.body.querySelector('[role="dialog"]')?.textContent ?? ''
+          ).includes(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+      })
+      assert.equal((submitButton as HTMLButtonElement).disabled, true)
+    } finally {
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+      queryClient.clear()
+      await view.unmount()
+      useAuthStore.getState().auth.setUser(originalUser)
+      useSystemConfigStore.getState().setLoading(originalSystemConfigLoading)
     }
   })
 
@@ -744,6 +1001,8 @@ describe('SmartOps active alerts', () => {
       role: 100,
     })
     const originalGet = api.get
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
     const htmlElementPrototype = window.HTMLElement
       .prototype as typeof window.HTMLElement.prototype & {
       attachEvent?: (name: string, listener: EventListener) => void
@@ -759,7 +1018,7 @@ describe('SmartOps active alerts', () => {
     }
     const manualRevision = 2
     const manualCompletionRequired = true
-    let includeManualItem = true
+    const includeManualItem = true
     api.get = (async (url: string): Promise<unknown> => {
       return {
         data:
@@ -768,9 +1027,9 @@ describe('SmartOps active alerts', () => {
                 success: true,
                 data: {
                   ...emptyReconciliationData(),
-                  total_count: includeManualItem ? 1 : 0,
-                  manual_count: includeManualItem ? 1 : 0,
-                  open_alert_count: includeManualItem ? 1 : 0,
+                  total_count: includeManualItem ? 3 : 0,
+                  manual_count: includeManualItem ? 2 : 0,
+                  open_alert_count: includeManualItem ? 3 : 0,
                   items: includeManualItem
                     ? [
                         {
@@ -786,6 +1045,7 @@ describe('SmartOps active alerts', () => {
                           task_quota: 100,
                           task_quota_target: 100,
                           requires_manual_completion: manualCompletionRequired,
+                          zero_quota_eligible: manualCompletionRequired,
                           funding_delta: 0,
                           applied_funding_delta: 0,
                           token_delta: 0,
@@ -802,6 +1062,66 @@ describe('SmartOps active alerts', () => {
                           record_blocks_user: false,
                           blocks_user: false,
                         },
+                        {
+                          id: 94,
+                          revision: manualRevision,
+                          operation_key: 'task:7002:finalize',
+                          status: 'manual',
+                          source: 'wallet',
+                          user_id: 53,
+                          subscription_id: 0,
+                          token_id: 54,
+                          task_id: 7002,
+                          task_quota: 120,
+                          task_quota_target: 120,
+                          requires_manual_completion: manualCompletionRequired,
+                          zero_quota_eligible: manualCompletionRequired,
+                          funding_delta: 0,
+                          applied_funding_delta: 0,
+                          token_delta: 0,
+                          applied_token_delta: 0,
+                          attempts: 0,
+                          last_error: 'provider usage needs verification',
+                          next_attempt: 0,
+                          created_at: 1786032545,
+                          updated_at: 1786032545,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: false,
+                          blocks_user: false,
+                        },
+                        {
+                          id: 95,
+                          revision: 1,
+                          operation_key: 'request:billing-request-95:finalize',
+                          status: 'pending',
+                          source: 'wallet',
+                          user_id: 54,
+                          subscription_id: 0,
+                          token_id: 0,
+                          task_id: 0,
+                          task_quota: 0,
+                          task_quota_target: 0,
+                          requires_manual_completion: false,
+                          zero_quota_eligible: false,
+                          funding_delta: 100,
+                          applied_funding_delta: 0,
+                          token_delta: 100,
+                          applied_token_delta: 0,
+                          attempts: 1,
+                          last_error: 'ordinary alert needs review',
+                          next_attempt: 0,
+                          created_at: 1786032546,
+                          updated_at: 1786032546,
+                          reconciliation_reviewed_at: 0,
+                          reconciliation_reviewed_by: 0,
+                          reconciliation_review_note: '',
+                          user_blocking_override: null,
+                          record_blocks_user: true,
+                          blocks_user: true,
+                        },
                       ]
                     : [],
                 },
@@ -809,6 +1129,43 @@ describe('SmartOps active alerts', () => {
             : { success: true, data: [] },
       }
     }) as typeof api.get
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      if (url === '/api/smart-ops/billing-settlements/reviews') {
+        return { data: { success: true, data: [] } }
+      }
+      if (url !== '/api/smart-ops/billing-settlements/complete-tasks-zero') {
+        return {
+          data: {
+            success: true,
+            data: {
+              completed_count: 2,
+              failed_count: 0,
+              settlement_ids: [93, 94],
+              failed: [],
+            },
+          },
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 1,
+            failed_count: 1,
+            settlement_ids: [93],
+            failed: [
+              {
+                settlement_id: 94,
+                code: 'record_conflict',
+                message:
+                  'record changed or could not be applied safely; refresh and reconcile it',
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.post
     const queryClient = createQueryClient()
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
@@ -817,19 +1174,20 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      let completeButton: HTMLElement | undefined
       await waitFor(() => {
         const screen = within(view.container)
-        completeButton = screen.getByRole('button', {
-          name: 'Complete billing',
-        })
+        assert.ok(
+          screen.getAllByRole('button', {
+            name: 'Confirm zero-quota settlement',
+          }).length > 0
+        )
         assert.equal(
           screen
             .getByRole('checkbox', {
               name: 'Select billing reconciliation alert 93',
             })
             .hasAttribute('data-disabled'),
-          true
+          false
         )
         assert.equal(
           screen
@@ -840,65 +1198,580 @@ describe('SmartOps active alerts', () => {
           true
         )
       })
-      assert.ok(completeButton)
-      await view.click(completeButton)
-
-      const dialog = await waitFor(() =>
-        within(document.body).getByRole('dialog')
+      await view.click(
+        within(view.container).getAllByRole('button', {
+          name: 'Confirm zero-quota settlement',
+        })[0]
       )
-      const dialogScreen = within(dialog)
-      const quotaInput = dialogScreen.getByLabelText('Exact final quota')
-      const noteInput = dialogScreen.getByLabelText('Audit note')
-      const submitButton = dialogScreen.getByRole('button', {
-        name: 'Apply exact settlement',
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      assert.deepEqual(writes, [])
+      await view.click(
+        within(view.container).getAllByRole('button', {
+          name: 'Confirm zero-quota settlement',
+        })[0]
+      )
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes[0], {
+          url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+          data: { items: [{ id: 93, revision: manualRevision }] },
+        })
       })
-      assert.equal(submitButton.hasAttribute('disabled'), true)
-      assert.equal((quotaInput as HTMLInputElement).max, '100')
-      assert.equal((quotaInput as HTMLInputElement).min, '0')
-      assert.equal((noteInput as HTMLTextAreaElement).maxLength, 1000)
+      const taskCheckbox = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 93',
+      })
+      await view.click(taskCheckbox)
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 94',
+        })
+      )
       assert.ok(
-        (dialog.textContent ?? '').includes(
-          'This workflow cannot add a charge above the original reservation.'
-        )
+        within(view.container).getByRole('button', {
+          name: 'Enter exact quotas (2)',
+        })
       )
-
-      includeManualItem = false
-      await queryClient.invalidateQueries({
-        queryKey: ['smart-ops', 'billing-settlement-reconciliation'],
+      const zeroBatchButton = within(view.container).getByRole('button', {
+        name: 'Confirm zero-quota settlements (2)',
       })
-
-      const staleDialog = await waitFor(() => {
-        const currentDialog = within(document.body).getByRole('dialog')
+      assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
+      await view.click(zeroBatchButton)
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes[1], {
+          url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+          data: {
+            items: [
+              { id: 93, revision: manualRevision },
+              { id: 94, revision: manualRevision },
+            ],
+          },
+        })
         assert.ok(
-          (currentDialog.textContent ?? '').includes(
-            'This reconciliation record changed while the dialog was open.'
-          )
+          (view.container.textContent ?? '').includes('Settlement #94:')
         )
-        return currentDialog
       })
-      const staleDialogScreen = within(staleDialog)
-      assert.equal(staleDialog, dialog)
-      assert.equal(
-        staleDialog.querySelector('#manual-task-actual-quota'),
-        quotaInput
+      assert.equal(within(document.body).queryByRole('dialog'), null)
+      assert.ok(
+        within(view.container).getAllByRole('button', {
+          name: 'Enter exact quota',
+        }).length > 0
       )
-      assert.equal(
-        staleDialog.querySelector('#manual-task-audit-note'),
-        noteInput
+
+      // The H3 zero-quota shortcut must not hide the exact settlement path.
+      // Open the real dialog and verify that the exact input remains available
+      // instead of being replaced by the zero-quota batch action.
+      await view.click(
+        within(view.container).getAllByRole('button', {
+          name: 'Enter exact quota',
+        })[0]
       )
+      const exactQuotaInput = document.getElementById(
+        'manual-task-actual-quota'
+      ) as HTMLInputElement
+      assert.ok(exactQuotaInput)
+      assert.equal(exactQuotaInput.type, 'number')
+      assert.equal(exactQuotaInput.value, '')
+      assert.equal(exactQuotaInput.min, '0')
+      assert.equal(exactQuotaInput.max, '100')
       assert.equal(
-        staleDialogScreen
-          .getByRole('button', { name: 'Apply exact settlement' })
-          .hasAttribute('disabled'),
+        (
+          within(document.body).getByRole('button', {
+            name: 'Apply exact settlement',
+          }) as HTMLButtonElement
+        ).disabled,
         true
       )
+
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      // The exact dialog was opened from the manual-task rows above. After it
+      // closes, select only the ordinary alert to verify that manual task
+      // completion remains separate from ordinary batch review.
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 93',
+        })
+      )
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 95',
+        })
+      )
+      const mixedSelectionButton = within(view.container).getByRole('button', {
+        name: 'Select either task settlements or ordinary alerts, not both.',
+      }) as HTMLButtonElement
+      assert.equal(mixedSelectionButton.disabled, true)
+      assert.equal(writes.length, 2)
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 93',
+        })
+      )
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Review and close selected (1)',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes[2], {
+          url: '/api/smart-ops/billing-settlements/reviews',
+          data: { items: [{ id: 95, revision: 1 }] },
+        })
+        assert.ok(
+          (view.container.textContent ?? '').includes('Settlement #94:')
+        )
+      })
+
+      // Opening the exact-settlement path must not issue another zero-quota
+      // request. The exact endpoint contract is covered by the API test.
+      assert.equal(writes.length, 3)
     } finally {
       api.get = originalGet
+      api.post = originalPost
       delete htmlElementPrototype.attachEvent
       delete htmlElementPrototype.detachEvent
       await view.unmount()
       queryClient.clear()
       useAuthStore.getState().auth.setUser(originalUser)
+    }
+  })
+
+  test('submits per-task exact quotas from the selected batch dialog', async (): Promise<void> => {
+    const originalUser = useAuthStore.getState().auth.user
+    useAuthStore.getState().auth.setUser({
+      id: 1,
+      username: 'root',
+      role: 100,
+    })
+    const originalSystemConfigLoading = useSystemConfigStore.getState().loading
+    useSystemConfigStore.getState().setLoading(false)
+    const htmlElementPrototype = window.HTMLElement
+      .prototype as typeof window.HTMLElement.prototype & {
+      attachEvent?: (name: string, listener: EventListener) => void
+      detachEvent?: (name: string, listener: EventListener) => void
+    }
+    htmlElementPrototype.attachEvent = function (name, listener) {
+      this.addEventListener(name.replace(/^on/, ''), listener)
+    }
+    htmlElementPrototype.detachEvent = function (name, listener) {
+      this.removeEventListener(name.replace(/^on/, ''), listener)
+    }
+    const originalGet = api.get
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    type TaskItemSeed = {
+      id: number
+      revision: number
+      operation_key: string
+      task_id: number
+      task_quota: number
+      zero_quota_eligible: boolean
+    }
+    const taskItems = (
+      [
+        {
+          id: 101,
+          revision: 2,
+          operation_key: 'task:7101:finalize',
+          task_id: 7101,
+          task_quota: 100,
+          zero_quota_eligible: true,
+        },
+        {
+          id: 102,
+          revision: 3,
+          operation_key: 'task:7102:finalize',
+          task_id: 7102,
+          task_quota: 80,
+          zero_quota_eligible: true,
+        },
+      ] satisfies TaskItemSeed[]
+    ).map(
+      (item: TaskItemSeed): BillingSettlementReconciliationItem => ({
+        ...item,
+        status: 'manual' as const,
+        source: 'wallet' as const,
+        user_id: 53,
+        subscription_id: 0,
+        token_id: 54,
+        task_quota_target: item.task_quota,
+        requires_manual_completion: true,
+        funding_delta: 0,
+        applied_funding_delta: 0,
+        token_delta: 0,
+        applied_token_delta: 0,
+        attempts: 0,
+        last_error: 'provider usage needs verification',
+        next_attempt: 0,
+        created_at: 1786032545,
+        updated_at: 1786032545,
+        reconciliation_reviewed_at: 0,
+        reconciliation_reviewed_by: 0,
+        reconciliation_review_note: '',
+        user_blocking_override: null,
+        record_blocks_user: false,
+        blocks_user: false,
+      })
+    )
+    api.get = (async (url: string): Promise<unknown> => ({
+      data:
+        url === '/api/smart-ops/billing-settlements'
+          ? {
+              success: true,
+              data: {
+                ...emptyReconciliationData(),
+                total_count: taskItems.length,
+                manual_count: taskItems.length,
+                open_alert_count: taskItems.length,
+                items: taskItems,
+              },
+            }
+          : { success: true, data: [] },
+    })) as typeof api.get
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 2,
+            failed_count: 0,
+            settlement_ids: [101, 102],
+            failed: [],
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ActiveAlerts />
+      </QueryClientProvider>
+    )
+
+    try {
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Review and close selected (0)',
+          })
+        )
+      })
+      const checkboxes = taskItems.map((item) =>
+        within(view.container).getByRole('checkbox', {
+          name: `Select billing reconciliation alert ${item.id}`,
+        })
+      )
+      await view.click(checkboxes[0])
+      await view.click(checkboxes[1])
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Enter exact quotas (2)',
+        })
+      )
+
+      const firstInput = await waitFor(() => {
+        const input = document.getElementById(
+          'manual-task-actual-quota-101'
+        ) as HTMLInputElement | null
+        assert.ok(input)
+        return input
+      })
+      const secondInput = document.getElementById(
+        'manual-task-actual-quota-102'
+      ) as HTMLInputElement
+      assert.ok(secondInput)
+      assert.equal(useSystemConfigStore.getState().loading, false)
+      assert.equal(firstInput.disabled, false)
+      assert.equal(secondInput.disabled, false)
+      assert.equal(firstInput.value, '')
+      assert.equal(secondInput.value, '')
+      assert.equal(within(document.body).queryByText('Loading...'), null)
+      assert.equal(
+        within(document.body).queryByText(
+          'This reconciliation record changed while the dialog was open.'
+        ),
+        null
+      )
+      const setInputValue = (input: HTMLInputElement, value: string): void => {
+        const setter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value'
+        )?.set
+        assert.ok(setter)
+        setter.call(input, value)
+        fireEvent.input(input)
+      }
+      await act(async () => {
+        setInputValue(firstInput, '')
+      })
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByText('Enter the exact final quota.')
+        )
+        assert.equal(firstInput.getAttribute('aria-invalid'), 'true')
+        const submitButton = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        }) as HTMLButtonElement
+        assert.equal(submitButton.disabled, true)
+      })
+      await act(async () => {
+        setInputValue(firstInput, '101')
+      })
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByText(
+            'Final quota cannot exceed the reserved quota.'
+          )
+        )
+        const submitButton = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        }) as HTMLButtonElement
+        assert.equal(submitButton.disabled, true)
+      })
+      await act(async () => {
+        setInputValue(firstInput, '0')
+        setInputValue(secondInput, '40')
+      })
+      await waitFor(() => {
+        assert.equal(firstInput.value, '0')
+        assert.equal(secondInput.value, '40')
+        const submitButton = within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        }) as HTMLButtonElement
+        assert.equal(submitButton.disabled, false)
+      })
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply exact settlements',
+        })
+      )
+
+      await waitFor(() => {
+        assert.deepEqual(writes, [
+          {
+            url: '/api/smart-ops/billing-settlements/complete-tasks',
+            data: {
+              items: [
+                { id: 101, revision: 2, actual_quota: 0 },
+                { id: 102, revision: 3, actual_quota: 40 },
+              ],
+            },
+          },
+        ])
+      })
+    } finally {
+      api.get = originalGet
+      api.post = originalPost
+      await view.unmount()
+      queryClient.clear()
+      useAuthStore.getState().auth.setUser(originalUser)
+      useSystemConfigStore.getState().setLoading(originalSystemConfigLoading)
+      delete htmlElementPrototype.attachEvent
+      delete htmlElementPrototype.detachEvent
+    }
+  })
+
+  test('blocks zero-quota settlement when the confirmation revision becomes stale', async (): Promise<void> => {
+    const originalPost = api.post
+    const writes: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url: string, data: unknown): Promise<unknown> => {
+      writes.push({ url: String(url), data })
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 1,
+            failed_count: 0,
+            settlement_ids: [111],
+            failed: [],
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const taskItem = (
+      revision: number
+    ): BillingSettlementReconciliationItem => ({
+      id: 111,
+      revision,
+      operation_key: 'task:7111:finalize',
+      status: 'manual' as const,
+      source: 'wallet' as const,
+      user_id: 53,
+      subscription_id: 0,
+      token_id: 54,
+      task_id: 7111,
+      task_quota: 100,
+      task_quota_target: 100,
+      requires_manual_completion: true,
+      zero_quota_eligible: true,
+      funding_delta: 0,
+      applied_funding_delta: 0,
+      token_delta: 0,
+      applied_token_delta: 0,
+      attempts: 0,
+      last_error: 'provider usage needs verification',
+      next_attempt: 0,
+      created_at: 1786032545,
+      updated_at: 1786032545,
+      reconciliation_reviewed_at: 0,
+      reconciliation_reviewed_by: 0,
+      reconciliation_review_note: '',
+      user_blocking_override: null,
+      record_blocks_user: false,
+      blocks_user: false,
+    })
+
+    function Harness(): ReactElement {
+      const [revision, setRevision] = useState(2)
+      const data = useMemo<BillingSettlementReconciliationData>(
+        () => ({
+          ...emptyReconciliationData(),
+          total_count: 1,
+          manual_count: 1,
+          open_alert_count: 1,
+          items: [taskItem(revision)],
+        }),
+        [revision]
+      )
+      return (
+        <>
+          <button type='button' onClick={() => setRevision(3)}>
+            Refresh reconciliation
+          </button>
+          <BillingSettlementEvidence
+            canCompleteManualTask
+            canUpdateBlockingPolicy
+            data={data}
+            error={null}
+            loading={false}
+            onRetry={() => undefined}
+          />
+        </>
+      )
+    }
+
+    const queryClient = createQueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <Harness />
+      </QueryClientProvider>
+    )
+
+    try {
+      const checkbox = within(view.container).getByRole('checkbox', {
+        name: 'Select billing reconciliation alert 111',
+      })
+      await view.click(checkbox)
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Confirm zero-quota settlements (1)',
+          })
+        )
+      })
+      const exactQuotaBatchButton = within(view.container).getByRole('button', {
+        name: 'Enter exact quotas (1)',
+      })
+      const zeroQuotaBatchButton = within(view.container).getByRole('button', {
+        name: 'Confirm zero-quota settlements (1)',
+      })
+      const actionButtons = Array.from(
+        view.container.querySelectorAll('button')
+      ).filter((button) =>
+        [exactQuotaBatchButton, zeroQuotaBatchButton].includes(button)
+      )
+      assert.equal(actionButtons[0], exactQuotaBatchButton)
+      await view.click(exactQuotaBatchButton)
+      await waitFor(() => {
+        assert.ok(document.getElementById('manual-task-actual-quota-111'))
+      })
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      await view.click(zeroQuotaBatchButton)
+      await waitFor(() => {
+        assert.ok(
+          within(document.body).getByRole('button', {
+            name: 'Apply zero-quota settlements',
+          })
+        )
+      })
+
+      const refreshButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement | null
+      assert.ok(refreshButton)
+      fireEvent.click(refreshButton)
+      await waitFor(() => {
+        const confirm = within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        }) as HTMLButtonElement
+        assert.equal(confirm.disabled, true)
+        assert.ok(
+          within(document.body).getByText(
+            'This reconciliation record changed while the dialog was open.'
+          )
+        )
+      })
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      assert.deepEqual(writes, [])
+
+      await view.click(
+        within(document.body).getByRole('button', { name: 'Cancel' })
+      )
+      await view.click(
+        within(view.container).getByRole('checkbox', {
+          name: 'Select billing reconciliation alert 111',
+        })
+      )
+      await waitFor(() => {
+        assert.ok(
+          within(view.container).getByRole('button', {
+            name: 'Confirm zero-quota settlements (1)',
+          })
+        )
+      })
+      await view.click(
+        within(view.container).getByRole('button', {
+          name: 'Confirm zero-quota settlements (1)',
+        })
+      )
+      await view.click(
+        within(document.body).getByRole('button', {
+          name: 'Apply zero-quota settlements',
+        })
+      )
+      await waitFor(() => {
+        assert.deepEqual(writes, [
+          {
+            url: '/api/smart-ops/billing-settlements/complete-tasks-zero',
+            data: { items: [{ id: 111, revision: 3 }] },
+          },
+        ])
+      })
+    } finally {
+      api.post = originalPost
+      await view.unmount()
+      queryClient.clear()
     }
   })
 

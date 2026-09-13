@@ -8,6 +8,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/shopspring/decimal"
 )
@@ -351,6 +352,11 @@ func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRati
 	if math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || common.QuotaPerUnit <= 0 {
 		return nil, fmt.Errorf("H3 quota per unit must be finite and positive")
 	}
+	usageContract := taskusage.MiniMaxH3Contract()
+	usageContractDigest, err := taskusage.ContractDigest(usageContract)
+	if err != nil {
+		return nil, fmt.Errorf("build H3 usage contract digest: %w", err)
+	}
 
 	videoReserve := int64(0)
 	if input.InputVideoCount > 0 {
@@ -366,6 +372,10 @@ func buildH3BillingPlan(profile H3BillingConfig, input H3BillingInput, groupRati
 		GroupRatio:                     groupRatio,
 		QuotaPerUnit:                   common.QuotaPerUnit,
 		Resolution:                     resolution,
+		UsageProducerKind:              types.TaskUsageProducerKindGoAdapter,
+		UsageSourceID:                  usageContract.SourceID,
+		UsageSchemaVersion:             usageContract.SchemaVersion,
+		UsageContractDigest:            usageContractDigest,
 		RequestedOutputDurationSeconds: input.OutputDurationSeconds,
 		InputVideoCount:                input.InputVideoCount,
 		InputAudioCount:                input.InputAudioCount,
@@ -583,6 +593,34 @@ func validateH3BillingPlan(plan *types.TaskBillingPlan) error {
 	}
 	if strings.TrimSpace(plan.ConfigHash) == "" {
 		return fmt.Errorf("H3 billing plan config hash is invalid")
+	}
+	usageIdentityFields := 0
+	if plan.UsageProducerKind != "" {
+		usageIdentityFields++
+	}
+	if plan.UsageSourceID != "" {
+		usageIdentityFields++
+	}
+	if plan.UsageSchemaVersion != 0 {
+		usageIdentityFields++
+	}
+	if plan.UsageContractDigest != "" {
+		usageIdentityFields++
+	}
+	if plan.Source == H3BillingSource && usageIdentityFields != 4 {
+		return fmt.Errorf("H3 billing plan usage contract identity is required")
+	}
+	if usageIdentityFields != 0 {
+		if usageIdentityFields != 4 {
+			return fmt.Errorf("H3 billing plan usage contract identity is incomplete")
+		}
+		if plan.UsageProducerKind != types.TaskUsageProducerKindGoAdapter ||
+			plan.UsageSourceID != taskusage.SourceIDMiniMax {
+			return fmt.Errorf("H3 billing plan usage contract identity is invalid")
+		}
+		if _, err := taskusage.ResolveContract(plan.UsageSourceID, plan.UsageSchemaVersion, plan.UsageContractDigest); err != nil {
+			return fmt.Errorf("H3 billing plan usage contract identity is invalid: %w", err)
+		}
 	}
 	if plan.GroupRatio < 0 || math.IsNaN(plan.GroupRatio) || math.IsInf(plan.GroupRatio, 0) {
 		return fmt.Errorf("H3 billing plan group ratio is invalid")
