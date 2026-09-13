@@ -163,14 +163,14 @@ describe('SmartOps active alerts', () => {
       })
       const zeroMessage = instance.t(key, {
         count: 0,
-        displayCount: '0',
+        displayCount: '7',
       })
       const distinctMessage = instance.t(key, {
         count: 3,
         displayCount: '3',
       })
       assert.notEqual(zeroMessage, distinctMessage)
-      assert.ok(zeroMessage.includes('0'))
+      assert.ok(zeroMessage.includes('7'))
       assert.ok(distinctMessage.includes('3'))
       for (const count of [1, 2]) {
         const message = instance.t(key, {
