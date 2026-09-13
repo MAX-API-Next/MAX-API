@@ -36,24 +36,31 @@ import type {
   SmartOpsAlertsResponse,
 } from './types'
 
-const manualTaskBillingBatchCompletionResponseSchema = z.object({
-  success: z.boolean(),
-  message: z.string().optional(),
-  data: z
-    .object({
-      completed_count: z.number().int().nonnegative(),
-      failed_count: z.number().int().nonnegative(),
-      settlement_ids: z.array(z.number().int().positive()),
-      failed: z.array(
-        z.object({
-          settlement_id: z.number().int().positive(),
-          code: z.string().optional(),
-          message: z.string().optional(),
-        })
-      ),
+const manualTaskBillingBatchCompletionDataSchema = z.object({
+  completed_count: z.number().int().nonnegative(),
+  failed_count: z.number().int().nonnegative(),
+  settlement_ids: z.array(z.number().int().positive()),
+  failed: z.array(
+    z.object({
+      settlement_id: z.number().int().positive(),
+      code: z.string().optional(),
+      message: z.string().optional(),
     })
-    .optional(),
+  ),
 })
+
+const manualTaskBillingBatchCompletionResponseSchema = z.union([
+  z.object({
+    success: z.literal(true),
+    message: z.string().optional(),
+    data: manualTaskBillingBatchCompletionDataSchema,
+  }),
+  z.object({
+    success: z.literal(false),
+    message: z.string().optional(),
+    data: manualTaskBillingBatchCompletionDataSchema.optional(),
+  }),
+])
 
 type ManualTaskBillingBatchCompletionResponse = z.infer<
   typeof manualTaskBillingBatchCompletionResponseSchema

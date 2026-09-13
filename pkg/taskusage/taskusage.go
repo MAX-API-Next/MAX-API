@@ -185,8 +185,9 @@ func ValidateEnvelope(contract types.TaskUsageContract, envelope *types.TaskUsag
 		envelope.Completeness != expected.Completeness {
 		return fmt.Errorf("task usage envelope identity or digest mismatch")
 	}
-	if envelope.EvidenceDigest != expected.EvidenceDigest &&
-		envelope.EvidenceDigest != legacyEvidenceDigest(envelope.Stage, envelope.Presence, envelope.Completeness, envelope.Usage) {
+	legacyDigestAccepted := legacyEvidenceDigestAllowed(contract) &&
+		envelope.EvidenceDigest == legacyEvidenceDigest(envelope.Stage, envelope.Presence, envelope.Completeness, envelope.Usage)
+	if envelope.EvidenceDigest != expected.EvidenceDigest && !legacyDigestAccepted {
 		return fmt.Errorf("task usage envelope identity or digest mismatch")
 	}
 	return nil
@@ -331,6 +332,11 @@ func legacyEvidenceDigest(stage, presence, completeness string, usage *types.Tas
 		fmt.Fprintf(&canonical, "%s=%s\n", key, pointerString(values[key]))
 	}
 	return sha256Hex(canonical.String())
+}
+
+func legacyEvidenceDigestAllowed(contract types.TaskUsageContract) bool {
+	return contract.SchemaVersion == 1 &&
+		(contract.SourceID == SourceIDMiniMax || contract.SourceID == SourceIDDoubaoVideo)
 }
 
 func pointerString(value *int64) string {

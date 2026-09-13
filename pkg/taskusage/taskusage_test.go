@@ -125,6 +125,51 @@ func TestEvidenceDigestIgnoresCanonicalFieldsOutsideFrozenContract(t *testing.T)
 	require.NoError(t, ValidateEnvelope(contract, legacy, types.TaskUsageProducerKindGoAdapter))
 }
 
+func TestValidateEnvelopeRejectsLegacyDigestForUnregisteredContracts(t *testing.T) {
+	base := MiniMaxH3Contract()
+	tests := []struct {
+		name     string
+		contract types.TaskUsageContract
+	}{
+		{
+			name: "unknown source",
+			contract: func() types.TaskUsageContract {
+				contract := base
+				contract.SourceID = "future_provider"
+				return contract
+			}(),
+		},
+		{
+			name: "new schema version",
+			contract: func() types.TaskUsageContract {
+				contract := base
+				contract.SchemaVersion = 2
+				return contract
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := int64(5_000)
+			video := int64(0)
+			audio := int64(0)
+			images := int64(1)
+			envelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, tt.contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+				OutputDurationMs:     &output,
+				InputVideoDurationMs: &video,
+				InputAudioDurationMs: &audio,
+				InputImageCount:      &images,
+				Source:               types.TaskUsageSourceProviderResponse,
+				Completeness:         types.TaskUsageCompletenessComplete,
+			})
+			require.NoError(t, err)
+			envelope.EvidenceDigest = legacyEvidenceDigest(envelope.Stage, envelope.Presence, envelope.Completeness, envelope.Usage)
+			require.ErrorContains(t, ValidateEnvelope(tt.contract, envelope, types.TaskUsageProducerKindGoAdapter), "digest")
+		})
+	}
+}
+
 func TestValidateEnvelopeRejectsIdentityAndDigestTampering(t *testing.T) {
 	zero := int64(0)
 	envelope, err := BuildEnvelope(types.TaskUsageProducerKindGoAdapter, DoubaoVideoContract(), types.TaskUsageSourceProviderResponse, &types.TaskUsage{

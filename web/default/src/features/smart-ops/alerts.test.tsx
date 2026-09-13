@@ -326,6 +326,20 @@ describe('SmartOps active alerts', () => {
           items: [{ id: 93, revision: 2 }],
         })
       )
+
+      api.post = (async (): Promise<unknown> => ({
+        data: { success: true },
+      })) as typeof api.post
+      await assert.rejects(
+        completeManualTaskBillingSettlements({
+          items: [{ id: 93, revision: 2, actual_quota: 40 }],
+        })
+      )
+      await assert.rejects(
+        completeManualTaskBillingSettlementsZero({
+          items: [{ id: 93, revision: 2 }],
+        })
+      )
     } finally {
       api.post = originalPost
     }
