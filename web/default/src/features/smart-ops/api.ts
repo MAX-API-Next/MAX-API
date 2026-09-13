@@ -43,10 +43,10 @@ const manualTaskBillingBatchCompletionResponseSchema = z.object({
     .object({
       completed_count: z.number().int().nonnegative(),
       failed_count: z.number().int().nonnegative(),
-      settlement_ids: z.array(z.number().int().safe().positive()),
+      settlement_ids: z.array(z.number().int().positive()),
       failed: z.array(
         z.object({
-          settlement_id: z.number().int().safe().positive(),
+          settlement_id: z.number().int().positive(),
           code: z.string().optional(),
           message: z.string().optional(),
         })

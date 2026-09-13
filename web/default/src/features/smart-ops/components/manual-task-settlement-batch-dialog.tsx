@@ -75,7 +75,7 @@ export function ManualTaskSettlementBatchDialog(
   const form = useForm<ManualTaskSettlementBatchFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      items: props.items.map(() => ({ actualQuota: '0' })),
+      items: props.items.map(() => ({ actualQuota: '' })),
     },
     mode: 'onChange',
   })

@@ -1281,9 +1281,17 @@ describe('SmartOps active alerts', () => {
       ) as HTMLInputElement
       assert.ok(exactQuotaInput)
       assert.equal(exactQuotaInput.type, 'number')
-      assert.equal(exactQuotaInput.value, '0')
+      assert.equal(exactQuotaInput.value, '')
       assert.equal(exactQuotaInput.min, '0')
       assert.equal(exactQuotaInput.max, '100')
+      assert.equal(
+        (
+          within(document.body).getByRole('button', {
+            name: 'Apply exact settlement',
+          }) as HTMLButtonElement
+        ).disabled,
+        true
+      )
 
       await view.click(
         within(document.body).getByRole('button', { name: 'Cancel' })
@@ -1489,8 +1497,8 @@ describe('SmartOps active alerts', () => {
       assert.equal(useSystemConfigStore.getState().loading, false)
       assert.equal(firstInput.disabled, false)
       assert.equal(secondInput.disabled, false)
-      assert.equal(firstInput.value, '0')
-      assert.equal(secondInput.value, '0')
+      assert.equal(firstInput.value, '')
+      assert.equal(secondInput.value, '')
       assert.equal(within(document.body).queryByText('Loading...'), null)
       assert.equal(
         within(document.body).queryByText(
