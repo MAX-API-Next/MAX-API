@@ -35,6 +35,7 @@ import { api } from '@/lib/api'
 import {
   completeManualTaskBillingSettlement,
   completeManualTaskBillingSettlements,
+  completeManualTaskBillingSettlementsZero,
 } from './api'
 import type {
   BillingSettlementReconciliationData,
@@ -261,7 +262,17 @@ describe('SmartOps active alerts', () => {
       config: unknown
     ): Promise<unknown> => {
       writes.push({ url: String(url), data, config })
-      return { data: { success: true, data: { completed_count: 2 } } }
+      return {
+        data: {
+          success: true,
+          data: {
+            completed_count: 2,
+            failed_count: 0,
+            settlement_ids: [93, 94],
+            failed: [],
+          },
+        },
+      }
     }) as typeof api.post
 
     try {
@@ -285,6 +296,36 @@ describe('SmartOps active alerts', () => {
           config: { skipBusinessError: true, skipErrorHandler: true },
         },
       ])
+    } finally {
+      api.post = originalPost
+    }
+  })
+
+  test('rejects malformed batch settlement responses at the API boundary', async (): Promise<void> => {
+    const originalPost = api.post
+    api.post = (async (): Promise<unknown> => ({
+      data: {
+        success: true,
+        data: {
+          completed_count: 1,
+          failed_count: 0,
+          settlement_ids: 'not-an-array',
+          failed: [],
+        },
+      },
+    })) as typeof api.post
+
+    try {
+      await assert.rejects(
+        completeManualTaskBillingSettlements({
+          items: [{ id: 93, revision: 2, actual_quota: 40 }],
+        })
+      )
+      await assert.rejects(
+        completeManualTaskBillingSettlementsZero({
+          items: [{ id: 93, revision: 2 }],
+        })
+      )
     } finally {
       api.post = originalPost
     }

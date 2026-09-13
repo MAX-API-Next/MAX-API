@@ -84,7 +84,8 @@ export function classifyBillingSettlementReviewSelection(
       item.requires_manual_completion && item.zero_quota_eligible !== true
   )
   const hasZeroQuotaTasks = items.some(
-    (item) => item.zero_quota_eligible === true
+    (item) =>
+      item.requires_manual_completion && item.zero_quota_eligible === true
   )
   const hasOrdinaryAlerts = items.some(
     (item) => !item.requires_manual_completion

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { type ReactElement } from 'react'
+import { useMemo, type ReactElement } from 'react'
 import { useFieldArray, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
@@ -64,9 +64,16 @@ export function ManualTaskSettlementBatchDialog(
 ): ReactElement {
   const { t } = useTranslation()
   const { currency, loading: configLoading } = useSystemConfig()
-  const maxQuotas = props.items.map((item) => item.task_quota)
+  const maxQuotas = useMemo(
+    () => props.items.map((item) => item.task_quota),
+    [props.items]
+  )
+  const schema = useMemo(
+    () => getManualTaskSettlementBatchSchema(t, maxQuotas),
+    [maxQuotas, t]
+  )
   const form = useForm<ManualTaskSettlementBatchFormValues>({
-    resolver: zodResolver(getManualTaskSettlementBatchSchema(t, maxQuotas)),
+    resolver: zodResolver(schema),
     defaultValues: {
       items: props.items.map(() => ({ actualQuota: '0' })),
     },

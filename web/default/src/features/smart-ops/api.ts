@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { z } from 'zod'
 import { api } from '@/lib/api'
 import { MAX_PERFORMANCE_LIMIT } from './lib/filters'
 import type {
@@ -24,7 +25,6 @@ import type {
   BillingSettlementReviewRequest,
   ManualTaskBillingCompletionRequest,
   ManualTaskBillingBatchCompletionRequest,
-  ManualTaskBillingBatchCompletionData,
   ChannelPerformanceData,
   ChannelPerformanceQuery,
   ChannelPerformanceResponse,
@@ -35,6 +35,29 @@ import type {
   ModelPerformanceResponse,
   SmartOpsAlertsResponse,
 } from './types'
+
+const manualTaskBillingBatchCompletionResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string().optional(),
+  data: z
+    .object({
+      completed_count: z.number().int().nonnegative(),
+      failed_count: z.number().int().nonnegative(),
+      settlement_ids: z.array(z.number().int().safe().positive()),
+      failed: z.array(
+        z.object({
+          settlement_id: z.number().int().safe().positive(),
+          code: z.string().optional(),
+          message: z.string().optional(),
+        })
+      ),
+    })
+    .optional(),
+})
+
+type ManualTaskBillingBatchCompletionResponse = z.infer<
+  typeof manualTaskBillingBatchCompletionResponseSchema
+>
 
 export async function getSmartOpsAlerts(): Promise<SmartOpsAlertsResponse> {
   const response = await api.get<SmartOpsAlertsResponse>(
@@ -86,38 +109,30 @@ export async function completeManualTaskBillingSettlement(
 
 export async function completeManualTaskBillingSettlements(
   request: ManualTaskBillingBatchCompletionRequest
-): Promise<
-  BillingSettlementMutationResponse & {
-    data?: ManualTaskBillingBatchCompletionData
-  }
-> {
-  const response = await api.post<
-    BillingSettlementMutationResponse & {
-      data?: ManualTaskBillingBatchCompletionData
+): Promise<ManualTaskBillingBatchCompletionResponse> {
+  const response = await api.post<ManualTaskBillingBatchCompletionResponse>(
+    '/api/smart-ops/billing-settlements/complete-tasks',
+    request,
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
     }
-  >('/api/smart-ops/billing-settlements/complete-tasks', request, {
-    skipBusinessError: true,
-    skipErrorHandler: true,
-  })
-  return response.data
+  )
+  return manualTaskBillingBatchCompletionResponseSchema.parse(response.data)
 }
 
 export async function completeManualTaskBillingSettlementsZero(
   request: BillingSettlementReviewRequest
-): Promise<
-  BillingSettlementMutationResponse & {
-    data?: ManualTaskBillingBatchCompletionData
-  }
-> {
-  const response = await api.post<
-    BillingSettlementMutationResponse & {
-      data?: ManualTaskBillingBatchCompletionData
+): Promise<ManualTaskBillingBatchCompletionResponse> {
+  const response = await api.post<ManualTaskBillingBatchCompletionResponse>(
+    '/api/smart-ops/billing-settlements/complete-tasks-zero',
+    request,
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
     }
-  >('/api/smart-ops/billing-settlements/complete-tasks-zero', request, {
-    skipBusinessError: true,
-    skipErrorHandler: true,
-  })
-  return response.data
+  )
+  return manualTaskBillingBatchCompletionResponseSchema.parse(response.data)
 }
 
 export async function getChannelPerformance(

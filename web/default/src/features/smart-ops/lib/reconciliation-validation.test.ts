@@ -171,6 +171,19 @@ describe('classifyBillingSettlementReviewSelection', () => {
     )
   })
 
+  test('ignores a stale zero-quota flag on an ordinary alert', () => {
+    assert.equal(
+      classifyBillingSettlementReviewSelection([
+        {
+          ...validData().items[0],
+          requires_manual_completion: false,
+          zero_quota_eligible: true,
+        },
+      ]),
+      'ordinary'
+    )
+  })
+
   test('routes zero and exact task selections to exact quota entry', () => {
     const ordinary = validData().items[0]
     const zeroQuotaTask = {

@@ -794,6 +794,10 @@ func EnsureManualTaskBillingCompletion(input BillingSettlementInput, reviewerID 
 	if reviewerID <= 0 || strings.TrimSpace(note) == "" || !billingSettlementIsManualTaskCompletion(input.OperationKey, input.TaskID) {
 		return BillingSettlement{}, ErrBillingSettlementReviewConflict
 	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	var approved BillingSettlement
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		record, _, err := ensureBillingSettlementRecordDB(tx, input)
@@ -980,6 +984,10 @@ func ResolveManualTaskBillingSettlement(id int64, expectedRevision int64, review
 	}
 	if id <= 0 || expectedRevision <= 0 || reviewerID <= 0 || strings.TrimSpace(note) == "" {
 		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
+	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	var resolved BillingSettlement
 	alreadyResolved := false
@@ -1284,6 +1292,10 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	}
 	if err := validateBillingSettlementInput(input); err != nil {
 		return false, err
+	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	effectPayload, err := billingSettlementEffectPayload(input.Effect)
 	if err != nil {
