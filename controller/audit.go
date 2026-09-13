@@ -35,6 +35,8 @@ var auditContentTemplates = map[string]string{
 	"billing.reconciliation_review":                 "Reviewed billing settlement ${settlement_id} (block user: ${block_user})",
 	"billing.reconciliation_review_batch":           "Reviewed and closed ${count} billing reconciliation alerts",
 	"billing.manual_task_settlement_complete":       "Completed manual task billing settlement ${settlement_id} with exact quota ${actual_quota}",
+	"billing.manual_task_settlement_batch_complete": "Completed ${completed_count} manual task billing settlements (${failed_count} failed)",
+	"billing.manual_task_settlement_batch_zero":     "Completed ${completed_count} manual task settlements with zero quota (${failed_count} failed)",
 
 	"channel.create":              "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":              "Updated channel ${name} (ID: ${id})",

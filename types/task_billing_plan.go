@@ -21,6 +21,11 @@ type TaskBillingPlan struct {
 	QuotaPerUnit  float64 `json:"quota_per_unit"`
 	Resolution    string  `json:"resolution"`
 
+	UsageProducerKind   string `json:"usage_producer_kind,omitempty"`
+	UsageSourceID       string `json:"usage_source_id,omitempty"`
+	UsageSchemaVersion  int    `json:"usage_schema_version,omitempty"`
+	UsageContractDigest string `json:"usage_contract_digest,omitempty"`
+
 	RequestedOutputDurationSeconds int64 `json:"requested_output_duration_seconds"`
 	InputVideoCount                int64 `json:"input_video_count"`
 	InputAudioCount                int64 `json:"input_audio_count"`

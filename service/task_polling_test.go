@@ -6,6 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/assert"
@@ -47,7 +51,20 @@ type usagePollingResponseAdaptor struct {
 	usageErr error
 }
 
-type configuredWrapperPollingAdaptor struct{}
+type usageFactPollingResponseAdaptor struct {
+	contract     types.TaskUsageContract
+	envelope     *types.TaskUsageEnvelope
+	err          error
+	calls        int
+	producerKind string
+}
+
+type configuredWrapperPollingAdaptor struct {
+	envelope                 *types.TaskUsageEnvelope
+	adjustedPromptTokens     int
+	adjustedCompletionTokens int
+	adjustedTotalTokens      int
+}
 
 func (a *configuredWrapperPollingAdaptor) Init(*relaycommon.RelayInfo) {}
 
@@ -63,7 +80,8 @@ func (a *configuredWrapperPollingAdaptor) FetchTask(string, string, map[string]a
 					"id":"439499419230570",
 					"object":"video.generation",
 					"status":"completed",
-					"data":[{"url":"https://cdn.example.com/polled.mp4"}]
+					"data":[{"url":"https://cdn.example.com/polled.mp4"}],
+					"usage":{"prompt_tokens":8,"completion_tokens":12,"total_tokens":20}
 				}
 			}
 		}`)),
@@ -74,8 +92,23 @@ func (a *configuredWrapperPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.
 	return nil, errors.New("configured parser should handle wrapper response")
 }
 
-func (a *configuredWrapperPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+func (a *configuredWrapperPollingAdaptor) AdjustBillingOnComplete(_ *model.Task, taskResult *relaycommon.TaskInfo) int {
+	a.adjustedPromptTokens = taskResult.PromptTokens
+	a.adjustedCompletionTokens = taskResult.CompletionTokens
+	a.adjustedTotalTokens = taskResult.TotalTokens
 	return 0
+}
+
+func (a *configuredWrapperPollingAdaptor) UsageContract() types.TaskUsageContract {
+	return taskusage.DoubaoVideoContract()
+}
+
+func (a *configuredWrapperPollingAdaptor) UsageProducerKind() string {
+	return types.TaskUsageProducerKindGoAdapter
+}
+
+func (a *configuredWrapperPollingAdaptor) ProduceUsage(types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	return a.envelope, nil
 }
 
 func (a *usagePollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
@@ -94,6 +127,36 @@ func (a *usagePollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *rela
 
 func (a *usagePollingResponseAdaptor) ExtractTaskUsage([]byte) (*types.TaskUsage, error) {
 	return a.usage, a.usageErr
+}
+
+func (a *usageFactPollingResponseAdaptor) Init(*relaycommon.RelayInfo) {}
+
+func (a *usageFactPollingResponseAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+
+func (a *usageFactPollingResponseAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess)}, nil
+}
+
+func (a *usageFactPollingResponseAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *usageFactPollingResponseAdaptor) UsageContract() types.TaskUsageContract {
+	return a.contract
+}
+
+func (a *usageFactPollingResponseAdaptor) UsageProducerKind() string {
+	if a.producerKind == "" {
+		return types.TaskUsageProducerKindGoAdapter
+	}
+	return a.producerKind
+}
+
+func (a *usageFactPollingResponseAdaptor) ProduceUsage(types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	a.calls++
+	return a.envelope, a.err
 }
 
 func TestApplyTaskUsageFactsAttachesProviderEvidence(t *testing.T) {
@@ -117,9 +180,128 @@ func TestApplyTaskUsageFactsFailsClosedOnProviderError(t *testing.T) {
 	assert.Nil(t, taskResult.Usage)
 }
 
+func TestApplyTaskUsageFactsPrefersValidatedEnvelopeAndProducesOnce(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{"usage":{}}`), taskResult))
+	require.Equal(t, 1, adaptor.calls)
+	require.NotNil(t, taskResult.UsageEnvelope)
+	require.Equal(t, types.TaskUsagePresencePresentZero, taskResult.UsageEnvelope.Presence)
+	require.NotNil(t, taskResult.Usage)
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{"usage":{}}`), taskResult))
+	require.Equal(t, 1, adaptor.calls, "an already validated envelope must not be produced twice")
+}
+
+func TestApplyTaskUsageFactsRejectsTamperedEnvelope(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	envelope.EvidenceDigest = "tampered"
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	err = applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult)
+	require.Error(t, err)
+	require.Nil(t, taskResult.Usage)
+	require.Nil(t, taskResult.UsageEnvelope)
+}
+
+func TestApplyTaskUsageFactsRejectsNonProviderResponseEnvelope(t *testing.T) {
+	zero := int64(0)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceRequestEstimate, &types.TaskUsage{
+		CompletionTokens: &zero, TotalTokens: &zero,
+		Source: types.TaskUsageSourceRequestEstimate, Completeness: types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+	taskResult := &relaycommon.TaskInfo{}
+
+	err = applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult)
+	require.EqualError(t, err, `task usage envelope stage "request_estimate" is not supported for polling`)
+	require.Nil(t, taskResult.Usage)
+	require.Nil(t, taskResult.UsageEnvelope)
+}
+
+func TestApplyTaskUsageFactsDoesNotCopyPartialDoubaoUsageToLegacyFields(t *testing.T) {
+	completion := int64(12)
+	contract := taskusage.DoubaoVideoContract()
+	envelope, err := taskusage.BuildEnvelope(types.TaskUsageProducerKindGoAdapter, contract, types.TaskUsageSourceProviderResponse, &types.TaskUsage{
+		CompletionTokens: &completion,
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessPartial,
+	})
+	require.NoError(t, err)
+	taskResult := &relaycommon.TaskInfo{}
+	adaptor := &usageFactPollingResponseAdaptor{contract: contract, envelope: envelope}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult))
+	assert.Zero(t, taskResult.CompletionTokens)
+	assert.Zero(t, taskResult.TotalTokens)
+	require.NotNil(t, taskResult.UsageEnvelope)
+	assert.Equal(t, types.TaskUsageCompletenessPartial, taskResult.UsageEnvelope.Completeness)
+}
+
+func TestApplyTaskUsageFactsAcceptsTrustedTaskPluginEnvelope(t *testing.T) {
+	_, sourceFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(sourceFile), "..", "pkg", "taskusage", "testdata", "task-plugin-minimax-h3-v1.json"))
+	require.NoError(t, err)
+	var fixture struct {
+		ProducerKind  string           `json:"producer_kind"`
+		SourceID      string           `json:"source_id"`
+		SchemaVersion int              `json:"schema_version"`
+		Stage         string           `json:"stage"`
+		Usage         *types.TaskUsage `json:"usage"`
+	}
+	require.NoError(t, common.Unmarshal(data, &fixture))
+	require.Equal(t, types.TaskUsageProducerKindTaskPlugin, fixture.ProducerKind)
+	contract := taskusage.MiniMaxH3Contract()
+	require.Equal(t, contract.SourceID, fixture.SourceID)
+	require.Equal(t, contract.SchemaVersion, fixture.SchemaVersion)
+	envelope, err := taskusage.BuildEnvelope(fixture.ProducerKind, contract, fixture.Stage, fixture.Usage)
+	require.NoError(t, err)
+	taskResult := &relaycommon.TaskInfo{}
+	adaptor := &usageFactPollingResponseAdaptor{
+		contract: contract, envelope: envelope, producerKind: fixture.ProducerKind,
+	}
+
+	require.NoError(t, applyTaskUsageFacts(adaptor, []byte(`{}`), taskResult))
+	require.NotNil(t, taskResult.UsageEnvelope)
+	require.Equal(t, fixture.ProducerKind, taskResult.UsageEnvelope.ProducerKind)
+	require.EqualValues(t, 5_000, *taskResult.Usage.OutputDurationMs)
+}
+
 func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *testing.T) {
 	truncate(t)
 	baseURL := "https://upstream.example.com"
+	completionTokens := int64(12)
+	totalTokens := int64(20)
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.DoubaoVideoContract(),
+		types.TaskUsageSourceProviderResponse,
+		&types.TaskUsage{
+			CompletionTokens: &completionTokens,
+			TotalTokens:      &totalTokens,
+			Source:           types.TaskUsageSourceProviderResponse,
+			Completeness:     types.TaskUsageCompletenessComplete,
+		},
+	)
+	require.NoError(t, err)
 	task := &model.Task{
 		TaskID:      "task_wrapped_polling",
 		Status:      model.TaskStatusInProgress,
@@ -138,13 +320,17 @@ func TestUpdateVideoSingleTaskUsesConfiguredParserForWrappedProviderResult(t *te
 	task.ChannelId = channel.Id
 	require.NoError(t, model.DB.Create(channel).Error)
 
-	err := updateVideoSingleTask(context.Background(), &configuredWrapperPollingAdaptor{}, channel, task.TaskID, map[string]*model.Task{task.TaskID: task})
+	adaptor := &configuredWrapperPollingAdaptor{envelope: envelope}
+	err = updateVideoSingleTask(context.Background(), adaptor, channel, task.TaskID, map[string]*model.Task{task.TaskID: task})
 
 	require.NoError(t, err)
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
 	assert.Equal(t, "https://cdn.example.com/polled.mp4", reloaded.PrivateData.ResultURL)
+	assert.Equal(t, 8, adaptor.adjustedPromptTokens)
+	assert.Equal(t, 12, adaptor.adjustedCompletionTokens)
+	assert.Equal(t, 20, adaptor.adjustedTotalTokens)
 }
 
 func TestAppliedTaskRecoveryPreservesSnapshotOnCASLoss(t *testing.T) {

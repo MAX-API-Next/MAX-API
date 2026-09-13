@@ -19,70 +19,53 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import type { TFunction } from 'i18next'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { getManualTaskSettlementSchema } from './manual-task-settlement'
+import {
+  getManualTaskSettlementBatchSchema,
+  getManualTaskSettlementSchema,
+} from './manual-task-settlement'
 
 const t = ((value: string) => value) as unknown as TFunction
 
 describe('manual task settlement schema', () => {
   const schema = getManualTaskSettlementSchema(t, 100)
 
-  test('accepts an exact bounded quota and trims the audit note', () => {
+  test('accepts an exact bounded quota without an audit note field', () => {
     const result = schema.safeParse({
       actualQuota: '40',
-      note: '  Verified provider usage.  ',
     })
 
     assert.equal(result.success, true)
     if (result.success) {
-      assert.deepEqual(result.data, {
-        actualQuota: '40',
-        note: 'Verified provider usage.',
-      })
+      assert.deepEqual(result.data, { actualQuota: '40' })
     }
   })
 
   test('accepts the exact reservation cap', () => {
     const result = schema.safeParse({
       actualQuota: '100',
-      note: 'Verified full reservation usage.',
     })
 
     assert.equal(result.success, true)
   })
 
   test('rejects empty quota', () => {
-    assert.equal(
-      schema.safeParse({ actualQuota: '', note: 'valid note' }).success,
-      false
-    )
+    assert.equal(schema.safeParse({ actualQuota: '' }).success, false)
   })
 
   test('rejects fractional quota', () => {
-    assert.equal(
-      schema.safeParse({ actualQuota: '1.5', note: 'valid note' }).success,
-      false
-    )
+    assert.equal(schema.safeParse({ actualQuota: '1.5' }).success, false)
   })
 
   test('rejects negative quota', () => {
-    assert.equal(
-      schema.safeParse({ actualQuota: '-1', note: 'valid note' }).success,
-      false
-    )
+    assert.equal(schema.safeParse({ actualQuota: '-1' }).success, false)
   })
 
   test('rejects over-reservation quota', () => {
-    assert.equal(
-      schema.safeParse({ actualQuota: '101', note: 'valid note' }).success,
-      false
-    )
+    assert.equal(schema.safeParse({ actualQuota: '101' }).success, false)
   })
 
-  test('rejects a short audit note', () => {
-    assert.equal(
-      schema.safeParse({ actualQuota: '0', note: 'x' }).success,
-      false
-    )
+  test('allows zero quota without a note', () => {
+    assert.equal(schema.safeParse({ actualQuota: '0' }).success, true)
   })
 
   test('rejects an unsafe integer below the cap', () => {
@@ -91,7 +74,6 @@ describe('manual task settlement schema', () => {
     assert.equal(
       largeSchema.safeParse({
         actualQuota: '9007199254740992',
-        note: 'valid note',
       }).success,
       false
     )
@@ -99,19 +81,64 @@ describe('manual task settlement schema', () => {
 
   test('rejects non-decimal quota representations', () => {
     for (const actualQuota of ['1e1', '0x10', '+5']) {
-      assert.equal(
-        schema.safeParse({ actualQuota, note: 'valid note' }).success,
-        false
-      )
+      assert.equal(schema.safeParse({ actualQuota }).success, false)
     }
   })
 
   test('preserves an explicit zero quota', () => {
     const result = schema.safeParse({
       actualQuota: '0',
-      note: 'Verified zero usage.',
     })
 
     assert.equal(result.success, true)
+  })
+
+  test('binds each batch item to its positional reservation cap', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    assert.equal(
+      batch.safeParse({
+        items: [{ actualQuota: '40' }, { actualQuota: '80' }],
+      }).success,
+      true
+    )
+    assert.equal(
+      batch.safeParse({
+        items: [{ actualQuota: '41' }, { actualQuota: '80' }],
+      }).success,
+      false
+    )
+  })
+
+  test('rejects batch arrays with incorrect cardinality', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    assert.equal(
+      batch.safeParse({ items: [{ actualQuota: '0' }] }).success,
+      false
+    )
+    assert.equal(
+      batch.safeParse({
+        items: [
+          { actualQuota: '0' },
+          { actualQuota: '0' },
+          { actualQuota: '0' },
+        ],
+      }).success,
+      false
+    )
+  })
+
+  test('reports an invalid second item at its indexed path', () => {
+    const batch = getManualTaskSettlementBatchSchema(t, [40, 80])
+    const result = batch.safeParse({
+      items: [{ actualQuota: '0' }, { actualQuota: '81' }],
+    })
+    assert.equal(result.success, false)
+    if (!result.success) {
+      assert.ok(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'items.1.actualQuota'
+        )
+      )
+    }
   })
 })

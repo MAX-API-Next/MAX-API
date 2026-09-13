@@ -18,6 +18,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	taskcommon "github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
@@ -35,6 +36,7 @@ type TaskAdaptor struct {
 }
 
 var _ channel.TaskUsageProvider = (*TaskAdaptor)(nil)
+var _ channel.TaskUsageFactProvider = (*TaskAdaptor)(nil)
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
@@ -308,10 +310,10 @@ func (a *TaskAdaptor) parseResolutionFromSize(size string, modelConfig ModelConf
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	if result, handled, err := parseH3TaskResult(respBody); handled {
-		return result, err
+		return attachH3UsageEnvelope(result, err)
 	}
 	if result, handled, err := parseGenericMiniMaxTaskResult(respBody); handled {
-		return result, err
+		return attachH3UsageEnvelope(result, err)
 	}
 
 	resTask := QueryTaskResponse{}
@@ -365,6 +367,92 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 func (a *TaskAdaptor) ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error) {
 	return a.extractTaskUsage(respBody, 0)
+}
+
+func (a *TaskAdaptor) UsageContract() types.TaskUsageContract {
+	return taskusage.MiniMaxH3Contract()
+}
+
+func (a *TaskAdaptor) UsageProducerKind() string {
+	return types.TaskUsageProducerKindGoAdapter
+}
+
+func (a *TaskAdaptor) ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error) {
+	if ctx.Stage != types.TaskUsageSourceProviderResponse {
+		return nil, fmt.Errorf("H3 task usage stage %q is not supported", ctx.Stage)
+	}
+	usage, err := a.ExtractTaskUsage(ctx.Payload)
+	if err != nil {
+		return nil, err
+	}
+	envelope, buildErr := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		a.UsageContract(),
+		ctx.Stage,
+		usage,
+	)
+	if buildErr == nil {
+		return envelope, nil
+	}
+	// Preserve the provider response as an auditable invalid fact so polling
+	// can reach a terminal state while billing remains reconciliation-gated.
+	invalidUsage := types.CloneTaskUsage(usage)
+	if invalidUsage == nil {
+		invalidUsage = &types.TaskUsage{}
+	}
+	invalidUsage.Source = ctx.Stage
+	invalidUsage.Completeness = types.TaskUsageCompletenessInvalid
+	invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		a.UsageContract(),
+		ctx.Stage,
+		invalidUsage,
+	)
+	if fallbackErr != nil {
+		return nil, buildErr
+	}
+	return invalidEnvelope, nil
+}
+
+func attachH3UsageEnvelope(result *relaycommon.TaskInfo, parseErr error) (*relaycommon.TaskInfo, error) {
+	if parseErr != nil || result == nil {
+		return result, parseErr
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		result.Usage,
+	)
+	if err != nil {
+		// Keep the parsed task state available to polling even when the
+		// provider usage cannot be bound to the host contract. Mark the
+		// evidence invalid so the task remains reconciliation-gated instead
+		// of allowing an unverified usage value to settle billing.
+		invalidUsage := types.CloneTaskUsage(result.Usage)
+		if invalidUsage == nil {
+			invalidUsage = &types.TaskUsage{}
+		}
+		invalidUsage.Source = types.TaskUsageSourceProviderResponse
+		invalidUsage.Completeness = types.TaskUsageCompletenessInvalid
+		invalidEnvelope, fallbackErr := taskusage.BuildEnvelope(
+			types.TaskUsageProducerKindGoAdapter,
+			taskusage.MiniMaxH3Contract(),
+			types.TaskUsageSourceProviderResponse,
+			invalidUsage,
+		)
+		if fallbackErr == nil {
+			result.Usage = invalidUsage
+			result.UsageEnvelope = invalidEnvelope
+			return result, nil
+		}
+		// The fallback contract is host-owned and should always be valid. If
+		// that invariant is ever broken, retain the result and surface the
+		// original binding error for the caller's retry/reconciliation path.
+		return result, err
+	}
+	result.UsageEnvelope = envelope
+	return result, nil
 }
 
 func (a *TaskAdaptor) extractTaskUsage(respBody []byte, unwrapDepth int) (*types.TaskUsage, error) {

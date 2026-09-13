@@ -21,7 +21,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota } from '@/lib/format'
+import { formatNumber, formatQuota } from '@/lib/format'
+import { useSystemConfig } from '@/hooks/use-system-config'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,7 +42,6 @@ import {
 } from '@/components/ui/field'
 import { Form, FormField } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import {
   getManualTaskSettlementSchema,
   type ManualTaskSettlementFormValues,
@@ -55,8 +55,7 @@ interface ManualTaskSettlementDialogProps {
   onOpenChange: (open: boolean) => void
   onSubmit: (
     item: BillingSettlementReconciliationItem,
-    actualQuota: number,
-    note: string
+    actualQuota: number
   ) => void
 }
 
@@ -64,20 +63,24 @@ export function ManualTaskSettlementDialog(
   props: ManualTaskSettlementDialogProps
 ): ReactElement {
   const { t } = useTranslation()
+  const { currency, loading: configLoading } = useSystemConfig()
   const item = props.item
   const form = useForm<ManualTaskSettlementFormValues>({
     resolver: zodResolver(
       getManualTaskSettlementSchema(t, props.item?.task_quota ?? 0)
     ),
-    defaultValues: { actualQuota: '', note: '' },
+    defaultValues: { actualQuota: '' },
     mode: 'onChange',
   })
   const canSubmit =
-    Boolean(props.item) && !props.stale && form.formState.isValid
+    Boolean(props.item) &&
+    !props.stale &&
+    !configLoading &&
+    form.formState.isValid
 
   const handleSubmit = form.handleSubmit((values) => {
     if (props.item && !props.stale) {
-      props.onSubmit(props.item, Number(values.actualQuota), values.note)
+      props.onSubmit(props.item, Number(values.actualQuota))
     }
   })
 
@@ -107,11 +110,6 @@ export function ManualTaskSettlementDialog(
                   quota: formatQuota(item.task_quota),
                 })}
               </AlertTitle>
-              <AlertDescription>
-                {t(
-                  'Only an exact quota from verified provider evidence is allowed. This workflow cannot add a charge above the original reservation.'
-                )}
-              </AlertDescription>
             </Alert>
 
             {props.stale && (
@@ -148,42 +146,18 @@ export function ManualTaskSettlementDialog(
                           min={0}
                           max={item.task_quota}
                           step={1}
-                          disabled={props.pending || props.stale}
-                          aria-invalid={fieldState.invalid}
-                        />
-                        <FieldDescription>
-                          {t('Allowed range: 0 to {{quota}}.', {
-                            quota: formatQuota(item.task_quota),
-                          })}
-                        </FieldDescription>
-                        {fieldState.error && (
-                          <FieldError>{fieldState.error.message}</FieldError>
-                        )}
-                      </Field>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name='note'
-                    render={({ field, fieldState }) => (
-                      <Field data-invalid={fieldState.invalid}>
-                        <FieldLabel htmlFor='manual-task-audit-note'>
-                          {t('Audit note')}
-                        </FieldLabel>
-                        <Textarea
-                          {...field}
-                          id='manual-task-audit-note'
-                          placeholder={t(
-                            'Describe the provider evidence and calculation used.'
-                          )}
-                          maxLength={1000}
-                          disabled={props.pending || props.stale}
+                          disabled={
+                            props.pending || props.stale || configLoading
+                          }
                           aria-invalid={fieldState.invalid}
                         />
                         <FieldDescription>
                           {t(
-                            'This note is bound to the idempotent financial operation.'
+                            'Enter quota value. {{quotaPerUnit}} quota = $1. Allowed range: 0 to {{quota}}.',
+                            {
+                              quotaPerUnit: formatNumber(currency.quotaPerUnit),
+                              quota: formatQuota(item.task_quota),
+                            }
                           )}
                         </FieldDescription>
                         {fieldState.error && (

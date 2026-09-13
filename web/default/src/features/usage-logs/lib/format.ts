@@ -281,6 +281,10 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   login: 'Logged in successfully via {{method}}',
   'billing.manual_task_settlement_complete':
     'Completed manual task billing settlement {{settlement_id}} with exact quota {{actual_quota}}',
+  'billing.manual_task_settlement_batch_complete':
+    'Completed {{completed_count}} manual task billing settlements ({{failed_count}} failed)',
+  'billing.manual_task_settlement_batch_zero':
+    'Completed {{completed_count}} manual task settlements with zero quota ({{failed_count}} failed)',
   'user.create': 'Created user {{username}} (role {{role}})',
   'user.update': 'Updated user {{username}} (ID: {{id}})',
   'user.delete': 'Deleted user {{username}} (ID: {{id}})',

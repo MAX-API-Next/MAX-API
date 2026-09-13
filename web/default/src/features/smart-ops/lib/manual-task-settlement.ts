@@ -21,12 +21,20 @@ import type { TFunction } from 'i18next'
 
 type ManualTaskSettlementSchemaShape = {
   actualQuota: string
-  note: string
 }
 
 type ManualTaskSettlementSchema = z.ZodType<
   ManualTaskSettlementSchemaShape,
   ManualTaskSettlementSchemaShape
+>
+
+type ManualTaskSettlementBatchSchemaShape = {
+  items: ManualTaskSettlementSchemaShape[]
+}
+
+type ManualTaskSettlementBatchSchema = z.ZodType<
+  ManualTaskSettlementBatchSchemaShape,
+  ManualTaskSettlementBatchSchemaShape
 >
 
 export function getManualTaskSettlementSchema(
@@ -47,14 +55,40 @@ export function getManualTaskSettlementSchema(
         (value) => Number(value) <= maxQuota,
         t('Final quota cannot exceed the reserved quota.')
       ),
-    note: z
-      .string()
-      .trim()
-      .refine((value) => {
-        const length = Array.from(value).length
-        return length >= 3 && length <= 1000
-      }, t('Audit note must contain between 3 and 1000 characters.')),
   })
 }
 
 export type ManualTaskSettlementFormValues = z.infer<ManualTaskSettlementSchema>
+
+export function getManualTaskSettlementBatchSchema(
+  t: TFunction,
+  maxQuotas: number[]
+): ManualTaskSettlementBatchSchema {
+  const itemSchemas = maxQuotas.map((maxQuota) =>
+    getManualTaskSettlementSchema(t, maxQuota)
+  )
+
+  return z.object({
+    items: z
+      .array(z.object({ actualQuota: z.string() }))
+      .length(maxQuotas.length)
+      .superRefine((items, context) => {
+        items.forEach((item, index) => {
+          const schema = itemSchemas[index]
+          if (!schema) return
+          const result = schema.safeParse(item)
+          if (result.success) return
+          result.error.issues.forEach((issue) => {
+            context.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, ...issue.path],
+              message: issue.message,
+            })
+          })
+        })
+      }),
+  })
+}
+
+export type ManualTaskSettlementBatchFormValues =
+  z.infer<ManualTaskSettlementBatchSchema>

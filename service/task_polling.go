@@ -16,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -39,6 +40,14 @@ type TaskPollingAdaptor interface {
 // evidence only; billing is still owned by the existing settlement path.
 type taskUsageProvider interface {
 	ExtractTaskUsage(responseBody []byte) (*types.TaskUsage, error)
+}
+
+type taskUsageFactProvider interface {
+	UsageContract() types.TaskUsageContract
+	// UsageProducerKind is host-owned provenance. The polling boundary must
+	// validate against this trusted value instead of the envelope's self-report.
+	UsageProducerKind() string
+	ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error)
 }
 
 // GetTaskAdaptorFunc 由 main 包注入，用于获取指定平台的任务适配器。
@@ -645,6 +654,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
 			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
+			task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(terminalDecision.UsageEnvelope)
 			persistPendingTaskTerminalEvidence(task, taskResult, time.Now().Unix())
 			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
 			if intentErr != nil {
@@ -851,6 +861,38 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 	if adaptor == nil || taskResult == nil {
 		return nil
 	}
+	if provider, ok := adaptor.(taskUsageFactProvider); ok {
+		contract := provider.UsageContract()
+		envelope := taskResult.UsageEnvelope
+		if envelope == nil {
+			var err error
+			envelope, err = provider.ProduceUsage(types.TaskUsageContext{
+				Stage: types.TaskUsageSourceProviderResponse, Payload: responseBody,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if err := taskusage.ValidateEnvelope(contract, envelope, provider.UsageProducerKind()); err != nil {
+			return err
+		}
+		if envelope.Stage != types.TaskUsageSourceProviderResponse {
+			return fmt.Errorf("task usage envelope stage %q is not supported for polling", envelope.Stage)
+		}
+		// Doubao's legacy token fields feed the historical token-ratio
+		// settlement path. Partial provider evidence must not become a billing
+		// input, while other legacy providers retain their documented partial
+		// compatibility behavior.
+		if contract.SourceID != taskusage.SourceIDDoubaoVideo ||
+			envelope.Completeness == types.TaskUsageCompletenessComplete {
+			if err := applyLegacyTaskUsageFields(taskResult, envelope); err != nil {
+				return err
+			}
+		}
+		taskResult.UsageEnvelope = types.CloneTaskUsageEnvelope(envelope)
+		taskResult.Usage = types.CloneTaskUsage(envelope.Usage)
+		return nil
+	}
 	provider, ok := adaptor.(taskUsageProvider)
 	if !ok {
 		return nil
@@ -861,6 +903,46 @@ func applyTaskUsageFacts(adaptor TaskPollingAdaptor, responseBody []byte, taskRe
 	}
 	if usage != nil {
 		taskResult.Usage = usage
+	}
+	return nil
+}
+
+// applyLegacyTaskUsageFields keeps the historical token fields synchronized
+// with validated provider usage. Only complete or partial envelopes are
+// eligible; invalid and missing usage must never become billing inputs.
+func applyLegacyTaskUsageFields(taskResult *relaycommon.TaskInfo, envelope *types.TaskUsageEnvelope) error {
+	if taskResult == nil || envelope == nil || envelope.Usage == nil {
+		return nil
+	}
+	if envelope.Completeness != types.TaskUsageCompletenessComplete &&
+		envelope.Completeness != types.TaskUsageCompletenessPartial {
+		return nil
+	}
+	usage := envelope.Usage
+	if usage.CompletionTokens != nil {
+		value := int(*usage.CompletionTokens)
+		if int64(value) != *usage.CompletionTokens {
+			return fmt.Errorf("completion token usage exceeds platform integer range")
+		}
+		taskResult.CompletionTokens = value
+	}
+	if usage.TotalTokens != nil {
+		value := int(*usage.TotalTokens)
+		if int64(value) != *usage.TotalTokens {
+			return fmt.Errorf("total token usage exceeds platform integer range")
+		}
+		taskResult.TotalTokens = value
+	}
+	if usage.CompletionTokens != nil && usage.TotalTokens != nil {
+		promptTokens := *usage.TotalTokens - *usage.CompletionTokens
+		if promptTokens < 0 {
+			return fmt.Errorf("total token usage cannot be less than completion token usage")
+		}
+		value := int(promptTokens)
+		if int64(value) != promptTokens {
+			return fmt.Errorf("prompt token usage exceeds platform integer range")
+		}
+		taskResult.PromptTokens = value
 	}
 	return nil
 }
@@ -894,6 +976,7 @@ func recoverManualTaskBillingSettlement(
 		billingContext := *task.PrivateData.BillingContext
 		candidate.PrivateData.BillingContext = &billingContext
 		candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+		candidate.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	}
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
 	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
@@ -931,6 +1014,7 @@ func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskSta
 	}
 	task.Status = fromStatus
 	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	task.UpdatedAt = time.Now().Unix()
 	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }

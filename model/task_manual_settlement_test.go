@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -182,6 +183,52 @@ func TestUpdateWithStatusAndSettlementIntentKeepsTaskNonTerminal(t *testing.T) {
 	require.NoError(t, DB.Where("operation_key = ?", operationKey).First(&settlement).Error)
 	require.Equal(t, BillingSettlementStatusPending, settlement.Status)
 	require.EqualValues(t, -300, settlement.FundingDelta)
+}
+
+func TestTaskPrivateDataPersistsTaskUsageEnvelope(t *testing.T) {
+	truncateTables(t)
+	zero := int64(0)
+	task := &Task{
+		TaskID: "usage-envelope-round-trip",
+		Status: TaskStatusInProgress,
+		PrivateData: TaskPrivateData{BillingContext: &TaskBillingContext{
+			TaskUsage: &types.TaskUsage{
+				OutputDurationMs: &zero,
+				Source:           types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessPartial,
+			},
+			TaskUsageEnvelope: &types.TaskUsageEnvelope{
+				ProducerKind: types.TaskUsageProducerKindGoAdapter,
+				SourceID:     "minimax", SchemaVersion: 1,
+				ContractDigest: "contract-digest", Stage: types.TaskUsageSourceProviderResponse,
+				Presence: types.TaskUsagePresencePartial, Completeness: types.TaskUsageCompletenessPartial,
+				EvidenceDigest: "evidence-digest",
+				Usage: &types.TaskUsage{
+					OutputDurationMs: &zero,
+					Source:           types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessPartial,
+				},
+			},
+		}},
+	}
+	insertTask(t, task)
+
+	var stored Task
+	require.NoError(t, DB.First(&stored, task.ID).Error)
+	require.NotNil(t, stored.PrivateData.BillingContext)
+	envelope := stored.PrivateData.BillingContext.TaskUsageEnvelope
+	require.NotNil(t, envelope)
+	require.Equal(t, types.TaskUsageProducerKindGoAdapter, envelope.ProducerKind)
+	require.Equal(t, "minimax", envelope.SourceID)
+	require.Equal(t, 1, envelope.SchemaVersion)
+	require.Equal(t, "contract-digest", envelope.ContractDigest)
+	require.Equal(t, types.TaskUsageSourceProviderResponse, envelope.Stage)
+	require.Equal(t, types.TaskUsagePresencePartial, envelope.Presence)
+	require.Equal(t, types.TaskUsageCompletenessPartial, envelope.Completeness)
+	require.Equal(t, "evidence-digest", envelope.EvidenceDigest)
+	require.NotNil(t, envelope.Usage)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	require.Zero(t, *envelope.Usage.OutputDurationMs)
+	require.Equal(t, types.TaskUsageSourceProviderResponse, envelope.Usage.Source)
+	require.Equal(t, types.TaskUsageCompletenessPartial, envelope.Usage.Completeness)
 }
 
 func TestUpdateWithStatusAndSettlementIntentCASLossLeavesNoIntent(t *testing.T) {

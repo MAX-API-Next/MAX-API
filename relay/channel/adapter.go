@@ -89,6 +89,18 @@ type TaskUsageProvider interface {
 	ExtractTaskUsage(respBody []byte) (*types.TaskUsage, error)
 }
 
+// TaskUsageFactProvider is the versioned, auditable usage-fact seam. It is a
+// pure producer contract: implementations may parse and normalize Payload but
+// must not perform network I/O, pricing, task/log writes, or funding changes.
+// TaskUsageProvider remains as the compatibility entry for existing adaptors.
+type TaskUsageFactProvider interface {
+	UsageContract() types.TaskUsageContract
+	// UsageProducerKind is host-owned provenance. The polling boundary must
+	// validate against this trusted value instead of the envelope's self-report.
+	UsageProducerKind() string
+	ProduceUsage(ctx types.TaskUsageContext) (*types.TaskUsageEnvelope, error)
+}
+
 // TaskBillingPlanProvider is an optional provider-specific request normalizer.
 // It only produces a bounded pricing snapshot; it has no funding authority.
 type TaskBillingPlanProvider interface {

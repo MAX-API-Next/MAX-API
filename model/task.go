@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -70,6 +71,19 @@ type Task struct {
 
 	includeDataInUpdate        bool `gorm:"-"`
 	includePrivateDataInUpdate bool `gorm:"-"`
+}
+
+// IsMiniMaxH3Task reports whether the persisted task has an explicit,
+// trusted MiniMax-H3 upstream binding. Client-side origin aliases and legacy
+// billing-context names are intentionally not sufficient for H3-only actions.
+func IsMiniMaxH3Task(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	if upstream := strings.TrimSpace(task.Properties.UpstreamModelName); upstream != "" {
+		return strings.EqualFold(upstream, constant.TaskModelMiniMaxH3)
+	}
+	return false
 }
 
 func (t *Task) BeforeSave(*gorm.DB) error {
@@ -157,6 +171,7 @@ type TaskBillingContext struct {
 	TaskBilling             *types.TaskBillingResult `json:"task_billing,omitempty"`
 	TaskBillingPlan         *types.TaskBillingPlan   `json:"task_billing_plan,omitempty"`
 	TaskUsage               *types.TaskUsage         `json:"task_usage,omitempty"`
+	TaskUsageEnvelope       *types.TaskUsageEnvelope `json:"task_usage_envelope,omitempty"`
 	OriginModelName         string                   `json:"origin_model_name,omitempty"`         // 模型名称，必须为OriginModelName
 	PerCallBilling          bool                     `json:"per_call_billing,omitempty"`          // 按次计费：跳过轮询阶段的差额结算
 	DeltaSettlementDisabled *bool                    `json:"delta_settlement_disabled,omitempty"` // 渠道关闭完成态差额结算时按提交快照跳过
@@ -722,6 +737,10 @@ func (t *Task) UpdateWithStatusAndSettlementIntent(fromStatus TaskStatus, expect
 		updatedAt = expectedUpdatedAt + 1
 	}
 
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if _, _, err := ensureBillingSettlementRecordDB(tx, input); err != nil {
 			return err
@@ -779,6 +798,10 @@ func (t *Task) UpdateWithStatusAndManualSettlement(fromStatus TaskStatus, expect
 		updatedAt = expectedUpdatedAt + 1
 	}
 
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if _, err := ensureManualBillingSettlementRecordDB(tx, input, reason); err != nil {
 			return err

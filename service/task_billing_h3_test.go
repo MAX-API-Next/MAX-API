@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/task_billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -37,7 +38,26 @@ func (a *h3TerminalPollingAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInf
 	if a.parseErr != nil {
 		return nil, a.parseErr
 	}
-	return a.result, nil
+	if a.result == nil || a.result.UsageEnvelope != nil {
+		return a.result, nil
+	}
+	result := *a.result
+	usage := types.CloneTaskUsage(result.Usage)
+	if usage != nil && usage.Source == "" {
+		usage.Source = types.TaskUsageSourceProviderResponse
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		usage,
+	)
+	if err != nil {
+		return nil, err
+	}
+	result.Usage = usage
+	result.UsageEnvelope = envelope
+	return &result, nil
 }
 
 func (a *h3TerminalPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relaycommon.TaskInfo) int {
@@ -46,6 +66,22 @@ func (a *h3TerminalPollingAdaptor) AdjustBillingOnComplete(*model.Task, *relayco
 
 func h3UsageInt64(value int64) *int64 {
 	return &value
+}
+
+func serviceH3TaskInfo(t *testing.T, status string, usage *types.TaskUsage) *relaycommon.TaskInfo {
+	t.Helper()
+	cloned := types.CloneTaskUsage(usage)
+	if cloned != nil && cloned.Source == "" {
+		cloned.Source = types.TaskUsageSourceProviderResponse
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		cloned,
+	)
+	require.NoError(t, err)
+	return &relaycommon.TaskInfo{Status: status, Usage: cloned, UsageEnvelope: envelope}
 }
 
 func buildServiceH3Plan(t *testing.T, input task_billing_setting.H3BillingInput) *types.TaskBillingPlan {
@@ -86,7 +122,7 @@ func TestH3TerminalDecisionUsesFrozenPlanForNegativeAndZeroDelta(t *testing.T) {
 
 	decision := prepareTaskTerminalBillingDecision(
 		context.Background(), nil, task,
-		&relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Usage: usage},
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage),
 		constant.ChannelTypeMiniMax,
 	)
 
@@ -109,7 +145,7 @@ func TestH3TerminalDecisionUsesFrozenPlanForNegativeAndZeroDelta(t *testing.T) {
 	reserveUsage.InputVideoDurationMs = h3UsageInt64(15_000)
 	zeroDeltaDecision := prepareTaskTerminalBillingDecision(
 		context.Background(), nil, zeroDeltaTask,
-		&relaycommon.TaskInfo{Status: string(model.TaskStatusFailure), Usage: reserveUsage},
+		serviceH3TaskInfo(t, string(model.TaskStatusFailure), reserveUsage),
 		constant.ChannelTypeMiniMax,
 	)
 	require.True(t, zeroDeltaDecision.UsesPlan)
@@ -117,6 +153,22 @@ func TestH3TerminalDecisionUsesFrozenPlanForNegativeAndZeroDelta(t *testing.T) {
 	require.NotNil(t, zeroDeltaDecision.Settlement)
 	require.Zero(t, zeroDeltaDecision.Settlement.FundingDelta)
 	require.EqualValues(t, plan.ReserveQuota, zeroDeltaDecision.Settlement.TaskQuotaTarget)
+}
+
+func TestPrepareTaskTerminalBillingDecisionKeepsMissingUsageSentinel(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), nil),
+		constant.ChannelTypeMiniMax,
+	)
+
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
+	require.NotEmpty(t, decision.ManualReason)
 }
 
 func TestH3TerminalDecisionPreservesExplicitZeroFinalQuota(t *testing.T) {
@@ -138,7 +190,7 @@ func TestH3TerminalDecisionPreservesExplicitZeroFinalQuota(t *testing.T) {
 
 	decision := prepareTaskTerminalBillingDecision(
 		context.Background(), nil, task,
-		&relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Usage: usage},
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage),
 		constant.ChannelTypeMiniMax,
 	)
 
@@ -152,6 +204,240 @@ func TestH3TerminalDecisionPreservesExplicitZeroFinalQuota(t *testing.T) {
 	require.Zero(t, decision.Settlement.Effect.Quota)
 }
 
+func TestH3TerminalDecisionFailsClosedOnUsageEnvelopeIdentityDrift(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	usage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+	result := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage)
+	result.UsageEnvelope.SourceID = "unexpected-source"
+
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, result, constant.ChannelTypeMiniMax)
+	require.True(t, decision.UsesPlan)
+	require.True(t, strings.HasPrefix(decision.ManualReason, "H3 terminal usage requires manual reconciliation:"))
+	// The invalid first candidate is filtered before terminal validation, so the
+	// decision must fail closed on the absence of a plan-validated envelope.
+	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope is missing")
+	require.NotNil(t, decision.Settlement)
+	require.Zero(t, decision.Settlement.FundingDelta)
+	require.Nil(t, decision.Settlement.Effect)
+	require.Nil(t, decision.UsageEnvelope)
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
+}
+
+func TestFrozenTaskUsageEnvelopeKeepsMissingUntilReplacementMatchesPlan(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	missing, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		nil,
+	)
+	require.NoError(t, err)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = missing
+
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(0),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+	mismatched := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	mismatched.SourceID = "unexpected-source"
+	selected := frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: mismatched})
+	require.Equal(t, missing.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessMissing, selected.Completeness)
+
+	valid := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	selected = frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: valid})
+	require.Equal(t, valid.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessComplete, selected.Completeness)
+}
+
+func TestFrozenTaskUsageEnvelopeRejectsInvalidFirstCandidateUntilValidPoll(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	completeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000),
+		InputImageCount:  h3UsageInt64(0),
+		Source:           types.TaskUsageSourceProviderResponse,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	}
+
+	mismatched := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	mismatched.SourceID = "unexpected-source"
+	selected := frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: mismatched})
+	require.Nil(t, selected)
+	mismatchDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: completeUsage, UsageEnvelope: mismatched,
+	}, constant.ChannelTypeMiniMax)
+	require.NotEmpty(t, mismatchDecision.ManualReason)
+	require.Nil(t, mismatchDecision.UsageEnvelope)
+
+	valid := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage).UsageEnvelope
+	selected = frozenTaskUsageEnvelope(task, &relaycommon.TaskInfo{UsageEnvelope: valid})
+	require.NotNil(t, selected)
+	require.Equal(t, valid.EvidenceDigest, selected.EvidenceDigest)
+	require.Equal(t, types.TaskUsageCompletenessComplete, selected.Completeness)
+}
+
+func TestH3HistoricalPlanWithoutUsageIdentityKeepsLegacyCompatibility(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	plan.UsageProducerKind = ""
+	plan.UsageSourceID = ""
+	plan.UsageSchemaVersion = 0
+	plan.UsageContractDigest = ""
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	usage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: usage,
+	}, constant.ChannelTypeMiniMax)
+	require.True(t, decision.UsesPlan)
+	require.Empty(t, decision.ManualReason)
+	require.NotNil(t, decision.Settlement)
+	require.Nil(t, decision.UsageEnvelope)
+}
+
+func TestH3HistoricalPlanKeepsPersistedLegacyUsageWhenNewResultHasEnvelope(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	plan.UsageProducerKind = ""
+	plan.UsageSourceID = ""
+	plan.UsageSchemaVersion = 0
+	plan.UsageContractDigest = ""
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	task.PrivateData.BillingContext.TaskUsage = &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+	newResultUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(15_000), InputImageCount: h3UsageInt64(9),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), newResultUsage),
+		constant.ChannelTypeMiniMax,
+	)
+	require.Empty(t, decision.ManualReason)
+	require.Nil(t, decision.UsageEnvelope)
+	require.EqualValues(t, 5_000, *decision.Usage.OutputDurationMs)
+	require.EqualValues(t, 0, *decision.Usage.InputImageCount)
+}
+
+func TestH3TerminalDecisionRejectsNonProviderUsageStage(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	usage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceManualReconcile, Completeness: types.TaskUsageCompletenessComplete,
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceManualReconcile,
+		usage,
+	)
+	require.NoError(t, err)
+
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
+		Status: string(model.TaskStatusSuccess), Usage: usage, UsageEnvelope: envelope,
+	}, constant.ChannelTypeMiniMax)
+	// Non-provider evidence is rejected at the freezing boundary and therefore
+	// reaches terminal billing as a missing validated envelope.
+	require.ErrorContains(t, errors.New(decision.ManualReason), "usage envelope is missing")
+	require.NotNil(t, decision.Settlement)
+	require.Zero(t, decision.Settlement.FundingDelta)
+	require.Nil(t, decision.UsageEnvelope)
+	require.NotNil(t, decision.Usage)
+	require.Equal(t, types.TaskUsageCompletenessMissing, decision.Usage.Completeness)
+}
+
+func TestH3TerminalDecisionUsesValidatedEnvelopeOverDivergentCompatibilityUsage(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	envelopeUsage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+	envelope, err := taskusage.BuildEnvelope(
+		types.TaskUsageProducerKindGoAdapter,
+		taskusage.MiniMaxH3Contract(),
+		types.TaskUsageSourceProviderResponse,
+		envelopeUsage,
+	)
+	require.NoError(t, err)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = envelope
+	task.PrivateData.BillingContext.TaskUsage = &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(15_000), InputImageCount: h3UsageInt64(9),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), task.PrivateData.BillingContext.TaskUsage),
+		constant.ChannelTypeMiniMax,
+	)
+	require.Empty(t, decision.ManualReason)
+	require.NotNil(t, decision.Usage)
+	require.EqualValues(t, 5_000, *decision.Usage.OutputDurationMs)
+	require.EqualValues(t, 0, *decision.Usage.InputImageCount)
+	expected, err := task_billing_setting.QuoteH3Final(plan, envelopeUsage)
+	require.NoError(t, err)
+	require.EqualValues(t, expected.Quota, decision.Settlement.TaskQuotaTarget)
+}
+
+func TestH3SettlementEffectStoresOnlyCanonicalEnvelopeMetadata(t *testing.T) {
+	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
+		Resolution: "768P", OutputDurationSeconds: 5,
+	})
+	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
+	usage := &types.TaskUsage{
+		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
+		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
+	}
+	result := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage)
+	result.Url = "https://cdn.example.com/private-result.mp4"
+
+	decision := prepareTaskTerminalBillingDecision(
+		context.Background(), nil, task, result, constant.ChannelTypeMiniMax,
+	)
+	require.Empty(t, decision.ManualReason)
+	require.NotNil(t, decision.Settlement)
+	require.NotNil(t, decision.Settlement.Effect)
+	metadata, ok := decision.Settlement.Effect.Other["task_usage_envelope"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, types.TaskUsageCompletenessComplete, metadata["completeness"])
+	require.NotContains(t, metadata, "usage")
+	require.NotContains(t, metadata, "payload")
+	require.NotContains(t, metadata, "url")
+	encoded, err := common.Marshal(decision.Settlement.Effect.Other)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "private-result.mp4")
+}
+
 func TestH3TerminalDecisionRoutesUnsafeUsageToManual(t *testing.T) {
 	plan := buildServiceH3Plan(t, task_billing_setting.H3BillingInput{
 		Resolution: "768P", OutputDurationSeconds: 5, InputVideoCount: 1,
@@ -161,7 +447,7 @@ func TestH3TerminalDecisionRoutesUnsafeUsageToManual(t *testing.T) {
 		usage *types.TaskUsage
 	}{
 		{name: "missing", usage: nil},
-		{name: "partial", usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessPartial}},
+		{name: "partial", usage: &types.TaskUsage{OutputDurationMs: h3UsageInt64(5_000), Completeness: types.TaskUsageCompletenessPartial}},
 		{name: "invalid", usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessInvalid}},
 		{name: "ambiguous", usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessAmbiguous}},
 	}
@@ -170,7 +456,7 @@ func TestH3TerminalDecisionRoutesUnsafeUsageToManual(t *testing.T) {
 			task := makeServiceH3Task(t, plan.ReserveQuota, plan)
 			decision := prepareTaskTerminalBillingDecision(
 				context.Background(), nil, task,
-				&relaycommon.TaskInfo{Status: string(model.TaskStatusFailure), Usage: test.usage},
+				serviceH3TaskInfo(t, string(model.TaskStatusFailure), test.usage),
 				constant.ChannelTypeMiniMax,
 			)
 			require.True(t, decision.UsesPlan)
@@ -199,7 +485,7 @@ func TestH3TerminalDecisionRoutesChangedFrozenTotalsToManual(t *testing.T) {
 
 	decision := prepareTaskTerminalBillingDecision(
 		context.Background(), nil, task,
-		&relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), Usage: usage},
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage),
 		constant.ChannelTypeMiniMax,
 	)
 
@@ -370,10 +656,9 @@ func TestUpdateVideoSingleTaskRecoversManualH3WhenLaterPollHasCompleteUsage(t *t
 	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
 	task.Status = model.TaskStatusInProgress
 	persistTask(t, task)
-	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess),
-		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
-	}, constant.ChannelTypeMiniMax)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing}),
+		constant.ChannelTypeMiniMax)
 	require.NotEmpty(t, missingDecision.ManualReason)
 	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
 	require.NoError(t, err)
@@ -427,10 +712,9 @@ func TestRecoverManualH3PersistsTerminalEvidenceBeforeFunding(t *testing.T) {
 	task := makeServiceH3Task(t, plan.ReserveQuota, plan)
 	persistTask(t, task)
 
-	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess),
-		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
-	}, constant.ChannelTypeMiniMax)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing}),
+		constant.ChannelTypeMiniMax)
 	require.NotEmpty(t, missingDecision.ManualReason)
 	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
 	require.NoError(t, err)
@@ -442,15 +726,11 @@ func TestRecoverManualH3PersistsTerminalEvidenceBeforeFunding(t *testing.T) {
 		Source:           types.TaskUsageSourceProviderResponse,
 		Completeness:     types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: completeUsage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage), constant.ChannelTypeMiniMax)
 	require.Empty(t, decision.ManualReason)
-	providerResult := &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess),
-		Url:    "https://cdn.example.com/manual-recovered.mp4",
-		Usage:  completeUsage,
-	}
+	providerResult := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage)
+	providerResult.Url = "https://cdn.example.com/manual-recovered.mp4"
 	expectedUpdatedAt := task.UpdatedAt
 	recovered, err := recoverManualTaskBillingSettlement(
 		context.Background(), task, decision, providerResult, model.TaskStatusInProgress, expectedUpdatedAt,
@@ -485,10 +765,9 @@ func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testin
 	task.Status = model.TaskStatusInProgress
 	persistTask(t, task)
 
-	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess),
-		Usage:  &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
-	}, constant.ChannelTypeMiniMax)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing}),
+		constant.ChannelTypeMiniMax)
 	require.NotEmpty(t, missingDecision.ManualReason)
 	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
 	require.NoError(t, err)
@@ -500,9 +779,8 @@ func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testin
 		Source:           types.TaskUsageSourceProviderResponse,
 		Completeness:     types.TaskUsageCompletenessComplete,
 	}
-	providerResult := &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Url: "https://cdn.example.com/promoted-recovery.mp4", Usage: completeUsage,
-	}
+	providerResult := serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage)
+	providerResult.Url = "https://cdn.example.com/promoted-recovery.mp4"
 	decision := prepareTaskTerminalBillingDecision(
 		context.Background(), nil, task, providerResult, constant.ChannelTypeMiniMax,
 	)
@@ -513,6 +791,7 @@ func TestUpdateVideoSingleTaskAppliesAlreadyPromotedManualH3Settlement(t *testin
 	billingContext := *task.PrivateData.BillingContext
 	candidate.PrivateData.BillingContext = &billingContext
 	candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(completeUsage)
+	candidate.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
 	won, err = candidate.UpdateWithStatusAndPendingTerminalEvidence(task.Status, task.UpdatedAt)
 	require.NoError(t, err)
@@ -596,9 +875,9 @@ func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.
 	task.Status = model.TaskStatusInProgress
 	persistTask(t, task)
 
-	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
-	}, constant.ChannelTypeMiniMax)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing}),
+		constant.ChannelTypeMiniMax)
 	require.NotEmpty(t, missingDecision.ManualReason)
 	won, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
 	require.NoError(t, err)
@@ -610,9 +889,8 @@ func TestUpdateVideoSingleTaskRecoversManualH3SubscriptionFullRefund(t *testing.
 		Source:           types.TaskUsageSourceProviderResponse,
 		Completeness:     types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: completeUsage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), completeUsage), constant.ChannelTypeMiniMax)
 	require.Empty(t, decision.ManualReason)
 	require.NotNil(t, decision.Settlement)
 	require.EqualValues(t, -100, decision.Settlement.FundingDelta)
@@ -660,9 +938,9 @@ func TestUpdateVideoSingleTaskDoesNotRecoverManualH3BeforeSubmissionSettlement(t
 		OperationKey: requestKey, Source: model.BillingSettlementSourceWallet, UserID: task.UserId,
 		Status: model.BillingSettlementStatusPending, CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(), Revision: 1,
 	}).Error)
-	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing},
-	}, constant.ChannelTypeMiniMax)
+	missingDecision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), &types.TaskUsage{Completeness: types.TaskUsageCompletenessMissing}),
+		constant.ChannelTypeMiniMax)
 	_, err := persistTaskManualBillingDecision(task, task.Status, task.UpdatedAt, missingDecision)
 	require.NoError(t, err)
 
@@ -796,11 +1074,11 @@ func TestUpdateVideoSingleTaskRecoversAppliedH3FundingWithPendingEffect(t *testi
 		InputImageCount: h3UsageInt64(0), Source: types.TaskUsageSourceProviderResponse,
 		Completeness: types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: usage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage), constant.ChannelTypeMiniMax)
 	require.NotNil(t, decision.Settlement)
 	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(usage)
+	task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
 	won, err := task.UpdateWithStatusAndSettlementIntent(task.Status, task.UpdatedAt, *decision.Settlement)
 	require.NoError(t, err)
 	require.True(t, won)
@@ -863,9 +1141,8 @@ func TestH3ZeroFinalSettlementRefundsAndProjectsReceiptExactlyOnce(t *testing.T)
 		OutputDurationMs: h3UsageInt64(5_000), InputImageCount: h3UsageInt64(0),
 		Source: types.TaskUsageSourceProviderResponse, Completeness: types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: usage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage), constant.ChannelTypeMiniMax)
 	require.NotNil(t, decision.Settlement)
 
 	require.True(t, ApplyTaskBillingSettlement(context.Background(), task, decision.Settlement))
@@ -905,9 +1182,8 @@ func TestH3SettlementRefundsWalletWhenTokenWasDeleted(t *testing.T) {
 		InputImageCount: h3UsageInt64(0), Source: types.TaskUsageSourceProviderResponse,
 		Completeness: types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: usage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage), constant.ChannelTypeMiniMax)
 	require.NotNil(t, decision.Settlement)
 
 	require.True(t, ApplyTaskBillingSettlement(context.Background(), task, decision.Settlement))
@@ -938,9 +1214,8 @@ func TestH3SettlementRefundsUnlimitedTokenExactlyOnce(t *testing.T) {
 		InputImageCount: h3UsageInt64(0), Source: types.TaskUsageSourceProviderResponse,
 		Completeness: types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: usage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage), constant.ChannelTypeMiniMax)
 	require.NotNil(t, decision.Settlement)
 
 	require.True(t, ApplyTaskBillingSettlement(context.Background(), task, decision.Settlement))
@@ -979,9 +1254,8 @@ func TestH3SubscriptionZeroDeltaFinalizesWithoutTouchingSubscriptionPeriod(t *te
 		InputImageCount: h3UsageInt64(0), Source: types.TaskUsageSourceProviderResponse,
 		Completeness: types.TaskUsageCompletenessComplete,
 	}
-	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task, &relaycommon.TaskInfo{
-		Status: string(model.TaskStatusSuccess), Usage: usage,
-	}, constant.ChannelTypeMiniMax)
+	decision := prepareTaskTerminalBillingDecision(context.Background(), nil, task,
+		serviceH3TaskInfo(t, string(model.TaskStatusSuccess), usage), constant.ChannelTypeMiniMax)
 	require.NotNil(t, decision.Settlement)
 	require.Zero(t, decision.Settlement.FundingDelta)
 

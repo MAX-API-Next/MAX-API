@@ -45,6 +45,14 @@ var (
 	ErrSubscriptionRefundClamped           = errors.New("subscription refund was clamped")
 	ErrSubscriptionSettlementUnbound       = errors.New("subscription settlement is not bound to its pre-consume request")
 	ErrSubscriptionSettlementPeriodChanged = errors.New("subscription settlement crossed a quota reset period")
+
+	// SQLite permits only one writer and does not support the row-level lock
+	// clause used by the other supported databases. Serializing the complete
+	// settlement lifecycle prevents two local connections from both reading a
+	// pending record and then racing while upgrading their deferred transaction
+	// to a write transaction. The operation key remains the durable idempotency
+	// boundary for retries from other processes or after a restart.
+	billingSettlementSQLiteWriteMu sync.Mutex
 )
 
 type permanentBillingSettlementError struct {
@@ -202,6 +210,7 @@ type BillingSettlementReconciliationItem struct {
 	TaskQuota                int64  `json:"task_quota"`
 	TaskQuotaTarget          int64  `json:"task_quota_target"`
 	RequiresManualCompletion bool   `json:"requires_manual_completion"`
+	ZeroQuotaEligible        bool   `json:"zero_quota_eligible"`
 	FundingDelta             int64  `json:"funding_delta"`
 	AppliedFundingDelta      int64  `json:"applied_funding_delta"`
 	TokenDelta               int64  `json:"token_delta"`
@@ -460,6 +469,22 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 			data.Truncated = true
 			items = items[:limit]
 		}
+		taskIDs := make([]int64, 0, len(items))
+		for _, item := range items {
+			if item.TaskID > 0 {
+				taskIDs = append(taskIDs, item.TaskID)
+			}
+		}
+		tasksByID := make(map[int64]*Task, len(taskIDs))
+		if len(taskIDs) > 0 {
+			var tasks []Task
+			if err := tx.Select("id", "properties").Where("id IN ?", taskIDs).Find(&tasks).Error; err != nil {
+				return err
+			}
+			for index := range tasks {
+				tasksByID[tasks[index].ID] = &tasks[index]
+			}
+		}
 		displayedUserIDs := make([]int, 0, len(items))
 		for index := range items {
 			items[index].LastError = common.SanitizePersistedLogContent(
@@ -473,6 +498,9 @@ func GetUnresolvedPositiveFinalizeSettlements(limit int) (BillingSettlementRecon
 				FundingDelta: items[index].FundingDelta, TokenDelta: items[index].TokenDelta,
 				TaskQuota: items[index].TaskQuota, TaskQuotaTarget: items[index].TaskQuotaTarget,
 			})
+			if items[index].RequiresManualCompletion {
+				items[index].ZeroQuotaEligible = IsMiniMaxH3Task(tasksByID[items[index].TaskID])
+			}
 			items[index].RecordBlocksUser = items[index].FundingDelta > 0 &&
 				strings.HasPrefix(items[index].OperationKey, billingRequestOperationPrefix) &&
 				strings.HasSuffix(items[index].OperationKey, billingRequestFinalizeSuffix) &&
@@ -766,6 +794,10 @@ func EnsureManualTaskBillingCompletion(input BillingSettlementInput, reviewerID 
 	if reviewerID <= 0 || strings.TrimSpace(note) == "" || !billingSettlementIsManualTaskCompletion(input.OperationKey, input.TaskID) {
 		return BillingSettlement{}, ErrBillingSettlementReviewConflict
 	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	var approved BillingSettlement
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		record, _, err := ensureBillingSettlementRecordDB(tx, input)
@@ -953,6 +985,10 @@ func ResolveManualTaskBillingSettlement(id int64, expectedRevision int64, review
 	if id <= 0 || expectedRevision <= 0 || reviewerID <= 0 || strings.TrimSpace(note) == "" {
 		return BillingSettlement{}, false, ErrBillingSettlementReviewConflict
 	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
+	}
 	var resolved BillingSettlement
 	alreadyResolved := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -1053,6 +1089,10 @@ func GetBillingSettlementStatus(operationKey string) (status string, found bool,
 func ApplyBillingSettlementOnce(input BillingSettlementInput) (appliedFundingDelta int64, alreadyApplied bool, err error) {
 	if input.OperationKey == "" {
 		return 0, false, errors.New("billing settlement operation key is required")
+	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 
 	record, alreadyApplied, err := ensureBillingSettlementRecord(input)
@@ -1252,6 +1292,10 @@ func PromoteManualTaskBillingSettlement(input BillingSettlementInput, reasonPref
 	}
 	if err := validateBillingSettlementInput(input); err != nil {
 		return false, err
+	}
+	if common.UsingSQLite {
+		billingSettlementSQLiteWriteMu.Lock()
+		defer billingSettlementSQLiteWriteMu.Unlock()
 	}
 	effectPayload, err := billingSettlementEffectPayload(input.Effect)
 	if err != nil {

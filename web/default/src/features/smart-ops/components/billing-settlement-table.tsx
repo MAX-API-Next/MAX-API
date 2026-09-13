@@ -35,7 +35,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useBillingSettlementSelection } from '../hooks/use-billing-settlement-selection'
+import {
+  isManualSettlementSelectable,
+  useBillingSettlementSelection,
+} from '../hooks/use-billing-settlement-selection'
 import { formatLocalizedCount } from '../lib/format'
 import type {
   BillingSettlementReconciliationItem,
@@ -78,6 +81,36 @@ function BillingSettlementActionsCell(
   const { t } = useTranslation()
 
   if (props.item.requires_manual_completion) {
+    if (
+      props.item.zero_quota_eligible === true &&
+      props.canCompleteManualTask
+    ) {
+      return (
+        <div className='flex flex-wrap justify-end gap-2'>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() =>
+              props.onReviewTargets([
+                { id: props.item.id, revision: props.item.revision },
+              ])
+            }
+            disabled={props.reviewPending}
+          >
+            {t('Confirm zero-quota settlement')}
+          </Button>
+          <Button
+            type='button'
+            size='sm'
+            onClick={() => props.onCompleteManualTask(props.item)}
+            disabled={props.reviewPending}
+          >
+            {t('Enter exact quota')}
+          </Button>
+        </div>
+      )
+    }
     return (
       <div className='flex flex-col items-end gap-1'>
         <Button
@@ -86,7 +119,7 @@ function BillingSettlementActionsCell(
           onClick={() => props.onCompleteManualTask(props.item)}
           disabled={props.reviewPending || !props.canCompleteManualTask}
         >
-          {t('Complete billing')}
+          {t('Enter exact quota')}
         </Button>
         {!props.canCompleteManualTask && (
           <span className='text-muted-foreground text-xs'>
@@ -130,12 +163,13 @@ export function BillingSettlementTable(
   props: BillingSettlementTableProps
 ): ReactElement {
   const { t, i18n } = useTranslation()
-  const hasReviewableItems = props.items.some(
-    (item) => !item.requires_manual_completion
+  const hasReviewableItems = props.items.some((item) =>
+    isManualSettlementSelectable(item, props.canCompleteManualTask)
   )
   const { allSelected, someSelected, isSelected, toggleAll, toggleItem } =
     useBillingSettlementSelection({
       items: props.items,
+      canSelectManualTask: props.canCompleteManualTask,
       selectedTargets: props.selectedTargets,
       onSelectedTargetsChange: props.onSelectedTargetsChange,
     })
@@ -182,7 +216,11 @@ export function BillingSettlementTable(
                       toggleItem(item, checked === true)
                     }
                     disabled={
-                      props.reviewPending || item.requires_manual_completion
+                      props.reviewPending ||
+                      !isManualSettlementSelectable(
+                        item,
+                        props.canCompleteManualTask
+                      )
                     }
                     aria-label={t(
                       'Select billing reconciliation alert {{id}}',
@@ -207,11 +245,12 @@ export function BillingSettlementTable(
                       {item.status === 'manual' ? t('Manual') : t('Pending')}
                     </Badge>
                     <Badge variant='destructive'>{t('Open alert')}</Badge>
-                    {item.requires_manual_completion && (
-                      <Badge variant='outline'>
-                        {t('Exact quota required')}
-                      </Badge>
-                    )}
+                    {item.requires_manual_completion &&
+                      item.zero_quota_eligible !== true && (
+                        <Badge variant='outline'>
+                          {t('Exact quota required')}
+                        </Badge>
+                      )}
                   </div>
                 </TableCell>
                 <TableCell>

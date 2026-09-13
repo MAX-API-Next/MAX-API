@@ -507,6 +507,53 @@ func TestExtractTaskUsageReadsGenericMiniMaxVideoResponse(t *testing.T) {
 	assert.Equal(t, int64(1), *usage.InputImageCount)
 }
 
+func TestProduceUsageReturnsAuditableH3Envelope(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"id":"439499419230570",
+			"object":"video.generation",
+			"status":"completed",
+			"usage":{"input_seconds":0,"input_audio_seconds":0,"output_seconds":5,"input_image_count":1,"total_seconds":5}
+		}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TaskUsageProducerKindGoAdapter, envelope.ProducerKind)
+	require.Equal(t, "minimax", envelope.SourceID)
+	require.Equal(t, 1, envelope.SchemaVersion)
+	require.Equal(t, types.TaskUsagePresencePresentValid, envelope.Presence)
+	require.NotEmpty(t, envelope.ContractDigest)
+	require.NotEmpty(t, envelope.EvidenceDigest)
+	require.NotNil(t, envelope.Usage.InputVideoDurationMs)
+	require.Zero(t, *envelope.Usage.InputVideoDurationMs)
+	require.NotNil(t, envelope.Usage.InputAudioDurationMs)
+	require.Zero(t, *envelope.Usage.InputAudioDurationMs)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	require.EqualValues(t, 5_000, *envelope.Usage.OutputDurationMs)
+	require.NotNil(t, envelope.Usage.InputImageCount)
+	require.EqualValues(t, 1, *envelope.Usage.InputImageCount)
+}
+
+func TestProduceUsageKeepsOutOfRangeFactsAsInvalidEnvelope(t *testing.T) {
+	envelope, err := (&TaskAdaptor{}).ProduceUsage(types.TaskUsageContext{
+		Stage: types.TaskUsageSourceProviderResponse,
+		Payload: []byte(`{
+			"id":"439499419230570",
+			"object":"video.generation",
+			"status":"completed",
+			"usage":{"input_seconds":0,"output_seconds":16,"input_image_count":0,"total_seconds":16}
+		}`),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, envelope)
+	assert.Equal(t, types.TaskUsageCompletenessInvalid, envelope.Completeness)
+	assert.Equal(t, types.TaskUsagePresenceInvalid, envelope.Presence)
+	require.NotNil(t, envelope.Usage)
+	require.NotNil(t, envelope.Usage.OutputDurationMs)
+	assert.EqualValues(t, 16_000, *envelope.Usage.OutputDurationMs)
+}
+
 func TestExtractTaskUsageIgnoresNonObjectGenericUsage(t *testing.T) {
 	for _, value := range []string{`null`, `[]`, `"none"`, `123`} {
 		t.Run(value, func(t *testing.T) {
@@ -792,6 +839,36 @@ func TestParseH3UsageMarksInvalidProviderValues(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.TaskUsageCompletenessInvalid, result.Usage.Completeness)
 	require.Nil(t, result.Usage.InputImageCount)
+}
+
+func TestAttachH3UsageEnvelopePreservesParsedResultOnBindingError(t *testing.T) {
+	result := &relaycommon.TaskInfo{
+		TaskID:   "task-envelope-binding-error",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Url:      "https://cdn.example.com/video.mp4",
+		Usage: &types.TaskUsage{
+			Source:           types.TaskUsageSourceCallback,
+			Completeness:     types.TaskUsageCompletenessComplete,
+			OutputDurationMs: ptrInt64ForTest(16_000),
+		},
+	}
+
+	parsed, err := attachH3UsageEnvelope(result, nil)
+
+	require.NoError(t, err)
+	require.Same(t, result, parsed)
+	require.Equal(t, model.TaskStatusSuccess, parsed.Status)
+	require.Equal(t, "https://cdn.example.com/video.mp4", parsed.Url)
+	require.NotNil(t, parsed.UsageEnvelope)
+	require.Equal(t, types.TaskUsageCompletenessInvalid, parsed.UsageEnvelope.Completeness)
+	require.NotNil(t, parsed.Usage)
+	require.NotNil(t, parsed.Usage.OutputDurationMs)
+	assert.EqualValues(t, 16_000, *parsed.Usage.OutputDurationMs)
+}
+
+func ptrInt64ForTest(value int64) *int64 {
+	return &value
 }
 
 func TestParseH3UsagePreservesFractionalVideoAndAudioSeconds(t *testing.T) {
