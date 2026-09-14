@@ -324,13 +324,22 @@ docker compose up -d
 
 Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilisant un `NODE_NAME` différent par nœud. `CRYPTO_SECRET` est une surcharge facultative qui reprend `SESSION_SECRET` s'il est absent ; s'il est défini explicitement, utilisez la même valeur sur chaque nœud. Utilisez `LOG_SQL_DSN` pour une base de journaux séparée et activez `ERROR_LOG_ENABLED` lorsque les statistiques de performance des erreurs sont nécessaires. Consultez la [documentation](https://docs.max-api.ai) pour toutes les variables d'environnement et les instructions de build depuis les sources.
 
-## 🤝 Mentions légales et développements dérivés
+## 🤝 Projets associés
 
-Si vous créez ou distribuez une version dérivée, lisez intégralement [NOTICE](./NOTICE) et [LICENSE](./LICENSE), puis conservez à un emplacement bien visible les mentions légales, attributions, lien vers le projet d'origine et marquage des modifications qui y sont requis.
+- [One API](https://github.com/songquanpeng/one-api)
+- [MAX-API](https://github.com/z3042653234/MAX-API)
+- [Midjourney Proxy](https://github.com/novicezk/midjourney-proxy)
+- [Chat API](https://github.com/ai365vip/chat-api)
+- [New API](https://github.com/QuantumNous/new-api)
+- [VoAPI](https://github.com/VoAPI/VoAPI)
+- [Sub2API](https://github.com/Wei-Shaw/sub2api)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
-En complément de la licence AGPLv3 par défaut, un projet dérivé réservé à l'usage de son opérateur bénéficie automatiquement, sans demande ni approbation distincte, de l'autorisation commerciale temporaire, gratuite et non permanente décrite dans [NOTICE](./NOTICE) pour les ajouts et modifications de MAX API que les mainteneurs du projet ont le droit de concéder, tant qu'il affiche clairement soit le lien du projet [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API), soit une mention de la communauté [MAX-API-Next](https://github.com/MAX-API-Next), à un emplacement bien visible de la page d'accueil, du pied de page, de la page À propos, des mentions légales ou des attributions.
+## ⚠️ Mentions légales
 
-Cette autorisation temporaire ne couvre, ne remplace ni ne supprime les obligations de l'AGPLv3, de One API, de New API ou de tout autre composant amont. Elle cesse de s'appliquer si la condition d'affichage n'est plus respectée, ou si elle expire, est modifiée ou prend fin par une mention publiée dans NOTICE, le README ou la communauté officielle MAX-API-Next. Les droits accordés indépendamment par l'AGPLv3 restent inchangés ; toute utilisation poursuivie hors de cette autorisation temporaire doit respecter l'AGPLv3 ou faire l'objet d'une autorisation écrite distincte du titulaire de droits concerné. Consultez [NOTICE](./NOTICE) pour les conditions complètes.
+- **⚖️ Utilisation conforme** : utilisez ce projet conformément aux lois et réglementations de votre juridiction. Toute utilisation illégale ou non conforme est interdite.
+- **📖 Avertissement** : ce projet est fourni à des fins d'apprentissage technique et de recherche. Les auteurs ne sont pas responsables des suspensions de compte, interruptions de service, pertes de données ou autres dommages directs ou indirects liés à son utilisation.
+- **🚫 Aucune autorisation commerciale** : ce projet n'a autorisé aucune personne ni organisation à l'exploiter commercialement. Toute activité de ce type et les litiges, pertes ou responsabilités qui en découlent relèvent de l'opérateur.
 
 ## 📜 Licence
 

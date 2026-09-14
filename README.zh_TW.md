@@ -326,13 +326,22 @@ docker compose up -d
 
 多節點必須統一 `SESSION_SECRET`，並為每個節點使用不同的 `NODE_NAME`。`CRYPTO_SECRET` 為可選覆寫項，未設定時使用 `SESSION_SECRET`；如明確設定，所有節點必須使用相同值。獨立日誌庫使用 `LOG_SQL_DSN`；錯誤效能統計需要按需啟用 `ERROR_LOG_ENABLED`。完整環境變數和原始碼建置說明請見[詳細文件](https://docs.max-api.ai)。
 
-## 🤝 法律說明與二次開發
+## 🤝 相關專案
 
-如果你基於本專案進行二次開發或散布，請先完整閱讀 [NOTICE](./NOTICE) 和 [LICENSE](./LICENSE)，並依其中要求在專案明顯位置保留法律聲明、歸屬資訊、原專案連結和修改標記。
+- [One API](https://github.com/songquanpeng/one-api)
+- [MAX-API](https://github.com/z3042653234/MAX-API)
+- [Midjourney Proxy](https://github.com/novicezk/midjourney-proxy)
+- [Chat API](https://github.com/ai365vip/chat-api)
+- [New API](https://github.com/QuantumNous/new-api)
+- [VoAPI](https://github.com/VoAPI/VoAPI)
+- [Sub2API](https://github.com/Wei-Shaw/sub2api)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
-除 AGPLv3 預設授權外，現階段，僅供自身使用的二次開發專案如持續在專案首頁、頁尾、「關於」、法律聲明或其他明顯位置清楚展示 [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) 專案連結，或對 [MAX-API-Next](https://github.com/MAX-API-Next) 社群的致謝，即自動免費取得 MAX API 專案方對其有權授權的新增與修改部分所提供的非永久臨時商用授權，無需另行申請或審批。
+## ⚠️ 法律說明
 
-此臨時授權不涵蓋、取代或免除 AGPLv3、One API、New API 或其他上游授權義務；展示條件不再符合，或專案方透過 NOTICE、README 或 MAX-API-Next 官方社群公告其到期、調整或終止時，此臨時授權即不再適用。AGPLv3 獨立授予的權利不受影響；超出臨時授權繼續使用時，須遵守 AGPLv3 或另行取得適用權利人的書面授權。完整條件以 [NOTICE](./NOTICE) 為準。
+- **⚖️ 合規使用**：請在符合您所在國家或地區法律法規的前提下使用本專案，嚴禁將其用於任何違法違規用途。
+- **📖 免責聲明**：本專案僅供技術學習與研究使用，作者不對因使用本專案導致的帳戶封禁、服務中斷、資料遺失或其他任何直接或間接損失承擔責任。
+- **🚫 無商業授權**：本專案從未授權任何個人或組織基於本專案開展任何形式的商業化運營。任何以本專案名義或基於本專案從事的商業行為均與本專案及其開發者無關，由此產生的一切糾紛、損失和法律責任由行為主體自行承擔。
 
 ## 📜 許可證
 
