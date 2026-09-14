@@ -324,13 +324,22 @@ docker compose up -d
 
 複数ノードでは `SESSION_SECRET` を共有し、各ノードに異なる `NODE_NAME` を設定する必要があります。`CRYPTO_SECRET` は任意の上書き値で、未設定時は `SESSION_SECRET` を使用します。明示的に設定する場合は、すべてのノードで同じ値を使用してください。独立ログデータベースには `LOG_SQL_DSN` を使用し、エラー性能統計が必要な場合は `ERROR_LOG_ENABLED` を有効にしてください。すべての環境変数とソースビルド手順は[詳細ドキュメント](https://docs.max-api.ai)を参照してください。
 
-## 🤝 法的事項と二次開発
+## 🤝 関連プロジェクト
 
-二次開発版を作成または配布する場合は、[NOTICE](./NOTICE) と [LICENSE](./LICENSE) を全文確認し、そこに定められた法的表示、帰属、原プロジェクトへのリンク、変更表示を目立つ場所に保持してください。
+- [One API](https://github.com/songquanpeng/one-api)
+- [MAX-API](https://github.com/z3042653234/MAX-API)
+- [Midjourney Proxy](https://github.com/novicezk/midjourney-proxy)
+- [Chat API](https://github.com/ai365vip/chat-api)
+- [New API](https://github.com/QuantumNous/new-api)
+- [VoAPI](https://github.com/VoAPI/VoAPI)
+- [Sub2API](https://github.com/Wei-Shaw/sub2api)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
-既定の AGPLv3 ライセンスに加え、運営者自身のみが使用する二次開発プロジェクトは、プロジェクトの保守者が許諾する権利を有する MAX API の追加・変更部分について、[NOTICE](./NOTICE) に定める無料かつ非永久の一時的商用許諾を、別途の申請や承認なく自動的に受けられます。適用中は、ホームページ、フッター、「概要」、法的表示、または帰属表示の目立つ場所に、[MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) のプロジェクトリンク、または [MAX-API-Next](https://github.com/MAX-API-Next) コミュニティへの謝辞のいずれかを明確に表示し続ける必要があります。
+## ⚠️ 法的事項
 
-この一時的許諾は、AGPLv3、One API、New API、その他の上流素材に関するライセンス義務を対象とせず、置き換えも免除もしません。表示条件を満たさなくなった場合、または NOTICE、README、MAX-API-Next 公式コミュニティの告知により期限切れ、変更、終了となった場合は適用されなくなります。AGPLv3 から独立して付与される権利には影響せず、一時的許諾の範囲外で利用を継続する場合は AGPLv3 を遵守するか、該当する権利者から別途書面による許諾を得る必要があります。完全な条件は [NOTICE](./NOTICE) を参照してください。
+- **⚖️ 適法な利用**：利用地域の法令および規制を遵守して本プロジェクトを使用してください。違法または不適切な用途での使用を禁止します。
+- **📖 免責事項**：本プロジェクトは技術学習および研究目的で提供されます。利用によるアカウント停止、サービス中断、データ損失、その他の直接的または間接的な損害について、著者は責任を負いません。
+- **🚫 商用許諾なし**：本プロジェクトは、個人または組織による商用運用を許諾していません。これに基づく活動と、それに伴う紛争、損失、責任は運営者が負うものとします。
 
 ## 📜 ライセンス
 

@@ -324,13 +324,22 @@ docker compose up -d
 
 Multi-node deployments must share `SESSION_SECRET` while using a different `NODE_NAME` for each node. `CRYPTO_SECRET` is an optional override that falls back to `SESSION_SECRET` when unset; if explicitly set, use the same value on every node. Use `LOG_SQL_DSN` for a separate log database and enable `ERROR_LOG_ENABLED` when error-performance statistics are needed. See the [documentation](https://docs.max-api.ai) for complete environment variables and source-build instructions.
 
-## 🤝 Legal notes and derivative use
+## 🤝 Related projects
 
-If you create or distribute a derivative version, read [NOTICE](./NOTICE) and [LICENSE](./LICENSE) in full and preserve the legal notices, attributions, original-project link, and change marking required there in a prominent location.
+- [One API](https://github.com/songquanpeng/one-api)
+- [MAX-API](https://github.com/z3042653234/MAX-API)
+- [Midjourney Proxy](https://github.com/novicezk/midjourney-proxy)
+- [Chat API](https://github.com/ai365vip/chat-api)
+- [New API](https://github.com/QuantumNous/new-api)
+- [VoAPI](https://github.com/VoAPI/VoAPI)
+- [Sub2API](https://github.com/Wei-Shaw/sub2api)
+- [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
-In addition to the default AGPLv3 license, a derivative project used only by its operator automatically receives, without a separate application or approval, the no-fee, non-perpetual temporary commercial permission described in [NOTICE](./NOTICE) for MAX API additions and modifications that the project maintainers have the right to license, while it continuously keeps either the [MAX-API-Next/MAX-API](https://github.com/MAX-API-Next/MAX-API) project link or an acknowledgement of the [MAX-API-Next](https://github.com/MAX-API-Next) community clearly visible in a prominent homepage, footer, About, legal, or attribution location.
+## ⚠️ Legal notes
 
-This temporary permission does not cover, replace, or waive AGPLv3 or any license obligation for One API, New API, or other upstream material. It ceases to apply if the display condition is no longer met, or if it expires, is amended, or is terminated through NOTICE, the README, or an official MAX-API-Next community notice. Rights independently granted by AGPLv3 remain unaffected; continued use outside the temporary permission must comply with AGPLv3 or a separate written authorization from the applicable rights holder. See [NOTICE](./NOTICE) for the complete terms.
+- **⚖️ Lawful use**: Use this project in compliance with the laws and regulations of your jurisdiction. Do not use it for illegal or non-compliant purposes.
+- **📖 Disclaimer**: This project is provided for technical learning and research. The authors are not responsible for account suspension, service interruption, data loss, or any direct or indirect loss caused by its use.
+- **🚫 No commercial authorization**: This project has not authorized any individual or organization to commercially operate based on it. Any such activity and resulting disputes, losses, or liabilities are the responsibility of the operator.
 
 ## 📜 License
 
