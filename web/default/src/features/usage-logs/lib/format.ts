@@ -264,9 +264,8 @@ export function getTieredBillingSummary(
   for (const v of BILLING_PRICING_VARS) {
     if (!v.field) continue
     if (v.group === 'cache' && !cacheTokensPresent) continue
-    const raw = tier[v.field as keyof ParsedTier]
-    const price = Number(raw)
-    if (Number.isFinite(price) && price > 0) {
+    const price = tier[v.field]
+    if (typeof price === 'number' && Number.isFinite(price)) {
       priceEntries.push({
         field: v.field,
         shortLabel: v.shortLabel,

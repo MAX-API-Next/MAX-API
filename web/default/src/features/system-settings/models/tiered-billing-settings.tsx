@@ -123,7 +123,7 @@ function validateUnifiedConfig(value: string) {
   return normalized
 }
 
-function downloadJson(filename: string, value: string) {
+function downloadJson(filename: string, value: string): void {
   const blob = new Blob([value], { type: 'application/json;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
@@ -229,7 +229,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const isDirty = text !== initialText
 
   const handleImport = useCallback(
-    async (event: ChangeEvent<HTMLInputElement>) => {
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
       const file = event.target.files?.[0]
       event.target.value = ''
       if (!file) return
@@ -241,7 +241,6 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
         setError('')
       } catch (err) {
         const message = err instanceof Error ? err.message : t('Invalid JSON')
-        setError(message)
         toast.error(message)
       }
     },

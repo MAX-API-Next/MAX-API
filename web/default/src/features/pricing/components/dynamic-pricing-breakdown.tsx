@@ -238,9 +238,10 @@ export function DynamicPricingBreakdown({
   const visiblePriceFields = BILLING_PRICING_VARS.filter((v) => {
     if (!hasTiers) return false
     if (hideCacheColumns && v.group === 'cache') return false
-    return tiers.some(
-      (tier) => Number(tier[v.field as string as keyof ParsedTier] || 0) > 0
-    )
+    return tiers.some((tier) => {
+      const value = tier[v.field as string]
+      return typeof value === 'number' && Number.isFinite(value)
+    })
   })
 
   return (
@@ -302,16 +303,14 @@ export function DynamicPricingBreakdown({
                   )}
                   <div className='grid grid-cols-2 gap-x-3 gap-y-1.5'>
                     {visiblePriceFields.map((v) => {
-                      const value = Number(
-                        tier[v.field as string as keyof ParsedTier] || 0
-                      )
+                      const value = tier[v.field as string]
                       return (
                         <div key={v.field} className='min-w-0'>
                           <div className='text-muted-foreground truncate text-[10px] font-medium tracking-wider uppercase'>
                             {t(v.shortLabel)}
                           </div>
                           <div className='truncate font-mono text-sm font-semibold'>
-                            {value > 0
+                            {typeof value === 'number' && Number.isFinite(value)
                               ? `${symbol}${(value * rate).toFixed(4)}`
                               : '-'}
                           </div>
@@ -379,15 +378,14 @@ export function DynamicPricingBreakdown({
                         )}
                       </TableCell>
                       {visiblePriceFields.map((v) => {
-                        const value = Number(
-                          tier[v.field as string as keyof ParsedTier] || 0
-                        )
+                        const value = tier[v.field as string]
                         return (
                           <TableCell
                             key={v.field}
                             className='py-2.5 text-right align-top font-mono'
                           >
-                            {value > 0 ? (
+                            {typeof value === 'number' &&
+                            Number.isFinite(value) ? (
                               <span className='font-semibold'>
                                 {`${symbol}${(value * rate).toFixed(4)}`}
                               </span>

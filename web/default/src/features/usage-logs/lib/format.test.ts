@@ -19,7 +19,37 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import ru from '@/i18n/locales/ru.json'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { renderAuditContent } from './format'
+import { getTieredBillingSummary, renderAuditContent } from './format'
+
+describe('tiered billing price summaries', () => {
+  test('preserves configured zero prices and the cache-usage visibility policy', () => {
+    const expr = 'tier("free", p * 0 + c * 2 + cr * 0 + img * 0)'
+    const other = {
+      billing_mode: 'tiered_expr',
+      expr_b64: Buffer.from(expr).toString('base64'),
+      matched_tier: 'free',
+    }
+    const withoutCache = getTieredBillingSummary(other)
+    assert.deepEqual(
+      withoutCache?.priceEntries.map(({ field, price }) => [field, price]),
+      [
+        ['inputPrice', 0],
+        ['outputPrice', 2],
+        ['imagePrice', 0],
+      ]
+    )
+    const withCache = getTieredBillingSummary({ ...other, cache_tokens: 10 })
+    assert.deepEqual(
+      withCache?.priceEntries.map(({ field, price }) => [field, price]),
+      [
+        ['inputPrice', 0],
+        ['outputPrice', 2],
+        ['cacheReadPrice', 0],
+        ['imagePrice', 0],
+      ]
+    )
+  })
+})
 
 describe('renderAuditContent', () => {
   test('localizes completed manual task billing settlements', () => {

@@ -9,6 +9,8 @@ the Free Software Foundation, either version 3 of the License, or
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { PricingModel } from '../types'
+import { parseTiersFromExpr } from './billing-expr'
+import { getDynamicPriceEntries } from './dynamic-price'
 import {
   formatFixedPrice,
   formatGroupPrice,
@@ -36,6 +38,21 @@ function modelWithRateCard(
 }
 
 describe('task rate-card display prices', () => {
+  test('dynamic summaries keep configured zero prices and omit absent prices', () => {
+    const [tier] = parseTiersFromExpr('tier("free", p * 0 + c * 2 + cr * 0)')
+    const entries = getDynamicPriceEntries(tier, { tokenUnit: 'M' })
+    assert.deepEqual(
+      entries.map(({ key, value }) => [key, value]),
+      [
+        ['p', 0],
+        ['c', 2],
+        ['cr', 0],
+      ]
+    )
+    assert.match(entries[0].formatted, /0/)
+    assert.match(entries[2].formatted, /0/)
+  })
+
   test('keeps an explicit zero price visible', () => {
     assert.match(formatTaskRateCardRange(modelWithRateCard(0, 0)), /0/)
   })

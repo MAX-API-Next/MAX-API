@@ -35,6 +35,9 @@ for (const expression of [
   'len < 100 ? tier("peak", p * 2 + c * 4) : max(p, 1)',
   'len < 9007199254740993 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',
   'len < 1e-999 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',
+  'tier("custom", max(p, 1) * 3 + c * 15)',
+  'tier("custom", p * 1e999 + c * 15)',
+  'tier("custom", p * 1e-999 + c * 15)',
 ]) {
   test(`shows the complete raw expression when structured parsing is unsupported: ${expression}`, async () => {
     const view = await testEnv.render(
@@ -55,6 +58,55 @@ for (const expression of [
     }
   })
 }
+
+test('shows configured zero coefficients and leaves absent coefficients blank in both layouts', async () => {
+  const view = await testEnv.render(
+    <DynamicPricingBreakdown
+      billingExpr={
+        'len < 100 ? tier("free", p * 0 + c * 0 + cr * 0 + cc * 0 + cc1h * 0 + img * 0 + img_o * 0 + ai * 0 + ao * 0) : tier("base", p * 2 + c * 4)'
+      }
+    />
+  )
+  try {
+    const headers = [...view.container.querySelectorAll('thead th')]
+    assert.equal(headers.length, 10)
+    const rows = view.container.querySelectorAll('tbody tr')
+    assert.deepEqual(
+      [...rows[0].querySelectorAll('td')]
+        .slice(1)
+        .map((cell) => cell.textContent),
+      Array(9).fill('$0.0000')
+    )
+    assert.deepEqual(
+      [...rows[1].querySelectorAll('td')]
+        .slice(3)
+        .map((cell) => cell.textContent),
+      Array(7).fill('-')
+    )
+    const mobile = view.container.querySelector('.sm\\:hidden')
+    assert.ok(mobile)
+    assert.equal((mobile.textContent?.match(/\$0\.0000/g) || []).length, 9)
+  } finally {
+    await view.unmount()
+  }
+})
+
+test('still hides cache columns when the request has no cache usage', async () => {
+  const view = await testEnv.render(
+    <DynamicPricingBreakdown
+      billingExpr={'tier("free", p * 0 + c * 0 + cr * 0 + img * 0)'}
+      hideCacheColumns
+    />
+  )
+  try {
+    const headers = [...view.container.querySelectorAll('thead th')].map(
+      (cell) => cell.textContent
+    )
+    assert.deepEqual(headers, ['Tier', 'Input', 'Output', 'Image In'])
+  } finally {
+    await view.unmount()
+  }
+})
 
 describe('ModelDetailsContent structured task pricing', () => {
   function createModel(inputVideoMaxQuantity?: number): PricingModel {

@@ -213,6 +213,54 @@ describe('evalExprLocally', () => {
 })
 
 describe('visual tier conditions', () => {
+  test('rejects unsupported or unsafe complete tier bodies', () => {
+    for (const body of [
+      'max(p, 1) * 3 + c * 15',
+      'p * 2 * 3 + c * 4',
+      'p * 2 - c * 4',
+      'p * 2 + unknown * 3',
+      'xp * 2 + c * 4',
+      'p * 2 + p * 3',
+      'p * 1e999 + c * 4',
+      'p * 1e-999 + c * 4',
+      'p * 9007199254740993 + c * 4',
+      'p * 2 +',
+      'p * 2 + 10',
+      '',
+    ]) {
+      assert.deepEqual(parseTiersFromExpr(`tier("custom", ${body})`), [], body)
+      assert.deepEqual(
+        parseTiersFromExpr(
+          `len < 100 ? tier("known", p * 1 + c * 2) : tier("custom", ${body})`
+        ),
+        [],
+        body
+      )
+    }
+  })
+
+  test('retains coefficient presence, zero, and supported exponent notation', () => {
+    const [tier] = parseTiersFromExpr(
+      'tier("free", c * 1e+2 + p * .5 + cr * 0 + cc1h * 0e-99)'
+    )
+    assert.equal(tier.inputPrice, 0.5)
+    assert.equal(tier.outputPrice, 100)
+    assert.equal(tier.cacheReadPrice, 0)
+    assert.equal(tier.cacheCreate1hPrice, 0)
+    assert.equal(Object.hasOwn(tier, 'cacheCreatePrice'), false)
+    for (const { exprVar } of BILLING_CACHE_VAR_MAP) {
+      const absent = parseTiersFromExpr('tier("base", p * 2 + c * 4)')[0]
+      const present = parseTiersFromExpr(
+        `tier("base", p * 2 + c * 4 + ${exprVar} * 0)`
+      )[0]
+      assert.equal(
+        Object.keys(present).length,
+        Object.keys(absent).length + 1,
+        exprVar
+      )
+    }
+  })
+
   test('rejects structured displays with unsupported or missing branches', () => {
     for (const expression of [
       'len < 100 ? tier("peak", p * 2 + c * 4) : max(p, 1)',

@@ -166,11 +166,6 @@ export const BILLING_CACHE_VAR_MAP = BILLING_EXTRA_VARS.map((v) => ({
   exprVar: v.key,
 }))
 
-const BILLING_VAR_REGEX = new RegExp(
-  `\\b(${BILLING_PRICING_VARS.map((v) => v.key).join('|')})\\s*\\*\\s*([\\d.eE+-]+)`,
-  'g'
-)
-
 // ---------------------------------------------------------------------------
 // Request rule constants
 // ---------------------------------------------------------------------------
@@ -259,18 +254,25 @@ function stripExprVersion(exprStr: string): { version: number; body: string } {
   return { version: 1, body: exprStr }
 }
 
-function parseTierBody(bodyStr: string): Record<string, number> {
-  const coeffs: Record<string, number> = {}
-  const re = new RegExp(BILLING_VAR_REGEX.source, 'g')
-  let m
-  while ((m = re.exec(bodyStr)) !== null) {
-    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2])
-  }
+function parseTierBody(bodyStr: string): Record<string, number> | null {
+  const body = bodyStr.trim()
+  // Consume every term and separator. Unsupported bodies must stay raw.
+  const termRe =
+    /\s*([a-z][a-z0-9_]*)\s*\*\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*/y
   const tier: Record<string, number> = {}
-  for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
-    tier[field] = coeffs[varName] || 0
+  while (termRe.lastIndex < body.length) {
+    const match = termRe.exec(body)
+    if (!match || !Object.hasOwn(BILLING_VAR_KEY_TO_FIELD, match[1]))
+      return null
+    const field = BILLING_VAR_KEY_TO_FIELD[match[1]]
+    if (Object.hasOwn(tier, field) || !isSupportedNumericLiteral(match[2]))
+      return null
+    tier[field] = Number(match[2])
+    if (termRe.lastIndex === body.length) return tier
+    if (body[termRe.lastIndex] !== '+') return null
+    termRe.lastIndex += 1
   }
-  return tier
+  return null
 }
 
 export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
@@ -321,9 +323,13 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
         }
         if (groupConditions.length > 0) conditionGroups.push(groupConditions)
       }
-      const tier = parseTierBody(tierMatch[2]) as ParsedTier
-      tier.label = tierMatch[1]
-      tier.conditions = isUnconditional ? [] : conditionGroups.flat()
+      const prices = parseTierBody(tierMatch[2])
+      if (!prices) return []
+      const tier: ParsedTier = {
+        ...prices,
+        label: tierMatch[1],
+        conditions: isUnconditional ? [] : conditionGroups.flat(),
+      }
       if (!isUnconditional && conditionGroups.length > 1) {
         tier.conditionGroups = conditionGroups
       }
