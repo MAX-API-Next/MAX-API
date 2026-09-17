@@ -196,7 +196,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   })
   const { mutateAsync } = mutation
 
-  const handleFormat = useCallback(() => {
+  const handleFormat = useCallback((): void => {
     editRevision.current += 1
     try {
       setText(formatJsonForTextarea(text || '{}'))
@@ -206,7 +206,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     }
   }, [t, text])
 
-  const handleLoadExample = useCallback(() => {
+  const handleLoadExample = useCallback((): void => {
     editRevision.current += 1
     setText(JSON.stringify(EXAMPLE_CONFIG, null, 2))
     setError('')

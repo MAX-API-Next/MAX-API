@@ -349,23 +349,34 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const filteredVendorSummary = useMemo((): VendorSummary[] => {
     const query = search.trim().toLowerCase()
     return vendorSummary
-      .filter((vendor) => vendorFilter === 'all' || vendor.key === vendorFilter)
-      .map((vendor) => {
+      .filter(
+        (vendor: VendorSummary): boolean =>
+          vendorFilter === 'all' || vendor.key === vendorFilter
+      )
+      .map((vendor: VendorSummary): VendorSummary => {
         if (!query) return vendor
         return {
           ...vendor,
-          modelCount: vendor.models.filter((model) =>
+          modelCount: vendor.models.filter((model: string): boolean =>
             model.toLowerCase().includes(query)
           ).length,
           rowCount: vendor.models
-            .filter((model) => model.toLowerCase().includes(query))
-            .reduce((sum, model) => sum + (vendor.modelRows[model] ?? 0), 0),
-          models: vendor.models.filter((model) =>
+            .filter((model: string): boolean =>
+              model.toLowerCase().includes(query)
+            )
+            .reduce(
+              (sum: number, model: string): number =>
+                sum + (vendor.modelRows[model] ?? 0),
+              0
+            ),
+          models: vendor.models.filter((model: string): boolean =>
             model.toLowerCase().includes(query)
           ),
         }
       })
-      .filter((vendor) => !query || vendor.models.length > 0)
+      .filter(
+        (vendor: VendorSummary): boolean => !query || vendor.models.length > 0
+      )
   }, [search, vendorFilter, vendorSummary])
   const isDirty = text !== initialText
 
