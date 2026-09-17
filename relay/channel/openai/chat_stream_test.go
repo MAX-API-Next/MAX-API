@@ -184,7 +184,10 @@ func TestNativeChatStreamBufferLimitsCloseRetryWindow(t *testing.T) {
 			if limit == "bytes" {
 				frames = []string{`{"padding":"` + strings.Repeat("x", maxPendingChatStreamBytes) + `","choices":[{"delta":{"role":"assistant"}}]}`}
 			}
-			_, apiErr := replayChatStream(c, info, append(frames, chatOverloadFrame)...)
+			allFrames := make([]string, len(frames)+1)
+			copy(allFrames, frames)
+			allFrames[len(frames)] = chatOverloadFrame
+			_, apiErr := replayChatStream(c, info, allFrames...)
 			require.NotNil(t, apiErr)
 			require.True(t, types.IsSkipRetryError(apiErr))
 			require.NotEmpty(t, recorder.Body.String())

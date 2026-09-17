@@ -21,6 +21,7 @@ import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import type { PricingModel } from '../types'
+import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelDetailsContent } from './model-details'
 
 const testEnv = createReactTestEnvironment()
@@ -28,6 +29,24 @@ const testEnv = createReactTestEnvironment()
 before(() => testEnv.setup())
 
 after(() => testEnv.teardown())
+
+test('shows the raw expression instead of partially parsed tier restrictions', async () => {
+  const expression =
+    'len < 100 && c == 5 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+  const view = await testEnv.render(
+    <DynamicPricingBreakdown billingExpr={expression} />
+  )
+  try {
+    assert.match(
+      view.container.textContent || '',
+      /Unable to parse structured pricing/
+    )
+    assert.equal(view.container.querySelector('code')?.textContent, expression)
+    assert.equal(view.container.querySelector('table'), null)
+  } finally {
+    await view.unmount()
+  }
+})
 
 describe('ModelDetailsContent structured task pricing', () => {
   function createModel(inputVideoMaxQuantity?: number): PricingModel {

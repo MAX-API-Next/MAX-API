@@ -284,6 +284,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
       const tierMatch = tierRe.exec(parts?.[2] || branch)
       if (!tierMatch) continue
       const conditionGroups: TierCondition[][] = []
+      let isUnconditional = false
       for (const group of splitTopLevelExpression(
         unwrapConditionParens(condStr),
         '||'
@@ -296,34 +297,34 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
           atoms.length > 0 &&
           atoms.every((atom) => unwrapConditionParens(atom) === 'true')
         ) {
-          // A true OR branch makes this tier unconditional, including when
-          // restrictive groups were already collected earlier in the loop.
-          conditionGroups.length = 0
-          break
+          // Still validate the remaining groups before using structured pricing.
+          isUnconditional = true
+          continue
         }
         const groupConditions: TierCondition[] = []
         for (const cp of atoms) {
-          if (cp.trim() === 'true') continue
-          const cm = cp
-            .trim()
-            .match(
-              /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
-            )
-          if (cm) {
-            groupConditions.push({
-              var: (cm[1] || cm[2]) as TierCondition['var'],
-              op: cm[4] as TierCondition['op'],
-              value: Number(cm[5]),
-              ...(cm[2] ? { timezone: cm[3] } : {}),
-            })
-          }
+          const atom = unwrapConditionParens(cp)
+          if (atom === 'true') continue
+          const cm = atom.match(
+            /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+          )
+          // A partial condition would advertise a different pricing contract.
+          if (!cm || !Number.isFinite(Number(cm[5]))) return []
+          groupConditions.push({
+            var: (cm[1] || cm[2]) as TierCondition['var'],
+            op: cm[4] as TierCondition['op'],
+            value: Number(cm[5]),
+            ...(cm[2] ? { timezone: cm[3] } : {}),
+          })
         }
         if (groupConditions.length > 0) conditionGroups.push(groupConditions)
       }
       const tier = parseTierBody(tierMatch[2]) as ParsedTier
       tier.label = tierMatch[1]
-      tier.conditions = conditionGroups.flat()
-      if (conditionGroups.length > 1) tier.conditionGroups = conditionGroups
+      tier.conditions = isUnconditional ? [] : conditionGroups.flat()
+      if (!isUnconditional && conditionGroups.length > 1) {
+        tier.conditionGroups = conditionGroups
+      }
       tiers.push(tier)
     }
     return tiers

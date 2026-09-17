@@ -213,6 +213,33 @@ describe('evalExprLocally', () => {
 })
 
 describe('visual tier conditions', () => {
+  test('rejects incomplete structured displays for unsupported conditions', () => {
+    for (const condition of [
+      'len < 100 && c == 5',
+      '(len < 100) || (c == 5)',
+      'len < 100 && (c > 1 || c < 5)',
+      'param("service_tier") == "priority" && len < 100',
+      '(len < 100) || (true) || (c == 5)',
+      'len < 1e999',
+      'len < 1+2',
+    ]) {
+      assert.deepEqual(
+        parseTiersFromExpr(
+          `${condition} ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
+        ),
+        [],
+        condition
+      )
+    }
+  })
+
+  test('preserves wrapped true AND members in supported display conditions', () => {
+    const tiers = parseTiersFromExpr(
+      '(true) && len < 100 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    )
+    assert.deepEqual(tiers[0].conditions, [{ var: 'len', op: '<', value: 100 }])
+  })
+
   for (const condition of [
     'true || len < 100',
     '(len < 100) || (len > 200) || ((true))',
