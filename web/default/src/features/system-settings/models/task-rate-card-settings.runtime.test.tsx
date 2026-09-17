@@ -33,7 +33,7 @@ before(() => testEnv.setup())
 after(() => testEnv.teardown())
 
 for (const kind of ['task', 'tiered'] as const) {
-  test(`${kind} settings retain valid editor state after failed file imports`, async () => {
+  test(`${kind} settings retain valid editor state after failed file imports`, async (): Promise<void> => {
     const queryClient = new QueryClient()
     const actions = document.createElement('div')
     document.body.append(actions)
@@ -63,13 +63,13 @@ for (const kind of ['task', 'tiered'] as const) {
       const original = editor.value
       assert.equal(save.disabled, false)
       for (const text of [
-        async () => '{',
-        async () => '[]',
-        async () => {
+        async (): Promise<string> => '{',
+        async (): Promise<string> => '[]',
+        async (): Promise<string> => {
           throw new Error('Synthetic file read failure')
         },
       ]) {
-        await act(async () => {
+        await act(async (): Promise<void> => {
           fireEvent.change(fileInput, { target: { files: [{ text }] } })
         })
         assert.equal(editor.value, original)
@@ -79,9 +79,9 @@ for (const kind of ['task', 'tiered'] as const) {
         kind === 'task'
           ? '{"test-model":{"unit":"second","rows":[]}}'
           : '{"test-model":{"enabled":true,"expr":"p * 1"}}'
-      await act(async () => {
+      await act(async (): Promise<void> => {
         fireEvent.change(fileInput, {
-          target: { files: [{ text: async () => imported }] },
+          target: { files: [{ text: async (): Promise<string> => imported }] },
         })
       })
       assert.deepEqual(JSON.parse(editor.value), JSON.parse(imported))

@@ -332,7 +332,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const editRevision = useRef(0)
   const initialText = useMemo(
-    () => formatJsonForTextarea(defaultValue || '{}'),
+    (): string => formatJsonForTextarea(defaultValue || '{}'),
     [defaultValue]
   )
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
