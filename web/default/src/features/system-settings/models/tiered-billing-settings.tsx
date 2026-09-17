@@ -205,7 +205,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     setError('')
   }, [])
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (): Promise<void> => {
     let config: Record<string, TieredBillingEntry>
     try {
       config = validateUnifiedConfig(text || '{}', t)

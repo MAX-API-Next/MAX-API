@@ -54,9 +54,9 @@ before(async () => {
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     ResizeObserver: class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
     },
     IS_REACT_ACT_ENVIRONMENT: true,
   }
@@ -72,10 +72,10 @@ before(async () => {
   Object.defineProperty(dom.window, 'matchMedia', {
     value: () => ({
       matches: false,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
+      addListener(): void {},
+      removeListener(): void {},
+      addEventListener(): void {},
+      removeEventListener(): void {},
     }),
   })
   // React and Base UI must detect the browser before mounting interactive portals.
@@ -106,7 +106,11 @@ const availableGroups = Array.from(
   (_, index) => `group-${index + 1}`
 )
 
-function RoutingHarness(props: { initialGroups: string[] }): ReactElement {
+type RoutingHarnessProps = {
+  initialGroups: string[]
+}
+
+function RoutingHarness(props: RoutingHarnessProps): ReactElement {
   const [mode, setMode] = useState<TokenRoutingMode>('smart')
   const [manualGroups, setManualGroups] = useState(props.initialGroups)
   return (

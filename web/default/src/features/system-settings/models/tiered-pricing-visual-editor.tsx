@@ -311,7 +311,7 @@ function VisualTierCard({
     groupIndex: number,
     conditionIndex: number,
     next: TierConditionInput
-  ) => {
+  ): void => {
     const groups = conditionGroups.map((group) => ({
       conditions: [...group.conditions],
     }))
