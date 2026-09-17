@@ -120,6 +120,9 @@ describe('visual optional price presence', () => {
       'tier("base", p * 3 + c * 15 + max(cr, 1))',
       'hour("Asia/Shanghai") > 99 ? tier("base", p * 3 + c * 15) : tier("other", p * 6 + c * 30)',
       'len < 100 && c == 5 ? tier("base", p * 3 + c * 15) : tier("other", p * 6 + c * 30)',
+      ': tier("base", p * 3 + c * 15)',
+      'tier("base", p * 3 + c * 15) :',
+      'len < 100 ? tier("base", p * 3 + c * 15) : : tier("other", p * 6 + c * 30)',
     ])
       assert.equal(tryParseVisualConfig(source), null, source)
   })
@@ -210,6 +213,54 @@ describe('evalExprLocally', () => {
 })
 
 describe('visual tier conditions', () => {
+  for (const condition of [
+    '((len < 100) || (len > 200))',
+    '((((len < 100) || (len > 200))))',
+    '((len < 100 && hour("Test/)||(:offset") >= 9) || (len > 200))',
+  ]) {
+    test(`preserves fully wrapped OR conditions: ${condition}`, () => {
+      const source = `${condition} ? tier("peak", p * 2 + c * 4 + cr * 0) : tier("off", p * 1 + c * 2)`
+      const display = parseTiersFromExpr(source)
+      assert.equal(display[0]?.conditionGroups?.length, 2)
+      assert.equal(display[0].conditionGroups![0][0].value, 100)
+      assert.equal(display[0].conditionGroups![1][0].value, 200)
+      const visual = tryParseVisualConfig(source)
+      assert.ok(visual)
+      assert.deepEqual(
+        visual.tiers[0].conditionGroups?.map((group) => group.conditions),
+        display[0].conditionGroups
+      )
+      assert.equal(visual.tiers[0].cache_read_unit_cost, 0)
+      assert.equal(visual.tiers[1].cache_read_unit_cost, undefined)
+      const regenerated = generateExprFromVisualConfig(visual)
+      assert.deepEqual(tryParseVisualConfig(regenerated), visual)
+      assert.deepEqual(parseTiersFromExpr(regenerated), display)
+      for (const len of [0, 99, 100, 150, 200, 201]) {
+        assert.deepEqual(
+          evalExprLocally(regenerated, len, 2, emptyExtraTokens),
+          evalExprLocally(source, len, 2, emptyExtraTokens)
+        )
+      }
+    })
+  }
+
+  test('keeps rejecting unsupported or lossy conditions inside outer wrappers', () => {
+    for (const condition of [
+      '((len < 100 || len > 200) && c > 1)',
+      '((len < 100) || (c == 5))',
+      '((hour("UTC") > 99) || (len > 200))',
+      '((len < 9007199254740993) || (len > 200))',
+    ]) {
+      assert.equal(
+        tryParseVisualConfig(
+          `${condition} ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
+        ),
+        null,
+        condition
+      )
+    }
+  })
+
   for (const timezone of ['Test/)||(', 'Test/)&&(', 'Test/:offset']) {
     test(`preserves quoted syntax in both pricing parsers: ${timezone}`, () => {
       const config = {

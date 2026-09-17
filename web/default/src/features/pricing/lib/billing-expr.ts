@@ -284,7 +284,10 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
       const tierMatch = tierRe.exec(parts?.[2] || branch)
       if (!tierMatch) continue
       const conditionGroups: TierCondition[][] = []
-      for (const group of splitTopLevelExpression(condStr, '||')) {
+      for (const group of splitTopLevelExpression(
+        unwrapConditionParens(condStr),
+        '||'
+      )) {
         const groupConditions: TierCondition[] = []
         for (const cp of splitTopLevelExpression(
           unwrapConditionParens(group),

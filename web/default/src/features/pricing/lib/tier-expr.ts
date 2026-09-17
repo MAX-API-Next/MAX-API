@@ -194,7 +194,7 @@ function parseTierConditionGroups(conditionStr: string): TierConditionGroup[] {
   if (!conditionStr || conditionStr.trim() === 'true') return []
   const atomPattern =
     /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
-  return splitTopLevelExpression(conditionStr, '||')
+  return splitTopLevelExpression(unwrapConditionParens(conditionStr), '||')
     .map((groupStr) => unwrapConditionParens(groupStr))
     .map((groupStr) => {
       const conditions: TierConditionInput[] = []
@@ -376,10 +376,22 @@ export function tryParseVisualConfig(
 
     const tierRe = new RegExp(`^tier\\("([^"]*)",\\s*${bodyPat}\\)$`)
     const tiers: VisualTier[] = []
-    for (const branch of splitTopLevelExpression(body, ':')) {
+    const branches = splitTopLevelExpression(body, ':')
+    // The splitter omits empty parts. Reject missing branches before comparing
+    // conditions with only their complete outer parentheses removed.
+    if (
+      canonicalizeExprForComparison(branches.join(':')) !==
+      canonicalizeExprForComparison(body)
+    )
+      return null
+    const comparisonBranches: string[] = []
+    for (const branch of branches) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
       const condStr = parts?.[1]?.trim() || ''
       const tierSource = parts?.[2] || branch
+      comparisonBranches.push(
+        parts ? `${unwrapConditionParens(condStr)} ? ${tierSource}` : branch
+      )
       const match = tierRe.exec(tierSource)
       if (!match) continue
       const conditionGroups = parseTierConditionGroups(condStr)
@@ -403,7 +415,7 @@ export function tryParseVisualConfig(
     const regenerated = generateExprFromVisualConfig(cfg)
     if (
       canonicalizeExprForComparison(regenerated) !==
-      canonicalizeExprForComparison(body)
+      canonicalizeExprForComparison(comparisonBranches.join(' : '))
     ) {
       return null
     }
