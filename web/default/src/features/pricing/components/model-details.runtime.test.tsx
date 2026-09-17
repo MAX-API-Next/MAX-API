@@ -38,6 +38,7 @@ for (const expression of [
   'tier("custom", max(p, 1) * 3 + c * 15)',
   'tier("custom", p * 1e999 + c * 15)',
   'tier("custom", p * 1e-999 + c * 15)',
+  'len < 100 ? tier("short", p * 1 + c * 2)',
 ]) {
   test(`shows the complete raw expression when structured parsing is unsupported: ${expression}`, async () => {
     const view = await testEnv.render(

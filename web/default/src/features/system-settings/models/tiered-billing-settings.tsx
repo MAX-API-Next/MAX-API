@@ -201,22 +201,27 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     await mutateAsync({ config })
   }, [mutateAsync, t, text])
 
-  const enabledCount = useMemo(() => {
+  const validatedConfig = useMemo((): Record<
+    string,
+    TieredBillingEntry
+  > | null => {
     try {
-      const config = validateUnifiedConfig(text || '{}')
-      return Object.values(config).filter((entry) => entry.enabled).length
+      return validateUnifiedConfig(text || '{}')
     } catch {
-      return 0
+      return null
     }
   }, [text])
 
-  const configuredModels = useMemo(() => {
-    try {
-      return Object.keys(validateUnifiedConfig(text || '{}'))
-    } catch {
-      return []
-    }
-  }, [text])
+  const enabledCount = useMemo(
+    (): number =>
+      Object.values(validatedConfig ?? {}).filter((entry) => entry.enabled)
+        .length,
+    [validatedConfig]
+  )
+  const configuredModels = useMemo(
+    (): string[] => Object.keys(validatedConfig ?? {}),
+    [validatedConfig]
+  )
 
   const filteredModels = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -272,7 +277,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
           variant='outline'
           size='sm'
           onClick={() => downloadJson('tiered-billing.json', text || '{}')}
-          disabled={Boolean(error)}
+          disabled={validatedConfig === null}
         >
           <Download className='mr-2 h-4 w-4' />
           {t('Download')}

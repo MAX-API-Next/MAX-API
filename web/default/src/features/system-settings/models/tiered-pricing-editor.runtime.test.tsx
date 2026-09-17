@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act, useState } from 'react'
 import type { Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
@@ -37,6 +38,8 @@ let within: typeof import('@testing-library/react').within
 let ModelPricingEditorPanel: typeof import('./model-pricing-sheet').ModelPricingEditorPanel
 let ModelRatioVisualEditor: typeof import('./model-ratio-visual-editor').ModelRatioVisualEditor
 let TieredPricingEditor: typeof import('./tiered-pricing-editor').TieredPricingEditor
+let TieredBillingSettings: typeof import('./tiered-billing-settings').TieredBillingSettings
+let SettingsPageProvider: typeof import('../components/settings-page-context').SettingsPageProvider
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -130,6 +133,53 @@ const modelB: ModelRatioData = {
 }
 
 describe('optional zero prices in the actual editor', () => {
+  test('only enables tiered configuration downloads for valid current JSON', async () => {
+    const container = createContainer()
+    const actions = createContainer()
+    const root = createRoot(container)
+    const queryClient = new QueryClient()
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <QueryClientProvider client={queryClient}>
+              <SettingsPageProvider actionsContainer={actions}>
+                <TieredBillingSettings billingMode='{}' billingExpr='{}' />
+              </SettingsPageProvider>
+            </QueryClientProvider>
+          </I18nextProvider>
+        )
+      )
+      const editor = container.querySelector('textarea')
+      assert.ok(editor)
+      const download = within(actions).getByRole('button', {
+        name: 'Download',
+      }) as HTMLButtonElement
+      assert.equal(download.disabled, false)
+      for (const invalid of ['{', '[]', '{"model":{"enabled":true}}']) {
+        await act(async () =>
+          fireEvent.change(editor, { target: { value: invalid } })
+        )
+        assert.equal(editor.value, invalid)
+        assert.equal(download.disabled, true, invalid)
+      }
+      for (const valid of [
+        '{}',
+        '{"model":{"enabled":true,"expr":"tier(\\"base\\", p * 1)"}}',
+        '{"model":{"enabled":false,"expr":""}}',
+      ]) {
+        await act(async () =>
+          fireEvent.change(editor, { target: { value: valid } })
+        )
+        assert.equal(download.disabled, false, valid)
+      }
+    } finally {
+      await unmount(root, container)
+      actions.remove()
+      queryClient.clear()
+    }
+  })
+
   for (const source of [
     'tier("base", p * 3.0 + c * 15.0 + cr * 0.0)',
     'tier("base", p * 3e0 + c * 1.5e1 + cr * 0e0)',
@@ -413,6 +463,9 @@ before(async () => {
   ;({ ModelPricingEditorPanel } = await import('./model-pricing-sheet'))
   ;({ ModelRatioVisualEditor } = await import('./model-ratio-visual-editor'))
   ;({ TieredPricingEditor } = await import('./tiered-pricing-editor'))
+  ;({ TieredBillingSettings } = await import('./tiered-billing-settings'))
+  ;({ SettingsPageProvider } =
+    await import('../components/settings-page-context'))
 })
 
 after(() => {

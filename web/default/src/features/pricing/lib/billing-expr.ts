@@ -281,8 +281,12 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
     const { body } = stripExprVersion(exprStr)
     const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    for (const branch of splitTopLevelExpression(body, ':', true)) {
+    const branches = splitTopLevelExpression(body, ':', true)
+    for (const [index, branch] of branches.entries()) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
+      // A complete ternary chain ends in exactly one unconditional fallback.
+      const expectsCondition = index < branches.length - 1
+      if (Boolean(parts) !== expectsCondition) return []
       const condStr = parts?.[1]?.trim() || ''
       const tierMatch = tierRe.exec(parts?.[2] || branch)
       if (!tierMatch || (parts && !condStr)) return []

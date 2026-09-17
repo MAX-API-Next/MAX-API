@@ -239,6 +239,16 @@ describe('visual tier conditions', () => {
     }
   })
 
+  test('rejects conditional expressions without a complete fallback chain', () => {
+    for (const expression of [
+      'len < 100 ? tier("short", p * 1 + c * 2)',
+      'tier("short", p * 1 + c * 2) : tier("long", p * 2 + c * 4)',
+      'len < 100 ? tier("short", p * 1 + c * 2) : len < 200 ? tier("mid", p * 2 + c * 4)',
+    ]) {
+      assert.deepEqual(parseTiersFromExpr(expression), [], expression)
+    }
+  })
+
   test('retains coefficient presence, zero, and supported exponent notation', () => {
     const [tier] = parseTiersFromExpr(
       'tier("free", c * 1e+2 + p * .5 + cr * 0 + cc1h * 0e-99)'
