@@ -158,7 +158,7 @@ Run the private upstream component check before any of the following work:
 
 Required procedure:
 
-1. Read `.agents/upstream-sync/components.json`, `.agents/upstream-sync/new-api-sync.md`, and the living implementation plan at `new-api/.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md`.
+1. Read `.agents/upstream-sync/components.json`, `.agents/upstream-sync/new-api-sync.md`, and the living implementation plan at `.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md`.
 2. Run the checker from the repository root with the cross-platform `pwsh` executable when available:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
    On Windows hosts without `pwsh`, use the equivalent Windows PowerShell fallback:
@@ -179,4 +179,4 @@ RelayKit-specific requirements:
 - Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
 - RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
 - If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
-- If the living plan is missing in a fresh workspace, recreate it under `.tmp/` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
+- If the living plan is missing in a fresh workspace, recreate `.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
