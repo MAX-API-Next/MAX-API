@@ -24,6 +24,7 @@ import { after, afterEach, before, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import { MAX_MANUAL_ROUTING_GROUPS } from '../lib/api-key-form'
 import type { TokenRoutingMode } from '../types'
+import type { ApiKeyGroupOption } from './api-key-group-combobox'
 
 let ApiKeyRoutingEditor: typeof import('./api-key-routing-editor').ApiKeyRoutingEditor
 let cleanup: typeof import('@testing-library/react/pure').cleanup
@@ -38,7 +39,7 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', {
 const i18n = createInstance()
 const previousGlobals = new Map<string, PropertyDescriptor | undefined>()
 
-before(async () => {
+before(async (): Promise<void> => {
   await i18n.init({ lng: 'en', resources: { en: { translation: {} } } })
   const globals = {
     window: dom.window,
@@ -68,9 +69,16 @@ before(async () => {
       value,
     })
   }
-  dom.window.HTMLElement.prototype.scrollIntoView = () => undefined
+  dom.window.HTMLElement.prototype.scrollIntoView = (): void => undefined
   Object.defineProperty(dom.window, 'matchMedia', {
-    value: () => ({
+    value: (): Pick<
+      MediaQueryList,
+      | 'matches'
+      | 'addListener'
+      | 'removeListener'
+      | 'addEventListener'
+      | 'removeEventListener'
+    > => ({
       matches: false,
       addListener(): void {},
       removeListener(): void {},
@@ -84,11 +92,11 @@ before(async () => {
   ;({ ApiKeyRoutingEditor } = await import('./api-key-routing-editor'))
 })
 
-afterEach(async () => {
-  await act(async () => cleanup())
+afterEach(async (): Promise<void> => {
+  await act(async (): Promise<void> => cleanup())
 })
 
-after(() => {
+after((): void => {
   dom.window.close()
   for (const [key, descriptor] of previousGlobals) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor)
@@ -98,12 +106,12 @@ after(() => {
 
 const groups = Array.from(
   { length: MAX_MANUAL_ROUTING_GROUPS },
-  (_, index) => `group-${index + 1}`
+  (_: unknown, index: number): string => `group-${index + 1}`
 )
 
 const availableGroups = Array.from(
   { length: 14 },
-  (_, index) => `group-${index + 1}`
+  (_: unknown, index: number): string => `group-${index + 1}`
 )
 
 type RoutingHarnessProps = {
@@ -123,23 +131,25 @@ function RoutingHarness(props: RoutingHarnessProps): ReactElement {
         autoRouteOptions={[
           { value: 'auto', label: 'Automatic', groups: availableGroups },
         ]}
-        realGroupOptions={availableGroups.map((group) => ({
-          value: group,
-          label: group,
-          ratio: 1,
-        }))}
+        realGroupOptions={availableGroups.map(
+          (group: string): ApiKeyGroupOption => ({
+            value: group,
+            label: group,
+            ratio: 1,
+          })
+        )}
         onModeChange={setMode}
-        onRouteChange={() => undefined}
+        onRouteChange={(): void => undefined}
         onManualGroupsChange={setManualGroups}
-        onRetryOnFailureChange={() => undefined}
+        onRetryOnFailureChange={(): void => undefined}
       />
     </I18nextProvider>
   )
 }
 
-describe('ApiKeyRoutingEditor', () => {
+describe('ApiKeyRoutingEditor', (): void => {
   for (const initialGroups of [[], groups]) {
-    test(`clears ${initialGroups.length} stored manual selections when automatic routing is disabled`, async () => {
+    test(`clears ${initialGroups.length} stored manual selections when automatic routing is disabled`, async (): Promise<void> => {
       const view = render(<RoutingHarness initialGroups={initialGroups} />)
       view.getByText('+11')
       fireEvent.click(
@@ -178,7 +188,7 @@ describe('ApiKeyRoutingEditor', () => {
     })
   }
 
-  test('keeps all available groups visible at the manual selection limit', async () => {
+  test('keeps all available groups visible at the manual selection limit', async (): Promise<void> => {
     let changedGroups: string[] | undefined
     const view = render(
       <I18nextProvider i18n={i18n}>
@@ -188,18 +198,20 @@ describe('ApiKeyRoutingEditor', () => {
           manualGroups={groups}
           retryOnFailure
           autoRouteOptions={[]}
-          realGroupOptions={availableGroups.map((group) => ({
-            value: group,
-            label: group,
-            desc: group,
-            ratio: 1,
-          }))}
-          onModeChange={() => undefined}
-          onRouteChange={() => undefined}
+          realGroupOptions={availableGroups.map(
+            (group: string): ApiKeyGroupOption => ({
+              value: group,
+              label: group,
+              desc: group,
+              ratio: 1,
+            })
+          )}
+          onModeChange={(): void => undefined}
+          onRouteChange={(): void => undefined}
           onManualGroupsChange={(nextGroups: string[]): void => {
             changedGroups = nextGroups
           }}
-          onRetryOnFailureChange={() => undefined}
+          onRetryOnFailureChange={(): void => undefined}
         />
       </I18nextProvider>
     )

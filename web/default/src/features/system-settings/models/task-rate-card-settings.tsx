@@ -336,6 +336,16 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
     [defaultValue]
   )
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
+  useEffect((): void => {
+    if (
+      vendorFilter !== 'all' &&
+      !vendorSummary.some(
+        (vendor: VendorSummary): boolean => vendor.key === vendorFilter
+      )
+    ) {
+      setVendorFilter('all')
+    }
+  }, [vendorFilter, vendorSummary])
   const filteredVendorSummary = useMemo((): VendorSummary[] => {
     const query = search.trim().toLowerCase()
     return vendorSummary

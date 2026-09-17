@@ -1763,6 +1763,7 @@
     "Enable when proxying workers that fetch images over HTTP.": "HTTP経由で画像をフェッチするワーカーをプロキシする場合に有効にします。",
     "Enabled": "有効",
     "Enabled flag for {{model}} must be a boolean": "{{model}} の有効フラグは真偽値である必要があります",
+    "Billing expression for {{model}} must be a string": "{{model}} の課金式は文字列である必要があります",
     "Enabled all channels with tag: {{tag}}": "タグ「{{tag}}」の全チャネルを有効にしました",
     "Enabled Status": "有効ステータス",
     "Enabling...": "有効化中...",

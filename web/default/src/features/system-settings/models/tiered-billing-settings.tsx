@@ -124,7 +124,14 @@ function validateUnifiedConfig(
         )
       }
       const enabled = rawEntry.enabled ?? false
-      const expr = typeof rawEntry.expr === 'string' ? rawEntry.expr.trim() : ''
+      if (rawEntry.expr !== undefined && typeof rawEntry.expr !== 'string') {
+        throw new Error(
+          t('Billing expression for {{model}} must be a string', {
+            model: name,
+          })
+        )
+      }
+      const expr = rawEntry.expr?.trim() ?? ''
       if (enabled && !expr) {
         throw new Error(`Billing expression for ${name} cannot be empty`)
       }

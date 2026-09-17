@@ -134,20 +134,110 @@ const modelB: ModelRatioData = {
   requestRuleExpr: '',
 }
 
+type TieredValidationCase = {
+  name: string
+  entry: { enabled?: unknown; expr?: unknown }
+  normalized?: { enabled: boolean; expr: string }
+}
+
+const tieredValidationCases: TieredValidationCase[] = [
+  ...[false, true, undefined, 'false', 'true', 0, 1, null, [], {}].map(
+    (enabled: unknown): TieredValidationCase => ({
+      name: `boolean flag ${JSON.stringify(enabled)}`,
+      entry: { enabled, expr: 'p * 1' },
+      normalized:
+        enabled === undefined || typeof enabled === 'boolean'
+          ? { enabled: enabled ?? false, expr: 'p * 1' }
+          : undefined,
+    })
+  ),
+  ...[0, 1, null, false, [], {}, undefined, '', ' p * 0 '].map(
+    (expr: unknown): TieredValidationCase => ({
+      name: `expression ${JSON.stringify(expr)}`,
+      entry: { enabled: false, expr },
+      normalized:
+        expr === undefined || typeof expr === 'string'
+          ? { enabled: false, expr: expr?.trim() ?? '' }
+          : undefined,
+    })
+  ),
+]
+
+for (const replaceVia of ['import', 'edit'] as const) {
+  test(`task vendor filter follows valid selections after ${replaceVia} replacement`, async (): Promise<void> => {
+    const queryClient = new QueryClient()
+    const config = (vendors: string[]): string =>
+      JSON.stringify(
+        Object.fromEntries(
+          vendors.map((vendor: string): [string, object] => [
+            `${vendor}-test-model`,
+            { vendor, unit: 'second', rows: [] },
+          ])
+        )
+      )
+    const container = createContainer()
+    const root = createRoot(container)
+    await act(async (): Promise<void> => {
+      root.render(
+        <I18nextProvider i18n={i18n}>
+          <QueryClientProvider client={queryClient}>
+            <TaskRateCardSettings defaultValue={config(['kling', 'minimax'])} />
+          </QueryClientProvider>
+        </I18nextProvider>
+      )
+    })
+    try {
+      const screen = within(container)
+      const section = screen
+        .getByRole('heading', { name: 'Vendor partitions' })
+        .closest('section')
+      assert.ok(section)
+      const summary = within(section)
+      await act(async (): Promise<void> => {
+        fireEvent.click(summary.getByRole('button', { name: 'Kling' }))
+      })
+      summary.getByText('kling-test-model')
+      assert.equal(summary.queryByText('minimax-test-model'), null)
+
+      const replace = async (vendors: string[]): Promise<void> => {
+        await act(async (): Promise<void> => {
+          if (replaceVia === 'import') {
+            const input = container.querySelector('input[type=file]')
+            assert.ok(input)
+            fireEvent.change(input, {
+              target: {
+                files: [{ text: async (): Promise<string> => config(vendors) }],
+              },
+            })
+          } else {
+            fireEvent.change(
+              screen.getByRole('textbox', { name: 'Current rate card JSON' }),
+              { target: { value: config(vendors) } }
+            )
+          }
+        })
+      }
+
+      await replace(['kling', 'sora'])
+      summary.getByText('kling-test-model')
+      assert.equal(summary.queryByText('sora-test-model'), null)
+      await replace(['minimax', 'sora'])
+      summary.getByText('minimax-test-model')
+      summary.getByText('sora-test-model')
+      assert.equal(summary.queryByRole('button', { name: 'Kling' }), null)
+      await replace(['kling', 'sora'])
+      summary.getByText('kling-test-model')
+      summary.getByText('sora-test-model')
+    } finally {
+      await unmount(root, container)
+      queryClient.clear()
+    }
+  })
+}
+
 describe('optional zero prices in the actual editor', () => {
-  for (const enabled of [
-    false,
-    true,
-    undefined,
-    'false',
-    'true',
-    0,
-    1,
-    null,
-    [],
-    {},
-  ]) {
-    test(`tiered configuration enforces boolean flags before save or download: ${JSON.stringify(enabled)}`, async (): Promise<void> => {
+  for (const { name, entry, normalized } of tieredValidationCases) {
+    test(`tiered configuration validates import, save and download: ${name}`, async (): Promise<void> => {
       const { api } = await import('@/lib/api')
       const previousAdapter = api.defaults.adapter
       const writes: unknown[] = []
@@ -188,11 +278,24 @@ describe('optional zero prices in the actual editor', () => {
         const download = within(actions).getByRole('button', {
           name: 'Download',
         }) as HTMLButtonElement
-        const valid = enabled === undefined || typeof enabled === 'boolean'
+        const valid = normalized !== undefined
+        const input = JSON.stringify({ model: entry })
+        const fileInput = actions.querySelector('input[type=file]')
+        assert.ok(fileInput)
+        const original = editor.value
+        await act(async (): Promise<void> => {
+          fireEvent.change(fileInput, {
+            target: {
+              files: [{ text: async (): Promise<string> => input }],
+            },
+          })
+        })
+        if (valid) assert.deepEqual(JSON.parse(editor.value), JSON.parse(input))
+        else assert.equal(editor.value, original)
         await act(async (): Promise<void> => {
           fireEvent.change(editor, {
             target: {
-              value: JSON.stringify({ model: { enabled, expr: 'p * 1' } }),
+              value: input,
             },
           })
         })
@@ -206,7 +309,7 @@ describe('optional zero prices in the actual editor', () => {
             ? [
                 {
                   config: {
-                    model: { enabled: enabled ?? false, expr: 'p * 1' },
+                    model: normalized,
                   },
                 },
               ]
