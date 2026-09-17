@@ -513,7 +513,9 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
             <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
             <Input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+                setSearch(event.target.value)
+              }
               placeholder={t('Search model name...')}
               aria-label={t('Search model name...')}
               className='pl-9'
@@ -525,7 +527,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               size='sm'
               variant={vendorFilter === 'all' ? 'secondary' : 'ghost'}
               aria-pressed={vendorFilter === 'all'}
-              onClick={() => setVendorFilter('all')}
+              onClick={(): void => setVendorFilter('all')}
             >
               {t('All')}
             </Button>
@@ -536,7 +538,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
                 size='sm'
                 variant={vendorFilter === vendor.key ? 'secondary' : 'ghost'}
                 aria-pressed={vendorFilter === vendor.key}
-                onClick={() => setVendorFilter(vendor.key)}
+                onClick={(): void => setVendorFilter(vendor.key)}
               >
                 {t(vendor.label)}
               </Button>
@@ -626,7 +628,9 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               type='button'
               variant='outline'
               size='sm'
-              onClick={() => downloadJson('task-rate-cards.json', text || '{}')}
+              onClick={(): void =>
+                downloadJson('task-rate-cards.json', text || '{}')
+              }
               disabled={Boolean(error)}
             >
               <Download className='mr-2 h-4 w-4' />
@@ -636,7 +640,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               type='button'
               variant='outline'
               size='sm'
-              onClick={() => fileInputRef.current?.click()}
+              onClick={(): void => fileInputRef.current?.click()}
             >
               <Upload className='mr-2 h-4 w-4' />
               {t('Upload file')}

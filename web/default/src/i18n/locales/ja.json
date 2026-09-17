@@ -1763,7 +1763,7 @@
     "Enable when proxying workers that fetch images over HTTP.": "HTTP経由で画像をフェッチするワーカーをプロキシする場合に有効にします。",
     "Enabled": "有効",
     "Enabled flag for {{model}} must be a boolean": "{{model}} の有効フラグは真偽値である必要があります",
-    "Tiered billing JSON must be an object": "段階料金の JSON はオブジェクトである必要があります",
+    "Tiered billing JSON must be an object": "階層課金の JSON はオブジェクトである必要があります",
     "Model name cannot be empty": "モデル名は空にできません",
     "Config for {{model}} must be an object": "{{model}} の設定はオブジェクトである必要があります",
     "Billing expression for {{model}} cannot be empty": "{{model}} の課金式は空にできません",

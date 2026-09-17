@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
+import { within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import type { PricingModel } from '../types'
@@ -40,27 +41,22 @@ for (const expression of [
   'tier("custom", p * 1e-999 + c * 15)',
   'len < 100 ? tier("short", p * 1 + c * 2)',
 ]) {
-  test(`shows the complete raw expression when structured parsing is unsupported: ${expression}`, async () => {
+  test(`shows the complete raw expression when structured parsing is unsupported: ${expression}`, async (): Promise<void> => {
     const view = await testEnv.render(
       <DynamicPricingBreakdown billingExpr={expression} />
     )
     try {
-      assert.match(
-        view.container.textContent || '',
-        /Unable to parse structured pricing/
-      )
-      assert.equal(
-        view.container.querySelector('code')?.textContent,
-        expression
-      )
-      assert.equal(view.container.querySelector('table'), null)
+      const pricing = within(view.container)
+      assert.ok(pricing.getByText('Unable to parse structured pricing'))
+      assert.ok(pricing.getByText(expression, { exact: true }))
+      assert.equal(pricing.queryByRole('table'), null)
     } finally {
       await view.unmount()
     }
   })
 }
 
-test('shows configured zero coefficients and leaves absent coefficients blank in both layouts', async () => {
+test('shows configured zero coefficients and leaves absent coefficients blank in both layouts', async (): Promise<void> => {
   const view = await testEnv.render(
     <DynamicPricingBreakdown
       billingExpr={
@@ -69,30 +65,41 @@ test('shows configured zero coefficients and leaves absent coefficients blank in
     />
   )
   try {
-    const headers = [...view.container.querySelectorAll('thead th')]
-    assert.equal(headers.length, 10)
-    const rows = view.container.querySelectorAll('tbody tr')
+    const pricing = within(view.container)
+    const table = pricing.getByRole('table')
+    const desktop = within(table)
+    assert.equal(desktop.getAllByRole('columnheader').length, 10)
+    const freeRow = desktop.getByRole('row', { name: /^free / })
+    const baseRow = desktop.getByRole('row', { name: /^base / })
     assert.deepEqual(
-      [...rows[0].querySelectorAll('td')]
+      within(freeRow)
+        .getAllByRole('cell')
         .slice(1)
-        .map((cell) => cell.textContent),
+        .map((cell: HTMLElement): string | null => cell.textContent),
       Array(9).fill('$0.0000')
     )
     assert.deepEqual(
-      [...rows[1].querySelectorAll('td')]
+      within(baseRow)
+        .getAllByRole('cell')
         .slice(3)
-        .map((cell) => cell.textContent),
+        .map((cell: HTMLElement): string | null => cell.textContent),
       Array(7).fill('-')
     )
-    const mobile = view.container.querySelector('.sm\\:hidden')
-    assert.ok(mobile)
-    assert.equal((mobile.textContent?.match(/\$0\.0000/g) || []).length, 9)
+    // Mobile cards render outside the semantic desktop table.
+    const mobilePrices = (price: string): HTMLElement[] =>
+      pricing
+        .getAllByText(price, { exact: true })
+        .filter((element: HTMLElement): boolean => !table.contains(element))
+    assert.equal(mobilePrices('$0.0000').length, 9)
+    assert.equal(mobilePrices('-').length, 7)
+    assert.equal(mobilePrices('$2.0000').length, 1)
+    assert.equal(mobilePrices('$4.0000').length, 1)
   } finally {
     await view.unmount()
   }
 })
 
-test('still hides cache columns when the request has no cache usage', async () => {
+test('still hides cache columns when the request has no cache usage', async (): Promise<void> => {
   const view = await testEnv.render(
     <DynamicPricingBreakdown
       billingExpr={'tier("free", p * 0 + c * 0 + cr * 0 + img * 0)'}
@@ -100,9 +107,9 @@ test('still hides cache columns when the request has no cache usage', async () =
     />
   )
   try {
-    const headers = [...view.container.querySelectorAll('thead th')].map(
-      (cell) => cell.textContent
-    )
+    const headers = within(view.container)
+      .getAllByRole('columnheader')
+      .map((cell: HTMLElement): string | null => cell.textContent)
     assert.deepEqual(headers, ['Tier', 'Input', 'Output', 'Image In'])
   } finally {
     await view.unmount()

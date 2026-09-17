@@ -1763,7 +1763,7 @@
     "Enable when proxying workers that fetch images over HTTP.": "Включить при проксировании воркеров, которые получают изображения по HTTP.",
     "Enabled": "Включено",
     "Enabled flag for {{model}} must be a boolean": "Флаг включения для {{model}} должен быть логическим значением",
-    "Tiered billing JSON must be an object": "JSON ступенчатой тарификации должен быть объектом",
+    "Tiered billing JSON must be an object": "JSON многоуровневого биллинга должен быть объектом",
     "Model name cannot be empty": "Имя модели не может быть пустым",
     "Config for {{model}} must be an object": "Конфигурация для {{model}} должна быть объектом",
     "Billing expression for {{model}} cannot be empty": "Выражение тарификации для {{model}} не может быть пустым",

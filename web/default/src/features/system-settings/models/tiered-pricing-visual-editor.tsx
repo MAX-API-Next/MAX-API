@@ -35,7 +35,10 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { BILLING_EXTRA_VARS } from '@/features/pricing/lib/billing-expr'
+import {
+  BILLING_EXTRA_VARS,
+  type BillingVar,
+} from '@/features/pricing/lib/billing-expr'
 import {
   CACHE_MODE_GENERIC,
   CACHE_MODE_TIMED,
@@ -101,14 +104,8 @@ function ConditionRow({
   const currentInputOption = CONDITION_INPUT_OPTIONS.find(
     (option) => option.value === condition.var
   )
-  const isTimeCondition = [
-    'hour',
-    'minute',
-    'weekday',
-    'month',
-    'day',
-  ].includes(condition.var)
   const timeBounds = getTierConditionBounds(condition.var)
+  const isTimeCondition = Boolean(timeBounds)
   const handleVariableChange = (value: string | null): void => {
     if (!value) return
     const nextVar = value as TierConditionInput['var']
@@ -627,7 +624,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     onChange({ ...config, tiers })
   }
 
-  const handleAddTier = () => {
+  const handleAddTier = (): void => {
     const tiers = [...config.tiers]
     const lastIndex = tiers.length - 1
     // When adding a new fallback, give the previous catch-all tier a default
@@ -646,13 +643,14 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
         conditions: [],
         input_unit_cost: tiers[lastIndex]?.input_unit_cost ?? 0,
         output_unit_cost: tiers[lastIndex]?.output_unit_cost ?? 0,
-        cache_read_unit_cost: tiers[lastIndex]?.cache_read_unit_cost,
-        cache_create_unit_cost: tiers[lastIndex]?.cache_create_unit_cost,
-        cache_create_1h_unit_cost: tiers[lastIndex]?.cache_create_1h_unit_cost,
-        image_unit_cost: tiers[lastIndex]?.image_unit_cost,
-        image_output_unit_cost: tiers[lastIndex]?.image_output_unit_cost,
-        audio_input_unit_cost: tiers[lastIndex]?.audio_input_unit_cost,
-        audio_output_unit_cost: tiers[lastIndex]?.audio_output_unit_cost,
+        ...Object.fromEntries(
+          BILLING_EXTRA_VARS.flatMap(
+            (variable: BillingVar): [string, unknown][] =>
+              variable.tierField
+                ? [[variable.tierField, tiers[lastIndex]?.[variable.tierField]]]
+                : []
+          )
+        ),
       })
     )
     onChange({ ...config, tiers })
@@ -684,20 +682,21 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     const targetIndex = Math.max(0, Math.min(groupIndex, groups.length))
     const targetGroup = groups[targetIndex] ?? { conditions: [] }
     const usedVars = new Set(
-      targetGroup.conditions.map((condition) => condition.var)
+      targetGroup.conditions.map(
+        (condition: TierConditionInput): TierConditionInput['var'] =>
+          condition.var
+      )
     )
-    const variableOrder: TierConditionInput['var'][] = [
-      'len',
-      'p',
-      'c',
-      'hour',
-      'minute',
-      'weekday',
-      'month',
-      'day',
-    ]
+    const variableOrder = CONDITION_INPUT_OPTIONS.map(
+      (
+        option: (typeof CONDITION_INPUT_OPTIONS)[number]
+      ): TierConditionInput['var'] => option.value
+    )
     const nextVar =
-      variableOrder.find((variable) => !usedVars.has(variable)) || 'len'
+      variableOrder.find(
+        (variable: TierConditionInput['var']): boolean =>
+          !usedVars.has(variable)
+      ) || 'len'
     const timeBounds = getTierConditionBounds(nextVar)
     const nextGroups =
       groups.length > 0

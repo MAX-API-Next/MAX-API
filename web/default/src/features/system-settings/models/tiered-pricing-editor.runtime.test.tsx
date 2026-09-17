@@ -676,6 +676,86 @@ describe('optional zero prices in the actual editor', () => {
     })
   }
 
+  for (const price of [undefined, 0, 0.25]) {
+    test(`inherits every registered optional price (${price}) when adding a tier`, async (): Promise<void> => {
+      const container = createContainer()
+      const root = createRoot(container)
+      const extraTerms =
+        price === undefined
+          ? ''
+          : BILLING_EXTRA_VARS.map(
+              (variable: (typeof BILLING_EXTRA_VARS)[number]): string =>
+                ` + ${variable.key} * ${price}`
+            ).join('')
+      let saved = `tier("base", p * 3 + c * 15${extraTerms})`
+      function ControlledEditor(): ReactElement {
+        const [expression, setExpression] = useState(saved)
+        return (
+          <TieredPricingEditor
+            billingExpr={expression}
+            requestRuleExpr=''
+            onBillingExprChange={(next: string): void => {
+              saved = next
+              setExpression(next)
+            }}
+            onRequestRuleExprChange={(): void => undefined}
+          />
+        )
+      }
+      try {
+        await act(async (): Promise<void> => {
+          root.render(
+            <I18nextProvider i18n={i18n}>
+              <ControlledEditor />
+            </I18nextProvider>
+          )
+        })
+        await act(async (): Promise<void> => {
+          fireEvent.click(
+            within(container).getByRole('button', { name: 'Add tier' })
+          )
+        })
+        assert.equal(
+          saved,
+          `len < 200000 ? tier("base", p * 3 + c * 15${extraTerms}) : tier("tier_2", p * 3 + c * 15${extraTerms})`
+        )
+        if (price === undefined) {
+          // Blank media fields are collapsed and 1h cache is hidden in generic mode.
+          for (const button of within(container).getAllByRole('button', {
+            name: 'Media pricing',
+          })) {
+            await act(async (): Promise<void> => {
+              fireEvent.click(button)
+            })
+          }
+          for (const tab of within(container).getAllByRole('tab', {
+            name: 'Time-sliced cache (Claude)',
+          })) {
+            await act(async (): Promise<void> => {
+              fireEvent.click(tab)
+            })
+          }
+          assert.equal(
+            saved,
+            'len < 200000 ? tier("base", p * 3 + c * 15) : tier("tier_2", p * 3 + c * 15)'
+          )
+        }
+        for (const variable of BILLING_EXTRA_VARS) {
+          const inputs = within(container).getAllByLabelText(variable.label)
+          assert.equal(inputs.length, 2)
+          for (const input of inputs) {
+            assert.equal(
+              (input as HTMLInputElement).value,
+              price === undefined ? '' : String(price)
+            )
+          }
+        }
+      } finally {
+        await unmount(root, container)
+      }
+    })
+  }
+
   test('distinguishes blank, zero and positive prices and preserves them when adding a tier', async () => {
     const container = createContainer()
     const root = createRoot(container)

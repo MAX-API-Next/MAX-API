@@ -185,9 +185,11 @@ export function normalizeVisualConfig(
 function buildConditionStr(conditions: TierConditionInput[]): string {
   if (!conditions || conditions.length === 0) return ''
   return conditions
-    .filter((c) => c.var && c.op && c.value != null && c.value !== '')
-    .map((c) => {
-      const lhs = ['hour', 'minute', 'weekday', 'month', 'day'].includes(c.var)
+    .filter((c: TierConditionInput): boolean =>
+      Boolean(c.var && c.op && c.value != null && c.value !== '')
+    )
+    .map((c: TierConditionInput): string => {
+      const lhs = getTierConditionBounds(c.var)
         ? `${c.var}(${JSON.stringify(String(c.timezone || 'Asia/Shanghai'))})`
         : c.var
       return `${lhs} ${c.op} ${c.value}`

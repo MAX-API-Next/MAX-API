@@ -53,7 +53,7 @@ for (const kind of ['task', 'tiered'] as const) {
     )
     try {
       const editor = [...view.container.querySelectorAll('textarea')].find(
-        (input) => !input.readOnly
+        (input: HTMLTextAreaElement): boolean => !input.readOnly
       )
       assert.ok(editor)
       const save = within(actions).getByRole('button', {
@@ -72,7 +72,7 @@ for (const kind of ['task', 'tiered'] as const) {
         async (): Promise<string> => '[]',
         ...(kind === 'tiered'
           ? ['false', 'true', 0, 1, null, [], {}].map(
-              (enabled): (() => Promise<string>) =>
+              (enabled: unknown): (() => Promise<string>) =>
                 async (): Promise<string> =>
                   JSON.stringify({ model: { enabled, expr: 'p * 1' } })
             )

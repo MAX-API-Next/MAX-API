@@ -15,10 +15,14 @@ func TestTimeFunctionsJSONQuotedTimezoneCompatibility(t *testing.T) {
 		t.Run(timezone, func(t *testing.T) {
 			quoted, err := common.Marshal(timezone)
 			require.NoError(t, err)
-			expression := "hour(" + string(quoted) + `) >= 0 ? tier("base", p * 1 + c * 0) : tier("fallback", p * 2 + c * 0)`
-			cost, _, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 100})
+			// Each hour() call reads the clock independently. Bracket the actual
+			// value with UTC reads so crossing an hour boundary is still valid.
+			expression := `let before = hour("UTC"); let actual = hour(` + string(quoted) + `); let after = hour("UTC");
+				actual == before || actual == after ? tier("base", p * 1 + c * 0) : tier("fallback", p * 2 + c * 0)`
+			cost, trace, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 100})
 			require.NoError(t, err)
 			require.Equal(t, float64(100), cost)
+			require.Equal(t, "base", trace.MatchedTier)
 		})
 	}
 }

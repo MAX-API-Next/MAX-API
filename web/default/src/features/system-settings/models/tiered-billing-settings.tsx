@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import {
   type ChangeEvent,
+  type ReactElement,
   useCallback,
   useEffect,
   useMemo,
@@ -256,7 +257,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const filteredModels = useMemo((): string[] => {
     const query = search.trim().toLowerCase()
     if (!query) return configuredModels
-    return configuredModels.filter((model) =>
+    return configuredModels.filter((model: string): boolean =>
       model.toLowerCase().includes(query)
     )
   }, [configuredModels, search])
@@ -312,7 +313,9 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
           type='button'
           variant='outline'
           size='sm'
-          onClick={() => downloadJson('tiered-billing.json', text || '{}')}
+          onClick={(): void =>
+            downloadJson('tiered-billing.json', text || '{}')
+          }
           disabled={validatedConfig === null}
         >
           <Download className='mr-2 h-4 w-4' />
@@ -322,7 +325,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
           type='button'
           variant='outline'
           size='sm'
-          onClick={() => fileInputRef.current?.click()}
+          onClick={(): void => fileInputRef.current?.click()}
         >
           <Upload className='mr-2 h-4 w-4' />
           {t('Upload file')}
@@ -359,7 +362,9 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
             <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
             <Input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+                setSearch(event.target.value)
+              }
               placeholder={t('Search model name...')}
               aria-label={t('Search model name...')}
               className='pl-9'
@@ -393,14 +398,16 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
             className='flex flex-wrap gap-1.5'
             aria-label={t('Matching models')}
           >
-            {filteredModels.map((model) => (
-              <span
-                key={model}
-                className='bg-muted text-muted-foreground rounded-md px-2 py-1 font-mono text-xs'
-              >
-                {model}
-              </span>
-            ))}
+            {filteredModels.map(
+              (model: string): ReactElement => (
+                <span
+                  key={model}
+                  className='bg-muted text-muted-foreground rounded-md px-2 py-1 font-mono text-xs'
+                >
+                  {model}
+                </span>
+              )
+            )}
           </div>
         )}
 

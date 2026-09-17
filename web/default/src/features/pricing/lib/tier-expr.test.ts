@@ -89,9 +89,9 @@ for (const timezone of [
   })
 }
 
-describe('visual optional price presence', () => {
+describe('visual optional price presence', (): void => {
   for (const { field, exprVar } of BILLING_CACHE_VAR_MAP) {
-    test(`preserves absent, zero and positive ${exprVar} prices through normalization and round trips`, () => {
+    test(`preserves absent, zero and positive ${exprVar} prices through normalization and round trips`, (): void => {
       const absent = normalizeVisualTier({
         input_unit_cost: 3,
         output_unit_cost: 15,
@@ -120,14 +120,14 @@ describe('visual optional price presence', () => {
     })
   }
 
-  test('does not create zero-priced subcategories in default tiers', () => {
+  test('does not create zero-priced subcategories in default tiers', (): void => {
     assert.equal(
       generateExprFromVisualConfig(createDefaultVisualConfig()),
       'tier("base", p * 0 + c * 0)'
     )
   })
 
-  test('accepts equivalent numeric spellings when switching to visual mode', () => {
+  test('accepts equivalent numeric spellings when switching to visual mode', (): void => {
     for (const source of [
       'tier("base", p * 3.0 + c * 15.0)',
       'tier("base", p * 3e0 + c * 1.5e1)',
@@ -139,7 +139,7 @@ describe('visual optional price presence', () => {
     }
   })
 
-  test('preserves numeric spellings and zero presence in every optional category', () => {
+  test('preserves numeric spellings and zero presence in every optional category', (): void => {
     for (const { field, exprVar } of BILLING_CACHE_VAR_MAP) {
       for (const zero of ['0.0', '0e0']) {
         const source = `tier("base 3.0", p * 3.0 + c * 1.5e1 + ${exprVar} * ${zero})`
@@ -162,7 +162,7 @@ describe('visual optional price presence', () => {
     }
   })
 
-  test('still rejects lossy or malformed visual conversions', () => {
+  test('still rejects lossy or malformed visual conversions', (): void => {
     for (const source of [
       'tier("base", p * 1+2 + c * 15)',
       'tier("base", p * 1e999 + c * 15)',
@@ -178,7 +178,7 @@ describe('visual optional price presence', () => {
       assert.equal(tryParseVisualConfig(source), null, source)
   })
 
-  test('keeps every zero-priced subcategory referenced in the billing contract', () => {
+  test('keeps every zero-priced subcategory referenced in the billing contract', (): void => {
     const source = `tier("base", p * 3 + c * 15${BILLING_CACHE_VAR_MAP.map(({ exprVar }) => ` + ${exprVar} * 0`).join('')})`
     const parsed = tryParseVisualConfig(source)
     assert.ok(parsed)
@@ -186,8 +186,8 @@ describe('visual optional price presence', () => {
   })
 })
 
-describe('evalExprLocally', () => {
-  test('evaluates backend-style ternaries and logical operators', () => {
+describe('evalExprLocally', (): void => {
+  test('evaluates backend-style ternaries and logical operators', (): void => {
     const result = evalExprLocally(
       'v1:p <= 100 && c > 0 ? tier("small", p * 2 + c * 3) : tier("large", p * 4)',
       100,
@@ -198,7 +198,7 @@ describe('evalExprLocally', () => {
     assert.deepEqual(result, { cost: 230, matchedTier: 'small', error: null })
   })
 
-  test('evaluates time-based pricing expressions with backend time functions', () => {
+  test('evaluates time-based pricing expressions with backend time functions', (): void => {
     const result = evalExprLocally(
       'hour("Asia/Shanghai") < 9 || (hour("Asia/Shanghai") >= 12 && hour("Asia/Shanghai") < 14) || hour("Asia/Shanghai") >= 18 ? tier("平常时段 0-9/12-14/18-24", p * 4.5 + c * 13.5 + cr * 0.15) : tier("高峰期 9-12/14-18", p * 9 + c * 27 + cr * 0.3)',
       100,
@@ -225,7 +225,7 @@ describe('evalExprLocally', () => {
     )
   })
 
-  test('keeps time helpers in backend ranges and falls back to UTC', () => {
+  test('keeps time helpers in backend ranges and falls back to UTC', (): void => {
     const utcFallbackChecks = ['hour', 'minute', 'weekday', 'month', 'day']
       .flatMap((helper) => [
         `${helper}("Invalid/Zone") == ${helper}("UTC")`,
@@ -249,7 +249,7 @@ describe('evalExprLocally', () => {
     assert.deepEqual(result, { cost: 42, matchedTier: 'valid', error: null })
   })
 
-  test('does not expose browser globals or member access', () => {
+  test('does not expose browser globals or member access', (): void => {
     const result = evalExprLocally(
       'globalThis.document ? 999 : 1',
       100,
@@ -263,8 +263,8 @@ describe('evalExprLocally', () => {
   })
 })
 
-describe('visual tier conditions', () => {
-  test('rejects unsupported or unsafe complete tier bodies', () => {
+describe('visual tier conditions', (): void => {
+  test('rejects unsupported or unsafe complete tier bodies', (): void => {
     for (const body of [
       'max(p, 1) * 3 + c * 15',
       'p * 2 * 3 + c * 4',
@@ -290,7 +290,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('rejects conditional expressions without a complete fallback chain', () => {
+  test('rejects conditional expressions without a complete fallback chain', (): void => {
     for (const expression of [
       'len < 100 ? tier("short", p * 1 + c * 2)',
       'tier("short", p * 1 + c * 2) : tier("long", p * 2 + c * 4)',
@@ -300,7 +300,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('retains coefficient presence, zero, and supported exponent notation', () => {
+  test('retains coefficient presence, zero, and supported exponent notation', (): void => {
     const [tier] = parseTiersFromExpr(
       'tier("free", c * 1e+2 + p * .5 + cr * 0 + cc1h * 0e-99)'
     )
@@ -322,7 +322,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('rejects structured displays with unsupported or missing branches', () => {
+  test('rejects structured displays with unsupported or missing branches', (): void => {
     for (const expression of [
       'len < 100 ? tier("peak", p * 2 + c * 4) : max(p, 1)',
       'len < 100 ? max(p, 1) : tier("off", p * 1 + c * 2)',
@@ -334,7 +334,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('rejects unsafe integer and underflowed condition literals', () => {
+  test('rejects unsafe integer and underflowed condition literals', (): void => {
     for (const literal of [
       '9007199254740993',
       '-9007199254740993',
@@ -361,7 +361,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('rejects incomplete structured displays for unsupported conditions', () => {
+  test('rejects incomplete structured displays for unsupported conditions', (): void => {
     for (const condition of [
       'len < 100 && c == 5',
       '(len < 100) || (c == 5)',
@@ -384,7 +384,7 @@ describe('visual tier conditions', () => {
     }
   })
 
-  test('preserves wrapped true AND members in supported display conditions', () => {
+  test('preserves wrapped true AND members in supported display conditions', (): void => {
     const tiers = parseTiersFromExpr(
       '(true) && len < 100 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
     )
@@ -396,7 +396,7 @@ describe('visual tier conditions', () => {
     '(len < 100) || (len > 200) || ((true))',
     '((len < 100) || (true && (true)))',
   ]) {
-    test(`displays an unconditional OR tier without restrictions: ${condition}`, () => {
+    test(`displays an unconditional OR tier without restrictions: ${condition}`, (): void => {
       const source = `${condition} ? tier("always", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
       const display = parseTiersFromExpr(source)
       assert.equal(display.length, 2)
@@ -412,7 +412,7 @@ describe('visual tier conditions', () => {
     })
   }
 
-  test('retains restrictions when true is an AND member rather than an OR branch', () => {
+  test('retains restrictions when true is an AND member rather than an OR branch', (): void => {
     const tiers = parseTiersFromExpr(
       '(true && len < 100) || (len > 200) ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
     )
@@ -427,7 +427,7 @@ describe('visual tier conditions', () => {
     '((((len < 100) || (len > 200))))',
     '((len < 100 && hour("Test/)||(:offset") >= 9) || (len > 200))',
   ]) {
-    test(`preserves fully wrapped OR conditions: ${condition}`, () => {
+    test(`preserves fully wrapped OR conditions: ${condition}`, (): void => {
       const source = `${condition} ? tier("peak", p * 2 + c * 4 + cr * 0) : tier("off", p * 1 + c * 2)`
       const display = parseTiersFromExpr(source)
       assert.equal(display[0]?.conditionGroups?.length, 2)
@@ -453,7 +453,7 @@ describe('visual tier conditions', () => {
     })
   }
 
-  test('keeps rejecting unsupported or lossy conditions inside outer wrappers', () => {
+  test('keeps rejecting unsupported or lossy conditions inside outer wrappers', (): void => {
     for (const condition of [
       '((len < 100 || len > 200) && c > 1)',
       '((len < 100) || (c == 5))',
@@ -471,7 +471,7 @@ describe('visual tier conditions', () => {
   })
 
   for (const timezone of ['Test/)||(', 'Test/)&&(', 'Test/:offset']) {
-    test(`preserves quoted syntax in both pricing parsers: ${timezone}`, () => {
+    test(`preserves quoted syntax in both pricing parsers: ${timezone}`, (): void => {
       const config = {
         tiers: [
           normalizeVisualTier({
@@ -507,7 +507,7 @@ describe('visual tier conditions', () => {
     })
   }
 
-  test('supports time conditions without requiring a second tier', () => {
+  test('supports time conditions without requiring a second tier', (): void => {
     const expr = generateExprFromVisualConfig({
       tiers: [
         {
@@ -528,7 +528,7 @@ describe('visual tier conditions', () => {
     assert.equal(parsed?.tiers[0].conditions[0].timezone, 'Asia/Shanghai')
   })
 
-  test('keeps time conditions visible in pricing breakdown parsing', () => {
+  test('keeps time conditions visible in pricing breakdown parsing', (): void => {
     const tiers = parseTiersFromExpr(
       'hour("Asia/Shanghai") >= 9 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
     )
@@ -536,7 +536,7 @@ describe('visual tier conditions', () => {
     assert.equal(tiers[0]?.conditions[0]?.timezone, 'Asia/Shanghai')
   })
 
-  test('parses OR condition groups for pricing breakdowns', () => {
+  test('parses OR condition groups for pricing breakdowns', (): void => {
     const tiers = parseTiersFromExpr(
       '(len < 200000 && hour("Asia/Shanghai") >= 9) || (weekday("Asia/Shanghai") <= 5 && month("Asia/Shanghai") >= 1) ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
     )
@@ -545,7 +545,7 @@ describe('visual tier conditions', () => {
     assert.equal(tiers[0]?.conditions[3]?.var, 'month')
   })
 
-  test('round-trips an explicit unconditional non-final tier', () => {
+  test('round-trips an explicit unconditional non-final tier', (): void => {
     const expr =
       'true ? tier("primary", p * 2 + c * 4) : tier("fallback", p * 1 + c * 2)'
     const parsed = tryParseVisualConfig(expr)
@@ -560,7 +560,7 @@ describe('visual tier conditions', () => {
     })
   })
 
-  test('normalizes time condition values to their calendar ranges', () => {
+  test('normalizes time condition values to their calendar ranges', (): void => {
     const tier = normalizeVisualTier({
       conditions: [
         { var: 'month', op: '<=', value: 200000 },
@@ -571,7 +571,7 @@ describe('visual tier conditions', () => {
     assert.equal(tier.conditions[1].value, 0)
   })
 
-  test('generates more than two conditions without truncation', () => {
+  test('generates more than two conditions without truncation', (): void => {
     const expr = generateExprFromVisualConfig({
       tiers: [
         {
@@ -593,7 +593,7 @@ describe('visual tier conditions', () => {
     )
   })
 
-  test('round-trips OR condition groups with AND members', () => {
+  test('round-trips OR condition groups with AND members', (): void => {
     const expr = generateExprFromVisualConfig({
       tiers: [
         {
@@ -642,7 +642,7 @@ describe('visual tier conditions', () => {
     assert.equal(generateExprFromVisualConfig(parsed!), expr)
   })
 
-  test('resets invalid time values when normalizing a condition', () => {
+  test('resets invalid time values when normalizing a condition', (): void => {
     const tier = normalizeVisualTier({
       conditions: [{ var: 'month', op: '<=', value: 200000 }],
     })
