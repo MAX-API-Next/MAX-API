@@ -59,6 +59,52 @@ func TestStartedChatStreamErrorUsesSSEFraming(t *testing.T) {
 	require.Equal(t, "data: [DONE]", frames[2])
 }
 
+func TestNativeChatRequestErrorsRespectControllerRetryPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldFlag, oldTimes, oldRanges := common.EmptyCompletionRetryEnabled, common.RetryTimes, operation_setting.AutomaticRetryStatusCodeRanges
+	common.EmptyCompletionRetryEnabled, common.RetryTimes = true, 2
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 502, End: 502}}
+	t.Cleanup(func() {
+		common.EmptyCompletionRetryEnabled, common.RetryTimes, operation_setting.AutomaticRetryStatusCodeRanges = oldFlag, oldTimes, oldRanges
+	})
+	for _, tc := range []struct {
+		name      string
+		errorType string
+		code      any
+		retry     bool
+	}{
+		{"invalid request without code", "invalid_request_error", nil, false},
+		{"context limit", "upstream_error", "context_length_exceeded", false},
+		{"invalid prompt", "upstream_error", "invalid_prompt", false},
+		{"content policy", "invalid_request_error", "content_policy_violation", false},
+		{"overload", "upstream_error", nil, true},
+		{"server error", "server_error", "server_error", true},
+		{"rate limit", "invalid_request_error", "rate_limit_exceeded", true},
+		{"provider quota", "invalid_request_error", "insufficient_quota", true},
+		{"provider credential", "invalid_request_error", "invalid_api_key", true},
+		{"provider model", "invalid_request_error", "model_not_found", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			upstream := types.OpenAIError{Message: "synthetic request failure", Type: tc.errorType, Code: tc.code}
+			body, err := common.Marshal(map[string]any{"error": upstream})
+			require.NoError(t, err)
+			info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, RelayFormat: types.RelayFormatOpenAI, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+			usage, apiErr := openai.OaiStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: " + string(body) + "\n\n"))})
+			require.NotNil(t, apiErr)
+			require.Nil(t, usage)
+			require.False(t, c.Writer.Written())
+			require.Equal(t, upstream.Message, apiErr.ToOpenAIError().Message)
+			require.Equal(t, upstream.Type, apiErr.ToOpenAIError().Type)
+			require.Equal(t, upstream.Code, apiErr.ToOpenAIError().Code)
+			require.Equal(t, tc.retry, shouldRetry(c, apiErr, 1))
+			require.False(t, shouldRetry(c, apiErr, 0))
+		})
+	}
+}
+
 func TestNativeChatUnstartedErrorUsesJSONStatusAndContentType(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

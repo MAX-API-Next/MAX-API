@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Matching models": "Modèles correspondants",
     "Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.": "Laissez les prix facultatifs vides pour appliquer le prix de base d’entrée ou de sortie. Saisissez 0 pour rendre cette catégorie de tokens gratuite.",
     "Timezone": "Fuseau horaire",
     "Failed to complete manual task billing.": "Échec de la finalisation manuelle de la facturation de la tâche.",

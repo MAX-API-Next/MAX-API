@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Matching models": "Совпадающие модели",
     "Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.": "Оставьте необязательные цены пустыми, чтобы применять базовую цену ввода или вывода. Введите 0, чтобы эта категория токенов была бесплатной.",
     "Timezone": "Часовой пояс",
     "Failed to complete manual task billing.": "Не удалось завершить ручной биллинг задачи.",

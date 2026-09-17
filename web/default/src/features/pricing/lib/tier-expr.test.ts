@@ -210,6 +210,43 @@ describe('evalExprLocally', () => {
 })
 
 describe('visual tier conditions', () => {
+  for (const timezone of ['Test/)||(', 'Test/)&&(', 'Test/:offset']) {
+    test(`preserves quoted syntax in both pricing parsers: ${timezone}`, () => {
+      const config = {
+        tiers: [
+          normalizeVisualTier({
+            label: 'peak:night',
+            conditions: [],
+            conditionGroups: [
+              { conditions: [{ var: 'hour', timezone, op: '>=', value: 9 }] },
+              { conditions: [{ var: 'len', op: '<', value: 100 }] },
+            ],
+            input_unit_cost: 2,
+            output_unit_cost: 4,
+          }),
+          normalizeVisualTier({
+            label: 'off',
+            input_unit_cost: 1,
+            output_unit_cost: 2,
+          }),
+        ],
+      }
+      const expression = generateExprFromVisualConfig(config)
+      const visual = tryParseVisualConfig(expression)
+      const display = parseTiersFromExpr(expression)
+      assert.equal(
+        visual?.tiers[0].conditionGroups?.[0].conditions[0].timezone,
+        timezone
+      )
+      assert.deepEqual(
+        display[0]?.conditionGroups,
+        config.tiers[0].conditionGroups?.map((group) => group.conditions)
+      )
+      assert.equal(display[0]?.label, 'peak:night')
+      assert.equal(display.length, 2)
+    })
+  }
+
   test('supports time conditions without requiring a second tier', () => {
     const expr = generateExprFromVisualConfig({
       tiers: [

@@ -18,6 +18,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { Parser, type Value } from 'expr-eval'
 import { BILLING_CACHE_VAR_MAP } from './billing-expr'
+import {
+  splitTopLevelExpression,
+  unwrapConditionParens,
+} from './expression-syntax'
 
 export const CACHE_MODE_TIMED = 'timed'
 export const CACHE_MODE_GENERIC = 'generic'
@@ -64,7 +68,7 @@ export function normalizeTierCondition(
   return {
     ...condition,
     value,
-    timezone: condition.timezone || 'Asia/Shanghai',
+    timezone: condition.timezone ?? 'Asia/Shanghai',
   }
 }
 
@@ -186,77 +190,15 @@ function buildConditionStr(conditions: TierConditionInput[]): string {
     .join(' && ')
 }
 
-function splitTopLevelLogical(source: string, operator: '&&' | '||'): string[] {
-  const parts: string[] = []
-  let start = 0
-  let depth = 0
-  let quote = ''
-  let escaped = false
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index]
-    if (quote) {
-      if (escaped) escaped = false
-      else if (char === '\\') escaped = true
-      else if (char === quote) quote = ''
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-    if (char === '(') depth += 1
-    else if (char === ')') depth = Math.max(0, depth - 1)
-    if (depth === 0 && source.startsWith(operator, index)) {
-      parts.push(source.slice(start, index).trim())
-      start = index + operator.length
-      index += operator.length - 1
-    }
-  }
-  parts.push(source.slice(start).trim())
-  return parts.filter(Boolean)
-}
-
-function unwrapConditionParens(source: string): string {
-  let value = source.trim()
-  while (value.startsWith('(') && value.endsWith(')')) {
-    let depth = 0
-    let quote = ''
-    let closesAtEnd = false
-    let escaped = false
-    for (let index = 0; index < value.length; index += 1) {
-      const char = value[index]
-      if (quote) {
-        if (escaped) escaped = false
-        else if (char === '\\') escaped = true
-        else if (char === quote) quote = ''
-        continue
-      }
-      if (char === '"' || char === "'") {
-        quote = char
-        continue
-      }
-      if (char === '(') depth += 1
-      else if (char === ')') depth -= 1
-      if (depth === 0) {
-        closesAtEnd = index === value.length - 1
-        break
-      }
-    }
-    if (!closesAtEnd) break
-    value = value.slice(1, -1).trim()
-  }
-  return value
-}
-
 function parseTierConditionGroups(conditionStr: string): TierConditionGroup[] {
   if (!conditionStr || conditionStr.trim() === 'true') return []
   const atomPattern =
     /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
-  return splitTopLevelLogical(conditionStr, '||')
+  return splitTopLevelExpression(conditionStr, '||')
     .map((groupStr) => unwrapConditionParens(groupStr))
     .map((groupStr) => {
       const conditions: TierConditionInput[] = []
-      for (const atom of splitTopLevelLogical(groupStr, '&&')) {
+      for (const atom of splitTopLevelExpression(groupStr, '&&')) {
         const match = atom.trim().match(atomPattern)
         if (!match) continue
         conditions.push({
@@ -432,37 +374,9 @@ export function tryParseVisualConfig(
         : null
     }
 
-    const splitTopLevelColon = (source: string): string[] => {
-      const parts: string[] = []
-      let start = 0
-      let depth = 0
-      let quote = ''
-      let escaped = false
-      for (let index = 0; index < source.length; index += 1) {
-        const char = source[index]
-        if (quote) {
-          if (escaped) escaped = false
-          else if (char === '\\') escaped = true
-          else if (char === quote) quote = ''
-          continue
-        }
-        if (char === '"' || char === "'") {
-          quote = char
-          continue
-        }
-        if (char === '(') depth += 1
-        else if (char === ')') depth = Math.max(0, depth - 1)
-        else if (char === ':' && depth === 0) {
-          parts.push(source.slice(start, index).trim())
-          start = index + 1
-        }
-      }
-      parts.push(source.slice(start).trim())
-      return parts.filter(Boolean)
-    }
     const tierRe = new RegExp(`^tier\\("([^"]*)",\\s*${bodyPat}\\)$`)
     const tiers: VisualTier[] = []
-    for (const branch of splitTopLevelColon(body)) {
+    for (const branch of splitTopLevelExpression(body, ':')) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
       const condStr = parts?.[1]?.trim() || ''
       const tierSource = parts?.[2] || branch

@@ -16,6 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import {
+  splitTopLevelExpression,
+  unwrapConditionParens,
+} from './expression-syntax'
+
 /**
  * Billing expression parsing utilities.
  *
@@ -271,79 +276,20 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
   if (!exprStr) return []
   try {
     const { body } = stripExprVersion(exprStr)
-    const splitTopLevelColon = (source: string): string[] => {
-      const parts: string[] = []
-      let start = 0
-      let depth = 0
-      let quote = ''
-      let escaped = false
-      for (let index = 0; index < source.length; index += 1) {
-        const char = source[index]
-        if (quote) {
-          if (escaped) escaped = false
-          else if (char === '\\') escaped = true
-          else if (char === quote) quote = ''
-          continue
-        }
-        if (char === '"' || char === "'") {
-          quote = char
-          continue
-        }
-        if (char === '(') depth += 1
-        else if (char === ')') depth = Math.max(0, depth - 1)
-        else if (char === ':' && depth === 0) {
-          parts.push(source.slice(start, index).trim())
-          start = index + 1
-        }
-      }
-      parts.push(source.slice(start).trim())
-      return parts.filter(Boolean)
-    }
     const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    for (const branch of splitTopLevelColon(body)) {
+    for (const branch of splitTopLevelExpression(body, ':')) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
       const condStr = parts?.[1]?.trim() || ''
       const tierMatch = tierRe.exec(parts?.[2] || branch)
       if (!tierMatch) continue
       const conditionGroups: TierCondition[][] = []
-      const splitLogical = (source: string, operator: '&&' | '||') => {
-        const parts: string[] = []
-        let start = 0
-        let depth = 0
-        for (let index = 0; index < source.length; index += 1) {
-          if (source[index] === '(') depth += 1
-          else if (source[index] === ')') depth = Math.max(0, depth - 1)
-          if (depth === 0 && source.startsWith(operator, index)) {
-            parts.push(source.slice(start, index).trim())
-            start = index + operator.length
-            index += operator.length - 1
-          }
-        }
-        parts.push(source.slice(start).trim())
-        return parts.filter(Boolean)
-      }
-      const unwrap = (source: string) => {
-        let value = source.trim()
-        while (value.startsWith('(') && value.endsWith(')')) {
-          let depth = 0
-          let closesAtEnd = false
-          for (let index = 0; index < value.length; index += 1) {
-            if (value[index] === '(') depth += 1
-            else if (value[index] === ')') depth -= 1
-            if (depth === 0) {
-              closesAtEnd = index === value.length - 1
-              break
-            }
-          }
-          if (!closesAtEnd) break
-          value = value.slice(1, -1).trim()
-        }
-        return value
-      }
-      for (const group of splitLogical(condStr, '||')) {
+      for (const group of splitTopLevelExpression(condStr, '||')) {
         const groupConditions: TierCondition[] = []
-        for (const cp of splitLogical(unwrap(group), '&&')) {
+        for (const cp of splitTopLevelExpression(
+          unwrapConditionParens(group),
+          '&&'
+        )) {
           if (cp.trim() === 'true') continue
           const cm = cp
             .trim()

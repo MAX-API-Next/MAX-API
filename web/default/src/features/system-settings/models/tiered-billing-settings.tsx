@@ -348,7 +348,11 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
         )}
 
         {search.trim() && filteredModels.length > 0 && (
-          <div className='flex flex-wrap gap-1.5' aria-label={t('Search')}>
+          <div
+            role='group'
+            className='flex flex-wrap gap-1.5'
+            aria-label={t('Matching models')}
+          >
             {filteredModels.map((model) => (
               <span
                 key={model}

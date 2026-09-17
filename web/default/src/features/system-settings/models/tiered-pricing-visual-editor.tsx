@@ -114,15 +114,20 @@ function ConditionRow({
     const nextVar = value as TierConditionInput['var']
     const bounds = getTierConditionBounds(nextVar)
     const numericValue = Number(condition.value)
-    const nextValue = bounds
-      ? Number.isFinite(numericValue) &&
+    let nextValue = 0
+    if (bounds) {
+      if (
+        Number.isFinite(numericValue) &&
         numericValue >= bounds.min &&
         numericValue <= bounds.max
-        ? numericValue
-        : bounds.defaultValue
-      : Number.isFinite(numericValue)
-        ? numericValue
-        : 0
+      ) {
+        nextValue = numericValue
+      } else {
+        nextValue = bounds.defaultValue
+      }
+    } else if (Number.isFinite(numericValue)) {
+      nextValue = numericValue
+    }
     onChange({
       ...condition,
       var: nextVar,
@@ -162,7 +167,7 @@ function ConditionRow({
       </Select>
       {isTimeCondition && (
         <Input
-          value={condition.timezone || 'Asia/Shanghai'}
+          value={condition.timezone ?? ''}
           onChange={(event) =>
             onChange({ ...condition, timezone: event.target.value })
           }
@@ -654,6 +659,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
       tiers[lastIndex] = normalizeVisualTier({
         ...tiers[lastIndex],
         conditions: [],
+        conditionGroups: [],
       })
     }
     onChange({ ...config, tiers })
@@ -669,9 +675,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     const targetIndex = Math.max(0, Math.min(groupIndex, groups.length))
     const targetGroup = groups[targetIndex] ?? { conditions: [] }
     const usedVars = new Set(
-      groups.flatMap((group) =>
-        group.conditions.map((condition) => condition.var)
-      )
+      targetGroup.conditions.map((condition) => condition.var)
     )
     const variableOrder: TierConditionInput['var'][] = [
       'len',

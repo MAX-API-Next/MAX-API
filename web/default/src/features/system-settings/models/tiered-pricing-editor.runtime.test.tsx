@@ -23,7 +23,10 @@ import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
-import { BILLING_EXTRA_VARS } from '@/features/pricing/lib/billing-expr'
+import {
+  BILLING_EXTRA_VARS,
+  parseTiersFromExpr,
+} from '@/features/pricing/lib/billing-expr'
 import type { ModelRatioData } from './model-pricing-sheet'
 
 // Load DOM-dependent modules after installing JSDOM so Base UI selects use
@@ -418,6 +421,128 @@ after(() => {
 })
 
 describe('TieredPricingEditor runtime behavior', () => {
+  test('keeps an empty timezone editable and applies the default only to the expression', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      'hour("Asia/Shanghai") >= 9 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    let saved = source
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => {
+                saved = next
+              }}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      )
+      const input = within(container).getByLabelText(
+        'Timezone'
+      ) as HTMLInputElement
+      await act(async () => fireEvent.change(input, { target: { value: '' } }))
+      assert.equal(input.value, '')
+      assert.match(saved, /hour\("Asia\/Shanghai"\)/)
+      await act(async () =>
+        fireEvent.change(input, { target: { value: 'UTC' } })
+      )
+      assert.equal(input.value, 'UTC')
+      assert.match(saved, /hour\("UTC"\)/)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('clears OR groups when deleting the final sibling and can add a fresh tier', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      '(hour("UTC") >= 9 && hour("UTC") < 17) || (len < 100) ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    let saved = source
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => {
+                saved = next
+              }}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      )
+      const editor = within(container)
+      assert.equal(editor.getAllByLabelText('Condition Value').length, 3)
+      await act(async () =>
+        fireEvent.click(
+          editor.getAllByRole('button', { name: 'Remove tier' })[1]
+        )
+      )
+      assert.equal(editor.queryAllByLabelText('Condition Value').length, 0)
+      assert.equal(saved, 'tier("peak", p * 2 + c * 4)')
+      await act(async () =>
+        fireEvent.click(editor.getByRole('button', { name: 'Add tier' }))
+      )
+      assert.equal(editor.getAllByLabelText('Condition Value').length, 1)
+      assert.deepEqual(parseTiersFromExpr(saved)[0].conditions, [
+        { var: 'len', op: '<', value: 200000 },
+      ])
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('chooses a new condition using only the target OR group', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      'len < 100 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    let saved = source
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => {
+                saved = next
+              }}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      )
+      const editor = within(container)
+      await act(async () =>
+        fireEvent.click(
+          editor.getAllByRole('button', { name: 'Add condition group' })[0]
+        )
+      )
+      await act(async () =>
+        fireEvent.click(
+          editor.getAllByRole('button', { name: 'Add condition' })[2]
+        )
+      )
+      assert.deepEqual(
+        parseTiersFromExpr(saved)[0].conditionGroups?.map((group) =>
+          group.map((condition) => condition.var)
+        ),
+        [['len'], ['hour', 'len']]
+      )
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
   test('mounts the visual editor without a runtime hook error', async () => {
     const container = createContainer()
     const root = createRoot(container)

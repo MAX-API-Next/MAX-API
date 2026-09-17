@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Matching models": "一致するモデル",
     "Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.": "任意の価格を空欄にすると、基本の入力・出力価格が適用されます。0 を入力すると、その種類のトークンは無料になります。",
     "Timezone": "タイムゾーン",
     "Failed to complete manual task billing.": "タスクの手動課金を完了できませんでした。",

@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Matching models": "Mô hình phù hợp",
     "Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.": "Để trống giá tùy chọn để áp dụng giá đầu vào hoặc đầu ra cơ bản. Nhập 0 để miễn phí loại token đó.",
     "Timezone": "Múi giờ",
     "Failed to complete manual task billing.": "Không thể hoàn tất tính phí thủ công cho tác vụ.",

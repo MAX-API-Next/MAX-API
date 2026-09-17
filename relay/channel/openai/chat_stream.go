@@ -78,7 +78,24 @@ func (frame *chatStreamFrame) upstreamError() *types.MaxAPIError {
 	if upstream.Type == "" {
 		upstream.Type = "upstream_error"
 	}
-	return types.WithOpenAIError(upstream, http.StatusBadGateway)
+	apiErr := types.WithOpenAIError(upstream, http.StatusBadGateway)
+	if chatStreamRequestErrorIsPermanent(upstream) {
+		types.ErrOptionWithSkipRetry()(apiErr)
+	}
+	return apiErr
+}
+
+// Reject invalid requests without replaying them, but leave channel-specific
+// credentials, quota, model availability and transient failures to routing.
+func chatStreamRequestErrorIsPermanent(upstream types.OpenAIError) bool {
+	code, _ := upstream.Code.(string)
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "rate_limit_exceeded", "insufficient_quota", "invalid_api_key", "model_not_found", "server_error", "overloaded_error":
+		return false
+	case "invalid_request", "invalid_request_error", "context_length_exceeded", "invalid_prompt", "content_policy_violation", "invalid_parameter", "unsupported_parameter", "missing_required_parameter", "invalid_value", "invalid_type":
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(upstream.Type), "invalid_request_error")
 }
 
 // A failed attempt with no payload returns nil usage and can reach the retry

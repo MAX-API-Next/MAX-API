@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Matching models": "匹配的模型",
     "Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.": "可选价格留空时沿用基础输入或输出价格；填写 0 表示该类 token 免费。",
     "Timezone": "时区",
     "Failed to complete manual task billing.": "无法完成人工任务计费。",
