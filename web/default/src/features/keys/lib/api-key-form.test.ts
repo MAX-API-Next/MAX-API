@@ -23,11 +23,11 @@ const translate = ((key: string) => key) as TFunction
 
 describe('API key routing form', () => {
   test('defaults new keys to the configured automatic routing group', () => {
-    const values = getApiKeyFormDefaultValues('auto', ['base', 'default'])
+    const values = getApiKeyFormDefaultValues('auto')
     const payload = transformFormDataToPayload(values)
 
     assert.equal(values.routing_mode, 'smart')
-    assert.deepEqual(values.manual_groups, ['base', 'default'])
+    assert.deepEqual(values.manual_groups, [])
     assert.deepEqual(payload.routing, {
       version: 1,
       mode: 'smart',
@@ -97,18 +97,12 @@ describe('API key routing form', () => {
     assert.equal(values.manual_groups.includes(''), false)
   })
 
-  test('normalizes default manual groups to the supported maximum', () => {
-    const values = getApiKeyFormDefaultValues(
-      'auto',
-      Array.from(
-        { length: MAX_MANUAL_ROUTING_GROUPS + 2 },
-        (_, index) => `group-${index}`
-      )
-    )
-
-    assert.equal(values.manual_groups.length, MAX_MANUAL_ROUTING_GROUPS)
-    assert.equal(values.manual_groups.includes(''), false)
-
+  test('requires a manual selection and enforces the supported maximum', () => {
+    const values = {
+      ...getApiKeyFormDefaultValues(),
+      name: 'manual-key',
+      routing_mode: 'manual',
+    }
     const schema = getApiKeyFormSchema(translate, {
       smartRoutes: ['auto'],
       manualGroups: Array.from(
@@ -116,6 +110,21 @@ describe('API key routing form', () => {
         (_, index) => `group-${index}`
       ),
     })
+    const empty = schema.safeParse(values)
+    assert.equal(empty.success, false)
+    assert.ok(
+      empty.error?.issues.some((issue) => issue.path[0] === 'manual_groups')
+    )
+    const selected = schema.safeParse({ ...values, manual_groups: ['group-9'] })
+    assert.equal(selected.success, true)
+    const maximum = schema.safeParse({
+      ...values,
+      manual_groups: Array.from(
+        { length: MAX_MANUAL_ROUTING_GROUPS },
+        (_, index) => `group-${index}`
+      ),
+    })
+    assert.equal(maximum.success, true)
     const result = schema.safeParse({
       ...values,
       routing_mode: 'manual',
@@ -186,7 +195,7 @@ describe('API key routing form', () => {
     assert.equal(shouldIncludeRoutingProjection(true, true, false), false)
   })
 
-  test('uses the selected smart route groups when switching to manual mode', () => {
+  test('does not seed manual groups when loading a smart key', () => {
     const apiKey = {
       id: 2,
       name: 'smart-key',
@@ -212,7 +221,7 @@ describe('API key routing form', () => {
     } satisfies ApiKey
 
     const values = transformApiKeyToFormDefaults(apiKey, ['fast', 'default'])
-    assert.deepEqual(values.manual_groups, ['fast', 'default'])
+    assert.deepEqual(values.manual_groups, [])
     assert.equal(values.cross_group_retry, false)
   })
 
@@ -222,7 +231,7 @@ describe('API key routing form', () => {
     assert.equal(shouldIncludeRoutingProjection(true, false, false), true)
 
     const payload = transformFormDataToPayload(
-      getApiKeyFormDefaultValues('auto', ['default']),
+      getApiKeyFormDefaultValues('auto'),
       { includeRouting: false }
     )
 

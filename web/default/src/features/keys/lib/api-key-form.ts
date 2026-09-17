@@ -146,16 +146,12 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
 }
 
 export function getApiKeyFormDefaultValues(
-  defaultAutoRoute: string = DEFAULT_AUTO_ROUTE_KEY,
-  defaultManualGroups: string[] = []
+  defaultAutoRoute: string = DEFAULT_AUTO_ROUTE_KEY
 ): ApiKeyFormValues {
-  const availableManualGroups = defaultManualGroups
-    .filter((group) => group.trim() !== '')
-    .slice(0, MAX_MANUAL_ROUTING_GROUPS)
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
     routing_route: defaultAutoRoute,
-    manual_groups: availableManualGroups,
+    manual_groups: [],
   }
 }
 
@@ -231,25 +227,27 @@ export function transformFormDataToPayload(
  */
 export function transformApiKeyToFormDefaults(
   apiKey: ApiKey,
-  smartModeManualGroups: string[] = []
+  legacyManualGroups: string[] = []
 ): ApiKeyFormValues {
   const routing = apiKey.routing
   const legacySmart = !routing && isAutoRouteKey(apiKey.group)
   const mode = routing?.mode ?? (legacySmart ? 'smart' : 'manual')
-  const availableManualGroups = smartModeManualGroups
+  const availableManualGroups = legacyManualGroups
     .filter((group) => group.trim() !== '')
     .slice(0, MAX_MANUAL_ROUTING_GROUPS)
   const legacyGroup = apiKey.group?.trim() || ''
   const storedManualGroups =
     routing?.groups?.filter((group) => group.trim() !== '') || []
-  const manualGroups =
-    mode === 'manual'
-      ? storedManualGroups.length > 0
-        ? storedManualGroups
-        : legacyGroup
-          ? [legacyGroup]
-          : availableManualGroups
-      : availableManualGroups
+  let manualGroups: string[] = []
+  if (mode === 'manual') {
+    if (storedManualGroups.length > 0) {
+      manualGroups = storedManualGroups
+    } else if (legacyGroup) {
+      manualGroups = [legacyGroup]
+    } else {
+      manualGroups = availableManualGroups
+    }
+  }
   return {
     name: apiKey.name,
     remain_quota_dollars: apiKey.unlimited_quota
