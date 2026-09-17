@@ -448,9 +448,18 @@ function VisualTierCard({
           </div>
         </div>
         {conditionGroups.length === 0 ? (
-          <p className='text-muted-foreground text-xs'>
-            {t('Always matches (default tier).')}
-          </p>
+          <>
+            {index === total - 1 && (
+              <p className='text-muted-foreground text-xs'>
+                {t('Always matches (default tier).')}
+              </p>
+            )}
+            {index < total - 1 && (
+              <p className='text-destructive text-xs'>
+                {t('Always matches; later tiers are unreachable')}
+              </p>
+            )}
+          </>
         ) : (
           <div className='flex flex-col gap-2'>
             {conditionGroups.map((group, groupIndex) => (

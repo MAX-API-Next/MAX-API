@@ -330,12 +330,13 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const [search, setSearch] = useState('')
   const [vendorFilter, setVendorFilter] = useState('all')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const editRevision = useRef(0)
   const initialText = useMemo(
     () => formatJsonForTextarea(defaultValue || '{}'),
     [defaultValue]
   )
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
-  const filteredVendorSummary = useMemo(() => {
+  const filteredVendorSummary = useMemo((): VendorSummary[] => {
     const query = search.trim().toLowerCase()
     return vendorSummary
       .filter((vendor) => vendorFilter === 'all' || vendor.key === vendorFilter)
@@ -359,12 +360,17 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const isDirty = text !== initialText
 
   useEffect(() => {
+    editRevision.current += 1
     setText(formatJsonForTextarea(defaultValue || '{}'))
     setError('')
+    return () => {
+      editRevision.current += 1
+    }
   }, [defaultValue])
 
   const handleChange = useCallback(
     (value: string) => {
+      editRevision.current += 1
       setText(value)
       try {
         const parsed = JSON.parse(value) as unknown
@@ -382,6 +388,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
 
   const handleUseExample = useCallback(
     (example: string): void => {
+      editRevision.current += 1
       setText(example)
       setError('')
       toast.success(t('Example loaded. Review prices before saving.'))
@@ -402,17 +409,22 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
       const file = event.target.files?.[0]
       event.target.value = ''
       if (!file) return
+      const revision = ++editRevision.current
 
       try {
-        const imported = formatJsonForTextarea(await file.text())
+        const contents = await file.text()
+        if (revision !== editRevision.current) return
+        const imported = formatJsonForTextarea(contents)
         const parsed = JSON.parse(imported || '{}') as unknown
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
           throw new Error(t('JSON must be an object'))
         }
+        editRevision.current += 1
         setText(imported || '{}')
         setError('')
         toast.success(t('JSON imported. Review prices before saving.'))
       } catch (err) {
+        if (revision !== editRevision.current) return
         const message = err instanceof Error ? err.message : t('Invalid JSON')
         toast.error(message)
       }

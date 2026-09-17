@@ -478,6 +478,7 @@
     "Allowed Ports": "許可するポート",
     "Already have an account?": "アカウントをお持ちの方？",
     "Always matches (default tier).": "常に一致（デフォルト ティア）。",
+    "Always matches; later tiers are unreachable": "常に一致するため、後続のティアは適用されません",
     "Amount": "金額",
     "Amount cannot be changed when editing.": "編集時は金額を変更できません。",
     "Amount discount": "割引額",

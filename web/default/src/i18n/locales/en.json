@@ -478,6 +478,7 @@
     "Allowed Ports": "Allowed Ports",
     "Already have an account?": "Already have an account?",
     "Always matches (default tier).": "Always matches (default tier).",
+    "Always matches; later tiers are unreachable": "Always matches; later tiers are unreachable",
     "Amount": "Amount",
     "Amount cannot be changed when editing.": "Amount cannot be changed when editing.",
     "Amount discount": "Amount discount",

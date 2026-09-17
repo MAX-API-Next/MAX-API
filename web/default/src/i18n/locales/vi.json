@@ -478,6 +478,7 @@
     "Allowed Ports": "Cổng được phép",
     "Already have an account?": "Đã có tài khoản?",
     "Always matches (default tier).": "Luôn khớp (bậc mặc định).",
+    "Always matches; later tiers are unreachable": "Luôn khớp; các bậc sau sẽ không được áp dụng",
     "Amount": "Số lượng",
     "Amount cannot be changed when editing.": "Số tiền không thể thay đổi khi chỉnh sửa.",
     "Amount discount": "Số tiền giảm giá",

@@ -140,6 +140,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const editRevision = useRef(0)
 
   const initialText = useMemo(() => {
     return JSON.stringify(
@@ -150,10 +151,14 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   }, [props.billingExpr, props.billingMode])
 
   useEffect(() => {
+    editRevision.current += 1
     // The editor must reset when the server-provided model selection changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setText(initialText)
     setError('')
+    return () => {
+      editRevision.current += 1
+    }
   }, [initialText])
 
   const mutation = useMutation({
@@ -173,6 +178,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const { mutateAsync } = mutation
 
   const handleFormat = useCallback(() => {
+    editRevision.current += 1
     try {
       setText(formatJsonForTextarea(text || '{}'))
       setError('')
@@ -182,6 +188,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   }, [t, text])
 
   const handleLoadExample = useCallback(() => {
+    editRevision.current += 1
     setText(JSON.stringify(EXAMPLE_CONFIG, null, 2))
     setError('')
   }, [])
@@ -223,7 +230,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     [validatedConfig]
   )
 
-  const filteredModels = useMemo(() => {
+  const filteredModels = useMemo((): string[] => {
     const query = search.trim().toLowerCase()
     if (!query) return configuredModels
     return configuredModels.filter((model) =>
@@ -238,13 +245,18 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
       const file = event.target.files?.[0]
       event.target.value = ''
       if (!file) return
+      const revision = ++editRevision.current
 
       try {
-        const imported = formatJsonForTextarea(await file.text())
+        const contents = await file.text()
+        if (revision !== editRevision.current) return
+        const imported = formatJsonForTextarea(contents)
         validateUnifiedConfig(imported || '{}')
+        editRevision.current += 1
         setText(imported || '{}')
         setError('')
       } catch (err) {
+        if (revision !== editRevision.current) return
         const message = err instanceof Error ? err.message : t('Invalid JSON')
         toast.error(message)
       }
@@ -371,6 +383,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
         <Textarea
           value={text}
           onChange={(event) => {
+            editRevision.current += 1
             setText(event.target.value)
             if (error) setError('')
           }}

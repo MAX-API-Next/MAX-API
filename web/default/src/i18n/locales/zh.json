@@ -478,6 +478,7 @@
     "Allowed Ports": "允许的端口",
     "Already have an account?": "已有账户？",
     "Always matches (default tier).": "始终匹配（默认档位）。",
+    "Always matches; later tiers are unreachable": "始终匹配，后续档位将不会生效",
     "Amount": "金额",
     "Amount cannot be changed when editing.": "编辑时无法更改数量。",
     "Amount discount": "金额折扣",

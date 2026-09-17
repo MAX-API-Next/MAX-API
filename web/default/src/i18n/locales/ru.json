@@ -478,6 +478,7 @@
     "Allowed Ports": "Разрешенные порты",
     "Already have an account?": "Уже есть аккаунт?",
     "Always matches (default tier).": "Всегда совпадает (уровень по умолчанию).",
+    "Always matches; later tiers are unreachable": "Всегда применяется; последующие уровни недостижимы",
     "Amount": "Сумма",
     "Amount cannot be changed when editing.": "Количество нельзя изменить при редактировании.",
     "Amount discount": "Скидка на сумму",

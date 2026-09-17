@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { act, useState } from 'react'
+import { act, useState, type ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createInstance } from 'i18next'
@@ -39,6 +39,7 @@ let ModelPricingEditorPanel: typeof import('./model-pricing-sheet').ModelPricing
 let ModelRatioVisualEditor: typeof import('./model-ratio-visual-editor').ModelRatioVisualEditor
 let TieredPricingEditor: typeof import('./tiered-pricing-editor').TieredPricingEditor
 let TieredBillingSettings: typeof import('./tiered-billing-settings').TieredBillingSettings
+let TaskRateCardSettings: typeof import('./task-rate-card-settings').TaskRateCardSettings
 let SettingsPageProvider: typeof import('../components/settings-page-context').SettingsPageProvider
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -133,6 +134,130 @@ const modelB: ModelRatioData = {
 }
 
 describe('optional zero prices in the actual editor', () => {
+  for (const kind of ['task', 'tiered'] as const) {
+    test(`${kind} settings discard imports superseded by edits, imports, examples, and resets`, async () => {
+      const container = createContainer()
+      const actions = createContainer()
+      const root = createRoot(container)
+      const queryClient = new QueryClient()
+      const { toast } = await import('sonner')
+      const config = (name: string): string =>
+        JSON.stringify({ [name]: { enabled: false, expr: '' } })
+      const renderSettings = (name: string): ReactElement => (
+        <I18nextProvider i18n={i18n}>
+          <QueryClientProvider client={queryClient}>
+            <SettingsPageProvider actionsContainer={actions}>
+              {kind === 'task' ? (
+                <TaskRateCardSettings defaultValue={config(name)} />
+              ) : (
+                <TieredBillingSettings
+                  billingMode='{}'
+                  billingExpr={JSON.stringify({
+                    [name]: 'tier("base", p * 1)',
+                  })}
+                />
+              )}
+            </SettingsPageProvider>
+          </QueryClientProvider>
+        </I18nextProvider>
+      )
+      try {
+        await act(async () => root.render(renderSettings('initial')))
+        const editor = [...container.querySelectorAll('textarea')].find(
+          (input) => !input.readOnly
+        )
+        assert.ok(editor)
+        const fileInput = (kind === 'task' ? container : actions).querySelector(
+          'input[type=file]'
+        )
+        assert.ok(fileInput)
+        const importFile = async (
+          text: () => Promise<string>
+        ): Promise<void> => {
+          await act(async () =>
+            fireEvent.change(fileInput, { target: { files: [{ text }] } })
+          )
+        }
+        const startSlowImport = async (): Promise<(value: string) => void> => {
+          let resolve!: (value: string) => void
+          const pending = new Promise<string>((done) => {
+            resolve = done
+          })
+          await importFile(() => pending)
+          return resolve
+        }
+        const assertStaleIgnored = async (
+          resolve: (value: string) => void
+        ): Promise<void> => {
+          const current = editor.value
+          const notifications = toast.getHistory().length
+          await act(async () => resolve(config('stale')))
+          assert.equal(editor.value, current)
+          assert.equal(toast.getHistory().length, notifications)
+        }
+
+        let complete = await startSlowImport()
+        await act(async () =>
+          fireEvent.change(editor, { target: { value: config('edited') } })
+        )
+        await assertStaleIgnored(complete)
+
+        complete = await startSlowImport()
+        await importFile(async () => config('newer'))
+        assert.deepEqual(JSON.parse(editor.value), JSON.parse(config('newer')))
+        await assertStaleIgnored(complete)
+
+        complete = await startSlowImport()
+        await importFile(async () => '{')
+        await assertStaleIgnored(complete)
+
+        complete = await startSlowImport()
+        const example = within(container).getAllByRole('button', {
+          name: kind === 'task' ? 'Use example' : 'Load example',
+        })[0]
+        await act(async () => fireEvent.click(example))
+        await assertStaleIgnored(complete)
+
+        if (kind === 'tiered') {
+          complete = await startSlowImport()
+          await act(async () =>
+            fireEvent.click(
+              within(actions).getByRole('button', { name: 'Format JSON' })
+            )
+          )
+          await assertStaleIgnored(complete)
+        }
+
+        complete = await startSlowImport()
+        await act(async () => root.render(renderSettings('reset')))
+        assert.match(editor.value, /reset/)
+        await assertStaleIgnored(complete)
+
+        let reject!: (reason: Error) => void
+        const failedRead = new Promise<string>((_resolve, fail) => {
+          reject = fail
+        })
+        await importFile(() => failedRead)
+        await act(async () =>
+          fireEvent.change(editor, {
+            target: { value: config('after-failed-read') },
+          })
+        )
+        const notifications = toast.getHistory().length
+        await act(async () => reject(new Error('Stale read failure')))
+        assert.equal(toast.getHistory().length, notifications)
+
+        complete = await startSlowImport()
+        await act(async () => root.render(null))
+        await assertStaleIgnored(complete)
+      } finally {
+        await unmount(root, container)
+        actions.remove()
+        queryClient.clear()
+      }
+    })
+  }
+
   test('only enables tiered configuration downloads for valid current JSON', async () => {
     const container = createContainer()
     const actions = createContainer()
@@ -193,7 +318,7 @@ describe('optional zero prices in the actual editor', () => {
         ? 'tier("base", p * 3 + c * 15 + cr * 0)'
         : source
       let saved = source
-      function ControlledEditor() {
+      function ControlledEditor(): ReactElement {
         const [expression, setExpression] = useState(source)
         return (
           <TieredPricingEditor
@@ -207,7 +332,7 @@ describe('optional zero prices in the actual editor', () => {
           />
         )
       }
-      const selectMode = async (name: string) => {
+      const selectMode = async (name: string): Promise<void> => {
         await act(async () => {
           fireEvent.keyDown(within(container).getAllByRole('combobox')[0], {
             key: 'ArrowDown',
@@ -320,7 +445,7 @@ describe('optional zero prices in the actual editor', () => {
       const container = createContainer()
       const root = createRoot(container)
       let saved = `tier("base", p * 3 + c * 15 + ${variable.key} * 0)`
-      const renderEditor = (key: string) => (
+      const renderEditor = (key: string): ReactElement => (
         <I18nextProvider i18n={i18n}>
           <TieredPricingEditor
             key={key}
@@ -358,7 +483,7 @@ describe('optional zero prices in the actual editor', () => {
     const container = createContainer()
     const root = createRoot(container)
     let saved = 'tier("base", p * 3 + c * 15)'
-    function ControlledEditor() {
+    function ControlledEditor(): ReactElement {
       const [expression, setExpression] = useState(saved)
       return (
         <TieredPricingEditor
@@ -464,6 +589,7 @@ before(async () => {
   ;({ ModelRatioVisualEditor } = await import('./model-ratio-visual-editor'))
   ;({ TieredPricingEditor } = await import('./tiered-pricing-editor'))
   ;({ TieredBillingSettings } = await import('./tiered-billing-settings'))
+  ;({ TaskRateCardSettings } = await import('./task-rate-card-settings'))
   ;({ SettingsPageProvider } =
     await import('../components/settings-page-context'))
 })
@@ -725,10 +851,24 @@ describe('TieredPricingEditor runtime behavior', () => {
       )
       await act(async () => undefined)
       assert.equal(editor.getAllByText('Fallback tier').length, 1)
+      editor.getByText('Always matches; later tiers are unreachable')
+      assert.equal(
+        editor.getAllByText('Always matches (default tier).').length,
+        1
+      )
       assert.ok(
         billingChanges.some((expr) =>
           expr.startsWith('true ? tier("short", p * 1 + c * 2)')
         )
+      )
+      await act(async () =>
+        fireEvent.click(
+          editor.getAllByRole('button', { name: 'Add condition' })[0]
+        )
+      )
+      assert.equal(
+        editor.queryByText('Always matches; later tiers are unreachable'),
+        null
       )
     } finally {
       await unmount(root, container)
@@ -785,7 +925,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     const container = createContainer()
     const root = createRoot(container)
     const changes: Array<{ modelName: string; next: string }> = []
-    const renderEditor = (model: ModelRatioData) => (
+    const renderEditor = (model: ModelRatioData): ReactElement => (
       <I18nextProvider i18n={i18n}>
         <TieredPricingEditor
           modelName={model.name}
@@ -888,7 +1028,7 @@ describe('TieredPricingEditor runtime behavior', () => {
       [modelA.name]: modelA.billingExpr,
       [modelB.name]: modelB.billingExpr,
     })
-    const renderEditor = () => (
+    const renderEditor = (): ReactElement => (
       <I18nextProvider i18n={i18n}>
         <ModelRatioVisualEditor
           savedModelPrice='{}'

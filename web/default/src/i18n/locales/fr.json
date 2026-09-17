@@ -478,6 +478,7 @@
     "Allowed Ports": "Ports autorisés",
     "Already have an account?": "Vous avez déjà un compte ?",
     "Always matches (default tier).": "Toujours appliqué (palier par défaut).",
+    "Always matches; later tiers are unreachable": "Toujours appliqué ; les paliers suivants ne seront jamais atteints",
     "Amount": "Montant",
     "Amount cannot be changed when editing.": "Le montant ne peut pas être modifié lors de la modification.",
     "Amount discount": "Remise sur le montant",
