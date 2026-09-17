@@ -281,7 +281,11 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
     const { body } = stripExprVersion(exprStr)
     const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    const branches = splitTopLevelExpression(body, ':', true)
+    const branches = splitTopLevelExpression(
+      unwrapConditionParens(body),
+      ':',
+      true
+    )
     for (const [index, branch] of branches.entries()) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
       // A complete ternary chain ends in exactly one unconditional fallback.
@@ -314,7 +318,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
           const atom = unwrapConditionParens(cp)
           if (atom === 'true') continue
           const cm = atom.match(
-            /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+            /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("((?:[^"\\]|\\.)*)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
           )
           // A partial condition would advertise a different pricing contract.
           if (!cm || !isSupportedNumericLiteral(cm[5])) return []
@@ -322,7 +326,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
             var: (cm[1] || cm[2]) as TierCondition['var'],
             op: cm[4] as TierCondition['op'],
             value: Number(cm[5]),
-            ...(cm[2] ? { timezone: cm[3] } : {}),
+            ...(cm[2] ? { timezone: JSON.parse(`"${cm[3]}"`) as string } : {}),
           })
         }
         if (groupConditions.length > 0) conditionGroups.push(groupConditions)

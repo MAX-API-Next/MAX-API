@@ -188,7 +188,7 @@ function buildConditionStr(conditions: TierConditionInput[]): string {
     .filter((c) => c.var && c.op && c.value != null && c.value !== '')
     .map((c) => {
       const lhs = ['hour', 'minute', 'weekday', 'month', 'day'].includes(c.var)
-        ? `${c.var}("${String(c.timezone || 'Asia/Shanghai').replace(/"/g, '\\"')}")`
+        ? `${c.var}(${JSON.stringify(String(c.timezone || 'Asia/Shanghai'))})`
         : c.var
       return `${lhs} ${c.op} ${c.value}`
     })
@@ -198,7 +198,7 @@ function buildConditionStr(conditions: TierConditionInput[]): string {
 function parseTierConditionGroups(conditionStr: string): TierConditionGroup[] {
   if (!conditionStr || conditionStr.trim() === 'true') return []
   const atomPattern =
-    /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+    /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("((?:[^"\\]|\\.)*)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
   return splitTopLevelExpression(unwrapConditionParens(conditionStr), '||')
     .map((groupStr) => unwrapConditionParens(groupStr))
     .map((groupStr) => {
@@ -210,7 +210,9 @@ function parseTierConditionGroups(conditionStr: string): TierConditionGroup[] {
           var: (match[1] || match[2]) as TierConditionInput['var'],
           op: match[4] as TierConditionInput['op'],
           value: Number(match[5]),
-          ...(match[2] ? { timezone: match[3] } : {}),
+          ...(match[2]
+            ? { timezone: JSON.parse(`"${match[3]}"`) as string }
+            : {}),
         })
       }
       return { conditions }

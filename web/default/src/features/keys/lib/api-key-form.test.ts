@@ -97,7 +97,7 @@ describe('API key routing form', () => {
     assert.equal(values.manual_groups.includes(''), false)
   })
 
-  test('requires a manual selection and enforces the supported maximum', () => {
+  test('requires a manual selection and enforces the supported maximum', (): void => {
     const values = {
       ...getApiKeyFormDefaultValues(),
       name: 'manual-key',
@@ -107,7 +107,7 @@ describe('API key routing form', () => {
       smartRoutes: ['auto'],
       manualGroups: Array.from(
         { length: MAX_MANUAL_ROUTING_GROUPS + 2 },
-        (_, index) => `group-${index}`
+        (_: unknown, index: number): string => `group-${index}`
       ),
     })
     const empty = schema.safeParse(values)
@@ -121,7 +121,7 @@ describe('API key routing form', () => {
       ...values,
       manual_groups: Array.from(
         { length: MAX_MANUAL_ROUTING_GROUPS },
-        (_, index) => `group-${index}`
+        (_: unknown, index: number): string => `group-${index}`
       ),
     })
     assert.equal(maximum.success, true)
@@ -130,7 +130,7 @@ describe('API key routing form', () => {
       routing_mode: 'manual',
       manual_groups: Array.from(
         { length: MAX_MANUAL_ROUTING_GROUPS + 1 },
-        (_, index) => `group-${index}`
+        (_: unknown, index: number): string => `group-${index}`
       ),
     })
     assert.equal(result.success, false)
@@ -195,7 +195,7 @@ describe('API key routing form', () => {
     assert.equal(shouldIncludeRoutingProjection(true, true, false), false)
   })
 
-  test('does not seed manual groups when loading a smart key', () => {
+  test('does not seed manual groups when loading a smart key', (): void => {
     const apiKey = {
       id: 2,
       name: 'smart-key',

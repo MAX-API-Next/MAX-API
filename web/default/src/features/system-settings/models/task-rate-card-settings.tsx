@@ -524,6 +524,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               type='button'
               size='sm'
               variant={vendorFilter === 'all' ? 'secondary' : 'ghost'}
+              aria-pressed={vendorFilter === 'all'}
               onClick={() => setVendorFilter('all')}
             >
               {t('All')}
@@ -534,6 +535,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
                 type='button'
                 size='sm'
                 variant={vendorFilter === vendor.key ? 'secondary' : 'ghost'}
+                aria-pressed={vendorFilter === vendor.key}
                 onClick={() => setVendorFilter(vendor.key)}
               >
                 {t(vendor.label)}

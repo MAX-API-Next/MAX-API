@@ -100,7 +100,7 @@ function validateUnifiedConfig(
 ): Record<string, TieredBillingEntry> {
   const parsed = JSON.parse(value) as unknown
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Tiered billing JSON must be an object')
+    throw new Error(t('Tiered billing JSON must be an object'))
   }
 
   const normalized: Record<string, TieredBillingEntry> = {}
@@ -108,10 +108,12 @@ function validateUnifiedConfig(
     ([model, entry]) => {
       const name = model.trim()
       if (!name) {
-        throw new Error('Model name cannot be empty')
+        throw new Error(t('Model name cannot be empty'))
       }
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-        throw new Error(`Config for ${name} must be an object`)
+        throw new Error(
+          t('Config for {{model}} must be an object', { model: name })
+        )
       }
 
       const rawEntry = entry as Partial<TieredBillingEntry>
@@ -133,7 +135,9 @@ function validateUnifiedConfig(
       }
       const expr = rawEntry.expr?.trim() ?? ''
       if (enabled && !expr) {
-        throw new Error(`Billing expression for ${name} cannot be empty`)
+        throw new Error(
+          t('Billing expression for {{model}} cannot be empty', { model: name })
+        )
       }
       normalized[name] = { enabled, expr }
     }

@@ -44,6 +44,10 @@ func (w *chatStreamWriteObserver) WriteString(data string) (int, error) {
 	return w.Write([]byte(data))
 }
 
+func (w *chatStreamWriteObserver) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 // Keep the raw delta fields for the visibility decision. The forwarding path
 // still owns formatting; unknown provider payloads must not become empty just
 // because the typed Chat DTO does not yet describe them.
@@ -141,14 +145,14 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	pendingBytes := 0
 	buffering := shouldRetryEmptyCompletion(c, info)
 	observer := newOpenAIStreamToolCallObserver(info)
+	writeObserver := &chatStreamWriteObserver{ResponseWriter: c.Writer}
+	c.Writer = writeObserver
+	defer func() { c.Writer = writeObserver.ResponseWriter }()
 
 	send := func(data string) bool {
-		writer := &chatStreamWriteObserver{ResponseWriter: c.Writer}
-		c.Writer = writer
-		defer func() { c.Writer = writer.ResponseWriter }()
 		err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 		if err == nil {
-			err = writer.err
+			err = writeObserver.err
 		}
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)

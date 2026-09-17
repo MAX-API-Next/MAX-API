@@ -38,6 +38,57 @@ const emptyExtraTokens: ExtraTokenValues = {
   audioOutputTokens: 0,
 }
 
+for (const expression of [
+  'tier("base", p * 0 + c * 15)',
+  'len < 100 ? tier("low", p * 0 + c * 1) : tier("high", p * 2 + c * 3)',
+]) {
+  test(`preserves outer wrappers in price displays: ${expression}`, (): void => {
+    const expected = parseTiersFromExpr(expression)
+    assert.ok(expected.length > 0)
+    for (const wrapped of [`(${expression})`, `v1: (( ${expression} ))`]) {
+      assert.deepEqual(parseTiersFromExpr(wrapped), expected)
+    }
+    assert.deepEqual(parseTiersFromExpr(`(${expression} + unknown)`), [])
+  })
+}
+
+for (const timezone of [
+  'UTC',
+  'Test/"quote',
+  'Test/back\\',
+  'Test/\\"',
+  'Test/\nline',
+  'Test/\tvalue',
+]) {
+  test(`round-trips escaped timezone strings: ${JSON.stringify(timezone)}`, (): void => {
+    const config = {
+      tiers: [
+        normalizeVisualTier({
+          label: 'day',
+          conditions: [{ var: 'hour', timezone, op: '>=', value: 9 }],
+          input_unit_cost: 1,
+          output_unit_cost: 2,
+        }),
+        normalizeVisualTier({
+          label: 'base',
+          input_unit_cost: 3,
+          output_unit_cost: 4,
+        }),
+      ],
+    }
+    const expression = generateExprFromVisualConfig(config)
+    assert.ok(expression.includes(`hour(${JSON.stringify(timezone)})`))
+    const parsed = tryParseVisualConfig(expression)
+    assert.ok(parsed)
+    assert.equal(parsed.tiers[0].conditions[0].timezone, timezone)
+    assert.equal(generateExprFromVisualConfig(parsed), expression)
+    assert.equal(
+      parseTiersFromExpr(expression)[0]?.conditions[0]?.timezone,
+      timezone
+    )
+  })
+}
+
 describe('visual optional price presence', () => {
   for (const { field, exprVar } of BILLING_CACHE_VAR_MAP) {
     test(`preserves absent, zero and positive ${exprVar} prices through normalization and round trips`, () => {

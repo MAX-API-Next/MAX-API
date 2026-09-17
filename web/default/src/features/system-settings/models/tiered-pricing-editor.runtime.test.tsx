@@ -196,6 +196,8 @@ for (const replaceVia of ['import', 'edit'] as const) {
       await act(async (): Promise<void> => {
         fireEvent.click(summary.getByRole('button', { name: 'Kling' }))
       })
+      summary.getByRole('button', { name: 'Kling', pressed: true })
+      summary.getByRole('button', { name: 'All', pressed: false })
       summary.getByText('kling-test-model')
       assert.equal(summary.queryByText('minimax-test-model'), null)
 
@@ -222,6 +224,8 @@ for (const replaceVia of ['import', 'edit'] as const) {
       summary.getByText('kling-test-model')
       assert.equal(summary.queryByText('sora-test-model'), null)
       await replace(['minimax', 'sora'])
+      summary.getByRole('button', { name: 'All', pressed: true })
+      summary.getByRole('button', { name: 'MiniMax', pressed: false })
       summary.getByText('minimax-test-model')
       summary.getByText('sora-test-model')
       assert.equal(summary.queryByRole('button', { name: 'Kling' }), null)
@@ -439,7 +443,10 @@ describe('optional zero prices in the actual editor', () => {
 
         complete = await startSlowImport()
         await act(async () => root.render(null))
-        await assertStaleIgnored(complete)
+        const notificationsAfterUnmount = toast.getHistory().length
+        await act(async (): Promise<void> => complete(config('stale')))
+        assert.equal(container.querySelector('textarea'), null)
+        assert.equal(toast.getHistory().length, notificationsAfterUnmount)
       } finally {
         await unmount(root, container)
         actions.remove()

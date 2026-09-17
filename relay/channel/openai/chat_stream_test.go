@@ -380,3 +380,76 @@ func TestNativeChatStreamWriteFailureDoesNotSettleFirstPayload(t *testing.T) {
 		})
 	}
 }
+
+type pingFaultChatWriter struct {
+	gin.ResponseWriter
+	short          bool
+	pingWrites     int
+	writeDeadlines int
+}
+
+func (w *pingFaultChatWriter) SetWriteDeadline(time.Time) error {
+	w.writeDeadlines++
+	return nil
+}
+
+func (w *pingFaultChatWriter) Write(data []byte) (int, error) {
+	if strings.HasPrefix(string(data), ": PING") {
+		w.pingWrites++
+		w.ResponseWriter.WriteHeaderNow()
+		if w.short {
+			return len(data) - 1, nil
+		}
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func TestNativeChatStreamPingWriteFailureIsTerminal(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		for _, short := range []bool{false, true} {
+			t.Run(fmt.Sprintf("partial=%t/short=%t", partial, short), func(t *testing.T) {
+				c, _, info := newChatStreamTest(t)
+				info.DisablePing = false
+				settings := operation_setting.GetGeneralSetting()
+				oldEnabled, oldSeconds := settings.PingIntervalEnabled, settings.PingIntervalSeconds
+				oldTimeout := constant.StreamingTimeout
+				settings.PingIntervalEnabled, settings.PingIntervalSeconds = true, 1
+				constant.StreamingTimeout = 3
+				t.Cleanup(func() {
+					settings.PingIntervalEnabled, settings.PingIntervalSeconds = oldEnabled, oldSeconds
+					constant.StreamingTimeout = oldTimeout
+				})
+				writer := &pingFaultChatWriter{ResponseWriter: c.Writer, short: short}
+				c.Writer = writer
+				r, w := io.Pipe()
+				defer r.Close()
+				defer w.Close()
+				producer := make(chan error, 1)
+				go func() {
+					frame := chatRoleFrame
+					if partial {
+						frame = `{"choices":[{"delta":{"content":"hello"}}]}`
+					}
+					_, err := io.WriteString(w, "data: "+frame+"\n\n")
+					producer <- err
+				}()
+				usage, apiErr := OaiStreamHandler(c, info, &http.Response{StatusCode: 200, Body: r})
+				require.NoError(t, <-producer)
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.Contains(t, info.StreamStatus.Summary(), string(relaycommon.StreamEndReasonPingFail))
+				require.Equal(t, 1, writer.pingWrites, "a failed ping must terminate without more underlying writes")
+				require.Positive(t, writer.writeDeadlines, "observer must preserve response-controller deadline traversal")
+				require.Same(t, writer, c.Writer)
+				if partial {
+					expected := service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38)
+					require.NotNil(t, usage)
+					require.Equal(t, expected.CompletionTokens, usage.CompletionTokens)
+				} else {
+					require.Nil(t, usage)
+				}
+			})
+		}
+	}
+}
