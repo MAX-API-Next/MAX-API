@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,97 @@ type chatStreamBillingRecorder struct {
 }
 
 var chatStreamMetricSequence atomic.Uint64
+
+type billingChatWriteFailure struct {
+	*httptest.ResponseRecorder
+}
+
+func (w *billingChatWriteFailure) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), "undelivered") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseRecorder.Write(data)
+}
+
+func TestNativeChatRelayBillingOnDeliveryFailures(t *testing.T) {
+	for _, scenario := range []string{"format", "role_format", "partial_format", "write", "partial_write"} {
+		t.Run(scenario, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			service.InitHttpClient()
+			oldFlag, oldTimes := common.EmptyCompletionRetryEnabled, common.RetryTimes
+			common.EmptyCompletionRetryEnabled, common.RetryTimes = true, 2
+			t.Cleanup(func() { common.EmptyCompletionRetryEnabled, common.RetryTimes = oldFlag, oldTimes })
+			var calls atomic.Int32
+			partial := strings.HasPrefix(scenario, "partial_")
+			writeFailure := strings.HasSuffix(scenario, "write")
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				frames := []string{}
+				if calls.Add(1) > 1 {
+					frames = append(frames, `{"choices":[{"delta":{"content":"winner"}}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`)
+				} else {
+					if scenario == "role_format" {
+						frames = append(frames, `{"choices":[{"delta":{"role":"assistant"}}]}`)
+					} else if partial {
+						frames = append(frames, `{"choices":[{"delta":{"content":"hello"}}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`)
+					}
+					id := `"bad"`
+					if !writeFailure {
+						id = `123`
+					}
+					frames = append(frames, `{"id":`+id+`,"choices":[{"delta":{"content":"undelivered"}}],"usage":{"prompt_tokens":1000,"completion_tokens":999,"total_tokens":1999}}`)
+				}
+				_, _ = w.Write([]byte("data: " + strings.Join(append(frames, "[DONE]"), "\n\ndata: ") + "\n\n"))
+			}))
+			t.Cleanup(upstream.Close)
+			recorder := httptest.NewRecorder()
+			var writer http.ResponseWriter = recorder
+			if writeFailure {
+				writer = &billingChatWriteFailure{recorder}
+			}
+			c, _ := gin.CreateTestContext(writer)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeOpenAI)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "gpt-test")
+			common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{ForceFormat: true})
+			billing := &chatStreamBillingRecorder{}
+			info := &relaycommon.RelayInfo{
+				RelayMode: relayconstant.RelayModeChatCompletions, RelayFormat: types.RelayFormatOpenAI,
+				OriginModelName: "gpt-test", StartTime: time.Now(), IsStream: true, DisablePing: true,
+				RequestId: "delivery-test-" + scenario, Billing: billing,
+				UserQuota: 1000, UserSetting: dto.UserSetting{QuotaWarningThreshold: 1},
+				PriceData: types.PriceData{ModelRatio: 1, CompletionRatio: 1, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+				Request:   &dto.GeneralOpenAIRequest{Model: "gpt-test", Stream: common.GetPointer(true)},
+			}
+			apiErr := TextHelper(c, info)
+			require.NotNil(t, apiErr)
+			require.Equal(t, scenario != "format", types.IsSkipRetryError(apiErr))
+			require.NotContains(t, recorder.Body.String(), "undelivered")
+			if partial {
+				require.Equal(t, []int{12}, billing.quotas)
+				require.Len(t, billing.effects, 1)
+				service.HandleFailedBilling(c, info, apiErr)
+				require.Zero(t, billing.refunds)
+			} else {
+				require.Empty(t, billing.quotas)
+				require.Empty(t, billing.effects)
+				if scenario == "format" {
+					info.RetryIndex++
+					require.Nil(t, TextHelper(c, info))
+					require.Equal(t, []int{12}, billing.quotas)
+					require.Len(t, billing.effects, 1)
+					require.Equal(t, 1, strings.Count(recorder.Body.String(), "winner"))
+				} else {
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.Equal(t, 1, billing.refunds)
+				}
+			}
+		})
+	}
+}
 
 func (b *chatStreamBillingRecorder) Settle(int) error { panic("expected settlement with effect") }
 func (b *chatStreamBillingRecorder) SettleWithEffect(quota int, effect *model.BillingSettlementEffect) error {

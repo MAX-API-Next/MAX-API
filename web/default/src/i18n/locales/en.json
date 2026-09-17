@@ -1762,6 +1762,7 @@
     "Enable WeChat Auth": "Enable WeChat Auth",
     "Enable when proxying workers that fetch images over HTTP.": "Enable when proxying workers that fetch images over HTTP.",
     "Enabled": "Enabled",
+    "Enabled flag for {{model}} must be a boolean": "Enabled flag for {{model}} must be a boolean",
     "Enabled all channels with tag: {{tag}}": "Enabled all channels with tag: {{tag}}",
     "Enabled Status": "Enabled Status",
     "Enabling...": "Enabling...",

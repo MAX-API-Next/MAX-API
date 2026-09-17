@@ -415,12 +415,13 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         const contents = await file.text()
         if (revision !== editRevision.current) return
         const imported = formatJsonForTextarea(contents)
-        const parsed = JSON.parse(imported || '{}') as unknown
+        if (!imported) throw new Error(t('Invalid JSON'))
+        const parsed = JSON.parse(imported) as unknown
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
           throw new Error(t('JSON must be an object'))
         }
         editRevision.current += 1
-        setText(imported || '{}')
+        setText(imported)
         setError('')
         toast.success(t('JSON imported. Review prices before saving.'))
       } catch (err) {

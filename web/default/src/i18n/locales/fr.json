@@ -1762,6 +1762,7 @@
     "Enable WeChat Auth": "Activer l'authentification WeChat",
     "Enable when proxying workers that fetch images over HTTP.": "Activer lors de la mise en proxy des workers qui récupèrent des images via HTTP.",
     "Enabled": "Activé",
+    "Enabled flag for {{model}} must be a boolean": "L’indicateur d’activation de {{model}} doit être un booléen",
     "Enabled all channels with tag: {{tag}}": "Tous les canaux avec le tag {{tag}} ont été activés",
     "Enabled Status": "Statut activé",
     "Enabling...": "Activation en cours...",

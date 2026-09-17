@@ -1762,6 +1762,7 @@
     "Enable WeChat Auth": "Включить аутентификацию WeChat",
     "Enable when proxying workers that fetch images over HTTP.": "Включить при проксировании воркеров, которые получают изображения по HTTP.",
     "Enabled": "Включено",
+    "Enabled flag for {{model}} must be a boolean": "Флаг включения для {{model}} должен быть логическим значением",
     "Enabled all channels with tag: {{tag}}": "Все каналы с тегом {{tag}} включены",
     "Enabled Status": "Статус включения",
     "Enabling...": "Включается...",

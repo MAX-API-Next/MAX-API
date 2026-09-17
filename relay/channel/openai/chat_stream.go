@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -19,6 +20,29 @@ const (
 	maxPendingChatStreamEvents = 32
 	maxPendingChatStreamBytes  = 64 << 10
 )
+
+// Observe native Chat writes because legacy SSE rendering can discard writer
+// errors. The scanner serializes this wrapper with ping writes.
+type chatStreamWriteObserver struct {
+	gin.ResponseWriter
+	err error
+}
+
+func (w *chatStreamWriteObserver) Write(data []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.ResponseWriter.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func (w *chatStreamWriteObserver) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
 
 // Keep the raw delta fields for the visibility decision. The forwarding path
 // still owns formatting; unknown provider payloads must not become empty just
@@ -119,11 +143,27 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	observer := newOpenAIStreamToolCallObserver(info)
 
 	send := func(data string) bool {
-		if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+		writer := &chatStreamWriteObserver{ResponseWriter: c.Writer}
+		c.Writer = writer
+		defer func() { c.Writer = writer.ResponseWriter }()
+		err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+		if err == nil {
+			err = writer.err
+		}
+		if err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusBadGateway)
+			if c.Writer.Written() {
+				types.ErrOptionWithSkipRetry()(streamErr)
+			}
 			return false
 		}
 		return true
+	}
+	recordUsage := func(frame *chatStreamFrame, data string) {
+		lastData = data
+		if frame.Usage != nil {
+			usage, containUsage = frame.Usage, true
+		}
 	}
 	flushPending := func() bool {
 		buffering = false
@@ -149,17 +189,9 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			sr.Stop(streamErr)
 			return
 		}
-		lastData = data
-		if frame.Usage != nil {
-			usage, containUsage = frame.Usage, true
-		}
 		visible := frame.hasPayload()
-		hasPayload = hasPayload || visible
-		observeOpenAIStreamToolCalls(observer, data)
-		if err := processTokenData(info.RelayMode, data, &text, &toolCount); err != nil {
-			sr.Error(err)
-		}
 		if !info.ShouldIncludeUsage && frame.Usage != nil && len(frame.Choices) == 0 {
+			recordUsage(&frame, data)
 			return
 		}
 		if buffering {
@@ -169,6 +201,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 					return
 				}
 			} else {
+				recordUsage(&frame, data)
 				pending = append(pending, data)
 				pendingBytes += len(data)
 				return
@@ -176,6 +209,13 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		if !send(data) {
 			sr.Stop(streamErr)
+			return
+		}
+		hasPayload = hasPayload || visible
+		recordUsage(&frame, data)
+		observeOpenAIStreamToolCalls(observer, data)
+		if err := processTokenData(info.RelayMode, data, &text, &toolCount); err != nil {
+			sr.Error(err)
 		}
 	})
 
@@ -187,7 +227,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if streamErr != nil {
-		if c.Writer.Written() || hasPayload {
+		if c.Writer.Written() {
 			types.ErrOptionWithSkipRetry()(streamErr)
 		}
 		if !hasPayload {
@@ -214,6 +254,9 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		return usage, streamErr
 	}
 	if !flushPending() {
+		if !hasPayload {
+			return nil, streamErr
+		}
 		return usage, streamErr
 	}
 	if hasPayload {

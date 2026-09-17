@@ -1762,6 +1762,7 @@
     "Enable WeChat Auth": "启用微信授权",
     "Enable when proxying workers that fetch images over HTTP.": "当代理通过 HTTP 获取图像的 worker 时启用。",
     "Enabled": "已启用",
+    "Enabled flag for {{model}} must be a boolean": "{{model}} 的启用标志必须为布尔值",
     "Enabled all channels with tag: {{tag}}": "已启用标签「{{tag}}」下的所有渠道",
     "Enabled Status": "启用状态",
     "Enabling...": "正在启用...",

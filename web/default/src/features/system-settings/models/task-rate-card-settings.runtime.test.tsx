@@ -41,9 +41,12 @@ for (const kind of ['task', 'tiered'] as const) {
       <QueryClientProvider client={queryClient}>
         <SettingsPageProvider actionsContainer={actions}>
           {kind === 'task' ? (
-            <TaskRateCardSettings defaultValue='{}' />
+            <TaskRateCardSettings defaultValue='{"existing-model":{"unit":"second","rows":[]}}' />
           ) : (
-            <TieredBillingSettings billingMode='{}' billingExpr='{}' />
+            <TieredBillingSettings
+              billingMode='{"existing-model":"tiered_expr"}'
+              billingExpr='{"existing-model":"p * 1"}'
+            />
           )}
         </SettingsPageProvider>
       </QueryClientProvider>
@@ -63,8 +66,17 @@ for (const kind of ['task', 'tiered'] as const) {
       const original = editor.value
       assert.equal(save.disabled, false)
       for (const text of [
+        async (): Promise<string> => '',
+        async (): Promise<string> => ' \r\n\t ',
         async (): Promise<string> => '{',
         async (): Promise<string> => '[]',
+        ...(kind === 'tiered'
+          ? ['false', 'true', 0, 1, null, [], {}].map(
+              (enabled): (() => Promise<string>) =>
+                async (): Promise<string> =>
+                  JSON.stringify({ model: { enabled, expr: 'p * 1' } })
+            )
+          : []),
         async (): Promise<string> => {
           throw new Error('Synthetic file read failure')
         },
@@ -86,6 +98,12 @@ for (const kind of ['task', 'tiered'] as const) {
       })
       assert.deepEqual(JSON.parse(editor.value), JSON.parse(imported))
       assert.equal(save.disabled, false)
+      await act(async (): Promise<void> => {
+        fireEvent.change(fileInput, {
+          target: { files: [{ text: async (): Promise<string> => '{}' }] },
+        })
+      })
+      assert.deepEqual(JSON.parse(editor.value), {})
     } finally {
       await view.unmount()
       actions.remove()

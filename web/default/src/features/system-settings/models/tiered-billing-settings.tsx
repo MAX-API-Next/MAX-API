@@ -25,6 +25,7 @@ import {
   useState,
 } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import {
   Braces,
   Check,
@@ -93,7 +94,10 @@ function buildUnifiedConfig(billingMode: string, billingExpr: string) {
   return config
 }
 
-function validateUnifiedConfig(value: string) {
+function validateUnifiedConfig(
+  value: string,
+  t: TFunction
+): Record<string, TieredBillingEntry> {
   const parsed = JSON.parse(value) as unknown
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Tiered billing JSON must be an object')
@@ -111,7 +115,15 @@ function validateUnifiedConfig(value: string) {
       }
 
       const rawEntry = entry as Partial<TieredBillingEntry>
-      const enabled = Boolean(rawEntry.enabled)
+      if (
+        rawEntry.enabled !== undefined &&
+        typeof rawEntry.enabled !== 'boolean'
+      ) {
+        throw new Error(
+          t('Enabled flag for {{model}} must be a boolean', { model: name })
+        )
+      }
+      const enabled = rawEntry.enabled ?? false
       const expr = typeof rawEntry.expr === 'string' ? rawEntry.expr.trim() : ''
       if (enabled && !expr) {
         throw new Error(`Billing expression for ${name} cannot be empty`)
@@ -196,7 +208,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const handleSave = useCallback(async () => {
     let config: Record<string, TieredBillingEntry>
     try {
-      config = validateUnifiedConfig(text || '{}')
+      config = validateUnifiedConfig(text || '{}', t)
       setError('')
     } catch (err) {
       const message = err instanceof Error ? err.message : t('Invalid JSON')
@@ -213,11 +225,11 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     TieredBillingEntry
   > | null => {
     try {
-      return validateUnifiedConfig(text || '{}')
+      return validateUnifiedConfig(text || '{}', t)
     } catch {
       return null
     }
-  }, [text])
+  }, [t, text])
 
   const enabledCount = useMemo(
     (): number =>
@@ -251,9 +263,10 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
         const contents = await file.text()
         if (revision !== editRevision.current) return
         const imported = formatJsonForTextarea(contents)
-        validateUnifiedConfig(imported || '{}')
+        if (!imported) throw new Error(t('Invalid JSON'))
+        validateUnifiedConfig(imported, t)
         editRevision.current += 1
-        setText(imported || '{}')
+        setText(imported)
         setError('')
       } catch (err) {
         if (revision !== editRevision.current) return

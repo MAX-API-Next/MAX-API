@@ -1762,6 +1762,7 @@
     "Enable WeChat Auth": "Bật xác thực WeChat",
     "Enable when proxying workers that fetch images over HTTP.": "Kích hoạt khi làm proxy cho các worker tìm nạp hình ảnh qua HTTP.",
     "Enabled": "Đã bật",
+    "Enabled flag for {{model}} must be a boolean": "Cờ bật của {{model}} phải là giá trị boolean",
     "Enabled all channels with tag: {{tag}}": "Đã bật tất cả kênh với nhãn: {{tag}}",
     "Enabled Status": "Trạng thái kích hoạt",
     "Enabling...": "Đang bật...",

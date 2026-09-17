@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -309,4 +310,73 @@ func TestNativeChatStreamContentFilterIsNotRetried(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.Contains(t, recorder.Body.String(), "content_filter")
 	require.Zero(t, emptyCompletionRetryCount(c))
+}
+
+func TestNativeChatStreamFormattingFailureTracksForwardedPayload(t *testing.T) {
+	for _, prefix := range []string{"none", "role", "payload"} {
+		t.Run(prefix, func(t *testing.T) {
+			c, recorder, info := newChatStreamTest(t)
+			info.ChannelSetting.ForceFormat = true
+			frames := []string{}
+			if prefix == "role" {
+				frames = append(frames, chatRoleFrame)
+			} else if prefix == "payload" {
+				frames = append(frames, `{"choices":[{"delta":{"content":"hello"}}]}`)
+			}
+			// The native envelope accepts an extension's numeric id, but the
+			// requested typed formatter rejects it before writing this payload.
+			frames = append(frames, `{"id":123,"choices":[{"delta":{"content":"never delivered"}}],"usage":{"prompt_tokens":1000,"completion_tokens":999,"total_tokens":1999}}`, "[DONE]")
+			usage, apiErr := replayChatStream(c, info, frames...)
+			require.NotNil(t, apiErr)
+			require.Equal(t, prefix != "none", types.IsSkipRetryError(apiErr))
+			require.NotContains(t, recorder.Body.String(), "never delivered")
+			if prefix != "payload" {
+				require.Nil(t, usage, "role-only or uncommitted failures must not settle")
+			} else {
+				require.NotNil(t, usage)
+				require.Equal(t, 38, usage.PromptTokens)
+				expected := service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38)
+				require.Equal(t, expected.CompletionTokens, usage.CompletionTokens)
+				require.Contains(t, recorder.Body.String(), "hello")
+			}
+			if prefix == "none" {
+				require.False(t, c.Writer.Written())
+				info.RetryIndex++
+				usage, apiErr = replayChatStream(c, info, `{"choices":[{"delta":{"content":"winner"}}]}`, "[DONE]")
+				require.Nil(t, apiErr)
+				require.NotNil(t, usage)
+				require.Equal(t, 1, strings.Count(recorder.Body.String(), "winner"))
+			}
+		})
+	}
+}
+
+type rejectedChatResponseWriter struct {
+	header http.Header
+	short  bool
+}
+
+func (w *rejectedChatResponseWriter) Header() http.Header { return w.header }
+func (w *rejectedChatResponseWriter) WriteHeader(int)     {}
+func (w *rejectedChatResponseWriter) Flush()              {}
+func (w *rejectedChatResponseWriter) Write([]byte) (int, error) {
+	if w.short {
+		return 0, nil
+	}
+	return 0, io.ErrClosedPipe
+}
+
+func TestNativeChatStreamWriteFailureDoesNotSettleFirstPayload(t *testing.T) {
+	for _, short := range []bool{false, true} {
+		t.Run(fmt.Sprintf("short=%t", short), func(t *testing.T) {
+			c, _, info := newChatStreamTest(t)
+			failed, _ := gin.CreateTestContext(&rejectedChatResponseWriter{header: make(http.Header), short: short})
+			c.Writer = failed.Writer
+			usage, apiErr := replayChatStream(c, info, `{"choices":[{"delta":{"content":"never delivered"}}]}`, "[DONE]")
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr), "Gin committed the response headers")
+			require.Nil(t, usage)
+			require.Same(t, failed.Writer, c.Writer)
+		})
+	}
 }

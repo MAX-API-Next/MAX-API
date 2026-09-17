@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act, useState, type ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
+import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
@@ -134,6 +135,92 @@ const modelB: ModelRatioData = {
 }
 
 describe('optional zero prices in the actual editor', () => {
+  for (const enabled of [
+    false,
+    true,
+    undefined,
+    'false',
+    'true',
+    0,
+    1,
+    null,
+    [],
+    {},
+  ]) {
+    test(`tiered configuration enforces boolean flags before save or download: ${JSON.stringify(enabled)}`, async (): Promise<void> => {
+      const { api } = await import('@/lib/api')
+      const previousAdapter = api.defaults.adapter
+      const writes: unknown[] = []
+      api.defaults.adapter = async (
+        config: InternalAxiosRequestConfig
+      ): Promise<AxiosResponse> => {
+        assert.equal(config.url, '/api/option/tiered_billing')
+        writes.push(JSON.parse(config.data as string))
+        return {
+          data: { success: true },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        }
+      }
+      const container = createContainer()
+      const actions = createContainer()
+      const root = createRoot(container)
+      const queryClient = new QueryClient()
+      try {
+        await act(async (): Promise<void> => {
+          root.render(
+            <I18nextProvider i18n={i18n}>
+              <QueryClientProvider client={queryClient}>
+                <SettingsPageProvider actionsContainer={actions}>
+                  <TieredBillingSettings billingMode='{}' billingExpr='{}' />
+                </SettingsPageProvider>
+              </QueryClientProvider>
+            </I18nextProvider>
+          )
+        })
+        const editor = container.querySelector('textarea')
+        assert.ok(editor)
+        const save = within(actions).getByRole('button', {
+          name: 'Save tiered billing',
+        })
+        const download = within(actions).getByRole('button', {
+          name: 'Download',
+        }) as HTMLButtonElement
+        const valid = enabled === undefined || typeof enabled === 'boolean'
+        await act(async (): Promise<void> => {
+          fireEvent.change(editor, {
+            target: {
+              value: JSON.stringify({ model: { enabled, expr: 'p * 1' } }),
+            },
+          })
+        })
+        assert.equal(download.disabled, !valid)
+        await act(async (): Promise<void> => {
+          fireEvent.click(save)
+        })
+        assert.deepEqual(
+          writes,
+          valid
+            ? [
+                {
+                  config: {
+                    model: { enabled: enabled ?? false, expr: 'p * 1' },
+                  },
+                },
+              ]
+            : []
+        )
+      } finally {
+        await unmount(root, container)
+        actions.remove()
+        queryClient.clear()
+        api.defaults.adapter = previousAdapter
+      }
+    })
+  }
+
   for (const kind of ['task', 'tiered'] as const) {
     test(`${kind} settings discard imports superseded by edits, imports, examples, and resets`, async () => {
       const container = createContainer()
