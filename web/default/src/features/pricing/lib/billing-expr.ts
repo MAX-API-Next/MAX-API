@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import {
+  isSupportedNumericLiteral,
   splitTopLevelExpression,
   unwrapConditionParens,
 } from './expression-syntax'
@@ -278,20 +279,21 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
     const { body } = stripExprVersion(exprStr)
     const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    for (const branch of splitTopLevelExpression(body, ':')) {
+    for (const branch of splitTopLevelExpression(body, ':', true)) {
       const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
       const condStr = parts?.[1]?.trim() || ''
       const tierMatch = tierRe.exec(parts?.[2] || branch)
-      if (!tierMatch) continue
+      if (!tierMatch || (parts && !condStr)) return []
       const conditionGroups: TierCondition[][] = []
       let isUnconditional = false
-      for (const group of splitTopLevelExpression(
-        unwrapConditionParens(condStr),
-        '||'
-      )) {
+      const groups = condStr
+        ? splitTopLevelExpression(unwrapConditionParens(condStr), '||', true)
+        : []
+      for (const group of groups) {
         const atoms = splitTopLevelExpression(
           unwrapConditionParens(group),
-          '&&'
+          '&&',
+          true
         )
         if (
           atoms.length > 0 &&
@@ -309,7 +311,7 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
             /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
           )
           // A partial condition would advertise a different pricing contract.
-          if (!cm || !Number.isFinite(Number(cm[5]))) return []
+          if (!cm || !isSupportedNumericLiteral(cm[5])) return []
           groupConditions.push({
             var: (cm[1] || cm[2]) as TierCondition['var'],
             op: cm[4] as TierCondition['op'],

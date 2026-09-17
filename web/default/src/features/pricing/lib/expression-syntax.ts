@@ -19,7 +19,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 // Split only outside calls and quoted strings; both pricing parsers share this contract.
 export function splitTopLevelExpression(
   source: string,
-  operator: ':' | '&&' | '||'
+  operator: ':' | '&&' | '||',
+  preserveEmpty: boolean = false
 ): string[] {
   const parts: string[] = []
   let start = 0
@@ -47,7 +48,19 @@ export function splitTopLevelExpression(
     }
   }
   parts.push(source.slice(start).trim())
-  return parts.filter(Boolean)
+  return preserveEmpty ? parts : parts.filter(Boolean)
+}
+
+// Reject non-finite values, unsafe integer magnitudes, and nonzero underflow.
+export function isSupportedNumericLiteral(source: string): boolean {
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(source))
+    return false
+  const value = Number(source)
+  return (
+    Number.isFinite(value) &&
+    (!Number.isInteger(value) || Number.isSafeInteger(value)) &&
+    (value !== 0 || !/[1-9]/.test(source.split(/[eE]/)[0]))
+  )
 }
 
 // Remove enclosing parentheses without interpreting quoted punctuation.

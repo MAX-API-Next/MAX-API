@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState, type ReactElement } from 'react'
 import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -109,7 +109,7 @@ function ConditionRow({
     'day',
   ].includes(condition.var)
   const timeBounds = getTierConditionBounds(condition.var)
-  const handleVariableChange = (value: string | null) => {
+  const handleVariableChange = (value: string | null): void => {
     if (!value) return
     const nextVar = value as TierConditionInput['var']
     const bounds = getTierConditionBounds(nextVar)
@@ -253,7 +253,7 @@ function PriceField({
   value,
   onChange,
   onClear,
-}: PriceFieldProps) {
+}: PriceFieldProps): ReactElement {
   const inputId = useId()
   return (
     <div className='w-36 space-y-0.5'>
@@ -300,7 +300,7 @@ function VisualTierCard({
   const { t } = useTranslation()
   const cacheMode = getTierCacheMode(tier)
   const conditionGroups = getTierConditionGroups(tier)
-  const updateConditionGroups = (groups: TierConditionGroup[]) => {
+  const updateConditionGroups = (groups: TierConditionGroup[]): void => {
     onChange({
       ...tier,
       conditions: groups[0]?.conditions ?? [],
@@ -322,7 +322,7 @@ function VisualTierCard({
   const handleConditionRemove = (
     groupIndex: number,
     conditionIndex: number
-  ) => {
+  ): void => {
     const groups = conditionGroups.map((group) => ({
       conditions: [...group.conditions],
     }))
@@ -332,7 +332,7 @@ function VisualTierCard({
     updateConditionGroups(groups.filter((group) => group.conditions.length > 0))
   }
 
-  const handleConditionGroupRemove = (groupIndex: number) => {
+  const handleConditionGroupRemove = (groupIndex: number): void => {
     updateConditionGroups(
       conditionGroups.filter((_, currentIndex) => currentIndex !== groupIndex)
     )
@@ -341,7 +341,7 @@ function VisualTierCard({
   const handlePriceChange = (
     field: keyof VisualTier,
     value: number | undefined
-  ) => {
+  ): void => {
     onChange({ ...tier, [field]: value })
   }
 
@@ -393,7 +393,7 @@ function VisualTierCard({
           <Badge variant='outline'>
             {t('Tier')} {index + 1} / {total}
           </Badge>
-          {conditionGroups.length === 0 && (
+          {index === total - 1 && conditionGroups.length === 0 && (
             <Badge variant='secondary'>{t('Fallback tier')}</Badge>
           )}
           <Input
@@ -665,7 +665,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     onChange({ ...config, tiers })
   }
 
-  const handleAddCondition = (index: number, groupIndex = 0) => {
+  const handleAddCondition = (index: number, groupIndex: number = 0): void => {
     const tier = config.tiers[index]
     // Prefer `len` (input length) over `p`/`c` for tier conditions because
     // `p` is subject to auto-exclusion when sub-categories like `cr` are
@@ -715,7 +715,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     })
   }
 
-  const handleAddConditionGroup = (index: number) => {
+  const handleAddConditionGroup = (index: number): void => {
     const tier = config.tiers[index]
     const groups = getTierConditionGroups(tier)
     const nextGroups = groups.map((group) => ({

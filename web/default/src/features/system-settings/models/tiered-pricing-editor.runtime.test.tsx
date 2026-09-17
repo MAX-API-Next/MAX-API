@@ -671,6 +671,7 @@ describe('TieredPricingEditor runtime behavior', () => {
         null
       )
       await act(async () => undefined)
+      assert.equal(editor.getAllByText('Fallback tier').length, 1)
       assert.ok(
         billingChanges.some((expr) =>
           expr.startsWith('true ? tier("short", p * 1 + c * 2)')

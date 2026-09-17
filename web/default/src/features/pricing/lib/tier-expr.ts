@@ -19,6 +19,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { Parser, type Value } from 'expr-eval'
 import { BILLING_CACHE_VAR_MAP } from './billing-expr'
 import {
+  isSupportedNumericLiteral,
   splitTopLevelExpression,
   unwrapConditionParens,
 } from './expression-syntax'
@@ -38,12 +39,14 @@ export type TierConditionGroup = {
   conditions: TierConditionInput[]
 }
 
+type TierConditionBounds = { min: number; max: number; defaultValue: number }
+
 export const TIME_CONDITION_BOUNDS: Record<
   Extract<
     TierConditionInput['var'],
     'hour' | 'minute' | 'weekday' | 'month' | 'day'
   >,
-  { min: number; max: number; defaultValue: number }
+  TierConditionBounds
 > = {
   hour: { min: 0, max: 23, defaultValue: 9 },
   minute: { min: 0, max: 59, defaultValue: 0 },
@@ -52,7 +55,9 @@ export const TIME_CONDITION_BOUNDS: Record<
   day: { min: 1, max: 31, defaultValue: 1 },
 }
 
-export function getTierConditionBounds(variable: TierConditionInput['var']) {
+export function getTierConditionBounds(
+  variable: TierConditionInput['var']
+): TierConditionBounds | undefined {
   return TIME_CONDITION_BOUNDS[variable as keyof typeof TIME_CONDITION_BOUNDS]
 }
 
@@ -319,12 +324,9 @@ function canonicalizeExprForComparison(source: string): string {
         .slice(index)
         .match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/)
       if (match) {
-        const numeric = Number(match[0])
-        const safeNumber =
-          Number.isFinite(numeric) &&
-          (!Number.isInteger(numeric) || Number.isSafeInteger(numeric)) &&
-          (numeric !== 0 || !/[1-9]/.test(match[0].split(/[eE]/)[0]))
-        result += safeNumber ? String(numeric) : match[0]
+        result += isSupportedNumericLiteral(match[0])
+          ? String(Number(match[0]))
+          : match[0]
         index += match[0].length
         continue
       }

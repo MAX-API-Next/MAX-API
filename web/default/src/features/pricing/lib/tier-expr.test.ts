@@ -213,6 +213,45 @@ describe('evalExprLocally', () => {
 })
 
 describe('visual tier conditions', () => {
+  test('rejects structured displays with unsupported or missing branches', () => {
+    for (const expression of [
+      'len < 100 ? tier("peak", p * 2 + c * 4) : max(p, 1)',
+      'len < 100 ? max(p, 1) : tier("off", p * 1 + c * 2)',
+      'len < 100 ? tier("peak", p * 2 + c * 4) : : tier("off", p * 1 + c * 2)',
+      ': tier("off", p * 1 + c * 2)',
+      'tier("off", p * 1 + c * 2) :',
+    ]) {
+      assert.deepEqual(parseTiersFromExpr(expression), [], expression)
+    }
+  })
+
+  test('rejects unsafe integer and underflowed condition literals', () => {
+    for (const literal of [
+      '9007199254740993',
+      '-9007199254740993',
+      '1e-999',
+      '-1e-999',
+    ]) {
+      const expression = `len < ${literal} ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
+      assert.deepEqual(parseTiersFromExpr(expression), [], literal)
+      assert.equal(tryParseVisualConfig(expression), null, literal)
+    }
+    for (const literal of [
+      '0',
+      '-0',
+      '0e-999',
+      '1e3',
+      '1.25',
+      '9007199254740991',
+    ]) {
+      const expression = `len < ${literal} ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
+      assert.equal(
+        parseTiersFromExpr(expression)[0]?.conditions[0]?.value,
+        Number(literal)
+      )
+    }
+  })
+
   test('rejects incomplete structured displays for unsupported conditions', () => {
     for (const condition of [
       'len < 100 && c == 5',
@@ -222,6 +261,9 @@ describe('visual tier conditions', () => {
       '(len < 100) || (true) || (c == 5)',
       'len < 1e999',
       'len < 1+2',
+      'len < 100 &&',
+      '|| len < 100',
+      '(len < 100) || ()',
     ]) {
       assert.deepEqual(
         parseTiersFromExpr(

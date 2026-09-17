@@ -30,23 +30,31 @@ before(() => testEnv.setup())
 
 after(() => testEnv.teardown())
 
-test('shows the raw expression instead of partially parsed tier restrictions', async () => {
-  const expression =
-    'len < 100 && c == 5 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
-  const view = await testEnv.render(
-    <DynamicPricingBreakdown billingExpr={expression} />
-  )
-  try {
-    assert.match(
-      view.container.textContent || '',
-      /Unable to parse structured pricing/
+for (const expression of [
+  'len < 100 && c == 5 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',
+  'len < 100 ? tier("peak", p * 2 + c * 4) : max(p, 1)',
+  'len < 9007199254740993 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',
+  'len < 1e-999 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',
+]) {
+  test(`shows the complete raw expression when structured parsing is unsupported: ${expression}`, async () => {
+    const view = await testEnv.render(
+      <DynamicPricingBreakdown billingExpr={expression} />
     )
-    assert.equal(view.container.querySelector('code')?.textContent, expression)
-    assert.equal(view.container.querySelector('table'), null)
-  } finally {
-    await view.unmount()
-  }
-})
+    try {
+      assert.match(
+        view.container.textContent || '',
+        /Unable to parse structured pricing/
+      )
+      assert.equal(
+        view.container.querySelector('code')?.textContent,
+        expression
+      )
+      assert.equal(view.container.querySelector('table'), null)
+    } finally {
+      await view.unmount()
+    }
+  })
+}
 
 describe('ModelDetailsContent structured task pricing', () => {
   function createModel(inputVideoMaxQuantity?: number): PricingModel {
