@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,74 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type partialNativeStreamWriter struct {
+	*httptest.ResponseRecorder
+	short  bool
+	writes int
+}
+
+func (w *partialNativeStreamWriter) Write(data []byte) (int, error) {
+	w.writes++
+	if strings.Contains(string(data), "broken") {
+		n, _ := w.ResponseRecorder.Write(data[:len(data)/2])
+		if w.short {
+			return n, nil
+		}
+		return n, io.ErrClosedPipe
+	}
+	return w.ResponseRecorder.Write(data)
+}
+
+func TestNativeChatWriteFailureStaysLatchedThroughController(t *testing.T) {
+	oldFlag, oldTimes := common.EmptyCompletionRetryEnabled, common.RetryTimes
+	common.EmptyCompletionRetryEnabled, common.RetryTimes = true, 2
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled, common.RetryTimes = oldFlag, oldTimes })
+	for _, partial := range []bool{false, true} {
+		for _, short := range []bool{false, true} {
+			t.Run(fmt.Sprintf("partial=%t/short=%t", partial, short), func(t *testing.T) {
+				writer := &partialNativeStreamWriter{ResponseRecorder: httptest.NewRecorder(), short: short}
+				c, _ := gin.CreateTestContext(writer)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+				info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeChatCompletions, RelayFormat: types.RelayFormatOpenAI, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+				info.SetEstimatePromptTokens(38)
+				frames := ""
+				if partial {
+					frames = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
+				}
+				frames += "data: {\"choices\":[{\"delta\":{\"content\":\"broken\"}}],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":999,\"total_tokens\":1999}}\n\ndata: [DONE]\n\n"
+				usage, apiErr := openai.OaiStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(frames))})
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.False(t, shouldRetry(c, apiErr, 1))
+				if partial {
+					require.Equal(t, service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38), usage)
+				} else {
+					require.Nil(t, usage)
+				}
+				body, writes := writer.Body.String(), writer.writes
+				require.NotEmpty(t, body)
+				require.True(t, writeStartedStreamError(c, types.RelayFormatOpenAI, apiErr))
+				require.Equal(t, writes, writer.writes, "controller must not append to a partially written SSE frame")
+				require.Equal(t, body, writer.Body.String())
+				n, err := c.Writer.WriteString("late write")
+				require.Zero(t, n)
+				if short {
+					require.ErrorIs(t, err, io.ErrShortWrite)
+				} else {
+					require.ErrorIs(t, err, io.ErrClosedPipe)
+				}
+				require.Equal(t, writes, writer.writes)
+			})
+		}
+	}
+}
 
 func TestNativeChatErrorReachesControllerRetryPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)

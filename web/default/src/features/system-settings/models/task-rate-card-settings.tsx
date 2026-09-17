@@ -37,6 +37,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { CopyButton } from '@/components/copy-button'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { downloadJson } from './download-json'
 import { formatJsonForTextarea, normalizeJsonString } from './utils'
 
 const OPTION_KEY = 'task_billing_setting.rate_cards'
@@ -154,16 +155,6 @@ const MINIMAX_RATE_CARD_EXAMPLE = JSON.stringify(
   null,
   2
 )
-
-function downloadJson(filename: string, value: string): void {
-  const blob = new Blob([value], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
-}
 
 type TaskRateCardSettingsProps = {
   defaultValue: string

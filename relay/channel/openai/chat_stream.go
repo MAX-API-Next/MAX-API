@@ -147,7 +147,13 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	observer := newOpenAIStreamToolCallObserver(info)
 	writeObserver := &chatStreamWriteObserver{ResponseWriter: c.Writer}
 	c.Writer = writeObserver
-	defer func() { c.Writer = writeObserver.ResponseWriter }()
+	defer func() {
+		// Keep terminal write failures latched through the controller's error
+		// response; appending SSE events after a partial frame corrupts it.
+		if writeObserver.err == nil {
+			c.Writer = writeObserver.ResponseWriter
+		}
+	}()
 
 	send := func(data string) bool {
 		err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)

@@ -329,7 +329,7 @@ describe('optional zero prices in the actual editor', () => {
   }
 
   for (const kind of ['task', 'tiered'] as const) {
-    test(`${kind} settings discard imports superseded by edits, imports, examples, and resets`, async () => {
+    test(`${kind} settings discard imports superseded by edits, imports, examples, and resets`, async (): Promise<void> => {
       const container = createContainer()
       const actions = createContainer()
       const root = createRoot(container)
@@ -455,7 +455,7 @@ describe('optional zero prices in the actual editor', () => {
     })
   }
 
-  test('only enables tiered configuration downloads for valid current JSON', async () => {
+  test('only enables tiered configuration downloads for valid current JSON', async (): Promise<void> => {
     const container = createContainer()
     const actions = createContainer()
     const root = createRoot(container)
@@ -507,7 +507,7 @@ describe('optional zero prices in the actual editor', () => {
     'tier("base", p * 3e0 + c * 1.5e1 + cr * 0e0)',
     'tier("custom", max(p, 1) * 3 + c * 15)',
   ]) {
-    test(`preserves prices on mount and mode changes: ${source}`, async () => {
+    test(`preserves prices on mount and mode changes: ${source}`, async (): Promise<void> => {
       const container = createContainer()
       const root = createRoot(container)
       const supported = !source.includes('max(')
@@ -576,7 +576,7 @@ describe('optional zero prices in the actual editor', () => {
     })
   }
 
-  test('keeps zero prices when switching between visual and expression modes', async () => {
+  test('keeps zero prices when switching between visual and expression modes', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const source =
@@ -638,7 +638,7 @@ describe('optional zero prices in the actual editor', () => {
   })
 
   for (const variable of BILLING_EXTRA_VARS) {
-    test(`keeps ${variable.key}=0 on mount, unrelated edit and remount`, async () => {
+    test(`keeps ${variable.key}=0 on mount, unrelated edit and remount`, async (): Promise<void> => {
       const container = createContainer()
       const root = createRoot(container)
       let saved = `tier("base", p * 3 + c * 15 + ${variable.key} * 0)`
@@ -756,7 +756,7 @@ describe('optional zero prices in the actual editor', () => {
     })
   }
 
-  test('distinguishes blank, zero and positive prices and preserves them when adding a tier', async () => {
+  test('distinguishes blank, zero and positive prices and preserves them when adding a tier', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     let saved = 'tier("base", p * 3 + c * 15)'
@@ -877,7 +877,7 @@ after(() => {
 })
 
 describe('TieredPricingEditor runtime behavior', () => {
-  test('keeps an empty timezone editable and applies the default only to the expression', async () => {
+  test('keeps an empty timezone editable and applies the default only to the expression', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const source =
@@ -914,7 +914,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('clears OR groups when deleting the final sibling and can add a fresh tier', async () => {
+  test('clears OR groups when deleting the final sibling and can add a fresh tier', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const source =
@@ -956,7 +956,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('chooses a new condition using only the target OR group', async () => {
+  test('chooses a new condition using only the target OR group', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const source =
@@ -999,7 +999,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('mounts the visual editor without a runtime hook error', async () => {
+  test('mounts the visual editor without a runtime hook error', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
 
@@ -1024,7 +1024,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('allows adding a condition to the initial tier and exposes time fields', async () => {
+  test('allows adding a condition to the initial tier and exposes time fields', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     try {
@@ -1056,7 +1056,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('allows adding more than two conditions and condition groups', async () => {
+  test('allows adding more than two conditions and condition groups', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     try {
@@ -1095,7 +1095,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('removes a condition from a non-fallback tier', async () => {
+  test('removes a condition from a non-fallback tier', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const billingChanges: string[] = []
@@ -1152,7 +1152,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('removes a newly added fallback tier', async () => {
+  test('removes a newly added fallback tier', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
 
@@ -1198,7 +1198,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('never emits model A billing through model B callbacks', async () => {
+  test('never emits model A billing through model B callbacks', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const changes: Array<{ modelName: string; next: string }> = []
@@ -1232,7 +1232,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('does not carry model A billing state into model B', async () => {
+  test('does not carry model A billing state into model B', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const renderPanel = (editData: ModelRatioData) => (
@@ -1264,7 +1264,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('replaces expression state when the selected model snapshot changes', async () => {
+  test('replaces expression state when the selected model snapshot changes', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const updatedModelA: ModelRatioData = {
@@ -1294,7 +1294,7 @@ describe('TieredPricingEditor runtime behavior', () => {
     }
   })
 
-  test('updates expression prices when selecting another model row', async () => {
+  test('updates expression prices when selecting another model row', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)
     const modeMap = JSON.stringify({

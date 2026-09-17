@@ -44,6 +44,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { updateTieredBillingConfig } from '../api'
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
+import { downloadJson } from './download-json'
 import { formatJsonForTextarea } from './utils'
 
 type TieredBillingEntry = {
@@ -145,16 +146,6 @@ function validateUnifiedConfig(
   )
 
   return normalized
-}
-
-function downloadJson(filename: string, value: string): void {
-  const blob = new Blob([value], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 export function TieredBillingSettings(props: TieredBillingSettingsProps) {

@@ -54,6 +54,7 @@ func TestNativeChatStreamOverloadBeforeOutput(t *testing.T) {
 		for _, role := range []bool{false, true} {
 			t.Run(fmt.Sprintf("force=%t/role=%t", force, role), func(t *testing.T) {
 				c, recorder, info := newChatStreamTest(t)
+				originalWriter := c.Writer
 				info.ChannelSetting.ForceFormat = force
 				frames := []string{chatOverloadFrame, chatUsageFrame, "[DONE]"}
 				if role {
@@ -68,6 +69,7 @@ func TestNativeChatStreamOverloadBeforeOutput(t *testing.T) {
 				require.False(t, types.IsSkipRetryError(apiErr))
 				require.False(t, c.Writer.Written())
 				require.Empty(t, recorder.Body.String())
+				require.Same(t, originalWriter, c.Writer, "healthy writer must be restored for an uncommitted error")
 			})
 		}
 	}
@@ -106,12 +108,14 @@ func TestNativeChatStreamPreservesNonTextAndZeroUsageOutput(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, recorder, info := newChatStreamTest(t)
+			originalWriter := c.Writer
 			frame := `{"choices":[{"index":0,"delta":` + delta + `,"finish_reason":null}]}`
 			usage, apiErr := replayChatStream(c, info, chatRoleFrame, frame, chatUsageFrame, "[DONE]")
 			require.Nil(t, apiErr)
 			require.Equal(t, 38, usage.PromptTokens)
 			require.Contains(t, recorder.Body.String(), frame)
 			require.Equal(t, 0, emptyCompletionRetryCount(c))
+			require.Same(t, originalWriter, c.Writer, "successful streams restore the healthy writer")
 		})
 	}
 }
@@ -376,7 +380,13 @@ func TestNativeChatStreamWriteFailureDoesNotSettleFirstPayload(t *testing.T) {
 			require.NotNil(t, apiErr)
 			require.True(t, types.IsSkipRetryError(apiErr), "Gin committed the response headers")
 			require.Nil(t, usage)
-			require.Same(t, failed.Writer, c.Writer)
+			n, err := c.Writer.WriteString("late response")
+			require.Zero(t, n)
+			if short {
+				require.ErrorIs(t, err, io.ErrShortWrite)
+			} else {
+				require.ErrorIs(t, err, io.ErrClosedPipe)
+			}
 		})
 	}
 }
@@ -441,7 +451,14 @@ func TestNativeChatStreamPingWriteFailureIsTerminal(t *testing.T) {
 				require.Contains(t, info.StreamStatus.Summary(), string(relaycommon.StreamEndReasonPingFail))
 				require.Equal(t, 1, writer.pingWrites, "a failed ping must terminate without more underlying writes")
 				require.Positive(t, writer.writeDeadlines, "observer must preserve response-controller deadline traversal")
-				require.Same(t, writer, c.Writer)
+				n, err := c.Writer.WriteString(": PING\n\n")
+				require.Zero(t, n)
+				if short {
+					require.ErrorIs(t, err, io.ErrShortWrite)
+				} else {
+					require.ErrorIs(t, err, io.ErrClosedPipe)
+				}
+				require.Equal(t, 1, writer.pingWrites, "late writes must remain blocked after returning to the controller")
 				if partial {
 					expected := service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38)
 					require.NotNil(t, usage)
