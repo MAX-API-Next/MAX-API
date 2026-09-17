@@ -288,11 +288,21 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
         unwrapConditionParens(condStr),
         '||'
       )) {
-        const groupConditions: TierCondition[] = []
-        for (const cp of splitTopLevelExpression(
+        const atoms = splitTopLevelExpression(
           unwrapConditionParens(group),
           '&&'
-        )) {
+        )
+        if (
+          atoms.length > 0 &&
+          atoms.every((atom) => unwrapConditionParens(atom) === 'true')
+        ) {
+          // A true OR branch makes this tier unconditional, including when
+          // restrictive groups were already collected earlier in the loop.
+          conditionGroups.length = 0
+          break
+        }
+        const groupConditions: TierCondition[] = []
+        for (const cp of atoms) {
           if (cp.trim() === 'true') continue
           const cm = cp
             .trim()

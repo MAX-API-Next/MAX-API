@@ -214,6 +214,37 @@ describe('evalExprLocally', () => {
 
 describe('visual tier conditions', () => {
   for (const condition of [
+    'true || len < 100',
+    '(len < 100) || (len > 200) || ((true))',
+    '((len < 100) || (true && (true)))',
+  ]) {
+    test(`displays an unconditional OR tier without restrictions: ${condition}`, () => {
+      const source = `${condition} ? tier("always", p * 2 + c * 4) : tier("off", p * 1 + c * 2)`
+      const display = parseTiersFromExpr(source)
+      assert.equal(display.length, 2)
+      assert.deepEqual(display[0].conditions, [])
+      assert.equal(display[0].conditionGroups, undefined)
+      // Display simplification must not enable a lossy visual rewrite.
+      assert.equal(tryParseVisualConfig(source), null)
+      assert.deepEqual(evalExprLocally(source, 150, 2, emptyExtraTokens), {
+        cost: 308,
+        matchedTier: 'always',
+        error: null,
+      })
+    })
+  }
+
+  test('retains restrictions when true is an AND member rather than an OR branch', () => {
+    const tiers = parseTiersFromExpr(
+      '(true && len < 100) || (len > 200) ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    )
+    assert.deepEqual(tiers[0].conditionGroups, [
+      [{ var: 'len', op: '<', value: 100 }],
+      [{ var: 'len', op: '>', value: 200 }],
+    ])
+  })
+
+  for (const condition of [
     '((len < 100) || (len > 200))',
     '((((len < 100) || (len > 200))))',
     '((len < 100 && hour("Test/)||(:offset") >= 9) || (len > 200))',
