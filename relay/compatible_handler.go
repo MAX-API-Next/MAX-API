@@ -214,6 +214,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 
 	usage, maxApiErr := adaptor.DoResponse(c, httpResp, info)
 	if maxApiErr != nil {
+		// A native Chat stream can fail after delivering billable output.
+		// Its handler returns partial usage only with SkipRetry: preserve the
+		// existing settlement path rather than refunding a consumed response.
+		if partial, ok := usage.(*dto.Usage); ok && partial != nil && types.IsSkipRetryError(maxApiErr) &&
+			info.IsStream && info.RelayMode == relayconstant.RelayModeChatCompletions && info.RelayFormat == types.RelayFormatOpenAI {
+			service.PostPartialConsumeQuota(c, info, partial)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(maxApiErr, statusCodeMappingStr)
 		return maxApiErr

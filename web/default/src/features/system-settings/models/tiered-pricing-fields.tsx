@@ -49,12 +49,14 @@ type DraftNumberInputProps = Omit<
 > & {
   value: number | string
   onValueChange: (next: number) => void
+  onEmpty?: () => void
   selectZeroOnFocus?: boolean
 }
 
 export function DraftNumberInput({
   value,
   onValueChange,
+  onEmpty,
   selectZeroOnFocus = true,
   onBlur,
   onFocus,
@@ -75,7 +77,8 @@ export function DraftNumberInput({
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextDraft = event.target.value
     setDraft(nextDraft)
-    onValueChange(parseNumberDraft(nextDraft))
+    if (nextDraft.trim() === '' && onEmpty) onEmpty()
+    else onValueChange(parseNumberDraft(nextDraft))
   }
 
   const handleFocus = (event: FocusEvent<HTMLInputElement>) => {
@@ -95,6 +98,13 @@ export function DraftNumberInput({
   }
 
   const handleBlur = (event: FocusEvent<HTMLInputElement>) => {
+    if (event.currentTarget.value.trim() === '' && onEmpty) {
+      setFocused(false)
+      setDraft('')
+      onEmpty()
+      onBlur?.(event)
+      return
+    }
     const normalized = parseNumberDraft(event.currentTarget.value)
     setFocused(false)
     setDraft(String(normalized))

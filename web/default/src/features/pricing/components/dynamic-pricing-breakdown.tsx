@@ -103,12 +103,28 @@ function formatConditionSummary(
 ): string {
   return conditions
     .map((c) => {
+      if (['hour', 'minute', 'weekday', 'month', 'day'].includes(c.var)) {
+        const timeLabel = TIME_FUNC_LABELS[c.var] || c.var
+        return `${t(timeLabel)} ${OP_LABELS[c.op] || c.op} ${c.value} (${c.timezone || 'UTC'})`
+      }
       const varLabel = t(VAR_LABELS[c.var] || c.var)
       const hint = formatTokenHint(c.value)
       return `${varLabel} ${OP_LABELS[c.op] || c.op} ${hint || c.value}`
     })
     .filter(Boolean)
     .join(' && ')
+}
+
+function formatTierConditionSummary(
+  tier: Pick<ParsedTier, 'conditions' | 'conditionGroups'>,
+  t: (key: string) => string
+): string {
+  if (tier.conditionGroups && tier.conditionGroups.length > 1) {
+    return tier.conditionGroups
+      .map((group) => `(${formatConditionSummary(group, t)})`)
+      .join(' || ')
+  }
+  return formatConditionSummary(tier.conditions, t)
 }
 
 function describeCondition(
@@ -250,7 +266,7 @@ export function DynamicPricingBreakdown({
           </div>
           <div className='space-y-1.5 sm:hidden'>
             {tiers.map((tier, i) => {
-              const condSummary = formatConditionSummary(tier.conditions, t)
+              const condSummary = formatTierConditionSummary(tier, t)
               const isMatched =
                 matchedTierLabel != null &&
                 matchedTierLabel !== '' &&
@@ -326,7 +342,7 @@ export function DynamicPricingBreakdown({
               </TableHeader>
               <TableBody>
                 {tiers.map((tier, i) => {
-                  const condSummary = formatConditionSummary(tier.conditions, t)
+                  const condSummary = formatTierConditionSummary(tier, t)
                   const isMatched =
                     normalizedMatchedTierLabel !== '' &&
                     normalizeTierLabel(tier.label) ===

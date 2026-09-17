@@ -16,20 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { fireEvent, within } from '@testing-library/react'
+import { act, useState } from 'react'
+import type { Root } from 'react-dom/client'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
-import {
-  ModelPricingEditorPanel,
-  type ModelRatioData,
-} from './model-pricing-sheet'
-import { ModelRatioVisualEditor } from './model-ratio-visual-editor'
-import { TieredPricingEditor } from './tiered-pricing-editor'
+import { BILLING_EXTRA_VARS } from '@/features/pricing/lib/billing-expr'
+import type { ModelRatioData } from './model-pricing-sheet'
+
+// Load DOM-dependent modules after installing JSDOM so Base UI selects use
+// their browser lifecycle, including option registration and keyboard input.
+let createRoot: typeof import('react-dom/client').createRoot
+let fireEvent: typeof import('@testing-library/react').fireEvent
+let within: typeof import('@testing-library/react').within
+let ModelPricingEditorPanel: typeof import('./model-pricing-sheet').ModelPricingEditorPanel
+let ModelRatioVisualEditor: typeof import('./model-ratio-visual-editor').ModelRatioVisualEditor
+let TieredPricingEditor: typeof import('./tiered-pricing-editor').TieredPricingEditor
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -122,6 +126,244 @@ const modelB: ModelRatioData = {
   requestRuleExpr: '',
 }
 
+describe('optional zero prices in the actual editor', () => {
+  for (const source of [
+    'tier("base", p * 3.0 + c * 15.0 + cr * 0.0)',
+    'tier("base", p * 3e0 + c * 1.5e1 + cr * 0e0)',
+    'tier("custom", max(p, 1) * 3 + c * 15)',
+  ]) {
+    test(`preserves prices on mount and mode changes: ${source}`, async () => {
+      const container = createContainer()
+      const root = createRoot(container)
+      const supported = !source.includes('max(')
+      const expected = supported
+        ? 'tier("base", p * 3 + c * 15 + cr * 0)'
+        : source
+      let saved = source
+      function ControlledEditor() {
+        const [expression, setExpression] = useState(source)
+        return (
+          <TieredPricingEditor
+            billingExpr={expression}
+            requestRuleExpr=''
+            onBillingExprChange={(next) => {
+              saved = next
+              setExpression(next)
+            }}
+            onRequestRuleExprChange={() => undefined}
+          />
+        )
+      }
+      const selectMode = async (name: string) => {
+        await act(async () => {
+          fireEvent.keyDown(within(container).getAllByRole('combobox')[0], {
+            key: 'ArrowDown',
+          })
+        })
+        const option = await within(dom.window.document.body).findByRole(
+          'option',
+          { name }
+        )
+        await act(async () => {
+          fireEvent.pointerDown(option, { pointerType: 'mouse' })
+          fireEvent.click(option)
+        })
+      }
+      try {
+        await act(async () =>
+          root.render(
+            <I18nextProvider i18n={i18n}>
+              <ControlledEditor />
+            </I18nextProvider>
+          )
+        )
+        assert.equal(saved, expected)
+        if (supported) await selectMode('Expression editor')
+        await selectMode('Visual editor')
+        assert.equal(saved, expected)
+        if (supported) {
+          assert.equal(getInputValueByLabel(container, 'Input price'), '3')
+          assert.equal(getInputValueByLabel(container, 'Output price'), '15')
+          assert.equal(getInputValueByLabel(container, 'Cache read price'), '0')
+        } else {
+          assert.equal(
+            (
+              within(container).getByPlaceholderText(
+                'tier("base", p * 3 + c * 15)'
+              ) as HTMLTextAreaElement
+            ).value,
+            source
+          )
+        }
+      } finally {
+        await unmount(root, container)
+      }
+    })
+  }
+
+  test('keeps zero prices when switching between visual and expression modes', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      'tier("base", p * 3 + c * 15 + cr * 0 + cc1h * 0 + img_o * 0)'
+    const changes: string[] = []
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => changes.push(next)}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+      const editor = within(container)
+      const page = within(dom.window.document.body)
+      await act(async () => {
+        fireEvent.keyDown(editor.getAllByRole('combobox')[0], {
+          key: 'ArrowDown',
+        })
+      })
+      await act(async () => {
+        const option = await page.findByRole('option', {
+          name: 'Expression editor',
+        })
+        fireEvent.pointerDown(option, { pointerType: 'mouse' })
+        fireEvent.click(option)
+      })
+      const expression = editor.getByPlaceholderText(
+        'tier("base", p * 3 + c * 15)'
+      ) as HTMLTextAreaElement
+      assert.equal(expression.value, source)
+      await act(async () => {
+        fireEvent.keyDown(editor.getAllByRole('combobox')[0], {
+          key: 'ArrowDown',
+        })
+      })
+      await act(async () => {
+        const option = await page.findByRole('option', {
+          name: 'Visual editor',
+        })
+        fireEvent.pointerDown(option, { pointerType: 'mouse' })
+        fireEvent.click(option)
+      })
+      assert.equal(getInputValueByLabel(container, 'Cache read price'), '0')
+      assert.equal(
+        getInputValueByLabel(container, 'Cache create (1h) price'),
+        '0'
+      )
+      assert.equal(getInputValueByLabel(container, 'Image output price'), '0')
+      assert.ok(changes.every((value) => value === source))
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  for (const variable of BILLING_EXTRA_VARS) {
+    test(`keeps ${variable.key}=0 on mount, unrelated edit and remount`, async () => {
+      const container = createContainer()
+      const root = createRoot(container)
+      let saved = `tier("base", p * 3 + c * 15 + ${variable.key} * 0)`
+      const renderEditor = (key: string) => (
+        <I18nextProvider i18n={i18n}>
+          <TieredPricingEditor
+            key={key}
+            billingExpr={saved}
+            requestRuleExpr=''
+            onBillingExprChange={(next) => {
+              saved = next
+            }}
+            onRequestRuleExprChange={() => undefined}
+          />
+        </I18nextProvider>
+      )
+      try {
+        await act(async () => root.render(renderEditor('first')))
+        assert.ok(saved.includes(`${variable.key} * 0`))
+        assert.equal(getInputValueByLabel(container, variable.label), '0')
+        const input = within(container).getByLabelText(
+          'Input price'
+        ) as HTMLInputElement
+        await act(async () => {
+          fireEvent.blur(input, { target: { value: '4' } })
+        })
+        assert.ok(saved.includes('p * 4'))
+        assert.ok(saved.includes(`${variable.key} * 0`))
+        await act(async () => root.render(renderEditor('remount')))
+        assert.equal(getInputValueByLabel(container, variable.label), '0')
+        assert.ok(saved.includes(`${variable.key} * 0`))
+      } finally {
+        await unmount(root, container)
+      }
+    })
+  }
+
+  test('distinguishes blank, zero and positive prices and preserves them when adding a tier', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    let saved = 'tier("base", p * 3 + c * 15)'
+    function ControlledEditor() {
+      const [expression, setExpression] = useState(saved)
+      return (
+        <TieredPricingEditor
+          billingExpr={expression}
+          requestRuleExpr=''
+          onBillingExprChange={(next) => {
+            saved = next
+            setExpression(next)
+          }}
+          onRequestRuleExprChange={() => undefined}
+        />
+      )
+    }
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <ControlledEditor />
+          </I18nextProvider>
+        )
+      )
+      const editor = within(container)
+      const cache = editor.getByLabelText(
+        'Cache read price'
+      ) as HTMLInputElement
+      assert.equal(cache.value, '')
+      await act(async () => {
+        fireEvent.blur(cache, { target: { value: '0' } })
+      })
+      assert.ok(saved.includes('cr * 0'))
+      await act(async () => {
+        fireEvent.blur(cache, { target: { value: '0.25' } })
+      })
+      assert.ok(saved.includes('cr * 0.25'))
+      await act(async () => {
+        fireEvent.blur(cache, { target: { value: '' } })
+      })
+      assert.equal(cache.value, '')
+      assert.ok(!saved.includes('cr *'))
+      await act(async () => {
+        fireEvent.blur(cache, { target: { value: '0' } })
+      })
+      await act(async () => {
+        fireEvent.click(editor.getByRole('button', { name: 'Add tier' }))
+      })
+      assert.equal((saved.match(/cr \* 0/g) || []).length, 2)
+      for (const name of ['cc', 'cc1h', 'img', 'img_o', 'ai', 'ao']) {
+        assert.ok(
+          !saved.includes(`${name} *`),
+          `unexpected default price ${name}`
+        )
+      }
+    } finally {
+      await unmount(root, container)
+    }
+  })
+})
+
 before(async () => {
   await i18n.init({
     lng: 'en',
@@ -163,6 +405,11 @@ before(async () => {
   setGlobal('ResizeObserver', ResizeObserverStub)
   setGlobal('localStorage', window.localStorage)
   setGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  ;({ createRoot } = await import('react-dom/client'))
+  ;({ fireEvent, within } = await import('@testing-library/react/pure'))
+  ;({ ModelPricingEditorPanel } = await import('./model-pricing-sheet'))
+  ;({ ModelRatioVisualEditor } = await import('./model-ratio-visual-editor'))
+  ;({ TieredPricingEditor } = await import('./tiered-pricing-editor'))
 })
 
 after(() => {
@@ -191,6 +438,119 @@ describe('TieredPricingEditor runtime behavior', () => {
       })
 
       assert.match(container.textContent || '', /Tier 1 \/ 1/)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('allows adding a condition to the initial tier and exposes time fields', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              modelName='new-model'
+              billingExpr='tier("base", p * 1 + c * 2)'
+              requestRuleExpr=''
+              onBillingExprChange={() => undefined}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+      const editor = within(container)
+      const addCondition = editor.getAllByRole('button', {
+        name: 'Add condition',
+      })[0]
+      assert.equal((addCondition as HTMLButtonElement).disabled, false)
+      fireEvent.click(addCondition)
+      assert.ok(editor.getByLabelText('Condition Value'))
+      assert.match(container.textContent || '', /Full input length/)
+
+      assert.ok(editor.getAllByRole('button', { name: 'Add condition' }).length)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('allows adding more than two conditions and condition groups', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              modelName='conditions-model'
+              billingExpr='tier("base", p * 1 + c * 2)'
+              requestRuleExpr=''
+              onBillingExprChange={() => undefined}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+      const editor = within(container)
+      const addCondition = editor.getAllByRole('button', {
+        name: 'Add condition',
+      })[0]
+      fireEvent.click(addCondition)
+      fireEvent.click(addCondition)
+      fireEvent.click(addCondition)
+      assert.equal(editor.getAllByLabelText('Condition Value').length, 3)
+
+      fireEvent.click(
+        editor.getByRole('button', { name: 'Add condition group' })
+      )
+      assert.equal(editor.getAllByText(/Condition group/).length, 2)
+      fireEvent.click(
+        editor.getAllByRole('button', { name: 'Remove condition group' })[1]
+      )
+      assert.equal(editor.getAllByText(/Condition group/).length, 1)
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('removes a condition from a non-fallback tier', async () => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const billingChanges: string[] = []
+    try {
+      await act(async () => {
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              modelName='multi-tier-model'
+              billingExpr={
+                'len < 200000 ? tier("short", p * 1 + c * 2) : tier("long", p * 3 + c * 4)'
+              }
+              requestRuleExpr=''
+              onBillingExprChange={(next) => billingChanges.push(next)}
+              onRequestRuleExprChange={() => undefined}
+            />
+          </I18nextProvider>
+        )
+      })
+
+      const editor = within(container)
+      const removeButtons = editor.getAllByRole('button', {
+        name: 'Remove condition',
+      })
+      assert.equal(removeButtons.length, 1)
+      fireEvent.click(removeButtons[0])
+      assert.equal(
+        editor.queryByRole('button', { name: 'Remove condition' }),
+        null
+      )
+      await act(async () => undefined)
+      assert.ok(
+        billingChanges.some((expr) =>
+          expr.startsWith('true ? tier("short", p * 1 + c * 2)')
+        )
+      )
     } finally {
       await unmount(root, container)
     }

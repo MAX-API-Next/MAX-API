@@ -229,14 +229,16 @@ export type RequestRuleGroup = {
 }
 
 export type TierCondition = {
-  var: 'p' | 'c' | 'len'
+  var: 'p' | 'c' | 'len' | 'hour' | 'minute' | 'weekday' | 'month' | 'day'
   op: '<' | '<=' | '>' | '>='
   value: number
+  timezone?: string
 }
 
 export type ParsedTier = {
   label: string
   conditions: TierCondition[]
+  conditionGroups?: TierCondition[][]
   [field: string]: unknown
 }
 
@@ -269,33 +271,100 @@ export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
   if (!exprStr) return []
   try {
     const { body } = stripExprVersion(exprStr)
-    const condGroup =
-      `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)` +
-      `(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`
-    const tierRe = new RegExp(
-      `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`,
-      'g'
-    )
+    const splitTopLevelColon = (source: string): string[] => {
+      const parts: string[] = []
+      let start = 0
+      let depth = 0
+      let quote = ''
+      let escaped = false
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index]
+        if (quote) {
+          if (escaped) escaped = false
+          else if (char === '\\') escaped = true
+          else if (char === quote) quote = ''
+          continue
+        }
+        if (char === '"' || char === "'") {
+          quote = char
+          continue
+        }
+        if (char === '(') depth += 1
+        else if (char === ')') depth = Math.max(0, depth - 1)
+        else if (char === ':' && depth === 0) {
+          parts.push(source.slice(start, index).trim())
+          start = index + 1
+        }
+      }
+      parts.push(source.slice(start).trim())
+      return parts.filter(Boolean)
+    }
+    const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    let m
-    while ((m = tierRe.exec(body)) !== null) {
-      const condStr = m[1] || ''
-      const conditions: TierCondition[] = []
-      if (condStr) {
-        for (const cp of condStr.split(/\s*&&\s*/)) {
-          const cm = cp.trim().match(/^(p|c|len)\s*(<|<=|>|>=)\s*([\d.eE+]+)$/)
+    for (const branch of splitTopLevelColon(body)) {
+      const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
+      const condStr = parts?.[1]?.trim() || ''
+      const tierMatch = tierRe.exec(parts?.[2] || branch)
+      if (!tierMatch) continue
+      const conditionGroups: TierCondition[][] = []
+      const splitLogical = (source: string, operator: '&&' | '||') => {
+        const parts: string[] = []
+        let start = 0
+        let depth = 0
+        for (let index = 0; index < source.length; index += 1) {
+          if (source[index] === '(') depth += 1
+          else if (source[index] === ')') depth = Math.max(0, depth - 1)
+          if (depth === 0 && source.startsWith(operator, index)) {
+            parts.push(source.slice(start, index).trim())
+            start = index + operator.length
+            index += operator.length - 1
+          }
+        }
+        parts.push(source.slice(start).trim())
+        return parts.filter(Boolean)
+      }
+      const unwrap = (source: string) => {
+        let value = source.trim()
+        while (value.startsWith('(') && value.endsWith(')')) {
+          let depth = 0
+          let closesAtEnd = false
+          for (let index = 0; index < value.length; index += 1) {
+            if (value[index] === '(') depth += 1
+            else if (value[index] === ')') depth -= 1
+            if (depth === 0) {
+              closesAtEnd = index === value.length - 1
+              break
+            }
+          }
+          if (!closesAtEnd) break
+          value = value.slice(1, -1).trim()
+        }
+        return value
+      }
+      for (const group of splitLogical(condStr, '||')) {
+        const groupConditions: TierCondition[] = []
+        for (const cp of splitLogical(unwrap(group), '&&')) {
+          if (cp.trim() === 'true') continue
+          const cm = cp
+            .trim()
+            .match(
+              /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("([^"\\]+)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+            )
           if (cm) {
-            conditions.push({
-              var: cm[1] as TierCondition['var'],
-              op: cm[2] as TierCondition['op'],
-              value: Number(cm[3]),
+            groupConditions.push({
+              var: (cm[1] || cm[2]) as TierCondition['var'],
+              op: cm[4] as TierCondition['op'],
+              value: Number(cm[5]),
+              ...(cm[2] ? { timezone: cm[3] } : {}),
             })
           }
         }
+        if (groupConditions.length > 0) conditionGroups.push(groupConditions)
       }
-      const tier = parseTierBody(m[3]) as ParsedTier
-      tier.label = m[2]
-      tier.conditions = conditions
+      const tier = parseTierBody(tierMatch[2]) as ParsedTier
+      tier.label = tierMatch[1]
+      tier.conditions = conditionGroups.flat()
+      if (conditionGroups.length > 1) tier.conditionGroups = conditionGroups
       tiers.push(tier)
     }
     return tiers

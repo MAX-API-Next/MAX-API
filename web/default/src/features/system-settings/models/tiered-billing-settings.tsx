@@ -16,13 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Braces, Check, WandSparkles } from 'lucide-react'
+import {
+  Braces,
+  Check,
+  Download,
+  Search,
+  Upload,
+  WandSparkles,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { updateTieredBillingConfig } from '../api'
 import { SettingsForm } from '../components/settings-form-layout'
@@ -108,11 +123,23 @@ function validateUnifiedConfig(value: string) {
   return normalized
 }
 
+function downloadJson(filename: string, value: string) {
+  const blob = new Blob([value], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
 export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const initialText = useMemo(() => {
     return JSON.stringify(
@@ -123,6 +150,8 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
   }, [props.billingExpr, props.billingMode])
 
   useEffect(() => {
+    // The editor must reset when the server-provided model selection changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setText(initialText)
     setError('')
   }, [initialText])
@@ -141,6 +170,7 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
       toast.error(err.message || t('Failed to save tiered billing config'))
     },
   })
+  const { mutateAsync } = mutation
 
   const handleFormat = useCallback(() => {
     try {
@@ -168,8 +198,8 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
       return
     }
 
-    await mutation.mutateAsync({ config })
-  }, [mutation, t, text])
+    await mutateAsync({ config })
+  }, [mutateAsync, t, text])
 
   const enabledCount = useMemo(() => {
     try {
@@ -179,6 +209,44 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
       return 0
     }
   }, [text])
+
+  const configuredModels = useMemo(() => {
+    try {
+      return Object.keys(validateUnifiedConfig(text || '{}'))
+    } catch {
+      return []
+    }
+  }, [text])
+
+  const filteredModels = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return configuredModels
+    return configuredModels.filter((model) =>
+      model.toLowerCase().includes(query)
+    )
+  }, [configuredModels, search])
+
+  const isDirty = text !== initialText
+
+  const handleImport = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      event.target.value = ''
+      if (!file) return
+
+      try {
+        const imported = formatJsonForTextarea(await file.text())
+        validateUnifiedConfig(imported || '{}')
+        setText(imported || '{}')
+        setError('')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : t('Invalid JSON')
+        setError(message)
+        toast.error(message)
+      }
+    },
+    [t]
+  )
 
   return (
     <SettingsForm>
@@ -200,11 +268,37 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
         >
           {mutation.isPending ? t('Saving...') : t('Save tiered billing')}
         </Button>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={() => downloadJson('tiered-billing.json', text || '{}')}
+          disabled={Boolean(error)}
+        >
+          <Download className='mr-2 h-4 w-4' />
+          {t('Download')}
+        </Button>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Upload className='mr-2 h-4 w-4' />
+          {t('Upload file')}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type='file'
+          accept='application/json,.json'
+          className='hidden'
+          onChange={handleImport}
+        />
       </SettingsPageActionsPortal>
 
       <div className='space-y-4'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
-          <div className='space-y-1'>
+          <div className='min-w-0 space-y-1'>
             <h3 className='text-base font-medium'>
               {t('Tiered billing JSON')}
             </h3>
@@ -220,6 +314,24 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
           </Button>
         </div>
 
+        <div className='flex flex-wrap items-center gap-2'>
+          <div className='relative min-w-56 flex-1 sm:max-w-sm'>
+            <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t('Search model name...')}
+              aria-label={t('Search model name...')}
+              className='pl-9'
+            />
+          </div>
+          {isDirty && (
+            <span className='text-muted-foreground text-xs'>
+              {t('Unsaved changes')}
+            </span>
+          )}
+        </div>
+
         <Alert>
           <Check className='h-4 w-4' />
           <AlertDescription>
@@ -233,6 +345,19 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
           <Alert variant='destructive'>
             <AlertDescription>{error}</AlertDescription>
           </Alert>
+        )}
+
+        {search.trim() && filteredModels.length > 0 && (
+          <div className='flex flex-wrap gap-1.5' aria-label={t('Search')}>
+            {filteredModels.map((model) => (
+              <span
+                key={model}
+                className='bg-muted text-muted-foreground rounded-md px-2 py-1 font-mono text-xs'
+              >
+                {model}
+              </span>
+            ))}
+          </div>
         )}
 
         <Textarea

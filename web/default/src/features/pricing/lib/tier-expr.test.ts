@@ -18,7 +18,15 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { evalExprLocally, type ExtraTokenValues } from './tier-expr'
+import { BILLING_CACHE_VAR_MAP, parseTiersFromExpr } from './billing-expr'
+import {
+  evalExprLocally,
+  generateExprFromVisualConfig,
+  normalizeVisualTier,
+  createDefaultVisualConfig,
+  tryParseVisualConfig,
+  type ExtraTokenValues,
+} from './tier-expr'
 
 const emptyExtraTokens: ExtraTokenValues = {
   cacheReadTokens: 0,
@@ -29,6 +37,100 @@ const emptyExtraTokens: ExtraTokenValues = {
   audioInputTokens: 0,
   audioOutputTokens: 0,
 }
+
+describe('visual optional price presence', () => {
+  for (const { field, exprVar } of BILLING_CACHE_VAR_MAP) {
+    test(`preserves absent, zero and positive ${exprVar} prices through normalization and round trips`, () => {
+      const absent = normalizeVisualTier({
+        input_unit_cost: 3,
+        output_unit_cost: 15,
+      })
+      assert.equal(absent[field], undefined)
+      assert.doesNotMatch(
+        generateExprFromVisualConfig({ tiers: [absent] }),
+        new RegExp(`\\b${exprVar} \\*`)
+      )
+      for (const price of [0, 0.25]) {
+        const source = `tier("base", p * 3 + c * 15 + ${exprVar} * ${price})`
+        const parsed = tryParseVisualConfig(source)
+        assert.ok(parsed)
+        assert.equal(parsed.tiers[0][field], price)
+        assert.equal(generateExprFromVisualConfig(parsed), source)
+        assert.deepEqual(
+          tryParseVisualConfig(generateExprFromVisualConfig(parsed)),
+          parsed
+        )
+        const multi = `len < 100 ? ${source} : tier("other", p * 6 + c * 30)`
+        const multiParsed = tryParseVisualConfig(multi)
+        assert.ok(multiParsed)
+        assert.equal(multiParsed.tiers[1][field], undefined)
+        assert.equal(generateExprFromVisualConfig(multiParsed), multi)
+      }
+    })
+  }
+
+  test('does not create zero-priced subcategories in default tiers', () => {
+    assert.equal(
+      generateExprFromVisualConfig(createDefaultVisualConfig()),
+      'tier("base", p * 0 + c * 0)'
+    )
+  })
+
+  test('accepts equivalent numeric spellings when switching to visual mode', () => {
+    for (const source of [
+      'tier("base", p * 3.0 + c * 15.0)',
+      'tier("base", p * 3e0 + c * 1.5e1)',
+    ]) {
+      const parsed = tryParseVisualConfig(source)
+      assert.ok(parsed)
+      assert.equal(parsed.tiers[0].input_unit_cost, 3)
+      assert.equal(parsed.tiers[0].output_unit_cost, 15)
+    }
+  })
+
+  test('preserves numeric spellings and zero presence in every optional category', () => {
+    for (const { field, exprVar } of BILLING_CACHE_VAR_MAP) {
+      for (const zero of ['0.0', '0e0']) {
+        const source = `tier("base 3.0", p * 3.0 + c * 1.5e1 + ${exprVar} * ${zero})`
+        for (const expression of [
+          source,
+          `len < 1e2 ? ${source} : tier("other", p * .5 + c * 2.0)`,
+        ]) {
+          const parsed = tryParseVisualConfig(expression)
+          assert.ok(parsed, expression)
+          assert.equal(parsed.tiers[0].label, 'base 3.0')
+          assert.equal(parsed.tiers[0][field], 0)
+          assert.equal(parsed.tiers[0].input_unit_cost, 3)
+          assert.equal(parsed.tiers[0].output_unit_cost, 15)
+          assert.deepEqual(
+            tryParseVisualConfig(generateExprFromVisualConfig(parsed)),
+            parsed
+          )
+        }
+      }
+    }
+  })
+
+  test('still rejects lossy or malformed visual conversions', () => {
+    for (const source of [
+      'tier("base", p * 1+2 + c * 15)',
+      'tier("base", p * 1e999 + c * 15)',
+      'tier("base", p * 1e-999 + c * 15)',
+      'len < 9007199254740993 ? tier("base", p * 3 + c * 15) : tier("other", p * 6 + c * 30)',
+      'tier("base", p * 3 + c * 15 + max(cr, 1))',
+      'hour("Asia/Shanghai") > 99 ? tier("base", p * 3 + c * 15) : tier("other", p * 6 + c * 30)',
+      'len < 100 && c == 5 ? tier("base", p * 3 + c * 15) : tier("other", p * 6 + c * 30)',
+    ])
+      assert.equal(tryParseVisualConfig(source), null, source)
+  })
+
+  test('keeps every zero-priced subcategory referenced in the billing contract', () => {
+    const source = `tier("base", p * 3 + c * 15${BILLING_CACHE_VAR_MAP.map(({ exprVar }) => ` + ${exprVar} * 0`).join('')})`
+    const parsed = tryParseVisualConfig(source)
+    assert.ok(parsed)
+    assert.equal(generateExprFromVisualConfig(parsed), source)
+  })
+})
 
 describe('evalExprLocally', () => {
   test('evaluates backend-style ternaries and logical operators', () => {
@@ -104,5 +206,149 @@ describe('evalExprLocally', () => {
     assert.equal(result.cost, 0)
     assert.equal(result.matchedTier, '')
     assert.ok(result.error)
+  })
+})
+
+describe('visual tier conditions', () => {
+  test('supports time conditions without requiring a second tier', () => {
+    const expr = generateExprFromVisualConfig({
+      tiers: [
+        {
+          label: 'business-hours',
+          conditions: [
+            { var: 'hour', timezone: 'Asia/Shanghai', op: '>=', value: 9 },
+          ],
+          input_unit_cost: 1,
+          output_unit_cost: 2,
+          cache_mode: 'generic',
+        },
+      ],
+    })
+    assert.match(expr, /hour\("Asia\/Shanghai"\) >= 9/)
+    assert.match(expr, /: tier\("business-hours_fallback", p \* 1 \+ c \* 2\)$/)
+    const parsed = tryParseVisualConfig(expr)
+    assert.equal(parsed?.tiers[0].conditions[0].var, 'hour')
+    assert.equal(parsed?.tiers[0].conditions[0].timezone, 'Asia/Shanghai')
+  })
+
+  test('keeps time conditions visible in pricing breakdown parsing', () => {
+    const tiers = parseTiersFromExpr(
+      'hour("Asia/Shanghai") >= 9 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    )
+    assert.equal(tiers[0]?.conditions[0]?.var, 'hour')
+    assert.equal(tiers[0]?.conditions[0]?.timezone, 'Asia/Shanghai')
+  })
+
+  test('parses OR condition groups for pricing breakdowns', () => {
+    const tiers = parseTiersFromExpr(
+      '(len < 200000 && hour("Asia/Shanghai") >= 9) || (weekday("Asia/Shanghai") <= 5 && month("Asia/Shanghai") >= 1) ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    )
+    assert.equal(tiers[0]?.conditions.length, 4)
+    assert.equal(tiers[0]?.conditions[1]?.var, 'hour')
+    assert.equal(tiers[0]?.conditions[3]?.var, 'month')
+  })
+
+  test('round-trips an explicit unconditional non-final tier', () => {
+    const expr =
+      'true ? tier("primary", p * 2 + c * 4) : tier("fallback", p * 1 + c * 2)'
+    const parsed = tryParseVisualConfig(expr)
+    assert.ok(parsed)
+    assert.equal(parsed.tiers.length, 2)
+    assert.equal(parsed.tiers[0].conditions.length, 0)
+    assert.equal(generateExprFromVisualConfig(parsed), expr)
+    assert.deepEqual(evalExprLocally(expr, 10, 2, emptyExtraTokens), {
+      cost: 28,
+      matchedTier: 'primary',
+      error: null,
+    })
+  })
+
+  test('normalizes time condition values to their calendar ranges', () => {
+    const tier = normalizeVisualTier({
+      conditions: [
+        { var: 'month', op: '<=', value: 200000 },
+        { var: 'weekday', op: '>=', value: -3 },
+      ],
+    })
+    assert.equal(tier.conditions[0].value, 12)
+    assert.equal(tier.conditions[1].value, 0)
+  })
+
+  test('generates more than two conditions without truncation', () => {
+    const expr = generateExprFromVisualConfig({
+      tiers: [
+        {
+          label: 'multi',
+          conditions: [
+            { var: 'len', op: '<', value: 200000 },
+            { var: 'hour', op: '>=', value: 9 },
+            { var: 'weekday', op: '<=', value: 5 },
+          ],
+          input_unit_cost: 1,
+          output_unit_cost: 2,
+          cache_mode: 'generic',
+        },
+      ],
+    })
+    assert.match(
+      expr,
+      /len < 200000 && hour\("Asia\/Shanghai"\) >= 9 && weekday\("Asia\/Shanghai"\) <= 5/
+    )
+  })
+
+  test('round-trips OR condition groups with AND members', () => {
+    const expr = generateExprFromVisualConfig({
+      tiers: [
+        {
+          label: 'multi-group',
+          conditions: [],
+          conditionGroups: [
+            {
+              conditions: [
+                { var: 'len', op: '<', value: 200000 },
+                {
+                  var: 'hour',
+                  op: '>=',
+                  value: 9,
+                  timezone: 'Asia/Shanghai',
+                },
+              ],
+            },
+            {
+              conditions: [
+                {
+                  var: 'weekday',
+                  op: '<=',
+                  value: 5,
+                  timezone: 'Asia/Shanghai',
+                },
+                {
+                  var: 'month',
+                  op: '>=',
+                  value: 1,
+                  timezone: 'Asia/Shanghai',
+                },
+              ],
+            },
+          ],
+          input_unit_cost: 1,
+          output_unit_cost: 2,
+          cache_mode: 'generic',
+        },
+      ],
+    })
+    assert.match(expr, /\) \|\| \(/)
+    const parsed = tryParseVisualConfig(expr)
+    assert.equal(parsed?.tiers[0].conditionGroups?.length, 2)
+    assert.equal(parsed?.tiers[0].conditionGroups?.[0].conditions.length, 2)
+    assert.equal(parsed?.tiers[0].conditionGroups?.[1].conditions.length, 2)
+    assert.equal(generateExprFromVisualConfig(parsed!), expr)
+  })
+
+  test('resets invalid time values when normalizing a condition', () => {
+    const tier = normalizeVisualTier({
+      conditions: [{ var: 'month', op: '<=', value: 200000 }],
+    })
+    assert.equal(tier.conditions[0].value, 12)
   })
 })
