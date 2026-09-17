@@ -179,4 +179,4 @@ RelayKit-specific requirements:
 - Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
 - RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
 - If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
-- If the living plan is missing in a fresh workspace, recreate it under `new-api/.tmp/` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
+- If the living plan is missing in a fresh workspace, recreate it under `.tmp/` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
