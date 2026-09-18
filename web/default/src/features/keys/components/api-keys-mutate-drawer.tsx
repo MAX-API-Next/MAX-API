@@ -133,7 +133,7 @@ export function ApiKeysMutateDrawer(
     realGroups,
     autoRouteOptions,
     effectiveAutoRoute,
-    defaultManualGroups,
+    legacyManualGroups,
   } = useMemo(() => {
     const entries = Object.entries(groupsRaw)
     const real: ApiKeyGroupOption[] = entries
@@ -177,7 +177,7 @@ export function ApiKeysMutateDrawer(
       realGroups: real,
       autoRouteOptions: routes,
       effectiveAutoRoute: route,
-      defaultManualGroups:
+      legacyManualGroups:
         routeGroups.length > 0
           ? routeGroups
           : real.slice(0, 1).map((option) => option.value),
@@ -187,13 +187,13 @@ export function ApiKeysMutateDrawer(
   const routingContextRef = useRef({
     autoRouteOptions,
     realGroups,
-    defaultManualGroups,
+    legacyManualGroups,
     effectiveAutoRoute,
   })
   routingContextRef.current = {
     autoRouteOptions,
     realGroups,
-    defaultManualGroups,
+    legacyManualGroups,
     effectiveAutoRoute,
   }
   const schema = useMemo(
@@ -226,7 +226,7 @@ export function ApiKeysMutateDrawer(
     const {
       autoRouteOptions: availableAutoRoutes,
       realGroups: availableRealGroups,
-      defaultManualGroups: availableDefaultManualGroups,
+      legacyManualGroups: availableLegacyManualGroups,
       effectiveAutoRoute: availableAutoRoute,
     } = routingContextRef.current
 
@@ -265,7 +265,7 @@ export function ApiKeysMutateDrawer(
           setPreservedManualGroups(unavailableManualGroups)
           const routeManualGroups =
             availableAutoRoutes.find((route) => route.value === routeKey)
-              ?.groups || availableDefaultManualGroups
+              ?.groups || availableLegacyManualGroups
           form.reset(
             transformApiKeyToFormDefaults(result.data, routeManualGroups)
           )
@@ -281,12 +281,7 @@ export function ApiKeysMutateDrawer(
       setEditingLegacyRouting(false)
       setPreservedSmartRoute(undefined)
       setPreservedManualGroups([])
-      form.reset(
-        getApiKeyFormDefaultValues(
-          availableAutoRoute,
-          availableDefaultManualGroups
-        )
-      )
+      form.reset(getApiKeyFormDefaultValues(availableAutoRoute))
     }
 
     return () => {
@@ -467,7 +462,6 @@ export function ApiKeysMutateDrawer(
                         retryOnFailure={!!crossGroupRetry}
                         autoRouteOptions={autoRouteOptions}
                         realGroupOptions={realGroups}
-                        defaultManualGroups={defaultManualGroups}
                         preserveUnavailableRouting={
                           Boolean(preservedSmartRoute) ||
                           preservedManualGroups.length > 0
@@ -485,17 +479,6 @@ export function ApiKeysMutateDrawer(
                             shouldDirty: true,
                             shouldValidate: true,
                           })
-                          if (!form.getFieldState('manual_groups').isDirty) {
-                            const routeGroups =
-                              autoRouteOptions.find(
-                                (option) => option.value === route
-                              )?.groups || []
-                            form.setValue(
-                              'manual_groups',
-                              routeGroups.slice(0, MAX_MANUAL_ROUTING_GROUPS),
-                              { shouldValidate: true }
-                            )
-                          }
                         }}
                         onManualGroupsChange={(groups) =>
                           form.setValue('manual_groups', groups, {

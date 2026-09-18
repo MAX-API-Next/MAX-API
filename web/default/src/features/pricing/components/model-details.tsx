@@ -522,7 +522,7 @@ function PriceSection(props: {
               {t('Default quantity')}
             </div>
             <div className='text-foreground mt-1 font-mono text-base font-semibold tabular-nums'>
-              {card.default_quantity || 1}
+              {card.default_quantity ?? 1}
               <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
                 {t(card.unit || 'unit')}
               </span>
@@ -1028,7 +1028,7 @@ function GroupPricingSection(props: {
             </TableHeader>
             <TableBody>
               {availableGroups.map((group) => {
-                const ratio = props.groupRatio[group] || 1
+                const ratio = props.groupRatio[group] ?? 1
                 return (
                   <TableRow key={group}>
                     <TableCell className='py-2.5'>
@@ -1122,7 +1122,7 @@ function GroupPricingSection(props: {
         />
         <div className='space-y-3'>
           {availableGroups.map((group) => {
-            const ratio = props.groupRatio[group] || 1
+            const ratio = props.groupRatio[group] ?? 1
             return (
               <div key={group} className='overflow-hidden rounded-lg border'>
                 <div className='bg-muted/20 flex items-center justify-between gap-3 border-b px-3 py-2'>
@@ -1232,7 +1232,7 @@ function GroupPricingSection(props: {
           </TableHeader>
           <TableBody>
             {availableGroups.map((group) => {
-              const ratio = props.groupRatio[group] || 1
+              const ratio = props.groupRatio[group] ?? 1
               return (
                 <TableRow key={group}>
                   <TableCell className='py-2.5'>

@@ -18,22 +18,26 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import {
   memo,
+  type ChangeEvent,
   type ReactElement,
   useCallback,
   useEffect,
   useId,
   useMemo,
+  useRef,
   useState,
 } from 'react'
-import { FileJson } from 'lucide-react'
+import { Download, FileJson, Search, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { CopyButton } from '@/components/copy-button'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { downloadJson } from './download-json'
 import { formatJsonForTextarea, normalizeJsonString } from './utils'
 
 const OPTION_KEY = 'task_billing_setting.rate_cards'
@@ -162,6 +166,7 @@ type VendorSummary = {
   modelCount: number
   rowCount: number
   models: string[]
+  modelRows: Record<string, number>
 }
 
 type BillingExampleSectionProps = {
@@ -292,11 +297,13 @@ function buildVendorSummary(value: string): VendorSummary[] {
       modelCount: 0,
       rowCount: 0,
       models: [],
+      modelRows: {},
     }
 
     group.modelCount += 1
     group.rowCount += rows
     group.models.push(model)
+    group.modelRows[model] = rows
     groups.set(vendor, group)
   }
 
@@ -311,15 +318,71 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const currentRateCardHeadingId = useId()
   const [text, setText] = useState('')
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [vendorFilter, setVendorFilter] = useState('all')
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const editRevision = useRef(0)
+  const initialText = useMemo(
+    (): string => formatJsonForTextarea(defaultValue || '{}'),
+    [defaultValue]
+  )
   const vendorSummary = useMemo(() => buildVendorSummary(text), [text])
+  useEffect((): void => {
+    if (
+      vendorFilter !== 'all' &&
+      !vendorSummary.some(
+        (vendor: VendorSummary): boolean => vendor.key === vendorFilter
+      )
+    ) {
+      setVendorFilter('all')
+    }
+  }, [vendorFilter, vendorSummary])
+  const filteredVendorSummary = useMemo((): VendorSummary[] => {
+    const query = search.trim().toLowerCase()
+    return vendorSummary
+      .filter(
+        (vendor: VendorSummary): boolean =>
+          vendorFilter === 'all' || vendor.key === vendorFilter
+      )
+      .map((vendor: VendorSummary): VendorSummary => {
+        if (!query) return vendor
+        return {
+          ...vendor,
+          modelCount: vendor.models.filter((model: string): boolean =>
+            model.toLowerCase().includes(query)
+          ).length,
+          rowCount: vendor.models
+            .filter((model: string): boolean =>
+              model.toLowerCase().includes(query)
+            )
+            .reduce(
+              (sum: number, model: string): number =>
+                sum + (vendor.modelRows[model] ?? 0),
+              0
+            ),
+          models: vendor.models.filter((model: string): boolean =>
+            model.toLowerCase().includes(query)
+          ),
+        }
+      })
+      .filter(
+        (vendor: VendorSummary): boolean => !query || vendor.models.length > 0
+      )
+  }, [search, vendorFilter, vendorSummary])
+  const isDirty = text !== initialText
 
   useEffect(() => {
+    editRevision.current += 1
     setText(formatJsonForTextarea(defaultValue || '{}'))
     setError('')
+    return () => {
+      editRevision.current += 1
+    }
   }, [defaultValue])
 
   const handleChange = useCallback(
     (value: string) => {
+      editRevision.current += 1
       setText(value)
       try {
         const parsed = JSON.parse(value) as unknown
@@ -337,6 +400,7 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
 
   const handleUseExample = useCallback(
     (example: string): void => {
+      editRevision.current += 1
       setText(example)
       setError('')
       toast.success(t('Example loaded. Review prices before saving.'))
@@ -351,6 +415,35 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
   const handleUseMiniMaxExample = useCallback((): void => {
     handleUseExample(MINIMAX_RATE_CARD_EXAMPLE)
   }, [handleUseExample])
+
+  const handleImport = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = event.target.files?.[0]
+      event.target.value = ''
+      if (!file) return
+      const revision = ++editRevision.current
+
+      try {
+        const contents = await file.text()
+        if (revision !== editRevision.current) return
+        const imported = formatJsonForTextarea(contents)
+        if (!imported) throw new Error(t('Invalid JSON'))
+        const parsed = JSON.parse(imported) as unknown
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error(t('JSON must be an object'))
+        }
+        editRevision.current += 1
+        setText(imported)
+        setError('')
+        toast.success(t('JSON imported. Review prices before saving.'))
+      } catch (err) {
+        if (revision !== editRevision.current) return
+        const message = err instanceof Error ? err.message : t('Invalid JSON')
+        toast.error(message)
+      }
+    },
+    [t]
+  )
 
   const handleSave = useCallback(async () => {
     if (error) {
@@ -406,9 +499,51 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
               </span>
             ))}
         </div>
-        {vendorSummary.length > 0 ? (
-          <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <div className='relative min-w-56 flex-1 sm:max-w-sm'>
+            <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2' />
+            <Input
+              value={search}
+              onChange={(event: ChangeEvent<HTMLInputElement>): void =>
+                setSearch(event.target.value)
+              }
+              placeholder={t('Search model name...')}
+              aria-label={t('Search model name...')}
+              className='pl-9'
+            />
+          </div>
+          <div className='flex flex-wrap gap-1'>
+            <Button
+              type='button'
+              size='sm'
+              variant={vendorFilter === 'all' ? 'secondary' : 'ghost'}
+              aria-pressed={vendorFilter === 'all'}
+              onClick={(): void => setVendorFilter('all')}
+            >
+              {t('All')}
+            </Button>
             {vendorSummary.map((vendor) => (
+              <Button
+                key={vendor.key}
+                type='button'
+                size='sm'
+                variant={vendorFilter === vendor.key ? 'secondary' : 'ghost'}
+                aria-pressed={vendorFilter === vendor.key}
+                onClick={(): void => setVendorFilter(vendor.key)}
+              >
+                {t(vendor.label)}
+              </Button>
+            ))}
+          </div>
+          {isDirty && (
+            <span className='text-muted-foreground text-xs'>
+              {t('Unsaved changes')}
+            </span>
+          )}
+        </div>
+        {filteredVendorSummary.length > 0 ? (
+          <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
+            {filteredVendorSummary.map((vendor) => (
               <div
                 key={vendor.key}
                 className='bg-background rounded-md border p-3'
@@ -451,7 +586,9 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
           </div>
         ) : (
           <div className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
-            {t('No task rate cards configured yet.')}
+            {vendorSummary.length > 0
+              ? t('No matching task rate cards.')
+              : t('No task rate cards configured yet.')}
           </div>
         )}
       </section>
@@ -473,9 +610,41 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
       />
 
       <section className='space-y-2'>
-        <h3 id={currentRateCardHeadingId} className='text-sm font-medium'>
-          {t('Current rate card JSON')}
-        </h3>
+        <div className='flex flex-wrap items-center justify-between gap-2'>
+          <h3 id={currentRateCardHeadingId} className='text-sm font-medium'>
+            {t('Current rate card JSON')}
+          </h3>
+          <div className='flex flex-wrap items-center gap-2'>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={(): void =>
+                downloadJson('task-rate-cards.json', text || '{}')
+              }
+              disabled={Boolean(error)}
+            >
+              <Download className='mr-2 h-4 w-4' />
+              {t('Download')}
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={(): void => fileInputRef.current?.click()}
+            >
+              <Upload className='mr-2 h-4 w-4' />
+              {t('Upload file')}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type='file'
+              accept='application/json,.json'
+              className='hidden'
+              onChange={handleImport}
+            />
+          </div>
+        </div>
         <Textarea
           aria-labelledby={currentRateCardHeadingId}
           rows={18}

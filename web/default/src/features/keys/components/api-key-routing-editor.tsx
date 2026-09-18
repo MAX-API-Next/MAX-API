@@ -69,7 +69,6 @@ type ApiKeyRoutingEditorProps = {
   retryOnFailure: boolean
   autoRouteOptions: ApiKeyAutoRouteOption[]
   realGroupOptions: ApiKeyGroupOption[]
-  defaultManualGroups: string[]
   preserveUnavailableRouting?: boolean
   routesLoading?: boolean
   disabled?: boolean
@@ -432,11 +431,9 @@ export function ApiKeyRoutingEditor(props: ApiKeyRoutingEditorProps) {
     (option) => option.value === props.route
   )
 
-  const setMode = (mode: TokenRoutingMode) => {
-    if (mode === 'manual' && props.manualGroups.length === 0) {
-      props.onManualGroupsChange(
-        props.defaultManualGroups.slice(0, MAX_MANUAL_ROUTING_GROUPS)
-      )
+  const setMode = (mode: TokenRoutingMode): void => {
+    if (mode === 'manual') {
+      props.onManualGroupsChange([])
     }
     props.onModeChange(mode)
   }

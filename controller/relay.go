@@ -166,6 +166,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if maxAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(maxAPIError.Error())))
 			maxAPIError.SetMessage(common.MessageWithRequestId(maxAPIError.Error(), requestId))
+			if writeStartedStreamError(c, relayFormat, maxAPIError) {
+				return
+			}
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
 				helper.WssError(c, ws, maxAPIError.ToOpenAIError())

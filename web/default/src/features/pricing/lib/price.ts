@@ -211,7 +211,7 @@ export function formatGroupPrice(
     return '-'
   }
 
-  const ratio = groupRatio[group] || 1
+  const ratio = groupRatio[group] ?? 1
   let priceInUSD = calculateTokenPrice(model, type, ratio)
 
   priceInUSD = applyRechargeRate(
@@ -244,7 +244,7 @@ export function formatFixedPrice(
     return '-'
   }
 
-  const ratio = groupRatio[group] || 1
+  const ratio = groupRatio[group] ?? 1
   let priceInUSD = (model.model_price || 0) * ratio
 
   priceInUSD = applyRechargeRate(
@@ -336,8 +336,12 @@ export function formatTaskRateCardRange(
   const groupRatio = model.group_ratio || {}
   const multiplier =
     groupRatioMultiplier ?? getMinGroupRatio(enableGroups, groupRatio)
-  const minPrice = Number(card.min_unit_price ?? 0)
-  const maxPrice = Number(card.max_unit_price ?? minPrice)
+  const minPrice = Number(card.min_unit_price)
+  // Keep an explicitly configured zero price visible, but do not render a
+  // misleading $0 when the backend omitted the rate-card bounds entirely.
+  if (!Number.isFinite(minPrice)) return '-'
+  const rawMaxPrice = Number(card.max_unit_price)
+  const maxPrice = Number.isFinite(rawMaxPrice) ? rawMaxPrice : minPrice
   const minFormatted = formatTaskRateCardUnitPrice(
     minPrice,
     showWithRecharge,

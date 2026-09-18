@@ -16,18 +16,101 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
-import { within } from '@testing-library/react'
+import { fireEvent, within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
+import { SettingsPageProvider } from '../components/settings-page-context'
 import { TaskRateCardSettings } from './task-rate-card-settings'
+import { TieredBillingSettings } from './tiered-billing-settings'
 
 const testEnv = createReactTestEnvironment()
 
 before(() => testEnv.setup())
 
 after(() => testEnv.teardown())
+
+for (const kind of ['task', 'tiered'] as const) {
+  test(`${kind} settings retain valid editor state after failed file imports`, async (): Promise<void> => {
+    const queryClient = new QueryClient()
+    const actions = document.createElement('div')
+    document.body.append(actions)
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <SettingsPageProvider actionsContainer={actions}>
+          {kind === 'task' ? (
+            <TaskRateCardSettings defaultValue='{"existing-model":{"unit":"second","rows":[]}}' />
+          ) : (
+            <TieredBillingSettings
+              billingMode='{"existing-model":"tiered_expr"}'
+              billingExpr='{"existing-model":"p * 1"}'
+            />
+          )}
+        </SettingsPageProvider>
+      </QueryClientProvider>
+    )
+    try {
+      const editor = [...view.container.querySelectorAll('textarea')].find(
+        (input: HTMLTextAreaElement): boolean => !input.readOnly
+      )
+      assert.ok(editor)
+      const save = within(actions).getByRole('button', {
+        name: kind === 'task' ? 'Save task rate cards' : 'Save tiered billing',
+      }) as HTMLButtonElement
+      const fileInput = (
+        kind === 'task' ? view.container : actions
+      ).querySelector('input[type=file]')
+      assert.ok(fileInput)
+      const original = editor.value
+      assert.equal(save.disabled, false)
+      for (const text of [
+        async (): Promise<string> => '',
+        async (): Promise<string> => ' \r\n\t ',
+        async (): Promise<string> => '{',
+        async (): Promise<string> => '[]',
+        ...(kind === 'tiered'
+          ? ['false', 'true', 0, 1, null, [], {}].map(
+              (enabled: unknown): (() => Promise<string>) =>
+                async (): Promise<string> =>
+                  JSON.stringify({ model: { enabled, expr: 'p * 1' } })
+            )
+          : []),
+        async (): Promise<string> => {
+          throw new Error('Synthetic file read failure')
+        },
+      ]) {
+        await act(async (): Promise<void> => {
+          fireEvent.change(fileInput, { target: { files: [{ text }] } })
+        })
+        assert.equal(editor.value, original)
+        assert.equal(save.disabled, false)
+      }
+      const imported =
+        kind === 'task'
+          ? '{"test-model":{"unit":"second","rows":[]}}'
+          : '{"test-model":{"enabled":true,"expr":"p * 1"}}'
+      await act(async (): Promise<void> => {
+        fireEvent.change(fileInput, {
+          target: { files: [{ text: async (): Promise<string> => imported }] },
+        })
+      })
+      assert.deepEqual(JSON.parse(editor.value), JSON.parse(imported))
+      assert.equal(save.disabled, false)
+      await act(async (): Promise<void> => {
+        fireEvent.change(fileInput, {
+          target: { files: [{ text: async (): Promise<string> => '{}' }] },
+        })
+      })
+      assert.deepEqual(JSON.parse(editor.value), {})
+    } finally {
+      await view.unmount()
+      actions.remove()
+      queryClient.clear()
+    }
+  })
+}
 
 describe('TaskRateCardSettings billing examples', () => {
   test('allows the active MiniMax structured example to be loaded', async () => {

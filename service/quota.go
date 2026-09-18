@@ -286,6 +286,10 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+	postAudioConsumeQuota(ctx, relayInfo, usage, extraContent, true)
+}
+
+func postAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string, recordSuccess bool) {
 	relayInfo.CommitToolUsageAttempt()
 
 	var tieredUsedVars map[string]bool
@@ -404,9 +408,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))
-	})
+	if recordSuccess {
+		gopool.Go(func() {
+			perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))
+		})
+	}
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {

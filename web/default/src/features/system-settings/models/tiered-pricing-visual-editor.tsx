@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState, type ReactElement } from 'react'
 import { ChevronDown, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -35,15 +35,21 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { BILLING_EXTRA_VARS } from '@/features/pricing/lib/billing-expr'
+import {
+  BILLING_EXTRA_VARS,
+  type BillingVar,
+} from '@/features/pricing/lib/billing-expr'
 import {
   CACHE_MODE_GENERIC,
   CACHE_MODE_TIMED,
   type CacheMode,
+  type TierConditionGroup,
   type TierConditionInput,
   type VisualConfig,
   type VisualTier,
   getTierCacheMode,
+  getTierConditionGroups,
+  getTierConditionBounds,
   normalizeVisualConfig,
   normalizeVisualTier,
 } from '@/features/pricing/lib/tier-expr'
@@ -69,6 +75,11 @@ const CONDITION_INPUT_OPTIONS: {
   { value: 'len', labelKey: 'Full input length' },
   { value: 'p', labelKey: 'Billable input tokens' },
   { value: 'c', labelKey: 'Billable output tokens' },
+  { value: 'hour', labelKey: 'Hour' },
+  { value: 'minute', labelKey: 'Minute' },
+  { value: 'weekday', labelKey: 'Weekday' },
+  { value: 'month', labelKey: 'Month' },
+  { value: 'day', labelKey: 'Day' },
 ]
 const OPS: TierConditionInput['op'][] = ['<', '<=', '>', '>=']
 
@@ -93,9 +104,37 @@ function ConditionRow({
   const currentInputOption = CONDITION_INPUT_OPTIONS.find(
     (option) => option.value === condition.var
   )
+  const timeBounds = getTierConditionBounds(condition.var)
+  const isTimeCondition = Boolean(timeBounds)
+  const handleVariableChange = (value: string | null): void => {
+    if (!value) return
+    const nextVar = value as TierConditionInput['var']
+    const bounds = getTierConditionBounds(nextVar)
+    const numericValue = Number(condition.value)
+    let nextValue = 0
+    if (bounds) {
+      if (
+        Number.isFinite(numericValue) &&
+        numericValue >= bounds.min &&
+        numericValue <= bounds.max
+      ) {
+        nextValue = numericValue
+      } else {
+        nextValue = bounds.defaultValue
+      }
+    } else if (Number.isFinite(numericValue)) {
+      nextValue = numericValue
+    }
+    onChange({
+      ...condition,
+      var: nextVar,
+      value: nextValue,
+      ...(bounds ? { timezone: condition.timezone || 'Asia/Shanghai' } : {}),
+    })
+  }
 
   return (
-    <div className='flex items-center gap-2'>
+    <div className='flex flex-wrap items-center gap-2'>
       <Select
         items={[
           ...CONDITION_INPUT_OPTIONS.map((option) => ({
@@ -104,9 +143,7 @@ function ConditionRow({
           })),
         ]}
         value={condition.var}
-        onValueChange={(value) =>
-          onChange({ ...condition, var: value as TierConditionInput['var'] })
-        }
+        onValueChange={handleVariableChange}
       >
         <SelectTrigger className='w-32' size='sm'>
           <SelectValue>
@@ -125,6 +162,17 @@ function ConditionRow({
           </SelectGroup>
         </SelectContent>
       </Select>
+      {isTimeCondition && (
+        <Input
+          value={condition.timezone ?? ''}
+          onChange={(event) =>
+            onChange({ ...condition, timezone: event.target.value })
+          }
+          aria-label={t('Timezone')}
+          placeholder='Asia/Shanghai'
+          className='w-40'
+        />
+      )}
       <Select
         items={[...OPS.map((op) => ({ value: op, label: op }))]}
         value={condition.op}
@@ -146,15 +194,28 @@ function ConditionRow({
         </SelectContent>
       </Select>
       <DraftNumberInput
-        min={0}
+        min={timeBounds?.min ?? 0}
+        max={timeBounds?.max}
+        step={timeBounds ? 1 : undefined}
         value={condition.value}
-        onValueChange={(value) => onChange({ ...condition, value })}
+        onValueChange={(value) =>
+          onChange({
+            ...condition,
+            value: timeBounds
+              ? Math.min(timeBounds.max, Math.max(timeBounds.min, value))
+              : value,
+          })
+        }
         aria-label={t('Condition Value')}
-        placeholder={t('tokens')}
+        placeholder={
+          timeBounds ? `${timeBounds.min}-${timeBounds.max}` : t('tokens')
+        }
         className='w-32'
       />
       <span className='text-muted-foreground text-xs'>
-        {formatTokenHint(condition.value, t)}
+        {timeBounds
+          ? `${timeBounds.min}–${timeBounds.max}`
+          : formatTokenHint(condition.value, t)}
       </span>
       <Button
         type='button'
@@ -162,8 +223,8 @@ function ConditionRow({
         size='icon'
         onClick={onRemove}
         disabled={removeDisabled}
-        aria-label={t('Remove')}
-        className='ml-auto'
+        aria-label={t('Remove condition')}
+        className='ml-auto shrink-0'
       >
         <Trash2 className='text-destructive h-4 w-4' />
       </Button>
@@ -178,11 +239,18 @@ function ConditionRow({
 type PriceFieldProps = {
   label: string
   hint?: string
-  value: number
+  value: number | undefined
   onChange: (next: number) => void
+  onClear?: () => void
 }
 
-function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
+function PriceField({
+  label,
+  hint,
+  value,
+  onChange,
+  onClear,
+}: PriceFieldProps): ReactElement {
   const inputId = useId()
   return (
     <div className='w-36 space-y-0.5'>
@@ -193,8 +261,9 @@ function PriceField({ label, hint, value, onChange }: PriceFieldProps) {
         id={inputId}
         min={0}
         step={0.000001}
-        value={Number.isFinite(value) ? value : 0}
+        value={value ?? ''}
         onValueChange={onChange}
+        onEmpty={onClear}
         className='h-8 w-full'
       />
       {hint && <p className='text-muted-foreground text-xs'>{hint}</p>}
@@ -212,7 +281,8 @@ type VisualTierCardProps = {
   total: number
   onChange: (next: VisualTier) => void
   onRemove: () => void
-  onAddCondition: () => void
+  onAddCondition: (groupIndex: number) => void
+  onAddConditionGroup: () => void
 }
 
 function VisualTierCard({
@@ -222,29 +292,53 @@ function VisualTierCard({
   onChange,
   onRemove,
   onAddCondition,
+  onAddConditionGroup,
 }: VisualTierCardProps) {
   const { t } = useTranslation()
   const cacheMode = getTierCacheMode(tier)
-  const isFallbackTier = index === total - 1
-
-  const handleConditionChange = (
-    conditionIndex: number,
-    next: TierConditionInput
-  ) => {
-    const conditions = [...tier.conditions]
-    conditions[conditionIndex] = next
-    onChange({ ...tier, conditions })
-  }
-
-  const handleConditionRemove = (conditionIndex: number) => {
-    if (!isFallbackTier && tier.conditions.length <= 1) return
+  const conditionGroups = getTierConditionGroups(tier)
+  const updateConditionGroups = (groups: TierConditionGroup[]): void => {
     onChange({
       ...tier,
-      conditions: tier.conditions.filter((_, i) => i !== conditionIndex),
+      conditions: groups[0]?.conditions ?? [],
+      conditionGroups: groups,
     })
   }
+  const handleConditionChange = (
+    groupIndex: number,
+    conditionIndex: number,
+    next: TierConditionInput
+  ): void => {
+    const groups = conditionGroups.map((group) => ({
+      conditions: [...group.conditions],
+    }))
+    groups[groupIndex].conditions[conditionIndex] = next
+    updateConditionGroups(groups)
+  }
 
-  const handlePriceChange = (field: keyof VisualTier, value: number) => {
+  const handleConditionRemove = (
+    groupIndex: number,
+    conditionIndex: number
+  ): void => {
+    const groups = conditionGroups.map((group) => ({
+      conditions: [...group.conditions],
+    }))
+    const target = groups[groupIndex]
+    if (!target) return
+    target.conditions = target.conditions.filter((_, i) => i !== conditionIndex)
+    updateConditionGroups(groups.filter((group) => group.conditions.length > 0))
+  }
+
+  const handleConditionGroupRemove = (groupIndex: number): void => {
+    updateConditionGroups(
+      conditionGroups.filter((_, currentIndex) => currentIndex !== groupIndex)
+    )
+  }
+
+  const handlePriceChange = (
+    field: keyof VisualTier,
+    value: number | undefined
+  ): void => {
     onChange({ ...tier, [field]: value })
   }
 
@@ -253,7 +347,7 @@ function VisualTierCard({
       ...tier,
       cache_mode: mode,
       cache_create_1h_unit_cost:
-        mode === CACHE_MODE_TIMED ? (tier.cache_create_1h_unit_cost ?? 0) : 0,
+        mode === CACHE_MODE_TIMED ? tier.cache_create_1h_unit_cost : undefined,
     })
   }
 
@@ -261,7 +355,7 @@ function VisualTierCard({
   const outputUnitPrice = unitCostToPrice(tier.output_unit_cost)
   const hasMediaPricing = MEDIA_PRICE_VARS.some((variable) => {
     const fieldKey = variable.tierField as keyof VisualTier
-    return unitCostToPrice((tier[fieldKey] as number | undefined) ?? 0) > 0
+    return tier[fieldKey] != null
   })
   const [mediaOpen, setMediaOpen] = useState(hasMediaPricing)
 
@@ -275,7 +369,8 @@ function VisualTierCard({
     variable: (typeof BILLING_EXTRA_VARS)[number]
   ) => {
     const fieldKey = variable.tierField as keyof VisualTier
-    const value = unitCostToPrice((tier[fieldKey] as number | undefined) ?? 0)
+    const unitCost = tier[fieldKey] as number | undefined
+    const value = unitCost == null ? undefined : unitCostToPrice(unitCost)
 
     return (
       <PriceField
@@ -283,6 +378,7 @@ function VisualTierCard({
         label={t(variable.label)}
         value={value}
         onChange={(next) => handlePriceChange(fieldKey, priceToUnitCost(next))}
+        onClear={() => handlePriceChange(fieldKey, undefined)}
       />
     )
   }
@@ -294,7 +390,7 @@ function VisualTierCard({
           <Badge variant='outline'>
             {t('Tier')} {index + 1} / {total}
           </Badge>
-          {tier.conditions.length === 0 && (
+          {index === total - 1 && conditionGroups.length === 0 && (
             <Badge variant='secondary'>{t('Fallback tier')}</Badge>
           )}
           <Input
@@ -321,34 +417,93 @@ function VisualTierCard({
 
       {/* Conditions */}
       <div className='space-y-1.5'>
-        <div className='flex h-7 items-center justify-between'>
+        <div className='flex h-7 items-center justify-between gap-2'>
           <Label className='text-xs font-medium'>{t('Tier conditions')}</Label>
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            onClick={onAddCondition}
-            disabled={isFallbackTier || tier.conditions.length >= 2}
-            className='h-7 px-2 text-xs'
-          >
-            <Plus className='mr-1 h-3 w-3' />
-            {t('Add condition')}
-          </Button>
+          <div className='flex items-center gap-1'>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              onClick={() =>
+                onAddCondition(Math.max(0, conditionGroups.length - 1))
+              }
+              className='h-7 px-2 text-xs'
+            >
+              <Plus className='mr-1 h-3 w-3' />
+              {t('Add condition')}
+            </Button>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              onClick={onAddConditionGroup}
+              className='h-7 px-2 text-xs'
+            >
+              <Plus className='mr-1 h-3 w-3' />
+              {t('Add condition group')}
+            </Button>
+          </div>
         </div>
-        {tier.conditions.length === 0 ? (
-          <p className='text-muted-foreground text-xs'>
-            {t('Always matches (default tier).')}
-          </p>
+        {conditionGroups.length === 0 ? (
+          <>
+            {index === total - 1 && (
+              <p className='text-muted-foreground text-xs'>
+                {t('Always matches (default tier).')}
+              </p>
+            )}
+            {index < total - 1 && (
+              <p className='text-destructive text-xs'>
+                {t('Always matches; later tiers are unreachable')}
+              </p>
+            )}
+          </>
         ) : (
-          tier.conditions.map((condition, conditionIndex) => (
-            <ConditionRow
-              key={conditionIndex}
-              condition={condition}
-              onChange={(next) => handleConditionChange(conditionIndex, next)}
-              onRemove={() => handleConditionRemove(conditionIndex)}
-              removeDisabled={!isFallbackTier && tier.conditions.length <= 1}
-            />
-          ))
+          <div className='flex flex-col gap-2'>
+            {conditionGroups.map((group, groupIndex) => (
+              <div key={groupIndex} className='rounded-md border p-2'>
+                <div className='mb-1 flex items-center justify-between text-xs'>
+                  <span className='text-muted-foreground'>
+                    {t('Condition group')} {groupIndex + 1}
+                  </span>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='icon'
+                    onClick={() => handleConditionGroupRemove(groupIndex)}
+                    aria-label={t('Remove condition group')}
+                    className='size-6'
+                  >
+                    <Trash2 className='text-destructive size-3.5' />
+                  </Button>
+                </div>
+                <div className='flex flex-col gap-1.5'>
+                  {group.conditions.map((condition, conditionIndex) => (
+                    <ConditionRow
+                      key={conditionIndex}
+                      condition={condition}
+                      onChange={(next) =>
+                        handleConditionChange(groupIndex, conditionIndex, next)
+                      }
+                      onRemove={() =>
+                        handleConditionRemove(groupIndex, conditionIndex)
+                      }
+                      removeDisabled={false}
+                    />
+                  ))}
+                </div>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => onAddCondition(groupIndex)}
+                  className='mt-1 h-7 px-2 text-xs'
+                >
+                  <Plus className='mr-1 h-3 w-3' />
+                  {t('Add condition')}
+                </Button>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -379,6 +534,11 @@ function VisualTierCard({
           </div>
 
           <div className='space-y-2'>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'Leave optional prices blank to use the base input or output price. Enter 0 to make that token category free.'
+              )}
+            </p>
             <div className='flex h-7 items-center'>
               <Tabs
                 value={cacheMode}
@@ -459,16 +619,12 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
 
   const handleTierChange = (index: number, next: VisualTier) => {
     const tiers = [...config.tiers]
-    const lastIndex = tiers.length - 1
-    const normalized = normalizeVisualTier(
-      index === lastIndex ? { ...next, conditions: [] } : next
-    )
-    if (index < lastIndex && normalized.conditions.length === 0) return
+    const normalized = normalizeVisualTier(next)
     tiers[index] = normalized
     onChange({ ...config, tiers })
   }
 
-  const handleAddTier = () => {
+  const handleAddTier = (): void => {
     const tiers = [...config.tiers]
     const lastIndex = tiers.length - 1
     // When adding a new fallback, give the previous catch-all tier a default
@@ -478,14 +634,23 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
       tiers[lastIndex] = normalizeVisualTier({
         ...tiers[lastIndex],
         conditions: [{ var: 'len', op: '<', value: 200000 }],
+        conditionGroups: undefined,
       })
     }
     tiers.push(
       normalizeVisualTier({
         label: `tier_${tiers.length + 1}`,
         conditions: [],
-        input_unit_cost: 0,
-        output_unit_cost: 0,
+        input_unit_cost: tiers[lastIndex]?.input_unit_cost ?? 0,
+        output_unit_cost: tiers[lastIndex]?.output_unit_cost ?? 0,
+        ...Object.fromEntries(
+          BILLING_EXTRA_VARS.flatMap(
+            (variable: BillingVar): [string, unknown][] =>
+              variable.tierField
+                ? [[variable.tierField, tiers[lastIndex]?.[variable.tierField]]]
+                : []
+          )
+        ),
       })
     )
     onChange({ ...config, tiers })
@@ -495,33 +660,88 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     if (config.tiers.length <= 1) return
     const tiers = config.tiers.filter((_, i) => i !== index)
     const lastIndex = tiers.length - 1
-    tiers[lastIndex] = normalizeVisualTier({
-      ...tiers[lastIndex],
-      conditions: [],
-    })
+    // Keep the final remaining tier as the catch-all branch after removing a
+    // sibling tier; a standalone tier may still be explicitly conditioned.
+    if (lastIndex >= 0) {
+      tiers[lastIndex] = normalizeVisualTier({
+        ...tiers[lastIndex],
+        conditions: [],
+        conditionGroups: [],
+      })
+    }
     onChange({ ...config, tiers })
   }
 
-  const handleAddCondition = (index: number) => {
+  const handleAddCondition = (index: number, groupIndex: number = 0): void => {
     const tier = config.tiers[index]
-    if (index === config.tiers.length - 1) return
-    if (tier.conditions.length >= 2) return
     // Prefer `len` (input length) over `p`/`c` for tier conditions because
     // `p` is subject to auto-exclusion when sub-categories like `cr` are
     // priced separately, which can misroute long-input requests into shorter
     // tiers when cache-hits reduce the effective `p`.
-    const usedVars = new Set(tier.conditions.map((c) => c.var))
-    const nextVar: TierConditionInput['var'] = usedVars.has('len') ? 'c' : 'len'
+    const groups = getTierConditionGroups(tier)
+    const targetIndex = Math.max(0, Math.min(groupIndex, groups.length))
+    const targetGroup = groups[targetIndex] ?? { conditions: [] }
+    const usedVars = new Set(
+      targetGroup.conditions.map(
+        (condition: TierConditionInput): TierConditionInput['var'] =>
+          condition.var
+      )
+    )
+    const variableOrder = CONDITION_INPUT_OPTIONS.map(
+      (
+        option: (typeof CONDITION_INPUT_OPTIONS)[number]
+      ): TierConditionInput['var'] => option.value
+    )
+    const nextVar =
+      variableOrder.find(
+        (variable: TierConditionInput['var']): boolean =>
+          !usedVars.has(variable)
+      ) || 'len'
+    const timeBounds = getTierConditionBounds(nextVar)
+    const nextGroups =
+      groups.length > 0
+        ? groups.map((group) => ({ conditions: [...group.conditions] }))
+        : [{ conditions: [] }]
+    if (!nextGroups[targetIndex]) nextGroups[targetIndex] = targetGroup
+    nextGroups[targetIndex].conditions.push({
+      var: nextVar,
+      op: '<',
+      value: timeBounds?.defaultValue ?? 200000,
+      ...(timeBounds ? { timezone: 'Asia/Shanghai' } : {}),
+    })
     onChange({
       ...config,
       tiers: config.tiers.map((current, i) =>
         i === index
           ? {
               ...current,
-              conditions: [
-                ...tier.conditions,
-                { var: nextVar, op: '<', value: 200000 },
-              ],
+              conditions: nextGroups[0]?.conditions ?? [],
+              conditionGroups: nextGroups,
+            }
+          : current
+      ),
+    })
+  }
+
+  const handleAddConditionGroup = (index: number): void => {
+    const tier = config.tiers[index]
+    const groups = getTierConditionGroups(tier)
+    const nextGroups = groups.map((group) => ({
+      conditions: [...group.conditions],
+    }))
+    nextGroups.push({
+      conditions: [
+        { var: 'hour', timezone: 'Asia/Shanghai', op: '>=', value: 9 },
+      ],
+    })
+    onChange({
+      ...config,
+      tiers: config.tiers.map((current, i) =>
+        i === index
+          ? {
+              ...current,
+              conditions: nextGroups[0]?.conditions ?? [],
+              conditionGroups: nextGroups,
             }
           : current
       ),
@@ -532,7 +752,7 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
     <div className='space-y-2'>
       <p className='text-muted-foreground text-xs'>
         {t(
-          'Each tier supports up to 2 conditions. The last tier without conditions is the fallback.'
+          'Each tier supports multiple conditions. The last tier without conditions is the fallback.'
         )}
       </p>
       {config.tiers.map((tier, index) => (
@@ -543,7 +763,8 @@ export function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
           total={config.tiers.length}
           onChange={(next) => handleTierChange(index, next)}
           onRemove={() => handleRemoveTier(index)}
-          onAddCondition={() => handleAddCondition(index)}
+          onAddCondition={(groupIndex) => handleAddCondition(index, groupIndex)}
+          onAddConditionGroup={() => handleAddConditionGroup(index)}
         />
       ))}
       <Button

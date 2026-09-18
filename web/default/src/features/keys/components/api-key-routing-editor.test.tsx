@@ -16,51 +16,202 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { createReactTestEnvironment } from '@/test/react'
-import { cleanup, fireEvent, render, within } from '@testing-library/react'
+import { act, useState, type ReactElement } from 'react'
+import { createInstance } from 'i18next'
+import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
 import { after, afterEach, before, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import { MAX_MANUAL_ROUTING_GROUPS } from '../lib/api-key-form'
-import { ApiKeyRoutingEditor } from './api-key-routing-editor'
+import type { TokenRoutingMode } from '../types'
+import type { ApiKeyGroupOption } from './api-key-group-combobox'
 
-const testEnv = createReactTestEnvironment()
+let ApiKeyRoutingEditor: typeof import('./api-key-routing-editor').ApiKeyRoutingEditor
+let cleanup: typeof import('@testing-library/react/pure').cleanup
+let fireEvent: typeof import('@testing-library/react/pure').fireEvent
+let render: typeof import('@testing-library/react/pure').render
+let within: typeof import('@testing-library/react/pure').within
 
-before(() => testEnv.setup())
+const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+  url: 'http://localhost/',
+  pretendToBeVisual: true,
+})
+const i18n = createInstance()
+const previousGlobals = new Map<string, PropertyDescriptor | undefined>()
 
-afterEach(() => cleanup())
+before(async (): Promise<void> => {
+  await i18n.init({ lng: 'en', resources: { en: { translation: {} } } })
+  const globals = {
+    window: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    Event: dom.window.Event,
+    MouseEvent: dom.window.MouseEvent,
+    MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+    ResizeObserver: class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+    IS_REACT_ACT_ENVIRONMENT: true,
+  }
+  for (const [key, value] of Object.entries(globals)) {
+    previousGlobals.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value,
+    })
+  }
+  dom.window.HTMLElement.prototype.scrollIntoView = (): void => undefined
+  Object.defineProperty(dom.window, 'matchMedia', {
+    value: (): Pick<
+      MediaQueryList,
+      | 'matches'
+      | 'addListener'
+      | 'removeListener'
+      | 'addEventListener'
+      | 'removeEventListener'
+    > => ({
+      matches: false,
+      addListener(): void {},
+      removeListener(): void {},
+      addEventListener(): void {},
+      removeEventListener(): void {},
+    }),
+  })
+  // React and Base UI must detect the browser before mounting interactive portals.
+  ;({ cleanup, fireEvent, render, within } =
+    await import('@testing-library/react/pure'))
+  ;({ ApiKeyRoutingEditor } = await import('./api-key-routing-editor'))
+})
 
-after(() => testEnv.teardown())
+afterEach(async (): Promise<void> => {
+  await act(async (): Promise<void> => cleanup())
+})
+
+after((): void => {
+  dom.window.close()
+  for (const [key, descriptor] of previousGlobals) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+    else Reflect.deleteProperty(globalThis, key)
+  }
+})
 
 const groups = Array.from(
   { length: MAX_MANUAL_ROUTING_GROUPS },
-  (_, index) => `group-${index + 1}`
+  (_: unknown, index: number): string => `group-${index + 1}`
 )
 
-describe('ApiKeyRoutingEditor', () => {
-  test('keeps the maximum manual selection in one accessible selector', (): void => {
+const availableGroups = Array.from(
+  { length: 14 },
+  (_: unknown, index: number): string => `group-${index + 1}`
+)
+
+type RoutingHarnessProps = {
+  initialGroups: string[]
+}
+
+function RoutingHarness(props: RoutingHarnessProps): ReactElement {
+  const [mode, setMode] = useState<TokenRoutingMode>('smart')
+  const [manualGroups, setManualGroups] = useState(props.initialGroups)
+  return (
+    <I18nextProvider i18n={i18n}>
+      <ApiKeyRoutingEditor
+        mode={mode}
+        route='auto'
+        manualGroups={manualGroups}
+        retryOnFailure
+        autoRouteOptions={[
+          { value: 'auto', label: 'Automatic', groups: availableGroups },
+        ]}
+        realGroupOptions={availableGroups.map(
+          (group: string): ApiKeyGroupOption => ({
+            value: group,
+            label: group,
+            ratio: 1,
+          })
+        )}
+        onModeChange={setMode}
+        onRouteChange={(): void => undefined}
+        onManualGroupsChange={setManualGroups}
+        onRetryOnFailureChange={(): void => undefined}
+      />
+    </I18nextProvider>
+  )
+}
+
+describe('ApiKeyRoutingEditor', (): void => {
+  for (const initialGroups of [[], groups]) {
+    test(`clears ${initialGroups.length} stored manual selections when automatic routing is disabled`, async (): Promise<void> => {
+      const view = render(<RoutingHarness initialGroups={initialGroups} />)
+      view.getByText('+11')
+      fireEvent.click(
+        view.getByRole('button', { name: 'Disable and select groups' })
+      )
+
+      view.getByText('0 / 8 groups selected')
+      view.getByText('Select at least one manual routing group')
+      assert.equal(
+        view.queryAllByRole('button', { name: /^Remove group-/ }).length,
+        0
+      )
+
+      fireEvent.click(view.getByRole('combobox', { name: 'Select groups' }))
+      const options = await view.findAllByRole('option')
+      assert.equal(options.length, availableGroups.length)
+      for (const group of availableGroups) {
+        const option = view.getByRole('option', {
+          name: `${group}1x Ratio`,
+        })
+        assert.notEqual(option.getAttribute('aria-disabled'), 'true')
+      }
+      fireEvent.click(view.getByRole('option', { name: 'group-141x Ratio' }))
+      within(view.getByRole('combobox', { name: 'Select groups' })).getByText(
+        'group-14'
+      )
+      fireEvent.click(view.getByRole('combobox', { name: 'Select groups' }))
+
+      fireEvent.click(
+        view.getByRole('button', { name: 'Enable automatic routing' })
+      )
+      fireEvent.click(
+        view.getByRole('button', { name: 'Disable and select groups' })
+      )
+      view.getByText('0 / 8 groups selected')
+    })
+  }
+
+  test('keeps all available groups visible at the manual selection limit', async (): Promise<void> => {
     let changedGroups: string[] | undefined
     const view = render(
-      <I18nextProvider i18n={testEnv.i18n}>
+      <I18nextProvider i18n={i18n}>
         <ApiKeyRoutingEditor
           mode='manual'
           route='auto'
           manualGroups={groups}
           retryOnFailure
           autoRouteOptions={[]}
-          realGroupOptions={groups.map((group) => ({
-            value: group,
-            label: group,
-            desc: group,
-            ratio: 1,
-          }))}
-          defaultManualGroups={groups}
-          onModeChange={() => undefined}
-          onRouteChange={() => undefined}
+          realGroupOptions={availableGroups.map(
+            (group: string): ApiKeyGroupOption => ({
+              value: group,
+              label: group,
+              desc: group,
+              ratio: 1,
+            })
+          )}
+          onModeChange={(): void => undefined}
+          onRouteChange={(): void => undefined}
           onManualGroupsChange={(nextGroups: string[]): void => {
             changedGroups = nextGroups
           }}
-          onRetryOnFailureChange={() => undefined}
+          onRetryOnFailureChange={(): void => undefined}
         />
       </I18nextProvider>
     )
@@ -74,6 +225,21 @@ describe('ApiKeyRoutingEditor', () => {
     fireEvent.click(trigger)
 
     assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+    const options = await view.findAllByRole('option')
+    assert.equal(options.length, availableGroups.length)
+    for (const group of availableGroups) {
+      const option = view.getByRole('option', {
+        name: `${group}${group}1x Ratio`,
+      })
+      assert.equal(
+        option.getAttribute('aria-disabled'),
+        String(!groups.includes(group))
+      )
+    }
+    fireEvent.click(
+      view.getByRole('option', { name: 'group-14group-141x Ratio' })
+    )
+    assert.equal(changedGroups, undefined)
 
     const removeButtons = view.getAllByRole('button', {
       name: /^Remove group-/,

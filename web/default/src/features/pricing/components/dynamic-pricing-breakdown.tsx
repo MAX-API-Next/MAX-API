@@ -103,12 +103,28 @@ function formatConditionSummary(
 ): string {
   return conditions
     .map((c) => {
+      if (['hour', 'minute', 'weekday', 'month', 'day'].includes(c.var)) {
+        const timeLabel = TIME_FUNC_LABELS[c.var] || c.var
+        return `${t(timeLabel)} ${OP_LABELS[c.op] || c.op} ${c.value} (${c.timezone || 'UTC'})`
+      }
       const varLabel = t(VAR_LABELS[c.var] || c.var)
       const hint = formatTokenHint(c.value)
       return `${varLabel} ${OP_LABELS[c.op] || c.op} ${hint || c.value}`
     })
     .filter(Boolean)
     .join(' && ')
+}
+
+function formatTierConditionSummary(
+  tier: Pick<ParsedTier, 'conditions' | 'conditionGroups'>,
+  t: (key: string) => string
+): string {
+  if (tier.conditionGroups && tier.conditionGroups.length > 1) {
+    return tier.conditionGroups
+      .map((group) => `(${formatConditionSummary(group, t)})`)
+      .join(' || ')
+  }
+  return formatConditionSummary(tier.conditions, t)
 }
 
 function describeCondition(
@@ -222,9 +238,10 @@ export function DynamicPricingBreakdown({
   const visiblePriceFields = BILLING_PRICING_VARS.filter((v) => {
     if (!hasTiers) return false
     if (hideCacheColumns && v.group === 'cache') return false
-    return tiers.some(
-      (tier) => Number(tier[v.field as string as keyof ParsedTier] || 0) > 0
-    )
+    return tiers.some((tier) => {
+      const value = tier[v.field as string]
+      return typeof value === 'number' && Number.isFinite(value)
+    })
   })
 
   return (
@@ -250,7 +267,7 @@ export function DynamicPricingBreakdown({
           </div>
           <div className='space-y-1.5 sm:hidden'>
             {tiers.map((tier, i) => {
-              const condSummary = formatConditionSummary(tier.conditions, t)
+              const condSummary = formatTierConditionSummary(tier, t)
               const isMatched =
                 matchedTierLabel != null &&
                 matchedTierLabel !== '' &&
@@ -286,16 +303,14 @@ export function DynamicPricingBreakdown({
                   )}
                   <div className='grid grid-cols-2 gap-x-3 gap-y-1.5'>
                     {visiblePriceFields.map((v) => {
-                      const value = Number(
-                        tier[v.field as string as keyof ParsedTier] || 0
-                      )
+                      const value = tier[v.field as string]
                       return (
                         <div key={v.field} className='min-w-0'>
                           <div className='text-muted-foreground truncate text-[10px] font-medium tracking-wider uppercase'>
                             {t(v.shortLabel)}
                           </div>
                           <div className='truncate font-mono text-sm font-semibold'>
-                            {value > 0
+                            {typeof value === 'number' && Number.isFinite(value)
                               ? `${symbol}${(value * rate).toFixed(4)}`
                               : '-'}
                           </div>
@@ -326,7 +341,7 @@ export function DynamicPricingBreakdown({
               </TableHeader>
               <TableBody>
                 {tiers.map((tier, i) => {
-                  const condSummary = formatConditionSummary(tier.conditions, t)
+                  const condSummary = formatTierConditionSummary(tier, t)
                   const isMatched =
                     normalizedMatchedTierLabel !== '' &&
                     normalizeTierLabel(tier.label) ===
@@ -363,15 +378,14 @@ export function DynamicPricingBreakdown({
                         )}
                       </TableCell>
                       {visiblePriceFields.map((v) => {
-                        const value = Number(
-                          tier[v.field as string as keyof ParsedTier] || 0
-                        )
+                        const value = tier[v.field as string]
                         return (
                           <TableCell
                             key={v.field}
                             className='py-2.5 text-right align-top font-mono'
                           >
-                            {value > 0 ? (
+                            {typeof value === 'number' &&
+                            Number.isFinite(value) ? (
                               <span className='font-semibold'>
                                 {`${symbol}${(value * rate).toFixed(4)}`}
                               </span>

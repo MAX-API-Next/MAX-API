@@ -16,6 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import {
+  isSupportedNumericLiteral,
+  splitTopLevelExpression,
+  unwrapConditionParens,
+} from './expression-syntax'
+
 /**
  * Billing expression parsing utilities.
  *
@@ -160,11 +166,6 @@ export const BILLING_CACHE_VAR_MAP = BILLING_EXTRA_VARS.map((v) => ({
   exprVar: v.key,
 }))
 
-const BILLING_VAR_REGEX = new RegExp(
-  `\\b(${BILLING_PRICING_VARS.map((v) => v.key).join('|')})\\s*\\*\\s*([\\d.eE+-]+)`,
-  'g'
-)
-
 // ---------------------------------------------------------------------------
 // Request rule constants
 // ---------------------------------------------------------------------------
@@ -229,14 +230,16 @@ export type RequestRuleGroup = {
 }
 
 export type TierCondition = {
-  var: 'p' | 'c' | 'len'
+  var: 'p' | 'c' | 'len' | 'hour' | 'minute' | 'weekday' | 'month' | 'day'
   op: '<' | '<=' | '>' | '>='
   value: number
+  timezone?: string
 }
 
 export type ParsedTier = {
   label: string
   conditions: TierCondition[]
+  conditionGroups?: TierCondition[][]
   [field: string]: unknown
 }
 
@@ -251,51 +254,93 @@ function stripExprVersion(exprStr: string): { version: number; body: string } {
   return { version: 1, body: exprStr }
 }
 
-function parseTierBody(bodyStr: string): Record<string, number> {
-  const coeffs: Record<string, number> = {}
-  const re = new RegExp(BILLING_VAR_REGEX.source, 'g')
-  let m
-  while ((m = re.exec(bodyStr)) !== null) {
-    if (!(m[1] in coeffs)) coeffs[m[1]] = Number(m[2])
-  }
+function parseTierBody(bodyStr: string): Record<string, number> | null {
+  const body = bodyStr.trim()
+  // Consume every term and separator. Unsupported bodies must stay raw.
+  const termRe =
+    /\s*([a-z][a-z0-9_]*)\s*\*\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*/y
   const tier: Record<string, number> = {}
-  for (const [varName, field] of Object.entries(BILLING_VAR_KEY_TO_FIELD)) {
-    tier[field] = coeffs[varName] || 0
+  while (termRe.lastIndex < body.length) {
+    const match = termRe.exec(body)
+    if (!match || !Object.hasOwn(BILLING_VAR_KEY_TO_FIELD, match[1]))
+      return null
+    const field = BILLING_VAR_KEY_TO_FIELD[match[1]]
+    if (Object.hasOwn(tier, field) || !isSupportedNumericLiteral(match[2]))
+      return null
+    tier[field] = Number(match[2])
+    if (termRe.lastIndex === body.length) return tier
+    if (body[termRe.lastIndex] !== '+') return null
+    termRe.lastIndex += 1
   }
-  return tier
+  return null
 }
 
 export function parseTiersFromExpr(exprStr: string): ParsedTier[] {
   if (!exprStr) return []
   try {
     const { body } = stripExprVersion(exprStr)
-    const condGroup =
-      `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)` +
-      `(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`
-    const tierRe = new RegExp(
-      `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*([^)]+)\\)`,
-      'g'
-    )
+    const tierRe = /^tier\("([^"]*)",\s*([\s\S]+)\)$/
     const tiers: ParsedTier[] = []
-    let m
-    while ((m = tierRe.exec(body)) !== null) {
-      const condStr = m[1] || ''
-      const conditions: TierCondition[] = []
-      if (condStr) {
-        for (const cp of condStr.split(/\s*&&\s*/)) {
-          const cm = cp.trim().match(/^(p|c|len)\s*(<|<=|>|>=)\s*([\d.eE+]+)$/)
-          if (cm) {
-            conditions.push({
-              var: cm[1] as TierCondition['var'],
-              op: cm[2] as TierCondition['op'],
-              value: Number(cm[3]),
-            })
-          }
+    const branches = splitTopLevelExpression(
+      unwrapConditionParens(body),
+      ':',
+      true
+    )
+    for (const [index, branch] of branches.entries()) {
+      const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
+      // A complete ternary chain ends in exactly one unconditional fallback.
+      const expectsCondition = index < branches.length - 1
+      if (Boolean(parts) !== expectsCondition) return []
+      const condStr = parts?.[1]?.trim() || ''
+      const tierMatch = tierRe.exec(parts?.[2] || branch)
+      if (!tierMatch || (parts && !condStr)) return []
+      const conditionGroups: TierCondition[][] = []
+      let isUnconditional = false
+      const groups = condStr
+        ? splitTopLevelExpression(unwrapConditionParens(condStr), '||', true)
+        : []
+      for (const group of groups) {
+        const atoms = splitTopLevelExpression(
+          unwrapConditionParens(group),
+          '&&',
+          true
+        )
+        if (
+          atoms.length > 0 &&
+          atoms.every((atom) => unwrapConditionParens(atom) === 'true')
+        ) {
+          // Still validate the remaining groups before using structured pricing.
+          isUnconditional = true
+          continue
         }
+        const groupConditions: TierCondition[] = []
+        for (const cp of atoms) {
+          const atom = unwrapConditionParens(cp)
+          if (atom === 'true') continue
+          const cm = atom.match(
+            /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("((?:[^"\\]|\\.)*)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+          )
+          // A partial condition would advertise a different pricing contract.
+          if (!cm || !isSupportedNumericLiteral(cm[5])) return []
+          groupConditions.push({
+            var: (cm[1] || cm[2]) as TierCondition['var'],
+            op: cm[4] as TierCondition['op'],
+            value: Number(cm[5]),
+            ...(cm[2] ? { timezone: JSON.parse(`"${cm[3]}"`) as string } : {}),
+          })
+        }
+        if (groupConditions.length > 0) conditionGroups.push(groupConditions)
       }
-      const tier = parseTierBody(m[3]) as ParsedTier
-      tier.label = m[2]
-      tier.conditions = conditions
+      const prices = parseTierBody(tierMatch[2])
+      if (!prices) return []
+      const tier: ParsedTier = {
+        ...prices,
+        label: tierMatch[1],
+        conditions: isUnconditional ? [] : conditionGroups.flat(),
+      }
+      if (!isUnconditional && conditionGroups.length > 1) {
+        tier.conditionGroups = conditionGroups
+      }
       tiers.push(tier)
     }
     return tiers

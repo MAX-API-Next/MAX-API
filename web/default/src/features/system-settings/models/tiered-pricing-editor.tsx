@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -189,8 +190,18 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
       if (next === 'visual') {
         const { billingExpr, requestRuleExpr: ruleStr } =
           splitRawExprWithFallback(rawExpr, rawExprFallback)
-        setRawExprFallback(null)
         const parsed = tryParseVisualConfig(billingExpr)
+        // An unsupported expression must stay intact in raw mode. Only a
+        // genuinely empty draft may start with the default zero-price tier.
+        if (!parsed && billingExpr.trim()) {
+          toast.error(
+            t(
+              'This expression is too complex for the visual editor. Please switch to expression mode to edit.'
+            )
+          )
+          return
+        }
+        setRawExprFallback(null)
         if (parsed) {
           setVisualConfig(parsed)
         } else {
@@ -231,6 +242,7 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
       requestRulesCompatible,
       currentRequestRuleExpr,
       onRequestRuleExprChange,
+      t,
     ]
   )
 

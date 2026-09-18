@@ -15,6 +15,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -413,6 +414,21 @@ func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+	postTextConsumeQuota(ctx, relayInfo, usage, extraContent, true)
+}
+
+// PostPartialConsumeQuota settles delivered usage without recording a successful
+// request. The controller owns the terminal error and its failure metric.
+func PostPartialConsumeQuota(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage) {
+	if (usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0) &&
+		(ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)) {
+		postAudioConsumeQuota(ctx, info, usage, "partial upstream response", false)
+	} else {
+		postTextConsumeQuota(ctx, info, usage, []string{"partial upstream response"}, false)
+	}
+}
+
+func postTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string, recordSuccess bool) {
 	relayInfo.CommitToolUsageAttempt()
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
@@ -583,7 +599,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
-	})
+	if recordSuccess {
+		gopool.Go(func() {
+			perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		})
+	}
 }

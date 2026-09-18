@@ -18,20 +18,69 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { Parser, type Value } from 'expr-eval'
 import { BILLING_CACHE_VAR_MAP } from './billing-expr'
+import {
+  isSupportedNumericLiteral,
+  splitTopLevelExpression,
+  unwrapConditionParens,
+} from './expression-syntax'
 
 export const CACHE_MODE_TIMED = 'timed'
 export const CACHE_MODE_GENERIC = 'generic'
 export type CacheMode = typeof CACHE_MODE_TIMED | typeof CACHE_MODE_GENERIC
 
 export type TierConditionInput = {
-  var: 'p' | 'c' | 'len'
+  var: 'p' | 'c' | 'len' | 'hour' | 'minute' | 'weekday' | 'month' | 'day'
   op: '<' | '<=' | '>' | '>='
   value: number | string
+  timezone?: string
+}
+
+export type TierConditionGroup = {
+  conditions: TierConditionInput[]
+}
+
+type TierConditionBounds = { min: number; max: number; defaultValue: number }
+
+export const TIME_CONDITION_BOUNDS: Record<
+  Extract<
+    TierConditionInput['var'],
+    'hour' | 'minute' | 'weekday' | 'month' | 'day'
+  >,
+  TierConditionBounds
+> = {
+  hour: { min: 0, max: 23, defaultValue: 9 },
+  minute: { min: 0, max: 59, defaultValue: 0 },
+  weekday: { min: 0, max: 6, defaultValue: 1 },
+  month: { min: 1, max: 12, defaultValue: 1 },
+  day: { min: 1, max: 31, defaultValue: 1 },
+}
+
+export function getTierConditionBounds(
+  variable: TierConditionInput['var']
+): TierConditionBounds | undefined {
+  return TIME_CONDITION_BOUNDS[variable as keyof typeof TIME_CONDITION_BOUNDS]
+}
+
+export function normalizeTierCondition(
+  condition: TierConditionInput
+): TierConditionInput {
+  const bounds = getTierConditionBounds(condition.var)
+  if (!bounds) return condition
+  const numericValue = Number(condition.value)
+  const value = Number.isFinite(numericValue)
+    ? Math.min(bounds.max, Math.max(bounds.min, numericValue))
+    : bounds.defaultValue
+  return {
+    ...condition,
+    value,
+    timezone: condition.timezone ?? 'Asia/Shanghai',
+  }
 }
 
 export type VisualTier = {
   label: string
   conditions: TierConditionInput[]
+  conditionGroups?: TierConditionGroup[]
   input_unit_cost: number
   output_unit_cost: number
   cache_mode: CacheMode
@@ -45,6 +94,18 @@ export type VisualTier = {
   [field: string]: unknown
 }
 
+export function getTierConditionGroups(
+  tier: Pick<VisualTier, 'conditions' | 'conditionGroups'>
+): TierConditionGroup[] {
+  if (Array.isArray(tier.conditionGroups) && tier.conditionGroups.length > 0) {
+    const groups = tier.conditionGroups.filter((group) =>
+      Array.isArray(group.conditions)
+    )
+    if (groups.length > 0) return groups
+  }
+  return tier.conditions.length > 0 ? [{ conditions: tier.conditions }] : []
+}
+
 export type VisualConfig = {
   tiers: VisualTier[]
 }
@@ -54,7 +115,7 @@ export function getTierCacheMode(
 ): CacheMode {
   if (tier?.cache_mode === CACHE_MODE_TIMED) return CACHE_MODE_TIMED
   if (tier?.cache_mode === CACHE_MODE_GENERIC) return CACHE_MODE_GENERIC
-  return Number(tier?.cache_create_1h_unit_cost) > 0
+  return tier?.cache_create_1h_unit_cost != null
     ? CACHE_MODE_TIMED
     : CACHE_MODE_GENERIC
 }
@@ -67,15 +128,31 @@ export function normalizeVisualTier(
     input_unit_cost: Number(tier.input_unit_cost) || 0,
     output_unit_cost: Number(tier.output_unit_cost) || 0,
     cache_mode: getTierCacheMode(tier),
-    conditions: Array.isArray(tier.conditions) ? tier.conditions : [],
     ...tier,
-    cache_read_unit_cost: Number(tier.cache_read_unit_cost) || 0,
-    cache_create_unit_cost: Number(tier.cache_create_unit_cost) || 0,
-    cache_create_1h_unit_cost: Number(tier.cache_create_1h_unit_cost) || 0,
-    image_unit_cost: Number(tier.image_unit_cost) || 0,
-    image_output_unit_cost: Number(tier.image_output_unit_cost) || 0,
-    audio_input_unit_cost: Number(tier.audio_input_unit_cost) || 0,
-    audio_output_unit_cost: Number(tier.audio_output_unit_cost) || 0,
+    conditions: Array.isArray(tier.conditions)
+      ? tier.conditions.map((condition) => normalizeTierCondition(condition))
+      : [],
+    ...(Array.isArray(tier.conditionGroups)
+      ? {
+          conditionGroups: tier.conditionGroups
+            .filter((group) => Array.isArray(group.conditions))
+            .map((group) => ({
+              conditions: group.conditions.map((condition) =>
+                normalizeTierCondition(condition)
+              ),
+            })),
+        }
+      : {}),
+    // Presence is part of the billing contract: an omitted subcategory stays
+    // in p/c, while an explicit zero excludes it and prices it for free.
+    ...Object.fromEntries(
+      BILLING_CACHE_VAR_MAP.map(({ field }) => [
+        field,
+        tier[field] == null || tier[field] === ''
+          ? undefined
+          : Number(tier[field]),
+      ])
+    ),
   }
 }
 
@@ -108,9 +185,50 @@ export function normalizeVisualConfig(
 function buildConditionStr(conditions: TierConditionInput[]): string {
   if (!conditions || conditions.length === 0) return ''
   return conditions
-    .filter((c) => c.var && c.op && c.value != null && c.value !== '')
-    .map((c) => `${c.var} ${c.op} ${c.value}`)
+    .filter((c: TierConditionInput): boolean =>
+      Boolean(c.var && c.op && c.value != null && c.value !== '')
+    )
+    .map((c: TierConditionInput): string => {
+      const lhs = getTierConditionBounds(c.var)
+        ? `${c.var}(${JSON.stringify(String(c.timezone || 'Asia/Shanghai'))})`
+        : c.var
+      return `${lhs} ${c.op} ${c.value}`
+    })
     .join(' && ')
+}
+
+function parseTierConditionGroups(conditionStr: string): TierConditionGroup[] {
+  if (!conditionStr || conditionStr.trim() === 'true') return []
+  const atomPattern =
+    /^(?:(p|c|len)|((?:hour|minute|weekday|month|day))\("((?:[^"\\]|\\.)*)"\))\s*(<=|>=|<|>)\s*([\d.eE+-]+)$/
+  return splitTopLevelExpression(unwrapConditionParens(conditionStr), '||')
+    .map((groupStr) => unwrapConditionParens(groupStr))
+    .map((groupStr) => {
+      const conditions: TierConditionInput[] = []
+      for (const atom of splitTopLevelExpression(groupStr, '&&')) {
+        const match = atom.trim().match(atomPattern)
+        if (!match) continue
+        conditions.push({
+          var: (match[1] || match[2]) as TierConditionInput['var'],
+          op: match[4] as TierConditionInput['op'],
+          value: Number(match[5]),
+          ...(match[2]
+            ? { timezone: JSON.parse(`"${match[3]}"`) as string }
+            : {}),
+        })
+      }
+      return { conditions }
+    })
+    .filter((group) => group.conditions.length > 0)
+}
+
+function buildConditionExpr(tier: VisualTier): string {
+  const groups = getTierConditionGroups(tier)
+    .map((group) => buildConditionStr(group.conditions))
+    .filter(Boolean)
+  if (groups.length === 0) return ''
+  if (groups.length === 1) return groups[0]
+  return groups.map((group) => `(${group})`).join(' || ')
 }
 
 function buildTierBodyExpr(tier: VisualTier): string {
@@ -120,8 +238,10 @@ function buildTierBodyExpr(tier: VisualTier): string {
   parts.push(`p * ${ic}`)
   parts.push(`c * ${oc}`)
   for (const cv of BILLING_CACHE_VAR_MAP) {
-    const v = Number((tier as Record<string, unknown>)[cv.field]) || 0
-    if (v !== 0) parts.push(`${cv.exprVar} * ${v}`)
+    const value = tier[cv.field]
+    if (value != null && value !== '') {
+      parts.push(`${cv.exprVar} * ${Number(value)}`)
+    }
   }
   return parts.join(' + ')
 }
@@ -138,9 +258,9 @@ export function generateExprFromVisualConfig(
     const tier = tiers[0]
     const label = tier.label || 'default'
     const body = `tier("${label}", ${buildTierBodyExpr(tier)})`
-    const cond = buildConditionStr(tier.conditions)
+    const cond = buildConditionExpr(tier)
     if (cond) {
-      return `${cond} ? ${body} : p * 0 + c * 0`
+      return `${cond} ? ${body} : tier("${label}_fallback", ${buildTierBodyExpr(tier)})`
     }
     return body
   }
@@ -150,15 +270,75 @@ export function generateExprFromVisualConfig(
     const tier = tiers[i]
     const label = tier.label || `tier_${i + 1}`
     const body = `tier("${label}", ${buildTierBodyExpr(tier)})`
-    const cond = buildConditionStr(tier.conditions)
+    const cond = buildConditionExpr(tier)
 
-    if (i < tiers.length - 1 && cond) {
+    if (cond) {
       parts.push(`${cond} ? ${body}`)
     } else {
-      parts.push(body)
+      // An unconditional non-final tier is an intentional always-match
+      // branch, such as after removing its last condition.
+      parts.push(i < tiers.length - 1 ? `true ? ${body}` : body)
     }
   }
+  const last = tiers[tiers.length - 1]
+  if (buildConditionExpr(last)) {
+    parts.push(
+      `tier("${last.label || 'fallback'}_fallback", ${buildTierBodyExpr(last)})`
+    )
+  }
   return parts.join(' : ')
+}
+
+// Compare the visual subset without changing quoted labels or accepting
+// integer rounding/underflow as a harmless spelling difference.
+function canonicalizeExprForComparison(source: string): string {
+  let result = ''
+  let quote = ''
+  let escaped = false
+  let index = 0
+
+  while (index < source.length) {
+    const char = source[index]
+    if (quote) {
+      result += char
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === quote) quote = ''
+      index += 1
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      result += char
+      index += 1
+      continue
+    }
+    if (/\s/.test(char)) {
+      index += 1
+      continue
+    }
+
+    const previous = source[index - 1]
+    const isNumberStart =
+      /[0-9.]/.test(char) &&
+      !/[A-Za-z0-9_.]/.test(previous || '') &&
+      (/[0-9]/.test(char) || /[0-9]/.test(source[index + 1] || ''))
+    if (isNumberStart) {
+      const match = source
+        .slice(index)
+        .match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/)
+      if (match) {
+        result += isSupportedNumericLiteral(match[0])
+          ? String(Number(match[0]))
+          : match[0]
+        index += match[0].length
+        continue
+      }
+    }
+    result += char
+    index += 1
+  }
+  return result
 }
 
 export function tryParseVisualConfig(
@@ -189,44 +369,48 @@ export function tryParseVisualConfig(
         const val = simple[4 + i]
         if (val != null) tier[cv.field] = Number(val)
       })
-      return normalizeVisualConfig({
+      const config = normalizeVisualConfig({
         tiers: [normalizeVisualTier(tier as Partial<VisualTier>)],
       })
+      // Like the multi-tier parser, refuse a lossy visual conversion.
+      return canonicalizeExprForComparison(
+        generateExprFromVisualConfig(config)
+      ) === canonicalizeExprForComparison(body)
+        ? config
+        : null
     }
 
-    const condGroup =
-      `((?:(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)` +
-      `(?:\\s*&&\\s*(?:p|c|len)\\s*(?:<|<=|>|>=)\\s*[\\d.eE+]+)*)`
-    const tierRe = new RegExp(
-      `(?:${condGroup}\\s*\\?\\s*)?tier\\("([^"]*)",\\s*${bodyPat}\\)`,
-      'g'
-    )
+    const tierRe = new RegExp(`^tier\\("([^"]*)",\\s*${bodyPat}\\)$`)
     const tiers: VisualTier[] = []
-    let match: RegExpExecArray | null
-    while ((match = tierRe.exec(body)) !== null) {
-      const condStr = match[1] || ''
-      const conditions: TierConditionInput[] = []
-      if (condStr) {
-        for (const cp of condStr.split(/\s*&&\s*/)) {
-          const cm = cp.trim().match(/^(p|c|len)\s*(<|<=|>|>=)\s*([\d.eE+]+)$/)
-          if (cm) {
-            conditions.push({
-              var: cm[1] as TierConditionInput['var'],
-              op: cm[2] as TierConditionInput['op'],
-              value: Number(cm[3]),
-            })
-          }
-        }
-      }
+    const branches = splitTopLevelExpression(body, ':')
+    // The splitter omits empty parts. Reject missing branches before comparing
+    // conditions with only their complete outer parentheses removed.
+    if (
+      canonicalizeExprForComparison(branches.join(':')) !==
+      canonicalizeExprForComparison(body)
+    )
+      return null
+    const comparisonBranches: string[] = []
+    for (const branch of branches) {
+      const parts = branch.match(/^(.*?)\s*\?\s*(tier\("[^"]*",[\s\S]+\))$/)
+      const condStr = parts?.[1]?.trim() || ''
+      const tierSource = parts?.[2] || branch
+      comparisonBranches.push(
+        parts ? `${unwrapConditionParens(condStr)} ? ${tierSource}` : branch
+      )
+      const match = tierRe.exec(tierSource)
+      if (!match) continue
+      const conditionGroups = parseTierConditionGroups(condStr)
+      const conditions = conditionGroups[0]?.conditions ?? []
       const tier: Record<string, unknown> = {
         conditions,
-        input_unit_cost: Number(match[3]),
-        output_unit_cost: Number(match[4]),
-        label: match[2],
+        ...(conditionGroups.length > 1 ? { conditionGroups } : {}),
+        input_unit_cost: Number(match[2]),
+        output_unit_cost: Number(match[3]),
+        label: match[1],
       }
-      const m = match
       BILLING_CACHE_VAR_MAP.forEach((cv, i) => {
-        const val = m[5 + i]
+        const val = match[4 + i]
         if (val != null) tier[cv.field] = Number(val)
       })
       tiers.push(normalizeVisualTier(tier as Partial<VisualTier>))
@@ -235,7 +419,10 @@ export function tryParseVisualConfig(
 
     const cfg = normalizeVisualConfig({ tiers })
     const regenerated = generateExprFromVisualConfig(cfg)
-    if (regenerated.replace(/\s+/g, '') !== body.replace(/\s+/g, '')) {
+    if (
+      canonicalizeExprForComparison(regenerated) !==
+      canonicalizeExprForComparison(comparisonBranches.join(' : '))
+    ) {
       return null
     }
     return cfg

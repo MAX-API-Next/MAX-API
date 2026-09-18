@@ -31,6 +31,35 @@ const probeExpr = `param("service_tier") == "fast" ? tier("fast", p * 4 + c * 20
 
 const testQuotaPerUnit = 500_000.0
 
+func TestVisualZeroPriceContractKeepsNormalizationAndQuota(t *testing.T) {
+	for _, variable := range []string{"cr", "cc", "cc1h", "img", "img_o", "ai", "ao"} {
+		expr := `tier("base", p * 3 + c * 15 + ` + variable + ` * 0)`
+		require.True(t, billingexpr.UsedVars(expr)[variable], "zero coefficient must not remove %s from the normalization contract", variable)
+	}
+	usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100, TotalTokens: 1100}
+	usage.PromptTokensDetails.CachedTokens = 800
+	usage.CompletionTokenDetails.ImageTokens = 80
+	for _, tc := range []struct {
+		expr  string
+		p, c  float64
+		quota int
+	}{
+		{`tier("base", p * 3 + c * 15)`, 1000, 100, 2250},
+		{`tier("base", p * 3 + c * 15 + cr * 0)`, 200, 100, 1050},
+		{`tier("base", p * 3 + c * 15 + cr * 0 + img_o * 0)`, 200, 20, 450},
+		{`len < 2000 ? tier("base", p * 3 + c * 15 + cr * 0 + img_o * 0) : tier("other", p * 6 + c * 30)`, 200, 20, 450},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(tc.expr))
+			require.Equal(t, tc.p, params.P)
+			require.Equal(t, tc.c, params.C)
+			ok, quota, _ := TryTieredSettle(makeRelayInfo(tc.expr, 1, 1000, 100), params)
+			require.True(t, ok)
+			require.Equal(t, tc.quota, quota)
+		})
+	}
+}
+
 func makeSnapshot(expr string, groupRatio float64, estPrompt, estCompletion int) *billingexpr.BillingSnapshot {
 	return &billingexpr.BillingSnapshot{
 		BillingMode:               "tiered_expr",
