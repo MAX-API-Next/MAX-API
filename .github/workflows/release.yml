@@ -61,7 +61,6 @@ jobs:
           files: |
             max-api-*
             checksums-linux.txt
-            NOTICE
             LICENSE
             THIRD-PARTY-LICENSES.md
         env:
@@ -110,7 +109,6 @@ jobs:
           files: |
             max-api-macos-*
             checksums-macos.txt
-            NOTICE
             LICENSE
             THIRD-PARTY-LICENSES.md
         env:
@@ -161,7 +159,6 @@ jobs:
           files: |
             max-api-*.exe
             checksums-windows.txt
-            NOTICE
             LICENSE
             THIRD-PARTY-LICENSES.md
         env:
