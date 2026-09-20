@@ -3700,6 +3700,7 @@
     "Price: High to Low": "价格：从高到低",
     "Price: Low to High": "价格：从低到高",
     "Prices shown per": "价格显示单位",
+    "Prices shown per {{unit}} tokens": "价格按每 {{unit}} 个令牌显示",
     "Prices synced successfully": "价格同步成功",
     "Prices vary by usage tier and request conditions": "价格根据用量档位和请求条件动态调整",
     "Pricing": "定价",

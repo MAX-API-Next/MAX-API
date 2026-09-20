@@ -3700,6 +3700,7 @@
     "Price: High to Low": "Price: High to Low",
     "Price: Low to High": "Price: Low to High",
     "Prices shown per": "Prices shown per",
+    "Prices shown per {{unit}} tokens": "Prices shown per {{unit}} tokens",
     "Prices synced successfully": "Prices synced successfully",
     "Prices vary by usage tier and request conditions": "Prices vary by usage tier and request conditions",
     "Pricing": "Pricing",

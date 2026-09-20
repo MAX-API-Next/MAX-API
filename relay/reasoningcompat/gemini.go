@@ -62,15 +62,19 @@ func GeminiConfig(model string, intent Intent, maxTokens *uint, percentage float
 	}
 	notes := []string{}
 	config := &dto.GeminiThinkingConfig{IncludeThoughts: intent.Include}
-	if geminiKind(model) == "unsupported" {
+	kind := geminiKind(model)
+	if kind == "unknown" {
+		// Capability lookup is not a model allowlist. Keep older and custom
+		// model requests usable without inventing a budget or thinking level.
+		return nil, "", []string{fmt.Sprintf("unknown Gemini thinking capabilities for model %q; compatibility reasoning controls were not applied", model)}, nil
+	}
+	if kind == "unsupported" {
 		return nil, "", []string{"model does not support configurable thinking"}, nil
 	}
 	if intent.Mode == "" && intent.Effort == "" && intent.Budget == nil {
 		return config, "", notes, nil
 	}
-	switch geminiKind(model) {
-	case "unknown":
-		return nil, "", nil, fmt.Errorf("cannot translate reasoning controls for unknown Gemini model %q", model)
+	switch kind {
 	case "include-only":
 		return config, "high", []string{"model only supports includeThoughts; reasoning strength is fixed"}, nil
 	case "level":

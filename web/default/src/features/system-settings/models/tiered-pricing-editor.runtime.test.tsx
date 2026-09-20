@@ -24,7 +24,7 @@ import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { after, before, describe, test } from 'node:test'
+import { after, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import {
   BILLING_EXTRA_VARS,
@@ -821,7 +821,7 @@ describe('optional zero prices in the actual editor', () => {
   })
 })
 
-before(async () => {
+async function setup(): Promise<void> {
   await i18n.init({
     lng: 'en',
     fallbackLng: 'en',
@@ -873,7 +873,11 @@ before(async () => {
   ;({ TaskRateCardSettings } = await import('./task-rate-card-settings'))
   ;({ SettingsPageProvider } =
     await import('../components/settings-page-context'))
-})
+}
+
+// Module loading precedes timed interactions, just as it does on a loaded page.
+// Keep DOM installation before imports so Base UI uses its browser lifecycle.
+await setup()
 
 after(() => {
   restoreGlobals()

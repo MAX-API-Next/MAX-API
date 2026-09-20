@@ -54,6 +54,7 @@ describe('Model square expression pricing', () => {
       ).translation
       for (const key of [
         'Tier applicability',
+        'Prices shown per {{unit}} tokens',
         'Tiers are checked in order; the first match applies.',
         'When no earlier tier matches',
         'All conditions in a group must match.',
@@ -67,6 +68,39 @@ describe('Model square expression pricing', () => {
       }
     })
   }
+
+  test('localizes the complete token-unit sentence for both display units', async () => {
+    const resource = JSON.parse(
+      readFileSync(
+        new URL('../../../i18n/locales/fr.json', import.meta.url),
+        'utf8'
+      )
+    ).translation
+    testEnv.i18n.addResourceBundle('fr', 'translation', resource)
+    await testEnv.i18n.changeLanguage('fr')
+    try {
+      for (const tokenUnit of ['K', 'M'] as const) {
+        const view = await testEnv.render(
+          <ModelTierPricing
+            {...displayOptions}
+            tokenUnit={tokenUnit}
+            billingExpr='tier("base", p * 2 + c * 8)'
+          />
+        )
+        try {
+          assert.ok(
+            within(view.container).getByText(
+              `Prix affichés pour 1${tokenUnit} jetons`
+            )
+          )
+        } finally {
+          await view.unmount()
+        }
+      }
+    } finally {
+      await testEnv.i18n.changeLanguage('en')
+    }
+  })
 
   test('preserves zero, absent and tiny coefficients and follows model square unit selection', async () => {
     const view = await testEnv.render(

@@ -210,8 +210,9 @@ func TestParameterCompatibilityReasoningBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, gem.GenerationConfig.ThinkingConfig)
 	info.UpstreamModelName = "gemini-unknown"
-	_, err = gemini.CovertOpenAI2Gemini(c, dto.GeneralOpenAIRequest{Model: info.UpstreamModelName, ReasoningEffort: "high"}, info)
-	require.ErrorContains(t, err, "unknown Gemini model")
+	gem, err = gemini.CovertOpenAI2Gemini(c, dto.GeneralOpenAIRequest{Model: info.UpstreamModelName, ReasoningEffort: "high"}, info)
+	require.NoError(t, err)
+	require.Nil(t, gem.GenerationConfig.ThinkingConfig)
 
 	var nativeGemini dto.GeminiChatRequest
 	require.NoError(t, common.UnmarshalJsonStr(`{"generationConfig":{"thinkingConfig":{"thinkingBudget":0,"includeThoughts":false}}}`, &nativeGemini))
@@ -228,6 +229,33 @@ func TestParameterCompatibilityReasoningBoundaries(t *testing.T) {
 	info.UpstreamModelName = "gemini-3-pro-high"
 	nativeGemini.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(-2)
 	require.ErrorContains(t, gemini.ThinkingAdaptor(&nativeGemini, info), "budget must be >= -1")
+}
+
+func TestParameterCompatibilityUnknownGeminiReasoningIsNonFatal(t *testing.T) {
+	for _, model := range []string{"gemini-2.0-flash", "gemini-1.5-pro", "gemma-3-27b-it", "operator-defined-model"} {
+		t.Run(model, func(t *testing.T) {
+			c, info := parameterContext()
+			info.UpstreamModelName = model
+			info.ReasoningEffort = "high"
+			out, err := gemini.CovertOpenAI2Gemini(c, dto.GeneralOpenAIRequest{
+				Model: model, ReasoningEffort: "high", IncludeReasoning: common.GetPointer(false),
+				MaxCompletionTokens: common.GetPointer(uint(0)), Messages: []dto.Message{{Role: "user", Content: "hello"}},
+			}, info)
+			require.NoError(t, err)
+			require.Nil(t, out.GenerationConfig.ThinkingConfig)
+			require.Empty(t, info.ReasoningEffort)
+			require.Equal(t, uint(0), *out.GenerationConfig.MaxOutputTokens)
+			require.Equal(t, "hello", out.Contents[0].Parts[0].Text)
+			config, effort, notes, err := reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Mode: "enabled", Effort: "high"}, nil, .6)
+			require.NoError(t, err)
+			require.Nil(t, config)
+			require.Empty(t, effort)
+			require.Len(t, notes, 1)
+			require.Contains(t, notes[0], model)
+			_, _, _, err = reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Effort: "typo"}, nil, .6)
+			require.Error(t, err, "invalid controls must not be treated as unknown capabilities")
+		})
+	}
 }
 
 func TestParameterCompatibilityGeminiReasoning(t *testing.T) {
@@ -338,6 +366,12 @@ func TestParameterCompatibilityZhipuResponses(t *testing.T) {
 		out, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, req)
 		require.NoError(t, err)
 		require.Equal(t, req, out)
+	}
+	for _, plan := range []string{"glm-coding-plan", "glm-coding-plan-international"} {
+		info.ChannelBaseUrl = plan
+		url, err := adaptor.GetRequestURL(info)
+		require.ErrorContains(t, err, "Responses is not supported for coding-plan base aliases")
+		require.Empty(t, url, "a plan alias is not an HTTP origin and must not fall back to a separately billed endpoint")
 	}
 }
 

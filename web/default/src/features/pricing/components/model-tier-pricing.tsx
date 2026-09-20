@@ -219,8 +219,9 @@ export function ModelTierPricing(props: ModelTierPricingProps) {
             <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
               <h4 className='text-sm font-medium'>{t('Tiered price table')}</h4>
               <span className='text-muted-foreground text-xs'>
-                {t('Prices shown per')} {props.tokenUnit === 'K' ? '1K' : '1M'}{' '}
-                tokens
+                {t('Prices shown per {{unit}} tokens', {
+                  unit: props.tokenUnit === 'K' ? '1K' : '1M',
+                })}
               </span>
             </div>
             <div className='hidden min-w-0 @min-[36rem]/tier-pricing:block'>
