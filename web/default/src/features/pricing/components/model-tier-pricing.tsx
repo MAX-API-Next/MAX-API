@@ -142,6 +142,10 @@ function TierApplicability(props: { tiers: ParsedTier[] }) {
             i18n.language,
             t('OR')
           )
+          const defaultTierMessage =
+            index === 0
+              ? t('Always matches (default tier).')
+              : t('When no earlier tier matches')
           return (
             <Card
               key={index}
@@ -162,9 +166,7 @@ function TierApplicability(props: { tiers: ParsedTier[] }) {
               <CardContent className='flex min-w-0 flex-col gap-2'>
                 {groups.length === 0 ? (
                   <p className='text-muted-foreground text-xs'>
-                    {index === 0
-                      ? t('Always matches (default tier).')
-                      : t('When no earlier tier matches')}
+                    {defaultTierMessage}
                   </p>
                 ) : (
                   <>
