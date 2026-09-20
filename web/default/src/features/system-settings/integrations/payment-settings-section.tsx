@@ -279,36 +279,6 @@ export function PaymentSettingsSection({
     [t]
   )
 
-  const complianceRequiredText = t(
-    'I have read and understood the above compliance reminder, acknowledge the related legal risks, and confirm that I bear legal responsibility arising from deployment, operation, and charging behavior.'
-  )
-  const complianceRequiredTextParts = React.useMemo(
-    () => [
-      {
-        type: 'input' as const,
-        text: t('I have read and understood the above compliance reminder'),
-      },
-      { type: 'static' as const, text: t('，') },
-      {
-        type: 'input' as const,
-        text: t('acknowledge the related legal risks'),
-      },
-      { type: 'static' as const, text: t('，and ') },
-      {
-        type: 'input' as const,
-        text: t(
-          'confirm that I bear legal responsibility arising from deployment'
-        ),
-      },
-      { type: 'static' as const, text: t('、') },
-      {
-        type: 'input' as const,
-        text: t('operation and charging behavior'),
-      },
-    ],
-    [t]
-  )
-
   const complianceConfirmed =
     complianceDefaults.confirmed &&
     complianceDefaults.termsVersion === CURRENT_COMPLIANCE_TERMS_VERSION
@@ -833,12 +803,7 @@ export function PaymentSettingsSection({
           'This confirmation unlocks payment, redemption code, subscription plan, and invitation reward features. Please read the statements carefully.'
         )}
         items={complianceStatements}
-        requiredText={complianceRequiredText}
-        requiredTextParts={complianceRequiredTextParts}
-        inputPrompt={t('Please type the following text to confirm:')}
-        inputPlaceholder={t('Type the confirmation text here')}
-        mismatchHint={t('The entered text does not match the required text.')}
-        confirmText={t('Confirm and enable')}
+        confirmText={t('Acknowledge and enable features')}
         isLoading={confirmComplianceMutation.isPending}
         onConfirm={() => confirmComplianceMutation.mutate()}
       />

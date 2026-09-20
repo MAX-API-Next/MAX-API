@@ -62,10 +62,21 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		Metadata:             req.Metadata,
 		SafetyIdentifier:     req.SafetyIdentifier,
 		PromptCacheRetention: req.PromptCacheRetention,
+		PromptCacheOptions:   req.PromptCacheOptions,
+		ChatTemplateKwargs:   req.ChatTemplateKwargs,
+		TopK:                 req.TopK,
+		MinP:                 req.MinP,
+		RepetitionPenalty:    req.RepetitionPenalty,
+		CacheSalt:            req.CacheSalt,
 		EnableThinking:       req.EnableThinking,
 		ThinkingBudget:       req.ThinkingBudget,
 	}
 	out.FrequencyPenalty = req.FrequencyPenalty
+	if len(req.Stop) > 0 {
+		if err := common.Unmarshal(req.Stop, &out.Stop); err != nil {
+			return nil, fmt.Errorf("invalid stop: %w", err)
+		}
+	}
 	out.PresencePenalty = req.PresencePenalty
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort

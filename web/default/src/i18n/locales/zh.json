@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Acknowledge and enable features": "我已阅读并确认，启用功能",
     "Time condition reference": "时间条件说明",
     "Hour: 0–23 (24-hour clock); 0 is midnight.": "小时：0–23，采用 24 小时制，0 表示午夜。",
     "Minute: 0–59 within the current hour.": "分钟：0–59，表示当前小时内的分钟数。",

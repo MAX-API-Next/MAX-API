@@ -94,11 +94,17 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) error {
+	if reasoning.PreserveModelSuffix(request.Model) || (info != nil && reasoning.PreserveModelSuffix(info.OriginModelName)) {
+		return nil
+	}
 	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	if reasoning.PreserveModelSuffix(modelName) {
+		return nil
+	}
 	if !ok {
 		return nil
 	}
@@ -121,11 +127,17 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 }
 
 func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) error {
+	if reasoning.PreserveModelSuffix(request.Model) || (info != nil && reasoning.PreserveModelSuffix(info.OriginModelName)) {
+		return nil
+	}
 	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	if reasoning.PreserveModelSuffix(modelName) {
+		return nil
+	}
 	if !ok {
 		return nil
 	}

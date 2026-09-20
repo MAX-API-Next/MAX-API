@@ -7,8 +7,8 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
-	"github.com/MAX-API-Next/MAX-API/relay/channel/openrouter"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/relay/reasonmap"
 	"github.com/samber/lo"
 )
@@ -33,24 +33,36 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 
 	isOpenRouter := info.ChannelType == constant.ChannelTypeOpenRouter
 
+	effort := claudeRequest.GetEfforts()
+	if claudeRequest.Thinking != nil {
+		switch claudeRequest.Thinking.Type {
+		case "disabled":
+			effort = "none"
+		case "adaptive":
+			if effort == "" {
+				effort = "high"
+			}
+		case "enabled":
+			if effort == "" && claudeRequest.Thinking.BudgetTokens != nil {
+				effort = reasoningcompat.EffortFromBudget(*claudeRequest.Thinking.BudgetTokens)
+			}
+		}
+	}
+	openAIRequest.ReasoningEffort = effort
 	if isOpenRouter {
-		if effort := claudeRequest.GetEfforts(); effort != "" {
-			effortBytes, _ := common.Marshal(effort)
-			openAIRequest.Verbosity = effortBytes
+		controls := map[string]any{}
+		if effort != "" && effort != "none" {
+			controls["effort"] = effort
 		}
 		if claudeRequest.Thinking != nil {
-			var reasoning openrouter.RequestReasoning
-			if claudeRequest.Thinking.Type == "enabled" {
-				reasoning = openrouter.RequestReasoning{
-					Enabled:   true,
-					MaxTokens: claudeRequest.Thinking.GetBudgetTokens(),
-				}
-			} else if claudeRequest.Thinking.Type == "adaptive" {
-				reasoning = openrouter.RequestReasoning{
-					Enabled: true,
-				}
+			controls["enabled"] = claudeRequest.Thinking.Type != "disabled"
+			if claudeRequest.Thinking.Type == "enabled" && claudeRequest.Thinking.BudgetTokens != nil {
+				controls["max_tokens"] = *claudeRequest.Thinking.BudgetTokens
+				delete(controls, "effort")
 			}
-			reasoningJSON, err := common.Marshal(reasoning)
+		}
+		if len(controls) > 0 {
+			reasoningJSON, err := common.Marshal(controls)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal reasoning: %w", err)
 			}
@@ -58,9 +70,8 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 		}
 	} else {
 		thinkingSuffix := "-thinking"
-		if strings.HasSuffix(info.OriginModelName, thinkingSuffix) &&
-			!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
-			openAIRequest.Model = openAIRequest.Model + thinkingSuffix
+		if strings.HasSuffix(info.OriginModelName, thinkingSuffix) && !strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
+			openAIRequest.Model += thinkingSuffix
 		}
 	}
 

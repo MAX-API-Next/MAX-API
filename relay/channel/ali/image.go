@@ -293,7 +293,10 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 }
 
 func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.MaxAPIError, *dto.Usage) {
-	responseFormat := c.GetString("response_format")
+	responseFormat := ""
+	if request, ok := info.Request.(*dto.ImageRequest); ok && request != nil {
+		responseFormat = request.ResponseFormat
+	}
 
 	var aliTaskResponse AliResponse
 	responseBody, err := io.ReadAll(resp.Body)

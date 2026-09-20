@@ -74,6 +74,9 @@ func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) jso
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
+	if req != nil && req.HasMessageTools() {
+		return nil, fmt.Errorf("message-scoped tools require an OpenAI-compatible Chat Completions upstream; cannot convert to Responses")
+	}
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
@@ -380,27 +383,40 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	out := &dto.OpenAIResponsesRequest{
-		Model:             req.Model,
-		Input:             inputRaw,
-		Instructions:      instructionsRaw,
-		Stream:            req.Stream,
-		Temperature:       req.Temperature,
-		Text:              textRaw,
-		ToolChoice:        toolChoiceRaw,
-		Tools:             toolsRaw,
-		TopP:              topP,
-		FrequencyPenalty:  req.FrequencyPenalty,
-		PresencePenalty:   req.PresencePenalty,
-		User:              req.User,
-		ParallelToolCalls: parallelToolCallsRaw,
-		Store:             req.Store,
-		Metadata:          req.Metadata,
-		PromptCacheKey:    promptCacheKeyRaw,
-		EnableThinking:    req.EnableThinking,
-		ThinkingBudget:    req.ThinkingBudget,
+		Model:                req.Model,
+		Input:                inputRaw,
+		Instructions:         instructionsRaw,
+		Stream:               req.Stream,
+		Temperature:          req.Temperature,
+		Text:                 textRaw,
+		ToolChoice:           toolChoiceRaw,
+		Tools:                toolsRaw,
+		TopP:                 topP,
+		FrequencyPenalty:     req.FrequencyPenalty,
+		PresencePenalty:      req.PresencePenalty,
+		User:                 req.User,
+		ParallelToolCalls:    parallelToolCallsRaw,
+		Store:                req.Store,
+		Metadata:             req.Metadata,
+		PromptCacheKey:       promptCacheKeyRaw,
+		PromptCacheOptions:   req.PromptCacheOptions,
+		PromptCacheRetention: req.PromptCacheRetention,
+		ChatTemplateKwargs:   req.ChatTemplateKwargs,
+		TopK:                 req.TopK,
+		MinP:                 req.MinP,
+		RepetitionPenalty:    req.RepetitionPenalty,
+		CacheSalt:            req.CacheSalt,
+		EnableThinking:       req.EnableThinking,
+		ThinkingBudget:       req.ThinkingBudget,
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)
+	}
+	if req.Stop != nil {
+		out.Stop, err = common.Marshal(req.Stop)
+		if err != nil {
+			return nil, fmt.Errorf("marshal stop: %w", err)
+		}
 	}
 
 	if req.ReasoningEffort != "" {

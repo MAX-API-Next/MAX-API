@@ -19,9 +19,9 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
+	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
-	"github.com/MAX-API-Next/MAX-API/setting/reasoning"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -52,153 +52,82 @@ var geminiSupportedMimeTypes = map[string]bool{
 
 const thoughtSignatureBypassValue = "context_engineering_is_the_way_to_go"
 
-// Gemini 允许的思考预算范围
-const (
-	pro25MinBudget       = 128
-	pro25MaxBudget       = 32768
-	flash25MaxBudget     = 24576
-	flash25LiteMinBudget = 512
-	flash25LiteMaxBudget = 24576
-)
-
-func isNew25ProModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-}
-
-func is25FlashLiteModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-flash-lite")
-}
-
-// clampThinkingBudget 根据模型名称将预算限制在允许的范围内
-func clampThinkingBudget(modelName string, budget int) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	if is25FlashLite {
-		if budget < flash25LiteMinBudget {
-			return flash25LiteMinBudget
-		}
-		if budget > flash25LiteMaxBudget {
-			return flash25LiteMaxBudget
-		}
-	} else if isNew25Pro {
-		if budget < pro25MinBudget {
-			return pro25MinBudget
-		}
-		if budget > pro25MaxBudget {
-			return pro25MaxBudget
-		}
-	} else { // 其他模型
-		if budget < 0 {
-			return 0
-		}
-		if budget > flash25MaxBudget {
-			return flash25MaxBudget
+func ThinkingAdaptor(req *dto.GeminiChatRequest, info *relaycommon.RelayInfo, chat ...dto.GeneralOpenAIRequest) error {
+	model := info.UpstreamModelName
+	intent := reasoningcompat.Intent{}
+	var err error
+	if len(chat) > 0 {
+		intent, err = reasoningcompat.FromChat(chat[0])
+		if err != nil {
+			return err
 		}
 	}
-	return budget
-}
-
-// "effort": "high" - Allocates a large portion of tokens for reasoning (approximately 80% of max_tokens)
-// "effort": "medium" - Allocates a moderate portion of tokens (approximately 50% of max_tokens)
-// "effort": "low" - Allocates a smaller portion of tokens (approximately 20% of max_tokens)
-// "effort": "minimal" - Allocates a minimal portion of tokens (approximately 5% of max_tokens)
-func clampThinkingBudgetByEffort(modelName string, effort string) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	maxBudget := 0
-	if is25FlashLite {
-		maxBudget = flash25LiteMaxBudget
-	}
-	if isNew25Pro {
-		maxBudget = pro25MaxBudget
-	} else {
-		maxBudget = flash25MaxBudget
-	}
-	switch effort {
-	case "high":
-		maxBudget = maxBudget * 80 / 100
-	case "medium":
-		maxBudget = maxBudget * 50 / 100
-	case "low":
-		maxBudget = maxBudget * 20 / 100
-	case "minimal":
-		maxBudget = maxBudget * 5 / 100
-	}
-	return clampThinkingBudget(modelName, maxBudget)
-}
-
-func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo, oaiRequest ...dto.GeneralOpenAIRequest) {
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
-		modelName := info.UpstreamModelName
-		isNew25Pro := strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-			!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-			!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-
-		if strings.Contains(modelName, "-thinking-") {
-			parts := strings.SplitN(modelName, "-thinking-", 2)
-			if len(parts) == 2 && parts[1] != "" {
-				if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
-					clampedBudget := clampThinkingBudget(modelName, budgetTokens)
-					geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-						ThinkingBudget:  common.GetPointer(clampedBudget),
-						IncludeThoughts: true,
-					}
-				}
-			}
-		} else if strings.HasSuffix(modelName, "-thinking") {
-			unsupportedModels := []string{
-				"gemini-2.5-pro-preview-05-06",
-				"gemini-2.5-pro-preview-03-25",
-			}
-			isUnsupported := false
-			for _, unsupportedModel := range unsupportedModels {
-				if strings.HasPrefix(modelName, unsupportedModel) {
-					isUnsupported = true
-					break
-				}
-			}
-
-			if isUnsupported {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
-				}
-			} else {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
-				}
-				if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
-					budgetTokens := model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage * float64(*geminiRequest.GenerationConfig.MaxOutputTokens)
-					clampedBudget := clampThinkingBudget(modelName, int(budgetTokens))
-					geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(clampedBudget)
-				} else {
-					if len(oaiRequest) > 0 {
-						// 如果有reasoningEffort参数，则根据其值设置思考预算
-						geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(clampThinkingBudgetByEffort(modelName, oaiRequest[0].ReasoningEffort))
-					}
-				}
-			}
-		} else if strings.HasSuffix(modelName, "-nothinking") {
-			if !isNew25Pro {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					ThinkingBudget: common.GetPointer(0),
-				}
-			}
-		} else if _, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-				ThinkingLevel:   level,
-			}
-			info.ReasoningEffort = level
+	base, suffix, found := model, reasoningcompat.Intent{}, false
+	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+		base, suffix, found, err = reasoningcompat.ParseSuffix(model, "gemini", true)
+		if err != nil {
+			return err
 		}
 	}
+	config := req.GenerationConfig.ThinkingConfig
+	// A native request without aliases retains exactly its own controls.
+	if len(chat) == 0 && !found {
+		return nil
+	}
+	if config != nil {
+		if config.ThinkingBudget != nil && config.ThinkingLevel != "" {
+			return fmt.Errorf("thinkingBudget and thinkingLevel are mutually exclusive")
+		}
+		native := reasoningcompat.Intent{Budget: config.ThinkingBudget, Include: config.IncludeThoughts}
+		if config.ThinkingLevel != "" {
+			native.Effort, err = reasoningcompat.NormalizeEffort(config.ThinkingLevel)
+			if err != nil {
+				return err
+			}
+		}
+		if native.Budget != nil || native.Effort != "" {
+			native.Mode = "enabled"
+		}
+		if native.Effort == "none" || (native.Budget != nil && *native.Budget == 0) {
+			native.Mode = "disabled"
+		}
+		intent, err = reasoningcompat.MergeSuffix(intent, native)
+		if err != nil {
+			return err
+		}
+		if native.Include != nil {
+			intent.Include = native.Include
+		}
+	}
+	if found {
+		intent, err = reasoningcompat.MergeSuffix(intent, suffix)
+		if err != nil {
+			return err
+		}
+	}
+	if intent.Empty() {
+		return nil
+	}
+	if intent.Include == nil && intent.Mode != "disabled" {
+		intent.Include = common.GetPointer(true)
+	}
+	converted, effort, notes, err := reasoningcompat.GeminiConfig(base, intent, req.GenerationConfig.MaxOutputTokens, model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage)
+	if err != nil {
+		return err
+	}
+	req.GenerationConfig.ThinkingConfig = converted
+	info.ReasoningEffort = effort
+	for _, note := range notes {
+		logger.LogWarn(context.Background(), note)
+	}
+	return nil
 }
 
 // Setting safety to the lowest possible values since Gemini is already powerless enough
 func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {
+	if textRequest.HasMessageTools() {
+		return nil, fmt.Errorf("message-scoped tools cannot be converted to Gemini")
+	}
 
 	geminiRequest := dto.GeminiChatRequest{
 		Contents: make([]dto.GeminiChatContent, 0, len(textRequest.Messages)),
@@ -207,15 +136,16 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		},
 	}
 
-	if textRequest.TopP != nil && *textRequest.TopP > 0 {
+	if textRequest.TopP != nil {
 		geminiRequest.GenerationConfig.TopP = common.GetPointer(*textRequest.TopP)
 	}
 
-	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
-		geminiRequest.GenerationConfig.MaxOutputTokens = common.GetPointer(maxTokens)
+	geminiRequest.GenerationConfig.MaxOutputTokens = textRequest.MaxCompletionTokens
+	if geminiRequest.GenerationConfig.MaxOutputTokens == nil {
+		geminiRequest.GenerationConfig.MaxOutputTokens = textRequest.MaxTokens
 	}
 
-	if textRequest.Seed != nil && *textRequest.Seed != 0 {
+	if textRequest.Seed != nil {
 		geminiSeed := int64(lo.FromPtr(textRequest.Seed))
 		geminiRequest.GenerationConfig.Seed = common.GetPointer(geminiSeed)
 	}
@@ -238,8 +168,6 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		geminiRequest.GenerationConfig.StopSequences = stopSequences
 	}
 
-	adaptorWithExtraBody := false
-
 	// patch extra_body
 	if len(textRequest.ExtraBody) > 0 {
 		var extraBody map[string]interface{}
@@ -249,71 +177,32 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 
 		// eg. {"google":{"thinking_config":{"thinking_budget":5324,"include_thoughts":true}}}
 		if googleBody, ok := extraBody["google"].(map[string]interface{}); ok {
-			if !strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-				adaptorWithExtraBody = true
-				// check error param name like thinkingConfig, should be thinking_config
-				if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
-					return nil, errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead")
+			if _, exists := googleBody["thinkingConfig"]; exists {
+				return nil, errors.New("extra_body.google.thinkingConfig is not supported, use thinking_config")
+			}
+			if value, exists := googleBody["thinking_config"]; exists && value != nil {
+				config, ok := value.(map[string]any)
+				if !ok {
+					return nil, errors.New("extra_body.google.thinking_config must be an object")
 				}
-
-				if thinkingConfig, ok := googleBody["thinking_config"].(map[string]interface{}); ok {
-					// check error param name like thinkingBudget, should be thinking_budget
-					if _, hasErrorParam := thinkingConfig["thinkingBudget"]; hasErrorParam {
-						return nil, errors.New("extra_body.google.thinking_config.thinkingBudget is not supported, use extra_body.google.thinking_config.thinking_budget instead")
+				for _, key := range []string{"thinkingBudget", "thinkingLevel", "includeThoughts"} {
+					if _, exists := config[key]; exists {
+						return nil, fmt.Errorf("extra_body.google.thinking_config.%s must use snake_case", key)
 					}
-					var hasThinkingConfig bool
-					var tempThinkingConfig dto.GeminiThinkingConfig
-
-					if thinkingBudget, exists := thinkingConfig["thinking_budget"]; exists {
-						switch v := thinkingBudget.(type) {
-						case float64:
-							budgetInt := int(v)
-							tempThinkingConfig.ThinkingBudget = common.GetPointer(budgetInt)
-							if budgetInt > 0 {
-								// 有正数预算
-								tempThinkingConfig.IncludeThoughts = true
-							} else {
-								// 存在但为0或负数，禁用思考
-								tempThinkingConfig.IncludeThoughts = false
-							}
-							hasThinkingConfig = true
-						default:
-							return nil, errors.New("extra_body.google.thinking_config.thinking_budget must be an integer")
-						}
-					}
-
-					if includeThoughts, exists := thinkingConfig["include_thoughts"]; exists {
-						if v, ok := includeThoughts.(bool); ok {
-							tempThinkingConfig.IncludeThoughts = v
-							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.include_thoughts must be a boolean")
-						}
-					}
-					if thinkingLevel, exists := thinkingConfig["thinking_level"]; exists {
-						if v, ok := thinkingLevel.(string); ok {
-							tempThinkingConfig.ThinkingLevel = v
-							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.thinking_level must be a string")
-						}
-					}
-
-					if hasThinkingConfig {
-						// 避免 panic: 仅在获得配置时分配，防止后续赋值时空指针
-						if geminiRequest.GenerationConfig.ThinkingConfig == nil {
-							geminiRequest.GenerationConfig.ThinkingConfig = &tempThinkingConfig
-						} else {
-							// 如果已分配，则合并内容
-							if tempThinkingConfig.ThinkingBudget != nil {
-								geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = tempThinkingConfig.ThinkingBudget
-							}
-							geminiRequest.GenerationConfig.ThinkingConfig.IncludeThoughts = tempThinkingConfig.IncludeThoughts
-							if tempThinkingConfig.ThinkingLevel != "" {
-								geminiRequest.GenerationConfig.ThinkingConfig.ThinkingLevel = tempThinkingConfig.ThinkingLevel
-							}
-						}
-					}
+				}
+				data, err := common.Marshal(config)
+				if err != nil {
+					return nil, err
+				}
+				var thinking dto.GeminiThinkingConfig
+				if err := common.Unmarshal(data, &thinking); err != nil {
+					return nil, fmt.Errorf("invalid thinking_config: %w", err)
+				}
+				if thinking.ThinkingBudget != nil && *thinking.ThinkingBudget < -1 {
+					return nil, errors.New("thinking_budget must be >= -1")
+				}
+				if thinking.ThinkingBudget != nil || thinking.ThinkingLevel != "" || thinking.IncludeThoughts != nil {
+					geminiRequest.GenerationConfig.ThinkingConfig = &thinking
 				}
 			}
 
@@ -352,8 +241,8 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		}
 	}
 
-	if !adaptorWithExtraBody {
-		ThinkingAdaptor(&geminiRequest, info, textRequest)
+	if err := ThinkingAdaptor(&geminiRequest, info, textRequest); err != nil {
+		return nil, err
 	}
 
 	safetySettings := make([]dto.GeminiChatSafetySettings, 0, len(SafetySettingList))

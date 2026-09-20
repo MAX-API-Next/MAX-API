@@ -3,6 +3,7 @@
     "360": "360",
     "1000": "1000",
     "10000": "10000",
+    "Acknowledge and enable features": "内容を読み確認しました。機能を有効化",
     "Time condition reference": "時間条件の説明",
     "Hour: 0–23 (24-hour clock); 0 is midnight.": "時：0–23（24時間表記）。0 は午前0時です。",
     "Minute: 0–59 within the current hour.": "分：0–59。現在の時刻の分を表します。",
