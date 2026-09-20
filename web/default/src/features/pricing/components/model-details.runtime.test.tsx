@@ -20,16 +20,260 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
 import { within } from '@testing-library/react'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { after, before, describe, test } from 'node:test'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 import type { PricingModel } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelDetailsContent } from './model-details'
+import { ModelTierPricing } from './model-tier-pricing'
 
 const testEnv = createReactTestEnvironment()
 
 before(() => testEnv.setup())
 
 after(() => testEnv.teardown())
+
+describe('Model square expression pricing', () => {
+  const displayOptions = {
+    tokenUnit: 'M' as const,
+    priceRate: 1,
+    usdExchangeRate: 1,
+    showRechargePrice: false,
+  }
+  const expression =
+    '(hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 12 && weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") < 6) || (hour("Asia/Shanghai") >= 14 && hour("Asia/Shanghai") < 18 && weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") < 6) ? tier("peak", p * 2 + c * 8 + cr * 0.04) : tier("off", p * 1 + c * 4 + cr * 0)'
+
+  for (const locale of ['en', 'zh', 'fr', 'ja', 'ru', 'vi']) {
+    test(`provides model square display translations in ${locale}`, () => {
+      const resource = JSON.parse(
+        readFileSync(
+          new URL(`../../../i18n/locales/${locale}.json`, import.meta.url),
+          'utf8'
+        )
+      ).translation
+      for (const key of [
+        'Tier applicability',
+        'Tiers are checked in order; the first match applies.',
+        'When no earlier tier matches',
+        'All conditions in a group must match.',
+        'These conditions cannot match together.',
+        'OR',
+        'Base tier prices, before group and request multipliers. A dash means no separate coefficient in this tier.',
+      ]) {
+        assert.ok(resource[key]?.trim(), `${locale}: ${key}`)
+        assert.doesNotMatch(resource[key], /\?{2,}/, `${locale}: ${key}`)
+        if (locale !== 'en') assert.notEqual(resource[key], key)
+      }
+    })
+  }
+
+  test('preserves zero, absent and tiny coefficients and follows model square unit selection', async () => {
+    const view = await testEnv.render(
+      <ModelTierPricing
+        {...displayOptions}
+        tokenUnit='K'
+        billingExpr='len < 100 ? tier("free", p * 0 + c * 0 + cr * 0) : tier("base", p * 2 + c * 4 + cc * 0.01)'
+      />
+    )
+    try {
+      const content = within(view.container)
+      const table = within(content.getByRole('table'))
+      assert.deepEqual(
+        table.getAllByRole('columnheader').map((node) => node.textContent),
+        ['Tier', 'Input', 'Output', 'Cache Read', 'Cache Write']
+      )
+      assert.deepEqual(
+        within(table.getByRole('row', { name: /^free / }))
+          .getAllByRole('cell')
+          .map((node) => node.textContent),
+        ['free', '$0', '$0', '$0', '—']
+      )
+      assert.deepEqual(
+        within(table.getByRole('row', { name: /^base / }))
+          .getAllByRole('cell')
+          .map((node) => node.textContent),
+        ['base', '$0.002', '$0.004', '—', '$0.00001']
+      )
+      assert.match(view.container.textContent || '', /1K tokens/)
+    } finally {
+      await view.unmount()
+    }
+  })
+
+  test('keeps unsupported formulas and request multipliers available without partial pricing claims', async () => {
+    const source =
+      '(tier("custom", max(p, 1) * 3 + c * 15)) * (param("fast") == true ? 2 : 1)'
+    const view = await testEnv.render(
+      <ModelTierPricing {...displayOptions} billingExpr={source} />
+    )
+    try {
+      assert.equal(within(view.container).queryByRole('table'), null)
+      assert.ok(
+        within(view.container).getByText('Unable to parse structured pricing')
+      )
+      assert.ok(view.container.querySelector('details[open]'))
+      assert.equal(
+        view.container.querySelector('details code')?.textContent,
+        source
+      )
+      assert.ok(within(view.container).getByText('Conditional multipliers'))
+    } finally {
+      await view.unmount()
+    }
+  })
+
+  test('uses model square currency and recharge-price settings consistently', async () => {
+    const previous = useSystemConfigStore.getState().config
+    useSystemConfigStore.setState({
+      config: {
+        ...previous,
+        currency: {
+          ...previous.currency,
+          quotaDisplayType: 'CNY',
+          usdExchangeRate: 7,
+        },
+      },
+    })
+    try {
+      for (const [showRechargePrice, expected] of [
+        [false, '¥14'],
+        [true, '¥7'],
+      ] as const) {
+        const view = await testEnv.render(
+          <ModelTierPricing
+            {...displayOptions}
+            priceRate={3.5}
+            usdExchangeRate={7}
+            showRechargePrice={showRechargePrice}
+            billingExpr='tier("base", p * 2)'
+          />
+        )
+        try {
+          const row = within(view.container).getByRole('row', {
+            name: /^base /,
+          })
+          assert.equal(
+            within(row).getAllByRole('cell')[1].textContent,
+            expected
+          )
+        } finally {
+          await view.unmount()
+        }
+      }
+    } finally {
+      useSystemConfigStore.setState({ config: previous })
+    }
+  })
+
+  test('shows all request multipliers without disguising an OR time condition as an AND range', async () => {
+    const source =
+      '(tier("base", p * 2)) * ((hour("UTC") >= 22 || hour("UTC") < 2) ? 0.5 : 1) * (param("fast") == true ? 2 : 1)'
+    const view = await testEnv.render(
+      <ModelTierPricing {...displayOptions} billingExpr={source} />
+    )
+    try {
+      const content = within(view.container)
+      assert.ok(content.getByText('Hour ≥ 22 OR < 2 (UTC)'))
+      assert.ok(content.getByText('Body param fast = true'))
+      assert.ok(content.getByText('0.5×'))
+      assert.ok(content.getByText('2×'))
+      assert.equal(
+        view.container.querySelector('details code')?.textContent,
+        source
+      )
+    } finally {
+      await view.unmount()
+    }
+  })
+
+  test('warns on impossible time conditions and never invents a matching tier', async () => {
+    const view = await testEnv.render(
+      <ModelTierPricing
+        {...displayOptions}
+        billingExpr='hour("UTC") >= 9 && hour("UTC") < 12 && hour("UTC") >= 14 ? tier("peak", p * 2) : tier("off", p * 1)'
+      />
+    )
+    try {
+      assert.ok(
+        within(view.container).getByText(
+          'These conditions cannot match together.'
+        )
+      )
+      assert.doesNotMatch(view.container.textContent || '', /09:00–12:00/)
+      assert.equal(within(view.container).queryByText('Matched'), null)
+    } finally {
+      await view.unmount()
+    }
+  })
+
+  test('separates prices from conditions in the actual model square without changing the log layout', async () => {
+    const queryClient = new QueryClient()
+    const view = await testEnv.render(
+      <QueryClientProvider client={queryClient}>
+        <ModelDetailsContent
+          model={
+            {
+              id: 2,
+              model_name: 'time-priced-model',
+              billing_mode: 'tiered_expr',
+              billing_expr: expression,
+              enable_groups: ['default'],
+            } as PricingModel
+          }
+          groupRatio={{ default: 1 }}
+          usableGroup={{ default: { desc: 'Default', ratio: 1 } }}
+          endpointMap={{}}
+          autoGroups={[]}
+          priceRate={1}
+          usdExchangeRate={1}
+          tokenUnit='M'
+        />
+      </QueryClientProvider>
+    )
+    try {
+      const square = within(view.container).getByRole('region', {
+        name: 'Tiered price table',
+      })
+      const prices = within(square).getByRole('table')
+      assert.doesNotMatch(prices.textContent || '', /Asia\/Shanghai|&&|\|\|/)
+      assert.match(prices.textContent || '', /peak/)
+      const conditions = within(square).getByRole('region', {
+        name: 'Tier applicability',
+      })
+      assert.match(conditions.textContent || '', /09:00–12:00/)
+      assert.match(conditions.textContent || '', /14:00–18:00/)
+      assert.match(conditions.textContent || '', /OR/)
+      assert.match(conditions.textContent || '', /When no earlier tier matches/)
+      assert.match(square.textContent || '', /1M tokens/)
+      assert.equal(
+        square.querySelector('details code')?.textContent,
+        expression
+      )
+    } finally {
+      await view.unmount()
+      queryClient.clear()
+    }
+
+    const log = await testEnv.render(
+      <DynamicPricingBreakdown billingExpr={expression} />
+    )
+    try {
+      assert.match(
+        within(log.container).getByRole('table').textContent || '',
+        /Asia\/Shanghai/
+      )
+      assert.equal(
+        within(log.container).queryByRole('region', {
+          name: 'Tier applicability',
+        }),
+        null
+      )
+    } finally {
+      await log.unmount()
+    }
+  })
+})
 
 for (const expression of [
   'len < 100 && c == 5 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)',

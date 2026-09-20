@@ -81,7 +81,7 @@ const TIME_FUNC_LABELS: Record<string, string> = {
   hour: 'Hour',
   minute: 'Minute',
   weekday: 'Weekday',
-  month: 'Month',
+  month: 'Month number',
   day: 'Day',
 }
 

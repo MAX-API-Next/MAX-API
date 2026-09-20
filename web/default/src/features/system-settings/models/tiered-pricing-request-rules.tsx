@@ -57,6 +57,7 @@ import {
   type TimeCondition,
   type TimeFunc,
 } from '@/features/pricing/lib/billing-expr'
+import { BillingTimeHelp } from './billing-time-help'
 import { DraftNumberInput } from './tiered-pricing-fields'
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ function RuleConditionRow({
   onRemove,
 }: RuleConditionRowProps) {
   const { t } = useTranslation()
+  const timeHelpId = useId()
   const matchOptions = getRequestRuleMatchOptions(condition.source)
   const getMatchLabel = (mode: string) => {
     switch (mode) {
@@ -175,7 +177,7 @@ function RuleConditionRow({
           value !== null && onChange({ ...timeCond, timezone: value })
         }
       >
-        <SelectTrigger className='w-56' size='sm'>
+        <SelectTrigger className='w-56' size='sm' aria-describedby={timeHelpId}>
           <SelectValue>
             {COMMON_TIMEZONES.find((tz) => tz.value === timeCond.timezone)
               ?.label ?? timeCond.timezone}
@@ -222,6 +224,7 @@ function RuleConditionRow({
               onChange({ ...timeCond, rangeStart: String(value) })
             }
             aria-label={t('Start')}
+            aria-describedby={timeHelpId}
             placeholder={t('Start')}
             className='w-20'
           />
@@ -232,6 +235,7 @@ function RuleConditionRow({
               onChange({ ...timeCond, rangeEnd: String(value) })
             }
             aria-label={t('End')}
+            aria-describedby={timeHelpId}
             placeholder={t('End')}
             className='w-20'
           />
@@ -243,6 +247,7 @@ function RuleConditionRow({
             onChange({ ...timeCond, value: String(value) })
           }
           aria-label={t('Condition Value')}
+          aria-describedby={timeHelpId}
           placeholder={t('Value')}
           className='w-24'
         />
@@ -333,6 +338,13 @@ function RuleConditionRow({
       >
         <Trash2 className='text-destructive h-4 w-4' />
       </Button>
+      {condition.source === SOURCE_TIME && (
+        <BillingTimeHelp
+          id={timeHelpId}
+          timeFunc={condition.timeFunc}
+          mode='visual'
+        />
+      )}
     </div>
   )
 }
