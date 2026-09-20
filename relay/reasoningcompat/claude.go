@@ -176,7 +176,7 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 		if *req.MaxTokens <= 1024 || uint64(*req.MaxTokens) > uint64(math.MaxInt) {
 			return "", notes, fmt.Errorf("manual thinking requires 1024 < max_tokens <= platform integer limit")
 		}
-		budget := 0
+		var budget int
 		if intent.Budget != nil && *intent.Budget >= 0 {
 			budget = *intent.Budget
 		} else {

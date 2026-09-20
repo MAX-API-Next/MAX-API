@@ -2,6 +2,7 @@ package controller
 
 import (
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -218,7 +219,7 @@ func TestParameterCompatibilityReasoningBoundaries(t *testing.T) {
 	require.NoError(t, common.UnmarshalJsonStr(`{"generationConfig":{"thinkingConfig":{"thinkingBudget":0,"includeThoughts":false}}}`, &nativeGemini))
 	before, err := common.Marshal(nativeGemini)
 	require.NoError(t, err)
-	require.NoError(t, gemini.ThinkingAdaptor(&nativeGemini, info))
+	require.NoError(t, gemini.ThinkingAdaptor(c, &nativeGemini, info))
 	after, err := common.Marshal(nativeGemini)
 	require.NoError(t, err)
 	require.JSONEq(t, string(before), string(after))
@@ -228,7 +229,7 @@ func TestParameterCompatibilityReasoningBoundaries(t *testing.T) {
 	t.Cleanup(func() { settings.ThinkingAdapterEnabled = previous })
 	info.UpstreamModelName = "gemini-3-pro-high"
 	nativeGemini.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(-2)
-	require.ErrorContains(t, gemini.ThinkingAdaptor(&nativeGemini, info), "budget must be >= -1")
+	require.ErrorContains(t, gemini.ThinkingAdaptor(c, &nativeGemini, info), "budget must be >= -1")
 }
 
 func TestParameterCompatibilityUnknownGeminiReasoningIsNonFatal(t *testing.T) {
@@ -256,6 +257,56 @@ func TestParameterCompatibilityUnknownGeminiReasoningIsNonFatal(t *testing.T) {
 			require.Error(t, err, "invalid controls must not be treated as unknown capabilities")
 		})
 	}
+}
+
+func TestParameterCompatibilityGeminiWarningRequestContext(t *testing.T) {
+	logFile, err := os.CreateTemp(t.TempDir(), "gemini-warnings-*.log")
+	require.NoError(t, err)
+	common.LogWriterMu.Lock()
+	originalWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = logFile
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = originalWriter
+		common.LogWriterMu.Unlock()
+		require.NoError(t, logFile.Close())
+	})
+
+	c, info := parameterContext()
+	c.Set(common.RequestIdKey, "gemini-warning-request")
+	c.Request.Header.Set("Authorization", "Bearer synthetic-sensitive-key")
+	info.UpstreamModelName = "gemini-2.0-flash"
+	_, err = gemini.CovertOpenAI2Gemini(c, dto.GeneralOpenAIRequest{
+		Model: info.UpstreamModelName, ReasoningEffort: "high",
+		Messages: []dto.Message{{Role: "user", Content: "synthetic-sensitive-message"}},
+	}, info)
+	require.NoError(t, err)
+	logged, err := os.ReadFile(logFile.Name())
+	require.NoError(t, err)
+	require.Contains(t, string(logged), "| gemini-warning-request |")
+	require.Contains(t, string(logged), "unknown Gemini thinking capabilities")
+	require.NotContains(t, string(logged), "synthetic-sensitive")
+
+	var nilContext *gin.Context
+	_, err = gemini.CovertOpenAI2Gemini(nilContext, dto.GeneralOpenAIRequest{
+		Model: info.UpstreamModelName, ReasoningEffort: "high",
+	}, info)
+	require.NoError(t, err)
+	logged, err = os.ReadFile(logFile.Name())
+	require.NoError(t, err)
+	require.Contains(t, string(logged), "| SYSTEM |")
+
+	settings := model_setting.GetGeminiSettings()
+	originalEnabled := settings.ThinkingAdapterEnabled
+	settings.ThinkingAdapterEnabled = true
+	t.Cleanup(func() { settings.ThinkingAdapterEnabled = originalEnabled })
+	c.Set(common.RequestIdKey, "gemini-native-warning-request")
+	info.UpstreamModelName = "gemini-2.0-flash-high"
+	require.NoError(t, gemini.ThinkingAdaptor(c, &dto.GeminiChatRequest{}, info))
+	logged, err = os.ReadFile(logFile.Name())
+	require.NoError(t, err)
+	require.Contains(t, string(logged), "| gemini-native-warning-request |")
 }
 
 func TestParameterCompatibilityGeminiReasoning(t *testing.T) {
@@ -370,7 +421,7 @@ func TestParameterCompatibilityZhipuResponses(t *testing.T) {
 	for _, plan := range []string{"glm-coding-plan", "glm-coding-plan-international"} {
 		info.ChannelBaseUrl = plan
 		url, err := adaptor.GetRequestURL(info)
-		require.ErrorContains(t, err, "Responses is not supported for coding-plan base aliases")
+		require.ErrorContains(t, err, "coding-plan base aliases do not support Responses")
 		require.Empty(t, url, "a plan alias is not an HTTP origin and must not fall back to a separately billed endpoint")
 	}
 }

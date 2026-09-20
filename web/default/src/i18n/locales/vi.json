@@ -745,7 +745,7 @@
     "Base multipliers applied when users select specific groups.": "Hệ số nhân cơ bản được áp dụng khi người dùng chọn các nhóm cụ thể.",
     "Base Price": "Giá cơ bản",
     "Base rate limit windows for this account.": "Cửa sổ giới hạn tốc độ cơ bản cho tài khoản này.",
-    "Base tier prices, before group and request multipliers. A dash means no separate coefficient in this tier.": "Đơn giá cơ bản trước hệ số nhóm và yêu cầu. Dấu gạch ngang nghĩa là bậc này không có hệ số riêng cho mục đó.",
+    "Base tier prices, before group and request multipliers. A dash means no separate coefficient in this tier.": "Đơn giá cơ bản của bậc, trước các hệ số nhân theo nhóm và theo yêu cầu. Dấu gạch ngang nghĩa là bậc này không có hệ số riêng cho mục đó.",
     "Base URL": "URL cơ sở",
     "Base URL is required for this channel type": "Loại kênh này yêu cầu Base URL",
     "Base URL is required for this channel type.": "Base URL là bắt buộc đối với loại kênh này.",

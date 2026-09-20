@@ -10,7 +10,7 @@
     "Weekday: 0 = Sunday, 1 = Monday, 2 = Tuesday, 3 = Wednesday, 4 = Thursday, 5 = Friday, 6 = Saturday.": "Jour de la semaine : 0 = dimanche, 1 = lundi, 2 = mardi, 3 = mercredi, 4 = jeudi, 5 = vendredi, 6 = samedi.",
     "Month: 1–12; January is 1.": "Mois : 1–12 ; janvier correspond à 1.",
     "Day of month: 1–31, depending on the month and leap year; this is not a duration.": "Jour du mois : 1–31, selon le mois et les années bissextiles ; il ne s’agit pas d’une durée.",
-    "Weekday < 6 includes Sunday through Friday. For Monday–Friday, use >= 1 AND <= 5 in the same condition group.": "Un jour de semaine < 6 inclut dimanche à vendredi. Pour lundi à vendredi, utilisez >= 1 ET <= 5 dans le même groupe de conditions.",
+    "Weekday < 6 includes Sunday through Friday. For Monday–Friday, use >= 1 AND <= 5 in the same condition group.": "Une valeur de jour de semaine < 6 inclut les jours du dimanche au vendredi. Pour cibler les jours du lundi au vendredi, utilisez >= 1 ET <= 5 dans le même groupe de conditions.",
     "Time values use the configured timezone. Asia/Shanghai is China Standard Time (UTC+8).": "Les valeurs temporelles utilisent le fuseau configuré. Asia/Shanghai correspond à l’heure de Chine (UTC+8).",
     "An empty timezone in this visual editor uses Asia/Shanghai when generating the expression. Unrecognized timezones are evaluated as UTC.": "Un fuseau vide dans cet éditeur visuel devient Asia/Shanghai lors de la génération de l’expression. Les fuseaux non reconnus sont évalués en UTC.",
     "In expressions, an empty or unrecognized timezone is evaluated as UTC.": "Dans les expressions, un fuseau vide ou non reconnu est évalué en UTC.",

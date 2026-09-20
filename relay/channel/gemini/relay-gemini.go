@@ -52,7 +52,7 @@ var geminiSupportedMimeTypes = map[string]bool{
 
 const thoughtSignatureBypassValue = "context_engineering_is_the_way_to_go"
 
-func ThinkingAdaptor(req *dto.GeminiChatRequest, info *relaycommon.RelayInfo, chat ...dto.GeneralOpenAIRequest) error {
+func ThinkingAdaptor(c *gin.Context, req *dto.GeminiChatRequest, info *relaycommon.RelayInfo, chat ...dto.GeneralOpenAIRequest) error {
 	model := info.UpstreamModelName
 	intent := reasoningcompat.Intent{}
 	var err error
@@ -117,8 +117,12 @@ func ThinkingAdaptor(req *dto.GeminiChatRequest, info *relaycommon.RelayInfo, ch
 	}
 	req.GenerationConfig.ThinkingConfig = converted
 	info.ReasoningEffort = effort
+	var logContext context.Context = context.Background()
+	if c != nil {
+		logContext = c
+	}
 	for _, note := range notes {
-		logger.LogWarn(context.Background(), note)
+		logger.LogWarn(logContext, note)
 	}
 	return nil
 }
@@ -241,7 +245,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		}
 	}
 
-	if err := ThinkingAdaptor(&geminiRequest, info, textRequest); err != nil {
+	if err := ThinkingAdaptor(c, &geminiRequest, info, textRequest); err != nil {
 		return nil, err
 	}
 

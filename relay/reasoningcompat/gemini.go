@@ -142,9 +142,7 @@ func GeminiConfig(model string, intent Intent, maxTokens *uint, percentage float
 	}
 	if budget != -1 {
 		adjusted := budget
-		if budget == 0 && !strings.HasPrefix(model, "gemini-2.5-pro") {
-			adjusted = 0
-		} else {
+		if budget != 0 || strings.HasPrefix(model, "gemini-2.5-pro") {
 			adjusted = min(max(budget, minBudget), maxBudget)
 		}
 		if adjusted != budget {

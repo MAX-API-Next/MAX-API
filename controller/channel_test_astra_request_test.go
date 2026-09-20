@@ -22,7 +22,7 @@ import (
 func astraOutboundChat(t *testing.T, req *dto.GeneralOpenAIRequest, upstream string, channelType int) ([]byte, *relaycommon.RelayInfo) {
 	t.Helper()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	c.Request = httptest.NewRequestWithContext(t.Context(), "POST", "/v1/chat/completions", nil)
 	if upstream != req.Model {
 		mapping, err := common.Marshal(map[string]string{req.Model: upstream})
 		require.NoError(t, err)

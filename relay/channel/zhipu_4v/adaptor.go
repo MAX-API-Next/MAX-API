@@ -65,7 +65,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			return fmt.Sprintf("%s/api/paas/v4/embeddings", baseURL), nil
 		case relayconstant.RelayModeResponses:
 			if hasSpecialPlan {
-				return "", errors.New("Responses is not supported for coding-plan base aliases")
+				return "", errors.New("coding-plan base aliases do not support Responses")
 			}
 			return fmt.Sprintf("%s/api/v1/responses", baseURL), nil
 		case relayconstant.RelayModeImagesGenerations:

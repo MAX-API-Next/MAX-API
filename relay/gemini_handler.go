@@ -84,7 +84,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 			}
 		}
 		if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
-			if err := gemini.ThinkingAdaptor(request, info); err != nil {
+			if err := gemini.ThinkingAdaptor(c, request, info); err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 		}
