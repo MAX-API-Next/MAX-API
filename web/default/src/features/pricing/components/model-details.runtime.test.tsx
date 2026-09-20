@@ -135,6 +135,22 @@ describe('Model square expression pricing', () => {
     }
   })
 
+  test('identifies calendar day conditions in model pricing and usage logs', async () => {
+    const source =
+      'day("UTC") >= 15 ? tier("late", p * 2) : tier("early", p * 1)'
+    for (const component of [
+      <ModelTierPricing {...displayOptions} billingExpr={source} />,
+      <DynamicPricingBreakdown billingExpr={source} />,
+    ]) {
+      const view = await testEnv.render(component)
+      try {
+        assert.match(view.container.textContent || '', /Day of month/)
+      } finally {
+        await view.unmount()
+      }
+    }
+  })
+
   test('keeps unsupported formulas and request multipliers available without partial pricing claims', async () => {
     const source =
       '(tier("custom", max(p, 1) * 3 + c * 15)) * (param("fast") == true ? 2 : 1)'

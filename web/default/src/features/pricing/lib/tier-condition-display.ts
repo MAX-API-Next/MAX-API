@@ -27,7 +27,7 @@ export const TIER_CONDITION_LABELS = {
   minute: 'Minute',
   weekday: 'Weekday',
   month: 'Month number',
-  day: 'Day',
+  day: 'Day of month',
 } as const
 
 type ConditionDisplayLine = {

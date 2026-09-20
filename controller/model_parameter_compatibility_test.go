@@ -415,6 +415,12 @@ func TestParameterCompatibilitySuffixIdentity(t *testing.T) {
 		{"vendor-model-high", "vendor-model-high", ""}, {"gemini-3-pro-high", "gemini-3-pro-high", ""},
 		{"gpt-5.1-codex-max", "gpt-5.1-codex-max", ""}, {"gpt-5.1-codex-max-high", "gpt-5.1-codex-max", "high"},
 		{"openai/gpt-5.4-max", "openai/gpt-5.4", "max"}, {"o3-high", "o3", "high"},
+		{"GPT-5.1-high", "GPT-5.1", "high"}, {"O3-high", "O3", "high"},
+		{"OpenAI/GpT-5.4-none", "OpenAI/GpT-5.4", "none"},
+		{"GPT-5.1-CODEX-max", "GPT-5.1-CODEX-max", ""},
+		{"OpenAI/GPT-5.1-CODEX-max", "OpenAI/GPT-5.1-CODEX-max", ""},
+		{"GPT-5.1-CODEX-max-high", "GPT-5.1-CODEX-max", "high"},
+		{"Vendor-high", "Vendor-high", ""}, {"O0-high", "O0-high", ""},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			effort, base := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(tc.model)
@@ -422,13 +428,38 @@ func TestParameterCompatibilitySuffixIdentity(t *testing.T) {
 			require.Equal(t, tc.effort, effort)
 			converted, err := (&openai.Adaptor{}).ConvertOpenAIResponsesRequest(nil, nil, dto.OpenAIResponsesRequest{Model: tc.model})
 			require.NoError(t, err)
-			require.Equal(t, tc.base, converted.(dto.OpenAIResponsesRequest).Model)
+			response := converted.(dto.OpenAIResponsesRequest)
+			require.Equal(t, tc.base, response.Model)
+			if tc.effort == "" {
+				require.Nil(t, response.Reasoning)
+			} else {
+				require.Equal(t, tc.effort, response.Reasoning.Effort)
+			}
+			c, info := parameterContext()
+			info.UpstreamModelName = tc.model
+			_, err = (&openai.Adaptor{}).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{Model: tc.model})
+			require.NoError(t, err)
+			require.Equal(t, tc.base, info.UpstreamModelName)
+			require.Equal(t, tc.effort, info.ReasoningEffort)
 		})
 	}
 	settings := model_setting.GetGlobalSettings()
 	before := settings.ThinkingModelBlacklist
-	settings.ThinkingModelBlacklist = []string{"alias", "deepseek-v4-pro-max", "grok-3-mini-high"}
+	settings.ThinkingModelBlacklist = []string{"alias", "deepseek-v4-pro-max", "grok-3-mini-high", "GPT-5.1-high"}
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = before })
+	for _, model := range []string{"GPT-5.1-high", "O3-high"} {
+		c, info := parameterContext()
+		info.OriginModelName = "alias"
+		info.UpstreamModelName = model
+		out, err := (&openai.Adaptor{}).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{Model: model})
+		require.NoError(t, err)
+		require.Equal(t, model, out.(dto.OpenAIResponsesRequest).Model)
+		require.Nil(t, out.(dto.OpenAIResponsesRequest).Reasoning)
+		require.Equal(t, model, info.UpstreamModelName)
+	}
+	effort, model := reasoning.ParseOpenAIReasoningEffortFromModelSuffix("GPT-5.1-high")
+	require.Empty(t, effort)
+	require.Equal(t, "GPT-5.1-high", model)
 	c, info := parameterContext()
 	info.OriginModelName = "alias"
 	info.UpstreamModelName = "gpt-5.4-high"

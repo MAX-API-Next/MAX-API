@@ -12,11 +12,11 @@ var EffortSuffixes = []string{"-max", "-xhigh", "-high", "-medium", "-low", "-mi
 
 var OpenAIEffortSuffixes = []string{"-max", "-xhigh", "-high", "-minimal", "-low", "-medium", "-none"}
 
-var openAIModelPattern = regexp.MustCompile(`^(gpt-[a-z0-9][a-z0-9._-]*|o[1-9][a-z0-9._-]*)$`)
+var openAIModelPattern = regexp.MustCompile(`(?i)^(gpt-[a-z0-9][a-z0-9._-]*|o[1-9][a-z0-9._-]*)$`)
 
 func PreserveModelSuffix(modelName string) bool {
 	bare := modelName[strings.LastIndex(modelName, "/")+1:]
-	return model_setting.ShouldPreserveThinkingSuffix(modelName) || bare == "gpt-5.1-codex-max"
+	return model_setting.ShouldPreserveThinkingSuffix(modelName) || strings.EqualFold(bare, "gpt-5.1-codex-max")
 }
 
 var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
