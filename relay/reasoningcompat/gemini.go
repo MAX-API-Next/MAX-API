@@ -51,14 +51,16 @@ func geminiLevel(model, effort string) string {
 	return effort
 }
 
-func GeminiConfig(model string, intent Intent, maxTokens *uint, percentage float64) (*dto.GeminiThinkingConfig, string, []string, error) {
+// GeminiConfig preserves native controls when capabilities are unknown; known
+// unsupported models explicitly return nil to remove thinking configuration.
+func GeminiConfig(model string, intent Intent, native *dto.GeminiThinkingConfig, maxTokens *uint, percentage float64) (*dto.GeminiThinkingConfig, string, []string, error) {
 	model = strings.ToLower(model)
 	effort, err := NormalizeEffort(intent.Effort)
 	if err != nil {
 		return nil, "", nil, err
 	}
 	if intent.Empty() {
-		return nil, "", nil, nil
+		return native, "", nil, nil
 	}
 	notes := []string{}
 	config := &dto.GeminiThinkingConfig{IncludeThoughts: intent.Include}
@@ -66,7 +68,7 @@ func GeminiConfig(model string, intent Intent, maxTokens *uint, percentage float
 	if kind == "unknown" {
 		// Capability lookup is not a model allowlist. Keep older and custom
 		// model requests usable without inventing a budget or thinking level.
-		return nil, "", []string{fmt.Sprintf("unknown Gemini thinking capabilities for model %q; compatibility reasoning controls were not applied", model)}, nil
+		return native, "", []string{fmt.Sprintf("unknown Gemini thinking capabilities for model %q; compatibility reasoning controls were not applied", model)}, nil
 	}
 	if kind == "unsupported" {
 		return nil, "", []string{"model does not support configurable thinking"}, nil

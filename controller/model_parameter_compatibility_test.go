@@ -247,13 +247,13 @@ func TestParameterCompatibilityUnknownGeminiReasoningIsNonFatal(t *testing.T) {
 			require.Empty(t, info.ReasoningEffort)
 			require.Equal(t, uint(0), *out.GenerationConfig.MaxOutputTokens)
 			require.Equal(t, "hello", out.Contents[0].Parts[0].Text)
-			config, effort, notes, err := reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Mode: "enabled", Effort: "high"}, nil, .6)
+			config, effort, notes, err := reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Mode: "enabled", Effort: "high"}, nil, nil, .6)
 			require.NoError(t, err)
 			require.Nil(t, config)
 			require.Empty(t, effort)
 			require.Len(t, notes, 1)
 			require.Contains(t, notes[0], model)
-			_, _, _, err = reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Effort: "typo"}, nil, .6)
+			_, _, _, err = reasoningcompat.GeminiConfig(model, reasoningcompat.Intent{Effort: "typo"}, nil, nil, .6)
 			require.Error(t, err, "invalid controls must not be treated as unknown capabilities")
 		})
 	}
@@ -307,6 +307,64 @@ func TestParameterCompatibilityGeminiWarningRequestContext(t *testing.T) {
 	logged, err = os.ReadFile(logFile.Name())
 	require.NoError(t, err)
 	require.Contains(t, string(logged), "| gemini-native-warning-request |")
+}
+
+func TestParameterCompatibilityGeminiNativeConfigOnUnknownModels(t *testing.T) {
+	settings := model_setting.GetGeminiSettings()
+	originalEnabled := settings.ThinkingAdapterEnabled
+	settings.ThinkingAdapterEnabled = true
+	t.Cleanup(func() { settings.ThinkingAdapterEnabled = originalEnabled })
+	for _, tc := range []struct {
+		name, nativeJSON, suffix string
+	}{
+		{"zero and false", `{"thinkingBudget":0,"includeThoughts":false}`, "-thinking-0"},
+		{"dynamic budget", `{"thinkingBudget":-1}`, "-thinking"},
+		{"positive budget", `{"thinkingBudget":2048}`, "-thinking"},
+		{"native level", `{"thinkingLevel":"high","includeThoughts":false}`, "-high"},
+		{"visibility only", `{"includeThoughts":false}`, "-thinking"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var native dto.GeminiThinkingConfig
+			require.NoError(t, common.UnmarshalJsonStr(tc.nativeJSON, &native))
+			c, info := parameterContext()
+			info.UpstreamModelName = "gemini-unknown" + tc.suffix
+			req := &dto.GeminiChatRequest{}
+			req.GenerationConfig.ThinkingConfig = &native
+			require.NoError(t, gemini.ThinkingAdaptor(c, req, info))
+			encoded, err := common.Marshal(req.GenerationConfig.ThinkingConfig)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.nativeJSON, string(encoded), "unknown capabilities must preserve native fields exactly")
+
+			info.UpstreamModelName = "operator-defined-model"
+			chat := dto.GeneralOpenAIRequest{Model: info.UpstreamModelName}
+			if native.IncludeThoughts == nil {
+				chat.ReasoningEffort = "high"
+				chat.IncludeReasoning = common.GetPointer(true)
+			}
+			nativeFields := map[string]any{}
+			if native.ThinkingBudget != nil {
+				nativeFields["thinking_budget"] = *native.ThinkingBudget
+			}
+			if native.ThinkingLevel != "" {
+				nativeFields["thinking_level"] = native.ThinkingLevel
+			}
+			if native.IncludeThoughts != nil {
+				nativeFields["include_thoughts"] = *native.IncludeThoughts
+			}
+			chat.ExtraBody, err = common.Marshal(map[string]any{"google": map[string]any{"thinking_config": nativeFields}})
+			require.NoError(t, err)
+			out, err := gemini.CovertOpenAI2Gemini(c, chat, info)
+			require.NoError(t, err)
+			encoded, err = common.Marshal(out.GenerationConfig.ThinkingConfig)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.nativeJSON, string(encoded))
+
+			info.UpstreamModelName = "gemini-2.5-flash-image"
+			out, err = gemini.CovertOpenAI2Gemini(c, chat, info)
+			require.NoError(t, err)
+			require.Nil(t, out.GenerationConfig.ThinkingConfig, "known unsupported models retain the distinct drop policy")
+		})
+	}
 }
 
 func TestParameterCompatibilityGeminiReasoning(t *testing.T) {

@@ -111,7 +111,7 @@ func ThinkingAdaptor(c *gin.Context, req *dto.GeminiChatRequest, info *relaycomm
 	if intent.Include == nil && intent.Mode != "disabled" {
 		intent.Include = common.GetPointer(true)
 	}
-	converted, effort, notes, err := reasoningcompat.GeminiConfig(base, intent, req.GenerationConfig.MaxOutputTokens, model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage)
+	converted, effort, notes, err := reasoningcompat.GeminiConfig(base, intent, config, req.GenerationConfig.MaxOutputTokens, model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage)
 	if err != nil {
 		return err
 	}
