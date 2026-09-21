@@ -24,6 +24,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { Button } from '@/components/ui/button'
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { batchManageUserStatus } from '../api'
+import { USER_STATUS } from '../constants'
 import {
   canBatchChangeUserStatus,
   MAX_USER_STATUS_BATCH_SIZE,
@@ -94,12 +95,15 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
     )
       return
     submitting.current = true
+    const targetStatus =
+      batch.action === 'enable' ? USER_STATUS.ENABLED : USER_STATUS.DISABLED
     try {
       const response = await mutation.mutateAsync(batch)
       setResults(
         normalizeBatchStatusResults(
           batch.users.map((user) => user.id),
-          response.success ? response.data?.results : undefined
+          response.success ? response.data?.results : undefined,
+          targetStatus
         )
       )
     } catch {
@@ -108,7 +112,8 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
       setResults(
         normalizeBatchStatusResults(
           batch.users.map((user) => user.id),
-          undefined
+          undefined,
+          targetStatus
         )
       )
     } finally {

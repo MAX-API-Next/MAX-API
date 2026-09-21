@@ -20,7 +20,7 @@ import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
-import type { BatchUserStatusResult, User } from '../types'
+import type { User } from '../types'
 import {
   canBatchChangeUserStatus,
   normalizeBatchStatusResults,
@@ -87,7 +87,8 @@ describe('User status batch safety', () => {
         [
           { id: 4, outcome: 'rejected', code: 'forbidden' },
           { id: 3, outcome: 'updated', status: 2 },
-        ]
+        ],
+        2
       ),
       [
         { id: 3, outcome: 'updated', status: 2 },
@@ -96,7 +97,7 @@ describe('User status batch safety', () => {
       ]
     )
     assert.equal(
-      normalizeBatchStatusResults([3], undefined)[0].outcome,
+      normalizeBatchStatusResults([3], undefined, 2)[0].outcome,
       'unknown'
     )
   })
@@ -108,17 +109,70 @@ describe('User status batch safety', () => {
         [
           { id: 3, outcome: 'updated' },
           { id: 3, outcome: 'unchanged' },
-        ]
+        ],
+        2
       )[0].outcome,
       'unknown'
     )
     assert.equal(
-      normalizeBatchStatusResults(
-        [3],
-        [{ id: 3, outcome: 'success' } as unknown as BatchUserStatusResult]
-      )[0].outcome,
+      normalizeBatchStatusResults([3], [{ id: 3, outcome: 'success' }], 2)[0]
+        .outcome,
       'unknown'
     )
+  })
+
+  test('confirms only schema-valid results matching the requested destination', () => {
+    for (const target of [1, 2] as const) {
+      for (const outcome of ['updated', 'unchanged'] as const) {
+        for (const status of [
+          undefined,
+          null,
+          0,
+          3,
+          '1',
+          '2',
+          target === 1 ? 2 : 1,
+        ]) {
+          const result = { id: 3, outcome, status }
+          assert.equal(
+            normalizeBatchStatusResults([3], [result], target)[0].outcome,
+            'unknown'
+          )
+        }
+        const valid = { id: 3, outcome, status: target }
+        assert.deepEqual(normalizeBatchStatusResults([3], [valid], target), [
+          valid,
+        ])
+        assert.equal(
+          normalizeBatchStatusResults(
+            [3],
+            [{ ...valid, code: 'forbidden' }],
+            target
+          )[0].outcome,
+          'unknown'
+        )
+        assert.equal(
+          normalizeBatchStatusResults(
+            [3],
+            [valid, { id: 3, outcome, status: null }],
+            target
+          )[0].outcome,
+          'unknown'
+        )
+      }
+      for (const results of [
+        null,
+        {},
+        [null],
+        [{ id: '3', outcome: 'updated', status: target }],
+        [{ id: 3, outcome: 'rejected', code: {} }],
+      ]) {
+        assert.equal(
+          normalizeBatchStatusResults([3], results, target)[0].outcome,
+          'unknown'
+        )
+      }
+    }
   })
 
   for (const locale of ['en', 'zh', 'fr', 'ja', 'ru', 'vi']) {

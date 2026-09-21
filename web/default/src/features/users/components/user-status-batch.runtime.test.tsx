@@ -155,6 +155,48 @@ async function renderHarness(users?: User[]) {
 }
 
 describe('Batch user status workflow', () => {
+  test('does not confirm missing or contradictory destination statuses', async () => {
+    const adapter = api.defaults.adapter
+    let requests = 0
+    api.defaults.adapter = async (config) => {
+      requests++
+      return {
+        config,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: {
+          success: true,
+          data: {
+            results: [
+              { id: 3, outcome: 'updated', status: 1 },
+              { id: 4, outcome: 'unchanged' },
+            ],
+          },
+        },
+      }
+    }
+    const view = await renderHarness()
+    try {
+      await view.click(within(view.container).getByText('Select page'))
+      await view.click(
+        within(view.container).getByRole('button', { name: 'Batch disable' })
+      )
+      const dialog = within(within(document.body).getByRole('dialog'))
+      await view.click(dialog.getByRole('button', { name: 'Confirm' }))
+      await waitFor(() =>
+        assert.ok(dialog.getByText('0 confirmed, 2 rejected or unconfirmed.'))
+      )
+      assert.equal(dialog.queryByText('Updated'), null)
+      assert.equal(dialog.queryByText('No change needed'), null)
+      assert.equal(dialog.queryByRole('button', { name: 'Confirm' }), null)
+      assert.equal(requests, 1)
+    } finally {
+      api.defaults.adapter = adapter
+      await view.close()
+    }
+  })
+
   for (const failure of ['business', 'http'] as const) {
     test(`reports ${failure} errors once while keeping account results unknown`, async () => {
       const adapter = api.defaults.adapter

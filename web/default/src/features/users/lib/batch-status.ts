@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { z } from 'zod'
 import type { AuthUser } from '@/stores/auth-store'
 import { USER_ROLE, USER_STATUS, isUserDeleted } from '../constants'
 import type { BatchUserStatusResult, User } from '../types'
@@ -38,20 +39,43 @@ export function canBatchChangeUserStatus(
   )
 }
 
-// An incomplete, duplicated or unrecognized response must never imply success.
+const batchStatusResultSchema = z.object({
+  id: z.number().int().positive(),
+  outcome: z.enum(['updated', 'unchanged', 'rejected', 'unknown']),
+  code: z.enum(['forbidden', 'not_found', 'conflict', 'unknown']).optional(),
+  status: z
+    .union([z.literal(USER_STATUS.ENABLED), z.literal(USER_STATUS.DISABLED)])
+    .optional(),
+})
+
+// An incomplete, duplicated or contradictory response must never imply success.
 // Results are matched by account ID, not response order.
 export function normalizeBatchStatusResults(
   ids: number[],
-  results: BatchUserStatusResult[] | undefined
+  results: unknown,
+  targetStatus: typeof USER_STATUS.ENABLED | typeof USER_STATUS.DISABLED
 ): BatchUserStatusResult[] {
-  const allowed = new Set(['updated', 'unchanged', 'rejected', 'unknown'])
+  const entries: unknown[] = Array.isArray(results) ? results : []
   return ids.map((id) => {
-    const matches = Array.isArray(results)
-      ? results.filter((result) => result?.id === id)
-      : []
-    if (matches.length !== 1 || !allowed.has(matches[0].outcome)) {
+    // Count duplicates before validation, including malformed duplicate entries.
+    const matches = entries.filter(
+      (entry) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        'id' in entry &&
+        entry.id === id
+    )
+    const parsed = batchStatusResultSchema.safeParse(matches[0])
+    if (matches.length !== 1 || !parsed.success) {
       return { id, outcome: 'unknown', code: 'unknown' }
     }
-    return matches[0]
+    const result = parsed.data
+    if (
+      (result.outcome === 'updated' || result.outcome === 'unchanged') &&
+      (result.status !== targetStatus || result.code !== undefined)
+    ) {
+      return { id, outcome: 'unknown', code: 'unknown' }
+    }
+    return result
   })
 }
