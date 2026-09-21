@@ -48,6 +48,115 @@ func TestParameterCompatibilityGPT5Sampling(t *testing.T) {
 	}
 }
 
+func TestParameterCompatibilityMixedCaseChatModels(t *testing.T) {
+	for _, tc := range []struct {
+		model, base, effort, role string
+		sampling, astra           bool
+	}{
+		{"GPT-5.1-high", "GPT-5.1", "high", "developer", false, false},
+		{"GpT-5.4-none", "GpT-5.4", "none", "developer", true, false},
+		{"GPT-5.2-2026-03-05", "GPT-5.2-2026-03-05", "", "developer", true, false},
+		{"GPT-5.2-pro", "GPT-5.2-pro", "", "developer", false, false},
+		{"GPT-5.1-CODEX-max", "GPT-5.1-CODEX-max", "", "developer", false, false},
+		{"O3-high", "O3", "high", "developer", false, false},
+		{"O1-mini-high", "O1-mini", "high", "system", false, false},
+		{"GPT-6-Astra-high", "GPT-6-Astra", "high", "developer", false, true},
+		{"GPT-6-Astra-2026-09-01-high", "GPT-6-Astra-2026-09-01", "high", "developer", false, true},
+		{"Vendor-high", "Vendor-high", "", "system", true, false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			req := &dto.GeneralOpenAIRequest{Model: tc.model, Messages: []dto.Message{{Role: "system", Content: "test"}}}
+			require.NoError(t, common.UnmarshalJsonStr(`{"temperature":0,"top_p":0,"logprobs":false,"top_logprobs":0,"max_tokens":0}`, req))
+			body, info := astraOutboundChat(t, req, req.Model, constant.ChannelTypeOpenAI)
+			require.Equal(t, tc.base, gjson.GetBytes(body, "model").String())
+			require.Equal(t, tc.base, info.UpstreamModelName)
+			require.Equal(t, tc.effort, info.ReasoningEffort)
+			require.Equal(t, tc.effort, gjson.GetBytes(body, "reasoning_effort").String())
+			require.Equal(t, tc.sampling, gjson.GetBytes(body, "temperature").Exists())
+			require.Equal(t, tc.role, req.Messages[0].Role)
+			if tc.astra {
+				require.False(t, gjson.GetBytes(body, "max_tokens").Exists())
+				require.True(t, gjson.GetBytes(body, "max_completion_tokens").Exists())
+				require.Zero(t, gjson.GetBytes(body, "max_completion_tokens").Int())
+			}
+		})
+	}
+}
+
+func TestParameterCompatibilityGeminiNonPrefixedAliases(t *testing.T) {
+	settings := model_setting.GetGeminiSettings()
+	before := settings.ThinkingAdapterEnabled
+	settings.ThinkingAdapterEnabled = true
+	t.Cleanup(func() { settings.ThinkingAdapterEnabled = before })
+	for _, model := range []string{"nano-banana-pro-preview-nothinking", "nano-banana-pro-preview-thinking", "nano-banana-pro-preview-thinking-0", "nano-banana-pro-preview-high"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(model+map[bool]string{true: "stream", false: "nonstream"}[stream], func(t *testing.T) {
+				c, info := parameterContext()
+				info.OriginModelName, info.UpstreamModelName = model, model
+				info.ChannelBaseUrl, info.IsStream = "https://example.test", stream
+				req := &dto.GeminiChatRequest{}
+				req.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(false)}
+				require.NoError(t, gemini.ThinkingAdaptor(c, req, info))
+				require.Equal(t, "high", info.ReasoningEffort)
+				require.Equal(t, common.GetPointer(false), req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+				url, err := (&gemini.Adaptor{}).GetRequestURL(info)
+				require.NoError(t, err)
+				require.Equal(t, "nano-banana-pro-preview", info.UpstreamModelName)
+				require.Equal(t, model, info.OriginModelName)
+				action := "generateContent"
+				if stream {
+					action = "streamGenerateContent?alt=sse"
+				}
+				require.Contains(t, url, "/models/nano-banana-pro-preview:"+action)
+			})
+		}
+	}
+	for _, model := range []string{"vendor-model-thinking", "nano-banana-proxy-high", "nano-banana-pro-preview"} {
+		_, info := parameterContext()
+		info.UpstreamModelName = model
+		_, err := (&gemini.Adaptor{}).GetRequestURL(info)
+		require.NoError(t, err)
+		require.Equal(t, model, info.UpstreamModelName)
+	}
+	for _, model := range []string{"nano-banana-pro-preview-thinking--2", "nano-banana-pro-preview-thinking-invalid"} {
+		c, info := parameterContext()
+		info.UpstreamModelName = model
+		require.ErrorContains(t, gemini.ThinkingAdaptor(c, &dto.GeminiChatRequest{}, info), "invalid thinking budget suffix")
+		_, err := (&gemini.Adaptor{}).GetRequestURL(info)
+		require.ErrorContains(t, err, "invalid thinking budget suffix")
+		require.Equal(t, model, info.UpstreamModelName)
+	}
+	c, info := parameterContext()
+	info.UpstreamModelName = "nano-banana-pro-preview-nothinking"
+	converted, err := gemini.CovertOpenAI2Gemini(c, dto.GeneralOpenAIRequest{Model: info.UpstreamModelName, IncludeReasoning: common.GetPointer(false)}, info)
+	require.NoError(t, err)
+	require.Equal(t, "high", info.ReasoningEffort)
+	require.Equal(t, common.GetPointer(false), converted.GenerationConfig.ThinkingConfig.IncludeThoughts)
+}
+
+func TestParameterCompatibilityGeminiAliasPreservation(t *testing.T) {
+	settings := model_setting.GetGeminiSettings()
+	global := model_setting.GetGlobalSettings()
+	before, blacklist := settings.ThinkingAdapterEnabled, global.ThinkingModelBlacklist
+	t.Cleanup(func() { settings.ThinkingAdapterEnabled, global.ThinkingModelBlacklist = before, blacklist })
+	model := "nano-banana-pro-preview-nothinking"
+	for _, tc := range []struct {
+		enabled   bool
+		preserved string
+	}{{true, model}, {true, "original-alias"}, {false, ""}} {
+		settings.ThinkingAdapterEnabled = tc.enabled
+		global.ThinkingModelBlacklist = []string{tc.preserved}
+		c, info := parameterContext()
+		info.UpstreamModelName, info.OriginModelName = model, "original-alias"
+		req := &dto.GeminiChatRequest{}
+		require.NoError(t, gemini.ThinkingAdaptor(c, req, info))
+		require.Nil(t, req.GenerationConfig.ThinkingConfig)
+		_, err := (&gemini.Adaptor{}).GetRequestURL(info)
+		require.NoError(t, err)
+		require.Equal(t, model, info.UpstreamModelName)
+	}
+}
+
 func TestParameterCompatibilityZhipu(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req := &dto.GeneralOpenAIRequest{Model: "glm-5", ReasoningEffort: "high"}
@@ -457,6 +566,17 @@ func TestParameterCompatibilitySuffixIdentity(t *testing.T) {
 		require.Nil(t, out.(dto.OpenAIResponsesRequest).Reasoning)
 		require.Equal(t, model, info.UpstreamModelName)
 	}
+	for _, protected := range []string{"alias", "GPT-5.1-high"} {
+		settings.ThinkingModelBlacklist = []string{protected}
+		c, info := parameterContext()
+		info.OriginModelName, info.UpstreamModelName = "alias", "GPT-5.1-high"
+		out, err := (&openai.Adaptor{}).ConvertOpenAIRequest(c, info, &dto.GeneralOpenAIRequest{Model: info.UpstreamModelName})
+		require.NoError(t, err)
+		require.Equal(t, "GPT-5.1-high", out.(*dto.GeneralOpenAIRequest).Model)
+		require.Empty(t, out.(*dto.GeneralOpenAIRequest).ReasoningEffort)
+		require.Equal(t, "GPT-5.1-high", info.UpstreamModelName)
+	}
+	settings.ThinkingModelBlacklist = []string{"alias", "deepseek-v4-pro-max", "grok-3-mini-high", "GPT-5.1-high"}
 	effort, model := reasoning.ParseOpenAIReasoningEffortFromModelSuffix("GPT-5.1-high")
 	require.Empty(t, effort)
 	require.Equal(t, "GPT-5.1-high", model)

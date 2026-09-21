@@ -315,13 +315,16 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 
 	}
-	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
-	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
+	// Capability checks are case-insensitive, like suffix parsing. Preserve the
+	// original spelling in the actual provider model and billing identity.
+	modelCapabilities := strings.ToLower(info.UpstreamModelName)
+	isOModel := dto.IsOpenAIReasoningOModel(modelCapabilities)
+	isGPT5Model := dto.IsOpenAIGPT5Model(modelCapabilities)
 	astraEffort, astraModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
 	if model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) || model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) {
 		astraEffort, astraModel = "", info.UpstreamModelName
 	}
-	isAstraModel := dto.IsOpenAIGPT6AstraModel(astraModel)
+	isAstraModel := dto.IsOpenAIGPT6AstraModel(strings.ToLower(astraModel))
 	if isOModel || isGPT5Model || isAstraModel {
 		// Resolve aliases before checking the effective model's capabilities.
 		if astraEffort != "" {
@@ -329,6 +332,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			info.UpstreamModelName = astraModel
 			request.Model = astraModel
 		}
+		modelCapabilities = strings.ToLower(info.UpstreamModelName)
 		if isAstraModel {
 			// Astra rejects max_tokens. Preserve an explicitly supplied new limit,
 			// including zero, and never send both parameter names to the provider.
@@ -345,7 +349,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Temperature = nil
 		}
 
-		if isAstraModel || (isGPT5Model && !dto.SupportsGPT5ChatSampling(info.UpstreamModelName, request.ReasoningEffort)) {
+		if isAstraModel || (isGPT5Model && !dto.SupportsGPT5ChatSampling(modelCapabilities, request.ReasoningEffort)) {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
@@ -355,7 +359,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		info.ReasoningEffort = request.ReasoningEffort
 
 		// o系列模型developer适配（o1-mini除外）
-		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
+		if !strings.HasPrefix(modelCapabilities, "o1-mini") && !strings.HasPrefix(modelCapabilities, "o1-preview") {
 			//修改第一个Message的内容，将system改为developer
 			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
 				request.Messages[0].Role = "developer"

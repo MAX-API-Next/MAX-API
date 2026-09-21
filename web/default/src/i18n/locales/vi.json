@@ -114,7 +114,7 @@
     "{\"original-model\": \"replacement-model\"}": "{\"original-model\": \"replacement-model\"}",
     "{{category}} Models": "Mô hình {{category}}",
     "{{completed}}/{{total}} completed": "Đã hoàn tất {{completed}}/{{total}}",
-    "{{confirmed}} confirmed, {{remaining}} rejected or unconfirmed.": "Đã xác nhận {{confirmed}}, bị từ chối hoặc chưa xác nhận {{remaining}}.",
+    "{{confirmed}} confirmed, {{remaining}} rejected or unconfirmed.": "Đã xác nhận {{confirmed}}; còn {{remaining}} mục bị từ chối hoặc chưa xác nhận.",
     "{{count}} {{entity}} selected. Bulk actions toolbar is available.": "Đã chọn {{count}} {{entity}}. Thanh thao tác hàng loạt hiện khả dụng.",
     "{{count}} / {{max}} groups selected": "Đã chọn {{count}} / {{max}} nhóm",
     "{{count}} blocking issue(s)": "{{count}} vấn đề chặn",

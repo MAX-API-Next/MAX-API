@@ -114,7 +114,7 @@
     "{\"original-model\": \"replacement-model\"}": "{\"original-model\": \"replacement-model\"}",
     "{{category}} Models": "Modèles {{category}}",
     "{{completed}}/{{total}} completed": "{{completed}}/{{total}} terminé(s)",
-    "{{confirmed}} confirmed, {{remaining}} rejected or unconfirmed.": "{{confirmed}} confirmés, {{remaining}} refusés ou non confirmés.",
+    "{{confirmed}} confirmed, {{remaining}} rejected or unconfirmed.": "Confirmations : {{confirmed}} ; refus ou résultats non confirmés : {{remaining}}.",
     "{{count}} {{entity}} selected. Bulk actions toolbar is available.": "{{count}} {{entity}} sélectionné(s). La barre d’actions groupées est disponible.",
     "{{count}} / {{max}} groups selected": "{{count}} / {{max}} groupes sélectionnés",
     "{{count}} blocking issue(s)": "{{count}} problème(s) bloquant(s)",

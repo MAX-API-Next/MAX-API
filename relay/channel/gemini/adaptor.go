@@ -12,7 +12,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/constant"
-	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -131,7 +130,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-		base, _, found, err := reasoningcompat.ParseSuffix(info.UpstreamModelName, "gemini", true)
+		base, _, found, err := parseThinkingSuffix(info.UpstreamModelName)
 		if err != nil {
 			return "", err
 		}

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { act, useMemo, useState } from 'react'
+import { AxiosError } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   getCoreRowModel,
@@ -27,8 +28,10 @@ import { createReactTestEnvironment } from '@/test/react'
 import { waitFor, within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, before, describe, test } from 'node:test'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { handleServerError } from '@/lib/handle-server-error'
 import { useUserStatusSelection } from '../hooks/use-user-status-selection'
 import { canBatchChangeUserStatus } from '../lib/batch-status'
 import type { User } from '../types'
@@ -131,7 +134,10 @@ async function renderHarness(users?: User[]) {
     .getState()
     .auth.setUser({ id: 2, role: 10, username: 'operator' })
   const client = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+    defaultOptions: {
+      mutations: { retry: false, onError: (error) => handleServerError(error) },
+      queries: { retry: false },
+    },
   })
   const view = await env.render(
     <QueryClientProvider client={client}>
@@ -149,6 +155,63 @@ async function renderHarness(users?: User[]) {
 }
 
 describe('Batch user status workflow', () => {
+  for (const failure of ['business', 'http'] as const) {
+    test(`reports ${failure} errors once while keeping account results unknown`, async () => {
+      const adapter = api.defaults.adapter
+      const messages: string[] = []
+      const toastError = toast.error
+      toast.error = (message) => {
+        messages.push(String(message))
+        return 0
+      }
+      let requests = 0
+      api.defaults.adapter = async (config) => {
+        requests++
+        const response = {
+          config,
+          status: failure === 'http' ? 400 : 200,
+          statusText: 'test',
+          headers: {},
+          data: { success: false, message: 'Batch rejected by server' },
+        }
+        if (failure === 'http') {
+          throw new AxiosError(
+            'Synthetic request failure',
+            'ERR_BAD_REQUEST',
+            config,
+            undefined,
+            response
+          )
+        }
+        return response
+      }
+      const view = await renderHarness()
+      try {
+        await view.click(within(view.container).getByText('account-three'))
+        await view.click(
+          within(view.container).getByRole('button', { name: 'Batch disable' })
+        )
+        const dialog = within(within(document.body).getByRole('dialog'))
+        await view.click(dialog.getByRole('button', { name: 'Confirm' }))
+        await waitFor(() =>
+          assert.ok(
+            dialog.getByText(
+              'Result unconfirmed. Refresh and verify before retrying.'
+            )
+          )
+        )
+        assert.deepEqual(messages, ['Batch rejected by server'])
+        assert.equal(requests, 1)
+        assert.equal(dialog.queryByText('Updated'), null)
+        assert.equal(dialog.queryByRole('button', { name: 'Confirm' }), null)
+      } finally {
+        api.defaults.adapter = adapter
+        toast.error = toastError
+        await view.close()
+      }
+    })
+  }
+
   test('keeps selection bound to IDs across reordering and clears it across pages, including returning', async () => {
     const view = await renderHarness()
     try {

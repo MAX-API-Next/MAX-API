@@ -107,6 +107,7 @@ describe('User status batch safety', () => {
       for (const key of [
         'Batch disable',
         'Batch enable',
+        'Updated',
         'Selected users',
         'No change needed',
         'Result unconfirmed. Refresh and verify before retrying.',

@@ -52,6 +52,15 @@ var geminiSupportedMimeTypes = map[string]bool{
 
 const thoughtSignatureBypassValue = "context_engineering_is_the_way_to_go"
 
+// The image-model alias shares Gemini thinking controls, but not its name
+// prefix. Keep this exception local so other providers' opaque names survive.
+func parseThinkingSuffix(model string) (string, reasoningcompat.Intent, bool, error) {
+	if model == "nano-banana-pro" || strings.HasPrefix(model, "nano-banana-pro-") {
+		return reasoningcompat.ParseSuffix(model, "nano-banana", true)
+	}
+	return reasoningcompat.ParseSuffix(model, "gemini", true)
+}
+
 func ThinkingAdaptor(c *gin.Context, req *dto.GeminiChatRequest, info *relaycommon.RelayInfo, chat ...dto.GeneralOpenAIRequest) error {
 	model := info.UpstreamModelName
 	intent := reasoningcompat.Intent{}
@@ -64,7 +73,7 @@ func ThinkingAdaptor(c *gin.Context, req *dto.GeminiChatRequest, info *relaycomm
 	}
 	base, suffix, found := model, reasoningcompat.Intent{}, false
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-		base, suffix, found, err = reasoningcompat.ParseSuffix(model, "gemini", true)
+		base, suffix, found, err = parseThinkingSuffix(model)
 		if err != nil {
 			return err
 		}

@@ -60,6 +60,9 @@ export function DataTableBulkActions(props: DataTableBulkActionsProps) {
         selected.users.map(({ id, status }) => ({ id, status }))
       ),
     retry: false,
+    // The API interceptor already shows HTTP/business errors. Override the
+    // default mutation toast; the catch below still preserves unknown results.
+    onError: () => undefined,
   })
   const selected = props.table
     .getFilteredSelectedRowModel()
