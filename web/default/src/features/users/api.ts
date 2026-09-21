@@ -30,6 +30,8 @@ import type {
   ManageUserAction,
   ManageUserQuotaPayload,
   ApiResponse,
+  BatchUserStatusAction,
+  BatchUserStatusResult,
 } from './types'
 
 // ============================================================================
@@ -118,6 +120,14 @@ export async function manageUser(
   action: ManageUserAction
 ): Promise<ApiResponse<Partial<User>>> {
   const res = await api.post('/api/user/manage', { id, action })
+  return res.data
+}
+
+export async function batchManageUserStatus(
+  action: BatchUserStatusAction,
+  users: { id: number; status: number }[]
+): Promise<ApiResponse<{ results: BatchUserStatusResult[] }>> {
+  const res = await api.post('/api/user/manage/batch', { action, users })
   return res.data
 }
 

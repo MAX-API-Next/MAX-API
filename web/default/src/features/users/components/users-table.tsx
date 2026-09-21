@@ -33,6 +33,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import {
   DISABLED_ROW_DESKTOP,
@@ -47,6 +48,8 @@ import {
   getUserRoleOptions,
   isUserDeleted,
 } from '../constants'
+import { useUserStatusSelection } from '../hooks/use-user-status-selection'
+import { canBatchChangeUserStatus } from '../lib/batch-status'
 import type { User } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useUsersColumns } from './users-columns'
@@ -63,7 +66,7 @@ export function UsersTable() {
   const columns = useUsersColumns()
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
-  const [rowSelection, setRowSelection] = useState({})
+  const actor = useAuthStore((state) => state.auth.user)
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
     quota_status: false,
@@ -115,6 +118,21 @@ export function UsersTable() {
   const selectedStatus = statusFilter[0] ?? ''
   const selectedQuotaStatus = quotaStatusFilter[0] ?? ''
   const selectedRole = roleFilter[0] ?? ''
+  // Selection is page-scoped and keyed by stable user IDs. A changed query or
+  // actor must not carry selected row indexes over to another set of accounts.
+  const selectionScope = JSON.stringify([
+    pagination.pageIndex,
+    pagination.pageSize,
+    globalFilter,
+    selectedStatus,
+    selectedQuotaStatus,
+    selectedRole,
+    groupFilter,
+    refreshTrigger,
+    actor?.id,
+    actor?.role,
+  ])
+  const selection = useUserStatusSelection(selectionScope)
 
   // Fetch data with React Query
   const { data, isLoading, isFetching } = useQuery({
@@ -176,13 +194,15 @@ export function UsersTable() {
     state: {
       sorting,
       columnVisibility,
-      rowSelection,
+      rowSelection: selection.rowSelection,
       columnFilters,
       globalFilter,
       pagination,
     },
-    enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
+    getRowId: selection.getRowId,
+    enableRowSelection: (row) =>
+      !isFetching && canBatchChangeUserStatus(row.original, actor),
+    onRowSelectionChange: selection.onRowSelectionChange,
     onSortingChange: setSorting,
     onColumnVisibilityChange: setColumnVisibility,
     globalFilterFn: (row, _columnId, filterValue) => {
@@ -263,7 +283,13 @@ export function UsersTable() {
             : DISABLED_ROW_DESKTOP
           : undefined
       }
-      bulkActions={<DataTableBulkActions table={table} />}
+      bulkActions={
+        <DataTableBulkActions
+          table={table}
+          selectionScope={selectionScope}
+          isFetching={isFetching}
+        />
+      }
     />
   )
 }
