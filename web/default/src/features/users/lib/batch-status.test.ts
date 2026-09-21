@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
@@ -28,6 +29,30 @@ import {
 const user = { id: 3, username: 'normal', role: 1, status: 1 } as User
 
 describe('User status batch safety', () => {
+  test('renders French batch counts without singular/plural agreement errors', async () => {
+    const resources = JSON.parse(
+      readFileSync(
+        new URL('../../../i18n/locales/fr.json', import.meta.url),
+        'utf8'
+      )
+    )
+    const instance = createInstance()
+    await instance.init({ lng: 'fr', resources: { fr: resources } })
+    for (const count of [0, 1, 2, 100]) {
+      assert.equal(
+        instance.t(
+          'Review the {{count}} selected accounts before confirming.',
+          { count }
+        ),
+        `Vérifiez les comptes sélectionnés (${count}) avant de confirmer.`
+      )
+      assert.equal(
+        instance.t('Select at most {{count}} users per batch.', { count }),
+        `Nombre maximal d’utilisateurs par lot : ${count}.`
+      )
+    }
+  })
+
   test('protects self, Root, peers, higher roles and deleted accounts', () => {
     const admin = { id: 2, role: 10 }
     assert.equal(canBatchChangeUserStatus(user, admin), true)

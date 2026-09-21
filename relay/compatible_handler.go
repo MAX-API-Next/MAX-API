@@ -169,6 +169,10 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 			}
 		}
 
+		convertedRequest, err = filterResponsesRequestFields(convertedRequest, info, adaptor)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
