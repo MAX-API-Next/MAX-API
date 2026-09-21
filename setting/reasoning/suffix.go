@@ -1,14 +1,23 @@
 package reasoning
 
 import (
+	"regexp"
 	"strings"
 
+	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/samber/lo"
 )
 
 var EffortSuffixes = []string{"-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
 
-var OpenAIEffortSuffixes = []string{"-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
+var OpenAIEffortSuffixes = []string{"-max", "-xhigh", "-high", "-minimal", "-low", "-medium", "-none"}
+
+var openAIModelPattern = regexp.MustCompile(`(?i)^(gpt-[a-z0-9][a-z0-9._-]*|o[1-9][a-z0-9._-]*)$`)
+
+func PreserveModelSuffix(modelName string) bool {
+	bare := modelName[strings.LastIndex(modelName, "/")+1:]
+	return model_setting.ShouldPreserveThinkingSuffix(modelName) || strings.EqualFold(bare, "gpt-5.1-codex-max")
+}
 
 var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
 
@@ -28,8 +37,11 @@ func TrimEffortSuffixWithSuffixes(modelName string, suffixes []string) (string, 
 }
 
 func ParseOpenAIReasoningEffortFromModelSuffix(modelName string) (string, string) {
+	if PreserveModelSuffix(modelName) {
+		return "", modelName
+	}
 	baseModel, effort, ok := TrimEffortSuffixWithSuffixes(modelName, OpenAIEffortSuffixes)
-	if !ok {
+	if !ok || !openAIModelPattern.MatchString(baseModel[strings.LastIndex(baseModel, "/")+1:]) {
 		return "", modelName
 	}
 	return effort, baseModel

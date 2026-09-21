@@ -38,6 +38,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   BILLING_EXTRA_VARS,
   type BillingVar,
+  type TimeFunc,
 } from '@/features/pricing/lib/billing-expr'
 import {
   CACHE_MODE_GENERIC,
@@ -53,6 +54,7 @@ import {
   normalizeVisualConfig,
   normalizeVisualTier,
 } from '@/features/pricing/lib/tier-expr'
+import { BillingTimeHelp } from './billing-time-help'
 import { DraftNumberInput } from './tiered-pricing-fields'
 import {
   formatTokenHint,
@@ -78,8 +80,8 @@ const CONDITION_INPUT_OPTIONS: {
   { value: 'hour', labelKey: 'Hour' },
   { value: 'minute', labelKey: 'Minute' },
   { value: 'weekday', labelKey: 'Weekday' },
-  { value: 'month', labelKey: 'Month' },
-  { value: 'day', labelKey: 'Day' },
+  { value: 'month', labelKey: 'Month number' },
+  { value: 'day', labelKey: 'Day of month' },
 ]
 const OPS: TierConditionInput['op'][] = ['<', '<=', '>', '>=']
 
@@ -101,6 +103,7 @@ function ConditionRow({
   removeDisabled,
 }: ConditionRowProps) {
   const { t } = useTranslation()
+  const timeHelpId = useId()
   const currentInputOption = CONDITION_INPUT_OPTIONS.find(
     (option) => option.value === condition.var
   )
@@ -169,6 +172,7 @@ function ConditionRow({
             onChange({ ...condition, timezone: event.target.value })
           }
           aria-label={t('Timezone')}
+          aria-describedby={timeHelpId}
           placeholder='Asia/Shanghai'
           className='w-40'
         />
@@ -207,6 +211,7 @@ function ConditionRow({
           })
         }
         aria-label={t('Condition Value')}
+        aria-describedby={isTimeCondition ? timeHelpId : undefined}
         placeholder={
           timeBounds ? `${timeBounds.min}-${timeBounds.max}` : t('tokens')
         }
@@ -228,6 +233,13 @@ function ConditionRow({
       >
         <Trash2 className='text-destructive h-4 w-4' />
       </Button>
+      {isTimeCondition && (
+        <BillingTimeHelp
+          id={timeHelpId}
+          timeFunc={condition.var as TimeFunc}
+          mode='visual'
+        />
+      )}
     </div>
   )
 }
@@ -792,6 +804,7 @@ type RawExprEditorProps = {
 
 export function RawExprEditor({ exprString, onChange }: RawExprEditorProps) {
   const { t } = useTranslation()
+  const timeHelpId = useId()
   return (
     <div className='space-y-3'>
       <Alert>
@@ -808,9 +821,12 @@ export function RawExprEditor({ exprString, onChange }: RawExprEditorProps) {
             <code>abs</code>, <code>header(name)</code>,{' '}
             <code>param(path)</code>, <code>has(source, text)</code>
           </div>
+          <div className='font-medium'>{t('Time condition reference')}</div>
+          <BillingTimeHelp id={timeHelpId} mode='expression' />
         </AlertDescription>
       </Alert>
       <Textarea
+        aria-describedby={timeHelpId}
         value={exprString}
         onChange={(event) => onChange(event.target.value)}
         placeholder='tier("base", p * 3 + c * 15)'

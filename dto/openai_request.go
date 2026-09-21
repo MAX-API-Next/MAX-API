@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -75,6 +76,7 @@ type GeneralOpenAIRequest struct {
 	// Used by OpenAI to cache responses for similar requests to optimize your cache hit rates. Replaces the user field
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	LogitBias            json.RawMessage `json:"logit_bias,omitempty"`
 	Metadata             json.RawMessage `json:"metadata,omitempty"`
 	Prediction           json.RawMessage `json:"prediction,omitempty"`
@@ -107,6 +109,25 @@ type GeneralOpenAIRequest struct {
 	SearchMode             json.RawMessage `json:"search_mode,omitempty"`
 	// Minimax
 	ReasoningSplit json.RawMessage `json:"reasoning_split,omitempty"`
+	// Client-supplied vLLM/SGLang extensions. Never synthesize these for other providers.
+	ThinkingTokenBudget  *int            `json:"thinking_token_budget,omitempty"`
+	IncludeReasoning     *bool           `json:"include_reasoning,omitempty"`
+	MinP                 *float64        `json:"min_p,omitempty"`
+	RepetitionPenalty    *float64        `json:"repetition_penalty,omitempty"`
+	StructuredOutputs    json.RawMessage `json:"structured_outputs,omitempty"`
+	ReturnTokenIDs       *bool           `json:"return_token_ids,omitempty"`
+	MinTokens            *uint           `json:"min_tokens,omitempty"`
+	SeparateReasoning    *bool           `json:"separate_reasoning,omitempty"`
+	StreamReasoning      *bool           `json:"stream_reasoning,omitempty"`
+	Regex                *string         `json:"regex,omitempty"`
+	EBNF                 *string         `json:"ebnf,omitempty"`
+	StopTokenIDs         json.RawMessage `json:"stop_token_ids,omitempty"`
+	StopRegex            json.RawMessage `json:"stop_regex,omitempty"`
+	NoStopTrim           *bool           `json:"no_stop_trim,omitempty"`
+	IgnoreEOS            *bool           `json:"ignore_eos,omitempty"`
+	SkipSpecialTokens    *bool           `json:"skip_special_tokens,omitempty"`
+	ContinueFinalMessage *bool           `json:"continue_final_message,omitempty"`
+	CacheSalt            *string         `json:"cache_salt,omitempty"`
 }
 
 func (r GeneralOpenAIRequest) MarshalJSON() ([]byte, error) {
@@ -114,7 +135,40 @@ func (r GeneralOpenAIRequest) MarshalJSON() ([]byte, error) {
 	if !IsQwenThinkingBudgetModel(r.Model) {
 		r.ThinkingBudget = nil
 	}
+	if r.HasMessageTools() {
+		// Only tool-loading messages omit absent content; ordinary assistant
+		// tool-call responses must retain their existing content:null contract.
+		type toolLoadingMessage struct {
+			Message
+			Content any `json:"content,omitempty"`
+		}
+		messages := make([]json.RawMessage, 0, len(r.Messages))
+		for _, message := range r.Messages {
+			var value any = message
+			if len(message.Tools) > 0 && message.Content == nil {
+				value = toolLoadingMessage{Message: message}
+			}
+			encoded, err := common.Marshal(value)
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, encoded)
+		}
+		return common.Marshal(struct {
+			*Alias
+			Messages []json.RawMessage `json:"messages,omitempty"`
+		}{Alias: (*Alias)(&r), Messages: messages})
+	}
 	return common.Marshal((*Alias)(&r))
+}
+
+func (r *GeneralOpenAIRequest) HasMessageTools() bool {
+	for _, message := range r.Messages {
+		if len(message.Tools) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
@@ -153,6 +207,15 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	for _, message := range r.Messages {
 		tokenCountMeta.MessagesCount++
 		texts = append(texts, message.Role)
+		if len(message.Tools) > 0 {
+			// Count declarations once, including custom schemas, even on messages
+			// without content. Reuse the existing per-tool estimation overhead.
+			texts = append(texts, string(message.Tools))
+			var tools []json.RawMessage
+			if common.Unmarshal(message.Tools, &tools) == nil {
+				tokenCountMeta.ToolsCount += len(tools)
+			}
+		}
 		if message.Content != nil {
 			if message.Name != nil {
 				tokenCountMeta.NameCount++
@@ -229,7 +292,41 @@ func IsOpenAIReasoningOModel(modelName string) bool {
 }
 
 func IsOpenAIGPT5Model(modelName string) bool {
-	return strings.HasPrefix(modelName, "gpt-5")
+	return modelName == "gpt-5" || strings.HasPrefix(modelName, "gpt-5-") || strings.HasPrefix(modelName, "gpt-5.")
+}
+
+// Only these standard models (and valid dated snapshots) support sampling
+// with reasoning disabled. Named variants do not inherit the exception.
+func SupportsGPT5ChatSampling(modelName, effort string) bool {
+	if effort != "" && effort != "none" {
+		return false
+	}
+	for _, base := range []string{"gpt-5.1", "gpt-5.2", "gpt-5.4"} {
+		if modelName == base {
+			return true
+		}
+		if date, ok := strings.CutPrefix(modelName, base+"-"); ok {
+			if _, err := time.Parse(time.DateOnly, date); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsOpenAIGPT6AstraModel matches the documented model and dated snapshots,
+// without applying Astra restrictions to unknown variants or generations.
+func IsOpenAIGPT6AstraModel(modelName string) bool {
+	const model = "gpt-6-astra"
+	if modelName == model {
+		return true
+	}
+	snapshot, ok := strings.CutPrefix(modelName, model+"-")
+	if !ok {
+		return false
+	}
+	_, err := time.Parse(time.DateOnly, snapshot)
+	return err == nil
 }
 
 func IsQwenThinkingBudgetModel(modelName string) bool {
@@ -245,7 +342,7 @@ func (r *GeneralOpenAIRequest) GetSystemRoleName() string {
 		if !strings.HasPrefix(r.Model, "o1-mini") && !strings.HasPrefix(r.Model, "o1-preview") {
 			return "developer"
 		}
-	} else if IsOpenAIGPT5Model(r.Model) {
+	} else if IsOpenAIGPT5Model(r.Model) || IsOpenAIGPT6AstraModel(r.Model) {
 		return "developer"
 	}
 	return "system"
@@ -316,6 +413,7 @@ type Message struct {
 	Reasoning        *string         `json:"reasoning,omitempty"`
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
+	Tools            json.RawMessage `json:"tools,omitempty"` // Kimi K3 message-scoped tool declarations.
 	parsedContent    []MediaContent
 	//parsedStringContent *string
 }
@@ -887,6 +985,7 @@ type OpenAIResponsesRequest struct {
 	Store                json.RawMessage `json:"store,omitempty"`
 	PromptCacheKey       json.RawMessage `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	// SafetyIdentifier carries client identity for policy abuse detection.
 	// This field is filtered by default and can be enabled via channel setting allow_safety_identifier.
 	SafetyIdentifier json.RawMessage `json:"safety_identifier,omitempty"`
@@ -904,6 +1003,13 @@ type OpenAIResponsesRequest struct {
 	// qwen
 	EnableThinking json.RawMessage `json:"enable_thinking,omitempty"`
 	ThinkingBudget json.RawMessage `json:"thinking_budget,omitempty"`
+	// Client-supplied OpenAI-compatible Responses extensions.
+	ChatTemplateKwargs json.RawMessage `json:"chat_template_kwargs,omitempty"`
+	TopK               *int            `json:"top_k,omitempty"`
+	MinP               *float64        `json:"min_p,omitempty"`
+	RepetitionPenalty  *float64        `json:"repetition_penalty,omitempty"`
+	Stop               json.RawMessage `json:"stop,omitempty"`
+	CacheSalt          *string         `json:"cache_salt,omitempty"`
 	// perplexity
 	Preset json.RawMessage `json:"preset,omitempty"`
 }

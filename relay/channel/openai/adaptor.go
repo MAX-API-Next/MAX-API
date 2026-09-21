@@ -315,10 +315,32 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 
 	}
-	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
-	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
-	if isOModel || isGPT5Model {
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
+	// Capability checks are case-insensitive, like suffix parsing. Preserve the
+	// original spelling in the actual provider model and billing identity.
+	modelCapabilities := strings.ToLower(info.UpstreamModelName)
+	isOModel := dto.IsOpenAIReasoningOModel(modelCapabilities)
+	isGPT5Model := dto.IsOpenAIGPT5Model(modelCapabilities)
+	astraEffort, astraModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
+	if model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) || model_setting.ShouldPreserveThinkingSuffix(info.UpstreamModelName) {
+		astraEffort, astraModel = "", info.UpstreamModelName
+	}
+	isAstraModel := dto.IsOpenAIGPT6AstraModel(strings.ToLower(astraModel))
+	if isOModel || isGPT5Model || isAstraModel {
+		// Resolve aliases before checking the effective model's capabilities.
+		if astraEffort != "" {
+			request.ReasoningEffort = astraEffort
+			info.UpstreamModelName = astraModel
+			request.Model = astraModel
+		}
+		modelCapabilities = strings.ToLower(info.UpstreamModelName)
+		if isAstraModel {
+			// Astra rejects max_tokens. Preserve an explicitly supplied new limit,
+			// including zero, and never send both parameter names to the provider.
+			if request.MaxCompletionTokens == nil {
+				request.MaxCompletionTokens = request.MaxTokens
+			}
+			request.MaxTokens = nil
+		} else if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
@@ -327,25 +349,17 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Temperature = nil
 		}
 
-		// gpt-5系列模型适配 归零不再支持的参数
-		if isGPT5Model {
+		if isAstraModel || (isGPT5Model && !dto.SupportsGPT5ChatSampling(modelCapabilities, request.ReasoningEffort)) {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
-		}
-
-		// 转换模型推理力度后缀
-		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
-			request.ReasoningEffort = effort
-			info.UpstreamModelName = originModel
-			request.Model = originModel
+			request.TopLogProbs = nil
 		}
 
 		info.ReasoningEffort = request.ReasoningEffort
 
 		// o系列模型developer适配（o1-mini除外）
-		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
+		if !strings.HasPrefix(modelCapabilities, "o1-mini") && !strings.HasPrefix(modelCapabilities, "o1-preview") {
 			//修改第一个Message的内容，将system改为developer
 			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
 				request.Messages[0].Role = "developer"
@@ -592,6 +606,9 @@ func openValidatedImageFile(fileHeader *multipart.FileHeader) (multipart.File, s
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
+	if info != nil && reasoning.PreserveModelSuffix(info.OriginModelName) {
+		effort, originModel = "", request.Model
+	}
 	if effort != "" {
 		if request.Reasoning == nil {
 			request.Reasoning = &dto.Reasoning{
@@ -601,6 +618,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 			request.Reasoning.Effort = effort
 		}
 		request.Model = originModel
+		if info != nil && info.ChannelMeta != nil {
+			info.UpstreamModelName = originModel
+		}
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort

@@ -117,6 +117,15 @@ export type ManageUserAction =
   | 'delete'
   | 'add_quota'
 
+export type BatchUserStatusAction = 'enable' | 'disable'
+
+export interface BatchUserStatusResult {
+  id: number
+  outcome: 'updated' | 'unchanged' | 'rejected' | 'unknown'
+  code?: 'forbidden' | 'not_found' | 'conflict' | 'unknown'
+  status?: number
+}
+
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
 
 export interface ManageUserQuotaPayload {

@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/setting/reasoning"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/MAX-API-Next/MAX-API/relay/constant"
@@ -78,10 +79,11 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
-		if strings.HasSuffix(request.Model, "-high") {
+		preserve := reasoning.PreserveModelSuffix(info.OriginModelName) || reasoning.PreserveModelSuffix(request.Model) || reasoning.PreserveModelSuffix(info.UpstreamModelName)
+		if !preserve && strings.HasSuffix(request.Model, "-high") {
 			request.ReasoningEffort = "high"
 			request.Model = strings.TrimSuffix(request.Model, "-high")
-		} else if strings.HasSuffix(request.Model, "-low") {
+		} else if !preserve && strings.HasSuffix(request.Model, "-low") {
 			request.ReasoningEffort = "low"
 			request.Model = strings.TrimSuffix(request.Model, "-low")
 		}

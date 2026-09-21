@@ -114,8 +114,15 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 		info.UpstreamRequestBodySize = size
 		requestBody = body
 	} else {
+		messageTools, err := relaycommon.CaptureMessageTools(request)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if err := relaycommon.ValidateMessageToolsConversion(messageTools, convertedRequest); err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
@@ -162,6 +169,10 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 			}
 		}
 
+		convertedRequest, err = filterResponsesRequestFields(convertedRequest, info, adaptor)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())

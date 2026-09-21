@@ -81,8 +81,8 @@ const TIME_FUNC_LABELS: Record<string, string> = {
   hour: 'Hour',
   minute: 'Minute',
   weekday: 'Weekday',
-  month: 'Month',
-  day: 'Day',
+  month: 'Month number',
+  day: 'Day of month',
 }
 
 function formatTokenHint(value: string | number): string {

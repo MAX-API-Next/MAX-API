@@ -23,7 +23,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createInstance } from 'i18next'
 import { JSDOM } from 'jsdom'
 import assert from 'node:assert/strict'
-import { after, before, describe, test } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { after, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import {
   BILLING_EXTRA_VARS,
@@ -39,6 +40,7 @@ let within: typeof import('@testing-library/react').within
 let ModelPricingEditorPanel: typeof import('./model-pricing-sheet').ModelPricingEditorPanel
 let ModelRatioVisualEditor: typeof import('./model-ratio-visual-editor').ModelRatioVisualEditor
 let TieredPricingEditor: typeof import('./tiered-pricing-editor').TieredPricingEditor
+let DynamicPricingBreakdown: typeof import('@/features/pricing/components/dynamic-pricing-breakdown').DynamicPricingBreakdown
 let TieredBillingSettings: typeof import('./tiered-billing-settings').TieredBillingSettings
 let TaskRateCardSettings: typeof import('./task-rate-card-settings').TaskRateCardSettings
 let SettingsPageProvider: typeof import('../components/settings-page-context').SettingsPageProvider
@@ -819,7 +821,7 @@ describe('optional zero prices in the actual editor', () => {
   })
 })
 
-before(async () => {
+async function setup(): Promise<void> {
   await i18n.init({
     lng: 'en',
     fallbackLng: 'en',
@@ -865,11 +867,17 @@ before(async () => {
   ;({ ModelPricingEditorPanel } = await import('./model-pricing-sheet'))
   ;({ ModelRatioVisualEditor } = await import('./model-ratio-visual-editor'))
   ;({ TieredPricingEditor } = await import('./tiered-pricing-editor'))
+  ;({ DynamicPricingBreakdown } =
+    await import('@/features/pricing/components/dynamic-pricing-breakdown'))
   ;({ TieredBillingSettings } = await import('./tiered-billing-settings'))
   ;({ TaskRateCardSettings } = await import('./task-rate-card-settings'))
   ;({ SettingsPageProvider } =
     await import('../components/settings-page-context'))
-})
+}
+
+// Module loading precedes timed interactions, just as it does on a loaded page.
+// Keep DOM installation before imports so Base UI uses its browser lifecycle.
+await setup()
 
 after(() => {
   restoreGlobals()
@@ -877,6 +885,196 @@ after(() => {
 })
 
 describe('TieredPricingEditor runtime behavior', () => {
+  test('explains weekday values and visual timezone defaults without changing pricing', async (): Promise<void> => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const billingExpr =
+      'weekday("Asia/Shanghai") < 6 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    const requestRuleExpr = '(weekday("Asia/Shanghai") == 0 ? 0.8 : 1)'
+    const changes: string[] = []
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={billingExpr}
+              requestRuleExpr={requestRuleExpr}
+              onBillingExprChange={(next) => changes.push(next)}
+              onRequestRuleExprChange={(next) => changes.push(next)}
+            />
+          </I18nextProvider>
+        )
+      )
+      const values = within(container).getAllByLabelText('Condition Value')
+      assert.deepEqual(
+        values.map((input) => (input as HTMLInputElement).value),
+        ['6', '0']
+      )
+      for (const input of values) {
+        const descriptionId = input.getAttribute('aria-describedby')
+        assert.ok(descriptionId)
+        const description = dom.window.document.getElementById(descriptionId)
+        assert.ok(description)
+        assert.match(description.textContent ?? '', /0 = Sunday, 1 = Monday/)
+        assert.match(description.textContent ?? '', /6 = Saturday/)
+        assert.match(
+          description.textContent ?? '',
+          /< 6 includes Sunday through Friday/
+        )
+        assert.match(description.textContent ?? '', />= 1 AND <= 5/)
+        assert.match(
+          description.textContent ?? '',
+          /empty timezone in this visual editor uses Asia\/Shanghai/
+        )
+      }
+      const timezone = within(container).getByLabelText('Timezone')
+      assert.equal(
+        timezone.getAttribute('aria-describedby'),
+        values[0].getAttribute('aria-describedby')
+      )
+      assert.deepEqual(changes, [])
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  test('provides all time ranges and expression timezone semantics in raw mode', async (): Promise<void> => {
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      'weekday("") == 0 ? tier("sunday", p * 2 + c * 4) : tier("other", p * 1 + c * 2)'
+    const changes: string[] = []
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={i18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => changes.push(next)}
+              onRequestRuleExprChange={(next) => changes.push(next)}
+            />
+          </I18nextProvider>
+        )
+      )
+      const textarea = container.querySelector('textarea')
+      assert.ok(textarea)
+      assert.equal(textarea.value, source)
+      const descriptionId = textarea.getAttribute('aria-describedby')
+      assert.ok(descriptionId)
+      const description = dom.window.document.getElementById(descriptionId)
+      assert.ok(description)
+      for (const helper of ['hour', 'minute', 'weekday', 'month', 'day']) {
+        assert.ok(description.textContent?.includes(`${helper}(tz)`))
+      }
+      for (const range of ['0–23', '0–59', '1–12', '1–31']) {
+        assert.ok(description.textContent?.includes(range))
+      }
+      assert.match(
+        description.textContent ?? '',
+        /empty or unrecognized timezone is evaluated as UTC/
+      )
+      assert.doesNotMatch(
+        description.textContent ?? '',
+        /visual editor uses Asia\/Shanghai/
+      )
+      assert.deepEqual(changes, [])
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
+  const conditionLocaleKeys = [
+    'Add condition group',
+    'Condition group',
+    'Remove condition group',
+    'Each tier supports multiple conditions. The last tier without conditions is the fallback.',
+    'Month number',
+  ]
+  const conditionLocales = Object.fromEntries(
+    ['en', 'zh', 'fr', 'ja', 'ru', 'vi'].map((locale) => [
+      locale,
+      JSON.parse(
+        readFileSync(
+          new URL(`../../../i18n/locales/${locale}.json`, import.meta.url),
+          'utf8'
+        )
+      ) as { translation: Record<string, string> },
+    ])
+  )
+
+  for (const [locale, resource] of Object.entries(conditionLocales)) {
+    test(`provides condition group translations in ${locale}`, () => {
+      for (const key of conditionLocaleKeys) {
+        assert.ok(resource.translation[key]?.trim(), `${locale}: ${key}`)
+        if (locale !== 'en') {
+          assert.notEqual(resource.translation[key], key, `${locale}: ${key}`)
+        }
+      }
+    })
+  }
+
+  test('localizes condition groups and calendar months without changing the expression', async (): Promise<void> => {
+    const localizedI18n = createInstance()
+    await localizedI18n.init({
+      lng: 'zh',
+      fallbackLng: 'en',
+      resources: conditionLocales,
+      interpolation: { escapeValue: false },
+    })
+    const container = createContainer()
+    const root = createRoot(container)
+    const source =
+      'month("Asia/Shanghai") >= 9 ? tier("peak", p * 2 + c * 4) : tier("off", p * 1 + c * 2)'
+    const changes: string[] = []
+    try {
+      await act(async () =>
+        root.render(
+          <I18nextProvider i18n={localizedI18n}>
+            <TieredPricingEditor
+              billingExpr={source}
+              requestRuleExpr=''
+              onBillingExprChange={(next) => changes.push(next)}
+              onRequestRuleExprChange={() => undefined}
+            />
+            <DynamicPricingBreakdown billingExpr={source} />
+          </I18nextProvider>
+        )
+      )
+      const editor = within(container)
+      assert.ok(editor.getAllByRole('button', { name: '新增条件组' }).length)
+      assert.ok(editor.getByText('条件组 1'))
+      assert.ok(editor.getByRole('button', { name: '删除条件组' }))
+      assert.ok(
+        editor.getByText('每个档位支持多个条件，最后一个无条件档位作为兜底。')
+      )
+      const monthSelector = editor
+        .getAllByRole('combobox')
+        .find((element) => element.textContent?.trim() === '月')
+      assert.ok(monthSelector)
+      assert.ok(editor.getByText('1–12'))
+      assert.ok(editor.getAllByText('月 ≥ 9 (Asia/Shanghai)').length)
+      assert.equal(editor.queryByText('本月'), null)
+      for (const key of conditionLocaleKeys.slice(0, 4)) {
+        assert.equal(container.textContent?.includes(key), false)
+      }
+      // The generic key can still describe a current-month dashboard filter.
+      assert.equal(localizedI18n.t('Month'), '本月')
+      assert.deepEqual(changes, [])
+
+      await act(async () => {
+        await localizedI18n.changeLanguage('en')
+      })
+      assert.ok(
+        editor.getAllByRole('button', { name: 'Add condition group' }).length
+      )
+      assert.equal(monthSelector.textContent?.trim(), 'Month number')
+      assert.deepEqual(changes, [])
+    } finally {
+      await unmount(root, container)
+    }
+  })
+
   test('keeps an empty timezone editable and applies the default only to the expression', async (): Promise<void> => {
     const container = createContainer()
     const root = createRoot(container)

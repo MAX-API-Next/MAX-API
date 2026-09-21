@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -95,7 +96,18 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	return RequestOpenAI2ClaudeMessage(c, *request)
+	origin := request.Model
+	if info != nil {
+		origin = info.OriginModelName
+	}
+	converted, err := RequestOpenAI2ClaudeMessage(c, *request, origin)
+	if err == nil && info != nil {
+		if info.ChannelMeta != nil {
+			info.UpstreamModelName = converted.Model
+		}
+		info.ReasoningEffort = reasoningcompat.ClaudeEffort(converted)
+	}
+	return converted, err
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {

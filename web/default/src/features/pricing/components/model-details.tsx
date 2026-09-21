@@ -84,11 +84,11 @@ import type {
   PricingModel,
   TokenUnit,
 } from '../types'
-import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelDetailsApi, ModelDetailsProviderInfo } from './model-details-api'
 import { ModalityIcons } from './model-details-modalities'
 import { ModelDetailsPerformance } from './model-details-performance'
 import { ModelDetailsQuickStats } from './model-details-quick-stats'
+import { ModelTierPricing } from './model-tier-pricing'
 
 // ----------------------------------------------------------------------------
 // Local UI helpers
@@ -1389,7 +1389,13 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               />
             )}
             {isDynamic && (
-              <DynamicPricingBreakdown billingExpr={props.model.billing_expr} />
+              <ModelTierPricing
+                billingExpr={props.model.billing_expr || ''}
+                tokenUnit={props.tokenUnit}
+                priceRate={props.priceRate}
+                usdExchangeRate={props.usdExchangeRate}
+                showRechargePrice={showRechargePrice}
+              />
             )}
             <GroupPricingSection
               model={props.model}
