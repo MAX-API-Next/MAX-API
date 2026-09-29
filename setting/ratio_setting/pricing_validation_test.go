@@ -48,6 +48,14 @@ func TestLoadPricingMapWithoutNormalizerPreservesRawKeys(t *testing.T) {
 	require.Equal(t, 2.5, value)
 }
 
+func TestDefaultModerationRatiosAreFree(t *testing.T) {
+	for _, model := range []string{"omni-moderation-latest", "omni-moderation-2024-09-26"} {
+		ratio, ok := GetDefaultModelRatioMap()[model]
+		require.True(t, ok, model)
+		require.Zero(t, ratio, model)
+	}
+}
+
 func TestValidatePricingMapRejectsOversizedJSONBeforeLoad(t *testing.T) {
 	raw := `{"` + strings.Repeat("a", maxPricingMapJSONBytes) + `":1}`
 

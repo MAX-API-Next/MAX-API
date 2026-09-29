@@ -130,6 +130,8 @@ var defaultModelRatio = map[string]float64{
 	"text-search-ada-doc-001":                   10,
 	"text-moderation-stable":                    0.1,
 	"text-moderation-latest":                    0.1,
+	"omni-moderation-latest":                    0, // OpenAI moderation models are free
+	"omni-moderation-2024-09-26":                0,
 	"claude-3-haiku-20240307":                   0.125, // $0.25 / 1M tokens
 	"claude-3-5-haiku-20241022":                 0.5,   // $1 / 1M tokens
 	"claude-haiku-4-5-20251001":                 0.5,   // $1 / 1M tokens

@@ -44,6 +44,19 @@ func TestGetModelFromJSONBodyPreservesProviderRoutingFields(t *testing.T) {
 	require.Equal(t, "openai", gjson.GetBytes(body, "provider.order.0").String())
 }
 
+func TestGetModelRequestDefaultsOmittedModerationModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/moderations", bytes.NewBufferString(`{"input":"check this"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+
+	request, shouldSelectChannel, err := getModelRequest(ctx)
+	require.NoError(t, err)
+	require.True(t, shouldSelectChannel)
+	require.Equal(t, "omni-moderation-latest", request.Model)
+}
+
 func TestPlaygroundExplicitGroupBypassesStoredTokenRoutePlan(t *testing.T) {
 	previousDB := model.DB
 	previousMemoryCache := common.MemoryCacheEnabled

@@ -3981,7 +3981,8 @@
           },
           "model": {
             "type": "string",
-            "example": "text-moderation-latest"
+            "description": "Optional. Defaults to omni-moderation-latest when omitted. Tokens with model limits must explicitly allow this model. Channels serving model-less moderation requests must include omni-moderation-latest in their model list.",
+            "example": "omni-moderation-latest"
           }
         }
       },
