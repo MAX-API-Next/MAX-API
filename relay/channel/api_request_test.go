@@ -16,9 +16,37 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/task/taskcommon"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClientWithStreamingHeaderTimeoutUsesRemainingAttemptBudget(t *testing.T) {
+	originalSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		StreamingFirstResultTimeoutSeconds: 1,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = originalSetting })
+
+	transport := &http.Transport{ResponseHeaderTimeout: 5 * time.Second}
+	client := &http.Client{Transport: transport}
+	info := &relaycommon.RelayInfo{
+		IsStream: true,
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info.InitChannelMeta(ctx)
+	time.Sleep(400 * time.Millisecond)
+
+	cloned := clientWithStreamingHeaderTimeout(client, info)
+	require.NotSame(t, client, cloned)
+	clonedTransport, ok := cloned.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Greater(t, clonedTransport.ResponseHeaderTimeout, 500*time.Millisecond)
+	require.Less(t, clonedTransport.ResponseHeaderTimeout, 700*time.Millisecond)
+	require.Equal(t, 5*time.Second, transport.ResponseHeaderTimeout)
+}
 
 type taskHeaderAdaptor struct {
 	taskcommon.BaseBilling

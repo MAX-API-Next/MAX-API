@@ -5626,7 +5626,7 @@
     "Automatic": "自动",
     "Automatic recovery restores a penalty after its cooldown; manual recovery keeps the penalty until an administrator acts.": "自动恢复会在冷却时间后解除惩罚；手动恢复会保留惩罚，直到管理员操作。",
     "Extend penalty on repeated timeout": "重复超时时延长惩罚",
-    "Keep the current penalty deadline when repeated timeouts continue during an active penalty.": "惩罚生效期间再次超时时，是否保留并延长当前惩罚截止时间。",
+    "Keep the current penalty deadline when repeated timeouts continue during an active penalty.": "惩罚生效期间再次超时时，保留当前惩罚截止时间。",
     "Expose channel demotion and disable transitions to the SmartOps alert stream.": "将渠道降级和禁用状态变化发布到 SmartOps 告警流。",
     "Save timeout policy": "保存超时策略",
     "Channel alert stream": "渠道告警流",

@@ -518,6 +518,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		client = service.GetHttpClient()
 	}
 	client = clientWithNonStreamingTimeout(client, info)
+	client = clientWithStreamingHeaderTimeout(client, info)
 
 	var stopPinger context.CancelFunc
 	var pingerDone <-chan struct{}
@@ -580,6 +581,46 @@ func clientWithNonStreamingTimeout(client *http.Client, info *common.RelayInfo) 
 	}
 	clone := *client
 	clone.Timeout = timeout
+	return &clone
+}
+
+// clientWithStreamingHeaderTimeout bounds the wait for upstream response
+// headers by the same first-response budget used by StreamScannerHandler.
+// The timeout is applied to a cloned transport, so it ends when headers are
+// received and does not cap the rest of a successful stream.
+func clientWithStreamingHeaderTimeout(client *http.Client, info *common.RelayInfo) *http.Client {
+	if client == nil || info == nil || !info.IsStream {
+		return client
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || setting.StreamingFirstResultTimeoutSeconds <= 0 {
+		return client
+	}
+	remaining := common.RemainingChannelFirstResponseTimeout(
+		info.ChannelAttemptStartTime(),
+		time.Duration(setting.StreamingFirstResultTimeoutSeconds)*time.Second,
+		time.Now(),
+	)
+	if remaining <= 0 {
+		return client
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if client.Transport == nil {
+		transport, ok = http.DefaultTransport.(*http.Transport)
+	}
+	if !ok || transport == nil {
+		// All built-in relay clients use *http.Transport. Custom round
+		// trippers are left untouched because imposing http.Client.Timeout
+		// would also terminate the body after a successful first response.
+		return client
+	}
+	clonedTransport := transport.Clone()
+	if clonedTransport.ResponseHeaderTimeout == 0 || remaining < clonedTransport.ResponseHeaderTimeout {
+		clonedTransport.ResponseHeaderTimeout = remaining
+	}
+	clone := *client
+	clone.Transport = clonedTransport
 	return &clone
 }
 

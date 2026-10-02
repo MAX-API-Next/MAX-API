@@ -71,3 +71,12 @@ func TestStreamScannerHandlerDoesNotTreatUsageOnlyFrameAsFirstResult(t *testing.
 	require.True(t, info.HasRecordedChannelFirstResponse())
 	require.NotEqual(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
 }
+
+func TestRemainingFirstResultTimeoutUsesChannelAttemptBudget(t *testing.T) {
+	configured := time.Second
+	start := time.Now().Add(-400 * time.Millisecond)
+	remaining := relaycommon.RemainingChannelFirstResponseTimeout(start, configured, time.Now())
+
+	require.Greater(t, remaining, 500*time.Millisecond)
+	require.Less(t, remaining, 700*time.Millisecond)
+}

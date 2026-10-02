@@ -1430,8 +1430,10 @@ func smartOpsAlertDeliveryStatusRank(status string) int {
 		return 40
 	case "skipped_repeat":
 		return 50
-	default:
+	case "failed", "delivery_unknown":
 		return 30
+	default:
+		return 0
 	}
 }
 

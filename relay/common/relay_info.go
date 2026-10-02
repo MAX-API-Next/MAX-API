@@ -838,6 +838,36 @@ func (info *RelayInfo) FirstResponseSignal() <-chan struct{} {
 	return info.channelFirstResponseSignal
 }
 
+// ChannelAttemptStartTime returns the start of the current channel attempt.
+// The value is copied so callers can calculate a deadline without exposing
+// RelayInfo's mutable retry state.
+func (info *RelayInfo) ChannelAttemptStartTime() time.Time {
+	if info == nil {
+		return time.Time{}
+	}
+	return info.channelAttemptStartTime
+}
+
+// RemainingChannelFirstResponseTimeout returns the portion of a configured
+// first-response timeout that remains for the current channel attempt. A zero
+// start time means the attempt start is unavailable, so the full configured
+// timeout is retained. Once the budget is exhausted, a nanosecond is returned
+// so time.NewTimer still fires immediately instead of treating zero as
+// "disabled".
+func RemainingChannelFirstResponseTimeout(start time.Time, configured time.Duration, now time.Time) time.Duration {
+	if configured <= 0 {
+		return 0
+	}
+	if start.IsZero() {
+		return configured
+	}
+	remaining := configured - now.Sub(start)
+	if remaining <= 0 {
+		return time.Nanosecond
+	}
+	return remaining
+}
+
 func (info *RelayInfo) HasRecordedChannelFirstResponse() bool {
 	return info != nil && info.channelFirstResponseRecorded.Load()
 }
@@ -897,6 +927,7 @@ func (info *RelayInfo) recordChannelHealthSuccess() {
 		(setting.TimeoutAutoDisableMinimumSamples <= 0 && setting.TimeoutAutoDisableRatioPercent <= 0) {
 		return
 	}
+	settingSnapshot := *setting
 	requestMode := channelhealth.RequestModeNonStreaming
 	if info.IsStream {
 		requestMode = channelhealth.RequestModeStreaming
@@ -913,7 +944,7 @@ func (info *RelayInfo) recordChannelHealthSuccess() {
 	go func() {
 		decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_, _ = channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, setting)
+		_, _ = channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, &settingSnapshot)
 	}()
 }
 

@@ -65,6 +65,12 @@ func TestSmartOpsAlertDeliveryProjectionRejectsOlderStatus(t *testing.T) {
 	require.Equal(t, 1, state.DeliveryAttempts)
 }
 
+func TestSmartOpsAlertDeliveryStatusRankRejectsUnknownStatuses(t *testing.T) {
+	require.Equal(t, 30, smartOpsAlertDeliveryStatusRank("failed"))
+	require.Equal(t, 30, smartOpsAlertDeliveryStatusRank("delivery_unknown"))
+	require.Zero(t, smartOpsAlertDeliveryStatusRank("unexpected_status"))
+}
+
 func TestNormalizeSmartOpsAlertObservedAtKeepsOneDeliveryTimestamp(t *testing.T) {
 	alert := normalizeSmartOpsAlertObservedAt(SmartOpsAlert{Key: "channel_timeout:936"})
 	require.False(t, alert.ObservedAt.IsZero())

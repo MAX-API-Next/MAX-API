@@ -96,7 +96,12 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	var firstResultTimer *time.Timer
 	var firstResultTimeoutChan <-chan time.Time
 	if firstResultTimeoutSeconds > 0 && info.FirstResponseSignal() != nil {
-		firstResultTimer = time.NewTimer(time.Duration(firstResultTimeoutSeconds) * time.Second)
+		firstResultTimeout := relaycommon.RemainingChannelFirstResponseTimeout(
+			info.ChannelAttemptStartTime(),
+			time.Duration(firstResultTimeoutSeconds)*time.Second,
+			time.Now(),
+		)
+		firstResultTimer = time.NewTimer(firstResultTimeout)
 		firstResultTimeoutChan = firstResultTimer.C
 	}
 
