@@ -119,6 +119,52 @@ func TestChannelHealthRuntimeTransitionProjectsAndNotifies(t *testing.T) {
 	}
 }
 
+func TestChannelHealthRecoveryDoesNotNotifyPriorityOnlyAlert(t *testing.T) {
+	originalSender := smartOpsAlertNotificationSender
+	originalSetting := *operation_setting.GetMonitorSetting()
+	originalRedisEnabled := common.RedisEnabled
+	smartOpsAlertMonitor.Lock()
+	originalActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = map[string]SmartOpsAlert{
+		channelHealthPriorityAlertKey(936): {
+			Key:    channelHealthPriorityAlertKey(936),
+			Status: smartOpsAlertStatusFiring,
+		},
+	}
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertNotificationSender = originalSender
+		*operation_setting.GetMonitorSetting() = originalSetting
+		common.RedisEnabled = originalRedisEnabled
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	common.RedisEnabled = false
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		ChannelTimeoutNotificationEnabled: true,
+	}
+	var events []SmartOpsAlert
+	smartOpsAlertNotificationSender = func(alert SmartOpsAlert) {
+		events = append(events, alert)
+	}
+
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:  936,
+		Transition: "runtime_recovered",
+		ObservedAt: time.Now(),
+	})
+
+	require.Empty(t, events)
+	smartOpsAlertMonitor.Lock()
+	defer smartOpsAlertMonitor.Unlock()
+	_, priorityStillActive := smartOpsAlertMonitor.active[channelHealthPriorityAlertKey(936)]
+	_, disabledStillActive := smartOpsAlertMonitor.active[channelHealthDisabledAlertKey(936)]
+	require.False(t, priorityStillActive)
+	require.False(t, disabledStillActive)
+}
+
 func TestChannelHealthTimeoutCountUsesTheLatestModeForSameModePolicy(t *testing.T) {
 	state := channelhealth.RuntimeState{
 		TimeoutCount: map[string]int64{

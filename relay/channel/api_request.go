@@ -28,12 +28,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type streamingHeaderTransportKey struct {
+type responseHeaderTransportKey struct {
 	base    *http.Transport
 	timeout time.Duration
 }
 
-var streamingHeaderTransportCache sync.Map
+var responseHeaderTransportCache sync.Map
 
 // applyUpstreamBodyMetadata restores metadata hidden when http.NewRequest
 // wraps an arbitrary reader in req.Body.
@@ -560,8 +560,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 	if info != nil && !info.IsStream && resp.Body != nil {
 		setting := operation_setting.GetMonitorSetting()
-		if setting != nil && setting.NonStreamingResponseTimeoutSeconds > 0 {
-			resp.Body = &timeoutTrackingBody{ReadCloser: resp.Body, info: info}
+		if setting != nil && setting.NonStreamingResponseTimeoutSeconds > 0 && !isServerSentEventsResponse(resp) {
+			resp.Body = newTimeoutTrackingBody(resp.Body, info, time.Duration(setting.NonStreamingResponseTimeoutSeconds)*time.Second)
 		}
 	}
 
@@ -583,12 +583,7 @@ func clientWithNonStreamingTimeout(client *http.Client, info *common.RelayInfo) 
 		return client
 	}
 	timeout := time.Duration(setting.NonStreamingResponseTimeoutSeconds) * time.Second
-	if client.Timeout > 0 && client.Timeout <= timeout {
-		return client
-	}
-	clone := *client
-	clone.Timeout = timeout
-	return &clone
+	return clientWithResponseHeaderTimeout(client, timeout)
 }
 
 // clientWithStreamingHeaderTimeout bounds the wait for upstream response
@@ -604,46 +599,90 @@ func clientWithStreamingHeaderTimeout(client *http.Client, info *common.RelayInf
 		return client
 	}
 	configured := time.Duration(setting.StreamingFirstResultTimeoutSeconds) * time.Second
+	return clientWithResponseHeaderTimeout(client, configured)
+}
 
+func clientWithResponseHeaderTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if client == nil || timeout <= 0 {
+		return client
+	}
 	transport, ok := client.Transport.(*http.Transport)
 	if client.Transport == nil {
 		transport, ok = http.DefaultTransport.(*http.Transport)
 	}
 	if !ok || transport == nil {
-		// All built-in relay clients use *http.Transport. Custom round
-		// trippers are left untouched because imposing http.Client.Timeout
-		// would also terminate the body after a successful first response.
 		return client
 	}
-	effective := configured
+	effective := timeout
 	if transport.ResponseHeaderTimeout > 0 && transport.ResponseHeaderTimeout < effective {
 		effective = transport.ResponseHeaderTimeout
 	}
-	cacheKey := streamingHeaderTransportKey{base: transport, timeout: effective}
-	if cached, ok := streamingHeaderTransportCache.Load(cacheKey); ok {
+	cacheKey := responseHeaderTransportKey{base: transport, timeout: effective}
+	if cached, ok := responseHeaderTransportCache.Load(cacheKey); ok {
 		clone := *client
 		clone.Transport = cached.(*http.Transport)
 		return &clone
 	}
 	clonedTransport := transport.Clone()
 	clonedTransport.ResponseHeaderTimeout = effective
-	actual, _ := streamingHeaderTransportCache.LoadOrStore(cacheKey, clonedTransport)
+	actual, _ := responseHeaderTransportCache.LoadOrStore(cacheKey, clonedTransport)
 	clone := *client
 	clone.Transport = actual.(*http.Transport)
 	return &clone
 }
 
+func isServerSentEventsResponse(resp *http.Response) bool {
+	return resp != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))), "text/event-stream")
+}
+
 type timeoutTrackingBody struct {
 	io.ReadCloser
-	info *common.RelayInfo
+	info       *common.RelayInfo
+	timer      *time.Timer
+	timedOut   atomic.Bool
+	recordOnce sync.Once
+}
+
+func newTimeoutTrackingBody(body io.ReadCloser, info *common.RelayInfo, timeout time.Duration) *timeoutTrackingBody {
+	tracked := &timeoutTrackingBody{ReadCloser: body, info: info}
+	if timeout > 0 {
+		tracked.timer = time.AfterFunc(timeout, tracked.expire)
+	}
+	return tracked
+}
+
+func (body *timeoutTrackingBody) expire() {
+	body.timedOut.Store(true)
+	body.recordTimeout()
+	_ = body.ReadCloser.Close()
+}
+
+func (body *timeoutTrackingBody) recordTimeout() {
+	body.recordOnce.Do(func() {
+		if body.info != nil {
+			body.info.RecordChannelTimeout("request_timeout")
+		}
+	})
 }
 
 func (body *timeoutTrackingBody) Read(p []byte) (int, error) {
 	n, err := body.ReadCloser.Read(p)
-	if err != nil && isUpstreamTimeout(err) && body.info != nil {
-		body.info.RecordChannelTimeout("request_timeout")
+	if err != nil {
+		if body.timer != nil {
+			body.timer.Stop()
+		}
+		if body.timedOut.Load() || isUpstreamTimeout(err) {
+			body.recordTimeout()
+		}
 	}
 	return n, err
+}
+
+func (body *timeoutTrackingBody) Close() error {
+	if body.timer != nil {
+		body.timer.Stop()
+	}
+	return body.ReadCloser.Close()
 }
 
 func isUpstreamTimeout(err error) bool {

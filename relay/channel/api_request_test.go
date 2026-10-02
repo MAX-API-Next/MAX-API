@@ -47,6 +47,50 @@ func TestClientWithStreamingHeaderTimeoutCachesTransportByConfiguredBudget(t *te
 	require.Equal(t, 5*time.Second, transport.ResponseHeaderTimeout)
 }
 
+func TestClientWithNonStreamingTimeoutUsesHeaderBudgetWithoutShorteningBodyClient(t *testing.T) {
+	originalSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		NonStreamingResponseTimeoutSeconds: 1,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = originalSetting })
+
+	transport := &http.Transport{ResponseHeaderTimeout: 5 * time.Second}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	cloned := clientWithNonStreamingTimeout(client, &relaycommon.RelayInfo{})
+	require.NotSame(t, client, cloned)
+	require.Equal(t, 30*time.Second, cloned.Timeout)
+	clonedTransport, ok := cloned.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, time.Second, clonedTransport.ResponseHeaderTimeout)
+	require.Equal(t, 5*time.Second, transport.ResponseHeaderTimeout)
+}
+
+func TestTimeoutTrackingBodyEnforcesDeadline(t *testing.T) {
+	reader, writer := io.Pipe()
+	tracked := newTimeoutTrackingBody(reader, nil, 20*time.Millisecond)
+	t.Cleanup(func() { _ = tracked.Close(); _ = writer.Close() })
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := tracked.Read(make([]byte, 1))
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timeout tracking body did not stop a stalled read")
+	}
+}
+
+func TestServerSentEventsResponseSkipsNonStreamingBodyTimeout(t *testing.T) {
+	sse := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}}}
+	json := &http.Response{Header: http.Header{"Content-Type": []string{"application/json"}}}
+	require.True(t, isServerSentEventsResponse(sse))
+	require.False(t, isServerSentEventsResponse(json))
+}
+
 type taskHeaderAdaptor struct {
 	taskcommon.BaseBilling
 	url string

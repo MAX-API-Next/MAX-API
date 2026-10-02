@@ -307,9 +307,16 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 		cursor, _ = strconv.ParseUint(value, 10, 64)
 	}
 	scanComplete := false
-	for {
+	persistCursor := func() error {
+		if cursor == 0 {
+			return nil
+		}
+		return maxcommon.RDB.Set(context.Background(), runtimeStateIndexCursorKey, strconv.FormatUint(cursor, 10), 0).Err()
+	}
+	for iterations := 0; iterations < 16; iterations++ {
 		batch, next, err := maxcommon.RDB.Scan(ctx, cursor, runtimeStateKeyPrefix+"*", 200).Result()
 		if err != nil {
+			_ = persistCursor()
 			return nil, err
 		}
 		keys = append(keys, batch...)
@@ -320,6 +327,11 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 		}
 		if len(keys) >= 1000 {
 			break
+		}
+	}
+	if !scanComplete {
+		if err := persistCursor(); err != nil {
+			return nil, err
 		}
 	}
 	allMembers := make([]string, 0, len(members)+len(keys))

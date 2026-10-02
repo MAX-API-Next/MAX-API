@@ -403,6 +403,7 @@ func handleChannelHealthRuntimeTransition(transition common.ChannelHealthRuntime
 		// Recovery must close both possible channel projections. The critical
 		// disable alert may have been created before a process restart, while a
 		// warning can still exist when an operator restores a penalty directly.
+		disabledAlertWasActive := channelHealthAlertWasActive(channelHealthDisabledAlertKey(transition.ChannelID))
 		projectSmartOpsActiveAlert(SmartOpsAlert{
 			Key:    channelHealthDisabledAlertKey(transition.ChannelID),
 			Status: smartOpsAlertStatusResolved,
@@ -411,16 +412,18 @@ func handleChannelHealthRuntimeTransition(transition common.ChannelHealthRuntime
 			Key:    channelHealthPriorityAlertKey(transition.ChannelID),
 			Status: smartOpsAlertStatusResolved,
 		})
-		if setting := operation_setting.GetMonitorSetting(); setting != nil && setting.ChannelTimeoutNotificationEnabled {
-			smartOpsAlertNotificationSender(SmartOpsAlert{
-				Key:        channelHealthDisabledAlertKey(transition.ChannelID),
-				Status:     smartOpsAlertStatusResolved,
-				Severity:   smartOpsAlertSeverityCritical,
-				Component:  "channel",
-				Node:       smartOpsAlertNodeName(),
-				ObservedAt: observedAt,
-				Message:    fmt.Sprintf("渠道 %d 已恢复运行态，告警已关闭", transition.ChannelID),
-			})
+		if disabledAlertWasActive {
+			if setting := operation_setting.GetMonitorSetting(); setting != nil && setting.ChannelTimeoutNotificationEnabled {
+				smartOpsAlertNotificationSender(SmartOpsAlert{
+					Key:        channelHealthDisabledAlertKey(transition.ChannelID),
+					Status:     smartOpsAlertStatusResolved,
+					Severity:   smartOpsAlertSeverityCritical,
+					Component:  "channel",
+					Node:       smartOpsAlertNodeName(),
+					ObservedAt: observedAt,
+					Message:    fmt.Sprintf("渠道 %d 已恢复运行态，告警已关闭", transition.ChannelID),
+				})
+			}
 		}
 		return
 	default:
@@ -435,6 +438,29 @@ func handleChannelHealthRuntimeTransition(transition common.ChannelHealthRuntime
 	if setting != nil && setting.ChannelTimeoutNotificationEnabled {
 		smartOpsAlertNotificationSender(alert)
 	}
+}
+
+// channelHealthAlertWasActive checks the process-local projection first, then
+// the shared Redis projection. This preserves a resolved notification after a
+// process restart without creating a false recovery notification for a channel
+// that only had a priority warning.
+func channelHealthAlertWasActive(key string) bool {
+	smartOpsAlertMonitor.Lock()
+	alert, ok := smartOpsAlertMonitor.active[key]
+	smartOpsAlertMonitor.Unlock()
+	if ok && alert.Status == smartOpsAlertStatusFiring {
+		return true
+	}
+	runtimeAlerts, available := loadChannelHealthSmartOpsAlerts()
+	if !available {
+		return false
+	}
+	for _, runtimeAlert := range runtimeAlerts {
+		if runtimeAlert.Key == key && runtimeAlert.Status == smartOpsAlertStatusFiring {
+			return true
+		}
+	}
+	return false
 }
 
 func formatChannelHealthPriorityAlertMessage(transition common.ChannelHealthRuntimeTransition) string {
