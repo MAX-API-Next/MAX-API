@@ -781,6 +781,9 @@ func (info *RelayInfo) setFirstResponseTimeLocked() {
 	if info.channelFirstResponseSignal != nil {
 		close(info.channelFirstResponseSignal)
 	}
+	if info.IsChannelTest {
+		return
+	}
 	info.recordChannelHealthObservation("first_response")
 	info.recordChannelHealthSuccess()
 }
@@ -886,7 +889,7 @@ func (info *RelayInfo) channelHealthAttemptID() string {
 // when the administrator enabled the advanced timeout gates. It runs off the
 // relay response path so a slow Redis instance cannot delay the client.
 func (info *RelayInfo) recordChannelHealthSuccess() {
-	if info == nil || info.ChannelMeta == nil || info.ChannelId <= 0 || !info.ChannelAutoBan {
+	if info == nil || info.IsChannelTest || info.ChannelMeta == nil || info.ChannelId <= 0 || !info.ChannelAutoBan {
 		return
 	}
 	setting := operation_setting.GetMonitorSetting()
@@ -917,10 +920,10 @@ func (info *RelayInfo) recordChannelHealthSuccess() {
 // RecordChannelTimeout records a confirmed timeout outcome for the current
 // channel attempt. It is intentionally side-effect-free for relay behavior.
 func (info *RelayInfo) RecordChannelTimeout(event string) {
-	info.recordChannelHealthObservation(event)
-	if info == nil {
+	if info == nil || info.IsChannelTest {
 		return
 	}
+	info.recordChannelHealthObservation(event)
 	timeoutKind := event
 	observedAt := time.Now()
 	if event == "transport_timeout" || event == "request_timeout" {

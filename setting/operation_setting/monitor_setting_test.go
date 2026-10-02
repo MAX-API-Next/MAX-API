@@ -37,6 +37,9 @@ func TestValidateMonitorSettingOption(t *testing.T) {
 	require.Error(t, ValidateMonitorSettingOption(
 		"monitor_setting.timeout_auto_disable_ratio_percent", "NaN",
 	))
+	require.Error(t, ValidateMonitorSettingOption(
+		"monitor_setting.streaming_first_result_timeout_seconds", " 15",
+	))
 }
 
 func TestMonitorSettingNormalizationRunsOnConfigLoad(t *testing.T) {

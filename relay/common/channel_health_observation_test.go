@@ -95,3 +95,52 @@ func TestRelayInfoTransportTimeoutHonorsConfiguredThreshold(t *testing.T) {
 	require.Zero(t, state.Penalty)
 	require.Zero(t, state.TimeoutCount[channelhealth.RequestModeStreaming])
 }
+
+func TestRelayInfoChannelTestDoesNotRecordHealthEvidence(t *testing.T) {
+	server := miniredis.RunT(t)
+	oldRDB, oldEnabled := maxcommon.RDB, maxcommon.RedisEnabled
+	maxcommon.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	maxcommon.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = maxcommon.RDB.Close()
+		maxcommon.RDB, maxcommon.RedisEnabled = oldRDB, oldEnabled
+	})
+
+	oldRecorder := recordChannelHealthObservation
+	var observations []maxcommon.ChannelHealthObservation
+	recordChannelHealthObservation = func(observation maxcommon.ChannelHealthObservation) error {
+		observations = append(observations, observation)
+		return nil
+	}
+	t.Cleanup(func() { recordChannelHealthObservation = oldRecorder })
+
+	oldSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		AutoPriorityDemotionEnabled:        true,
+		TimeoutAutoDisableEnabled:          true,
+		TimeoutAutoDisableMinimumSamples:   1,
+		StreamingFirstResultTimeoutSeconds: 1,
+		PriorityDeduction:                  10,
+		PenaltyCooldownSeconds:             60,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldSetting })
+
+	start := time.Now().Add(-2 * time.Second)
+	info := &RelayInfo{
+		StartTime:               start,
+		IsStream:                true,
+		IsChannelTest:           true,
+		isFirstResponse:         true,
+		ChannelMeta:             &ChannelMeta{ChannelId: 936, ChannelAutoBan: true},
+		channelAttemptStartTime: start,
+	}
+	info.SetFirstResponseTime()
+	info.RecordChannelTimeout("transport_timeout")
+	time.Sleep(50 * time.Millisecond)
+
+	require.Empty(t, observations)
+	state, err := channelhealth.LoadRuntimeState(context.Background(), 936)
+	require.NoError(t, err)
+	require.Zero(t, state.Penalty)
+	require.Zero(t, state.TimeoutCount[channelhealth.RequestModeStreaming])
+}

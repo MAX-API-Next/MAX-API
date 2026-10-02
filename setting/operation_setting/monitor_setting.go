@@ -162,7 +162,7 @@ func ValidateMonitorSettingOption(key, value string) error {
 	case "penalty_cooldown_seconds", "alert_repeat_interval_seconds":
 		return validateMonitorInt(key, value, 0, 2592000)
 	case "timeout_auto_disable_ratio_percent":
-		ratio, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		ratio, err := strconv.ParseFloat(value, 64)
 		if err != nil || math.IsNaN(ratio) || ratio < 0 || ratio > 100 {
 			return fmt.Errorf("%s must be between 0 and 100", key)
 		}
@@ -183,7 +183,7 @@ func ValidateMonitorSettingOption(key, value string) error {
 }
 
 func validateMonitorInt(key, value string, lo, hi int) error {
-	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < int64(lo) || parsed > int64(hi) {
 		return fmt.Errorf("%s must be an integer between %d and %d", key, lo, hi)
 	}
