@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -91,19 +92,22 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
-	TokenId                      int
-	TokenKey                     string
-	TokenGroup                   string
-	UserId                       int
-	UsingGroup                   string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup                    string // 用户所在分组
-	TokenUnlimited               bool
-	StartTime                    time.Time
-	FirstResponseTime            time.Time
-	isFirstResponse              bool
-	channelAttemptStartTime      time.Time
-	channelFirstResponseRecorded atomic.Bool
-	channelFirstResponseSignal   chan struct{}
+	TokenId                        int
+	TokenKey                       string
+	TokenGroup                     string
+	UserId                         int
+	UsingGroup                     string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup                      string // 用户所在分组
+	TokenUnlimited                 bool
+	StartTime                      time.Time
+	FirstResponseTime              time.Time
+	isFirstResponse                bool
+	channelAttemptStartTime        time.Time
+	channelFirstResponseMu         sync.Mutex
+	channelFirstResponseEvalAt     time.Time
+	channelFirstResponseEvaluating bool
+	channelFirstResponseRecorded   atomic.Bool
+	channelFirstResponseSignal     chan struct{}
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -761,6 +765,12 @@ func (info *RelayInfo) SetFirstResponseTime() {
 	if info == nil {
 		return
 	}
+	info.channelFirstResponseMu.Lock()
+	defer info.channelFirstResponseMu.Unlock()
+	info.setFirstResponseTimeLocked()
+}
+
+func (info *RelayInfo) setFirstResponseTimeLocked() {
 	if info.isFirstResponse {
 		info.FirstResponseTime = time.Now()
 		info.isFirstResponse = false
@@ -773,6 +783,46 @@ func (info *RelayInfo) SetFirstResponseTime() {
 	}
 	info.recordChannelHealthObservation("first_response")
 	info.recordChannelHealthSuccess()
+}
+
+const firstResponseEvaluationGrace = 100 * time.Millisecond
+
+// BeginFirstResponseEvaluation marks the short window in which a stream
+// handler is deciding whether the current payload is a deliverable first
+// response. The watchdog gives that decision a bounded grace period instead of
+// waiting on the response write itself.
+func (info *RelayInfo) BeginFirstResponseEvaluation() func() {
+	if info == nil {
+		return func() {}
+	}
+	info.channelFirstResponseMu.Lock()
+	if !info.channelFirstResponseRecorded.Load() {
+		info.channelFirstResponseEvaluating = true
+		info.channelFirstResponseEvalAt = time.Now()
+	}
+	info.channelFirstResponseMu.Unlock()
+	return func() {
+		info.channelFirstResponseMu.Lock()
+		info.channelFirstResponseEvaluating = false
+		info.channelFirstResponseEvalAt = time.Time{}
+		info.channelFirstResponseMu.Unlock()
+	}
+}
+
+func (info *RelayInfo) FirstResponseDeadlineExpired() bool {
+	if info == nil {
+		return true
+	}
+	info.channelFirstResponseMu.Lock()
+	defer info.channelFirstResponseMu.Unlock()
+	if info.channelFirstResponseRecorded.Load() {
+		return false
+	}
+	if info.channelFirstResponseEvaluating &&
+		time.Since(info.channelFirstResponseEvalAt) < firstResponseEvaluationGrace {
+		return false
+	}
+	return true
 }
 
 // FirstResponseSignal is closed once the current channel attempt has produced
@@ -884,31 +934,32 @@ func (info *RelayInfo) RecordChannelTimeout(event string) {
 		return
 	}
 	setting := operation_setting.GetMonitorSetting()
-	if setting == nil {
+	if setting == nil || (!setting.AutoPriorityDemotionEnabled && !setting.TimeoutAutoDisableEnabled) {
 		return
 	}
 	requestMode := channelhealth.RequestModeNonStreaming
 	if info.IsStream {
 		requestMode = channelhealth.RequestModeStreaming
 	}
-	decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	result, err := channelhealth.EvaluateTimeoutGuard(
-		decisionContext,
-		channelhealth.AttemptEvidence{
-			ChannelID:       info.ChannelId,
-			AttemptID:       info.channelHealthAttemptID(),
-			RequestMode:     requestMode,
-			TimeoutKind:     timeoutKind,
-			TimeoutEligible: true,
-			AutoBan:         info.ChannelAutoBan,
-			ObservedAt:      time.Now(),
-		},
-		setting,
-	)
-	if err == nil && result.Transition != "" {
+	evidence := channelhealth.AttemptEvidence{
+		ChannelID:       info.ChannelId,
+		AttemptID:       info.channelHealthAttemptID(),
+		RequestMode:     requestMode,
+		TimeoutKind:     timeoutKind,
+		TimeoutEligible: true,
+		AutoBan:         info.ChannelAutoBan,
+		ObservedAt:      time.Now(),
+	}
+	settingSnapshot := *setting
+	go func(evidence channelhealth.AttemptEvidence, setting operation_setting.MonitorSetting) {
+		decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		result, err := channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, &setting)
+		if err != nil || result.Transition == "" {
+			return
+		}
 		common.PublishChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
-			ChannelID:       info.ChannelId,
+			ChannelID:       evidence.ChannelID,
 			Transition:      result.Transition,
 			Penalty:         result.State.Penalty,
 			PenaltyUntil:    result.State.PenaltyUntil,
@@ -916,7 +967,7 @@ func (info *RelayInfo) RecordChannelTimeout(event string) {
 			DisabledUntil:   result.State.DisabledUntil,
 			ObservedAt:      result.State.LastObservedAt,
 		})
-	}
+	}(evidence, settingSnapshot)
 }
 
 func (info *RelayInfo) HasSendResponse() bool {

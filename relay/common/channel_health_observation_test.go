@@ -38,3 +38,20 @@ func TestRelayInfoRecordsOneFirstResponsePerChannelAttempt(t *testing.T) {
 	require.Equal(t, 2, observations[0].RetryIndex)
 	require.True(t, observations[0].AttemptLatencyMS >= 0)
 }
+
+func TestRelayInfoFirstResponseEvaluationHasBoundedGrace(t *testing.T) {
+	info := &RelayInfo{}
+	finish := info.BeginFirstResponseEvaluation()
+
+	require.False(t, info.FirstResponseDeadlineExpired())
+	info.SetFirstResponseTime()
+	require.False(t, info.FirstResponseDeadlineExpired())
+	finish()
+	require.False(t, info.FirstResponseDeadlineExpired())
+
+	pending := &RelayInfo{}
+	finishPending := pending.BeginFirstResponseEvaluation()
+	t.Cleanup(finishPending)
+	time.Sleep(firstResponseEvaluationGrace + 10*time.Millisecond)
+	require.True(t, pending.FirstResponseDeadlineExpired())
+}

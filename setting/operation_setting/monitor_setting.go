@@ -164,10 +164,10 @@ func ValidateMonitorSettingOption(key, value string) error {
 	return nil
 }
 
-func validateMonitorInt(key, value string, min, max int) error {
+func validateMonitorInt(key, value string, lo, hi int) error {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil || parsed < int64(min) || parsed > int64(max) {
-		return fmt.Errorf("%s must be an integer between %d and %d", key, min, max)
+	if err != nil || parsed < int64(lo) || parsed > int64(hi) {
+		return fmt.Errorf("%s must be an integer between %d and %d", key, lo, hi)
 	}
 	return nil
 }

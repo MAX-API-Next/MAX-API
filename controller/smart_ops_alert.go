@@ -104,7 +104,7 @@ func UpdateChannelHealthPolicy(c *gin.Context) {
 		return
 	}
 	recordManageAudit(c, "smart_ops.channel_health_policy_update", map[string]interface{}{
-		"keys": request.Updates,
+		"updates": values,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

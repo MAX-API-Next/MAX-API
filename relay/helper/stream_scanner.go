@@ -230,7 +230,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
 			sr.reset()
+			finishFirstResponseEvaluation := info.BeginFirstResponseEvaluation()
 			func() {
+				defer finishFirstResponseEvaluation()
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
 				ExtendWriteDeadline(c)
@@ -331,11 +333,12 @@ waitLoop:
 			continue
 		case <-firstResultTimeoutChan:
 			firstResultTimeoutChan = nil
-			if !info.HasRecordedChannelFirstResponse() {
+			if info.FirstResponseDeadlineExpired() {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 				info.RecordChannelTimeout("streaming_first_result_timeout")
 				break waitLoop
 			}
+			firstResultTimeoutChan = time.After(100 * time.Millisecond)
 			continue
 		case <-timeoutChan:
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)

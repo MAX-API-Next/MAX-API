@@ -395,11 +395,15 @@ export function ChannelHealth(): ReactElement {
     retry: false,
     staleTime: 30 * 1000,
   })
+  const [draftOverride, setDraftOverride] = useState<ChannelHealthDraft | null>(
+    null
+  )
   const updatePolicy = useMutation({
     mutationFn: updateChannelHealthPolicy,
     onSuccess: (response) => {
       if (response.success) {
         toast.success(t('Setting updated successfully'))
+        setDraftOverride(null)
         void policyQuery.refetch()
       } else {
         toast.error(response.message || t('Failed to update setting'))
@@ -426,9 +430,6 @@ export function ChannelHealth(): ReactElement {
   const loadedDraft = useMemo(
     () => parseDraft(policyQuery.data?.data),
     [policyQuery.data?.data]
-  )
-  const [draftOverride, setDraftOverride] = useState<ChannelHealthDraft | null>(
-    null
   )
   const draft = draftOverride ?? loadedDraft
   const updateDraft = (
@@ -954,24 +955,25 @@ export function ChannelHealth(): ReactElement {
                               ? '—'
                               : dateFormatter.format(new Date(observedAt))}
                           </time>
-                          {canEdit && (
-                            <Button
-                              variant='outline'
-                              size='sm'
-                              disabled={recoveryMutation.isPending}
-                              onClick={() =>
-                                void recoveryMutation.mutateAsync(
-                                  channelIdFromAlert(alert)
-                                )
-                              }
-                            >
-                              <RotateCcw
-                                data-icon='inline-start'
-                                aria-hidden='true'
-                              />
-                              {t('Recover channel')}
-                            </Button>
-                          )}
+                          {canEdit &&
+                            /^\d+$/.test(channelIdFromAlert(alert)) && (
+                              <Button
+                                variant='outline'
+                                size='sm'
+                                disabled={recoveryMutation.isPending}
+                                onClick={() =>
+                                  void recoveryMutation.mutateAsync(
+                                    channelIdFromAlert(alert)
+                                  )
+                                }
+                              >
+                                <RotateCcw
+                                  data-icon='inline-start'
+                                  aria-hidden='true'
+                                />
+                                {t('Recover channel')}
+                              </Button>
+                            )}
                         </div>
                       )
                     })}

@@ -2,11 +2,31 @@ package model
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	maxcommon "github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/channelhealth"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/go-redis/redis/v8"
 )
+
+const (
+	runtimeStateCacheTTL        = time.Second
+	runtimeStateFailureCooldown = 250 * time.Millisecond
+)
+
+type runtimeStateCacheEntry struct {
+	client     *redis.Client
+	state      channelhealth.RuntimeState
+	expiresAt  time.Time
+	retryAfter time.Time
+}
+
+var runtimeStateCache = struct {
+	sync.Mutex
+	entries map[int]runtimeStateCacheEntry
+}{entries: make(map[int]runtimeStateCacheEntry)}
 
 type channelRoutingCandidate struct {
 	channel  *Channel
@@ -22,14 +42,59 @@ func loadChannelRuntimeStates(channelIDs []int) map[int]channelhealth.RuntimeSta
 	if !channelHealthRoutingEnabled() || len(channelIDs) == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	states, err := channelhealth.LoadRuntimeStates(ctx, channelIDs)
-	if err != nil {
-		// Redis is an optional runtime dependency for this feature. The caller
-		// must keep the existing base-priority selection when it is unavailable.
+	now := time.Now()
+	client := maxcommon.RDB
+	if !maxcommon.RedisEnabled || client == nil {
 		return nil
 	}
+	states := make(map[int]channelhealth.RuntimeState, len(channelIDs))
+	pending := make([]int, 0, len(channelIDs))
+	runtimeStateCache.Lock()
+	for _, channelID := range channelIDs {
+		entry, ok := runtimeStateCache.entries[channelID]
+		if ok && entry.client == client && now.Before(entry.retryAfter) {
+			continue
+		}
+		if ok && entry.client == client && now.Before(entry.expiresAt) {
+			states[channelID] = entry.state
+			continue
+		}
+		pending = append(pending, channelID)
+	}
+	runtimeStateCache.Unlock()
+	if len(pending) == 0 {
+		return states
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	loaded, err := channelhealth.LoadRuntimeStates(ctx, pending)
+	if err != nil {
+		runtimeStateCache.Lock()
+		for _, channelID := range pending {
+			runtimeStateCache.entries[channelID] = runtimeStateCacheEntry{
+				client:     client,
+				retryAfter: now.Add(runtimeStateFailureCooldown),
+			}
+		}
+		runtimeStateCache.Unlock()
+		// Redis is an optional runtime dependency for this feature. The caller
+		// must keep the existing base-priority selection for channels without a
+		// cached state. Freshly cached states remain usable during the cooldown.
+		if len(states) == 0 {
+			return nil
+		}
+		return states
+	}
+	runtimeStateCache.Lock()
+	for channelID, state := range loaded {
+		runtimeStateCache.entries[channelID] = runtimeStateCacheEntry{
+			client:    client,
+			state:     state,
+			expiresAt: now.Add(runtimeStateCacheTTL),
+		}
+		states[channelID] = state
+	}
+	runtimeStateCache.Unlock()
 	return states
 }
 

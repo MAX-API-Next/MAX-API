@@ -87,7 +87,6 @@ func TestEvaluateTimeoutGuardRetriesConcurrentRedisTransactions(t *testing.T) {
 	var waitGroup sync.WaitGroup
 	waitGroup.Add(attempts)
 	for index := 0; index < attempts; index++ {
-		index := index
 		go func() {
 			defer waitGroup.Done()
 			_, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
