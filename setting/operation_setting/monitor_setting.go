@@ -2,6 +2,7 @@ package operation_setting
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -162,7 +163,7 @@ func ValidateMonitorSettingOption(key, value string) error {
 		return validateMonitorInt(key, value, 0, 2592000)
 	case "timeout_auto_disable_ratio_percent":
 		ratio, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if err != nil || ratio < 0 || ratio > 100 {
+		if err != nil || math.IsNaN(ratio) || ratio < 0 || ratio > 100 {
 			return fmt.Errorf("%s must be between 0 and 100", key)
 		}
 	case "timeout_auto_disable_count_scope":

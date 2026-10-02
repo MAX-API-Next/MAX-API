@@ -65,6 +65,14 @@ func TestSmartOpsAlertDeliveryProjectionRejectsOlderStatus(t *testing.T) {
 	require.Equal(t, 1, state.DeliveryAttempts)
 }
 
+func TestNormalizeSmartOpsAlertObservedAtKeepsOneDeliveryTimestamp(t *testing.T) {
+	alert := normalizeSmartOpsAlertObservedAt(SmartOpsAlert{Key: "channel_timeout:936"})
+	require.False(t, alert.ObservedAt.IsZero())
+
+	normalizedAgain := normalizeSmartOpsAlertObservedAt(alert)
+	require.Equal(t, alert.ObservedAt, normalizedAgain.ObservedAt)
+}
+
 func TestDeliverSmartOpsAlertRecordsSentDeliveryState(t *testing.T) {
 	withSmartOpsDeliveryRedis(t)
 	originalDelays := smartOpsAlertRetryDelays

@@ -5776,7 +5776,7 @@
     "Priority deduction must be a non-negative integer.": "優先度の減点は 0 以上の整数で指定してください。",
     "Disable count must be at least 2.": "無効化回数は 2 以上で指定してください。",
     "Disable window must be between 60 and 2592000 seconds.": "無効化ウィンドウは 60～2592000 秒で指定してください。",
-    "Minimum samples must be a non-negative integer.": "Minimum samples must be a non-negative integer.",
+    "Minimum samples must be a non-negative integer.": "最小サンプル数は 0 以上の整数で指定してください。",
     "Timeout ratio must be between 0 and 100 percent.": "タイムアウト比率は 0～100 パーセントで指定してください。",
     "Disable duration must be between 0 and 604800 seconds.": "無効化期間は 0～604800 秒で指定してください。",
     "Successful probe count must be between 1 and 10.": "成功プローブ数は 1～10 で指定してください。",

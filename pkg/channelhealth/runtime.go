@@ -26,6 +26,7 @@ const (
 	runtimeStateKeyPrefix        = "maxapi:channel-timeout:v1:state:"
 	runtimeStateIndexKey         = "maxapi:channel-timeout:v1:index"
 	runtimeStateIndexMigratedKey = "maxapi:channel-timeout:v1:index:migrated"
+	runtimeStateIndexCursorKey   = "maxapi:channel-timeout:v1:index:migration-cursor"
 	runtimeDedupeKeyPrefix       = "maxapi:channel-timeout:v1:dedupe:"
 	runtimeStateTTL              = 7 * 24 * time.Hour
 	runtimeDecisionTimeout       = 100 * time.Millisecond
@@ -273,24 +274,27 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(members) > 0 {
-		return listRuntimeStatesByMembers(ctx, members)
-	}
 	migrated, err := maxcommon.RDB.Exists(ctx, runtimeStateIndexMigratedKey).Result()
 	if err != nil {
 		return nil, err
 	}
 	if migrated > 0 {
-		return []RuntimeState{}, nil
+		return listRuntimeStatesByMembers(ctx, members)
 	}
 
 	// States written before the index was introduced are discovered by a bounded
-	// legacy scan and added to the index below. A complete scan records a marker;
-	// an interrupted scan remains eligible for a later migration attempt. New
-	// state transitions add their channel ID in the same Redis transaction, so
-	// normal requests never scan the shared keyspace after migration completes.
+	// legacy scan and added to the index below. The cursor is persisted so an
+	// interrupted scan resumes where it stopped; a complete scan records a
+	// marker. New state transitions add their channel ID in the same Redis
+	// transaction, so normal requests never scan the shared keyspace after
+	// migration completes.
 	keys := make([]string, 0, 32)
 	var cursor uint64
+	if value, err := maxcommon.RDB.Get(ctx, runtimeStateIndexCursorKey).Result(); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	} else if err == nil {
+		cursor, _ = strconv.ParseUint(value, 10, 64)
+	}
 	scanComplete := false
 	for {
 		batch, next, err := maxcommon.RDB.Scan(ctx, cursor, runtimeStateKeyPrefix+"*", 200).Result()
@@ -307,17 +311,22 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 			break
 		}
 	}
-	if len(keys) == 0 {
-		if scanComplete {
-			if err := maxcommon.RDB.Set(ctx, runtimeStateIndexMigratedKey, "1", 0).Err(); err != nil {
-				return nil, err
-			}
+	allMembers := make([]string, 0, len(members)+len(keys))
+	seenMembers := make(map[string]struct{}, len(members)+len(keys))
+	for _, member := range append(members, keys...) {
+		member = strings.TrimPrefix(member, runtimeStateKeyPrefix)
+		if _, ok := seenMembers[member]; ok {
+			continue
+		}
+		seenMembers[member] = struct{}{}
+		allMembers = append(allMembers, member)
+	}
+	members = allMembers
+	if len(members) == 0 && !scanComplete {
+		if err := maxcommon.RDB.Set(ctx, runtimeStateIndexCursorKey, strconv.FormatUint(cursor, 10), 0).Err(); err != nil {
+			return nil, err
 		}
 		return []RuntimeState{}, nil
-	}
-	members = make([]string, 0, len(keys))
-	for _, key := range keys {
-		members = append(members, strings.TrimPrefix(key, runtimeStateKeyPrefix))
 	}
 	states, err := listRuntimeStatesByMembers(ctx, members)
 	if err != nil {
@@ -327,13 +336,23 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 	for _, state := range states {
 		validMembers = append(validMembers, strconv.Itoa(state.ChannelID))
 	}
-	if len(validMembers) > 0 {
-		if err := maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, validMembers).Err(); err != nil {
+	if scanComplete {
+		pipe := maxcommon.RDB.TxPipeline()
+		if len(validMembers) > 0 {
+			pipe.SAdd(ctx, runtimeStateIndexKey, validMembers)
+		}
+		pipe.Set(ctx, runtimeStateIndexMigratedKey, "1", 0)
+		pipe.Del(ctx, runtimeStateIndexCursorKey)
+		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, err
 		}
-	}
-	if scanComplete {
-		if err := maxcommon.RDB.Set(ctx, runtimeStateIndexMigratedKey, "1", 0).Err(); err != nil {
+	} else {
+		pipe := maxcommon.RDB.TxPipeline()
+		if len(validMembers) > 0 {
+			pipe.SAdd(ctx, runtimeStateIndexKey, validMembers)
+		}
+		pipe.Set(ctx, runtimeStateIndexCursorKey, strconv.FormatUint(cursor, 10), 0)
+		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, err
 		}
 	}

@@ -5776,7 +5776,7 @@
     "Priority deduction must be a non-negative integer.": "Mức trừ ưu tiên phải là số nguyên không âm.",
     "Disable count must be at least 2.": "Số lần tắt phải ít nhất là 2.",
     "Disable window must be between 60 and 2592000 seconds.": "Cửa sổ tắt phải từ 60 đến 2592000 giây.",
-    "Minimum samples must be a non-negative integer.": "Minimum samples must be a non-negative integer.",
+    "Minimum samples must be a non-negative integer.": "Số mẫu tối thiểu phải là số nguyên không âm.",
     "Timeout ratio must be between 0 and 100 percent.": "Tỷ lệ chờ quá hạn phải từ 0 đến 100 phần trăm.",
     "Disable duration must be between 0 and 604800 seconds.": "Thời lượng tắt phải từ 0 đến 604800 giây.",
     "Successful probe count must be between 1 and 10.": "Số lần thăm dò thành công phải từ 1 đến 10.",

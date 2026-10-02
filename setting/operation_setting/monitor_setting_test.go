@@ -34,6 +34,9 @@ func TestValidateMonitorSettingOption(t *testing.T) {
 	require.Error(t, ValidateMonitorSettingOption(
 		"monitor_setting.priority_deduction", "-1",
 	))
+	require.Error(t, ValidateMonitorSettingOption(
+		"monitor_setting.timeout_auto_disable_ratio_percent", "NaN",
+	))
 }
 
 func TestMonitorSettingNormalizationRunsOnConfigLoad(t *testing.T) {

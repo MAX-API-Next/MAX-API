@@ -432,6 +432,28 @@ func TestListRuntimeStatesMarksLegacyScanComplete(t *testing.T) {
 	require.Empty(t, states)
 }
 
+func TestListRuntimeStatesCompletesLegacyMigrationWithIndexedMembers(t *testing.T) {
+	withRuntimeRedis(t)
+	for channelID, penalty := range map[int]string{937: "5", 938: "7"} {
+		_, err := maxcommon.RDB.HSet(context.Background(), RuntimeStateKey(channelID), map[string]interface{}{
+			"channel_id": strconv.Itoa(channelID),
+			"penalty":    penalty,
+		}).Result()
+		require.NoError(t, err)
+	}
+	require.NoError(t, maxcommon.RDB.SAdd(context.Background(), runtimeStateIndexKey, "937").Err())
+
+	states, err := ListRuntimeStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, states, 2)
+	migrated, err := maxcommon.RDB.Exists(context.Background(), runtimeStateIndexMigratedKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), migrated)
+	indexed, err := maxcommon.RDB.SIsMember(context.Background(), runtimeStateIndexKey, "938").Result()
+	require.NoError(t, err)
+	require.True(t, indexed)
+}
+
 func TestRecoverRuntimeStateRequiresConfiguredSuccessfulProbes(t *testing.T) {
 	withRuntimeRedis(t)
 	setting := testRuntimeSetting()

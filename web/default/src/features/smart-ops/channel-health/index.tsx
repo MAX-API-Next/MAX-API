@@ -471,7 +471,7 @@ export function ChannelHealth(): ReactElement {
     if (updates.length === 0) {
       return
     }
-    await updatePolicy.mutateAsync(updates)
+    updatePolicy.mutate(updates)
   }
 
   const setNumber = (name: keyof ChannelHealthDraft, value: number) =>

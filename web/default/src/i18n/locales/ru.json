@@ -5784,7 +5784,7 @@
     "Priority deduction must be a non-negative integer.": "Снижение приоритета должно быть неотрицательным целым числом.",
     "Disable count must be at least 2.": "Число отключений должно быть не меньше 2.",
     "Disable window must be between 60 and 2592000 seconds.": "Окно отключения должно быть от 60 до 2592000 секунд.",
-    "Minimum samples must be a non-negative integer.": "Minimum samples must be a non-negative integer.",
+    "Minimum samples must be a non-negative integer.": "Минимальное число образцов должно быть неотрицательным целым числом.",
     "Timeout ratio must be between 0 and 100 percent.": "Доля таймаутов должна быть от 0 до 100 процентов.",
     "Disable duration must be between 0 and 604800 seconds.": "Длительность отключения должна быть от 0 до 604800 секунд.",
     "Successful probe count must be between 1 and 10.": "Число успешных проверок должно быть от 1 до 10.",

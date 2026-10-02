@@ -1322,6 +1322,7 @@ var smartOpsAlertSendToRecipient = func(recipient smartOpsAlertRecipient, data d
 }
 
 func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
+	alert = normalizeSmartOpsAlertObservedAt(alert)
 	smartOpsAlertNotificationQueue.Do(func() {
 		smartOpsAlertNotificationQueue.pool = newSmartOpsAlertNotificationPool(
 			smartOpsAlertWorkerCount,
@@ -1348,6 +1349,13 @@ func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
 		}
 		common.SysLog(fmt.Sprintf("smart ops alert notification queue is full, dropping %s for node %s", alert.Key, alert.Node))
 	}
+}
+
+func normalizeSmartOpsAlertObservedAt(alert SmartOpsAlert) SmartOpsAlert {
+	if alert.ObservedAt.IsZero() {
+		alert.ObservedAt = time.Now()
+	}
+	return alert
 }
 
 func smartOpsAlertNotification(alert SmartOpsAlert) dto.Notify {
