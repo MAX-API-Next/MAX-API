@@ -881,6 +881,10 @@ func (info *RelayInfo) recordChannelHealthObservation(event string) {
 	if info == nil || info.ChannelMeta == nil || info.ChannelId <= 0 {
 		return
 	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || (!setting.AutoPriorityDemotionEnabled && !setting.TimeoutAutoDisableEnabled) {
+		return
+	}
 	start := info.channelAttemptStartTime
 	if start.IsZero() {
 		start = info.StartTime
@@ -893,6 +897,7 @@ func (info *RelayInfo) recordChannelHealthObservation(event string) {
 	_ = recordChannelHealthObservation(common.ChannelHealthObservation{
 		ChannelID:        info.ChannelId,
 		Event:            event,
+		PolicyEnabled:    true,
 		ObservedAt:       observedAt,
 		AttemptLatencyMS: latency,
 		Stream:           info.IsStream,

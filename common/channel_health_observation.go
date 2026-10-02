@@ -38,7 +38,7 @@ func startChannelHealthObservationWorker() {
 // It never waits for Redis and drops the observation when the bounded queue is
 // full, preserving the upstream response path as fail-open.
 func EnqueueChannelHealthObservation(observation ChannelHealthObservation) {
-	if observation.ChannelID <= 0 || observation.Event == "" || !RedisEnabled || RDB == nil {
+	if !observation.PolicyEnabled || observation.ChannelID <= 0 || observation.Event == "" || !RedisEnabled || RDB == nil {
 		return
 	}
 	startChannelHealthObservationWorker()
@@ -56,6 +56,7 @@ func EnqueueChannelHealthObservation(observation ChannelHealthObservation) {
 type ChannelHealthObservation struct {
 	ChannelID        int
 	Event            string
+	PolicyEnabled    bool
 	ObservedAt       time.Time
 	AttemptLatencyMS int64
 	Stream           bool

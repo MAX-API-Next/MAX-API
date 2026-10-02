@@ -47,6 +47,29 @@ func TestClientWithStreamingHeaderTimeoutCachesTransportByConfiguredBudget(t *te
 	require.Equal(t, 5*time.Second, transport.ResponseHeaderTimeout)
 }
 
+func TestResetProxyClientCacheClearsDerivedResponseHeaderTransports(t *testing.T) {
+	originalSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		StreamingFirstResultTimeoutSeconds: 1,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = originalSetting })
+	t.Cleanup(service.ResetProxyClientCache)
+
+	transport := &http.Transport{}
+	client := &http.Client{Transport: transport}
+	info := &relaycommon.RelayInfo{IsStream: true}
+	first := clientWithStreamingHeaderTimeout(client, info)
+	firstTransport, ok := first.Transport.(*http.Transport)
+	require.True(t, ok)
+
+	service.ResetProxyClientCache()
+	second := clientWithStreamingHeaderTimeout(client, info)
+	secondTransport, ok := second.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotSame(t, firstTransport, secondTransport)
+	require.Equal(t, time.Second, secondTransport.ResponseHeaderTimeout)
+}
+
 func TestClientWithNonStreamingTimeoutUsesHeaderBudgetWithoutShorteningBodyClient(t *testing.T) {
 	originalSetting := *operation_setting.GetMonitorSetting()
 	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{

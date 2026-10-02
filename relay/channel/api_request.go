@@ -35,6 +35,20 @@ type responseHeaderTransportKey struct {
 
 var responseHeaderTransportCache sync.Map
 
+func init() {
+	service.RegisterProxyClientCacheResetHook(resetResponseHeaderTransportCache)
+}
+
+func resetResponseHeaderTransportCache() {
+	responseHeaderTransportCache.Range(func(key, value interface{}) bool {
+		if transport, ok := value.(*http.Transport); ok && transport != nil {
+			transport.CloseIdleConnections()
+		}
+		responseHeaderTransportCache.Delete(key)
+		return true
+	})
+}
+
 // applyUpstreamBodyMetadata restores metadata hidden when http.NewRequest
 // wraps an arbitrary reader in req.Body.
 func applyUpstreamBodyMetadata(req *http.Request, body io.Reader, info *common.RelayInfo) {

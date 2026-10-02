@@ -14,6 +14,12 @@ import (
 )
 
 func TestRelayInfoRecordsOneFirstResponsePerChannelAttempt(t *testing.T) {
+	oldSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		AutoPriorityDemotionEnabled: true,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldSetting })
+
 	oldRecorder := recordChannelHealthObservation
 	t.Cleanup(func() { recordChannelHealthObservation = oldRecorder })
 
@@ -42,6 +48,7 @@ func TestRelayInfoRecordsOneFirstResponsePerChannelAttempt(t *testing.T) {
 	require.Equal(t, 936, observations[0].ChannelID)
 	require.Equal(t, 2, observations[0].RetryIndex)
 	require.True(t, observations[0].AttemptLatencyMS >= 0)
+	require.True(t, observations[0].PolicyEnabled)
 }
 
 func TestRelayInfoFirstResponseEvaluationHasBoundedGrace(t *testing.T) {

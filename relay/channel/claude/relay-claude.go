@@ -941,14 +941,8 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
-	if info.StreamStatus != nil &&
-		info.StreamStatus.EndReason == relaycommon.StreamEndReasonTimeout &&
-		!info.HasRecordedChannelFirstResponse() {
-		return nil, types.NewOpenAIError(
-			fmt.Errorf("upstream Claude stream timed out before the first response"),
-			types.ErrorCodeChannelResponseTimeExceeded,
-			http.StatusRequestTimeout,
-		)
+	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+		return nil, apiErr
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)

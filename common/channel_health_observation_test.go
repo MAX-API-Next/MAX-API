@@ -83,3 +83,23 @@ func TestRecordChannelHealthObservationSkipsRedisWhenDisabled(t *testing.T) {
 		Event:     "first_response",
 	}))
 }
+
+func TestEnqueueChannelHealthObservationSkipsDisabledPolicy(t *testing.T) {
+	server := miniredis.RunT(t)
+	oldRDB, oldEnabled := RDB, RedisEnabled
+	RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	RedisEnabled = true
+	t.Cleanup(func() {
+		_ = RDB.Close()
+		RDB, RedisEnabled = oldRDB, oldEnabled
+	})
+
+	EnqueueChannelHealthObservation(ChannelHealthObservation{
+		ChannelID: 937,
+		Event:     "first_response",
+	})
+	time.Sleep(50 * time.Millisecond)
+	count, err := RDB.Exists(context.Background(), channelHealthRuntimeKey(937)).Result()
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
