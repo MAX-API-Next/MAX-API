@@ -72,9 +72,16 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 // GetChannelExcluding selects a channel while excluding channels already tried
 // during the current request's retry sequence.
 func GetChannelExcluding(group string, model string, retry int, requestPath string, excludedChannelIDs map[int]struct{}) (*Channel, error) {
-	channelQuery, err := getChannelQuery(group, model, retry)
-	if err != nil {
-		return nil, err
+	var channelQuery *gorm.DB
+	var err error
+	if channelHealthRoutingEnabled() {
+		channelQuery = DB.Model(&Ability{}).
+			Where(abilityCol("group")+" = ? and "+abilityCol("model")+" = ? and "+abilityCol("enabled")+" = ?", group, model, true)
+	} else {
+		channelQuery, err = getChannelQuery(group, model, retry)
+		if err != nil {
+			return nil, err
+		}
 	}
 	abilityRows, err := findAbilityRows(channelQuery)
 	if err != nil {
@@ -173,13 +180,14 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChanne
 	if len(abilities) == 0 {
 		return 0, false, nil
 	}
-	priorities := make([]int64, 0, len(abilities))
+	routingCandidates := buildAbilityRoutingCandidates(abilities)
+	priorities := make([]int64, 0, len(routingCandidates))
 	seenPriorities := make(map[int64]struct{}, len(abilities))
-	for _, ability := range abilities {
-		if _, excluded := excludedChannelIDs[ability.ChannelId]; excluded {
+	for _, candidate := range routingCandidates {
+		if _, excluded := excludedChannelIDs[candidate.ability.ChannelId]; excluded {
 			continue
 		}
-		priority := abilityPriority(ability)
+		priority := candidate.priority
 		if _, ok := seenPriorities[priority]; ok {
 			continue
 		}
@@ -197,10 +205,10 @@ func selectChannelIdFromAbilities(abilities []Ability, retry int, excludedChanne
 	}
 	targetPriority := priorities[retry]
 
-	targetAbilities := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
-		if _, excluded := excludedChannelIDs[ability.ChannelId]; !excluded && abilityPriority(ability) == targetPriority {
-			targetAbilities = append(targetAbilities, ability)
+	targetAbilities := make([]Ability, 0, len(routingCandidates))
+	for _, candidate := range routingCandidates {
+		if _, excluded := excludedChannelIDs[candidate.ability.ChannelId]; !excluded && candidate.priority == targetPriority {
+			targetAbilities = append(targetAbilities, candidate.ability)
 		}
 	}
 	if len(targetAbilities) == 0 {

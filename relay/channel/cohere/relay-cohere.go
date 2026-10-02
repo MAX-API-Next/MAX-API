@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -128,14 +127,9 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}()
 	helper.SetEventStreamHeaders(c)
-	isFirst := true
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case data := <-dataChan:
-			if isFirst {
-				isFirst = false
-				info.FirstResponseTime = time.Now()
-			}
 			data = strings.TrimSuffix(data, "\r")
 			var cohereResp CohereResponse
 			err := json.Unmarshal([]byte(data), &cohereResp)
@@ -178,7 +172,11 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				common.SysLog("error marshalling stream response: " + err.Error())
 				return true
 			}
-			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonStr)})
+			if err := helper.StringData(c, string(jsonStr)); err != nil {
+				common.SysLog("error writing stream response: " + err.Error())
+				return false
+			}
+			info.SetFirstResponseTime()
 			return true
 		case <-stopChan:
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
@@ -236,6 +234,8 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	c.Writer.WriteHeader(resp.StatusCode)
 	if _, writeErr := c.Writer.Write(jsonResponse); writeErr != nil {
 		common.SysLog("failed to write Cohere response: " + writeErr.Error())
+	} else {
+		info.SetFirstResponseTime()
 	}
 	return &usage, nil
 }
@@ -275,6 +275,8 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	_, err = c.Writer.Write(jsonResponse)
 	if err != nil {
 		common.SysLog("failed to write Cohere rerank response: " + err.Error())
+	} else {
+		info.SetFirstResponseTime()
 	}
 	return &usage, nil
 }

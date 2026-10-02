@@ -8,8 +8,11 @@ import (
 // to record soft errors, signal fatal stops, or mark normal completion.
 // StreamScannerHandler checks IsStopped() after each callback invocation.
 type StreamResult struct {
-	status  *relaycommon.StreamStatus
-	stopped bool
+	status            *relaycommon.StreamStatus
+	stopped           bool
+	done              bool
+	delivered         bool
+	initialErrorCount int
 }
 
 func newStreamResult(status *relaycommon.StreamStatus) *StreamResult {
@@ -38,7 +41,21 @@ func (r *StreamResult) Stop(err error) {
 // (e.g., Dify "message_end"). The stream stops after this chunk.
 func (r *StreamResult) Done() {
 	r.status.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	r.done = true
 	r.stopped = true
+}
+
+// MarkDelivered explicitly marks an event whose output was delivered through
+// a path that the scanner cannot observe directly. Normal handlers can rely on
+// StreamScannerHandler detecting a positive response-writer byte delta.
+func (r *StreamResult) MarkDelivered() {
+	if r != nil {
+		r.delivered = true
+	}
+}
+
+func (r *StreamResult) IsDeliverable() bool {
+	return r != nil && r.delivered
 }
 
 // IsStopped returns whether Stop() or Done() was called during this chunk.
@@ -46,7 +63,21 @@ func (r *StreamResult) IsStopped() bool {
 	return r.stopped
 }
 
+// IsSuccessful reports whether the handler accepted the current upstream
+// event without a fatal stop or a newly recorded soft conversion error.
+func (r *StreamResult) IsSuccessful() bool {
+	if r == nil || r.status == nil {
+		return false
+	}
+	return (r.done || !r.stopped) && r.status.TotalErrorCount() == r.initialErrorCount
+}
+
 // reset clears the per-chunk stopped flag so the object can be reused.
 func (r *StreamResult) reset() {
 	r.stopped = false
+	r.done = false
+	r.delivered = false
+	if r.status != nil {
+		r.initialErrorCount = r.status.TotalErrorCount()
+	}
 }

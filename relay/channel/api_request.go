@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"regexp"
@@ -516,6 +517,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	} else {
 		client = service.GetHttpClient()
 	}
+	client = clientWithNonStreamingTimeout(client, info)
 
 	var stopPinger context.CancelFunc
 	var pingerDone <-chan struct{}
@@ -539,11 +541,20 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if isUpstreamTimeout(err) && info != nil {
+			info.RecordChannelTimeout("transport_timeout")
+		}
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
+	}
+	if info != nil && !info.IsStream && resp.Body != nil {
+		setting := operation_setting.GetMonitorSetting()
+		if setting != nil && setting.NonStreamingResponseTimeoutSeconds > 0 {
+			resp.Body = &timeoutTrackingBody{ReadCloser: resp.Body, info: info}
+		}
 	}
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
@@ -553,6 +564,47 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
 	return resp, nil
+}
+
+func clientWithNonStreamingTimeout(client *http.Client, info *common.RelayInfo) *http.Client {
+	if client == nil || info == nil || info.IsStream {
+		return client
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || setting.NonStreamingResponseTimeoutSeconds <= 0 {
+		return client
+	}
+	timeout := time.Duration(setting.NonStreamingResponseTimeoutSeconds) * time.Second
+	if client.Timeout > 0 && client.Timeout <= timeout {
+		return client
+	}
+	clone := *client
+	clone.Timeout = timeout
+	return &clone
+}
+
+type timeoutTrackingBody struct {
+	io.ReadCloser
+	info *common.RelayInfo
+}
+
+func (body *timeoutTrackingBody) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if err != nil && isUpstreamTimeout(err) && body.info != nil {
+		body.info.RecordChannelTimeout("request_timeout")
+	}
+	return n, err
+}
+
+func isUpstreamTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func newTaskHTTPRequest(method string, fullRequestURL string, requestBody io.Reader, info *common.RelayInfo) (*http.Request, error) {

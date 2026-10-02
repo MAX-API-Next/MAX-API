@@ -201,6 +201,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
 	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
+	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
@@ -301,6 +304,9 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (maxAPI
 	if openaiErr != nil {
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
+	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)

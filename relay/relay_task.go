@@ -411,6 +411,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if strings.TrimSpace(upstreamTaskID) == "" {
 		return nil, service.TaskErrorWrapperLocal(errors.New("task upstream response did not contain a task id"), "missing_upstream_task_id", http.StatusBadGateway)
 	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
+	}
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := taskEstimateQuota

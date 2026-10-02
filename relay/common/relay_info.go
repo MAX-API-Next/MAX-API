@@ -1,19 +1,23 @@
 package common
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
+	"github.com/MAX-API-Next/MAX-API/pkg/channelhealth"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -75,6 +79,7 @@ type ChannelMeta struct {
 	HeadersOverride      map[string]interface{}
 	ChannelSetting       dto.ChannelSettings
 	ChannelOtherSettings dto.ChannelOtherSettings
+	ChannelAutoBan       bool
 	UpstreamModelName    string
 	IsModelMapped        bool
 	SupportStreamOptions bool // 是否支持流式选项
@@ -86,16 +91,19 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
-	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
-	TokenUnlimited    bool
-	StartTime         time.Time
-	FirstResponseTime time.Time
-	isFirstResponse   bool
+	TokenId                      int
+	TokenKey                     string
+	TokenGroup                   string
+	UserId                       int
+	UsingGroup                   string // 使用的分组，当auto跨分组重试时，会变动
+	UserGroup                    string // 用户所在分组
+	TokenUnlimited               bool
+	StartTime                    time.Time
+	FirstResponseTime            time.Time
+	isFirstResponse              bool
+	channelAttemptStartTime      time.Time
+	channelFirstResponseRecorded atomic.Bool
+	channelFirstResponseSignal   chan struct{}
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -226,6 +234,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		ApiKey:               common.GetContextKeyString(c, constant.ContextKeyChannelKey),
 		Organization:         c.GetString("channel_organization"),
 		ChannelCreateTime:    c.GetInt64("channel_create_time"),
+		ChannelAutoBan:       common.GetContextKeyBool(c, constant.ContextKeyChannelAutoBan),
 		ParamOverride:        paramOverride,
 		HeadersOverride:      headerOverride,
 		UpstreamModelName:    common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
@@ -255,6 +264,9 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	}
 
 	info.ChannelMeta = channelMeta
+	info.channelAttemptStartTime = time.Now()
+	info.channelFirstResponseRecorded.Store(false)
+	info.channelFirstResponseSignal = make(chan struct{})
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
 		info.ReasoningEffort = ""
 	} else {
@@ -746,9 +758,164 @@ func (info *RelayInfo) GetEstimatePromptTokens() int {
 }
 
 func (info *RelayInfo) SetFirstResponseTime() {
+	if info == nil {
+		return
+	}
 	if info.isFirstResponse {
 		info.FirstResponseTime = time.Now()
 		info.isFirstResponse = false
+	}
+	if !info.channelFirstResponseRecorded.CompareAndSwap(false, true) {
+		return
+	}
+	if info.channelFirstResponseSignal != nil {
+		close(info.channelFirstResponseSignal)
+	}
+	info.recordChannelHealthObservation("first_response")
+	info.recordChannelHealthSuccess()
+}
+
+// FirstResponseSignal is closed once the current channel attempt has produced
+// a first valid, deliverable result. It is used by the stream watchdog without
+// exposing the internal deduplication state to relay callers.
+func (info *RelayInfo) FirstResponseSignal() <-chan struct{} {
+	if info == nil {
+		return nil
+	}
+	return info.channelFirstResponseSignal
+}
+
+func (info *RelayInfo) HasRecordedChannelFirstResponse() bool {
+	return info != nil && info.channelFirstResponseRecorded.Load()
+}
+
+var recordChannelHealthObservation = func(observation common.ChannelHealthObservation) error {
+	common.EnqueueChannelHealthObservation(observation)
+	return nil
+}
+
+func (info *RelayInfo) recordChannelHealthObservation(event string) {
+	if info == nil || info.ChannelMeta == nil || info.ChannelId <= 0 {
+		return
+	}
+	start := info.channelAttemptStartTime
+	if start.IsZero() {
+		start = info.StartTime
+	}
+	observedAt := time.Now()
+	latency := observedAt.Sub(start).Milliseconds()
+	if latency < 0 {
+		latency = 0
+	}
+	_ = recordChannelHealthObservation(common.ChannelHealthObservation{
+		ChannelID:        info.ChannelId,
+		Event:            event,
+		ObservedAt:       observedAt,
+		AttemptLatencyMS: latency,
+		Stream:           info.IsStream,
+		RetryIndex:       info.RetryIndex,
+	})
+}
+
+func (info *RelayInfo) channelHealthAttemptID() string {
+	if info == nil {
+		return ""
+	}
+	attemptID := info.RequestId
+	if attemptID == "" {
+		attemptStart := info.channelAttemptStartTime
+		if attemptStart.IsZero() {
+			attemptStart = info.StartTime
+		}
+		attemptID = fmt.Sprintf("attempt:%d:%d", attemptStart.UnixNano(), info.RetryIndex)
+	}
+	return fmt.Sprintf("%s:%d:%d", attemptID, info.ChannelId, info.RetryIndex)
+}
+
+// recordChannelHealthSuccess contributes one valid first-response sample only
+// when the administrator enabled the advanced timeout gates. It runs off the
+// relay response path so a slow Redis instance cannot delay the client.
+func (info *RelayInfo) recordChannelHealthSuccess() {
+	if info == nil || info.ChannelMeta == nil || info.ChannelId <= 0 || !info.ChannelAutoBan {
+		return
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || !setting.TimeoutAutoDisableEnabled ||
+		(setting.TimeoutAutoDisableMinimumSamples <= 0 && setting.TimeoutAutoDisableRatioPercent <= 0) {
+		return
+	}
+	requestMode := channelhealth.RequestModeNonStreaming
+	if info.IsStream {
+		requestMode = channelhealth.RequestModeStreaming
+	}
+	evidence := channelhealth.AttemptEvidence{
+		ChannelID:   info.ChannelId,
+		AttemptID:   info.channelHealthAttemptID(),
+		RequestMode: requestMode,
+		TimeoutKind: channelhealth.TimeoutKindFirstResponse,
+		Success:     true,
+		AutoBan:     info.ChannelAutoBan,
+		ObservedAt:  time.Now(),
+	}
+	go func() {
+		decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		_, _ = channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, setting)
+	}()
+}
+
+// RecordChannelTimeout records a confirmed timeout outcome for the current
+// channel attempt. It is intentionally side-effect-free for relay behavior.
+func (info *RelayInfo) RecordChannelTimeout(event string) {
+	info.recordChannelHealthObservation(event)
+	if info == nil {
+		return
+	}
+	timeoutKind := event
+	if event == "transport_timeout" || event == "request_timeout" {
+		if info.IsStream && !info.channelFirstResponseRecorded.Load() {
+			timeoutKind = channelhealth.TimeoutKindStreamingFirstResult
+		} else if !info.IsStream {
+			timeoutKind = channelhealth.TimeoutKindNonStreamingResponse
+		}
+	}
+	if timeoutKind != channelhealth.TimeoutKindStreamingFirstResult &&
+		timeoutKind != channelhealth.TimeoutKindNonStreamingResponse {
+		return
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil {
+		return
+	}
+	requestMode := channelhealth.RequestModeNonStreaming
+	if info.IsStream {
+		requestMode = channelhealth.RequestModeStreaming
+	}
+	decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	result, err := channelhealth.EvaluateTimeoutGuard(
+		decisionContext,
+		channelhealth.AttemptEvidence{
+			ChannelID:       info.ChannelId,
+			AttemptID:       info.channelHealthAttemptID(),
+			RequestMode:     requestMode,
+			TimeoutKind:     timeoutKind,
+			TimeoutEligible: true,
+			AutoBan:         info.ChannelAutoBan,
+			ObservedAt:      time.Now(),
+		},
+		setting,
+	)
+	if err == nil && result.Transition != "" {
+		common.PublishChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+			ChannelID:       info.ChannelId,
+			Transition:      result.Transition,
+			Penalty:         result.State.Penalty,
+			PenaltyUntil:    result.State.PenaltyUntil,
+			RuntimeDisabled: result.State.RuntimeDisabled,
+			DisabledUntil:   result.State.DisabledUntil,
+			ObservedAt:      result.State.LastObservedAt,
+		})
 	}
 }
 

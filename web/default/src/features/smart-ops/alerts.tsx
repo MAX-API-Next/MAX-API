@@ -68,6 +68,13 @@ const RESOURCE_LABEL: Record<string, string> = {
   system_memory: 'Memory usage',
   system_disk: 'Disk usage',
   billing_settlement_backlog: 'Billing reconciliation backlog',
+  channel_timeout_priority_demotion: 'Channel priority demotion',
+  channel_timeout_auto_disabled: 'Channel automatically disabled',
+}
+
+function getAlertResourceLabel(key: string): string {
+  const baseKey = key.split(':', 1)[0]
+  return RESOURCE_LABEL[baseKey] ?? key
 }
 
 interface ActiveAlertsTableProps {
@@ -104,7 +111,7 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
                 <TableCell className='px-4 py-3 whitespace-normal'>
                   <div className='flex max-w-md flex-col gap-0.5'>
                     <span className='text-sm font-medium'>
-                      {t(RESOURCE_LABEL[alert.key] ?? alert.key)}
+                      {t(getAlertResourceLabel(alert.key))}
                     </span>
                     <span className='text-muted-foreground font-mono text-[11px]'>
                       {alert.key}
@@ -112,7 +119,15 @@ function ActiveAlertsTable(props: ActiveAlertsTableProps): ReactElement {
                   </div>
                 </TableCell>
                 <TableCell className='py-3'>
-                  <Badge variant='destructive'>{t('Firing')}</Badge>
+                  <Badge
+                    variant={
+                      alert.severity === 'critical'
+                        ? 'destructive'
+                        : 'secondary'
+                    }
+                  >
+                    {t('Firing')}
+                  </Badge>
                 </TableCell>
                 <TableCell className='text-muted-foreground py-3 font-mono text-xs'>
                   {alert.node || t('Unknown')}
@@ -187,7 +202,7 @@ function ActiveAlertsContent(props: ActiveAlertsContentProps): ReactElement {
           <EmptyTitle>{t('No active alerts.')}</EmptyTitle>
           <EmptyDescription>
             {t(
-              'This process is not currently reporting sustained host pressure or an open billing reconciliation alert.'
+              'This process is not currently reporting sustained host pressure, channel timeout, or billing reconciliation alerts.'
             )}
           </EmptyDescription>
         </EmptyHeader>

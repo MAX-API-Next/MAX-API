@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
@@ -18,6 +19,96 @@ func GetSmartOpsAlerts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    service.GetSmartOpsAlerts(),
+	})
+}
+
+var channelHealthPolicyKeys = []string{
+	"monitor_setting.auto_priority_demotion_enabled",
+	"monitor_setting.streaming_first_result_timeout_seconds",
+	"monitor_setting.non_streaming_response_timeout_seconds",
+	"monitor_setting.priority_deduction",
+	"monitor_setting.timeout_auto_disable_enabled",
+	"monitor_setting.timeout_auto_disable_count",
+	"monitor_setting.timeout_auto_disable_window_seconds",
+	"monitor_setting.timeout_auto_disable_minimum_samples",
+	"monitor_setting.timeout_auto_disable_ratio_percent",
+	"monitor_setting.timeout_auto_disable_duration_seconds",
+	"monitor_setting.timeout_auto_disable_successful_probe_count",
+	"monitor_setting.timeout_auto_disable_recovery_mode",
+	"monitor_setting.timeout_auto_disable_count_scope",
+	"monitor_setting.penalty_cooldown_seconds",
+	"monitor_setting.recovery_mode",
+	"monitor_setting.extend_on_repeat_timeout",
+	"monitor_setting.channel_timeout_notification_enabled",
+	"monitor_setting.alert_repeat_interval_seconds",
+}
+
+func isChannelHealthPolicyKey(key string) bool {
+	for _, allowed := range channelHealthPolicyKeys {
+		if key == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func channelHealthPolicySnapshot() []model.Option {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	options := make([]model.Option, 0, len(channelHealthPolicyKeys))
+	for _, key := range channelHealthPolicyKeys {
+		options = append(options, model.Option{Key: key, Value: common.OptionMap[key]})
+	}
+	return options
+}
+
+// GetChannelHealthPolicy exposes only the non-sensitive monitor_setting keys
+// needed by Smart Operations. It is intentionally available to administrators
+// who can view the page; writes remain root-only.
+func GetChannelHealthPolicy(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    channelHealthPolicySnapshot(),
+	})
+}
+
+type channelHealthPolicyUpdate struct {
+	Key   string      `json:"key"`
+	Value interface{} `json:"value"`
+}
+
+type channelHealthPolicyUpdateRequest struct {
+	Updates []channelHealthPolicyUpdate `json:"updates"`
+}
+
+// UpdateChannelHealthPolicy validates and saves all changed monitor_setting
+// values in one existing-options transaction. No new persistence structure is
+// introduced and a rejected value cannot leave a partial policy update.
+func UpdateChannelHealthPolicy(c *gin.Context) {
+	var request channelHealthPolicyUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || len(request.Updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "updates is required"})
+		return
+	}
+	values := make(map[string]string, len(request.Updates))
+	for _, update := range request.Updates {
+		key := strings.TrimSpace(update.Key)
+		if !isChannelHealthPolicyKey(key) || !model.IsRegisteredOptionKey(key) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "unsupported channel health option"})
+			return
+		}
+		values[key] = common.Interface2String(update.Value)
+	}
+	if err := model.UpdateOptionsBulk(values); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	recordManageAudit(c, "smart_ops.channel_health_policy_update", map[string]interface{}{
+		"keys": request.Updates,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    channelHealthPolicySnapshot(),
 	})
 }
 

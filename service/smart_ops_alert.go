@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -9,13 +10,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/channelhealth"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/go-redis/redis/v8"
 	"gorm.io/gorm"
 )
 
@@ -27,14 +32,25 @@ const manualTaskBillingDefaultNote = "Administrator-approved manual task usage s
 const manualTaskBillingZeroNote = "Administrator-confirmed zero final quota settlement"
 
 const (
-	smartOpsAlertStatusFiring    = "firing"
-	smartOpsAlertStatusResolved  = "resolved"
-	smartOpsAlertSeverityWarning = "warning"
-	smartOpsAlertSampleInterval  = 5 * time.Second
-	smartOpsAlertRequiredSamples = 2
-	smartOpsAlertQueueSize       = 24
-	smartOpsAlertWorkerCount     = 3
+	smartOpsAlertStatusFiring     = "firing"
+	smartOpsAlertStatusResolved   = "resolved"
+	smartOpsAlertSeverityWarning  = "warning"
+	smartOpsAlertSeverityCritical = "critical"
+	smartOpsAlertSampleInterval   = 5 * time.Second
+	smartOpsAlertRequiredSamples  = 2
+	smartOpsAlertQueueSize        = 24
+	smartOpsAlertWorkerCount      = 3
+	smartOpsAlertDeliveryTTL      = 7 * 24 * time.Hour
+	smartOpsAlertDeliveryTimeout  = 100 * time.Millisecond
 )
+
+const smartOpsAlertDeliveryKeyPrefix = "maxapi:smart-ops:v1:delivery:"
+
+const smartOpsAlertRepeatKeyPrefix = "maxapi:smart-ops:v1:repeat:"
+
+const smartOpsAlertRepeatReleaseScript = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`
+
+var smartOpsAlertRepeatTokenCounter atomic.Uint64
 
 var smartOpsAlertRetryDelays = []time.Duration{
 	5 * time.Second,
@@ -46,15 +62,20 @@ var smartOpsAlertRetryDelays = []time.Duration{
 // It intentionally excludes secrets, request bodies, channel keys, and
 // mutation controls. Component-specific values retain their own units.
 type SmartOpsAlert struct {
-	Key          string    `json:"key"`
-	Status       string    `json:"status"`
-	Severity     string    `json:"severity"`
-	Component    string    `json:"component"`
-	Node         string    `json:"node,omitempty"`
-	CurrentValue float64   `json:"current_value"`
-	Threshold    float64   `json:"threshold"`
-	ObservedAt   time.Time `json:"observed_at"`
-	Message      string    `json:"message"`
+	Key               string    `json:"key"`
+	Status            string    `json:"status"`
+	Severity          string    `json:"severity"`
+	Component         string    `json:"component"`
+	Node              string    `json:"node,omitempty"`
+	CurrentValue      float64   `json:"current_value"`
+	Threshold         float64   `json:"threshold"`
+	ObservedAt        time.Time `json:"observed_at"`
+	Message           string    `json:"message"`
+	DeliveryStatus    string    `json:"delivery_status,omitempty"`
+	DeliveryAttempts  int       `json:"delivery_attempts,omitempty"`
+	DeliveryUpdatedAt time.Time `json:"delivery_updated_at,omitempty"`
+	DeliveryError     string    `json:"delivery_error,omitempty"`
+	repeatLockToken   string
 }
 
 type smartOpsAlertEvent struct {
@@ -152,6 +173,14 @@ var smartOpsAlertMonitor struct {
 }
 
 var smartOpsAlertNotificationSender = enqueueSmartOpsAlertNotification
+
+func init() {
+	// The relay package cannot import service without creating a cycle. A
+	// process-local observer keeps the runtime decision in Redis while allowing
+	// the existing Smart Operations projector and notification queue to react
+	// immediately after a timeout transition.
+	common.SetChannelHealthRuntimeTransitionObserver(handleChannelHealthRuntimeTransition)
+}
 
 // StartSmartOpsAlertMonitor starts the in-process detector. It is deliberately
 // separate from the resource sampler so the existing sampler remains cheap and
@@ -317,6 +346,117 @@ func projectSmartOpsActiveAlert(alert SmartOpsAlert) {
 	smartOpsAlertMonitor.active[alert.Key] = alert
 }
 
+func channelHealthPriorityAlertKey(channelID int) string {
+	return fmt.Sprintf("channel_timeout_priority_demotion:%d", channelID)
+}
+
+func channelHealthDisabledAlertKey(channelID int) string {
+	return fmt.Sprintf("channel_timeout_auto_disabled:%d", channelID)
+}
+
+func handleChannelHealthRuntimeTransition(transition common.ChannelHealthRuntimeTransition) {
+	if transition.ChannelID <= 0 || transition.Transition == "" {
+		return
+	}
+	observedAt := transition.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = time.Now()
+	}
+
+	var alert SmartOpsAlert
+	switch transition.Transition {
+	case "priority_demotion_firing", "priority_demotion_updated":
+		if transition.RuntimeDisabled {
+			return
+		}
+		alert = SmartOpsAlert{
+			Key:          channelHealthPriorityAlertKey(transition.ChannelID),
+			Status:       smartOpsAlertStatusFiring,
+			Severity:     smartOpsAlertSeverityWarning,
+			Component:    "channel",
+			Node:         smartOpsAlertNodeName(),
+			CurrentValue: float64(transition.Penalty),
+			Threshold:    float64(transition.Penalty),
+			ObservedAt:   observedAt,
+			Message:      formatChannelHealthPriorityAlertMessage(transition),
+		}
+	case "timeout_auto_disabled":
+		// A critical disablement supersedes the warning for the same channel.
+		// Remove the old projection before publishing the critical event so the
+		// cockpit cannot show two active states for one runtime transition.
+		projectSmartOpsActiveAlert(SmartOpsAlert{
+			Key:    channelHealthPriorityAlertKey(transition.ChannelID),
+			Status: smartOpsAlertStatusResolved,
+		})
+		alert = SmartOpsAlert{
+			Key:          channelHealthDisabledAlertKey(transition.ChannelID),
+			Status:       smartOpsAlertStatusFiring,
+			Severity:     smartOpsAlertSeverityCritical,
+			Component:    "channel",
+			Node:         smartOpsAlertNodeName(),
+			CurrentValue: 1,
+			Threshold:    1,
+			ObservedAt:   observedAt,
+			Message:      formatChannelHealthDisabledAlertMessage(transition),
+		}
+	case "runtime_recovered":
+		// Recovery must close both possible channel projections. The critical
+		// disable alert may have been created before a process restart, while a
+		// warning can still exist when an operator restores a penalty directly.
+		projectSmartOpsActiveAlert(SmartOpsAlert{
+			Key:    channelHealthDisabledAlertKey(transition.ChannelID),
+			Status: smartOpsAlertStatusResolved,
+		})
+		projectSmartOpsActiveAlert(SmartOpsAlert{
+			Key:    channelHealthPriorityAlertKey(transition.ChannelID),
+			Status: smartOpsAlertStatusResolved,
+		})
+		if setting := operation_setting.GetMonitorSetting(); setting != nil && setting.ChannelTimeoutNotificationEnabled {
+			smartOpsAlertNotificationSender(SmartOpsAlert{
+				Key:        channelHealthDisabledAlertKey(transition.ChannelID),
+				Status:     smartOpsAlertStatusResolved,
+				Severity:   smartOpsAlertSeverityCritical,
+				Component:  "channel",
+				Node:       smartOpsAlertNodeName(),
+				ObservedAt: observedAt,
+				Message:    fmt.Sprintf("渠道 %d 已恢复运行态，告警已关闭", transition.ChannelID),
+			})
+		}
+		return
+	default:
+		return
+	}
+
+	// Projection is always updated, even when external notifications are
+	// disabled. This keeps the cockpit authoritative and makes notification
+	// transport an operator preference rather than a state dependency.
+	projectSmartOpsActiveAlert(alert)
+	setting := operation_setting.GetMonitorSetting()
+	if setting != nil && setting.ChannelTimeoutNotificationEnabled {
+		smartOpsAlertNotificationSender(alert)
+	}
+}
+
+func formatChannelHealthPriorityAlertMessage(transition common.ChannelHealthRuntimeTransition) string {
+	message := fmt.Sprintf("渠道 %d 已因上游超时降低运行态优先级，扣减 %d", transition.ChannelID, transition.Penalty)
+	if !transition.PenaltyUntil.IsZero() {
+		message += "，预计恢复时间 " + transition.PenaltyUntil.Format(time.RFC3339)
+	} else {
+		message += "，当前需人工恢复"
+	}
+	return message
+}
+
+func formatChannelHealthDisabledAlertMessage(transition common.ChannelHealthRuntimeTransition) string {
+	message := fmt.Sprintf("渠道 %d 已因重复上游超时被运行态禁用，源状态 repeated_timeout", transition.ChannelID)
+	if !transition.DisabledUntil.IsZero() {
+		message += "，计划探测时间 " + transition.DisabledUntil.Format(time.RFC3339)
+	} else {
+		message += "，当前需人工恢复"
+	}
+	return message
+}
+
 func formatSmartOpsAlertMessage(label string, event *smartOpsAlertEvent) string {
 	if event.Status == smartOpsAlertStatusResolved {
 		return fmt.Sprintf("%s 已恢复：当前 %.1f%%，阈值 %.1f%%", label, event.CurrentValue, event.Threshold)
@@ -333,17 +473,148 @@ func smartOpsAlertNodeName() string {
 }
 
 // GetSmartOpsAlerts returns the currently firing alerts for the administrator
-// cockpit. It is a process-local projection and may be empty immediately after
-// restart until the sampler produces two consecutive samples.
+// cockpit. Process-local alerts are merged with the bounded Redis channel
+// runtime projection so a process restart does not hide an active channel
+// penalty or runtime disablement.
 func GetSmartOpsAlerts() []SmartOpsAlert {
+	runtimeAlerts, runtimeAvailable := loadChannelHealthSmartOpsAlerts()
 	smartOpsAlertMonitor.Lock()
-	defer smartOpsAlertMonitor.Unlock()
-	alerts := make([]SmartOpsAlert, 0, len(smartOpsAlertMonitor.active))
-	for _, alert := range smartOpsAlertMonitor.active {
+	alertsByKey := make(map[string]SmartOpsAlert, len(smartOpsAlertMonitor.active)+len(runtimeAlerts))
+	for key, alert := range smartOpsAlertMonitor.active {
+		alertsByKey[key] = alert
+	}
+	if runtimeAvailable {
+		runtimeKeys := make(map[string]struct{}, len(runtimeAlerts))
+		for _, alert := range runtimeAlerts {
+			runtimeKeys[alert.Key] = struct{}{}
+		}
+		// A priority penalty can expire without emitting a process-local
+		// transition. Once Redis has answered successfully, its projection is
+		// authoritative and stale channel alerts must not remain active forever.
+		for key := range alertsByKey {
+			if strings.HasPrefix(key, "channel_timeout_") {
+				if _, ok := runtimeKeys[key]; !ok {
+					delete(alertsByKey, key)
+				}
+			}
+		}
+	}
+	for _, alert := range runtimeAlerts {
+		alertsByKey[alert.Key] = alert
+	}
+	smartOpsAlertMonitor.Unlock()
+	alerts := make([]SmartOpsAlert, 0, len(alertsByKey))
+	for _, alert := range alertsByKey {
 		alerts = append(alerts, alert)
 	}
+	loadSmartOpsAlertDeliveryStates(alerts)
 	sort.Slice(alerts, func(i, j int) bool { return alerts[i].Key < alerts[j].Key })
 	return alerts
+}
+
+func loadChannelHealthSmartOpsAlerts() ([]SmartOpsAlert, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	states, err := channelhealth.ListRuntimeStates(ctx)
+	if err != nil {
+		// Redis is an optional runtime dependency. Existing process-local alerts
+		// remain available when the shared projection cannot be read.
+		return nil, false
+	}
+	setting := operation_setting.GetMonitorSetting()
+	now := time.Now()
+	alerts := make([]SmartOpsAlert, 0, len(states)*2)
+	for _, state := range states {
+		observedAt := state.LastObservedAt
+		if observedAt.IsZero() {
+			observedAt = now
+		}
+		if state.RuntimeDisabled {
+			alerts = append(alerts, SmartOpsAlert{
+				Key:          channelHealthDisabledAlertKey(state.ChannelID),
+				Status:       smartOpsAlertStatusFiring,
+				Severity:     smartOpsAlertSeverityCritical,
+				Component:    "channel",
+				Node:         smartOpsAlertNodeName(),
+				CurrentValue: float64(channelHealthTimeoutCount(state, setting)),
+				Threshold:    float64(channelHealthDisableThreshold(setting)),
+				ObservedAt:   observedAt,
+				Message: fmt.Sprintf(
+					"渠道 %d 已因重复上游超时被运行态禁用，源状态 %s",
+					state.ChannelID,
+					fallbackChannelHealthSource(state.ActiveSource),
+				),
+			})
+			continue
+		}
+		if state.Penalty <= 0 || (!state.PenaltyUntil.IsZero() && !now.Before(state.PenaltyUntil)) {
+			continue
+		}
+		transition := common.ChannelHealthRuntimeTransition{
+			ChannelID:    state.ChannelID,
+			Penalty:      state.Penalty,
+			PenaltyUntil: state.PenaltyUntil,
+			ObservedAt:   observedAt,
+		}
+		alerts = append(alerts, SmartOpsAlert{
+			Key:          channelHealthPriorityAlertKey(state.ChannelID),
+			Status:       smartOpsAlertStatusFiring,
+			Severity:     smartOpsAlertSeverityWarning,
+			Component:    "channel",
+			Node:         smartOpsAlertNodeName(),
+			CurrentValue: float64(state.Penalty),
+			Threshold:    float64(channelHealthPenaltyThreshold(setting)),
+			ObservedAt:   observedAt,
+			Message:      formatChannelHealthPriorityAlertMessage(transition),
+		})
+	}
+	return alerts, true
+}
+
+func channelHealthTimeoutCount(state channelhealth.RuntimeState, setting *operation_setting.MonitorSetting) int64 {
+	if setting != nil && setting.TimeoutAutoDisableCountScope == operation_setting.TimeoutAutoDisableCountScopeCombined {
+		return state.TimeoutCount["combined"]
+	}
+	mode := state.LastTimeoutMode
+	if mode == "" {
+		// Legacy Redis states do not have last_timeout_mode. Preserve their
+		// previous behavior until the next countable timeout writes it.
+		switch state.LastEvent {
+		case channelhealth.TimeoutKindStreamingFirstResult:
+			mode = channelhealth.RequestModeStreaming
+		case channelhealth.TimeoutKindNonStreamingResponse:
+			mode = channelhealth.RequestModeNonStreaming
+		}
+	}
+	switch mode {
+	case channelhealth.RequestModeStreaming:
+		return state.TimeoutCount[channelhealth.RequestModeStreaming]
+	case channelhealth.RequestModeNonStreaming:
+		return state.TimeoutCount[channelhealth.RequestModeNonStreaming]
+	default:
+		return state.TimeoutCount[channelhealth.RequestModeStreaming] + state.TimeoutCount[channelhealth.RequestModeNonStreaming]
+	}
+}
+
+func channelHealthDisableThreshold(setting *operation_setting.MonitorSetting) int {
+	if setting == nil {
+		return 0
+	}
+	return setting.TimeoutAutoDisableCount
+}
+
+func channelHealthPenaltyThreshold(setting *operation_setting.MonitorSetting) int {
+	if setting == nil {
+		return 0
+	}
+	return setting.PriorityDeduction
+}
+
+func fallbackChannelHealthSource(source string) string {
+	if source == "" {
+		return "repeated_timeout"
+	}
+	return source
 }
 
 // GetBillingSettlementReconciliation returns bounded, read-only evidence for
@@ -940,6 +1211,39 @@ type smartOpsAlertNotificationPool struct {
 	waitGroup sync.WaitGroup
 }
 
+type smartOpsAlertDeliveryProjection struct {
+	alert    SmartOpsAlert
+	status   string
+	attempts int
+	detail   string
+}
+
+var smartOpsAlertDeliveryProjectionQueue struct {
+	sync.Once
+	queue chan smartOpsAlertDeliveryProjection
+}
+
+func startSmartOpsAlertDeliveryProjectionWorker() {
+	smartOpsAlertDeliveryProjectionQueue.Do(func() {
+		smartOpsAlertDeliveryProjectionQueue.queue = make(chan smartOpsAlertDeliveryProjection, smartOpsAlertQueueSize)
+		go func() {
+			for projection := range smartOpsAlertDeliveryProjectionQueue.queue {
+				recordSmartOpsAlertDeliveryState(projection.alert, projection.status, projection.attempts, projection.detail)
+			}
+		}()
+	})
+}
+
+func enqueueSmartOpsAlertDeliveryProjection(projection smartOpsAlertDeliveryProjection) bool {
+	startSmartOpsAlertDeliveryProjectionWorker()
+	select {
+	case smartOpsAlertDeliveryProjectionQueue.queue <- projection:
+		return true
+	default:
+		return false
+	}
+}
+
 func newSmartOpsAlertNotificationPool(workerCount, queueSize int, deliver func(SmartOpsAlert) error) *smartOpsAlertNotificationPool {
 	if workerCount < 1 {
 		workerCount = 1
@@ -969,6 +1273,9 @@ func newSmartOpsAlertNotificationPool(workerCount, queueSize int, deliver func(S
 func (pool *smartOpsAlertNotificationPool) runWorker(queue <-chan SmartOpsAlert) {
 	defer pool.waitGroup.Done()
 	for alert := range queue {
+		// The relay/observer path only enqueues. Redis projection writes happen
+		// here, on a bounded worker, so a slow Redis cannot delay a response.
+		recordSmartOpsAlertDeliveryState(alert, "queued", 0, "")
 		if err := pool.deliver(alert); err != nil {
 			common.SysLog(fmt.Sprintf("failed to deliver smart ops alert notification: %s", err.Error()))
 		}
@@ -1023,6 +1330,16 @@ func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
 	})
 
 	if !smartOpsAlertNotificationQueue.pool.enqueue(alert) {
+		if !enqueueSmartOpsAlertDeliveryProjection(smartOpsAlertDeliveryProjection{
+			alert:  alert,
+			status: "failed",
+			detail: "notification_queue_full",
+		}) {
+			// Both queues are intentionally bounded. Losing this optional
+			// diagnostic projection is preferable to creating an unbounded
+			// goroutine or blocking the relay path.
+			common.SysLog(fmt.Sprintf("smart ops alert delivery projection queue is full for %s", alert.Key))
+		}
 		common.SysLog(fmt.Sprintf("smart ops alert notification queue is full, dropping %s for node %s", alert.Key, alert.Node))
 	}
 }
@@ -1041,21 +1358,153 @@ func smartOpsAlertNotifyType(alert SmartOpsAlert) string {
 	return fmt.Sprintf("%s:%s:%s:%s", dto.NotifyTypeSmartOpsAlert, alert.Node, alert.Key, alert.Status)
 }
 
+func smartOpsAlertDeliveryKey(alert SmartOpsAlert) string {
+	digest := sha256.Sum256([]byte(smartOpsAlertNotifyType(alert)))
+	return fmt.Sprintf("%s%x", smartOpsAlertDeliveryKeyPrefix, digest)
+}
+
+func smartOpsAlertRepeatKey(alert SmartOpsAlert) string {
+	digest := sha256.Sum256([]byte(alert.Key))
+	return fmt.Sprintf("%s%x", smartOpsAlertRepeatKeyPrefix, digest)
+}
+
+// shouldDeliverSmartOpsAlertNotification applies the configured interval to
+// repeated priority-demotion updates. Critical disablement and all recovery
+// events always pass through. Redis failure is fail-open so an operational
+// warning is not silently lost.
+func shouldDeliverSmartOpsAlertNotification(alert *SmartOpsAlert) bool {
+	if alert == nil || alert.Component != "channel" || alert.Status != smartOpsAlertStatusFiring ||
+		!strings.HasPrefix(alert.Key, "channel_timeout_priority_demotion:") {
+		return true
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || setting.AlertRepeatIntervalSeconds <= 0 || !common.RedisEnabled || common.RDB == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), smartOpsAlertDeliveryTimeout)
+	defer cancel()
+	token := fmt.Sprintf("%s:%d:%d", alert.Node, time.Now().UnixNano(), smartOpsAlertRepeatTokenCounter.Add(1))
+	allowed, err := common.RDB.SetNX(ctx, smartOpsAlertRepeatKey(*alert), token, time.Duration(setting.AlertRepeatIntervalSeconds)*time.Second).Result()
+	if err != nil {
+		return true
+	}
+	if allowed {
+		alert.repeatLockToken = token
+	}
+	return allowed
+}
+
+func clearSmartOpsAlertRepeatKey(alert SmartOpsAlert) {
+	if alert.Component != "channel" || alert.Status != smartOpsAlertStatusFiring ||
+		!strings.HasPrefix(alert.Key, "channel_timeout_priority_demotion:") ||
+		alert.repeatLockToken == "" ||
+		!common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), smartOpsAlertDeliveryTimeout)
+	defer cancel()
+	_, _ = common.RDB.Eval(ctx, smartOpsAlertRepeatReleaseScript, []string{smartOpsAlertRepeatKey(alert)}, alert.repeatLockToken).Result()
+}
+
+// recordSmartOpsAlertDeliveryState stores a bounded delivery projection in
+// Redis. It is diagnostic and recoverable; failures must never change the
+// alert transition or block the notification worker.
+func recordSmartOpsAlertDeliveryState(alert SmartOpsAlert, status string, attempts int, detail string) {
+	if !common.RedisEnabled || common.RDB == nil || status == "" {
+		return
+	}
+	if attempts < 0 {
+		attempts = 0
+	}
+	if len(detail) > 512 {
+		detail = detail[:512]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), smartOpsAlertDeliveryTimeout)
+	defer cancel()
+	fields := map[string]interface{}{
+		"alert_key":       alert.Key,
+		"alert_status":    alert.Status,
+		"alert_node":      alert.Node,
+		"delivery_status": status,
+		"attempts":        strconv.Itoa(attempts),
+		"error":           detail,
+		"updated_at":      time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	pipe := common.RDB.TxPipeline()
+	pipe.HSet(ctx, smartOpsAlertDeliveryKey(alert), fields)
+	pipe.Expire(ctx, smartOpsAlertDeliveryKey(alert), smartOpsAlertDeliveryTTL)
+	_, _ = pipe.Exec(ctx)
+}
+
+func loadSmartOpsAlertDeliveryState(alert *SmartOpsAlert) {
+	if alert == nil {
+		return
+	}
+	alerts := []SmartOpsAlert{*alert}
+	loadSmartOpsAlertDeliveryStates(alerts)
+	*alert = alerts[0]
+}
+
+// loadSmartOpsAlertDeliveryStates reads all delivery projections in one
+// bounded Redis pipeline. Delivery metadata is diagnostic, so a failed read
+// leaves the alert itself intact and simply omits the optional fields.
+func loadSmartOpsAlertDeliveryStates(alerts []SmartOpsAlert) {
+	if len(alerts) == 0 || !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), smartOpsAlertDeliveryTimeout)
+	defer cancel()
+	pipe := common.RDB.Pipeline()
+	commands := make([]*redis.StringStringMapCmd, len(alerts))
+	for index := range alerts {
+		commands[index] = pipe.HGetAll(ctx, smartOpsAlertDeliveryKey(alerts[index]))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return
+	}
+	for index, command := range commands {
+		fields, err := command.Result()
+		if err != nil {
+			continue
+		}
+		alerts[index].DeliveryStatus = fields["delivery_status"]
+		alerts[index].DeliveryAttempts, _ = strconv.Atoi(fields["attempts"])
+		alerts[index].DeliveryError = fields["error"]
+		if value := fields["updated_at"]; value != "" {
+			alerts[index].DeliveryUpdatedAt, _ = time.Parse(time.RFC3339Nano, value)
+		}
+	}
+}
+
 func deliverSmartOpsAlertNotification(alert SmartOpsAlert) error {
+	if !shouldDeliverSmartOpsAlertNotification(&alert) {
+		recordSmartOpsAlertDeliveryState(alert, "skipped_repeat", 0, "alert_repeat_interval_seconds")
+		return nil
+	}
+	recordSmartOpsAlertDeliveryState(alert, "sending", 0, "")
 	var recipients []smartOpsAlertRecipient
 	if err := retrySmartOpsAlertOperation(func() error {
 		var err error
 		recipients, err = smartOpsAlertLoadRecipients()
 		return err
 	}); err != nil {
+		clearSmartOpsAlertRepeatKey(alert)
+		recordSmartOpsAlertDeliveryState(alert, "delivery_unknown", len(smartOpsAlertRetryDelays)+1, err.Error())
 		return fmt.Errorf("failed to load administrator recipients: %w", err)
+	}
+	if len(recipients) == 0 {
+		clearSmartOpsAlertRepeatKey(alert)
+		recordSmartOpsAlertDeliveryState(alert, "skipped_unconfigured", 0, "no enabled administrator notification recipient")
+		return nil
 	}
 
 	notification := smartOpsAlertNotification(alert)
 	var firstErr error
+	deliveryAttempts := 0
 	for _, recipient := range recipients {
 		allowed, err := checkSmartOpsAlertNotificationLimit(recipient.ID, notification.Type)
 		if err != nil {
+			deliveryAttempts++
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -1063,6 +1512,7 @@ func deliverSmartOpsAlertNotification(alert SmartOpsAlert) error {
 			continue
 		}
 		if !allowed {
+			deliveryAttempts++
 			err = fmt.Errorf("notification limit exceeded for admin user %d", recipient.ID)
 			if firstErr == nil {
 				firstErr = err
@@ -1071,6 +1521,7 @@ func deliverSmartOpsAlertNotification(alert SmartOpsAlert) error {
 			continue
 		}
 		if err := retrySmartOpsAlertOperation(func() error {
+			deliveryAttempts++
 			return smartOpsAlertSendToRecipient(recipient, notification)
 		}); err != nil {
 			if firstErr == nil {
@@ -1078,6 +1529,12 @@ func deliverSmartOpsAlertNotification(alert SmartOpsAlert) error {
 			}
 			common.SysLog(fmt.Sprintf("failed to notify admin user %d for smart ops alert after retries: %s", recipient.ID, err.Error()))
 		}
+	}
+	if firstErr != nil {
+		clearSmartOpsAlertRepeatKey(alert)
+		recordSmartOpsAlertDeliveryState(alert, "failed", deliveryAttempts, firstErr.Error())
+	} else {
+		recordSmartOpsAlertDeliveryState(alert, "sent", deliveryAttempts, "")
 	}
 	return firstErr
 }
@@ -1120,13 +1577,32 @@ func loadSmartOpsAlertRecipients() ([]smartOpsAlertRecipient, error) {
 
 	recipients := make([]smartOpsAlertRecipient, 0, len(users))
 	for _, user := range users {
+		setting := user.GetSetting()
+		if !smartOpsAlertRecipientConfigured(user.Email, setting) {
+			continue
+		}
 		recipients = append(recipients, smartOpsAlertRecipient{
 			ID:      user.Id,
 			Email:   user.Email,
-			Setting: user.GetSetting(),
+			Setting: setting,
 		})
 	}
 	return recipients, nil
+}
+
+func smartOpsAlertRecipientConfigured(email string, setting dto.UserSetting) bool {
+	switch setting.NotifyType {
+	case dto.NotifyTypeWebhook:
+		return strings.TrimSpace(setting.WebhookUrl) != ""
+	case dto.NotifyTypeBark:
+		return strings.TrimSpace(setting.BarkUrl) != ""
+	case dto.NotifyTypeGotify:
+		return strings.TrimSpace(setting.GotifyUrl) != "" && strings.TrimSpace(setting.GotifyToken) != ""
+	case "", dto.NotifyTypeEmail:
+		return strings.TrimSpace(setting.NotificationEmail) != "" || strings.TrimSpace(email) != ""
+	default:
+		return false
+	}
 }
 
 // NotifyAdminUsers broadcasts an operational alert to enabled administrators

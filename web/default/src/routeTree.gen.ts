@@ -54,6 +54,7 @@ import { Route as AuthenticatedSmartOpsSystemInfoRouteImport } from './routes/_a
 import { Route as AuthenticatedSmartOpsProductionPerformanceRouteImport } from './routes/_authenticated/smart-ops/production-performance'
 import { Route as AuthenticatedSmartOpsModelPerformanceRouteImport } from './routes/_authenticated/smart-ops/model-performance'
 import { Route as AuthenticatedSmartOpsChannelPerformanceRouteImport } from './routes/_authenticated/smart-ops/channel-performance'
+import { Route as AuthenticatedSmartOpsChannelHealthRouteImport } from './routes/_authenticated/smart-ops/channel-health'
 import { Route as AuthenticatedSmartOpsAlertsRouteImport } from './routes/_authenticated/smart-ops/alerts'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
@@ -315,6 +316,12 @@ const AuthenticatedSmartOpsChannelPerformanceRoute =
     path: '/smart-ops/channel-performance',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedSmartOpsChannelHealthRoute =
+  AuthenticatedSmartOpsChannelHealthRouteImport.update({
+    id: '/smart-ops/channel-health',
+    path: '/smart-ops/channel-health',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedSmartOpsAlertsRoute =
   AuthenticatedSmartOpsAlertsRouteImport.update({
     id: '/smart-ops/alerts',
@@ -465,6 +472,7 @@ export interface FileRoutesByFullPath {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
+  '/smart-ops/channel-health': typeof AuthenticatedSmartOpsChannelHealthRoute
   '/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -529,6 +537,7 @@ export interface FileRoutesByTo {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
   '/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
+  '/smart-ops/channel-health': typeof AuthenticatedSmartOpsChannelHealthRoute
   '/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -597,6 +606,7 @@ export interface FileRoutesById {
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
   '/_authenticated/smart-ops/alerts': typeof AuthenticatedSmartOpsAlertsRoute
+  '/_authenticated/smart-ops/channel-health': typeof AuthenticatedSmartOpsChannelHealthRoute
   '/_authenticated/smart-ops/channel-performance': typeof AuthenticatedSmartOpsChannelPerformanceRoute
   '/_authenticated/smart-ops/model-performance': typeof AuthenticatedSmartOpsModelPerformanceRoute
   '/_authenticated/smart-ops/production-performance': typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -664,6 +674,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/smart-ops/alerts'
+    | '/smart-ops/channel-health'
     | '/smart-ops/channel-performance'
     | '/smart-ops/model-performance'
     | '/smart-ops/production-performance'
@@ -728,6 +739,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/models/$section'
     | '/smart-ops/alerts'
+    | '/smart-ops/channel-health'
     | '/smart-ops/channel-performance'
     | '/smart-ops/model-performance'
     | '/smart-ops/production-performance'
@@ -795,6 +807,7 @@ export interface FileRouteTypes {
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
     | '/_authenticated/smart-ops/alerts'
+    | '/_authenticated/smart-ops/channel-health'
     | '/_authenticated/smart-ops/channel-performance'
     | '/_authenticated/smart-ops/model-performance'
     | '/_authenticated/smart-ops/production-performance'
@@ -1168,6 +1181,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSmartOpsChannelPerformanceRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/smart-ops/channel-health': {
+      id: '/_authenticated/smart-ops/channel-health'
+      path: '/smart-ops/channel-health'
+      fullPath: '/smart-ops/channel-health'
+      preLoaderRoute: typeof AuthenticatedSmartOpsChannelHealthRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/smart-ops/alerts': {
       id: '/_authenticated/smart-ops/alerts'
       path: '/smart-ops/alerts'
@@ -1402,6 +1422,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
   AuthenticatedSmartOpsAlertsRoute: typeof AuthenticatedSmartOpsAlertsRoute
+  AuthenticatedSmartOpsChannelHealthRoute: typeof AuthenticatedSmartOpsChannelHealthRoute
   AuthenticatedSmartOpsChannelPerformanceRoute: typeof AuthenticatedSmartOpsChannelPerformanceRoute
   AuthenticatedSmartOpsModelPerformanceRoute: typeof AuthenticatedSmartOpsModelPerformanceRoute
   AuthenticatedSmartOpsProductionPerformanceRoute: typeof AuthenticatedSmartOpsProductionPerformanceRoute
@@ -1430,6 +1451,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
   AuthenticatedSmartOpsAlertsRoute: AuthenticatedSmartOpsAlertsRoute,
+  AuthenticatedSmartOpsChannelHealthRoute:
+    AuthenticatedSmartOpsChannelHealthRoute,
   AuthenticatedSmartOpsChannelPerformanceRoute:
     AuthenticatedSmartOpsChannelPerformanceRoute,
   AuthenticatedSmartOpsModelPerformanceRoute:

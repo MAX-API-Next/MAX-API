@@ -117,6 +117,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *type
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError
 	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
+	}
 
 	imageN := uint(1)
 	if request.N != nil {
