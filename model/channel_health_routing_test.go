@@ -96,6 +96,27 @@ func TestAbilityRoutingExcludesRuntimeDisabledChannel(t *testing.T) {
 	require.Equal(t, 2, selected)
 }
 
+func TestAbilityRoutingIgnoresRuntimeDisablementWhenAutoDisableIsOff(t *testing.T) {
+	setting := operation_setting.MonitorSetting{
+		AutoPriorityDemotionEnabled:        true,
+		TimeoutAutoDisableEnabled:          false,
+		StreamingFirstResultTimeoutSeconds: 1,
+	}
+	withChannelRoutingTestState(t, setting)
+	require.NoError(t, maxcommon.RDB.HSet(context.Background(), channelhealth.RuntimeStateKey(1), map[string]interface{}{
+		"runtime_disabled": "true",
+	}).Err())
+
+	baseHigh, baseLow := int64(100), int64(90)
+	selected, ok, err := selectChannelIdFromAbilities([]Ability{
+		{ChannelId: 1, Priority: &baseHigh, Weight: 100},
+		{ChannelId: 2, Priority: &baseLow, Weight: 100},
+	}, 0, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, selected)
+}
+
 func TestAbilityRoutingFailsOpenWhenRedisUnavailable(t *testing.T) {
 	oldSetting := *operation_setting.GetMonitorSetting()
 	oldRDB, oldEnabled := maxcommon.RDB, maxcommon.RedisEnabled

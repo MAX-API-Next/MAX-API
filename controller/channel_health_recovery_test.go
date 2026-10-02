@@ -42,11 +42,15 @@ func TestSelectChannelsForRuntimeRecoveryOnlyProbesDueEligibleChannels(t *testin
 		}).Err()
 		require.NoError(t, err)
 	}
+	require.NoError(t, common.RDB.HSet(context.Background(), channelhealth.RuntimeStateKey(5), map[string]interface{}{
+		"runtime_disabled": "false",
+	}).Err())
 	channels := []*model.Channel{
 		{Id: 1, Status: common.ChannelStatusEnabled},
 		{Id: 2, Status: common.ChannelStatusEnabled},
 		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
 		{Id: 4, Status: common.ChannelStatusAutoDisabled},
+		{Id: 5, Status: common.ChannelStatusEnabled},
 	}
 	selected := selectChannelsForRuntimeRecovery(channels)
 	require.Len(t, selected, 2)

@@ -38,6 +38,11 @@ func channelHealthRoutingEnabled() bool {
 	return setting != nil && (setting.AutoPriorityDemotionEnabled || setting.TimeoutAutoDisableEnabled)
 }
 
+func runtimeDisableRoutingEnabled() bool {
+	setting := operation_setting.GetMonitorSetting()
+	return setting != nil && setting.TimeoutAutoDisableEnabled
+}
+
 func loadChannelRuntimeStates(channelIDs []int) map[int]channelhealth.RuntimeState {
 	if !channelHealthRoutingEnabled() || len(channelIDs) == 0 {
 		return nil
@@ -109,6 +114,7 @@ func buildChannelRoutingCandidates(channels []*Channel) []channelRoutingCandidat
 		}
 	}
 	states := loadChannelRuntimeStates(channelIDs)
+	excludeRuntimeDisabled := runtimeDisableRoutingEnabled()
 	now := time.Now()
 	candidates := make([]channelRoutingCandidate, 0, len(channels))
 	for _, channel := range channels {
@@ -117,7 +123,7 @@ func buildChannelRoutingCandidates(channels []*Channel) []channelRoutingCandidat
 		}
 		priority := channel.GetPriority()
 		if state, ok := states[channel.Id]; ok {
-			if state.RuntimeDisabled {
+			if state.RuntimeDisabled && excludeRuntimeDisabled {
 				continue
 			}
 			priority = channelhealth.EffectivePriority(priority, state, now)
@@ -133,12 +139,13 @@ func buildAbilityRoutingCandidates(abilities []Ability) []abilityRoutingCandidat
 		channelIDs = append(channelIDs, ability.ChannelId)
 	}
 	states := loadChannelRuntimeStates(channelIDs)
+	excludeRuntimeDisabled := runtimeDisableRoutingEnabled()
 	now := time.Now()
 	candidates := make([]abilityRoutingCandidate, 0, len(abilities))
 	for _, ability := range abilities {
 		priority := abilityPriority(ability)
 		if state, ok := states[ability.ChannelId]; ok {
-			if state.RuntimeDisabled {
+			if state.RuntimeDisabled && excludeRuntimeDisabled {
 				continue
 			}
 			priority = channelhealth.EffectivePriority(priority, state, now)

@@ -962,7 +962,7 @@ export function ChannelHealth(): ReactElement {
                                 size='sm'
                                 disabled={recoveryMutation.isPending}
                                 onClick={() =>
-                                  void recoveryMutation.mutateAsync(
+                                  recoveryMutation.mutate(
                                     channelIdFromAlert(alert)
                                   )
                                 }

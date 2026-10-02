@@ -286,6 +286,77 @@ func TestEffectivePriorityExpiresAndClampsAtZero(t *testing.T) {
 	require.Equal(t, int64(80), EffectivePriority(100, state, time.Now()))
 	require.Equal(t, int64(100), EffectivePriority(100, state, time.Now().Add(2*time.Minute)))
 	require.Equal(t, int64(0), EffectivePriority(10, state, time.Now()))
+	require.Equal(t, int64(-25), EffectivePriority(-5, state, time.Now()))
+}
+
+func TestEvaluateTimeoutGuardPreservesPenaltyDeadlineWhenRepeatExtensionDisabled(t *testing.T) {
+	withRuntimeRedis(t)
+	setting := testRuntimeSetting()
+	setting.ExtendOnRepeatTimeout = false
+	setting.TimeoutAutoDisableCount = 100
+	now := time.Now()
+
+	first, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID:       936,
+		AttemptID:       "non-extending-first",
+		RequestMode:     RequestModeStreaming,
+		TimeoutKind:     TimeoutKindStreamingFirstResult,
+		TimeoutEligible: true,
+		AutoBan:         true,
+		ObservedAt:      now,
+	}, setting)
+	require.NoError(t, err)
+
+	second, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID:       936,
+		AttemptID:       "non-extending-repeat",
+		RequestMode:     RequestModeStreaming,
+		TimeoutKind:     TimeoutKindStreamingFirstResult,
+		TimeoutEligible: true,
+		AutoBan:         true,
+		ObservedAt:      now.Add(10 * time.Second),
+	}, setting)
+	require.NoError(t, err)
+	require.WithinDuration(t, first.State.PenaltyUntil, second.State.PenaltyUntil, time.Millisecond)
+}
+
+func TestEvaluateTimeoutGuardIgnoresTimeoutObservedBeforeRecovery(t *testing.T) {
+	withRuntimeRedis(t)
+	setting := testRuntimeSetting()
+	staleObservedAt := time.Now().Add(-time.Second)
+
+	first, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID:       936,
+		AttemptID:       "stale-before-recovery",
+		RequestMode:     RequestModeStreaming,
+		TimeoutKind:     TimeoutKindStreamingFirstResult,
+		TimeoutEligible: true,
+		AutoBan:         true,
+		ObservedAt:      staleObservedAt,
+	}, setting)
+	require.NoError(t, err)
+	require.True(t, first.Applied)
+
+	recovered, err := RestoreRuntimeState(context.Background(), 936)
+	require.NoError(t, err)
+	require.True(t, recovered.Applied)
+	require.Equal(t, "manual_recovery", recovered.State.LastEvent)
+
+	stale, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID:       936,
+		AttemptID:       "stale-after-recovery",
+		RequestMode:     RequestModeStreaming,
+		TimeoutKind:     TimeoutKindStreamingFirstResult,
+		TimeoutEligible: true,
+		AutoBan:         true,
+		ObservedAt:      staleObservedAt,
+	}, setting)
+	require.NoError(t, err)
+	require.False(t, stale.Applied)
+	require.False(t, stale.Deduplicated)
+	require.Equal(t, "manual_recovery", stale.State.LastEvent)
+	require.Zero(t, stale.State.Penalty)
+	require.False(t, stale.State.RuntimeDisabled)
 }
 
 func TestStreamIdleTimeoutDoesNotCountOrDemote(t *testing.T) {
@@ -326,6 +397,9 @@ func TestListRuntimeStatesRebuildsTheSmartOpsProjection(t *testing.T) {
 	require.Equal(t, 936, states[0].ChannelID)
 	require.Equal(t, int64(10), states[0].Penalty)
 	require.Equal(t, int64(1), states[0].TimeoutCount[RequestModeStreaming])
+	indexed, err := maxcommon.RDB.SIsMember(context.Background(), runtimeStateIndexKey, "936").Result()
+	require.NoError(t, err)
+	require.True(t, indexed)
 }
 
 func TestRecoverRuntimeStateRequiresConfiguredSuccessfulProbes(t *testing.T) {

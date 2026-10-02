@@ -959,7 +959,7 @@ func TestChannel(c *gin.Context) {
 var testAllChannelsLock sync.Mutex
 var testAllChannelsRunning bool = false
 
-func testChannels(channels []*model.Channel, testUserID int, notify bool, allowDisable bool) error {
+func testChannels(channels []*model.Channel, testUserID int, notify bool, allowDisable bool, runtimeStates map[int]channelhealth.RuntimeState) error {
 	testAllChannelsLock.Lock()
 	if testAllChannelsRunning {
 		testAllChannelsLock.Unlock()
@@ -988,7 +988,11 @@ func testChannels(channels []*model.Channel, testUserID int, notify bool, allowD
 			var runtimeState channelhealth.RuntimeState
 			var hasRuntimeState bool
 			if setting.TimeoutAutoDisableEnabled {
-				runtimeState, hasRuntimeState = loadChannelHealthRuntimeState(channel.Id)
+				if runtimeStates != nil {
+					runtimeState, hasRuntimeState = runtimeStates[channel.Id]
+				} else {
+					runtimeState, hasRuntimeState = loadChannelHealthRuntimeState(channel.Id)
+				}
 			}
 			runtimeRecoveryProbe := hasRuntimeState && runtimeState.RuntimeDisabled &&
 				(runtimeState.DisabledUntil.IsZero() || !time.Now().Before(runtimeState.DisabledUntil)) &&
@@ -1087,7 +1091,7 @@ func testAllChannels(notify bool) error {
 	if getChannelErr != nil {
 		return getChannelErr
 	}
-	return testChannels(selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll), testUserID, notify, true)
+	return testChannels(selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll), testUserID, notify, true, nil)
 }
 
 func testAutoDisabledChannels(notify bool) error {
@@ -1099,7 +1103,8 @@ func testAutoDisabledChannels(notify bool) error {
 	if getChannelErr != nil {
 		return getChannelErr
 	}
-	return testChannels(selectChannelsForRuntimeRecovery(channels), testUserID, notify, false)
+	selected, runtimeStates := selectChannelsForRuntimeRecoveryWithStates(channels)
+	return testChannels(selected, testUserID, notify, false, runtimeStates)
 }
 
 // Runtime recovery remains scheduled when the legacy all-channel test is
@@ -1109,7 +1114,7 @@ func testRuntimeDisabledChannels() error {
 	if err != nil {
 		return err
 	}
-	selected := selectChannelsForRuntimeRecovery(channels)
+	selected, runtimeStates := selectChannelsForRuntimeRecoveryWithStates(channels)
 	runtimeOnly := make([]*model.Channel, 0, len(selected))
 	for _, channel := range selected {
 		if channel.Status == common.ChannelStatusEnabled {
@@ -1123,7 +1128,7 @@ func testRuntimeDisabledChannels() error {
 	if err != nil {
 		return err
 	}
-	return testChannels(runtimeOnly, testUserID, false, false)
+	return testChannels(runtimeOnly, testUserID, false, false, runtimeStates)
 }
 
 func loadChannelHealthRuntimeState(channelID int) (channelhealth.RuntimeState, bool) {
@@ -1137,9 +1142,38 @@ func loadChannelHealthRuntimeState(channelID int) (channelhealth.RuntimeState, b
 }
 
 func selectChannelsForRuntimeRecovery(channels []*model.Channel) []*model.Channel {
+	selected, _ := selectChannelsForRuntimeRecoveryWithStates(channels)
+	return selected
+}
+
+func selectChannelsForRuntimeRecoveryWithStates(channels []*model.Channel) ([]*model.Channel, map[int]channelhealth.RuntimeState) {
 	selected := make([]*model.Channel, 0, len(channels))
 	now := time.Now()
 	setting := operation_setting.GetMonitorSetting()
+	if setting == nil {
+		return selected, nil
+	}
+	shouldLoadRuntimeStates := setting.TimeoutAutoDisableEnabled &&
+		setting.TimeoutAutoDisableRecoveryMode == operation_setting.TimeoutAutoDisableRecoveryProbe &&
+		setting.TimeoutAutoDisableDurationSeconds > 0
+	runtimeStates := make(map[int]channelhealth.RuntimeState)
+	if shouldLoadRuntimeStates {
+		candidateIDs := make([]int, 0, len(channels))
+		for _, channel := range channels {
+			if channel != nil && channel.Status != common.ChannelStatusManuallyDisabled &&
+				channel.Status != common.ChannelStatusAutoDisabled {
+				candidateIDs = append(candidateIDs, channel.Id)
+			}
+		}
+		if len(candidateIDs) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			loaded, err := channelhealth.LoadRuntimeStates(ctx, candidateIDs)
+			cancel()
+			if err == nil {
+				runtimeStates = loaded
+			}
+		}
+	}
 	for _, channel := range channels {
 		if channel == nil || channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
@@ -1148,17 +1182,16 @@ func selectChannelsForRuntimeRecovery(channels []*model.Channel) []*model.Channe
 			selected = append(selected, channel)
 			continue
 		}
-		if !setting.TimeoutAutoDisableEnabled ||
-			setting.TimeoutAutoDisableRecoveryMode != operation_setting.TimeoutAutoDisableRecoveryProbe ||
-			setting.TimeoutAutoDisableDurationSeconds <= 0 {
+		if !shouldLoadRuntimeStates {
 			continue
 		}
-		state, ok := loadChannelHealthRuntimeState(channel.Id)
-		if ok && (state.DisabledUntil.IsZero() || !now.Before(state.DisabledUntil)) {
+		state, ok := runtimeStates[channel.Id]
+		if ok && state.RuntimeDisabled &&
+			(state.DisabledUntil.IsZero() || !now.Before(state.DisabledUntil)) {
 			selected = append(selected, channel)
 		}
 	}
-	return selected
+	return selected, runtimeStates
 }
 
 // RecoverChannelHealthRuntime clears only the timeout strategy's Redis state.

@@ -24,6 +24,7 @@ const (
 	TimeoutKindFirstResponse        = "first_response"
 
 	runtimeStateKeyPrefix  = "maxapi:channel-timeout:v1:state:"
+	runtimeStateIndexKey   = "maxapi:channel-timeout:v1:index"
 	runtimeDedupeKeyPrefix = "maxapi:channel-timeout:v1:dedupe:"
 	runtimeStateTTL        = 7 * 24 * time.Hour
 	runtimeDecisionTimeout = 100 * time.Millisecond
@@ -98,6 +99,10 @@ func isCountableTimeout(kind string) bool {
 
 func isSuccessfulSample(evidence AttemptEvidence) bool {
 	return evidence.Success && evidence.TimeoutKind == TimeoutKindFirstResponse
+}
+
+func isRuntimeRecoveryEvent(event string) bool {
+	return event == "manual_recovery" || strings.HasPrefix(event, "recovery_probe_")
 }
 
 func advancedSampleGateEnabled(setting *operation_setting.MonitorSetting) bool {
@@ -263,6 +268,18 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	members, err := maxcommon.RDB.SMembers(ctx, runtimeStateIndexKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(members) > 0 {
+		return listRuntimeStatesByMembers(ctx, members)
+	}
+
+	// States written before the index was introduced are discovered once by a
+	// bounded legacy scan and added to the index below. New state transitions add
+	// their channel ID immediately after committing, so normal requests never
+	// scan the shared keyspace.
 	keys := make([]string, 0, 32)
 	var cursor uint64
 	for {
@@ -279,23 +296,49 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 	if len(keys) == 0 {
 		return []RuntimeState{}, nil
 	}
-	pipe := maxcommon.RDB.Pipeline()
-	commands := make([]*redis.StringStringMapCmd, 0, len(keys))
+	members = make([]string, 0, len(keys))
 	for _, key := range keys {
-		commands = append(commands, pipe.HGetAll(ctx, key))
+		members = append(members, strings.TrimPrefix(key, runtimeStateKeyPrefix))
+	}
+	states, err := listRuntimeStatesByMembers(ctx, members)
+	if err != nil {
+		return nil, err
+	}
+	validMembers := make([]string, 0, len(states))
+	for _, state := range states {
+		validMembers = append(validMembers, strconv.Itoa(state.ChannelID))
+	}
+	if len(validMembers) > 0 {
+		_ = maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, validMembers).Err()
+	}
+	return states, nil
+}
+
+func listRuntimeStatesByMembers(ctx context.Context, members []string) ([]RuntimeState, error) {
+	pipe := maxcommon.RDB.Pipeline()
+	commands := make([]*redis.StringStringMapCmd, 0, len(members))
+	validMembers := make([]string, 0, len(members))
+	for _, member := range members {
+		channelID, err := strconv.Atoi(strings.TrimSpace(member))
+		if err != nil || channelID <= 0 {
+			continue
+		}
+		validMembers = append(validMembers, strconv.Itoa(channelID))
+		commands = append(commands, pipe.HGetAll(ctx, runtimeStateKey(channelID)))
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return nil, err
 	}
 	states := make([]RuntimeState, 0, len(commands))
 	for index, command := range commands {
-		channelID, err := strconv.Atoi(strings.TrimPrefix(keys[index], runtimeStateKeyPrefix))
-		if err != nil || channelID <= 0 {
-			continue
-		}
+		channelID, _ := strconv.Atoi(validMembers[index])
 		fields, err := command.Result()
 		if err != nil && !errors.Is(err, redis.Nil) {
 			return nil, err
+		}
+		if len(fields) == 0 {
+			_ = maxcommon.RDB.SRem(ctx, runtimeStateIndexKey, validMembers[index]).Err()
+			continue
 		}
 		states = append(states, decodeRuntimeState(channelID, fields))
 	}
@@ -348,6 +391,11 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 		}
 		state := decodeRuntimeState(evidence.ChannelID, fields)
 		result.State = state
+		if isRuntimeRecoveryEvent(state.LastEvent) && !state.LastObservedAt.IsZero() && now.Before(state.LastObservedAt) {
+			// A timeout observed before the last recovery must not be allowed to
+			// reapply a penalty after the recovery transaction wins the watch.
+			return nil
+		}
 		if deduped > 0 {
 			result.Deduplicated = true
 			return nil
@@ -386,7 +434,8 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 			state.Penalty = int64(setting.PriorityDeduction)
 			if setting.RecoveryMode == operation_setting.RecoveryModeAutomatic {
 				until := now.Add(time.Duration(setting.PenaltyCooldownSeconds) * time.Second)
-				if setting.ExtendOnRepeatTimeout && previouslyActive && until.Before(state.PenaltyUntil) {
+				if previouslyActive && !state.PenaltyUntil.IsZero() &&
+					(!setting.ExtendOnRepeatTimeout || until.Before(state.PenaltyUntil)) {
 					until = state.PenaltyUntil
 				}
 				state.PenaltyUntil = until
@@ -444,6 +493,7 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 		}
 		return EvaluationResult{State: emptyRuntimeState(evidence.ChannelID)}, err
 	}
+	_ = maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, strconv.Itoa(evidence.ChannelID)).Err()
 	return result, nil
 }
 
@@ -558,6 +608,7 @@ func RecoverRuntimeState(ctx context.Context, channelID int, probeID string, suc
 		}
 		return EvaluationResult{State: emptyRuntimeState(channelID)}, err
 	}
+	_ = maxcommon.RDB.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID)).Err()
 	return result, nil
 }
 
@@ -607,6 +658,7 @@ func RestoreRuntimeState(ctx context.Context, channelID int) (EvaluationResult, 
 		}
 		return EvaluationResult{State: emptyRuntimeState(channelID)}, err
 	}
+	_ = maxcommon.RDB.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID)).Err()
 	return result, nil
 }
 
@@ -621,7 +673,7 @@ func EffectivePriority(base int64, state RuntimeState, now time.Time) int64 {
 		return base
 	}
 	effective := base - state.Penalty
-	if effective < 0 {
+	if effective < 0 && base >= 0 {
 		return 0
 	}
 	return effective
