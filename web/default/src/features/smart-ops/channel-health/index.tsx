@@ -66,6 +66,16 @@ import type { SmartOpsAlert } from '../types'
 
 const ALERT_POLL_INTERVAL_MS = 30000
 
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  sending: 'Sending',
+  sent: 'Sent',
+  skipped_repeat: 'Skipped (repeat interval)',
+  skipped_unconfigured: 'Skipped (not configured)',
+  failed: 'Delivery failed',
+  delivery_unknown: 'Delivery status unknown',
+}
+
 const DEFAULT_OPTION_VALUES = {
   'monitor_setting.auto_priority_demotion_enabled': false,
   'monitor_setting.streaming_first_result_timeout_seconds': 0,
@@ -933,7 +943,14 @@ export function ChannelHealth(): ReactElement {
                             </div>
                             {alert.delivery_status && (
                               <div className='text-muted-foreground mt-1 text-xs'>
-                                {t('Delivery status')}: {alert.delivery_status}
+                                {t('Delivery status')}:{' '}
+                                {DELIVERY_STATUS_LABELS[alert.delivery_status]
+                                  ? t(
+                                      DELIVERY_STATUS_LABELS[
+                                        alert.delivery_status
+                                      ]
+                                    )
+                                  : alert.delivery_status}
                                 {alert.delivery_attempts != null
                                   ? ` (${alert.delivery_attempts})`
                                   : ''}

@@ -241,6 +241,30 @@ func TestNativeChatStreamFlushesFirstPayloadWithoutWaitingForAnotherFrame(t *tes
 	require.Contains(t, recorder.Body.String(), "first")
 }
 
+func TestOaiStreamHandlerCountsBufferedFirstChunkAsFirstResponse(t *testing.T) {
+	originalSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		StreamingFirstResultTimeoutSeconds: 1,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = originalSetting })
+
+	c, recorder, info := newChatStreamTest(t)
+	info.RelayMode = relayconstant.RelayModeCompletions
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"id\":\"cmpl-1\",\"object\":\"text_completion\",\"model\":\"gpt-test\",\"choices\":[{\"text\":\"first\",\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		time.Sleep(1200 * time.Millisecond)
+		_ = writer.Close()
+	}()
+
+	_, apiErr := OaiStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Body: reader})
+	require.Nil(t, apiErr)
+	require.True(t, info.HasRecordedChannelFirstResponse())
+	require.NotEqual(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
+	require.Contains(t, recorder.Body.String(), "first")
+}
+
 func TestNativeChatStreamPingNeverAllowsRetryAfterCommit(t *testing.T) {
 	c, _, info := newChatStreamTest(t)
 	info.DisablePing = false

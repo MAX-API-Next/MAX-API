@@ -149,6 +149,11 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
+			} else {
+				// This handler retains the latest event so the terminal usage frame
+				// can be handled separately. Treat the accepted first event as the
+				// first result so the scanner does not wait for a second frame.
+				sr.MarkDelivered()
 			}
 		}
 	})

@@ -561,7 +561,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if info != nil && !info.IsStream && resp.Body != nil {
 		setting := operation_setting.GetMonitorSetting()
 		if setting != nil && setting.NonStreamingResponseTimeoutSeconds > 0 && !isServerSentEventsResponse(resp) {
-			resp.Body = newTimeoutTrackingBody(resp.Body, info, time.Duration(setting.NonStreamingResponseTimeoutSeconds)*time.Second)
+			budget := common.RemainingChannelFirstResponseTimeout(
+				info.ChannelAttemptStartTime(),
+				time.Duration(setting.NonStreamingResponseTimeoutSeconds)*time.Second,
+				time.Now(),
+			)
+			resp.Body = newTimeoutTrackingBody(resp.Body, info, budget)
 		}
 	}
 

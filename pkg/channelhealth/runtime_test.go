@@ -78,6 +78,32 @@ func TestEvaluateTimeoutGuardAppliesPenaltyAndDeduplicates(t *testing.T) {
 	require.Equal(t, int64(1), duplicate.State.TimeoutCount[RequestModeStreaming])
 }
 
+func TestEvaluateTimeoutGuardSkipsInactiveEvidenceWrite(t *testing.T) {
+	withRuntimeRedis(t)
+	setting := testRuntimeSetting()
+	setting.StreamingFirstResultTimeoutSeconds = 0
+
+	result, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID:   936,
+		AttemptID:   "inactive-stream-success",
+		RequestMode: RequestModeStreaming,
+		TimeoutKind: TimeoutKindFirstResponse,
+		Success:     true,
+		AutoBan:     true,
+		ObservedAt:  time.Now(),
+	}, setting)
+	require.NoError(t, err)
+	require.False(t, result.Applied)
+	require.False(t, result.Deduplicated)
+
+	exists, err := maxcommon.RDB.Exists(context.Background(), RuntimeStateKey(936)).Result()
+	require.NoError(t, err)
+	require.Zero(t, exists)
+	indexed, err := maxcommon.RDB.SIsMember(context.Background(), runtimeStateIndexKey, "936").Result()
+	require.NoError(t, err)
+	require.False(t, indexed)
+}
+
 func TestEvaluateTimeoutGuardRetriesConcurrentRedisTransactions(t *testing.T) {
 	withRuntimeRedis(t)
 	setting := testRuntimeSetting()

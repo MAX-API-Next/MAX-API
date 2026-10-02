@@ -538,6 +538,9 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 				result.Applied = true
 			}
 		}
+		if !shouldCount && !shouldRecordSample && !result.Applied {
+			return nil
+		}
 
 		state.Generation++
 		state.LastEvent = evidence.TimeoutKind
