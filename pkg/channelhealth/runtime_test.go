@@ -359,6 +359,60 @@ func TestEvaluateTimeoutGuardIgnoresTimeoutObservedBeforeRecovery(t *testing.T) 
 	require.False(t, stale.State.RuntimeDisabled)
 }
 
+func TestEvaluateTimeoutGuardKeepsRecoveryBoundaryAfterNewSample(t *testing.T) {
+	withRuntimeRedis(t)
+	setting := testRuntimeSetting()
+	setting.TimeoutAutoDisableMinimumSamples = 10
+	oldEvidence := AttemptEvidence{
+		ChannelID: 936, AttemptID: "initial", RequestMode: RequestModeStreaming,
+		TimeoutKind: TimeoutKindStreamingFirstResult, TimeoutEligible: true, AutoBan: true,
+		ObservedAt: time.Now().Add(-time.Second),
+	}
+	_, err := EvaluateTimeoutGuard(context.Background(), oldEvidence, setting)
+	require.NoError(t, err)
+	_, err = RestoreRuntimeState(context.Background(), 936)
+	require.NoError(t, err)
+	newSample, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+		ChannelID: 936, AttemptID: "new-success", RequestMode: RequestModeStreaming,
+		TimeoutKind: TimeoutKindFirstResponse, Success: true, AutoBan: true, ObservedAt: time.Now(),
+	}, setting)
+	require.NoError(t, err)
+	oldEvidence.AttemptID = "delayed-old-timeout"
+	stale, err := EvaluateTimeoutGuard(context.Background(), oldEvidence, setting)
+	require.NoError(t, err)
+	require.False(t, stale.Applied)
+	require.Equal(t, newSample.State.Generation, stale.State.Generation)
+	require.True(t, newSample.State.LastObservedAt.Equal(stale.State.LastObservedAt))
+	require.Zero(t, stale.State.TimeoutCount[RequestModeStreaming])
+	require.Zero(t, stale.State.Penalty)
+}
+
+func TestEvaluateTimeoutGuardTTLIncludesActiveDeadlines(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(disabled), func(t *testing.T) {
+			withRuntimeRedis(t)
+			setting := testRuntimeSetting()
+			setting.PenaltyCooldownSeconds = 30 * 24 * 3600
+			setting.TimeoutAutoDisableDurationSeconds = 30 * 24 * 3600
+			setting.TimeoutAutoDisableCount = 1
+			setting.TimeoutAutoDisableEnabled = disabled
+			result, err := EvaluateTimeoutGuard(context.Background(), AttemptEvidence{
+				ChannelID: 936, AttemptID: "long-deadline", RequestMode: RequestModeStreaming,
+				TimeoutKind: TimeoutKindStreamingFirstResult, TimeoutEligible: true, AutoBan: true,
+				ObservedAt: time.Now(),
+			}, setting)
+			require.NoError(t, err)
+			deadline := result.State.PenaltyUntil
+			if disabled {
+				deadline = result.State.DisabledUntil
+			}
+			ttl, err := maxcommon.RDB.TTL(context.Background(), RuntimeStateKey(936)).Result()
+			require.NoError(t, err)
+			require.Greater(t, ttl, time.Until(deadline))
+		})
+	}
+}
+
 func TestStreamIdleTimeoutDoesNotCountOrDemote(t *testing.T) {
 	withRuntimeRedis(t)
 	setting := testRuntimeSetting()

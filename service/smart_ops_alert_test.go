@@ -10,8 +10,38 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/channelhealth"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetSmartOpsAlertsRemovesStaleLocalChannelAlertAfterRuntimeRead(t *testing.T) {
+	server := miniredis.RunT(t)
+	oldRDB, oldEnabled := common.RDB, common.RedisEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB, common.RedisEnabled = oldRDB, oldEnabled
+	})
+	oldActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.Lock()
+	smartOpsAlertMonitor.active = map[string]SmartOpsAlert{
+		channelHealthPriorityAlertKey(936): {Key: channelHealthPriorityAlertKey(936), Status: smartOpsAlertStatusFiring},
+	}
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = oldActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	require.Empty(t, GetSmartOpsAlerts())
+	smartOpsAlertMonitor.Lock()
+	_, stillActive := smartOpsAlertMonitor.active[channelHealthPriorityAlertKey(936)]
+	smartOpsAlertMonitor.Unlock()
+	require.False(t, stillActive)
+}
 
 func TestChannelHealthRuntimeTransitionProjectsAndNotifies(t *testing.T) {
 	originalSender := smartOpsAlertNotificationSender

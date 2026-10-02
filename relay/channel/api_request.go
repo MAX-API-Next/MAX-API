@@ -28,6 +28,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type streamingHeaderTransportKey struct {
+	base    *http.Transport
+	timeout time.Duration
+}
+
+var streamingHeaderTransportCache sync.Map
+
 // applyUpstreamBodyMetadata restores metadata hidden when http.NewRequest
 // wraps an arbitrary reader in req.Body.
 func applyUpstreamBodyMetadata(req *http.Request, body io.Reader, info *common.RelayInfo) {
@@ -596,14 +603,7 @@ func clientWithStreamingHeaderTimeout(client *http.Client, info *common.RelayInf
 	if setting == nil || setting.StreamingFirstResultTimeoutSeconds <= 0 {
 		return client
 	}
-	remaining := common.RemainingChannelFirstResponseTimeout(
-		info.ChannelAttemptStartTime(),
-		time.Duration(setting.StreamingFirstResultTimeoutSeconds)*time.Second,
-		time.Now(),
-	)
-	if remaining <= 0 {
-		return client
-	}
+	configured := time.Duration(setting.StreamingFirstResultTimeoutSeconds) * time.Second
 
 	transport, ok := client.Transport.(*http.Transport)
 	if client.Transport == nil {
@@ -615,12 +615,21 @@ func clientWithStreamingHeaderTimeout(client *http.Client, info *common.RelayInf
 		// would also terminate the body after a successful first response.
 		return client
 	}
-	clonedTransport := transport.Clone()
-	if clonedTransport.ResponseHeaderTimeout == 0 || remaining < clonedTransport.ResponseHeaderTimeout {
-		clonedTransport.ResponseHeaderTimeout = remaining
+	effective := configured
+	if transport.ResponseHeaderTimeout > 0 && transport.ResponseHeaderTimeout < effective {
+		effective = transport.ResponseHeaderTimeout
 	}
+	cacheKey := streamingHeaderTransportKey{base: transport, timeout: effective}
+	if cached, ok := streamingHeaderTransportCache.Load(cacheKey); ok {
+		clone := *client
+		clone.Transport = cached.(*http.Transport)
+		return &clone
+	}
+	clonedTransport := transport.Clone()
+	clonedTransport.ResponseHeaderTimeout = effective
+	actual, _ := streamingHeaderTransportCache.LoadOrStore(cacheKey, clonedTransport)
 	clone := *client
-	clone.Transport = clonedTransport
+	clone.Transport = actual.(*http.Transport)
 	return &clone
 }
 

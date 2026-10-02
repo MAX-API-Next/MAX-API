@@ -495,6 +495,7 @@ func GetSmartOpsAlerts() []SmartOpsAlert {
 			if strings.HasPrefix(key, "channel_timeout_") {
 				if _, ok := runtimeKeys[key]; !ok {
 					delete(alertsByKey, key)
+					delete(smartOpsAlertMonitor.active, key)
 				}
 			}
 		}

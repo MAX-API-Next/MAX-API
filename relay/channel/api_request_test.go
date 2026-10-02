@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientWithStreamingHeaderTimeoutUsesRemainingAttemptBudget(t *testing.T) {
+func TestClientWithStreamingHeaderTimeoutCachesTransportByConfiguredBudget(t *testing.T) {
 	originalSetting := *operation_setting.GetMonitorSetting()
 	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
 		StreamingFirstResultTimeoutSeconds: 1,
@@ -33,18 +33,17 @@ func TestClientWithStreamingHeaderTimeoutUsesRemainingAttemptBudget(t *testing.T
 	info := &relaycommon.RelayInfo{
 		IsStream: true,
 	}
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	info.InitChannelMeta(ctx)
-	time.Sleep(400 * time.Millisecond)
 
 	cloned := clientWithStreamingHeaderTimeout(client, info)
+	clonedAgain := clientWithStreamingHeaderTimeout(client, info)
 	require.NotSame(t, client, cloned)
+	require.NotSame(t, client, clonedAgain)
 	clonedTransport, ok := cloned.Transport.(*http.Transport)
 	require.True(t, ok)
-	require.Greater(t, clonedTransport.ResponseHeaderTimeout, 500*time.Millisecond)
-	require.Less(t, clonedTransport.ResponseHeaderTimeout, 700*time.Millisecond)
+	clonedAgainTransport, ok := clonedAgain.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Same(t, clonedTransport, clonedAgainTransport)
+	require.Equal(t, time.Second, clonedTransport.ResponseHeaderTimeout)
 	require.Equal(t, 5*time.Second, transport.ResponseHeaderTimeout)
 }
 

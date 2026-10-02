@@ -941,11 +941,23 @@ func (info *RelayInfo) recordChannelHealthSuccess() {
 		AutoBan:     info.ChannelAutoBan,
 		ObservedAt:  time.Now(),
 	}
-	go func() {
+	go func(evidence channelhealth.AttemptEvidence, setting operation_setting.MonitorSetting) {
 		decisionContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_, _ = channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, &settingSnapshot)
-	}()
+		result, err := channelhealth.EvaluateTimeoutGuard(decisionContext, evidence, &setting)
+		if err != nil || result.Transition == "" {
+			return
+		}
+		common.PublishChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+			ChannelID:       evidence.ChannelID,
+			Transition:      result.Transition,
+			Penalty:         result.State.Penalty,
+			PenaltyUntil:    result.State.PenaltyUntil,
+			RuntimeDisabled: result.State.RuntimeDisabled,
+			DisabledUntil:   result.State.DisabledUntil,
+			ObservedAt:      result.State.LastObservedAt,
+		})
+	}(evidence, settingSnapshot)
 }
 
 // RecordChannelTimeout records a confirmed timeout outcome for the current

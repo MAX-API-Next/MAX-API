@@ -33,6 +33,8 @@ const (
 	runtimeWatchAttempts         = 32
 )
 
+const removeStaleRuntimeMemberScript = `if redis.call("EXISTS", KEYS[1]) == 0 then return redis.call("SREM", KEYS[2], ARGV[1]) end return 0`
+
 var ErrRuntimeUnavailable = errors.New("channel timeout runtime is unavailable")
 
 type AttemptEvidence struct {
@@ -63,6 +65,7 @@ type RuntimeState struct {
 	LastTimeoutMode           string
 	LastObservedAt            time.Time
 	RecoveryProbeSuccessCount int64
+	RecoveryWatermark         time.Time
 }
 
 type EvaluationResult struct {
@@ -150,6 +153,13 @@ func decodeRuntimeState(channelID int, fields map[string]string) RuntimeState {
 	state.LastTimeoutMode = normalizeRuntimeTimeoutMode(fields["last_timeout_mode"])
 	state.LastObservedAt = parseTime(fields["last_observed_at"])
 	state.RecoveryProbeSuccessCount = parseInt64(fields["recovery_probe_success_count"])
+	state.RecoveryWatermark = parseTime(fields["recovery_watermark"])
+	if state.RecoveryWatermark.IsZero() && isRuntimeRecoveryEvent(state.LastEvent) {
+		// Backfill the durable boundary for states written before the watermark
+		// field existed; the last recovery observation is the safest available
+		// lower bound.
+		state.RecoveryWatermark = state.LastObservedAt
+	}
 	for _, mode := range []string{RequestModeStreaming, RequestModeNonStreaming, "combined"} {
 		state.TimeoutCount[mode] = parseInt64(fields["timeout_count_"+mode])
 		state.SampleCount[mode] = parseInt64(fields["sample_count_"+mode])
@@ -171,6 +181,7 @@ func encodeRuntimeState(state RuntimeState) map[string]interface{} {
 		"last_timeout_mode":            state.LastTimeoutMode,
 		"last_observed_at":             formatTime(state.LastObservedAt),
 		"recovery_probe_success_count": strconv.FormatInt(state.RecoveryProbeSuccessCount, 10),
+		"recovery_watermark":           formatTime(state.RecoveryWatermark),
 	}
 	for _, mode := range []string{RequestModeStreaming, RequestModeNonStreaming, "combined"} {
 		fields["timeout_count_"+mode] = strconv.FormatInt(state.TimeoutCount[mode], 10)
@@ -382,7 +393,8 @@ func listRuntimeStatesByMembers(ctx context.Context, members []string) ([]Runtim
 			return nil, err
 		}
 		if len(fields) == 0 {
-			_ = maxcommon.RDB.SRem(ctx, runtimeStateIndexKey, validMembers[index]).Err()
+			_ = maxcommon.RDB.Eval(ctx, removeStaleRuntimeMemberScript,
+				[]string{runtimeStateKey(channelID), runtimeStateIndexKey}, validMembers[index]).Err()
 			continue
 		}
 		states = append(states, decodeRuntimeState(channelID, fields))
@@ -436,9 +448,10 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 		}
 		state := decodeRuntimeState(evidence.ChannelID, fields)
 		result.State = state
-		if isRuntimeRecoveryEvent(state.LastEvent) && !state.LastObservedAt.IsZero() && now.Before(state.LastObservedAt) {
+		if !state.RecoveryWatermark.IsZero() && now.Before(state.RecoveryWatermark) {
 			// A timeout observed before the last recovery must not be allowed to
-			// reapply a penalty after the recovery transaction wins the watch.
+			// reapply a penalty after the recovery transaction wins the watch,
+			// even when a newer success sample has replaced LastEvent.
 			return nil
 		}
 		if deduped > 0 {
@@ -528,7 +541,7 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 			state.Penalty > 0 && setting.RecoveryMode == operation_setting.RecoveryModeManual {
 			pipe.Persist(ctx, key)
 		} else {
-			pipe.Expire(ctx, key, runtimeStateTTL)
+			pipe.Expire(ctx, key, runtimeStateTTLFor(state, now))
 		}
 		_, err = pipe.Exec(ctx)
 		return err
@@ -547,6 +560,21 @@ func boundedRuntimeContext(ctx context.Context) (context.Context, context.Cancel
 		ctx = context.Background()
 	}
 	return context.WithTimeout(ctx, runtimeDecisionTimeout)
+}
+
+func runtimeStateTTLFor(state RuntimeState, now time.Time) time.Duration {
+	ttl := runtimeStateTTL
+	for _, until := range []time.Time{state.PenaltyUntil, state.DisabledUntil} {
+		if until.IsZero() || !until.After(now) {
+			continue
+		}
+		// Keep a small grace period so Redis' whole-second TTL precision cannot
+		// remove an active penalty or disablement at its exact deadline.
+		if remaining := until.Sub(now) + time.Hour; remaining > ttl {
+			ttl = remaining
+		}
+	}
+	return ttl
 }
 
 // watchRuntimeState retries optimistic Redis transactions that lost a
@@ -628,6 +656,7 @@ func RecoverRuntimeState(ctx context.Context, channelID int, probeID string, suc
 				state.PenaltyUntil = time.Time{}
 				state.RecoveryProbeSuccessCount = 0
 				state.LastEvent = "recovery_probe_succeeded"
+				state.RecoveryWatermark = now
 				result.Transition = "runtime_recovered"
 				result.Applied = true
 			} else {
@@ -644,7 +673,7 @@ func RecoverRuntimeState(ctx context.Context, channelID int, probeID string, suc
 		pipe.HSet(decisionCtx, key, encodeRuntimeState(state))
 		pipe.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID))
 		pipe.Set(decisionCtx, dedupeKey, "1", probeTTL)
-		pipe.Expire(decisionCtx, key, runtimeStateTTL)
+		pipe.Expire(decisionCtx, key, runtimeStateTTLFor(state, now))
 		_, err = pipe.Exec(decisionCtx)
 		return err
 	})
@@ -688,13 +717,14 @@ func RestoreRuntimeState(ctx context.Context, channelID int) (EvaluationResult, 
 		state.Generation++
 		state.LastEvent = "manual_recovery"
 		state.LastObservedAt = time.Now()
+		state.RecoveryWatermark = state.LastObservedAt
 		result.State = state
 		result.Transition = "runtime_recovered"
 		result.Applied = true
 		pipe := tx.TxPipeline()
 		pipe.HSet(decisionCtx, key, encodeRuntimeState(state))
 		pipe.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID))
-		pipe.Expire(decisionCtx, key, runtimeStateTTL)
+		pipe.Expire(decisionCtx, key, runtimeStateTTLFor(state, state.LastObservedAt))
 		_, err = pipe.Exec(decisionCtx)
 		return err
 	})

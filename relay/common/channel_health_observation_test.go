@@ -144,3 +144,51 @@ func TestRelayInfoChannelTestDoesNotRecordHealthEvidence(t *testing.T) {
 	require.Zero(t, state.Penalty)
 	require.Zero(t, state.TimeoutCount[channelhealth.RequestModeStreaming])
 }
+
+func TestRelayInfoSuccessSamplePublishesDisableTransition(t *testing.T) {
+	server := miniredis.RunT(t)
+	oldRDB, oldEnabled := maxcommon.RDB, maxcommon.RedisEnabled
+	maxcommon.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	maxcommon.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = maxcommon.RDB.Close()
+		maxcommon.RDB, maxcommon.RedisEnabled = oldRDB, oldEnabled
+	})
+
+	oldSetting := *operation_setting.GetMonitorSetting()
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		TimeoutAutoDisableEnabled:          true,
+		TimeoutAutoDisableCount:            1,
+		TimeoutAutoDisableMinimumSamples:   2,
+		StreamingFirstResultTimeoutSeconds: 1,
+	}
+	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldSetting })
+
+	first, err := channelhealth.EvaluateTimeoutGuard(context.Background(), channelhealth.AttemptEvidence{
+		ChannelID: 936, AttemptID: "timeout-before-success", RequestMode: channelhealth.RequestModeStreaming,
+		TimeoutKind: channelhealth.TimeoutKindStreamingFirstResult, TimeoutEligible: true, AutoBan: true,
+		ObservedAt: time.Now().Add(-time.Second),
+	}, operation_setting.GetMonitorSetting())
+	require.NoError(t, err)
+	require.False(t, first.State.RuntimeDisabled)
+
+	transitions := make(chan maxcommon.ChannelHealthRuntimeTransition, 1)
+	maxcommon.SetChannelHealthRuntimeTransitionObserver(func(transition maxcommon.ChannelHealthRuntimeTransition) {
+		transitions <- transition
+	})
+	t.Cleanup(func() { maxcommon.SetChannelHealthRuntimeTransitionObserver(nil) })
+	info := &RelayInfo{
+		IsStream:                true,
+		channelAttemptStartTime: time.Now(),
+		ChannelMeta:             &ChannelMeta{ChannelId: 936, ChannelAutoBan: true},
+	}
+	info.recordChannelHealthSuccess()
+
+	select {
+	case transition := <-transitions:
+		require.Equal(t, "timeout_auto_disabled", transition.Transition)
+		require.True(t, transition.RuntimeDisabled)
+	case <-time.After(time.Second):
+		t.Fatal("success sample did not publish its runtime transition")
+	}
+}
