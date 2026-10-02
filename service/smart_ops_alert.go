@@ -1216,6 +1216,7 @@ type smartOpsAlertDeliveryProjection struct {
 	status   string
 	attempts int
 	detail   string
+	eventAt  time.Time
 }
 
 var smartOpsAlertDeliveryProjectionQueue struct {
@@ -1228,7 +1229,7 @@ func startSmartOpsAlertDeliveryProjectionWorker() {
 		smartOpsAlertDeliveryProjectionQueue.queue = make(chan smartOpsAlertDeliveryProjection, smartOpsAlertQueueSize)
 		go func() {
 			for projection := range smartOpsAlertDeliveryProjectionQueue.queue {
-				recordSmartOpsAlertDeliveryState(projection.alert, projection.status, projection.attempts, projection.detail)
+				recordSmartOpsAlertDeliveryStateAt(projection.alert, projection.status, projection.attempts, projection.detail, projection.eventAt)
 			}
 		}()
 	})
@@ -1330,10 +1331,15 @@ func enqueueSmartOpsAlertNotification(alert SmartOpsAlert) {
 	})
 
 	if !smartOpsAlertNotificationQueue.pool.enqueue(alert) {
+		eventAt := alert.ObservedAt
+		if eventAt.IsZero() {
+			eventAt = time.Now()
+		}
 		if !enqueueSmartOpsAlertDeliveryProjection(smartOpsAlertDeliveryProjection{
-			alert:  alert,
-			status: "failed",
-			detail: "notification_queue_full",
+			alert:   alert,
+			status:  "failed",
+			detail:  "notification_queue_full",
+			eventAt: eventAt,
 		}) {
 			// Both queues are intentionally bounded. Losing this optional
 			// diagnostic projection is preferable to creating an unbounded
@@ -1406,10 +1412,36 @@ func clearSmartOpsAlertRepeatKey(alert SmartOpsAlert) {
 	_, _ = common.RDB.Eval(ctx, smartOpsAlertRepeatReleaseScript, []string{smartOpsAlertRepeatKey(alert)}, alert.repeatLockToken).Result()
 }
 
+func smartOpsAlertDeliveryStatusRank(status string) int {
+	switch status {
+	case "queued":
+		return 10
+	case "sending":
+		return 20
+	case "sent", "skipped_unconfigured":
+		return 40
+	case "skipped_repeat":
+		return 50
+	default:
+		return 30
+	}
+}
+
 // recordSmartOpsAlertDeliveryState stores a bounded delivery projection in
 // Redis. It is diagnostic and recoverable; failures must never change the
-// alert transition or block the notification worker.
+// alert transition or block the notification worker. Status updates use the
+// source observation time and a phase rank so an older queued/failed event
+// cannot overwrite a newer terminal state when projection queues finish out of
+// order.
 func recordSmartOpsAlertDeliveryState(alert SmartOpsAlert, status string, attempts int, detail string) {
+	eventAt := alert.ObservedAt
+	if eventAt.IsZero() {
+		eventAt = time.Now()
+	}
+	recordSmartOpsAlertDeliveryStateAt(alert, status, attempts, detail, eventAt)
+}
+
+func recordSmartOpsAlertDeliveryStateAt(alert SmartOpsAlert, status string, attempts int, detail string, eventAt time.Time) {
 	if !common.RedisEnabled || common.RDB == nil || status == "" {
 		return
 	}
@@ -1419,21 +1451,42 @@ func recordSmartOpsAlertDeliveryState(alert SmartOpsAlert, status string, attemp
 	if len(detail) > 512 {
 		detail = detail[:512]
 	}
+	if eventAt.IsZero() {
+		eventAt = time.Now()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), smartOpsAlertDeliveryTimeout)
 	defer cancel()
+	key := smartOpsAlertDeliveryKey(alert)
 	fields := map[string]interface{}{
-		"alert_key":       alert.Key,
-		"alert_status":    alert.Status,
-		"alert_node":      alert.Node,
-		"delivery_status": status,
-		"attempts":        strconv.Itoa(attempts),
-		"error":           detail,
-		"updated_at":      time.Now().UTC().Format(time.RFC3339Nano),
+		"alert_key":            alert.Key,
+		"alert_status":         alert.Status,
+		"alert_node":           alert.Node,
+		"delivery_status":      status,
+		"attempts":             strconv.Itoa(attempts),
+		"error":                detail,
+		"delivery_event_at":    strconv.FormatInt(eventAt.UnixMilli(), 10),
+		"delivery_status_rank": strconv.Itoa(smartOpsAlertDeliveryStatusRank(status)),
+		"updated_at":           time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	pipe := common.RDB.TxPipeline()
-	pipe.HSet(ctx, smartOpsAlertDeliveryKey(alert), fields)
-	pipe.Expire(ctx, smartOpsAlertDeliveryKey(alert), smartOpsAlertDeliveryTTL)
-	_, _ = pipe.Exec(ctx)
+	_ = common.RDB.Watch(ctx, func(tx *redis.Tx) error {
+		current, err := tx.HMGet(ctx, key, "delivery_event_at", "delivery_status_rank").Result()
+		if err != nil {
+			return err
+		}
+		currentEventAt, _ := strconv.ParseInt(fmt.Sprint(current[0]), 10, 64)
+		currentRank, _ := strconv.Atoi(fmt.Sprint(current[1]))
+		incomingEventAt := eventAt.UnixMilli()
+		incomingRank := smartOpsAlertDeliveryStatusRank(status)
+		if currentEventAt > incomingEventAt ||
+			(currentEventAt == incomingEventAt && currentRank >= incomingRank) {
+			return nil
+		}
+		pipe := tx.TxPipeline()
+		pipe.HSet(ctx, key, fields)
+		pipe.Expire(ctx, key, smartOpsAlertDeliveryTTL)
+		_, err = pipe.Exec(ctx)
+		return err
+	}, key)
 }
 
 func loadSmartOpsAlertDeliveryState(alert *SmartOpsAlert) {

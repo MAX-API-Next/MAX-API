@@ -402,6 +402,36 @@ func TestListRuntimeStatesRebuildsTheSmartOpsProjection(t *testing.T) {
 	require.True(t, indexed)
 }
 
+func TestListRuntimeStatesMarksLegacyScanComplete(t *testing.T) {
+	withRuntimeRedis(t)
+	key := RuntimeStateKey(937)
+	_, err := maxcommon.RDB.HSet(context.Background(), key, map[string]interface{}{
+		"channel_id": "937",
+		"penalty":    "5",
+	}).Result()
+	require.NoError(t, err)
+
+	states, err := ListRuntimeStates(context.Background())
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, 937, states[0].ChannelID)
+	migrated, err := maxcommon.RDB.Exists(context.Background(), runtimeStateIndexMigratedKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), migrated)
+	require.NoError(t, maxcommon.RDB.SRem(context.Background(), runtimeStateIndexKey, "937").Err())
+
+	// A stray legacy-shaped key does not restart a full keyspace scan after the
+	// migration marker has been recorded.
+	_, err = maxcommon.RDB.HSet(context.Background(), RuntimeStateKey(938), map[string]interface{}{
+		"channel_id": "938",
+		"penalty":    "7",
+	}).Result()
+	require.NoError(t, err)
+	states, err = ListRuntimeStates(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, states)
+}
+
 func TestRecoverRuntimeStateRequiresConfiguredSuccessfulProbes(t *testing.T) {
 	withRuntimeRedis(t)
 	setting := testRuntimeSetting()

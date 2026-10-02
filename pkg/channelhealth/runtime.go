@@ -23,12 +23,13 @@ const (
 	TimeoutKindStreamIdle           = "stream_idle_timeout"
 	TimeoutKindFirstResponse        = "first_response"
 
-	runtimeStateKeyPrefix  = "maxapi:channel-timeout:v1:state:"
-	runtimeStateIndexKey   = "maxapi:channel-timeout:v1:index"
-	runtimeDedupeKeyPrefix = "maxapi:channel-timeout:v1:dedupe:"
-	runtimeStateTTL        = 7 * 24 * time.Hour
-	runtimeDecisionTimeout = 100 * time.Millisecond
-	runtimeWatchAttempts   = 32
+	runtimeStateKeyPrefix        = "maxapi:channel-timeout:v1:state:"
+	runtimeStateIndexKey         = "maxapi:channel-timeout:v1:index"
+	runtimeStateIndexMigratedKey = "maxapi:channel-timeout:v1:index:migrated"
+	runtimeDedupeKeyPrefix       = "maxapi:channel-timeout:v1:dedupe:"
+	runtimeStateTTL              = 7 * 24 * time.Hour
+	runtimeDecisionTimeout       = 100 * time.Millisecond
+	runtimeWatchAttempts         = 32
 )
 
 var ErrRuntimeUnavailable = errors.New("channel timeout runtime is unavailable")
@@ -275,13 +276,22 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 	if len(members) > 0 {
 		return listRuntimeStatesByMembers(ctx, members)
 	}
+	migrated, err := maxcommon.RDB.Exists(ctx, runtimeStateIndexMigratedKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	if migrated > 0 {
+		return []RuntimeState{}, nil
+	}
 
-	// States written before the index was introduced are discovered once by a
-	// bounded legacy scan and added to the index below. New state transitions add
-	// their channel ID immediately after committing, so normal requests never
-	// scan the shared keyspace.
+	// States written before the index was introduced are discovered by a bounded
+	// legacy scan and added to the index below. A complete scan records a marker;
+	// an interrupted scan remains eligible for a later migration attempt. New
+	// state transitions add their channel ID in the same Redis transaction, so
+	// normal requests never scan the shared keyspace after migration completes.
 	keys := make([]string, 0, 32)
 	var cursor uint64
+	scanComplete := false
 	for {
 		batch, next, err := maxcommon.RDB.Scan(ctx, cursor, runtimeStateKeyPrefix+"*", 200).Result()
 		if err != nil {
@@ -289,11 +299,20 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 		}
 		keys = append(keys, batch...)
 		cursor = next
-		if cursor == 0 || len(keys) >= 1000 {
+		if cursor == 0 {
+			scanComplete = true
+			break
+		}
+		if len(keys) >= 1000 {
 			break
 		}
 	}
 	if len(keys) == 0 {
+		if scanComplete {
+			if err := maxcommon.RDB.Set(ctx, runtimeStateIndexMigratedKey, "1", 0).Err(); err != nil {
+				return nil, err
+			}
+		}
 		return []RuntimeState{}, nil
 	}
 	members = make([]string, 0, len(keys))
@@ -309,7 +328,14 @@ func ListRuntimeStates(ctx context.Context) ([]RuntimeState, error) {
 		validMembers = append(validMembers, strconv.Itoa(state.ChannelID))
 	}
 	if len(validMembers) > 0 {
-		_ = maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, validMembers).Err()
+		if err := maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, validMembers).Err(); err != nil {
+			return nil, err
+		}
+	}
+	if scanComplete {
+		if err := maxcommon.RDB.Set(ctx, runtimeStateIndexMigratedKey, "1", 0).Err(); err != nil {
+			return nil, err
+		}
 	}
 	return states, nil
 }
@@ -475,6 +501,7 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 		result.State = state
 		pipe := tx.TxPipeline()
 		pipe.HSet(ctx, key, encodeRuntimeState(state))
+		pipe.SAdd(ctx, runtimeStateIndexKey, strconv.Itoa(evidence.ChannelID))
 		pipe.Set(ctx, dedupeKey, "1", windowTTL)
 		if state.RuntimeDisabled &&
 			(setting.TimeoutAutoDisableDurationSeconds == 0 ||
@@ -493,7 +520,6 @@ func EvaluateTimeoutGuard(ctx context.Context, evidence AttemptEvidence, setting
 		}
 		return EvaluationResult{State: emptyRuntimeState(evidence.ChannelID)}, err
 	}
-	_ = maxcommon.RDB.SAdd(ctx, runtimeStateIndexKey, strconv.Itoa(evidence.ChannelID)).Err()
 	return result, nil
 }
 
@@ -597,6 +623,7 @@ func RecoverRuntimeState(ctx context.Context, channelID int, probeID string, suc
 		result.State = state
 		pipe := tx.TxPipeline()
 		pipe.HSet(decisionCtx, key, encodeRuntimeState(state))
+		pipe.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID))
 		pipe.Set(decisionCtx, dedupeKey, "1", probeTTL)
 		pipe.Expire(decisionCtx, key, runtimeStateTTL)
 		_, err = pipe.Exec(decisionCtx)
@@ -608,7 +635,6 @@ func RecoverRuntimeState(ctx context.Context, channelID int, probeID string, suc
 		}
 		return EvaluationResult{State: emptyRuntimeState(channelID)}, err
 	}
-	_ = maxcommon.RDB.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID)).Err()
 	return result, nil
 }
 
@@ -648,6 +674,7 @@ func RestoreRuntimeState(ctx context.Context, channelID int) (EvaluationResult, 
 		result.Applied = true
 		pipe := tx.TxPipeline()
 		pipe.HSet(decisionCtx, key, encodeRuntimeState(state))
+		pipe.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID))
 		pipe.Expire(decisionCtx, key, runtimeStateTTL)
 		_, err = pipe.Exec(decisionCtx)
 		return err
@@ -658,7 +685,6 @@ func RestoreRuntimeState(ctx context.Context, channelID int) (EvaluationResult, 
 		}
 		return EvaluationResult{State: emptyRuntimeState(channelID)}, err
 	}
-	_ = maxcommon.RDB.SAdd(decisionCtx, runtimeStateIndexKey, strconv.Itoa(channelID)).Err()
 	return result, nil
 }
 

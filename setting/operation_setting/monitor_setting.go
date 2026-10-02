@@ -82,34 +82,51 @@ func init() {
 	config.GlobalConfig.Register("monitor_setting", &monitorSetting)
 }
 
+// Normalize applies compatibility defaults after a persisted configuration
+// update. Keeping this separate from GetMonitorSetting makes reads side-effect
+// free for concurrent relay requests.
+func (setting *MonitorSetting) Normalize() {
+	if setting == nil {
+		return
+	}
+	if setting.ChannelTestMode != ChannelTestModePassiveRecovery {
+		setting.ChannelTestMode = ChannelTestModeScheduledAll
+	}
+	if setting.TimeoutAutoDisableCountScope != TimeoutAutoDisableCountScopeCombined {
+		setting.TimeoutAutoDisableCountScope = TimeoutAutoDisableCountScopeSameMode
+	}
+	if setting.TimeoutAutoDisableRecoveryMode != TimeoutAutoDisableRecoveryManual {
+		setting.TimeoutAutoDisableRecoveryMode = TimeoutAutoDisableRecoveryProbe
+	}
+	if setting.RecoveryMode != RecoveryModeManual {
+		setting.RecoveryMode = RecoveryModeAutomatic
+	}
+}
+
 func GetMonitorSetting() *MonitorSetting {
-	if os.Getenv("CHANNEL_TEST_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_TEST_FREQUENCY"))
+	frequencyValue, hasFrequency := os.LookupEnv("CHANNEL_TEST_FREQUENCY")
+	enabledValue, hasEnabled := os.LookupEnv("CHANNEL_TEST_ENABLED")
+	if !hasFrequency && !hasEnabled {
+		return &monitorSetting
+	}
+
+	effective := monitorSetting
+	if frequencyValue != "" {
+		frequency, err := strconv.Atoi(frequencyValue)
 		if err == nil && frequency > 0 {
-			monitorSetting.AutoTestChannelEnabled = true
-			monitorSetting.AutoTestChannelMinutes = float64(frequency)
-			monitorSetting.ChannelTestMode = ChannelTestModeScheduledAll
+			effective.AutoTestChannelEnabled = true
+			effective.AutoTestChannelMinutes = float64(frequency)
+			effective.ChannelTestMode = ChannelTestModeScheduledAll
 		}
 	}
-	if enabled, ok := os.LookupEnv("CHANNEL_TEST_ENABLED"); ok {
-		parsed, err := strconv.ParseBool(enabled)
+	if hasEnabled {
+		parsed, err := strconv.ParseBool(enabledValue)
 		if err == nil {
-			monitorSetting.AutoTestChannelEnabled = parsed
+			effective.AutoTestChannelEnabled = parsed
 		}
 	}
-	if monitorSetting.ChannelTestMode != ChannelTestModePassiveRecovery {
-		monitorSetting.ChannelTestMode = ChannelTestModeScheduledAll
-	}
-	if monitorSetting.TimeoutAutoDisableCountScope != TimeoutAutoDisableCountScopeCombined {
-		monitorSetting.TimeoutAutoDisableCountScope = TimeoutAutoDisableCountScopeSameMode
-	}
-	if monitorSetting.TimeoutAutoDisableRecoveryMode != TimeoutAutoDisableRecoveryManual {
-		monitorSetting.TimeoutAutoDisableRecoveryMode = TimeoutAutoDisableRecoveryProbe
-	}
-	if monitorSetting.RecoveryMode != RecoveryModeManual {
-		monitorSetting.RecoveryMode = RecoveryModeAutomatic
-	}
-	return &monitorSetting
+	effective.Normalize()
+	return &effective
 }
 
 // ValidateMonitorSettingOption validates one persisted option without

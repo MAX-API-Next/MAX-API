@@ -922,7 +922,24 @@ func (info *RelayInfo) RecordChannelTimeout(event string) {
 		return
 	}
 	timeoutKind := event
+	observedAt := time.Now()
 	if event == "transport_timeout" || event == "request_timeout" {
+		start := info.channelAttemptStartTime
+		if start.IsZero() {
+			start = info.StartTime
+		}
+		setting := operation_setting.GetMonitorSetting()
+		threshold := 0
+		if setting != nil {
+			if info.IsStream {
+				threshold = setting.StreamingFirstResultTimeoutSeconds
+			} else {
+				threshold = setting.NonStreamingResponseTimeoutSeconds
+			}
+		}
+		if start.IsZero() || threshold <= 0 || observedAt.Sub(start) < time.Duration(threshold)*time.Second {
+			return
+		}
 		if info.IsStream && !info.channelFirstResponseRecorded.Load() {
 			timeoutKind = channelhealth.TimeoutKindStreamingFirstResult
 		} else if !info.IsStream {
@@ -948,7 +965,7 @@ func (info *RelayInfo) RecordChannelTimeout(event string) {
 		TimeoutKind:     timeoutKind,
 		TimeoutEligible: true,
 		AutoBan:         info.ChannelAutoBan,
-		ObservedAt:      time.Now(),
+		ObservedAt:      observedAt,
 	}
 	settingSnapshot := *setting
 	go func(evidence channelhealth.AttemptEvidence, setting operation_setting.MonitorSetting) {

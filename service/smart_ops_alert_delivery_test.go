@@ -45,6 +45,26 @@ func TestSmartOpsAlertDeliveryStateIsTraceableInRedis(t *testing.T) {
 	require.False(t, failed.DeliveryUpdatedAt.IsZero())
 }
 
+func TestSmartOpsAlertDeliveryProjectionRejectsOlderStatus(t *testing.T) {
+	withSmartOpsDeliveryRedis(t)
+	eventAt := time.Now().UTC().Truncate(time.Millisecond)
+	alert := SmartOpsAlert{
+		Key:        "channel_timeout_auto_disabled:936",
+		Node:       "node-a",
+		Status:     smartOpsAlertStatusFiring,
+		ObservedAt: eventAt,
+	}
+
+	recordSmartOpsAlertDeliveryState(alert, "sent", 1, "")
+	recordSmartOpsAlertDeliveryState(alert, "queued", 0, "")
+	recordSmartOpsAlertDeliveryState(alert, "failed", 1, "late queue projection")
+
+	state := alert
+	loadSmartOpsAlertDeliveryState(&state)
+	require.Equal(t, "sent", state.DeliveryStatus)
+	require.Equal(t, 1, state.DeliveryAttempts)
+}
+
 func TestDeliverSmartOpsAlertRecordsSentDeliveryState(t *testing.T) {
 	withSmartOpsDeliveryRedis(t)
 	originalDelays := smartOpsAlertRetryDelays
