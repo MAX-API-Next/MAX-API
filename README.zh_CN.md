@@ -75,7 +75,7 @@ MAX API 不只是一个代码仓库，也是一项面向 AI Models、Agents、Ag
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 提交可复现问题、需求建议和兼容性变化 |
 | [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 获取正式版本发布动态 |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | 快速检索和理解项目代码 |
-| 技术与生态合作 | 联系 `maxapi@max-api.ai` |
+| 技术与生态合作 | 联系 `cscitech@cscitech.top` |
 
 ### 我们正在寻找这些共建者
 
@@ -347,7 +347,7 @@ docker compose up -d
 
 本项目采用 [GNU Affero 通用公共许可证 v3.0（AGPLv3）](./LICENSE) 授权。
 
-如果你修改并通过网络向用户提供本项目服务，请理解并遵守 AGPLv3 对应的源码提供等义务。机构合作或其他许可问题，请联系：maxapi@max-api.ai。
+如果你修改并通过网络向用户提供本项目服务，请理解并遵守 AGPLv3 对应的源码提供等义务。机构合作或其他许可问题，请联系：cscitech@cscitech.top。
 
 ---
 

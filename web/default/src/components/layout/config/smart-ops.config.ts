@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { type TFunction } from 'i18next'
-import { Bot, Gauge, ServerCog, TriangleAlert } from 'lucide-react'
+import { Activity, Bot, Gauge, ServerCog, TriangleAlert } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
 import type { NavGroup, SidebarView } from '../types'
@@ -32,6 +32,11 @@ export function buildSmartOpsNavGroups(
       title: t('Active Alerts'),
       url: '/smart-ops/alerts' as const,
       icon: TriangleAlert,
+    },
+    {
+      title: t('Channel health'),
+      url: '/smart-ops/channel-health' as const,
+      icon: Activity,
     },
     {
       title: t('Channel performance'),

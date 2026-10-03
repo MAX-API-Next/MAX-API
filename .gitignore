@@ -11,11 +11,6 @@ logs
 web/default/dist
 web/node_modules
 .env
-one-api
-max-api
-new-api
-sub2api
-CLIProxyAPI
 /__debug_bin*
 .DS_Store
 tiktoken_cache

@@ -26,19 +26,47 @@ import type {
 export type SmartOpsAlert = {
   key: string
   status: 'firing'
-  severity: 'warning'
+  severity: 'warning' | 'critical'
   component: string
   node?: string
   current_value: number
   threshold: number
   observed_at: string
   message: string
+  delivery_status?: string
+  delivery_attempts?: number
+  delivery_updated_at?: string
+  delivery_error?: string
 }
 
 export type SmartOpsAlertsResponse = {
   success: boolean
   message?: string
   data: SmartOpsAlert[]
+}
+
+export type ChannelHealthPolicyOption = {
+  key: string
+  value: string
+}
+
+export type ChannelHealthPolicyResponse = {
+  success: boolean
+  message?: string
+  data: ChannelHealthPolicyOption[]
+}
+
+export type ChannelHealthPolicyUpdate = {
+  key: string
+  value: string | number | boolean
+}
+
+export type ChannelHealthPolicyUpdateResponse = ChannelHealthPolicyResponse
+
+export type ChannelHealthRecoveryResponse = {
+  success: boolean
+  message?: string
+  data?: Record<string, unknown>
 }
 
 export type BillingSettlementReconciliationItem = {

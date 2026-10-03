@@ -145,6 +145,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError
 	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
+	}
 
 	usageDto := usage.(*dto.Usage)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {

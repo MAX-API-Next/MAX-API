@@ -22,6 +22,41 @@ import type { SmartOpsAlert } from '../types'
 
 const BILLING_BACKLOG_ALERT_KEY = 'billing_settlement_backlog'
 
+function isChannelPriorityAlert(alert: SmartOpsAlert): boolean {
+  return alert.key.startsWith('channel_timeout_priority_demotion:')
+}
+
+function isChannelDisabledAlert(alert: SmartOpsAlert): boolean {
+  return alert.key.startsWith('channel_timeout_auto_disabled:')
+}
+
+function formatChannelValue(
+  alert: SmartOpsAlert,
+  value: number,
+  locale: string,
+  t: TFunction
+): string | null {
+  if (isChannelPriorityAlert(alert)) {
+    return formatLocalizedCount(
+      value,
+      locale,
+      t,
+      '{{count}} priority point',
+      '{{count}} priority points'
+    )
+  }
+  if (isChannelDisabledAlert(alert)) {
+    return formatLocalizedCount(
+      value,
+      locale,
+      t,
+      '{{count}} timeout',
+      '{{count}} timeouts'
+    )
+  }
+  return null
+}
+
 export function formatLegacyLatency(
   milliseconds: number | null | undefined
 ): string {
@@ -125,6 +160,8 @@ export function formatAlertCurrentValue(
       '{{count}} records'
     )
   }
+  const channelValue = formatChannelValue(alert, alert.current_value, locale, t)
+  if (channelValue != null) return channelValue
   return formatPercent(alert.current_value, locale)
 }
 
@@ -136,5 +173,7 @@ export function formatAlertThreshold(
   if (isBillingBacklogAlert(alert)) {
     return formatDurationSeconds(alert.threshold, locale, t)
   }
+  const channelValue = formatChannelValue(alert, alert.threshold, locale, t)
+  if (channelValue != null) return channelValue
   return formatPercent(alert.threshold, locale)
 }

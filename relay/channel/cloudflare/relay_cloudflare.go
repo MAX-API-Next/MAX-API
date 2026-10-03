@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/logger"
@@ -36,7 +35,6 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
 	var responseText string
-	isFirst := true
 
 	for scanner.Scan() {
 		data := scanner.Text()
@@ -63,12 +61,12 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		response.Id = id
 		response.Model = info.UpstreamModelName
 		err = helper.ObjectData(c, response)
-		if isFirst {
-			isFirst = false
-			info.FirstResponseTime = time.Now()
-		}
 		if err != nil {
 			logger.LogError(c, "error_rendering_stream_response: "+err.Error())
+			continue
+		}
+		if len(response.Choices) > 0 {
+			info.SetFirstResponseTime()
 		}
 	}
 
@@ -115,7 +113,9 @@ func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response)
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, _ = c.Writer.Write(jsonResponse)
+	if _, err := c.Writer.Write(jsonResponse); err == nil && len(response.Choices) > 0 {
+		info.SetFirstResponseTime()
+	}
 	return nil, usage
 }
 
@@ -141,7 +141,9 @@ func cfSTTHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
-	_, _ = c.Writer.Write(jsonResponse)
+	if _, err := c.Writer.Write(jsonResponse); err == nil {
+		info.SetFirstResponseTime()
+	}
 
 	usage := service.ResponseText2Usage(c, cfResp.Result.Text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	return nil, usage

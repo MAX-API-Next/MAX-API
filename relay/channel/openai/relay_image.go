@@ -243,9 +243,6 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if created == 0 {
 		created = time.Now().Unix()
 	}
-	if info != nil {
-		info.SetFirstResponseTime()
-	}
 	for _, image := range imageResp.Data {
 		payload := map[string]any{
 			"type":       "image_generation.completed",
@@ -268,6 +265,9 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
 			}
 			return &usageResp.Usage, nil
+		}
+		if info != nil {
+			info.SetFirstResponseTime()
 		}
 	}
 	if err := writeOpenaiImageStreamDone(c); err != nil {

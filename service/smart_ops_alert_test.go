@@ -8,8 +8,178 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/channelhealth"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetSmartOpsAlertsRemovesStaleLocalChannelAlertAfterRuntimeRead(t *testing.T) {
+	server := miniredis.RunT(t)
+	oldRDB, oldEnabled := common.RDB, common.RedisEnabled
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB, common.RedisEnabled = oldRDB, oldEnabled
+	})
+	oldActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.Lock()
+	smartOpsAlertMonitor.active = map[string]SmartOpsAlert{
+		channelHealthPriorityAlertKey(936): {Key: channelHealthPriorityAlertKey(936), Status: smartOpsAlertStatusFiring},
+	}
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = oldActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	require.Empty(t, GetSmartOpsAlerts())
+	smartOpsAlertMonitor.Lock()
+	_, stillActive := smartOpsAlertMonitor.active[channelHealthPriorityAlertKey(936)]
+	smartOpsAlertMonitor.Unlock()
+	require.False(t, stillActive)
+}
+
+func TestChannelHealthRuntimeTransitionProjectsAndNotifies(t *testing.T) {
+	originalSender := smartOpsAlertNotificationSender
+	originalSetting := *operation_setting.GetMonitorSetting()
+	smartOpsAlertMonitor.Lock()
+	originalActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = make(map[string]SmartOpsAlert)
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertNotificationSender = originalSender
+		*operation_setting.GetMonitorSetting() = originalSetting
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		ChannelTimeoutNotificationEnabled: true,
+	}
+	var events []SmartOpsAlert
+	smartOpsAlertNotificationSender = func(alert SmartOpsAlert) {
+		events = append(events, alert)
+	}
+	now := time.Now()
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:    936,
+		Transition:   "priority_demotion_firing",
+		Penalty:      10,
+		PenaltyUntil: now.Add(time.Minute),
+		ObservedAt:   now,
+	})
+
+	alerts := GetSmartOpsAlerts()
+	require.Len(t, events, 1)
+	require.Equal(t, smartOpsAlertSeverityWarning, events[0].Severity)
+	require.Equal(t, channelHealthPriorityAlertKey(936), events[0].Key)
+	require.Contains(t, alerts, SmartOpsAlert{Key: channelHealthPriorityAlertKey(936), Status: smartOpsAlertStatusFiring, Severity: smartOpsAlertSeverityWarning, Component: "channel", Node: events[0].Node, CurrentValue: 10, Threshold: 10, ObservedAt: events[0].ObservedAt, Message: events[0].Message})
+
+	// Repeated timeouts update the cockpit projection and enter the bounded
+	// notification queue; the shared repeat gate decides whether delivery is
+	// due.
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:    936,
+		Transition:   "priority_demotion_updated",
+		Penalty:      10,
+		PenaltyUntil: now.Add(2 * time.Minute),
+		ObservedAt:   now.Add(time.Second),
+	})
+	require.Len(t, events, 2)
+
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:       936,
+		Transition:      "timeout_auto_disabled",
+		RuntimeDisabled: true,
+		DisabledUntil:   now.Add(30 * time.Minute),
+		ObservedAt:      now.Add(2 * time.Second),
+	})
+	require.Len(t, events, 3)
+	require.Equal(t, smartOpsAlertSeverityCritical, events[2].Severity)
+	require.Equal(t, channelHealthDisabledAlertKey(936), events[2].Key)
+	for _, alert := range GetSmartOpsAlerts() {
+		require.NotEqual(t, channelHealthPriorityAlertKey(936), alert.Key)
+	}
+
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:  936,
+		Transition: "runtime_recovered",
+		ObservedAt: now.Add(3 * time.Second),
+	})
+	require.Len(t, events, 4)
+	require.Equal(t, smartOpsAlertStatusResolved, events[3].Status)
+	for _, alert := range GetSmartOpsAlerts() {
+		require.NotEqual(t, channelHealthDisabledAlertKey(936), alert.Key)
+		require.NotEqual(t, channelHealthPriorityAlertKey(936), alert.Key)
+	}
+}
+
+func TestChannelHealthRecoveryDoesNotNotifyPriorityOnlyAlert(t *testing.T) {
+	originalSender := smartOpsAlertNotificationSender
+	originalSetting := *operation_setting.GetMonitorSetting()
+	originalRedisEnabled := common.RedisEnabled
+	smartOpsAlertMonitor.Lock()
+	originalActive := smartOpsAlertMonitor.active
+	smartOpsAlertMonitor.active = map[string]SmartOpsAlert{
+		channelHealthPriorityAlertKey(936): {
+			Key:    channelHealthPriorityAlertKey(936),
+			Status: smartOpsAlertStatusFiring,
+		},
+	}
+	smartOpsAlertMonitor.Unlock()
+	t.Cleanup(func() {
+		smartOpsAlertNotificationSender = originalSender
+		*operation_setting.GetMonitorSetting() = originalSetting
+		common.RedisEnabled = originalRedisEnabled
+		smartOpsAlertMonitor.Lock()
+		smartOpsAlertMonitor.active = originalActive
+		smartOpsAlertMonitor.Unlock()
+	})
+
+	common.RedisEnabled = false
+	*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{
+		ChannelTimeoutNotificationEnabled: true,
+	}
+	var events []SmartOpsAlert
+	smartOpsAlertNotificationSender = func(alert SmartOpsAlert) {
+		events = append(events, alert)
+	}
+
+	handleChannelHealthRuntimeTransition(common.ChannelHealthRuntimeTransition{
+		ChannelID:  936,
+		Transition: "runtime_recovered",
+		ObservedAt: time.Now(),
+	})
+
+	require.Empty(t, events)
+	smartOpsAlertMonitor.Lock()
+	defer smartOpsAlertMonitor.Unlock()
+	_, priorityStillActive := smartOpsAlertMonitor.active[channelHealthPriorityAlertKey(936)]
+	_, disabledStillActive := smartOpsAlertMonitor.active[channelHealthDisabledAlertKey(936)]
+	require.False(t, priorityStillActive)
+	require.False(t, disabledStillActive)
+}
+
+func TestChannelHealthTimeoutCountUsesTheLatestModeForSameModePolicy(t *testing.T) {
+	state := channelhealth.RuntimeState{
+		TimeoutCount: map[string]int64{
+			channelhealth.RequestModeStreaming:    2,
+			channelhealth.RequestModeNonStreaming: 5,
+		},
+		LastEvent: channelhealth.TimeoutKindStreamingFirstResult,
+	}
+	setting := &operation_setting.MonitorSetting{
+		TimeoutAutoDisableCountScope: operation_setting.TimeoutAutoDisableCountScopeSameMode,
+	}
+	require.Equal(t, int64(2), channelHealthTimeoutCount(state, setting))
+	state.LastEvent = channelhealth.TimeoutKindNonStreamingResponse
+	require.Equal(t, int64(5), channelHealthTimeoutCount(state, setting))
+}
 
 func TestSmartOpsAlertRequiresConsecutiveSamplesAndNotifiesRecovery(t *testing.T) {
 	state := smartOpsAlertState{}

@@ -75,7 +75,7 @@ MAX API は単なるコードリポジトリではありません。AI Models、
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 再現可能な問題、改善提案、互換性の変化を共有 |
 | [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 正式版の更新を確認 |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | コードベースをすばやく検索・理解 |
-| 技術・エコシステム連携 | `maxapi@max-api.ai` まで連絡 |
+| 技術・エコシステム連携 | `cscitech@cscitech.top` まで連絡 |
 
 ### 求めている貢献者
 
@@ -345,7 +345,7 @@ docker compose up -d
 
 本プロジェクトは [GNU Affero General Public License v3.0（AGPLv3）](./LICENSE) の下で提供されます。
 
-本プロジェクトを変更し、ネットワーク経由でユーザーへ提供する場合は、AGPLv3 のソースコード提供義務を理解し、遵守してください。機関との協力、その他のライセンスに関する問い合わせは maxapi@max-api.ai までご連絡ください。
+本プロジェクトを変更し、ネットワーク経由でユーザーへ提供する場合は、AGPLv3 のソースコード提供義務を理解し、遵守してください。機関との協力、その他のライセンスに関する問い合わせは cscitech@cscitech.top までご連絡ください。
 
 ---
 

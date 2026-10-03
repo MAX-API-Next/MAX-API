@@ -75,7 +75,7 @@ MAX API est plus qu'un dépôt de code. C'est une collaboration ouverte de long 
 | [Issues MAX API](https://github.com/MAX-API-Next/MAX-API/issues) | Signaler un problème reproductible, proposer une amélioration ou partager un changement de compatibilité |
 | [Versions MAX API](https://github.com/MAX-API-Next/MAX-API/releases) | Suivre les mises à jour des versions stables |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | Rechercher et comprendre rapidement le code |
-| Coopération technique et écosystème | Contacter `maxapi@max-api.ai` |
+| Coopération technique et écosystème | Contacter `cscitech@cscitech.top` |
 
 ### Profils de contributeurs recherchés
 
@@ -345,7 +345,7 @@ Les déploiements multi-nœuds doivent partager `SESSION_SECRET`, tout en utilis
 
 Ce projet est distribué sous la [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une coopération institutionnelle ou toute question de licence, contactez maxapi@max-api.ai.
+Si vous modifiez ce projet et le fournissez à des utilisateurs via un réseau, veuillez comprendre et respecter les obligations de mise à disposition du code source prévues par l'AGPLv3. Pour une coopération institutionnelle ou toute question de licence, contactez cscitech@cscitech.top.
 
 ---
 

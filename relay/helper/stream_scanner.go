@@ -88,6 +88,22 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	streamingTimeoutSeconds := constant.StreamingTimeout
 	streamingTimeout := time.Duration(streamingTimeoutSeconds) * time.Second
 	ticker, timeoutChan := newStreamingTimeoutTicker(streamingTimeoutSeconds)
+	monitorSetting := operation_setting.GetMonitorSetting()
+	firstResultTimeoutSeconds := 0
+	if monitorSetting != nil {
+		firstResultTimeoutSeconds = monitorSetting.StreamingFirstResultTimeoutSeconds
+	}
+	var firstResultTimer *time.Timer
+	var firstResultTimeoutChan <-chan time.Time
+	if firstResultTimeoutSeconds > 0 && info.FirstResponseSignal() != nil {
+		firstResultTimeout := relaycommon.RemainingChannelFirstResponseTimeout(
+			info.ChannelAttemptStartTime(),
+			time.Duration(firstResultTimeoutSeconds)*time.Second,
+			time.Now(),
+		)
+		firstResultTimer = time.NewTimer(firstResultTimeout)
+		firstResultTimeoutChan = firstResultTimer.C
+	}
 
 	var (
 		stopChan    = make(chan bool, 3) // 增加缓冲区避免阻塞
@@ -120,6 +136,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	logger.LogDebug(c, "relay max idle conns: %d", common.RelayMaxIdleConns)
 	logger.LogDebug(c, "relay max idle conns per host: %d", common.RelayMaxIdleConnsPerHost)
 	logger.LogDebug(c, "streaming timeout seconds: %d", int64(streamingTimeout.Seconds()))
+	logger.LogDebug(c, "streaming first result timeout seconds: %d", firstResultTimeoutSeconds)
 	logger.LogDebug(c, "ping interval seconds: %d", int64(pingInterval.Seconds()))
 
 	cleanup := func() {
@@ -131,6 +148,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 			if ticker != nil {
 				ticker.Stop()
+			}
+			if firstResultTimer != nil {
+				if !firstResultTimer.Stop() {
+					select {
+					case <-firstResultTimer.C:
+					default:
+					}
+				}
 			}
 			if pingTicker != nil {
 				pingTicker.Stop()
@@ -210,11 +235,19 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
 			sr.reset()
+			finishFirstResponseEvaluation := info.BeginFirstResponseEvaluation()
 			func() {
+				defer finishFirstResponseEvaluation()
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
 				ExtendWriteDeadline(c)
+				bytesBefore := c.Writer.Size()
 				dataHandler(data, sr)
+				bytesAfter := c.Writer.Size()
+				writerDelivered := bytesAfter > bytesBefore && bytesAfter > 0
+				if sr.IsSuccessful() && (sr.IsDeliverable() || writerDelivered) {
+					info.SetFirstResponseTime()
+				}
 			}()
 			if sr.IsStopped() {
 				return
@@ -267,7 +300,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
-				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
 
 				select {
@@ -293,14 +325,35 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
-	// 主循环等待完成或超时
-	select {
-	case <-timeoutChan:
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
-	case <-stopChan:
-		// EndReason already set by the goroutine that triggered stopChan
-	case <-c.Request.Context().Done():
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+	// 主循环等待完成或超时。The first-result channel disables its timer as
+	// soon as a handler confirms a deliverable payload; subsequent idle timeouts
+	// retain their existing diagnostic-only semantics.
+	firstResultSignal := info.FirstResponseSignal()
+waitLoop:
+	for {
+		select {
+		case <-firstResultSignal:
+			firstResultSignal = nil
+			firstResultTimeoutChan = nil
+			continue
+		case <-firstResultTimeoutChan:
+			firstResultTimeoutChan = nil
+			if info.FirstResponseDeadlineExpired() {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+				info.RecordChannelTimeout("streaming_first_result_timeout")
+				break waitLoop
+			}
+			firstResultTimeoutChan = time.After(100 * time.Millisecond)
+			continue
+		case <-timeoutChan:
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+			info.RecordChannelTimeout("stream_idle_timeout")
+		case <-stopChan:
+			// EndReason already set by the goroutine that triggered stopChan
+		case <-c.Request.Context().Done():
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+		}
+		break
 	}
 
 	cleanup()
