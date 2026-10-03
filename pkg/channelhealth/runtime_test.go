@@ -521,7 +521,7 @@ func TestListRuntimeStatesCompletesLegacyMigrationWithIndexedMembers(t *testing.
 		}).Result()
 		require.NoError(t, err)
 	}
-	require.NoError(t, maxcommon.RDB.SAdd(context.Background(), runtimeStateIndexKey, "937").Err())
+	require.NoError(t, maxcommon.RDB.SAdd(context.Background(), runtimeStateIndexKey, "937", "939").Err())
 
 	states, err := ListRuntimeStates(context.Background())
 	require.NoError(t, err)
@@ -532,6 +532,9 @@ func TestListRuntimeStatesCompletesLegacyMigrationWithIndexedMembers(t *testing.
 	indexed, err := maxcommon.RDB.SIsMember(context.Background(), runtimeStateIndexKey, "938").Result()
 	require.NoError(t, err)
 	require.True(t, indexed)
+	indexed, err = maxcommon.RDB.SIsMember(context.Background(), runtimeStateIndexKey, "939").Result()
+	require.NoError(t, err)
+	require.False(t, indexed)
 }
 
 func TestRecoverRuntimeStateRequiresConfiguredSuccessfulProbes(t *testing.T) {

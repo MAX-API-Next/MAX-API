@@ -398,6 +398,7 @@ func listRuntimeStatesByMembers(ctx context.Context, members []string) ([]Runtim
 		return nil, err
 	}
 	states := make([]RuntimeState, 0, len(commands))
+	staleMembers := make([]string, 0)
 	for index, command := range commands {
 		channelID, _ := strconv.Atoi(validMembers[index])
 		fields, err := command.Result()
@@ -405,11 +406,19 @@ func listRuntimeStatesByMembers(ctx context.Context, members []string) ([]Runtim
 			return nil, err
 		}
 		if len(fields) == 0 {
-			_ = maxcommon.RDB.Eval(ctx, removeStaleRuntimeMemberScript,
-				[]string{runtimeStateKey(channelID), runtimeStateIndexKey}, validMembers[index]).Err()
+			staleMembers = append(staleMembers, validMembers[index])
 			continue
 		}
 		states = append(states, decodeRuntimeState(channelID, fields))
+	}
+	if len(staleMembers) > 0 {
+		cleanup := maxcommon.RDB.Pipeline()
+		for _, member := range staleMembers {
+			channelID, _ := strconv.Atoi(member)
+			cleanup.Eval(ctx, removeStaleRuntimeMemberScript,
+				[]string{runtimeStateKey(channelID), runtimeStateIndexKey}, member)
+		}
+		_, _ = cleanup.Exec(ctx)
 	}
 	return states, nil
 }
