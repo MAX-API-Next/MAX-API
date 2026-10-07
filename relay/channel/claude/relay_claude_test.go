@@ -2,6 +2,8 @@ package claude
 
 import (
 	"encoding/base64"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -18,6 +20,27 @@ import (
 
 func commonPointer[T any](value T) *T {
 	return &value
+}
+
+func TestClaudeStreamHandlerReturnsRetryableErrorBeforeFirstResponseTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:    true,
+		RelayFormat: types.RelayFormatClaude,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+		DisablePing: true,
+	}
+	info.InitChannelMeta(c)
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+
+	usage, err := ClaudeStreamHandler(c, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, info)
+	require.Nil(t, usage)
+	require.NotNil(t, err)
+	require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, err.GetErrorCode())
+	require.False(t, types.IsSkipRetryError(err))
 }
 
 func setClaudeToolPricesForTest(t *testing.T, additions map[string]float64) {

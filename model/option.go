@@ -360,6 +360,11 @@ func validateOptionUpdate(key string, value string) error {
 	if err := validateRegisteredConfigOption(key, value); err != nil {
 		return err
 	}
+	if strings.HasPrefix(key, "monitor_setting.") {
+		if err := operation_setting.ValidateMonitorSettingOption(key, value); err != nil {
+			return err
+		}
+	}
 	switch key {
 	case "PreConsumedQuota":
 		_, err := parsePreConsumedQuota(value)

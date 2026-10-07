@@ -350,6 +350,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
+	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+		return nil, apiErr
+	}
+
 	if streamErr != nil {
 		return nil, streamErr
 	}

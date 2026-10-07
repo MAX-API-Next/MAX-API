@@ -75,7 +75,7 @@ MAX API 不只是一個程式碼倉庫，也是一項面向 AI Models、Agents�
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | 提交可重現問題、需求建議與相容性變化 |
 | [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | 取得正式版本發布動態 |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | 快速檢索與理解專案程式碼 |
-| 技術與生態合作 | 聯絡 `maxapi@max-api.ai` |
+| 技術與生態合作 | 聯絡 `cscitech@cscitech.top` |
 
 ### 我們正在尋找這些共建者
 
@@ -347,7 +347,7 @@ docker compose up -d
 
 本專案採用 [GNU Affero 通用公共許可證 v3.0（AGPLv3）](./LICENSE) 授權。
 
-如果你修改並透過網路向使用者提供本專案服務，請理解並遵守 AGPLv3 對應的原始碼提供等義務。機構合作或其他許可問題，請聯絡：maxapi@max-api.ai。
+如果你修改並透過網路向使用者提供本專案服務，請理解並遵守 AGPLv3 對應的原始碼提供等義務。機構合作或其他許可問題，請聯絡：cscitech@cscitech.top。
 
 ---
 

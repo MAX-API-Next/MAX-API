@@ -149,11 +149,20 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
+			} else {
+				// This handler retains the latest event so the terminal usage frame
+				// can be handled separately. Treat the accepted first event as the
+				// first result so the scanner does not wait for a second frame.
+				sr.MarkDelivered()
 			}
 		}
 	})
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
+	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+		return nil, apiErr
+	}
+
 	if isAudioModel && secondLastStreamData != "" {
 		var streamResp struct {
 			Usage *dto.Usage `json:"usage"`
@@ -605,7 +614,6 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					close(targetClosed)
 					return
 				}
-				info.SetFirstResponseTime()
 				realtimeEvent := &dto.RealtimeEvent{}
 				err = common.Unmarshal(message, realtimeEvent)
 				if err != nil {
@@ -692,6 +700,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					errChan <- fmt.Errorf("error writing to client: %v", err)
 					return
 				}
+				info.SetFirstResponseTime()
 
 			}
 		}

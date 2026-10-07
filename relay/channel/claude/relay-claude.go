@@ -941,6 +941,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	if err != nil {
 		return nil, err
 	}
+	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+		return nil, apiErr
+	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
 	if service.ResponseAuditEnabled() {

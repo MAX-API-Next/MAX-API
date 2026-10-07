@@ -34,6 +34,10 @@ import type {
   ModelPerformanceQuery,
   ModelPerformanceResponse,
   SmartOpsAlertsResponse,
+  ChannelHealthPolicyResponse,
+  ChannelHealthPolicyUpdate,
+  ChannelHealthPolicyUpdateResponse,
+  ChannelHealthRecoveryResponse,
 } from './types'
 
 const manualTaskBillingBatchCompletionDataSchema = z.object({
@@ -69,6 +73,35 @@ type ManualTaskBillingBatchCompletionResponse = z.infer<
 export async function getSmartOpsAlerts(): Promise<SmartOpsAlertsResponse> {
   const response = await api.get<SmartOpsAlertsResponse>(
     '/api/smart-ops/alerts'
+  )
+  return response.data
+}
+
+export async function getChannelHealthPolicy(): Promise<ChannelHealthPolicyResponse> {
+  const response = await api.get<ChannelHealthPolicyResponse>(
+    '/api/smart-ops/channel-health/policy'
+  )
+  return response.data
+}
+
+export async function updateChannelHealthPolicy(
+  updates: ChannelHealthPolicyUpdate[]
+): Promise<ChannelHealthPolicyUpdateResponse> {
+  const response = await api.put<ChannelHealthPolicyUpdateResponse>(
+    '/api/smart-ops/channel-health/policy',
+    { updates },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function recoverChannelHealthChannel(
+  channelId: string
+): Promise<ChannelHealthRecoveryResponse> {
+  const response = await api.post<ChannelHealthRecoveryResponse>(
+    `/api/smart-ops/channel-health/channels/${encodeURIComponent(channelId)}/recover`,
+    undefined,
+    { skipBusinessError: true, skipErrorHandler: true }
   )
   return response.data
 }

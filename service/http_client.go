@@ -20,6 +20,10 @@ var (
 	ssrfProtectedHTTPClient *http.Client
 	proxyClientLock         sync.Mutex
 	proxyClients            = make(map[string]*http.Client)
+	proxyClientResetHooks   struct {
+		sync.RWMutex
+		hooks []func()
+	}
 
 	ssrfProtectionCacheLock    sync.RWMutex
 	ssrfProtectionCacheKey     string
@@ -159,13 +163,33 @@ func GetHttpClientWithProxy(proxyURL string) (*http.Client, error) {
 // ResetProxyClientCache 清空代理客户端缓存，确保下次使用时重新初始化
 func ResetProxyClientCache() {
 	proxyClientLock.Lock()
-	defer proxyClientLock.Unlock()
 	for _, client := range proxyClients {
 		if transport, ok := client.Transport.(*http.Transport); ok && transport != nil {
 			transport.CloseIdleConnections()
 		}
 	}
 	proxyClients = make(map[string]*http.Client)
+	proxyClientLock.Unlock()
+
+	proxyClientResetHooks.RLock()
+	hooks := append([]func(){}, proxyClientResetHooks.hooks...)
+	proxyClientResetHooks.RUnlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
+// RegisterProxyClientCacheResetHook registers a package-local cache cleanup
+// callback. The callback runs after proxy clients have been closed and removed.
+// It lets adapters retire derived transport caches without introducing an
+// import cycle back into the service package.
+func RegisterProxyClientCacheResetHook(hook func()) {
+	if hook == nil {
+		return
+	}
+	proxyClientResetHooks.Lock()
+	proxyClientResetHooks.hooks = append(proxyClientResetHooks.hooks, hook)
+	proxyClientResetHooks.Unlock()
 }
 
 // NewProxyHttpClient 创建支持代理的 HTTP 客户端
@@ -177,16 +201,18 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 		return http.DefaultClient, nil
 	}
 
-	proxyClientLock.Lock()
-	if client, ok := proxyClients[proxyURL]; ok {
-		proxyClientLock.Unlock()
-		return client, nil
-	}
-	proxyClientLock.Unlock()
-
 	parsedURL, err := url.Parse(proxyURL)
 	if err != nil {
 		return nil, err
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" && parsedURL.Scheme != "socks5" && parsedURL.Scheme != "socks5h" {
+		return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)
+	}
+
+	proxyClientLock.Lock()
+	defer proxyClientLock.Unlock()
+	if client, ok := proxyClients[proxyURL]; ok {
+		return client, nil
 	}
 
 	switch parsedURL.Scheme {
@@ -206,9 +232,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 			CheckRedirect: checkRedirect,
 		}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
-		proxyClientLock.Lock()
 		proxyClients[proxyURL] = client
-		proxyClientLock.Unlock()
 		return client, nil
 
 	case "socks5", "socks5h":
@@ -246,9 +270,7 @@ func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
 
 		client := &http.Client{Transport: transport, CheckRedirect: checkRedirect}
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
-		proxyClientLock.Lock()
 		proxyClients[proxyURL] = client
-		proxyClientLock.Unlock()
 		return client, nil
 
 	default:

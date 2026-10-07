@@ -1,15 +1,46 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewProxyHttpClientSerializesConcurrentCreation(t *testing.T) {
+	ResetProxyClientCache()
+	t.Cleanup(ResetProxyClientCache)
+
+	const proxyURL = "http://127.0.0.1:65531"
+	const callers = 16
+	clients := make([]*http.Client, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			clients[index], _ = NewProxyHttpClient(proxyURL)
+			if clients[index] == nil {
+				errs <- fmt.Errorf("caller %d received nil client", index)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	for i := 1; i < callers; i++ {
+		require.Same(t, clients[0], clients[i])
+	}
+}
 
 func TestNewSSRFProtectedHTTPClientDisablesEnvironmentProxy(t *testing.T) {
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:8080")

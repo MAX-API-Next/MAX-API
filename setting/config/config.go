@@ -286,6 +286,9 @@ func updateConfigFromMap(config interface{}, configMap map[string]string) error 
 			field.Set(fresh.Elem())
 		}
 	}
+	if normalizer, ok := config.(interface{ Normalize() }); ok {
+		normalizer.Normalize()
+	}
 
 	return nil
 }

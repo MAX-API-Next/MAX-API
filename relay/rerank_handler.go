@@ -101,6 +101,9 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError
 	}
+	if !info.IsStream {
+		info.SetFirstResponseTime()
+	}
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
 }

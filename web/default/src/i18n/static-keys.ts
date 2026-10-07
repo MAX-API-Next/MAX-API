@@ -86,6 +86,15 @@ export const STATIC_I18N_KEYS = [
   // Billing statuses
   'Paid - Needs Reconciliation',
 
+  // SmartOps alert delivery statuses (dynamic labels)
+  'Queued',
+  'Sending',
+  'Sent',
+  'Skipped (repeat interval)',
+  'Skipped (not configured)',
+  'Delivery failed',
+  'Delivery status unknown',
+
   // API Keys
   'Enabled',
   'Disabled',

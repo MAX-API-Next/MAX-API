@@ -75,7 +75,7 @@ MAX API is more than a code repository. It is a long-term open collaboration aro
 | [MAX API Issues](https://github.com/MAX-API-Next/MAX-API/issues) | Report reproducible problems, propose improvements, and share compatibility changes |
 | [MAX API Releases](https://github.com/MAX-API-Next/MAX-API/releases) | Follow stable release updates |
 | [Ask DeepWiki](https://deepwiki.com/MAX-API-Next/MAX-API) | Search and understand the codebase quickly |
-| Technical and ecosystem cooperation | Contact `maxapi@max-api.ai` |
+| Technical and ecosystem cooperation | Contact `cscitech@cscitech.top` |
 
 ### Contributors we are looking for
 
@@ -345,7 +345,7 @@ Multi-node deployments must share `SESSION_SECRET` while using a different `NODE
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
-If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source-availability obligations. For institutional cooperation or other licensing questions, contact maxapi@max-api.ai.
+If you modify this project and provide it to users over a network, please understand and comply with AGPLv3 source-availability obligations. For institutional cooperation or other licensing questions, contact cscitech@cscitech.top.
 
 ---
 

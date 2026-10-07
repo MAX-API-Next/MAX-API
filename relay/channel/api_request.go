@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"regexp"
@@ -26,6 +27,27 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+type responseHeaderTransportKey struct {
+	base    *http.Transport
+	timeout time.Duration
+}
+
+var responseHeaderTransportCache sync.Map
+
+func init() {
+	service.RegisterProxyClientCacheResetHook(resetResponseHeaderTransportCache)
+}
+
+func resetResponseHeaderTransportCache() {
+	responseHeaderTransportCache.Range(func(key, value interface{}) bool {
+		if transport, ok := value.(*http.Transport); ok && transport != nil {
+			transport.CloseIdleConnections()
+		}
+		responseHeaderTransportCache.Delete(key)
+		return true
+	})
+}
 
 // applyUpstreamBodyMetadata restores metadata hidden when http.NewRequest
 // wraps an arbitrary reader in req.Body.
@@ -516,6 +538,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	} else {
 		client = service.GetHttpClient()
 	}
+	client = clientWithNonStreamingTimeout(client, info)
+	client = clientWithStreamingHeaderTimeout(client, info)
 
 	var stopPinger context.CancelFunc
 	var pingerDone <-chan struct{}
@@ -539,11 +563,25 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if isUpstreamTimeout(err) && info != nil {
+			info.RecordChannelTimeout("transport_timeout")
+		}
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
+	}
+	if info != nil && !info.IsStream && resp.Body != nil {
+		setting := operation_setting.GetMonitorSetting()
+		if setting != nil && setting.NonStreamingResponseTimeoutSeconds > 0 && !isServerSentEventsResponse(resp) {
+			budget := common.RemainingChannelFirstResponseTimeout(
+				info.ChannelAttemptStartTime(),
+				time.Duration(setting.NonStreamingResponseTimeoutSeconds)*time.Second,
+				time.Now(),
+			)
+			resp.Body = newTimeoutTrackingBody(resp.Body, info, budget)
+		}
 	}
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
@@ -553,6 +591,128 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
 	return resp, nil
+}
+
+func clientWithNonStreamingTimeout(client *http.Client, info *common.RelayInfo) *http.Client {
+	if client == nil || info == nil || info.IsStream {
+		return client
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || setting.NonStreamingResponseTimeoutSeconds <= 0 {
+		return client
+	}
+	timeout := time.Duration(setting.NonStreamingResponseTimeoutSeconds) * time.Second
+	return clientWithResponseHeaderTimeout(client, timeout)
+}
+
+// clientWithStreamingHeaderTimeout bounds the wait for upstream response
+// headers by the same first-response budget used by StreamScannerHandler.
+// The timeout is applied to a cloned transport, so it ends when headers are
+// received and does not cap the rest of a successful stream.
+func clientWithStreamingHeaderTimeout(client *http.Client, info *common.RelayInfo) *http.Client {
+	if client == nil || info == nil || !info.IsStream {
+		return client
+	}
+	setting := operation_setting.GetMonitorSetting()
+	if setting == nil || setting.StreamingFirstResultTimeoutSeconds <= 0 {
+		return client
+	}
+	configured := time.Duration(setting.StreamingFirstResultTimeoutSeconds) * time.Second
+	return clientWithResponseHeaderTimeout(client, configured)
+}
+
+func clientWithResponseHeaderTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if client == nil || timeout <= 0 {
+		return client
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if client.Transport == nil {
+		transport, ok = http.DefaultTransport.(*http.Transport)
+	}
+	if !ok || transport == nil {
+		return client
+	}
+	effective := timeout
+	if transport.ResponseHeaderTimeout > 0 && transport.ResponseHeaderTimeout < effective {
+		effective = transport.ResponseHeaderTimeout
+	}
+	cacheKey := responseHeaderTransportKey{base: transport, timeout: effective}
+	if cached, ok := responseHeaderTransportCache.Load(cacheKey); ok {
+		clone := *client
+		clone.Transport = cached.(*http.Transport)
+		return &clone
+	}
+	clonedTransport := transport.Clone()
+	clonedTransport.ResponseHeaderTimeout = effective
+	actual, _ := responseHeaderTransportCache.LoadOrStore(cacheKey, clonedTransport)
+	clone := *client
+	clone.Transport = actual.(*http.Transport)
+	return &clone
+}
+
+func isServerSentEventsResponse(resp *http.Response) bool {
+	return resp != nil && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))), "text/event-stream")
+}
+
+type timeoutTrackingBody struct {
+	io.ReadCloser
+	info       *common.RelayInfo
+	timer      *time.Timer
+	timedOut   atomic.Bool
+	recordOnce sync.Once
+}
+
+func newTimeoutTrackingBody(body io.ReadCloser, info *common.RelayInfo, timeout time.Duration) *timeoutTrackingBody {
+	tracked := &timeoutTrackingBody{ReadCloser: body, info: info}
+	if timeout > 0 {
+		tracked.timer = time.AfterFunc(timeout, tracked.expire)
+	}
+	return tracked
+}
+
+func (body *timeoutTrackingBody) expire() {
+	body.timedOut.Store(true)
+	body.recordTimeout()
+	_ = body.ReadCloser.Close()
+}
+
+func (body *timeoutTrackingBody) recordTimeout() {
+	body.recordOnce.Do(func() {
+		if body.info != nil {
+			body.info.RecordChannelTimeout("request_timeout")
+		}
+	})
+}
+
+func (body *timeoutTrackingBody) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if err != nil {
+		if body.timer != nil {
+			body.timer.Stop()
+		}
+		if body.timedOut.Load() || isUpstreamTimeout(err) {
+			body.recordTimeout()
+		}
+	}
+	return n, err
+}
+
+func (body *timeoutTrackingBody) Close() error {
+	if body.timer != nil {
+		body.timer.Stop()
+	}
+	return body.ReadCloser.Close()
+}
+
+func isUpstreamTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func newTaskHTTPRequest(method string, fullRequestURL string, requestBody io.Reader, info *common.RelayInfo) (*http.Request, error) {
