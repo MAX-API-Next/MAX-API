@@ -385,6 +385,13 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				Name:     name,
 				Response: contentMap,
 			}
+			if message.ToolCallId != "" {
+				id, err := common.Marshal(message.ToolCallId)
+				if err != nil {
+					return nil, fmt.Errorf("encode Gemini function response id: %w", err)
+				}
+				functionResp.ID = id
+			}
 
 			*parts = append(*parts, dto.GeminiPart{
 				FunctionResponse: functionResp,

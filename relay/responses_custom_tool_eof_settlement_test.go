@@ -100,14 +100,14 @@ func TestResponsesCustomToolEOFFinalizationUsesDurableLedger(t *testing.T) {
 							require.NoError(t, db.Create(&model.UserSubscription{Id: 905, UserId: 901, PlanId: 904, AmountTotal: 1000, Status: "active",
 								StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix()}).Error)
 						}
-						prompt, completion := 10, 0
+						prompt := 10
 						deliveredInput := strings.Join(inputs, "")
 						if ending == "first_input_write_failure" || ending == "no_delivery" {
 							deliveredInput = ""
 						} else if ending == "second_input_write_failure" || ending == "finish_second_input_write_failure" || ending == "input_flush_failure" {
 							deliveredInput = inputs[0]
 						}
-						completion = service.EstimateTokenByModel("gpt-test", deliveredInput)
+						completion := service.EstimateTokenByModel("gpt-test", deliveredInput)
 						if usageKind == "known" {
 							prompt, completion = 4, 2
 						} else if usageKind == "zero" {

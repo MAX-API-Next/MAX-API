@@ -418,6 +418,12 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 
 func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEvent {
 	events := make([]ChatToResponsesStreamEvent, 0)
+	tools := s.sortedTools()
+	for _, tool := range tools {
+		if tool.Name == "" {
+			s.MarkIncomplete("missing_tool_name")
+		}
+	}
 	status := s.outputStatus()
 	if s.textStarted && !s.textDone {
 		s.textDone = true
@@ -451,7 +457,7 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			Item:        s.reasoningOutput(status),
 		}))
 	}
-	for _, tool := range s.sortedTools() {
+	for _, tool := range tools {
 		if tool.Done {
 			continue
 		}

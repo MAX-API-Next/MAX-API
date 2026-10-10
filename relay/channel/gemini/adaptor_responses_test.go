@@ -104,6 +104,8 @@ func TestConvertOpenAIResponsesRequestToGeminiPreservesCustomToolCalls(t *testin
 	require.Len(t, got.Contents[1].Parts, 2)
 	assert.Equal(t, "ok", got.Contents[1].Parts[0].FunctionResponse.Response["content"])
 	assert.Equal(t, "legacy custom output", got.Contents[1].Parts[1].FunctionResponse.Response["content"])
+	assert.JSONEq(t, `"call_custom"`, string(got.Contents[1].Parts[0].FunctionResponse.ID))
+	assert.JSONEq(t, `"call_custom"`, string(got.Contents[1].Parts[1].FunctionResponse.ID))
 	assert.Equal(t, "user", got.Contents[2].Role)
 	assert.Equal(t, "next turn", got.Contents[2].Parts[0].Text)
 }

@@ -1093,6 +1093,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 				// after the client has gone away.
 				if streamStatus == nil || streamStatus.EndReason == relaycommon.StreamEndReasonEOF {
 					if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+						if !claudeInfo.responsesOutputDelivered {
+							return nil, finalErr
+						}
 						return claudeInfo.Usage, finalErr
 					}
 				}

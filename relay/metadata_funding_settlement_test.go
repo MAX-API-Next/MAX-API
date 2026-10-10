@@ -94,7 +94,10 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 	for _, route := range []string{"responses_native", "chat_native", "chat_to_responses", "responses_to_chat_custom", "responses_to_chat_global", "claude_to_responses", "gemini_to_responses"} {
 		for _, funding := range streamFundingCases() {
 			for _, usage := range []string{"known", "zero", "missing"} {
-				for _, ending := range []string{"eof", "transport", "malformed", "cancel", "timeout"} {
+				for _, ending := range []string{"eof", "transport", "malformed", "cancel", "timeout", "eof_terminal_write_failure"} {
+					if ending == "eof_terminal_write_failure" && route != "chat_to_responses" && route != "claude_to_responses" && route != "gemini_to_responses" {
+						continue
+					}
 					// Native Chat's normal EOF keeps its legacy empty-completion
 					// pricing policy. Its abnormal endings belong in this matrix.
 					if route == "chat_native" && ending == "eof" {
@@ -150,6 +153,10 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 							info.UserSetting.BillingPreference = "subscription_only"
 						}
 						var cancelWriter *metadataCancelWriter
+						if ending == "eof_terminal_write_failure" {
+							failureContext, _ := gin.CreateTestContext(&customToolEOFWriter{ResponseRecorder: recorder, ending: "terminal_write_failure"})
+							c.Writer = failureContext.Writer
+						}
 						if ending == "cancel" {
 							ctx, cancel := context.WithCancel(c.Request.Context())
 							t.Cleanup(cancel)
@@ -175,6 +182,10 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 						if ending == "timeout" {
 							require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())
 							require.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
+						}
+						if ending == "eof_terminal_write_failure" {
+							require.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason, "failure occurs after the scanner records EOF")
+							require.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
 						}
 						if cancelWriter != nil {
 							require.True(t, cancelWriter.triggered.Load())
