@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -237,6 +238,7 @@ func responsesWebSearchToolName(info *relaycommon.RelayInfo) string {
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
+	info.EnableFirstResultTracking()
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
 		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
@@ -255,13 +257,49 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	streamForwarded := false
 	hasVisiblePayload := false
 	emptyCompletionRecorded := false
+	terminalEventSeen := false
+	usageReported := false
+	outputDelivered := false
 
-	flushPendingEvents := func() {
+	sendEvent := func(event pendingResponsesStreamEvent) bool {
+		delivered, writeErr := sendResponsesStreamData(c, event.response, event.data)
+		if delivered {
+			streamForwarded = true
+			if helper.ResponsesStreamEventHasOutput(event.response) || responsesStreamHasVisibleOutput(&event.response) {
+				outputDelivered = true
+			}
+			if event.response.Type == "response.output_text.delta" {
+				responseTextBuilder.WriteString(event.response.Delta)
+			}
+		}
+		if writeErr != nil {
+			streamErr = types.NewError(writeErr, types.ErrorCodeBadResponse)
+			return false
+		}
+		if delivered && responsesStreamHasVisibleOutput(&event.response) {
+			info.SetFirstResultTime()
+		}
+		return true
+	}
+	finalizeUsage := func() {
+		if !usageReported {
+			if usage.CompletionTokens == 0 && responseTextBuilder.Len() > 0 {
+				usage.CompletionTokens = service.CountTextToken(responseTextBuilder.String(), info.UpstreamModelName)
+			}
+			if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
+				usage.PromptTokens = info.GetEstimatePromptTokens()
+			}
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	flushPendingEvents := func() bool {
 		for _, event := range pendingEvents {
-			sendResponsesStreamData(c, event.response, event.data)
+			if !sendEvent(event) {
+				return false
+			}
 		}
 		pendingEvents = pendingEvents[:0]
-		streamForwarded = true
+		return true
 	}
 	shouldBufferForEmptyRetry := func() bool {
 		return !streamForwarded && shouldRetryEmptyCompletion(c, info)
@@ -277,8 +315,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			sr.Error(err)
+			streamErr = types.NewError(err, types.ErrorCodeBadResponseBody)
+			sr.Stop(streamErr)
 			return
+		}
+		if streamResponse.Response != nil && (dto.HasOpenAIUsageTokens(streamResponse.Response.Usage) ||
+			helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
+			helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens")) {
+			usageReported = true
+			applyResponsesUsage(usage, streamResponse.Response.Usage)
+			if helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
+				helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens") {
+				usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+			}
 		}
 		if responsesStreamHasVisibleOutput(&streamResponse) {
 			hasVisiblePayload = true
@@ -286,12 +335,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		var terminalEventErr *types.MaxAPIError
 		switch streamResponse.Type {
 		case "response.completed":
+			terminalEventSeen = true
 			if streamResponse.Response != nil {
 				if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, streamForwarded); terminalErr != nil {
 					terminalEventErr = terminalErr
 					break
 				}
-				applyResponsesUsage(usage, streamResponse.Response.Usage)
 				observeResponsesOutputs(info, streamResponse.Response.Output)
 				if streamResponse.Response.HasImageGenerationCall() {
 					c.Set("image_generation_call", true)
@@ -307,9 +356,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					return
 				}
 			}
+		case "response.incomplete", "response.done":
+			terminalEventSeen = true
+			if streamResponse.Response != nil {
+				observeResponsesOutputs(info, streamResponse.Response.Output)
+			}
 		case "response.output_text.delta":
-			// 处理输出文本
-			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
 			// 函数调用处理
 			if streamResponse.Item != nil {
@@ -324,7 +376,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 		if terminalEventErr != nil {
 			if streamForwarded {
-				sendResponsesStreamData(c, streamResponse, data)
+				if !sendEvent(pendingResponsesStreamEvent{response: streamResponse, data: data}) {
+					sr.Stop(streamErr)
+					return
+				}
 			}
 			streamErr = terminalEventErr
 			sr.Stop(streamErr)
@@ -332,7 +387,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		if streamForwarded {
-			sendResponsesStreamData(c, streamResponse, data)
+			if !sendEvent(pendingResponsesStreamEvent{response: streamResponse, data: data}) {
+				sr.Stop(streamErr)
+			}
 			return
 		}
 
@@ -342,19 +399,34 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		})
 		switch streamResponse.Type {
 		case "response.completed":
-			flushPendingEvents()
+			if !flushPendingEvents() {
+				sr.Stop(streamErr)
+			}
 		default:
 			if hasVisiblePayload || len(pendingEvents) >= maxPendingResponsesStreamEvents || !shouldBufferForEmptyRetry() {
-				flushPendingEvents()
+				if !flushPendingEvents() {
+					sr.Stop(streamErr)
+				}
 			}
 		}
 	})
 
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
+		if outputDelivered {
+			finalizeUsage()
+			return usage, apiErr
+		}
 		return nil, apiErr
 	}
 
 	if streamErr != nil {
+		if streamForwarded || c.Writer.Written() {
+			streamErr = types.NewError(streamErr, streamErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
+		if outputDelivered {
+			finalizeUsage()
+			return usage, streamErr
+		}
 		return nil, streamErr
 	}
 	if !hasVisiblePayload && !emptyCompletionRecorded {
@@ -364,29 +436,34 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	}
 	if !streamForwarded && len(pendingEvents) > 0 {
-		flushPendingEvents()
-	}
-
-	if usage.CompletionTokens == 0 {
-		// 计算输出文本的 token 数量
-		tempStr := responseTextBuilder.String()
-		if len(tempStr) > 0 {
-			// 非正常结束，使用输出文本的 token 数量
-			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
-			usage.CompletionTokens = completionTokens
+		if !flushPendingEvents() {
+			if outputDelivered {
+				finalizeUsage()
+				return usage, types.NewError(streamErr, streamErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+			}
+			return nil, types.NewError(streamErr, streamErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
 		}
 	}
 
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-		usage.PromptTokens = info.GetEstimatePromptTokens()
-	}
-
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	finalizeUsage()
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, responseTextBuilder.String())
 	}
 	if hasVisiblePayload {
 		recordEmptyCompletionRetrySuccess(c, info, usage)
+	}
+	if !terminalEventSeen {
+		reason := "upstream_eof"
+		if info.StreamStatus != nil && info.StreamStatus.IsAbnormalEnd() {
+			reason = string(info.StreamStatus.EndReason)
+		}
+		// Lifecycle/usage metadata is not delivered generation. Returning it
+		// as partial usage would start a finalize before the failure refund,
+		// or make an empty zero-usage stream look successfully completed.
+		if !outputDelivered {
+			return nil, openaicompat.NewResponsesStreamIncompleteError(reason)
+		}
+		return usage, openaicompat.NewResponsesStreamIncompleteError(reason)
 	}
 
 	return usage, nil

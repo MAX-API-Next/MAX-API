@@ -520,6 +520,29 @@ func TestOaiResponsesStreamHandlerAllowsRetryWhenFirstEventIsError(t *testing.T)
 	}
 }
 
+func TestOaiResponsesStreamHandlerEOFAfterOutputReturnsIncompleteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gpt-4o",
+		DisablePing:     true,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-4o"},
+	}
+
+	usage, maxAPIError := OaiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`data: {"type":"response.output_text.delta","delta":"partial"}` + "\n")),
+	})
+	require.NotNil(t, usage)
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Contains(t, recorder.Body.String(), "response.output_text.delta")
+}
+
 func TestOaiResponsesToChatStreamHandlerPreservesMessageOnlyTerminalError(t *testing.T) {
 	setOpenAIToolPricesForTest(t, map[string]float64{"lookup": 5})
 	c, info := newOpenAIToolBillingContext("gpt-test")

@@ -91,6 +91,71 @@ func (frame *chatStreamFrame) hasPayload() bool {
 	return false
 }
 
+// Keep timing separate from the conservative empty-retry predicate. Provider
+// metadata and fields dropped by typed formatting are not delivered results.
+func (frame *chatStreamFrame) hasFirstResult(formatted bool) bool {
+	for _, choice := range frame.Choices {
+		if choice.FinishReason == "content_filter" {
+			return true
+		}
+		for _, key := range []string{"content", "reasoning", "reasoning_content"} {
+			value := choice.Delta[key]
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				return true
+			}
+			if parts, ok := value.([]any); ok && key == "content" && !formatted {
+				for _, part := range parts {
+					if content, ok := part.(map[string]any); ok {
+						for _, field := range []string{"text", "refusal", "image_url", "data"} {
+							if chatStreamValueHasPayload(content[field]) {
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+		if calls, ok := choice.Delta["tool_calls"].([]any); ok {
+			for _, call := range calls {
+				if chatStreamCallHasFirstResult(call, formatted) {
+					return true
+				}
+			}
+		}
+		if !formatted {
+			if chatStreamValueHasPayload(choice.Delta["refusal"]) || chatStreamCallHasFirstResult(choice.Delta["function_call"], false) {
+				return true
+			}
+			if audio, ok := choice.Delta["audio"].(map[string]any); ok &&
+				(chatStreamValueHasPayload(audio["data"]) || chatStreamValueHasPayload(audio["transcript"])) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func chatStreamCallHasFirstResult(value any, formatted bool) bool {
+	call, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, field := range []string{"id", "name", "arguments"} {
+		if chatStreamValueHasPayload(call[field]) {
+			return true
+		}
+	}
+	if function, ok := call["function"].(map[string]any); ok && chatStreamCallHasFirstResult(function, false) {
+		return true
+	}
+	if !formatted {
+		if custom, ok := call["custom"].(map[string]any); ok {
+			return chatStreamValueHasPayload(custom["name"]) || chatStreamValueHasPayload(custom["input"])
+		}
+	}
+	return false
+}
+
 func (frame *chatStreamFrame) upstreamError() *types.MaxAPIError {
 	if len(frame.Error) == 0 || strings.TrimSpace(string(frame.Error)) == "null" {
 		return nil
@@ -130,6 +195,7 @@ func chatStreamRequestErrorIsPermanent(upstream types.OpenAIError) bool {
 // policy. A partial response returns usage AND a SkipRetry error; TextHelper
 // settles that usage before returning the terminal error to the controller.
 func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
+	info.EnableFirstResultTracking()
 	if info.RetryIndex > 0 && !c.Writer.Written() {
 		info.StreamStatus = nil
 		info.SendResponseCount, info.ReceivedResponseCount = 0, 0
@@ -221,6 +287,9 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			sr.Stop(streamErr)
 			return
 		}
+		if frame.hasFirstResult(info.ChannelSetting.ForceFormat || info.ChannelSetting.ThinkingToContent) {
+			info.SetFirstResultTime()
+		}
 		hasPayload = hasPayload || visible
 		recordUsage(&frame, data)
 		observeOpenAIStreamToolCalls(observer, data)
@@ -233,7 +302,10 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	// race the final retry decision. Cancellation is never an empty completion.
 	if c.Request.Context().Err() != nil {
 		streamErr = types.NewOpenAIError(c.Request.Context().Err(), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
-	} else if streamErr == nil && !info.StreamStatus.IsNormalEnd() {
+	} else if streamErr == nil {
+		streamErr = helper.FirstResultTimeoutError(c, info)
+	}
+	if streamErr == nil && !info.StreamStatus.IsNormalEnd() {
 		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 	if streamErr != nil {

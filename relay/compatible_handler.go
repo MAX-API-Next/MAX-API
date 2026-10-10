@@ -78,6 +78,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 		applySystemPromptIfNeeded(c, info, request)
 		usage, maxApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
 		if maxApiErr != nil {
+			if usage != nil && info.IsStream && info.RelayFormat == types.RelayFormatOpenAI && types.IsSkipRetryError(maxApiErr) {
+				service.PostPartialConsumeQuota(c, info, usage)
+			}
 			return maxApiErr
 		}
 

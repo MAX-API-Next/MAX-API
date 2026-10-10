@@ -235,7 +235,7 @@ func TestResponsesRequestToChatCompletionsRequestSkipsNonMessageOutputItems(t *t
 	assert.Equal(t, "continue", got.Messages[1].StringContent())
 }
 
-func TestResponsesRequestToChatCompletionsRequestRejectsCustomToolCallItems(t *testing.T) {
+func TestResponsesRequestToChatCompletionsRequestEncodesCustomToolHistory(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",
 		Input: mustCompatRawMessage(t, []map[string]any{
@@ -245,12 +245,46 @@ func TestResponsesRequestToChatCompletionsRequestRejectsCustomToolCallItems(t *t
 				"name":    "apply_patch",
 				"input":   "patch body",
 			},
+			{
+				"type":    "custom_tool_call_output",
+				"call_id": "call_custom",
+				"output":  "ok",
+			},
 		}),
 	})
 
-	require.Error(t, err)
-	require.Nil(t, got)
-	assert.Contains(t, err.Error(), "custom_tool_call")
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 2)
+	toolCalls := got.Messages[0].ParseToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "function", toolCalls[0].Type)
+	assert.Equal(t, "call_custom", toolCalls[0].ID)
+	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
+	assert.Equal(t, "patch body", gjson.Get(toolCalls[0].Function.Arguments, "input").String())
+	assert.Equal(t, dto.Message{Role: "tool", ToolCallId: "call_custom", Content: "ok"}, got.Messages[1])
+}
+
+func TestResponsesRequestToChatCompletionsRequestEncodesCustomToolDefinition(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Tools: mustCompatRawMessage(t, []map[string]any{{
+			"type":        "custom",
+			"name":        "apply_patch",
+			"description": "Apply a patch",
+		}}),
+		ToolChoice: mustCompatRawMessage(t, map[string]any{"type": "custom", "name": "apply_patch"}),
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Tools, 1)
+	assert.Equal(t, "function", got.Tools[0].Type)
+	assert.Equal(t, "apply_patch", got.Tools[0].Function.Name)
+	assert.Contains(t, got.Tools[0].Function.Description, "Apply a patch")
+	params := got.Tools[0].Function.Parameters.(map[string]any)
+	assert.Equal(t, []string{"input"}, params["required"])
+	assert.Equal(t, map[string]any{
+		"type":     "function",
+		"function": map[string]any{"name": "apply_patch"},
+	}, got.ToolChoice)
 }
 
 func TestResponsesRequestToChatCompletionsRequestRejectsMissingToolCallIDs(t *testing.T) {
@@ -299,13 +333,13 @@ func TestResponsesRequestToChatCompletionsRequestRejectsUnsupportedToolTypes(t *
 		Model: "gpt-test",
 		Input: mustCompatRawMessage(t, "hello"),
 		Tools: mustCompatRawMessage(t, []map[string]any{
-			{"type": "custom", "name": "apply_patch"},
+			{"type": "web_search_preview"},
 		}),
 	})
 
 	require.Error(t, err)
 	require.Nil(t, got)
-	assert.Contains(t, err.Error(), `tool type "custom"`)
+	assert.Contains(t, err.Error(), `tool type "web_search_preview"`)
 }
 
 func TestChatCompletionsResponseToResponsesResponsePreservesToolCallsAndIncompleteReason(t *testing.T) {
@@ -494,6 +528,68 @@ func TestChatCompletionsStreamToResponsesEventsAggregatesUsage(t *testing.T) {
 	require.Len(t, events[9].Payload.Response.Output, 2)
 	assert.Equal(t, "hello", events[9].Payload.Response.Output[0].Content[0].Text)
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(events[9].Payload.Response.Output[1].Arguments))
+}
+
+func TestChatCompletionsStreamToResponsesEventsWaitsForToolName(t *testing.T) {
+	state := NewChatToResponsesStreamState("resp_unnamed", "gpt-test")
+	toolIndex := 0
+	finishReason := "tool_calls"
+
+	events := mustCompatResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Id: "chatcmpl_unnamed",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+			ToolCalls: []dto.ToolCallResponse{{
+				Index: &toolIndex,
+				ID:    "call_unnamed",
+				Function: dto.FunctionResponse{
+					Arguments: `{"input":"ls"}`,
+				},
+			}},
+		}}},
+	})
+	require.Len(t, events, 1)
+	assert.Equal(t, responsesEventCreated, events[0].Type)
+
+	nameEvents := mustCompatResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+			ToolCalls: []dto.ToolCallResponse{{
+				Index:    &toolIndex,
+				Function: dto.FunctionResponse{Name: "exec"},
+			}},
+		}}},
+	})
+	require.Len(t, nameEvents, 2)
+	assert.Equal(t, responsesEventOutputItemAdded, nameEvents[0].Type)
+	require.NotNil(t, nameEvents[0].Payload.Item)
+	assert.Equal(t, "exec", nameEvents[0].Payload.Item.Name)
+	assert.Equal(t, responsesEventFunctionArgsDelta, nameEvents[1].Type)
+	assert.Equal(t, `{"input":"ls"}`, nameEvents[1].Payload.Delta)
+
+	finishEvents := mustCompatResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{FinishReason: &finishReason}},
+	})
+	require.Len(t, finishEvents, 2)
+	assert.Equal(t, responsesEventFunctionArgsDone, finishEvents[0].Type)
+	assert.Equal(t, responsesEventOutputItemDone, finishEvents[1].Type)
+}
+
+func TestChatCompletionsStreamToResponsesMarksTransportEOFIncomplete(t *testing.T) {
+	state := NewChatToResponsesStreamState("resp_eof", "gpt-test")
+	mustCompatResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{Content: lo.ToPtr("partial")},
+		}},
+	})
+
+	state.MarkIncomplete("upstream_eof")
+	events := FinalizeChatCompletionsStreamToResponses(state)
+	require.NotEmpty(t, events)
+	last := events[len(events)-1]
+	assert.Equal(t, responsesEventIncomplete, last.Type)
+	require.NotNil(t, last.Payload.Response)
+	assert.Equal(t, `"incomplete"`, string(last.Payload.Response.Status))
+	require.NotNil(t, last.Payload.Response.IncompleteDetails)
+	assert.Equal(t, "upstream_eof", last.Payload.Response.IncompleteDetails.Reason)
 }
 
 func compatAssistantMessageWithTool(content string, id string, name string, args string) dto.Message {

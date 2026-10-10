@@ -34,9 +34,10 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
-	ErrSubscriptionQuotaInsufficient  = errors.New("subscription quota insufficient")
+	ErrSubscriptionOrderNotFound       = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid  = errors.New("subscription order status invalid")
+	ErrSubscriptionQuotaInsufficient   = errors.New("subscription quota insufficient")
+	ErrSubscriptionResetPendingBilling = errors.New("subscription has unsettled requests; retry quota reset after settlement")
 )
 
 func invalidateSubscriptionUserCache(userId int, operation string) {
@@ -1073,17 +1074,84 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
 	}
-	sub.AmountUsed = 0
+	updated := *sub
+	updated.AmountUsed = 0
 	if advanceResetTime {
 		nextReset := calcNextResetTime(time.Unix(now, 0), plan, sub.EndTime)
-		sub.NextResetTime = nextReset
+		updated.NextResetTime = nextReset
 		if nextReset > 0 {
-			sub.LastResetTime = now
+			updated.LastResetTime = now
 		} else {
-			sub.LastResetTime = 0
+			updated.LastResetTime = 0
 		}
 	}
+	if updated.LastResetTime == sub.LastResetTime {
+		if err := validateSubscriptionResetBillingTx(tx, *sub); err != nil {
+			return err
+		}
+	}
+	*sub = updated
 	return tx.Save(sub).Error
+}
+
+// The caller holds the subscription row lock. An unchanged period anchor
+// cannot distinguish a cleared reservation from later usage in that period.
+// Only a recorded funding application makes such a reservation safe to reset;
+// effect-only replay does not debit the subscription again.
+func validateSubscriptionResetBillingTx(tx *gorm.DB, sub UserSubscription) error {
+	var unresolved BillingSettlement
+	query := tx.Select("id").Where("source = ? AND subscription_id = ?", BillingSettlementSourceSubscription, sub.Id).
+		Where("status NOT IN ?", []string{BillingSettlementStatusApplied, ""}).Limit(1).Find(&unresolved)
+	if query.Error != nil {
+		return query.Error
+	}
+	if query.RowsAffected > 0 {
+		return ErrSubscriptionResetPendingBilling
+	}
+
+	const batchSize = 200
+	lastID := 0
+	for {
+		var records []SubscriptionPreConsumeRecord
+		if err := tx.Select("id", "request_id", "user_id").
+			Where("user_subscription_id = ? AND subscription_last_reset_time = ? AND status = ?", sub.Id, sub.LastResetTime, "consumed").
+			Where("id > ?", lastID).Order("id asc").Limit(batchSize).Find(&records).Error; err != nil {
+			return err
+		}
+		if len(records) == 0 {
+			return nil
+		}
+		keys := make([]string, len(records))
+		requestIDs := make([]string, len(records))
+		for i, record := range records {
+			keys[i] = BillingRequestFinalizeOperationKey(record.RequestId)
+			requestIDs[i] = record.RequestId
+		}
+		var settlements []BillingSettlement
+		if err := tx.Select("operation_key", "source", "status", "user_id", "subscription_id", "subscription_pre_consume_request_id", "task_id").
+			Where("operation_key IN ? OR subscription_pre_consume_request_id IN ?", keys, requestIDs).Find(&settlements).Error; err != nil {
+			return err
+		}
+		applied := make(map[string]bool, len(settlements))
+		for _, settlement := range settlements {
+			canonicalFinalize := settlement.OperationKey == BillingRequestFinalizeOperationKey(settlement.SubscriptionPreConsumeRequestID)
+			if settlement.TaskID > 0 {
+				canonicalFinalize = canonicalFinalize || settlement.OperationKey == BillingTaskFinalizeOperationKey(settlement.TaskID) ||
+					settlement.OperationKey == BillingTaskManualCompletionOperationKey(settlement.TaskID)
+			}
+			// Empty status is an applied legacy record, as in ApplyBillingSettlementOnce.
+			if canonicalFinalize && (settlement.Status == BillingSettlementStatusApplied || settlement.Status == "") &&
+				settlement.Source == BillingSettlementSourceSubscription && settlement.UserID == sub.UserId && settlement.SubscriptionID == sub.Id {
+				applied[settlement.SubscriptionPreConsumeRequestID] = true
+			}
+		}
+		for _, record := range records {
+			if record.UserId != sub.UserId || !applied[record.RequestId] {
+				return ErrSubscriptionResetPendingBilling
+			}
+		}
+		lastID = records[len(records)-1].Id
+	}
 }
 
 func buildSubscriptionResetResult(plan *SubscriptionPlan, subs []UserSubscription, advanceResetTime bool) *SubscriptionResetResult {

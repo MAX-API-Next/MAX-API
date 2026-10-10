@@ -15,6 +15,7 @@ const (
 	responsesInputTypeFunctionCall       = "function_call"
 	responsesInputTypeFunctionCallOutput = "function_call_output"
 	responsesInputTypeCustomToolCall     = "custom_tool_call"
+	responsesInputTypeCustomToolOutput   = "custom_tool_call_output"
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
@@ -170,11 +171,15 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		}
 		return appendToolCallToLastAssistant(messages, toolCall), nil
 	case responsesInputTypeCustomToolCall:
-		return nil, errors.New("responses to chat conversion does not support custom_tool_call items")
-	case responsesInputTypeFunctionCallOutput:
+		toolCall, err := responsesCustomToolCallItemToChatToolCall(item)
+		if err != nil {
+			return nil, err
+		}
+		return appendToolCallToLastAssistant(messages, toolCall), nil
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolOutput:
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
 		if callID == "" {
-			return nil, errors.New("function_call_output item is missing call_id")
+			return nil, fmt.Errorf("%s item is missing call_id", itemType)
 		}
 		content := responseToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
@@ -282,6 +287,35 @@ func responsesFunctionCallItemToChatToolCall(item map[string]any) (dto.ToolCallR
 	}, nil
 }
 
+// responsesCustomToolCallItemToChatToolCall carries a Responses free-form tool
+// input through the Chat Completions function-call shape. The target adapters
+// already understand function calls, so the raw text is retained verbatim in
+// the single required "input" argument.
+func responsesCustomToolCallItemToChatToolCall(item map[string]any) (dto.ToolCallRequest, error) {
+	name := strings.TrimSpace(common.Interface2String(item["name"]))
+	if name == "" {
+		return dto.ToolCallRequest{}, errors.New("custom_tool_call item is missing name")
+	}
+	arguments, err := common.Marshal(map[string]string{
+		"input": responsesArgumentsString(item["input"]),
+	})
+	if err != nil {
+		return dto.ToolCallRequest{}, err
+	}
+	callID := responsesCallID(item)
+	if callID == "" {
+		return dto.ToolCallRequest{}, errors.New("custom_tool_call item is missing call_id")
+	}
+	return dto.ToolCallRequest{
+		ID:   callID,
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:      name,
+			Arguments: string(arguments),
+		},
+	}, nil
+}
+
 func appendToolCallToLastAssistant(messages []dto.Message, toolCall dto.ToolCallRequest) []dto.Message {
 	if len(messages) == 0 || messages[len(messages)-1].Role != "assistant" {
 		messages = append(messages, dto.Message{Role: "assistant"})
@@ -303,9 +337,24 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 		return nil, fmt.Errorf("invalid tools: %w", err)
 	}
 	out := make([]dto.ToolCallRequest, 0, len(tools))
+	// Both kinds become functions upstream. Reject ambiguous restoration before
+	// converting either order, rather than interpreting a function as raw input.
+	names := make(map[string]string)
+	for _, tool := range tools {
+		kind := strings.TrimSpace(common.Interface2String(tool["type"]))
+		if kind != "function" && kind != "custom" {
+			continue
+		}
+		name := strings.TrimSpace(common.Interface2String(tool["name"]))
+		if previous, exists := names[name]; exists && (kind == "custom" || previous == "custom") {
+			return nil, fmt.Errorf("ambiguous custom tool name %q", name)
+		}
+		names[name] = kind
+	}
 	for _, tool := range tools {
 		toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
-		if toolType == "function" {
+		switch toolType {
+		case "function":
 			out = append(out, dto.ToolCallRequest{
 				Type: "function",
 				Function: dto.FunctionRequest{
@@ -314,11 +363,63 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 					Parameters:  tool["parameters"],
 				},
 			})
-			continue
+		case "custom":
+			name := strings.TrimSpace(common.Interface2String(tool["name"]))
+			if name == "" {
+				return nil, errors.New("custom tool is missing name")
+			}
+			out = append(out, dto.ToolCallRequest{
+				Type: "function",
+				Function: dto.FunctionRequest{
+					Name:        name,
+					Description: customToolDescription(tool),
+					Parameters:  customToolInputSchema(),
+				},
+			})
+		default:
+			return nil, fmt.Errorf("responses to chat conversion does not support tool type %q", toolType)
 		}
-		return nil, fmt.Errorf("responses to chat conversion does not support tool type %q", toolType)
 	}
 	return out, nil
+}
+
+func customToolInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"input": map[string]any{
+				"type":        "string",
+				"description": "Raw input for the tool.",
+			},
+		},
+		"required":             []string{"input"},
+		"additionalProperties": false,
+	}
+}
+
+func customToolDescription(tool map[string]any) string {
+	description := strings.TrimSpace(common.Interface2String(tool["description"]))
+	const hint = `This tool takes freeform text. Put the complete raw text in the "input" argument.`
+	parts := []string{}
+	if description != "" {
+		parts = append(parts, description)
+	}
+	parts = append(parts, hint)
+	if format, ok := tool["format"].(map[string]any); ok && common.Interface2String(format["type"]) == "grammar" {
+		definition := common.Interface2String(format["definition"])
+		if strings.TrimSpace(definition) != "" {
+			syntax := strings.TrimSpace(common.Interface2String(format["syntax"]))
+			label := syntax + " grammar"
+			switch syntax {
+			case "lark":
+				label = "Lark grammar"
+			case "regex":
+				label = "regular expression"
+			}
+			parts = append(parts, "The input must match this "+label+":\n"+definition)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
@@ -336,7 +437,7 @@ func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
 	if err := common.Unmarshal(raw, &choice); err != nil {
 		return nil, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	if common.Interface2String(choice["type"]) == "function" {
+	if choiceType := common.Interface2String(choice["type"]); choiceType == "function" || choiceType == "custom" {
 		if name := strings.TrimSpace(common.Interface2String(choice["name"])); name != "" {
 			return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
 		}

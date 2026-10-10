@@ -413,6 +413,22 @@ func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool
 	return fallbackQuota, true
 }
 
+// Only failed Responses generations may bypass the abnormal-stream reservation
+// fallback using known usage and a successfully resolved price. Other callers
+// retain their existing policy, including unknown usage and expression errors.
+func knownResponsesPartialUsage(info *relaycommon.RelayInfo, usage *dto.Usage, recordSuccess, priceResolved bool) bool {
+	if recordSuccess || !priceResolved || info == nil || !info.IsStream || info.RelayMode != relayconstant.RelayModeResponses || usage == nil {
+		return false
+	}
+	counts := effectiveBillingUsage(usage)
+	if usage.PromptTokens < 0 || usage.CompletionTokens < 0 || usage.TotalTokens < 0 ||
+		counts.PromptTokens < 0 || counts.CompletionTokens < 0 || counts.TotalTokens < 0 {
+		return false
+	}
+	return counts.PromptTokens > 0 || counts.CompletionTokens > 0 || counts.TotalTokens > 0 ||
+		(usage.BillingUsage != nil && usage.BillingUsage.TokenCountsReported)
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	postTextConsumeQuota(ctx, relayInfo, usage, extraContent, true)
 }
@@ -487,7 +503,8 @@ func postTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if originUsage == nil {
 		fallbackBaseQuota = 0
 	}
-	if fallbackQuota, ok := streamFallbackQuota(relayInfo, fallbackBaseQuota); ok {
+	if fallbackQuota, ok := streamFallbackQuota(relayInfo, fallbackBaseQuota); ok &&
+		!knownResponsesPartialUsage(relayInfo, originUsage, recordSuccess, !tieredBillingApplied || tieredResult != nil) {
 		summary.Quota = fallbackQuota
 		shouldUpdateUsageStats = true
 		extraContent = append(extraContent, fmt.Sprintf("stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota))

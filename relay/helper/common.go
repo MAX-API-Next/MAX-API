@@ -3,7 +3,9 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -12,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func FlushWriter(c *gin.Context) (err error) {
@@ -93,17 +97,101 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
+	_, err := ResponseChunkDataWithDelivery(c, resp, data)
+	return err
+}
+
+// Delivery is true only after a complete SSE frame was written. Flush may
+// still fail after delivery, and a short write must never count as a frame.
+func ResponseChunkDataWithDelivery(c *gin.Context, resp dto.ResponsesStreamResponse, data string) (bool, error) {
 	if c == nil || c.Writer == nil {
-		return errors.New("context or writer is nil")
+		return false, errors.New("context or writer is nil")
+	}
+	state := getResponsesStreamState(c)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return writeResponsesStreamFrame(c, state, resp.Type, data)
+}
+
+// The caller holds the request-local lock, including while flushing. A complete
+// write still counts as delivery if flush fails, but no later frame may follow.
+func writeResponsesStreamFrame(c *gin.Context, state *responsesStreamState, eventType, data string) (bool, error) {
+	if state.writeErr != nil {
+		return false, state.writeErr
+	}
+	if state.terminal {
+		return false, errResponsesStreamClosed
 	}
 
 	if requestContextDone(c) {
-		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		state.writeErr = fmt.Errorf("request context done: %w", c.Request.Context().Err())
+		return false, state.writeErr
+	}
+	if (strings.HasPrefix(eventType, "response.") || eventType == "error") && !gjson.Get(data, "sequence_number").Exists() {
+		var err error
+		data, err = sjson.Set(data, "sequence_number", state.nextSequence)
+		if err != nil {
+			return false, err
+		}
 	}
 
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
-	return FlushWriter(c)
+	SetEventStreamHeaders(c)
+	frame := fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, strings.ReplaceAll(data, "\r", "\\r"))
+	n, err := c.Writer.Write([]byte(frame))
+	if err != nil {
+		state.writeErr = err
+		return false, err
+	}
+	if n != len(frame) {
+		state.writeErr = io.ErrShortWrite
+		return false, io.ErrShortWrite
+	}
+	state.recordDelivery(eventType, data)
+	err = flushResponsesWriter(c)
+	if err != nil {
+		state.writeErr = err
+	}
+	return true, err
+}
+
+// ResponsesStreamEventHasOutput distinguishes delivered generation data from
+// lifecycle metadata when deciding whether an interrupted stream has usage.
+func ResponsesStreamEventHasOutput(event dto.ResponsesStreamResponse) bool {
+	switch event.Type {
+	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta",
+		"response.refusal.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+		return event.Delta != ""
+	case dto.ResponsesOutputTypeItemAdded, dto.ResponsesOutputTypeItemDone:
+		if event.Item != nil {
+			if event.Item.Type == dto.BuildInCallFileSearchCall {
+				// A search lifecycle/failed item is metadata. Only a finished
+				// invocation carries a delivered result and its existing fee.
+				status := strings.ToLower(strings.TrimSpace(event.Item.Status))
+				return event.Type == dto.ResponsesOutputTypeItemDone && (status == "" || status == "completed")
+			}
+			return event.Item.Type == dto.BuildInCallFunctionCall || event.Item.Type == dto.BuildInCallCustomToolCall
+		}
+	}
+	return false
+}
+
+// First-result timing excludes whitespace-only metadata/text while retaining
+// the independent output-delivery predicate used for partial usage accounting.
+func ResponsesStreamEventHasFirstResult(event dto.ResponsesStreamResponse) bool {
+	if !ResponsesStreamEventHasOutput(event) {
+		return false
+	}
+	if event.Type == dto.ResponsesOutputTypeItemAdded || event.Type == dto.ResponsesOutputTypeItemDone {
+		return true
+	}
+	return strings.TrimSpace(event.Delta) != ""
+}
+
+// An empty usage object is not a reported zero. Require both numeric counters
+// before treating an otherwise empty usage payload as authoritative.
+func HasUsageTokenFields(data, path, inputField, outputField string) bool {
+	return gjson.Get(data, path+"."+inputField).Type == gjson.Number &&
+		gjson.Get(data, path+"."+outputField).Type == gjson.Number
 }
 
 func StringData(c *gin.Context, str string) error {

@@ -410,6 +410,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				}
 				toolCall := dto.GeminiPart{
 					FunctionCall: &dto.FunctionCall{
+						ID:           call.ID,
 						FunctionName: call.Function.Name,
 						Arguments:    args,
 					},
@@ -903,8 +904,12 @@ func getResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 	if err != nil {
 		return nil
 	}
+	callID := strings.TrimSpace(item.FunctionCall.ID)
+	if callID == "" {
+		callID = fmt.Sprintf("call_%s", common.GetUUID())
+	}
 	return &dto.ToolCallResponse{
-		ID:   fmt.Sprintf("call_%s", common.GetUUID()),
+		ID:   callID,
 		Type: "function",
 		Function: dto.FunctionResponse{
 			Arguments: string(argsBytes),
@@ -1356,7 +1361,6 @@ func streamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 			}
 			appended++
 		}
-		isTools := false
 		isThought := false
 		if candidate.FinishReason != nil {
 			// Map Gemini FinishReason to OpenAI finish_reason
@@ -1401,7 +1405,6 @@ func streamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 					content.WriteByte(')')
 				}
 			} else if part.FunctionCall != nil {
-				isTools = true
 				if call := getResponseToolCall(&part); call != nil {
 					call.SetIndex(len(choice.Delta.ToolCalls))
 					choice.Delta.ToolCalls = append(choice.Delta.ToolCalls, *call)
@@ -1437,9 +1440,8 @@ func streamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 		} else {
 			choice.Delta.SetContentString(content.String())
 		}
-		if isTools {
-			choice.FinishReason = &constant.FinishReasonToolCalls
-		}
+		// Call arguments do not finish a candidate. The stream handler emits
+		// the terminal chunk once after the provider's STOP event.
 		choices = append(choices, choice)
 	}
 
@@ -1447,6 +1449,18 @@ func streamResponseGeminiChat2OpenAI(geminiResponse *dto.GeminiChatResponse) (*d
 	response.Object = "chat.completion.chunk"
 	response.Choices = choices
 	return &response, isStop
+}
+
+func hasGeminiTerminalFinishReason(geminiResponse *dto.GeminiChatResponse) bool {
+	if geminiResponse == nil {
+		return false
+	}
+	for _, candidate := range geminiResponse.Candidates {
+		if candidate.FinishReason != nil && strings.TrimSpace(*candidate.FinishReason) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func handleStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.ChatCompletionsStreamResponse) error {
@@ -1520,7 +1534,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("gemini callback stopped"))
 		}
 	})
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
 	}
 
@@ -1555,8 +1569,14 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	finishReason := constant.FinishReasonStop
 	toolCallIndexByChoice := make(map[int]map[string]int)
 	nextToolCallIndexByChoice := make(map[int]int)
+	functionCalls := newGeminiStreamFunctionCalls()
+	var conversionErr *types.MaxAPIError
 
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+		if prepareErr := functionCalls.prepare(geminiResponse); prepareErr != nil {
+			conversionErr = types.NewError(prepareErr, types.ErrorCodeBadResponseBody)
+			return false
+		}
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
 		response.Id = id
@@ -1639,6 +1659,15 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 
 	if err != nil {
 		return usage, err
+	}
+	if conversionErr == nil && len(functionCalls.pending) > 0 {
+		conversionErr = types.NewError(fmt.Errorf("Gemini stream ended with an incomplete function call"), types.ErrorCodeBadResponseBody)
+	}
+	if conversionErr != nil {
+		if c.Writer.Written() {
+			conversionErr = types.NewError(conversionErr, conversionErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
+		return usage, conversionErr
 	}
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)

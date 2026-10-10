@@ -258,9 +258,9 @@ func TestOaiResponsesStreamHandlerFlushesImmediatelyWhenEmptyRetryDisabled(t *te
 		},
 	}
 
-	_, err := OaiResponsesStreamHandler(c, info, resp)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	if err == nil || !types.IsSkipRetryError(err) || usage != nil {
+		t.Fatalf("metadata-only EOF must return no billable partial usage and forbid replay: usage=%+v, err=%v", usage, err)
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, "response.created") {
 		t.Fatalf("response body = %q, want forwarded pre-content event", body)
@@ -299,9 +299,9 @@ func TestOaiResponsesStreamHandlerCapsPendingEvents(t *testing.T) {
 		},
 	}
 
-	_, err := OaiResponsesStreamHandler(c, info, resp)
-	if err != nil {
-		t.Fatalf("unexpected error after pending cap forces forwarding: %v", err)
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	if err == nil || !types.IsSkipRetryError(err) || usage != nil {
+		t.Fatalf("flushing pending metadata must not turn an incomplete stream into a billable result: usage=%+v, err=%v", usage, err)
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, "response.created") {
 		t.Fatalf("response body = %q, want forwarded events after cap", body)
