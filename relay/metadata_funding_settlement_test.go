@@ -255,3 +255,118 @@ func TestMetadataOnlyCompletedResponsesPreservesReportedUsage(t *testing.T) {
 		})
 	}
 }
+
+// A terminal event name cannot override a failed response status. Exercise the
+// native adapter and original funding ledger, including durable failure replay.
+func TestNativeResponsesTerminalFailureRetainsOriginalFunding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	oldEmptyRetry := common.EmptyCompletionRetryEnabled
+	common.EmptyCompletionRetryEnabled = false
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldEmptyRetry })
+	const text = "partial terminal output"
+	for _, event := range []string{"response.completed", "response.done", "response.incomplete"} {
+		for _, status := range []string{"failed", "cancelled", "canceled"} {
+			for _, funding := range streamFundingCases() {
+				for _, usageKind := range []string{"known", "zero", "missing"} {
+					for _, delivered := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/%s/%s/%s/delivered_%t", event, status, funding.name, usageKind, delivered), func(t *testing.T) {
+							db := setupStreamFundingLedger(t, funding)
+							_, frames := metadataFundingFrames(t, "responses_native", usageKind)
+							if delivered {
+								data, err := common.Marshal(map[string]any{"type": "response.output_text.delta", "delta": text})
+								require.NoError(t, err)
+								frames = append(frames, string(data))
+							}
+							prompt, completion := 4, 2
+							if usageKind == "zero" {
+								prompt, completion = 0, 0
+							} else if usageKind == "missing" {
+								prompt, completion = 10, service.CountTextToken(text, "gpt-test")
+							}
+							response := map[string]any{"id": "resp_terminal_failure", "status": status, "output": []any{},
+								"error": map[string]any{"type": "server_error", "message": "synthetic terminal provider failure"}}
+							if usageKind != "missing" {
+								response["usage"] = map[string]int{"input_tokens": prompt, "output_tokens": completion, "total_tokens": prompt + completion}
+							}
+							terminal, err := common.Marshal(map[string]any{"type": event, "response": response})
+							require.NoError(t, err)
+							frames = append(frames, string(terminal))
+							var calls atomic.Int32
+							upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+								calls.Add(1)
+								w.Header().Set("Content-Type", "text/event-stream")
+								_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n")
+							}))
+							t.Cleanup(upstream.Close)
+							fingerprint := sha256.Sum256([]byte(t.Name()))
+							requestID := fmt.Sprintf("native-terminal-%x", fingerprint[:16])
+							c, info, _ := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+							require.Nil(t, service.PreConsumeBilling(c, 100, info))
+							// A new subscription and changed preference must not receive
+							// either this failure refund or the delivered partial charge.
+							require.NoError(t, db.Create(&model.UserSubscription{Id: 956, UserId: 951, PlanId: 954, Status: "active", AmountTotal: 1000,
+								StartTime: time.Now().Unix() - 1800, EndTime: time.Now().Unix() + 1800}).Error)
+							info.UserSetting.BillingPreference = "wallet_only"
+							if funding.source == "wallet" {
+								info.UserSetting.BillingPreference = "subscription_only"
+							}
+							apiErr := ResponsesHelper(c, info)
+							if apiErr != nil {
+								service.HandleFailedBilling(c, info, apiErr)
+								service.HandleFailedBilling(c, info, apiErr)
+							}
+							quota := prompt + completion
+							if !delivered {
+								quota = 0
+							}
+							var settlement model.BillingSettlement
+							require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+							require.Equal(t, funding.source, settlement.Source)
+							require.Equal(t, model.BillingSettlementStatusApplied, settlement.Status)
+							require.EqualValues(t, quota-100, settlement.AppliedFundingDelta)
+							require.EqualValues(t, quota-100, settlement.AppliedTokenDelta)
+							if delivered {
+								var effect model.BillingSettlementEffect
+								require.NoError(t, common.UnmarshalJsonStr(settlement.EffectPayload, &effect))
+								require.EqualValues(t, quota, effect.Quota)
+								require.True(t, effect.QuotaIsActual)
+								replayInfo := &relaycommon.RelayInfo{RequestId: requestID, UserId: info.UserId, TokenId: info.TokenId, TokenKey: info.TokenKey,
+									OriginModelName: info.OriginModelName, ForcePreConsume: true, UserSetting: info.UserSetting}
+								replay, replayErr := service.NewBillingSession(c, replayInfo, 100)
+								require.Nil(t, replayErr)
+								require.Equal(t, funding.source, replayInfo.BillingSource)
+								require.NoError(t, replay.SettleWithEffect(quota, &effect))
+								require.NoError(t, replay.SettleWithEffect(quota, &effect))
+								replay.Refund(c)
+							} else {
+								require.Empty(t, settlement.EffectPayload, "a failed metadata-only request has no consumption projection")
+								for range 2 {
+									_, already, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
+										OperationKey: settlement.OperationKey, Source: settlement.Source, UserID: settlement.UserID,
+										SubscriptionID: settlement.SubscriptionID, TokenID: settlement.TokenID, TokenKey: info.TokenKey,
+										FundingDelta: -100, TokenDelta: -100, SubscriptionPreConsumeRequestID: settlement.SubscriptionPreConsumeRequestID,
+										FinalizeSubscriptionPreConsume: settlement.FinalizeSubscriptionPreConsume, AllowMissingToken: true,
+									})
+									require.NoError(t, err)
+									require.True(t, already)
+								}
+							}
+							model.ProcessPendingBillingSettlementsOnce()
+							assertStreamFundingBalances(t, db, funding, requestID, quota, delivered, prompt, completion)
+							var decoy model.UserSubscription
+							require.NoError(t, db.First(&decoy, 956).Error)
+							require.Zero(t, decoy.AmountUsed)
+							require.EqualValues(t, 1, calls.Load())
+							require.Equal(t, delivered, info.HasRecordedChannelFirstResult())
+							require.NotNil(t, apiErr, "a failed terminal status must never be returned as success")
+							require.Equal(t, "synthetic terminal provider failure", apiErr.Error())
+							require.True(t, types.IsSkipRetryError(apiErr), "the earlier created metadata already committed the response")
+						})
+					}
+				}
+			}
+		}
+	}
+}

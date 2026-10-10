@@ -359,6 +359,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.incomplete", "response.done":
 			terminalEventSeen = true
 			if streamResponse.Response != nil {
+				if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, streamForwarded); terminalErr != nil {
+					terminalEventErr = terminalErr
+					break
+				}
 				observeResponsesOutputs(info, streamResponse.Response.Output)
 			}
 		case "response.output_text.delta":

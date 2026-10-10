@@ -193,3 +193,53 @@ func TestResponsesToChatLegalTerminalsPreserveProviderFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeResponsesLegalTerminalsPreserveReportedUsage(t *testing.T) {
+	oldEmptyRetry := common.EmptyCompletionRetryEnabled
+	common.EmptyCompletionRetryEnabled = false
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldEmptyRetry })
+	for _, event := range []string{"response.completed", "response.done", "response.incomplete"} {
+		for _, zero := range []bool{false, true} {
+			for _, delivered := range []bool{false, true} {
+				name := event
+				if zero {
+					name += "/zero"
+				} else {
+					name += "/known"
+				}
+				if delivered {
+					name += "/output"
+				} else {
+					name += "/metadata"
+				}
+				t.Run(name, func(t *testing.T) {
+					c, info := newResponsesUsageTestContext()
+					status := "completed"
+					if event == "response.incomplete" {
+						status = "incomplete"
+					}
+					prompt, completion := 4, 2
+					if zero {
+						prompt, completion = 0, 0
+					}
+					terminal, err := common.Marshal(map[string]any{"type": event, "response": map[string]any{
+						"id": "resp_native_legal", "status": status, "output": []any{},
+						"usage": map[string]int{"input_tokens": prompt, "output_tokens": completion, "total_tokens": prompt + completion},
+					}})
+					require.NoError(t, err)
+					body := "data: " + string(terminal) + "\n\n"
+					if delivered {
+						body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" + body
+					}
+					usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))})
+					require.Nil(t, apiErr)
+					require.NotNil(t, usage)
+					require.Equal(t, prompt, usage.PromptTokens)
+					require.Equal(t, completion, usage.CompletionTokens)
+					require.Equal(t, prompt+completion, usage.TotalTokens)
+					require.Equal(t, delivered, info.HasRecordedChannelFirstResult())
+				})
+			}
+		}
+	}
+}
