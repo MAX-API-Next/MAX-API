@@ -33,6 +33,111 @@ func resetBillingFinalize(sub UserSubscription, requestID string) BillingSettlem
 		SubscriptionPreConsumeRequestID: requestID}
 }
 
+func TestSubscriptionResetScopesProvenEarlierPeriod(t *testing.T) {
+	for _, state := range []string{BillingSettlementStatusManual, BillingSettlementStatusPending, "outcome_unknown"} {
+		for _, evidence := range []string{"earlier", "missing", "wrong_user", "future", "current"} {
+			for _, resetPlan := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/plan_%t", state, evidence, resetPlan), func(t *testing.T) {
+					plan, sub, requestID := seedResetBillingReservation(t)
+					require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+						var locked UserSubscription
+						if err := withRowLock(tx).First(&locked, sub.Id).Error; err != nil {
+							return err
+						}
+						return resetUserSubscriptionTx(tx, &locked, &plan, sub.LastResetTime+1, true)
+					}))
+					input := resetBillingFinalize(sub, requestID)
+					_, _, err := ApplyBillingSettlementOnce(input)
+					require.ErrorIs(t, err, ErrSubscriptionSettlementPeriodChanged)
+					require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Update("status", state).Error)
+					var current UserSubscription
+					require.NoError(t, DB.First(&current, sub.Id).Error)
+					switch evidence {
+					case "missing":
+						require.NoError(t, DB.Where("request_id = ?", requestID).Delete(&SubscriptionPreConsumeRecord{}).Error)
+					case "wrong_user":
+						require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Update("user_id", 9999).Error)
+					case "future", "current":
+						anchor := current.LastResetTime
+						if evidence == "future" {
+							anchor++
+						}
+						require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Update("subscription_last_reset_time", anchor).Error)
+					}
+					// New-period usage is independently reserved and durably finalized.
+					currentID := requestID + "-current"
+					_, err = PreConsumeTokenAndUserSubscription(currentID, sub.UserId, 4502, "synthetic-reset-billing", "gpt-test", 0, 200)
+					require.NoError(t, err)
+					currentInput := resetBillingFinalize(current, currentID)
+					currentInput.FundingDelta, currentInput.TokenDelta = 0, 0
+					_, _, err = ApplyBillingSettlementOnce(currentInput)
+					require.NoError(t, err)
+					if resetPlan {
+						_, err = AdminResetPlanSubscriptions(plan.Id, false)
+					} else {
+						_, err = AdminResetUserSubscriptionsByPlan(sub.UserId, plan.Id, false)
+					}
+					wantUsed := int64(200)
+					if evidence == "earlier" {
+						require.NoError(t, err, "a proven earlier-period intent cannot mutate the current period")
+						wantUsed = 0
+						for range 2 {
+							_, _, replayErr := ApplyBillingSettlementOnce(input)
+							require.Error(t, replayErr, "old-period replay remains unapplied")
+						}
+					} else {
+						require.ErrorIs(t, err, ErrSubscriptionResetPendingBilling)
+					}
+					var got UserSubscription
+					require.NoError(t, DB.First(&got, sub.Id).Error)
+					require.Equal(t, wantUsed, got.AmountUsed)
+					require.Equal(t, current.LastResetTime, got.LastResetTime)
+					var token Token
+					require.NoError(t, DB.First(&token, 4502).Error)
+					require.EqualValues(t, 700, token.RemainQuota)
+					var old BillingSettlement
+					require.NoError(t, DB.Where("operation_key = ?", input.OperationKey).First(&old).Error)
+					require.NotEqual(t, BillingSettlementStatusApplied, old.Status)
+					require.Zero(t, old.AppliedFundingDelta)
+					require.Zero(t, old.AppliedTokenDelta)
+					var count int64
+					require.NoError(t, DB.Model(&BillingSettlement{}).Count(&count).Error)
+					require.EqualValues(t, 2, count)
+				})
+			}
+		}
+	}
+}
+
+func TestSubscriptionResetNeverKeepsCurrentZeroAnchorGuard(t *testing.T) {
+	for _, state := range []string{BillingSettlementStatusManual, BillingSettlementStatusPending, "outcome_unknown"} {
+		for _, advance := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/advance_%t", state, advance), func(t *testing.T) {
+				plan, sub, requestID := seedResetBillingReservation(t)
+				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("quota_reset_period", SubscriptionResetNever).Error)
+				InvalidateSubscriptionPlanCache(plan.Id)
+				t.Cleanup(func() { InvalidateSubscriptionPlanCache(plan.Id) })
+				require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", sub.Id).Updates(map[string]any{"last_reset_time": 0, "next_reset_time": 0}).Error)
+				require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Update("subscription_last_reset_time", 0).Error)
+				input := resetBillingFinalize(sub, requestID)
+				input.FundingDelta, input.TokenDelta = 2000, 2000
+				_, _, err := ApplyBillingSettlementOnce(input)
+				require.ErrorIs(t, err, ErrSubscriptionQuotaInsufficient)
+				require.NoError(t, DB.Model(&BillingSettlement{}).Where("operation_key = ?", input.OperationKey).Update("status", state).Error)
+				_, err = AdminResetUserSubscriptionsByPlan(sub.UserId, plan.Id, advance)
+				require.ErrorIs(t, err, ErrSubscriptionResetPendingBilling)
+				var got UserSubscription
+				require.NoError(t, DB.First(&got, sub.Id).Error)
+				require.EqualValues(t, 100, got.AmountUsed)
+				require.Zero(t, got.LastResetTime)
+				var token Token
+				require.NoError(t, DB.First(&token, 4502).Error)
+				require.EqualValues(t, 900, token.RemainQuota)
+			})
+		}
+	}
+}
+
 func TestSubscriptionResetValidatesFundingEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

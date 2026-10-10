@@ -1099,9 +1099,18 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 // Only a recorded funding application makes such a reservation safe to reset;
 // effect-only replay does not debit the subscription again.
 func validateSubscriptionResetBillingTx(tx *gorm.DB, sub UserSubscription) error {
+	// Only retained, matching reservation evidence can prove that an intent
+	// belongs to an earlier period. Missing tombstones or ambiguous identities
+	// still block: neither cleanup nor a review disposition proves application.
+	earlierPeriod := tx.Model(&SubscriptionPreConsumeRecord{}).Select("1").
+		Where("subscription_pre_consume_records.request_id = billing_settlements.subscription_pre_consume_request_id").
+		Where("subscription_pre_consume_records.user_id = billing_settlements.user_id").
+		Where("user_subscription_id = ? AND user_id = ? AND subscription_last_reset_time < ? AND status = ?",
+			sub.Id, sub.UserId, sub.LastResetTime, "consumed")
 	var unresolved BillingSettlement
 	query := tx.Select("id").Where("source = ? AND subscription_id = ?", BillingSettlementSourceSubscription, sub.Id).
-		Where("status NOT IN ?", []string{BillingSettlementStatusApplied, ""}).Limit(1).Find(&unresolved)
+		Where("status NOT IN ?", []string{BillingSettlementStatusApplied, ""}).
+		Where("NOT EXISTS (?)", earlierPeriod).Limit(1).Find(&unresolved)
 	if query.Error != nil {
 		return query.Error
 	}
