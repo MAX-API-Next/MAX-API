@@ -141,6 +141,12 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
+		if terminalResponseSeen && reported && openaicompat.ChatToResponsesEventsAreMetadataOnly(events) {
+			// Final usage for output already delivered survives closing-event
+			// write failures. Buffered generation still waits for delivery below.
+			deliveredUsage = openaicompat.UsageFromChatUsage(state.Usage)
+			usageReported = true
+		}
 		for _, event := range events {
 			if !sendEvent(event) {
 				sr.Stop(streamErr)

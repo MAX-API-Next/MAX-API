@@ -36,6 +36,21 @@ type ChatToResponsesStreamEvent struct {
 	Payload dto.ResponsesStreamResponse
 }
 
+// ChatToResponsesEventsAreMetadataOnly excludes new output, including custom
+// input drained at finish time. Closing an already delivered item does not
+// make its provider usage depend on another successful downstream write.
+func ChatToResponsesEventsAreMetadataOnly(events []ChatToResponsesStreamEvent) bool {
+	for _, event := range events {
+		switch event.Type {
+		case responsesEventCreated, responsesEventOutputItemDone, responsesEventFunctionArgsDone,
+			responsesEventReasoningSummaryDone, "response.output_text.done", "response.custom_tool_call_input.done":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 type ChatToResponsesStreamState struct {
 	ID              string
 	Model           string

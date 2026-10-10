@@ -113,11 +113,14 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		}
 		return true
 	}
-	sendChunk := func(chunk *dto.ChatCompletionsStreamResponse) bool {
+	sendChunk := func(chunk *dto.ChatCompletionsStreamResponse, retainMetadataUsage func()) bool {
 		events, err := openaicompat.ChatCompletionsStreamChunkToResponsesEvents(chunk, state)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
+		}
+		if terminalResponseSeen && retainMetadataUsage != nil && openaicompat.ChatToResponsesEventsAreMetadataOnly(events) {
+			retainMetadataUsage()
 		}
 		for _, event := range events {
 			if !sendEvent(event) {
@@ -169,51 +172,54 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			}
 		}
 
-		if !sendChunk(response) {
-			return false
-		}
-		inputReported := gjson.Get(data, "usageMetadata.promptTokenCount").Type == gjson.Number
-		outputReported := gjson.Get(data, "usageMetadata.candidatesTokenCount").Type == gjson.Number
-		if inputReported || outputReported || dto.HasGeminiUsageMetadataTokens(geminiResponse.GetUsageMetadata()) {
-			if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
-				fallbackPrompt := 0
-				if !inputReported {
-					fallbackPrompt = info.GetEstimatePromptTokens()
-				}
-				mapped := buildUsageFromGeminiMetadata(*metadata, fallbackPrompt)
-				// A numeric zero completion count must not be inferred from total.
-				if outputReported {
-					mapped.CompletionTokens = metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
-				}
-				if !outputReported {
-					promptTokens := mapped.PromptTokens
-					patchGeminiZeroCompletionUsage(c, info, &mapped, deliveredText.String(), 0)
-					if inputReported {
-						mapped.PromptTokens = promptTokens
-						mapped.TotalTokens = mapped.PromptTokens + mapped.CompletionTokens
-						if mapped.BillingUsage != nil && mapped.BillingUsage.Estimated {
-							mapped.BillingUsage.GeminiUsageMetadata.PromptTokenCount = metadata.PromptTokenCount
-							mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
+		retainUsage := func() {
+			inputReported := gjson.Get(data, "usageMetadata.promptTokenCount").Type == gjson.Number
+			outputReported := gjson.Get(data, "usageMetadata.candidatesTokenCount").Type == gjson.Number
+			if inputReported || outputReported || dto.HasGeminiUsageMetadataTokens(geminiResponse.GetUsageMetadata()) {
+				if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
+					fallbackPrompt := 0
+					if !inputReported {
+						fallbackPrompt = info.GetEstimatePromptTokens()
+					}
+					mapped := buildUsageFromGeminiMetadata(*metadata, fallbackPrompt)
+					// A numeric zero completion count must not be inferred from total.
+					if outputReported {
+						mapped.CompletionTokens = metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
+					}
+					if !outputReported {
+						promptTokens := mapped.PromptTokens
+						patchGeminiZeroCompletionUsage(c, info, &mapped, deliveredText.String(), 0)
+						if inputReported {
+							mapped.PromptTokens = promptTokens
+							mapped.TotalTokens = mapped.PromptTokens + mapped.CompletionTokens
+							if mapped.BillingUsage != nil && mapped.BillingUsage.Estimated {
+								mapped.BillingUsage.GeminiUsageMetadata.PromptTokenCount = metadata.PromptTokenCount
+								mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
+							}
 						}
 					}
+					if mapped.BillingUsage == nil {
+						copyMetadata := *metadata
+						mapped.BillingUsage = &dto.BillingUsage{Source: dto.BillingUsageSourceGeminiChat, Semantic: dto.BillingUsageSemanticGemini, GeminiUsageMetadata: &copyMetadata}
+					}
+					if mapped.PromptTokens != metadata.PromptTokenCount+metadata.ToolUsePromptTokenCount {
+						mapped.TotalTokens = mapped.PromptTokens + mapped.CompletionTokens
+						mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
+					}
+					if mapped.BillingUsage != nil {
+						mapped.BillingUsage.TokenCountsReported = inputReported && outputReported
+					}
+					reportedUsage = &mapped
+					reportedOutputUsage = outputReported
 				}
-				if mapped.BillingUsage == nil {
-					copyMetadata := *metadata
-					mapped.BillingUsage = &dto.BillingUsage{Source: dto.BillingUsageSourceGeminiChat, Semantic: dto.BillingUsageSemanticGemini, GeminiUsageMetadata: &copyMetadata}
-				}
-				if mapped.PromptTokens != metadata.PromptTokenCount+metadata.ToolUsePromptTokenCount {
-					mapped.TotalTokens = mapped.PromptTokens + mapped.CompletionTokens
-					mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
-				}
-				if mapped.BillingUsage != nil {
-					mapped.BillingUsage.TokenCountsReported = inputReported && outputReported
-				}
-				reportedUsage = &mapped
-				reportedOutputUsage = outputReported
 			}
 		}
+		if !sendChunk(response, retainUsage) {
+			return false
+		}
+		retainUsage()
 		if isStop {
-			return sendChunk(helper.GenerateStopResponse(responseID, created, info.UpstreamModelName, finishReason))
+			return sendChunk(helper.GenerateStopResponse(responseID, created, info.UpstreamModelName, finishReason), nil)
 		}
 		return true
 	})
