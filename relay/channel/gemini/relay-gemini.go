@@ -1570,6 +1570,38 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return usage, nil
 }
 
+// Legacy SSE rendering can discard write errors. Observe each formatter call
+// without counting a partial frame as generation delivery.
+type geminiChatWriteObserver struct {
+	gin.ResponseWriter
+	writeErr error
+}
+
+func (w *geminiChatWriteObserver) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	w.recordWrite(n, len(data), err)
+	return n, err
+}
+
+func (w *geminiChatWriteObserver) WriteString(data string) (int, error) {
+	n, err := w.ResponseWriter.WriteString(data)
+	w.recordWrite(n, len(data), err)
+	return n, err
+}
+
+func (w *geminiChatWriteObserver) recordWrite(n, size int, err error) {
+	if err == nil && n != size {
+		err = io.ErrShortWrite
+	}
+	if w.writeErr == nil {
+		w.writeErr = err
+	}
+}
+
+func (w *geminiChatWriteObserver) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	id := helper.GetResponseID(c)
 	createAt := common.GetTimestamp()
@@ -1578,6 +1610,35 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	nextToolCallIndexByChoice := make(map[int]int)
 	functionCalls := newGeminiStreamFunctionCalls()
 	var conversionErr *types.MaxAPIError
+	generationDelivered := false
+	send := func(response *dto.ChatCompletionsStreamResponse) error {
+		// The scanner serializes callbacks and pings under its write mutex.
+		writer := &geminiChatWriteObserver{ResponseWriter: c.Writer}
+		before := writer.Size()
+		c.Writer = writer
+		defer func() { c.Writer = writer.ResponseWriter }()
+		err := handleStream(c, info, response)
+		if writer.writeErr == nil && writer.Size() > before {
+			// A later flush error does not erase a completely written frame.
+			for _, choice := range response.Choices {
+				if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" {
+					generationDelivered = true
+				}
+				for _, tool := range choice.Delta.ToolCalls {
+					if tool.Function.Name != "" || tool.Function.Arguments != "" {
+						generationDelivered = true
+					}
+				}
+			}
+		}
+		if writer.writeErr != nil {
+			err = writer.writeErr
+		}
+		if err != nil {
+			conversionErr = types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		return err
+	}
 
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		if prepareErr := functionCalls.prepare(geminiResponse); prepareErr != nil {
@@ -1635,9 +1696,10 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 					emptyResponse.Choices[0].Delta.ToolCalls = copiedToolCalls
 				}
 				finishReason = constant.FinishReasonToolCalls
-				err := handleStream(c, info, emptyResponse)
+				err := send(emptyResponse)
 				if err != nil {
 					logger.LogError(c, err.Error())
+					return false
 				}
 
 				response.ClearToolCalls()
@@ -1645,20 +1707,25 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 					response.Choices[0].FinishReason = nil
 				}
 			} else {
-				err := handleStream(c, info, emptyResponse)
+				err := send(emptyResponse)
 				if err != nil {
 					logger.LogError(c, err.Error())
+					return false
 				}
 			}
 		}
 
-		err := handleStream(c, info, response)
+		err := send(response)
 		if err != nil {
 			logger.LogError(c, err.Error())
+			return false
 		}
 		if isStop {
 			if info.RelayFormat != types.RelayFormatClaude {
-				_ = handleStream(c, info, helper.GenerateStopResponse(id, createAt, info.UpstreamModelName, finishReason))
+				if err := send(helper.GenerateStopResponse(id, createAt, info.UpstreamModelName, finishReason)); err != nil {
+					logger.LogError(c, err.Error())
+					return false
+				}
 			}
 		}
 		return true
@@ -1667,12 +1734,18 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	if err != nil {
 		return usage, err
 	}
+	if conversionErr == nil && info.StreamStatus.IsAbnormalEnd() {
+		conversionErr = types.NewError(fmt.Errorf("Gemini stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponseBody)
+	}
 	if conversionErr == nil && len(functionCalls.pending) > 0 {
 		conversionErr = types.NewError(fmt.Errorf("Gemini stream ended with an incomplete function call"), types.ErrorCodeBadResponseBody)
 	}
 	if conversionErr != nil {
 		if c.Writer.Written() {
 			conversionErr = types.NewError(conversionErr, conversionErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
+		if !generationDelivered {
+			return nil, conversionErr
 		}
 		return usage, conversionErr
 	}

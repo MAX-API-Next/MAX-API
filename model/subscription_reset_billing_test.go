@@ -215,6 +215,7 @@ func TestSubscriptionPlanResetRollsBackEarlierSubscriptions(t *testing.T) {
 	require.NoError(t, DB.Create(&first).Error)
 	_, err := AdminResetPlanSubscriptions(plan.Id, false)
 	require.ErrorIs(t, err, ErrSubscriptionResetPendingBilling)
+	require.Contains(t, err.Error(), fmt.Sprintf("subscription_id=%d", sub.Id))
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, first.Id).Error)
 	require.EqualValues(t, 25, got.AmountUsed, "an earlier reset must roll back when a later subscription is blocked")
@@ -253,6 +254,7 @@ func TestSubscriptionResetRetainsManualFundingGuardAfterTombstoneCleanup(t *test
 	require.EqualValues(t, 1, deleted)
 	_, err = AdminResetUserSubscriptionsByPlan(sub.UserId, plan.Id, false)
 	require.ErrorIs(t, err, ErrSubscriptionResetPendingBilling)
+	require.Contains(t, err.Error(), fmt.Sprintf("subscription_id=%d", sub.Id))
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, sub.Id).Error)
 	require.EqualValues(t, 100, got.AmountUsed)

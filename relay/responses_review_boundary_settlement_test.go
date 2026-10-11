@@ -3,20 +3,167 @@ package relay
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type geminiChatFrameFailureWriter struct {
+	*httptest.ResponseRecorder
+	kind      string
+	triggered bool
+}
+
+func (w *geminiChatFrameFailureWriter) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), `"tool_calls"`) {
+		switch w.kind {
+		case "write":
+			w.triggered = true
+			return 0, io.ErrClosedPipe
+		case "short":
+			w.triggered = true
+			return w.ResponseRecorder.Write(data[:3])
+		}
+	}
+	return w.ResponseRecorder.Write(data)
+}
+
+func (w *geminiChatFrameFailureWriter) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
+
+func (w *geminiChatFrameFailureWriter) Flush() {
+	if w.kind == "flush" && strings.Contains(w.Body.String(), `"content":"visible"`) {
+		w.triggered = true
+		panic(io.ErrClosedPipe)
+	}
+	w.ResponseRecorder.Flush()
+}
+
+func TestGeminiChatConversionFailureRetainsOnlyDeliveredFunding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	pending := `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-pending","name":"lookup","args":{"q":"pending"},"willContinue":true}}]}}]}`
+	known := `{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}`
+	withUsage := func(frame, usage string) string {
+		return strings.TrimSuffix(frame, "}") + `,"usageMetadata":` + usage + `}`
+	}
+	text := withUsage(`{"candidates":[{"content":{"parts":[{"text":"visible"}]}}]}`, known)
+	tool := withUsage(`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-delivered","name":"lookup","args":{"q":"visible"}}}]}}]}`, known)
+	for _, scenario := range []struct {
+		name, frames, failure string
+		delivered             bool
+	}{
+		{"pending_missing", pending, "", false},
+		{"pending_known", withUsage(pending, known), "", false},
+		{"pending_zero", withUsage(pending, `{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}`), "", false},
+		{"pending_conflict", pending + "\n" + `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-pending","name":"changed"}}]}}]}`, "", false},
+		{"pending_stop", pending + "\n" + withUsage(`{"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}`, known), "", false},
+		{"pending_malformed", pending + "\n{broken", "", false},
+		{"first_malformed", `{broken`, "", false},
+		{"text_delivered", text + "\n" + pending, "", true},
+		{"whitespace_delivered", withUsage(`{"candidates":[{"content":{"parts":[{"text":" "}]}}]}`, known) + "\n" + pending, "", true},
+		{"reasoning_delivered", withUsage(`{"candidates":[{"content":{"parts":[{"text":"reasoning","thought":true}]}}]}`, known) + "\n" + pending, "", true},
+		{"tool_delivered", tool + "\n" + pending, "", true},
+		{"text_malformed", text + "\n{broken", "", true},
+		{"tool_write", tool + "\n" + pending, "write", false},
+		{"tool_short", tool + "\n" + pending, "short", false},
+		{"text_flush", text + "\n" + pending, "flush", true},
+	} {
+		for _, funding := range streamFundingCases() {
+			t.Run(scenario.name+"/"+funding.name, func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprint(w, "data: "+strings.ReplaceAll(scenario.frames, "\n", "\n\ndata: ")+"\n\n")
+				}))
+				defer upstream.Close()
+				requestID := fmt.Sprintf("gemini-delivery-%x", sha256.Sum256([]byte(t.Name())))
+				c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeGemini, funding)
+				writer := &geminiChatFrameFailureWriter{ResponseRecorder: recorder, kind: scenario.failure}
+				baseContext := c
+				c, _ = gin.CreateTestContext(writer)
+				c.Request, c.Keys = baseContext.Request, baseContext.Keys
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				session := info.Billing.(*service.BillingSession)
+				info.UserSetting.BillingPreference = "wallet_only"
+				if funding.source == "wallet" {
+					info.UserSetting.BillingPreference = "subscription_only"
+				}
+				apiErr := TextHelper(c, info)
+				if apiErr != nil {
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+				}
+				quota, prompt, completion := 0, 0, 0
+				if scenario.delivered {
+					quota, prompt, completion = 6, 4, 2
+				}
+				var record model.BillingSettlement
+				require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&record).Error)
+				require.EqualValues(t, quota-100, record.AppliedFundingDelta)
+				require.EqualValues(t, quota-100, record.AppliedTokenDelta)
+				require.Equal(t, funding.source, record.Source)
+				require.Equal(t, model.BillingSettlementStatusApplied, record.Status)
+				require.NotNil(t, apiErr)
+				require.Equal(t, scenario.name != "first_malformed", types.IsSkipRetryError(apiErr))
+				if scenario.failure != "" {
+					require.True(t, writer.triggered)
+				}
+				if scenario.name == "tool_delivered" {
+					require.Contains(t, recorder.Body.String(), "call-delivered")
+					require.Contains(t, recorder.Body.String(), "lookup")
+				}
+				session.Refund(c)
+				model.ProcessPendingBillingSettlementsOnce()
+				assertStreamFundingBalances(t, db, funding, requestID, quota, scenario.delivered, prompt, completion)
+				var effect *model.BillingSettlementEffect
+				if scenario.delivered {
+					effect = &model.BillingSettlementEffect{}
+					require.NoError(t, common.UnmarshalJsonStr(record.EffectPayload, effect))
+					replayInfo := &relaycommon.RelayInfo{RequestId: requestID, UserId: info.UserId, TokenId: info.TokenId, TokenKey: info.TokenKey, OriginModelName: info.OriginModelName, ForcePreConsume: true, UserSetting: info.UserSetting}
+					replay, replayErr := service.NewBillingSession(c, replayInfo, 100)
+					require.Nil(t, replayErr)
+					require.Equal(t, funding.source, replayInfo.BillingSource)
+					require.NoError(t, replay.SettleWithEffect(quota, effect))
+					replay.Refund(c)
+				}
+				before := requestReplaySnapshot(t, db)
+				results := make(chan error, 2)
+				var workers sync.WaitGroup
+				for range 2 {
+					workers.Add(1)
+					go func() {
+						defer workers.Done()
+						_, _, err := model.ApplyBillingSettlementOnce(requestReplayInput(record, effect))
+						results <- err
+					}()
+				}
+				workers.Wait()
+				close(results)
+				for err := range results {
+					require.NoError(t, err)
+				}
+				model.ProcessPendingBillingSettlementsOnce()
+				require.Equal(t, before, requestReplaySnapshot(t, db))
+			})
+		}
+	}
+}
 
 func TestResponsesNonStreamPartialUsageRetainsOriginalFunding(t *testing.T) {
 	gin.SetMode(gin.TestMode)

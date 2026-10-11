@@ -1115,7 +1115,7 @@ func validateSubscriptionResetBillingTx(tx *gorm.DB, sub UserSubscription) error
 		return query.Error
 	}
 	if query.RowsAffected > 0 {
-		return ErrSubscriptionResetPendingBilling
+		return fmt.Errorf("%w (subscription_id=%d)", ErrSubscriptionResetPendingBilling, sub.Id)
 	}
 
 	const batchSize = 200
@@ -1156,7 +1156,7 @@ func validateSubscriptionResetBillingTx(tx *gorm.DB, sub UserSubscription) error
 		}
 		for _, record := range records {
 			if record.UserId != sub.UserId || !applied[record.RequestId] {
-				return ErrSubscriptionResetPendingBilling
+				return fmt.Errorf("%w (subscription_id=%d)", ErrSubscriptionResetPendingBilling, sub.Id)
 			}
 		}
 		lastID = records[len(records)-1].Id
