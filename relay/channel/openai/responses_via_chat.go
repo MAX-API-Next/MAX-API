@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
@@ -42,11 +43,26 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if (usage == nil || usage.TotalTokens == 0) && !helper.HasUsageTokenFields(string(body), "usage", "prompt_tokens", "completion_tokens") {
+	promptReported := gjson.GetBytes(body, "usage.prompt_tokens").Type == gjson.Number
+	completionReported := gjson.GetBytes(body, "usage.completion_tokens").Type == gjson.Number
+	chatUsage := chatResp.Usage
+	chatUsage.BillingUsage = nil
+	if !promptReported || !completionReported {
 		text := service.ExtractOutputTextFromResponses(responsesResp)
-		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
-		responsesResp.Usage = openaicompat.UsageFromChatUsage(usage)
+		estimated := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !promptReported {
+			chatUsage.PromptTokens = estimated.PromptTokens
+		}
+		if !completionReported {
+			chatUsage.CompletionTokens = estimated.CompletionTokens
+		}
+		chatUsage.TotalTokens = chatUsage.PromptTokens + chatUsage.CompletionTokens
 	}
+	chatUsage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(&chatUsage)
+	chatUsage.BillingUsage.TokenCountsReported = promptReported && completionReported
+	chatUsage.BillingUsage.Estimated = !chatUsage.BillingUsage.TokenCountsReported
+	usage = openaicompat.UsageFromChatUsage(&chatUsage)
+	responsesResp.Usage = usage
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.ExtractOutputTextFromResponses(responsesResp))
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -15,6 +16,72 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestGeminiPendingCallIDSurvivesPartReordering(t *testing.T) {
+	for _, scenario := range []struct {
+		name, initial, final string
+		want                 map[string]string
+		conflict             bool
+	}{
+		{"shift_right", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "a"}, false},
+		{"shift_left", `{"candidates":[{"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "a"}, false},
+		{"swap_pending", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}},{"functionCall":{"id":"call-b","name":"lookup","args":{"q":"b"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-b","willContinue":false}},{"functionCall":{"id":"call-a","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "a", "0/call-b": "b"}, false},
+		{"candidate_isolation", `{"candidates":[{"index":0,"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"first"},"willContinue":true}}]}},{"index":1,"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"second"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"index":1,"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","willContinue":false}}]},"finishReason":"STOP"},{"index":0,"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "first", "1/call-a": "second"}, false},
+		{"anonymous_position", `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"q":"anonymous"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/": "anonymous"}, false},
+		{"moved_conflict", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","name":"changed","willContinue":false}}]},"finishReason":"STOP"}]}`, nil, true},
+		{"moved_then_anonymous", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}` + "\n" +
+			`{"candidates":[{"content":{"parts":[{"text":"visible"},{"functionCall":{"id":"call-a","willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"text":"visible"},{"functionCall":{"willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "a"}, false},
+		{"completed_repeat_over_pending", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"}}}]}}]}` + "\n" +
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-b","name":"lookup","args":{"q":"b"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a"}},{"functionCall":{"id":"call-b","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-b": "b"}, false},
+		{"independent_named_slots", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}` + "\n" +
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-b","name":"lookup","args":{"q":"b"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","willContinue":false}},{"functionCall":{"id":"call-b","willContinue":false}}]},"finishReason":"STOP"}]}`, map[string]string{"0/call-a": "a", "0/call-b": "b"}, false},
+		{"ambiguous_anonymous", `{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-a","name":"lookup","args":{"q":"a"},"willContinue":true}}]}}]}` + "\n" +
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"call-b","name":"lookup","args":{"q":"b"},"willContinue":true}}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"willContinue":false}}]},"finishReason":"STOP"}]}`, nil, true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			state := newGeminiStreamFunctionCalls()
+			var final dto.GeminiChatResponse
+			for _, frame := range strings.Split(scenario.initial, "\n") {
+				var initial dto.GeminiChatResponse
+				require.NoError(t, common.UnmarshalJsonStr(frame, &initial))
+				require.NoError(t, state.prepare(&initial))
+			}
+			require.NoError(t, common.UnmarshalJsonStr(scenario.final, &final))
+			err := state.prepare(&final)
+			if scenario.conflict {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Empty(t, state.pending)
+			calls := 0
+			for _, candidate := range final.Candidates {
+				for _, part := range candidate.Content.Parts {
+					if part.FunctionCall == nil {
+						continue
+					}
+					calls++
+					call := part.FunctionCall
+					require.Equal(t, "lookup", call.FunctionName)
+					want, exists := scenario.want[fmt.Sprintf("%d/%s", candidate.Index, call.ID)]
+					require.True(t, exists)
+					require.Equal(t, want, call.Arguments.(map[string]any)["q"])
+				}
+			}
+			require.Equal(t, len(scenario.want), calls)
+		})
+	}
+}
 
 func runGeminiResponsesRevalidation(t *testing.T, frames []string, custom bool) (*dto.Usage, *types.MaxAPIError, string) {
 	t.Helper()

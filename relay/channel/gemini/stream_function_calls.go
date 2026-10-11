@@ -11,6 +11,12 @@ import (
 type geminiCallPosition struct {
 	candidate int64
 	part      int
+	id        string
+}
+
+type geminiPendingFunctionCall struct {
+	part int
+	call dto.FunctionCall
 }
 type geminiCallIdentity struct {
 	candidate int64
@@ -20,12 +26,12 @@ type geminiCallIdentity struct {
 // Gemini args are complete JSON snapshots, unlike Chat arguments deltas.
 // Buffer willContinue sequences and emit each stable call ID only once.
 type geminiStreamFunctionCalls struct {
-	pending   map[geminiCallPosition]dto.FunctionCall
+	pending   map[geminiCallPosition]geminiPendingFunctionCall
 	completed map[geminiCallIdentity]dto.FunctionCall
 }
 
 func newGeminiStreamFunctionCalls() *geminiStreamFunctionCalls {
-	return &geminiStreamFunctionCalls{pending: make(map[geminiCallPosition]dto.FunctionCall), completed: make(map[geminiCallIdentity]dto.FunctionCall)}
+	return &geminiStreamFunctionCalls{pending: make(map[geminiCallPosition]geminiPendingFunctionCall), completed: make(map[geminiCallIdentity]dto.FunctionCall)}
 }
 
 func (s *geminiStreamFunctionCalls) prepare(response *dto.GeminiChatResponse) error {
@@ -37,27 +43,9 @@ func (s *geminiStreamFunctionCalls) prepare(response *dto.GeminiChatResponse) er
 				parts = append(parts, part)
 				continue
 			}
-			position := geminiCallPosition{candidate.Index, partIndex}
 			call := *part.FunctionCall
 			call.ID = strings.TrimSpace(call.ID)
 			call.FunctionName = strings.TrimSpace(call.FunctionName)
-			if previous, exists := s.pending[position]; exists {
-				if call.ID != "" && previous.ID != "" && call.ID != previous.ID {
-					return fmt.Errorf("Gemini function call changed id while incomplete")
-				}
-				if call.FunctionName != "" && previous.FunctionName != "" && call.FunctionName != previous.FunctionName {
-					return fmt.Errorf("Gemini function call changed name while incomplete")
-				}
-				if call.ID == "" {
-					call.ID = previous.ID
-				}
-				if call.FunctionName == "" {
-					call.FunctionName = previous.FunctionName
-				}
-				if call.Arguments == nil {
-					call.Arguments = previous.Arguments
-				}
-			}
 			identity := geminiCallIdentity{candidate.Index, call.ID}
 			if previous, exists := s.completed[identity]; call.ID != "" && exists {
 				if call.FunctionName != "" && call.FunctionName != previous.FunctionName {
@@ -78,8 +66,55 @@ func (s *geminiStreamFunctionCalls) prepare(response *dto.GeminiChatResponse) er
 				}
 				continue
 			}
+			position := geminiCallPosition{candidate: candidate.Index, part: partIndex}
+			// Named calls use a stable key; anonymous continuations use the
+			// latest physical slot only when it identifies exactly one call.
+			if call.ID != "" {
+				position.part, position.id = -1, call.ID
+				if _, exists := s.pending[position]; !exists {
+					anonymous := geminiCallPosition{candidate: candidate.Index, part: partIndex}
+					if _, exists := s.pending[anonymous]; exists {
+						position = anonymous
+					}
+				}
+			} else {
+				found := false
+				for pendingPosition, pending := range s.pending {
+					if pendingPosition.candidate == candidate.Index && pending.part == partIndex {
+						if found {
+							return fmt.Errorf("Gemini anonymous function call has ambiguous identity")
+						}
+						position = pendingPosition
+						found = true
+					}
+				}
+			}
+			if pending, exists := s.pending[position]; exists {
+				previous := pending.call
+				if call.ID != "" && previous.ID != "" && call.ID != previous.ID {
+					return fmt.Errorf("Gemini function call changed id while incomplete")
+				}
+				if call.FunctionName != "" && previous.FunctionName != "" && call.FunctionName != previous.FunctionName {
+					return fmt.Errorf("Gemini function call changed name while incomplete")
+				}
+				if call.ID == "" {
+					call.ID = previous.ID
+				}
+				if call.FunctionName == "" {
+					call.FunctionName = previous.FunctionName
+				}
+				if call.Arguments == nil {
+					call.Arguments = previous.Arguments
+				}
+			}
+			identity = geminiCallIdentity{candidate.Index, call.ID}
 			if call.WillContinue != nil && *call.WillContinue {
-				s.pending[position] = call
+				delete(s.pending, position)
+				key := geminiCallPosition{candidate: candidate.Index, part: partIndex}
+				if call.ID != "" {
+					key.part, key.id = -1, call.ID
+				}
+				s.pending[key] = geminiPendingFunctionCall{part: partIndex, call: call}
 				continue
 			}
 			if call.FunctionName == "" {

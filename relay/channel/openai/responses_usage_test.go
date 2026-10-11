@@ -5,16 +5,61 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChatToResponsesNonStreamPartialUsageDetails(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, scenario := range []struct {
+		name, counters     string
+		prompt, completion int
+		cached             int
+		estimated          bool
+	}{
+		{"prompt", `"prompt_tokens":4`, 4, service.EstimateTokenByModel("gpt-test", "visible"), 1, true},
+		{"completion", `"completion_tokens":2`, 10, 2, 1, true},
+		{"prompt_zero", `"prompt_tokens":0`, 0, service.EstimateTokenByModel("gpt-test", "visible"), 0, true},
+		{"completion_zero", `"completion_tokens":0`, 10, 0, 1, true},
+		{"complete", `"prompt_tokens":4,"completion_tokens":2`, 4, 2, 1, false},
+		{"complete_zero", `"prompt_tokens":0,"completion_tokens":0`, 0, 0, 0, false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			writer := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(writer)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			info := &relaycommon.RelayInfo{OriginModelName: "gpt-test", ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+			info.SetEstimatePromptTokens(10)
+			payload := `{"choices":[{"message":{"role":"assistant","content":"visible"},"finish_reason":"stop"}],"usage":{` + scenario.counters + `,"prompt_tokens_details":{"cached_tokens":` + strconv.Itoa(scenario.cached) + `}}}`
+			usage, apiErr := OaiChatToResponsesHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(payload))})
+			require.Nil(t, apiErr)
+			require.Equal(t, scenario.prompt, usage.PromptTokens)
+			require.Equal(t, scenario.completion, usage.CompletionTokens)
+			require.NotNil(t, usage.BillingUsage)
+			require.Equal(t, dto.BillingUsageSourceOAIChat, usage.BillingUsage.Source)
+			require.Equal(t, scenario.estimated, usage.BillingUsage.Estimated)
+			require.Equal(t, !scenario.estimated, usage.BillingUsage.TokenCountsReported)
+			require.Equal(t, scenario.cached, usage.BillingUsage.OpenAIUsage.PromptTokensDetails.CachedTokens)
+			var response dto.OpenAIResponsesResponse
+			require.NoError(t, common.Unmarshal(writer.Body.Bytes(), &response))
+			require.Equal(t, scenario.prompt, response.Usage.InputTokens)
+			require.Equal(t, scenario.completion, response.Usage.OutputTokens)
+			if scenario.cached > 0 {
+				require.NotNil(t, response.Usage.InputTokensDetails)
+				require.Equal(t, scenario.cached, response.Usage.InputTokensDetails.CachedTokens)
+			}
+		})
+	}
+}
 
 func detailedResponsesUsage() *dto.Usage {
 	return &dto.Usage{
