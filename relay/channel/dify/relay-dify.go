@@ -252,7 +252,7 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			sr.Error(err)
 		}
 	})
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
 	}
 	helper.Done(c)

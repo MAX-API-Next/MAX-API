@@ -160,7 +160,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		usage, maxApiErr := openaichannel.OaiResponsesToChatStreamHandler(c, info, httpResp)
 		if maxApiErr != nil {
 			service.ResetStatusCode(maxApiErr, statusCodeMappingStr)
-			return nil, maxApiErr
+			return usage, maxApiErr
 		}
 		return usage, nil
 	}

@@ -32,6 +32,7 @@ func (r *StreamResult) Error(err error) {
 func (r *StreamResult) Stop(err error) {
 	if err != nil {
 		r.status.RecordError(err.Error())
+		r.status.RecordFatalError(err)
 	}
 	r.status.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
 	r.stopped = true

@@ -8,12 +8,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 )
 
-const (
-	geminiResponsesInputTypeCustomToolCall       = "custom_tool_call"
-	geminiResponsesInputTypeCustomToolCallOutput = "custom_tool_call_output"
-	geminiResponsesInputTypeFunctionCallOutput   = "function_call_output"
-)
-
 func preprocessGeminiOpenAIResponsesRequest(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
 	tools, err := filterGeminiResponsesTools(request.Tools)
 	if err != nil {
@@ -43,7 +37,7 @@ func filterGeminiResponsesTools(raw []byte) ([]byte, error) {
 	filtered := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
-		if toolType != "function" {
+		if toolType != "function" && toolType != "custom" {
 			return nil, fmt.Errorf("gemini responses conversion does not support tool type %q", toolType)
 		}
 		filtered = append(filtered, tool)
@@ -64,31 +58,10 @@ func filterGeminiResponsesInput(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	skippedCustomCallIDs := make(map[string]struct{})
-	for _, item := range items {
-		if strings.TrimSpace(common.Interface2String(item["type"])) != geminiResponsesInputTypeCustomToolCall {
-			continue
-		}
-		if callID := strings.TrimSpace(common.Interface2String(item["call_id"])); callID != "" {
-			skippedCustomCallIDs[callID] = struct{}{}
-		}
-	}
-
-	filtered := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		itemType := strings.TrimSpace(common.Interface2String(item["type"]))
-		switch itemType {
-		case geminiResponsesInputTypeCustomToolCall, geminiResponsesInputTypeCustomToolCallOutput:
-			continue
-		case geminiResponsesInputTypeFunctionCallOutput:
-			if _, ok := skippedCustomCallIDs[strings.TrimSpace(common.Interface2String(item["call_id"]))]; ok {
-				continue
-			}
-		}
-		filtered = append(filtered, item)
-	}
-
-	return common.Marshal(filtered)
+	// Custom tool history is normalized by the shared Responses-to-Chat
+	// converter. Keep both the call and its output so Gemini receives the same
+	// function-call context as Claude and OpenAI-compatible upstreams.
+	return common.Marshal(items)
 }
 
 func geminiRawJSONPresent(raw []byte) bool {

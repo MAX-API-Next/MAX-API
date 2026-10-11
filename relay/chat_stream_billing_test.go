@@ -262,3 +262,59 @@ func TestNativeChatPartialBillingDoesNotRecordSuccess(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestResponsesPartialBillingRecorderPreservesFailureMetricAndRefundBoundary(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.PerfMetric{}, &model.PerfMetricFlushReceipt{}))
+	previousDB, previousRedis := model.DB, common.RedisEnabled
+	setting := config.GlobalConfig.Get("perf_metrics_setting").(*perf_metrics_setting.PerfMetricsSetting)
+	previousSetting := *setting
+	model.DB, common.RedisEnabled, setting.Enabled = db, false, true
+	t.Cleanup(func() {
+		model.DB, common.RedisEnabled = previousDB, previousRedis
+		*setting = previousSetting
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	billing := &chatStreamBillingRecorder{}
+	sequence := chatStreamMetricSequence.Add(1)
+	info := &relaycommon.RelayInfo{
+		RequestId:       fmt.Sprintf("responses-partial-canary-%d", sequence),
+		OriginModelName: fmt.Sprintf("responses-partial-canary-model-%d", sequence),
+		RelayMode:       relayconstant.RelayModeResponses,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		StartTime:       time.Now(),
+		IsStream:        true,
+		Billing:         billing,
+		UserQuota:       1000,
+		UserSetting:     dto.UserSetting{QuotaWarningThreshold: 1},
+		ChannelMeta:     &relaycommon.ChannelMeta{},
+		PriceData:       types.PriceData{ModelRatio: 1, CompletionRatio: 1, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+
+	service.PostPartialConsumeQuota(c, info, &dto.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12})
+	require.Equal(t, []int{12}, billing.quotas)
+	require.Len(t, billing.effects, 1)
+
+	apiErr := types.NewOpenAIError(fmt.Errorf("synthetic responses incomplete"), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
+	service.HandleFailedBilling(c, info, apiErr)
+	require.Zero(t, billing.refunds, "partial settlement must prevent a full refund")
+
+	perfmetrics.RecordRelaySample(info, false, 0)
+	result, queryErr := perfmetrics.QuerySummaryAll(1, nil)
+	require.NoError(t, queryErr)
+	found := false
+	for _, summary := range result.Models {
+		if summary.ModelName == info.OriginModelName {
+			found = true
+			require.EqualValues(t, 1, summary.RequestCount)
+			require.Zero(t, summary.SuccessRate)
+			break
+		}
+	}
+	require.True(t, found, "missing partial Responses failure metric")
+}

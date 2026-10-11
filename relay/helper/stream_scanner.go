@@ -15,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/logger"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
+	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 
@@ -77,6 +78,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	if resp == nil || dataHandler == nil {
 		return
 	}
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		// Initialize before workers; ping failure and event delivery share state.
+		getResponsesStreamState(c)
+	}
 
 	// Preserve an existing StreamStatus so callers can carry forward prior stream errors.
 	if info.StreamStatus == nil {
@@ -95,7 +100,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 	var firstResultTimer *time.Timer
 	var firstResultTimeoutChan <-chan time.Time
-	if firstResultTimeoutSeconds > 0 && info.FirstResponseSignal() != nil {
+	if firstResultTimeoutSeconds > 0 && info.FirstResultSignal() != nil {
 		firstResultTimeout := relaycommon.RemainingChannelFirstResponseTimeout(
 			info.ChannelAttemptStartTime(),
 			time.Duration(firstResultTimeoutSeconds)*time.Second,
@@ -199,6 +204,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 						err = pingDataWithTimeout(c)
 					}()
 					if err != nil {
+						if info.RelayFormat == types.RelayFormatOpenAIResponses {
+							LatchResponsesStreamWriteError(c, err)
+						}
 						logger.LogError(c, "ping data error: "+err.Error())
 						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
 						stop()
@@ -328,7 +336,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// 主循环等待完成或超时。The first-result channel disables its timer as
 	// soon as a handler confirms a deliverable payload; subsequent idle timeouts
 	// retain their existing diagnostic-only semantics.
-	firstResultSignal := info.FirstResponseSignal()
+	firstResultSignal := info.FirstResultSignal()
 waitLoop:
 	for {
 		select {
@@ -338,7 +346,7 @@ waitLoop:
 			continue
 		case <-firstResultTimeoutChan:
 			firstResultTimeoutChan = nil
-			if info.FirstResponseDeadlineExpired() {
+			if info.FirstResultDeadlineExpired() {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 				info.RecordChannelTimeout("streaming_first_result_timeout")
 				break waitLoop

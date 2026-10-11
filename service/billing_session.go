@@ -736,6 +736,18 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 // preConsume 执行预扣费：信任检查 -> 令牌预扣 -> 资金来源预扣。
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIError {
+	if _, wallet := s.funding.(*WalletFunding); wallet && s.relayInfo.IsPlayground {
+		// Playground wallets use legacy hooks without an operation key. Never
+		// let that path reinterpret an already persisted paid reservation.
+		_, persisted, err := model.ResolveBillingPreConsumeSource(s.relayInfo.RequestId)
+		if err != nil {
+			return mapAtomicPreConsumeError(err)
+		}
+		if persisted {
+			return mapAtomicPreConsumeError(fmt.Errorf("%w: playground wallet cannot reuse persisted request %s",
+				model.ErrBillingSettlementOperationConflict, s.relayInfo.RequestId))
+		}
+	}
 	effectiveQuota := quota
 
 	// ---- 信任额度旁路 ----

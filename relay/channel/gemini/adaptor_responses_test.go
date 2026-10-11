@@ -27,7 +27,7 @@ func TestConvertOpenAIResponsesRequestToGeminiInstructionsAndInput(t *testing.T)
 	assert.Equal(t, "hello", got.Contents[0].Parts[0].Text)
 }
 
-func TestConvertOpenAIResponsesRequestToGeminiSkipsCustomToolCalls(t *testing.T) {
+func TestConvertOpenAIResponsesRequestToGeminiPreservesCustomToolCalls(t *testing.T) {
 	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
 		Model: "gemini-test",
 		Input: mustGeminiRawMessage(t, []map[string]any{
@@ -67,20 +67,47 @@ func TestConvertOpenAIResponsesRequestToGeminiSkipsCustomToolCalls(t *testing.T)
 					"type": "object",
 				},
 			},
+			{
+				"type":        "custom",
+				"name":        "apply_patch",
+				"description": "Apply a patch",
+			},
 		}),
 	})
 
 	require.Len(t, got.GetTools(), 1)
-	require.Len(t, got.Contents, 2)
+	require.Len(t, got.Contents, 3)
+	functions, err := common.Marshal(got.GetTools()[0].FunctionDeclarations)
+	require.NoError(t, err)
+	assert.Contains(t, string(functions), "apply_patch")
 	assert.Equal(t, "model", got.Contents[0].Role)
-	require.Len(t, got.Contents[0].Parts, 1)
-	assert.Equal(t, "before custom", got.Contents[0].Parts[0].Text)
-	assert.Nil(t, got.Contents[0].Parts[0].FunctionCall)
+	require.Len(t, got.Contents[0].Parts, 2)
+	var functionCall *dto.FunctionCall
+	var textPart string
+	for _, part := range got.Contents[0].Parts {
+		if part.FunctionCall != nil {
+			functionCall = part.FunctionCall
+		}
+		if part.Text != "" {
+			textPart = part.Text
+		}
+	}
+	require.NotNil(t, functionCall)
+	assert.Equal(t, "before custom", textPart)
+	assert.Equal(t, "call_custom", functionCall.ID)
+	assert.Equal(t, "apply_patch", functionCall.FunctionName)
+	arguments, ok := functionCall.Arguments.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "patch body", arguments["input"])
 
 	assert.Equal(t, "user", got.Contents[1].Role)
-	require.Len(t, got.Contents[1].Parts, 1)
-	assert.Equal(t, "next turn", got.Contents[1].Parts[0].Text)
-	assert.Nil(t, got.Contents[1].Parts[0].FunctionResponse)
+	require.Len(t, got.Contents[1].Parts, 2)
+	assert.Equal(t, "ok", got.Contents[1].Parts[0].FunctionResponse.Response["content"])
+	assert.Equal(t, "legacy custom output", got.Contents[1].Parts[1].FunctionResponse.Response["content"])
+	assert.JSONEq(t, `"call_custom"`, string(got.Contents[1].Parts[0].FunctionResponse.ID))
+	assert.JSONEq(t, `"call_custom"`, string(got.Contents[1].Parts[1].FunctionResponse.ID))
+	assert.Equal(t, "user", got.Contents[2].Role)
+	assert.Equal(t, "next turn", got.Contents[2].Parts[0].Text)
 }
 
 func TestConvertOpenAIResponsesRequestToGeminiRejectsUnsupportedTools(t *testing.T) {

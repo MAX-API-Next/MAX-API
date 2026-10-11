@@ -3,6 +3,7 @@ package gemini
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -468,6 +469,7 @@ func TestGeminiResponsesStreamHandlerEstimatesUsageAndAuditWhenUpstreamUsageMiss
 	chunk := dto.GeminiChatResponse{
 		Candidates: []dto.GeminiChatCandidate{
 			{
+				FinishReason: common.GetPointer("STOP"),
 				Content: dto.GeminiChatContent{
 					Role: "model",
 					Parts: []dto.GeminiPart{
@@ -477,7 +479,8 @@ func TestGeminiResponsesStreamHandlerEstimatesUsageAndAuditWhenUpstreamUsageMiss
 			},
 		},
 	}
-	chunkData, err := common.Marshal(chunk)
+	// The DTO serializes zero usageMetadata; omit the field to model absence.
+	chunkData, err := common.Marshal(map[string]any{"candidates": chunk.Candidates})
 	require.NoError(t, err)
 
 	streamBody := []byte("data: " + string(chunkData) + "\n" + "data: [DONE]\n")
@@ -500,6 +503,141 @@ func TestGeminiResponsesStreamHandlerEstimatesUsageAndAuditWhenUpstreamUsageMiss
 	require.Equal(t, 20, completed.Response.Usage.InputTokens)
 	require.Positive(t, completed.Response.Usage.OutputTokens)
 	require.Positive(t, completed.Response.Usage.TotalTokens)
+}
+
+func TestGeminiResponsesStreamEOFReturnsIncompleteWithoutFalseCompletion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+		DisablePing:     true,
+	}
+	chunk := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}`
+
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("data: " + chunk + "\n")),
+	})
+	require.NotNil(t, usage)
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Contains(t, recorder.Body.String(), "response.incomplete")
+	require.NotContains(t, recorder.Body.String(), "response.completed")
+}
+
+func TestGeminiResponsesStreamRecognizesNonStopTerminalReasons(t *testing.T) {
+	tests := []struct {
+		name           string
+		finishReason   string
+		incompleteHint string
+	}{
+		{name: "max tokens", finishReason: "MAX_TOKENS", incompleteHint: "max_output_tokens"},
+		{name: "safety", finishReason: "SAFETY", incompleteHint: "content_filter"},
+		{name: "recitation", finishReason: "RECITATION", incompleteHint: "content_filter"},
+		{name: "blocklist", finishReason: "BLOCKLIST", incompleteHint: "content_filter"},
+		{name: "prohibited content", finishReason: "PROHIBITED_CONTENT", incompleteHint: "content_filter"},
+		{name: "sensitive pii", finishReason: "SPII", incompleteHint: "content_filter"},
+		{name: "other provider stop", finishReason: "OTHER", incompleteHint: "content_filter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			info := &relaycommon.RelayInfo{
+				IsStream:        true,
+				RelayFormat:     types.RelayFormatOpenAIResponses,
+				OriginModelName: "gemini-test",
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+				DisablePing:     true,
+			}
+			chunk := fmt.Sprintf(`{"candidates":[{"index":0,"finishReason":%q,"content":{"role":"model","parts":[{"text":"partial"}]} }],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}`, tt.finishReason)
+
+			usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("data: " + chunk + "\n")),
+			})
+			require.Nil(t, maxAPIError)
+			require.NotNil(t, usage)
+			require.Equal(t, 4, usage.PromptTokens)
+			require.Equal(t, 2, usage.CompletionTokens)
+			require.Equal(t, 6, usage.TotalTokens)
+			require.Contains(t, recorder.Body.String(), "response.incomplete")
+			require.Contains(t, recorder.Body.String(), tt.incompleteHint)
+			require.NotContains(t, recorder.Body.String(), "responses stream ended before a terminal event")
+		})
+	}
+}
+
+func TestGeminiResponsesStreamIncompletePreservesProviderUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+		DisablePing:     true,
+	}
+	chunk := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":6}}`
+
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("data: " + chunk + "\n")),
+	})
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.Equal(t, 4, usage.PromptTokens)
+	var incomplete dto.ResponsesStreamResponse
+	require.NoError(t, common.UnmarshalJsonStr(sseDataForEvent(t, recorder.Body.String(), "response.incomplete"), &incomplete))
+	require.NotNil(t, incomplete.Response)
+	require.NotNil(t, incomplete.Response.Usage)
+	require.Equal(t, 4, incomplete.Response.Usage.InputTokens)
+	require.Equal(t, 2, incomplete.Response.Usage.OutputTokens)
+	require.Equal(t, 6, incomplete.Response.Usage.TotalTokens)
+}
+
+func TestGeminiResponsesStreamMalformedFrameIsAbnormal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+		DisablePing:     true,
+	}
+	valid := `data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]}}]}` + "\n"
+	reader, writer := io.Pipe()
+	finished := make(chan struct{})
+	go func() {
+		_, _ = writer.Write([]byte(valid))
+		_, _ = writer.Write([]byte("data: {not-json}\n"))
+		<-finished
+	}()
+	defer func() {
+		close(finished)
+		_ = writer.Close()
+	}()
+
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       reader,
+	})
+	require.NotNil(t, usage)
+	require.NotNil(t, maxAPIError)
+	require.True(t, types.IsSkipRetryError(maxAPIError))
+	require.NotContains(t, recorder.Body.String(), "response.completed")
 }
 
 func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {

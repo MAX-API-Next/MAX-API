@@ -18,6 +18,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/relay/reasonmap"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -527,10 +528,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
 	}
-	var responseText string
+	var responseText strings.Builder
 	var responseThinking string
 	if len(claudeResponse.Content) > 0 {
-		responseText = claudeResponse.Content[0].GetText()
 		if claudeResponse.Content[0].Thinking != nil {
 			responseThinking = *claudeResponse.Content[0].Thinking
 		}
@@ -557,7 +557,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 				thinkingContent = *message.Thinking
 			}
 		case "text":
-			responseText = message.GetText()
+			responseText.WriteString(message.GetText())
 		}
 	}
 	choice := dto.OpenAITextResponseChoice{
@@ -567,7 +567,7 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		},
 		FinishReason: stopReasonClaude2OpenAI(claudeResponse.StopReason),
 	}
-	choice.SetStringContent(responseText)
+	choice.SetStringContent(responseText.String())
 	if len(responseThinking) > 0 {
 		choice.ReasoningContent = &responseThinking
 	}
@@ -584,12 +584,19 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 }
 
 type ClaudeResponseInfo struct {
-	ResponseId   string
-	Created      int64
-	Model        string
-	ResponseText strings.Builder
-	Usage        *dto.Usage
-	Done         bool
+	ResponseId                        string
+	Created                           int64
+	Model                             string
+	ResponseText                      strings.Builder
+	Usage                             *dto.Usage
+	Done                              bool
+	ResponsesState                    *openaicompat.ChatToResponsesStreamState
+	ResponsesTerminalSeen             bool
+	responsesOutputDelivered          bool
+	responsesInputUsageReported       bool
+	responsesFinalOutputUsageReported bool
+	responsesUsageFinalized           bool
+	responsesDeliveredText            strings.Builder
 
 	pendingToolUses []claudePendingToolUse
 }
@@ -876,27 +883,105 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		if err != nil {
 			logger.LogError(c, "send_stream_response_failed: "+err.Error())
 		}
+	} else if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		if claudeResponse.Type == "message_stop" ||
+			(claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil && strings.TrimSpace(*claudeResponse.Delta.StopReason) != "") {
+			claudeInfo.ResponsesTerminalSeen = true
+		}
+		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		if claudeResponse.Type == "message_start" && gjson.Get(data, "message.usage.input_tokens").Type == gjson.Number {
+			claudeInfo.responsesInputUsageReported = true
+		}
+		if claudeResponse.Type == "message_delta" && gjson.Get(data, "usage.output_tokens").Type == gjson.Number {
+			claudeInfo.responsesFinalOutputUsageReported = true
+			claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
+		}
+		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+			info.UpstreamModelName = claudeResponse.Message.Model
+		}
+		if claudeInfo.ResponsesState == nil {
+			claudeInfo.ResponsesState = openaicompat.NewChatToResponsesStreamState(claudeInfo.ResponseId, info.UpstreamModelName)
+			claudeInfo.ResponsesState.CustomToolNames = service.ResponsesCustomToolNames(info)
+		}
+		responsesUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+		claudeInfo.ResponsesState.Usage = openaicompat.UsageFromChatUsage(&responsesUsage)
+		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		if response == nil {
+			return nil
+		}
+		events, convertErr := openaicompat.ChatCompletionsStreamChunkToResponsesEvents(response, claudeInfo.ResponsesState)
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
+		}
+		return writeClaudeResponsesEvents(c, info, claudeInfo, events)
 	}
 	return nil
 }
 
-func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	defer claudeInfo.discardPendingToolUses()
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
+func writeClaudeResponsesEvents(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, events []openaicompat.ChatToResponsesStreamEvent) *types.MaxAPIError {
+	for _, event := range events {
+		payload, marshalErr := common.Marshal(event.Payload)
+		if marshalErr != nil {
+			return types.NewError(marshalErr, types.ErrorCodeJsonMarshalFailed)
+		}
+		delivered, writeErr := helper.ResponseChunkDataWithDelivery(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
+		if delivered && helper.ResponsesStreamEventHasOutput(event.Payload) {
+			claudeInfo.responsesOutputDelivered = true
+			if event.Payload.Delta != "" {
+				claudeInfo.responsesDeliveredText.WriteString(event.Payload.Delta)
+				if claudeInfo.responsesUsageFinalized {
+					claudeInfo.responsesUsageFinalized = false
+					// Refresh only the locally synthesized sidecar, never provider usage.
+					if claudeInfo.Usage.BillingUsage != nil && claudeInfo.Usage.BillingUsage.Estimated {
+						claudeInfo.Usage.BillingUsage = nil
+					}
+				}
+			}
+		}
+		if writeErr != nil {
+			return types.NewError(writeErr, types.ErrorCodeBadResponse)
+		}
+		if delivered && helper.ResponsesStreamEventHasFirstResult(event.Payload) {
+			info.SetFirstResultTime()
+		}
 	}
-	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	return nil
+}
+
+// Finalize usage independently of downstream writes so interrupted Responses
+// streams retain the same provider and fallback accounting evidence as EOF.
+func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.responsesUsageFinalized {
+		return
+	}
+	complete := claudeInfo.Done
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		complete = claudeInfo.ResponsesTerminalSeen
+	}
+	explicitZero := info.RelayFormat == types.RelayFormatOpenAIResponses && complete && claudeInfo.responsesFinalOutputUsageReported
+	estimated := false
+	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
+		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
+		estimated = claudeInfo.Usage.PromptTokens > 0
+	}
+	if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) || !complete {
 		if common.DebugEnabled {
 			common.SysLog("claude response usage is not complete, maybe upstream error")
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
-		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		if claudeInfo.Usage.CompletionTokens == 0 ||
-			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
-			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+		text := claudeInfo.ResponseText.String()
+		if info.RelayFormat == types.RelayFormatOpenAIResponses {
+			text = claudeInfo.responsesDeliveredText.String()
 		}
-		if claudeInfo.Usage.PromptTokens == 0 {
+		fallback := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) ||
+			(!complete && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
+			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
+			estimated = true
+		}
+		if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
 			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+			estimated = true
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 	}
@@ -904,8 +989,38 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 	}
 	if claudeInfo.Usage != nil && claudeInfo.Usage.BillingUsage == nil {
-		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(buildMessageDeltaPatchUsage(nil, claudeInfo))
+		providerUsage := buildMessageDeltaPatchUsage(nil, claudeInfo)
+		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(providerUsage)
+		if claudeInfo.Usage.BillingUsage == nil && info.RelayFormat == types.RelayFormatOpenAIResponses && (claudeInfo.responsesInputUsageReported || claudeInfo.responsesFinalOutputUsageReported) {
+			claudeInfo.Usage.BillingUsage = &dto.BillingUsage{Source: dto.BillingUsageSourceClaudeMessages, Semantic: dto.BillingUsageSemanticAnthropic, ClaudeUsage: providerUsage}
+		}
+		if claudeInfo.Usage.BillingUsage != nil && info.RelayFormat == types.RelayFormatOpenAIResponses {
+			claudeInfo.Usage.BillingUsage.Estimated = estimated
+			claudeInfo.Usage.BillingUsage.TokenCountsReported = claudeInfo.responsesInputUsageReported && claudeInfo.responsesFinalOutputUsageReported
+		}
 	}
+	claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		claudeInfo.responsesUsageFinalized = true
+	}
+}
+
+func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) *types.MaxAPIError {
+	defer claudeInfo.discardPendingToolUses()
+	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.ResponsesState != nil {
+		flushErr := writeClaudeResponsesEvents(c, info, claudeInfo, openaicompat.FlushChatCompletionsStreamToResponsesOutput(claudeInfo.ResponsesState))
+		finalizeClaudeStreamUsage(c, info, claudeInfo)
+		if flushErr != nil {
+			return types.NewError(flushErr, flushErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
+		responsesUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+		claudeInfo.ResponsesState.Usage = openaicompat.UsageFromChatUsage(&responsesUsage)
+		if finalErr := writeClaudeResponsesEvents(c, info, claudeInfo, openaicompat.FinalizeChatCompletionsStreamToResponses(claudeInfo.ResponsesState)); finalErr != nil {
+			return types.NewError(finalErr, finalErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
+	finalizeClaudeStreamUsage(c, info, claudeInfo)
 
 	if info.RelayFormat == types.RelayFormatClaude {
 		//
@@ -920,6 +1035,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 		}
 		helper.Done(c)
 	}
+	return nil
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.MaxAPIError) {
@@ -930,6 +1046,11 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		info.EnableFirstResultTracking()
+		claudeInfo.ResponsesState = openaicompat.NewChatToResponsesStreamState(claudeInfo.ResponseId, info.UpstreamModelName)
+		claudeInfo.ResponsesState.CustomToolNames = service.ResponsesCustomToolNames(info)
+	}
 	defer claudeInfo.discardPendingToolUses()
 	var err *types.MaxAPIError
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -939,13 +1060,59 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		}
 	})
 	if err != nil {
+		if info.RelayFormat == types.RelayFormatOpenAIResponses && c.Writer.Written() {
+			err = types.NewError(err, err.GetErrorCode(), types.ErrOptionWithSkipRetry())
+			if !claudeInfo.responsesOutputDelivered {
+				return nil, err
+			}
+			finalizeClaudeStreamUsage(c, info, claudeInfo)
+			claudeInfo.ResponsesState.MarkIncomplete("upstream_error")
+			return claudeInfo.Usage, types.NewError(err, err.GetErrorCode(), types.ErrOptionWithSkipRetry())
+		}
 		return nil, err
 	}
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
+		if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.responsesOutputDelivered {
+			finalizeClaudeStreamUsage(c, info, claudeInfo)
+			return claudeInfo.Usage, apiErr
+		}
 		return nil, apiErr
 	}
+	if info.RelayFormat == types.RelayFormatOpenAIResponses {
+		finalizeClaudeStreamUsage(c, info, claudeInfo)
+		streamStatus := info.StreamStatus
+		if !claudeInfo.ResponsesTerminalSeen {
+			reason := "upstream_eof"
+			if streamStatus != nil && streamStatus.IsAbnormalEnd() {
+				reason = string(streamStatus.EndReason)
+			}
+			if claudeInfo.ResponsesState != nil {
+				claudeInfo.ResponsesState.MarkIncomplete(reason)
+				// EOF means the client can still receive a terminal Responses
+				// event. For cancellation or transport failure, do not write
+				// after the client has gone away.
+				if streamStatus == nil || streamStatus.EndReason == relaycommon.StreamEndReasonEOF {
+					if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+						if !claudeInfo.responsesOutputDelivered {
+							return nil, finalErr
+						}
+						return claudeInfo.Usage, finalErr
+					}
+				}
+			}
+			if !claudeInfo.responsesOutputDelivered {
+				return nil, openaicompat.NewResponsesStreamIncompleteError(reason)
+			}
+			return claudeInfo.Usage, openaicompat.NewResponsesStreamIncompleteError(reason)
+		}
+		if streamStatus != nil && streamStatus.IsAbnormalEnd() {
+			return claudeInfo.Usage, openaicompat.NewResponsesStreamIncompleteError(string(streamStatus.EndReason))
+		}
+	}
 
-	HandleStreamFinalResponse(c, info, claudeInfo)
+	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
+		return claudeInfo.Usage, finalErr
+	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, claudeInfo.ResponseText.String())
 	}
@@ -991,6 +1158,17 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		responseData = data
 		if service.ResponseAuditEnabled() {
 			auditResponse = ResponseClaude2OpenAI(&claudeResponse)
+		}
+	case types.RelayFormatOpenAIResponses:
+		auditResponse = ResponseClaude2OpenAI(&claudeResponse)
+		auditResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+		responsesResponse, _, convertErr := service.ChatCompletionsResponseToResponsesResponseWithCustomTools(auditResponse, claudeInfo.ResponseId, service.ResponsesCustomToolNames(info))
+		if convertErr != nil {
+			return types.NewError(convertErr, types.ErrorCodeBadResponseBody)
+		}
+		responseData, err = common.Marshal(responsesResponse)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeJsonMarshalFailed)
 		}
 	}
 
