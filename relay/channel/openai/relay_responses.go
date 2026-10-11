@@ -20,6 +20,122 @@ import (
 
 const maxPendingResponsesStreamEvents = 32
 
+// Collect generated output only after its complete SSE frame was delivered.
+// Keep tool snapshots separate from deltas so item.done cannot count the same
+// arguments twice. This estimate never replaces upstream-reported token counts.
+type responsesOutputEstimate struct {
+	text         strings.Builder
+	tools        []*responsesToolEstimate
+	toolsByAlias map[string]*responsesToolEstimate
+}
+
+type responsesToolEstimate struct {
+	name     string
+	deltas   strings.Builder
+	snapshot string
+}
+
+func (t *responsesToolEstimate) observeSnapshot(snapshot string) {
+	// Preserve already delivered content if a later malformed snapshot is
+	// empty or contradicts it; identical/full extensions are counted once.
+	if strings.HasPrefix(snapshot, t.snapshot) {
+		t.snapshot = snapshot
+	}
+}
+
+func (e *responsesOutputEstimate) tool(event dto.ResponsesStreamResponse) *responsesToolEstimate {
+	aliases := make([]string, 0, 4)
+	if event.OutputIndex != nil {
+		aliases = append(aliases, fmt.Sprintf("index:%d", *event.OutputIndex))
+	}
+	if event.ItemID != "" {
+		aliases = append(aliases, "id:"+event.ItemID)
+	}
+	if event.Item != nil {
+		if event.Item.ID != "" {
+			aliases = append(aliases, "id:"+event.Item.ID)
+		}
+		if event.Item.CallId != "" {
+			aliases = append(aliases, "call:"+event.Item.CallId)
+		}
+	}
+	if len(aliases) == 0 {
+		// Compatibility providers may omit both identifiers. Keep their single
+		// function/custom argument stream distinct instead of inventing IDs.
+		kind := dto.BuildInCallFunctionCall
+		if strings.HasPrefix(event.Type, "response.custom_tool_call_input.") ||
+			(event.Item != nil && event.Item.Type == dto.BuildInCallCustomToolCall) {
+			kind = dto.BuildInCallCustomToolCall
+		}
+		aliases = append(aliases, "unidentified:"+kind)
+	}
+	if e.toolsByAlias == nil {
+		e.toolsByAlias = make(map[string]*responsesToolEstimate)
+	}
+	var tool *responsesToolEstimate
+	for _, alias := range aliases {
+		if tool = e.toolsByAlias[alias]; tool != nil {
+			break
+		}
+	}
+	if tool == nil {
+		tool = &responsesToolEstimate{}
+		e.tools = append(e.tools, tool)
+	}
+	for _, alias := range aliases {
+		e.toolsByAlias[alias] = tool
+	}
+	return tool
+}
+
+func (e *responsesOutputEstimate) observe(event dto.ResponsesStreamResponse) {
+	switch event.Type {
+	case "response.output_text.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta", "response.refusal.delta":
+		e.text.WriteString(event.Delta)
+	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+		e.tool(event).deltas.WriteString(event.Delta)
+	case "response.function_call_arguments.done":
+		if event.Arguments != nil {
+			e.tool(event).observeSnapshot(*event.Arguments)
+		}
+	case "response.custom_tool_call_input.done":
+		if event.Input != nil {
+			e.tool(event).observeSnapshot(*event.Input)
+		}
+	case "response.output_item.added", "response.output_item.done":
+		if event.Item != nil && (event.Item.Type == dto.BuildInCallFunctionCall || event.Item.Type == dto.BuildInCallCustomToolCall) {
+			tool := e.tool(event)
+			if tool.name == "" {
+				tool.name = event.Item.Name
+			}
+			tool.observeSnapshot(event.Item.ArgumentsString())
+		}
+	case "response.completed", "response.incomplete", "response.done":
+		if event.Response != nil {
+			for i, item := range event.Response.Output {
+				e.observe(dto.ResponsesStreamResponse{Type: "response.output_item.done", Item: &item, OutputIndex: &i})
+			}
+		}
+	}
+}
+
+func (e *responsesOutputEstimate) textForTokens() string {
+	var text strings.Builder
+	text.WriteString(e.text.String())
+	for _, tool := range e.tools {
+		text.WriteString(tool.name)
+		arguments := tool.deltas.String()
+		// A full delivered snapshot may include a suffix that never arrived as
+		// a delta. Only extend matching prefixes; retain delivered deltas if a
+		// malformed snapshot contradicts them, without charging both copies.
+		if strings.HasPrefix(tool.snapshot, arguments) {
+			arguments = tool.snapshot
+		}
+		text.WriteString(arguments)
+	}
+	return text.String()
+}
+
 func applyResponsesUsage(dst *dto.Usage, src *dto.Usage) {
 	if dst == nil || src == nil {
 		return
@@ -248,6 +364,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var outputEstimate responsesOutputEstimate
 	var streamErr *types.MaxAPIError
 	type pendingResponsesStreamEvent struct {
 		response dto.ResponsesStreamResponse
@@ -265,6 +382,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		delivered, writeErr := sendResponsesStreamData(c, event.response, event.data)
 		if delivered {
 			streamForwarded = true
+			outputEstimate.observe(event.response)
 			if helper.ResponsesStreamEventHasOutput(event.response) || responsesStreamHasVisibleOutput(&event.response) {
 				outputDelivered = true
 			}
@@ -283,8 +401,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	finalizeUsage := func() {
 		if !usageReported {
-			if usage.CompletionTokens == 0 && responseTextBuilder.Len() > 0 {
-				usage.CompletionTokens = service.CountTextToken(responseTextBuilder.String(), info.UpstreamModelName)
+			if usage.CompletionTokens == 0 {
+				usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
 			}
 			if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
 				usage.PromptTokens = info.GetEstimatePromptTokens()

@@ -340,7 +340,9 @@ func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundin
 	wantLogs, wantRequests := 0, 0
 	if delivered {
 		wantLogs = 1
-		if quota != 0 {
+		// Free pricing and a zero-valued expression still count a request with
+		// measured generation; explicit numeric zero usage does not.
+		if quota != 0 || prompt+completion > 0 {
 			wantRequests = 1
 		}
 	}
