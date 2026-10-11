@@ -346,6 +346,9 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 			continue
 		}
 		name := strings.TrimSpace(common.Interface2String(tool["name"]))
+		if kind == "custom" && name == "" {
+			return nil, errors.New("custom tool is missing name")
+		}
 		if previous, exists := names[name]; exists && (kind == "custom" || previous == "custom") {
 			return nil, fmt.Errorf("ambiguous custom tool name %q", name)
 		}
@@ -365,9 +368,6 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 			})
 		case "custom":
 			name := strings.TrimSpace(common.Interface2String(tool["name"]))
-			if name == "" {
-				return nil, errors.New("custom tool is missing name")
-			}
 			out = append(out, dto.ToolCallRequest{
 				Type: "function",
 				Function: dto.FunctionRequest{

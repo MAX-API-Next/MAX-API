@@ -20,6 +20,21 @@ func TestResponsesToolNamesRejectAmbiguousCustomConversion(t *testing.T) {
 	tools, err := responsesRequestToolsToChat([]byte(`[{"type":"function","name":"lookup"},{"type":"custom","name":"patch"}]`))
 	require.NoError(t, err)
 	require.Len(t, tools, 2)
+	for _, scenario := range []struct {
+		name, tools string
+	}{
+		{"function_first", `[{"type":"function"},{"type":"custom"}]`},
+		{"custom_first", `[{"type":"custom"},{"type":"function"}]`},
+		{"whitespace_function_first", `[{"type":"function","name":" "},{"type":"custom","name":"\t"}]`},
+		{"whitespace_custom_first", `[{"type":"custom","name":"\t"},{"type":"function","name":" "}]`},
+		{"two_custom", `[{"type":"custom"},{"type":"custom"}]`},
+		{"single_custom", `[{"type":"custom"}]`},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			_, err := responsesRequestToolsToChat([]byte(scenario.tools))
+			require.EqualError(t, err, "custom tool is missing name")
+		})
+	}
 }
 
 func TestResponsesCustomToolPreservesGrammarConstraint(t *testing.T) {
