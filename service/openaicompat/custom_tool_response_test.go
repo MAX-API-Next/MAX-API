@@ -60,3 +60,39 @@ func TestResponsesCustomToolPreservesRawInputAndOrdinaryFunctions(t *testing.T) 
 		})
 	}
 }
+
+func TestResponsesCustomToolWhitespaceNameMatchesStream(t *testing.T) {
+	for _, name := range []string{" apply_patch", "apply_patch\t\n", " \tapply_patch \n"} {
+		t.Run(name, func(t *testing.T) {
+			tool := dto.ToolCallResponse{ID: "call_custom", Type: "function", Function: dto.FunctionResponse{Name: name, Arguments: `{"input":"raw patch"}`}}
+			message := dto.Message{Role: "assistant"}
+			message.SetToolCalls([]dto.ToolCallResponse{tool})
+			names := map[string]struct{}{"apply_patch": {}}
+			response, _, err := ChatCompletionsResponseToResponsesResponseWithCustomTools(&dto.OpenAITextResponse{
+				Choices: []dto.OpenAITextResponseChoice{{Message: message, FinishReason: "tool_calls"}},
+			}, "resp_custom", names)
+			require.NoError(t, err)
+			require.Len(t, response.Output, 1)
+			require.Equal(t, "custom_tool_call", response.Output[0].Type)
+			require.Equal(t, name, response.Output[0].Name)
+			require.Equal(t, "raw patch", response.Output[0].Input)
+			require.Nil(t, response.Output[0].Arguments)
+			require.Equal(t, "call_custom", response.Output[0].CallId)
+
+			state := NewChatToResponsesStreamState("resp_custom", "test")
+			state.CustomToolNames = names
+			tool.SetIndex(0)
+			_, err = ChatCompletionsStreamChunkToResponsesEvents(&dto.ChatCompletionsStreamResponse{
+				Choices: []dto.ChatCompletionsStreamResponseChoice{{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{tool}}}},
+			}, state)
+			require.NoError(t, err)
+			events := FinalizeChatCompletionsStreamToResponses(state)
+			require.NotEmpty(t, events)
+			stream := events[len(events)-1].Payload.Response
+			require.NotNil(t, stream)
+			require.Equal(t, response.Output[0].Type, stream.Output[0].Type)
+			require.Equal(t, "apply_patch", stream.Output[0].Name)
+			require.Equal(t, response.Output[0].Input, stream.Output[0].Input)
+		})
+	}
+}

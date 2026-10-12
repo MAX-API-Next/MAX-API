@@ -147,7 +147,7 @@ func ChatCompletionsResponseToResponsesResponseWithCustomTools(resp *dto.OpenAIT
 	}
 	for i, toolCall := range choice.Message.ParseToolCalls() {
 		item := chatToolCallToResponsesOutput(toolCall, id, i, status)
-		if _, custom := customToolNames[toolCall.Function.Name]; custom && item.Type == responsesOutputTypeFunctionCall {
+		if _, custom := customToolNames[strings.TrimSpace(toolCall.Function.Name)]; custom && item.Type == responsesOutputTypeFunctionCall {
 			item.Type = responsesOutputTypeCustomToolCall
 			item.Input = customToolInputFromArguments(toolCall.Function.Arguments)
 			item.Arguments = nil

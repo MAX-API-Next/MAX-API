@@ -224,7 +224,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			reason = string(info.StreamStatus.EndReason)
 		}
 		state.MarkIncomplete(reason)
-		if info.StreamStatus == nil || info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF {
+		if !info.StreamStatus.IsAbnormalEnd() {
 			if !finalizeStream() {
 				finalErr := types.NewError(streamErr, streamErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
 				if !outputDelivered {

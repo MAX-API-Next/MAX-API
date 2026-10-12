@@ -73,7 +73,7 @@ func TestResponsesCustomToolEOFFinalizationUsesDurableLedger(t *testing.T) {
 				if provider == "chat" && strings.HasSuffix(usageKind, "input_only") {
 					continue
 				}
-				for _, ending := range []string{"eof", "first_input_write_failure", "second_input_write_failure", "finish_second_input_write_failure", "input_flush_failure", "terminal_write_failure", "no_delivery"} {
+				for _, ending := range []string{"eof", "done", "first_input_write_failure", "second_input_write_failure", "finish_second_input_write_failure", "input_flush_failure", "terminal_write_failure", "no_delivery"} {
 					t.Run(strings.Join([]string{provider, funding, usageKind, ending}, "/"), func(t *testing.T) {
 						db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 						require.NoError(t, err)
@@ -118,6 +118,9 @@ func TestResponsesCustomToolEOFFinalizationUsesDurableLedger(t *testing.T) {
 							prompt = 0
 						}
 						channelType, frames := customToolEOFFrames(t, provider, usageKind, inputs)
+						if ending == "done" {
+							frames = append(frames, "[DONE]")
+						}
 						if ending == "finish_second_input_write_failure" && usageKind != "known" && usageKind != "zero" {
 							switch provider {
 							case "chat":
@@ -159,7 +162,7 @@ func TestResponsesCustomToolEOFFinalizationUsesDurableLedger(t *testing.T) {
 						info.SetEstimatePromptTokens(10)
 						require.Nil(t, service.PreConsumeBilling(c, 100, info))
 						apiErr := ResponsesHelper(c, info)
-						if ending == "eof" && (usageKind == "known" || usageKind == "zero") {
+						if (ending == "eof" || ending == "done") && (usageKind == "known" || usageKind == "zero") {
 							require.Nil(t, apiErr)
 						} else {
 							require.NotNil(t, apiErr)
@@ -240,8 +243,12 @@ func TestResponsesCustomToolEOFFinalizationUsesDurableLedger(t *testing.T) {
 							}
 						}
 						require.Equal(t, deliveredInput, gotInput.String(), "only fully written input deltas may participate in settlement")
-						if ending == "eof" {
+						if ending == "eof" || ending == "done" {
 							require.Equal(t, 1, terminalCount)
+							if usageKind != "known" && usageKind != "zero" {
+								require.Contains(t, writer.Body.String(), `"type":"response.incomplete"`)
+								require.NotContains(t, writer.Body.String(), `"type":"response.completed"`)
+							}
 						} else {
 							require.Zero(t, terminalCount, "no terminal may be appended after the downstream fails")
 						}

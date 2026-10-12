@@ -571,9 +571,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, responseTextBuilder.String())
 	}
-	if hasVisiblePayload {
-		recordEmptyCompletionRetrySuccess(c, info, usage)
-	}
 	if !terminalEventSeen {
 		reason := "upstream_eof"
 		if info.StreamStatus != nil && info.StreamStatus.IsAbnormalEnd() {
@@ -586,6 +583,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return nil, openaicompat.NewResponsesStreamIncompleteError(reason)
 		}
 		return usage, openaicompat.NewResponsesStreamIncompleteError(reason)
+	}
+	if hasVisiblePayload {
+		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}
 
 	return usage, nil

@@ -285,7 +285,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 			reason = string(info.StreamStatus.EndReason)
 		}
 		state.MarkIncomplete(reason)
-		if info.StreamStatus == nil || info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF {
+		if !info.StreamStatus.IsAbnormalEnd() {
 			if !finalizeStream() {
 				finalErr := types.NewError(streamErr, streamErr.GetErrorCode(), types.ErrOptionWithSkipRetry())
 				if !outputDelivered {

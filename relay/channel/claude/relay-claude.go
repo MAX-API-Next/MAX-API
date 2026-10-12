@@ -1088,10 +1088,10 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			}
 			if claudeInfo.ResponsesState != nil {
 				claudeInfo.ResponsesState.MarkIncomplete(reason)
-				// EOF means the client can still receive a terminal Responses
-				// event. For cancellation or transport failure, do not write
+				// A normal ending still permits a terminal Responses event.
+				// For cancellation or transport failure, do not write
 				// after the client has gone away.
-				if streamStatus == nil || streamStatus.EndReason == relaycommon.StreamEndReasonEOF {
+				if !streamStatus.IsAbnormalEnd() {
 					if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
 						if !claudeInfo.responsesOutputDelivered {
 							return nil, finalErr
