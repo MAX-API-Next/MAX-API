@@ -243,3 +243,56 @@ func TestNativeResponsesLegalTerminalsPreserveReportedUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeResponsesDeliveredTerminalIgnoresLaterFrames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitTokenEncoders()
+	oldEmptyRetry := common.EmptyCompletionRetryEnabled
+	common.EmptyCompletionRetryEnabled = false
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldEmptyRetry })
+	tails := []struct{ name, frame string }{
+		{"duplicate", `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1000,"output_tokens":999,"total_tokens":1999}}}`},
+		{"metadata", `{"type":"response.in_progress","response":{"usage":{"input_tokens":1000,"output_tokens":999,"total_tokens":1999}}}`},
+		{"malformed", `{broken`},
+		{"failure", `{"type":"response.failed","response":{"status":"failed","error":{"message":"late failure"}}}`},
+		{"tool", `{"type":"response.output_item.done","item":{"type":"function_call","name":"late_tool","id":"late_tool","arguments":"{}"}}`},
+		{"output", `{"type":"response.output_text.delta","delta":"late output"}`},
+	}
+	for _, event := range []string{"response.completed", "response.incomplete", "response.done"} {
+		for _, usageKind := range []string{"missing", "known", "zero"} {
+			for _, tail := range tails {
+				t.Run(event+"/"+usageKind+"/"+tail.name, func(t *testing.T) {
+					c, info := newResponsesUsageTestContext()
+					recorder := httptest.NewRecorder()
+					written, _ := gin.CreateTestContext(recorder)
+					c.Writer = written.Writer
+					info.SetEstimatePromptTokens(10)
+					response := map[string]any{"id": "resp_terminal", "status": "completed"}
+					if event == "response.incomplete" {
+						response["status"] = "incomplete"
+					}
+					prompt, completion := 10, service.CountTextToken("accepted output", "gpt-test")
+					if usageKind != "missing" {
+						prompt, completion = 4, 2
+						if usageKind == "zero" {
+							prompt, completion = 0, 0
+						}
+						response["usage"] = map[string]int{"input_tokens": prompt, "output_tokens": completion, "total_tokens": prompt + completion}
+					}
+					terminal, err := common.Marshal(map[string]any{"type": event, "response": response})
+					require.NoError(t, err)
+					body := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"accepted output\"}\n\ndata: " + string(terminal) + "\n\ndata: " + tail.frame + "\n\n"
+					usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))})
+					require.Nil(t, apiErr, "a delivered terminal fixes this generation's outcome")
+					require.NotNil(t, usage)
+					require.Equal(t, prompt, usage.PromptTokens)
+					require.Equal(t, completion, usage.CompletionTokens)
+					require.Equal(t, prompt+completion, usage.TotalTokens)
+					require.Equal(t, 2, strings.Count(recorder.Body.String(), "event: "))
+					require.NotContains(t, recorder.Body.String(), "late")
+					require.NotContains(t, recorder.Body.String(), "1999")
+				})
+			}
+		}
+	}
+}

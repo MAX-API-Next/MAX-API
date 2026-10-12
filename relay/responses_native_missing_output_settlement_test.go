@@ -11,8 +11,10 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -82,10 +84,16 @@ func nativeMissingOutputCases() []nativeMissingOutputCase {
 type nativeMissingOutputWriter struct {
 	*httptest.ResponseRecorder
 	short, triggered bool
+	failOn           string
+	flush            bool
 }
 
 func (w *nativeMissingOutputWriter) Write(data []byte) (int, error) {
-	if strings.Contains(string(data), "unwritten-generated-output") {
+	failOn := w.failOn
+	if failOn == "" {
+		failOn = "unwritten-generated-output"
+	}
+	if !w.flush && strings.Contains(string(data), failOn) {
 		w.triggered = true
 		if w.short {
 			return w.ResponseRecorder.Write(data[:3])
@@ -97,6 +105,47 @@ func (w *nativeMissingOutputWriter) Write(data []byte) (int, error) {
 
 func (w *nativeMissingOutputWriter) WriteString(data string) (int, error) {
 	return w.Write([]byte(data))
+}
+
+func (w *nativeMissingOutputWriter) FlushError() error {
+	if w.flush && strings.Contains(w.Body.String(), w.failOn) {
+		w.triggered = true
+		return io.ErrClosedPipe
+	}
+	w.ResponseRecorder.Flush()
+	return nil
+}
+
+func TestNativeResponsesTerminalTailRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	oldAudit := common.LogResponseContentEnabled
+	common.LogResponseContentEnabled = true
+	t.Cleanup(func() { common.LogResponseContentEnabled = oldAudit })
+	setFileSearchLedgerPriceForTest(t, 0.02)
+	for _, event := range []string{"response.completed", "response.incomplete", "response.done"} {
+		for _, funding := range streamFundingCases() {
+			for _, usage := range []string{"missing", "known", "zero"} {
+				t.Run(event+"/"+funding.name+"/"+usage, func(t *testing.T) {
+					scenario := nativeMissingOutputCase{event, "accepted output", []map[string]any{
+						{"type": "response.output_text.delta", "delta": "accepted output"},
+						{"type": event, "response": map[string]any{"id": "resp_missing", "status": strings.TrimPrefix(event, "response.")}},
+					}}
+					runNativeMissingOutputLedger(t, scenario, funding, usage, "after_terminal", false)
+				})
+			}
+		}
+	}
+	for _, funding := range streamFundingCases() {
+		for _, failure := range []string{"terminal_write", "terminal_short", "terminal_flush"} {
+			t.Run(funding.name+"/"+failure, func(t *testing.T) {
+				scenario := nativeMissingOutputCase{"response.completed", "accepted output", []map[string]any{
+					{"type": "response.output_text.delta", "delta": "accepted output"},
+					{"type": "response.completed", "response": map[string]any{"id": "resp_missing", "status": "completed"}},
+				}}
+				runNativeMissingOutputLedger(t, scenario, funding, "known", failure, false)
+			})
+		}
+	}
 }
 
 func TestNativeResponsesMissingOutputRetainsOriginalFunding(t *testing.T) {
@@ -166,7 +215,7 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 	hasTerminal := false
 	if !noDelivery {
 		for _, frame := range scenario.frames {
-			if frame["type"] == "response.completed" {
+			if frame["type"] == "response.completed" || frame["type"] == "response.incomplete" || frame["type"] == "response.done" {
 				hasTerminal = true
 				if usage == "terminal_zero" {
 					// A terminal snapshot supplies usage in that one terminal;
@@ -190,6 +239,13 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 		frames = append(frames, `{"type":"response.failed","response":{"id":"resp_missing","status":"failed","error":{"code":"server_error","message":"synthetic failure"}}}`)
 	case "write", "short":
 		frames = append(frames, `{"type":"response.`+scenario.name+`.delta","item_id":"item_0","output_index":0,"delta":"unwritten-generated-output"}`)
+	case "after_terminal", "terminal_write", "terminal_short", "terminal_flush":
+		frames = append(frames,
+			`{"type":"response.completed","response":{"id":"late_response","status":"completed","usage":{"input_tokens":1000,"output_tokens":999,"total_tokens":1999}}}`,
+			`{"type":"response.output_item.done","item":{"type":"file_search_call","id":"late_tool","status":"completed"}}`,
+			`{"type":"response.output_text.delta","delta":"late output"}`,
+			`{"type":"response.failed","response":{"status":"failed","error":{"message":"late failure"}}}`,
+			`{broken`)
 	}
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +259,12 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 	t.Cleanup(upstream.Close)
 	requestID := "native-missing-" + fmt.Sprintf("%x", len(t.Name())) + "-" + scenario.name
 	c, info, recorder := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+	if ending == "after_terminal" {
+		info.Request.(*dto.OpenAIResponsesRequest).Tools = []byte(`[{"type":"file_search","vector_store_ids":["vs_synthetic"]}]`)
+		info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+			dto.BuildInToolFileSearch: {ToolName: dto.BuildInToolFileSearch},
+		}}
+	}
 	if len(pricing) > 0 {
 		if pricing[0] == "free" {
 			info.PriceData.ModelRatio = 0
@@ -213,13 +275,17 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 	var writer *nativeMissingOutputWriter
 	if ending == "write" || ending == "short" {
 		writer = &nativeMissingOutputWriter{ResponseRecorder: recorder, short: ending == "short"}
+	} else if strings.HasPrefix(ending, "terminal_") && ending != "terminal_failed" {
+		writer = &nativeMissingOutputWriter{ResponseRecorder: recorder, failOn: "event: response.completed", short: ending == "terminal_short", flush: ending == "terminal_flush"}
+	}
+	if writer != nil {
 		failed, _ := gin.CreateTestContext(writer)
 		c.Writer = failed.Writer
 	}
 	require.Nil(t, service.PreConsumeBilling(c, 100, info))
 	apiErr := ResponsesHelper(c, info)
 	legalTerminal := usage == "terminal_zero" || hasTerminal
-	if legalTerminal && ending == "eof" {
+	if legalTerminal && (ending == "eof" || ending == "after_terminal") {
 		require.Nil(t, apiErr)
 	} else {
 		require.NotNil(t, apiErr)
@@ -227,6 +293,14 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 	if writer != nil {
 		require.True(t, writer.triggered)
 		require.NotContains(t, recorder.Body.String(), "unwritten-generated-output")
+	}
+	if ending == "after_terminal" || strings.HasPrefix(ending, "terminal_") && ending != "terminal_failed" {
+		require.NotContains(t, recorder.Body.String(), "late")
+		require.NotContains(t, recorder.Body.String(), "1999")
+	}
+	if ending == "after_terminal" {
+		require.Zero(t, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch].CallCount, "post-terminal tools must not add fees")
+		require.Equal(t, 1, strings.Count(recorder.Body.String(), "event: "+scenario.name+"\n"))
 	}
 	service.HandleFailedBilling(c, info, apiErr)
 	service.HandleFailedBilling(c, info, apiErr)
@@ -265,7 +339,7 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 		require.True(t, effect.QuotaIsActual)
 	}
 	assertStreamFundingBalances(t, db, funding, requestID, quota, !noDelivery, prompt, completion)
-	if ending == "eof" {
+	if ending == "eof" || ending == "after_terminal" {
 		var audit strings.Builder
 		for _, frame := range scenario.frames {
 			if frame["type"] == "response.output_text.delta" {

@@ -74,7 +74,9 @@ func TestResponsesCustomToolWhitespaceNameMatchesStream(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, response.Output, 1)
 			require.Equal(t, "custom_tool_call", response.Output[0].Type)
-			require.Equal(t, name, response.Output[0].Name)
+			require.Equal(t, "apply_patch", response.Output[0].Name)
+			_, registered := names[response.Output[0].Name]
+			require.True(t, registered, "clients must resolve the returned custom name against the tool registry")
 			require.Equal(t, "raw patch", response.Output[0].Input)
 			require.Nil(t, response.Output[0].Arguments)
 			require.Equal(t, "call_custom", response.Output[0].CallId)
@@ -92,7 +94,17 @@ func TestResponsesCustomToolWhitespaceNameMatchesStream(t *testing.T) {
 			require.NotNil(t, stream)
 			require.Equal(t, response.Output[0].Type, stream.Output[0].Type)
 			require.Equal(t, "apply_patch", stream.Output[0].Name)
+			require.Equal(t, response.Output[0].Name, stream.Output[0].Name)
 			require.Equal(t, response.Output[0].Input, stream.Output[0].Input)
+
+			tool.Function.Name = " lookup "
+			message.SetToolCalls([]dto.ToolCallResponse{tool})
+			ordinary, _, err := ChatCompletionsResponseToResponsesResponseWithCustomTools(&dto.OpenAITextResponse{
+				Choices: []dto.OpenAITextResponseChoice{{Message: message, FinishReason: "tool_calls"}},
+			}, "resp_function", names)
+			require.NoError(t, err)
+			require.Equal(t, "function_call", ordinary.Output[0].Type)
+			require.Equal(t, " lookup ", ordinary.Output[0].Name, "custom restoration must preserve ordinary function behavior")
 		})
 	}
 }

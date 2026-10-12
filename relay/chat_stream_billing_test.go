@@ -305,16 +305,25 @@ func TestResponsesPartialBillingRecorderPreservesFailureMetricAndRefundBoundary(
 	require.Zero(t, billing.refunds, "partial settlement must prevent a full refund")
 
 	perfmetrics.RecordRelaySample(info, false, 0)
-	result, queryErr := perfmetrics.QuerySummaryAll(1, nil)
-	require.NoError(t, queryErr)
-	found := false
-	for _, summary := range result.Models {
-		if summary.ModelName == info.OriginModelName {
-			found = true
-			require.EqualValues(t, 1, summary.RequestCount)
-			require.Zero(t, summary.SuccessRate)
+	// Success samples use gopool.Go. Observe a bounded window for an erroneous
+	// enqueue, keeping all test queries on this goroutine before DB cleanup.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		result, queryErr := perfmetrics.QuerySummaryAll(1, nil)
+		require.NoError(t, queryErr)
+		found := false
+		for _, summary := range result.Models {
+			if summary.ModelName == info.OriginModelName {
+				found = true
+				require.EqualValues(t, 1, summary.RequestCount)
+				require.Zero(t, summary.SuccessRate)
+				break
+			}
+		}
+		require.True(t, found, "missing partial Responses failure metric")
+		if !time.Now().Before(deadline) {
 			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	require.True(t, found, "missing partial Responses failure metric")
 }

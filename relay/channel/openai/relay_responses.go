@@ -375,6 +375,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	hasVisiblePayload := false
 	emptyCompletionRecorded := false
 	terminalEventSeen := false
+	terminalDelivered := false
 	usageReported := false
 	outputDelivered := false
 
@@ -393,6 +394,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if writeErr != nil {
 			streamErr = types.NewError(writeErr, types.ErrorCodeBadResponse)
 			return false
+		}
+		if delivered {
+			switch event.response.Type {
+			case "response.completed", "response.incomplete", "response.done", "response.failed",
+				"response.cancelled", "response.canceled", "error", "response.error":
+				terminalDelivered = true
+			}
 		}
 		if delivered && responsesStreamHasVisibleOutput(&event.response) {
 			info.SetFirstResultTime()
@@ -426,6 +434,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
+			return
+		}
+		// A delivered terminal fixes this generation's outcome and usage. Late
+		// upstream frames must not alter billing or write to the closed stream.
+		if terminalDelivered {
 			return
 		}
 

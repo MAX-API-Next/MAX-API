@@ -279,6 +279,13 @@ func TestSubscriptionResetChecksAllReservationsBeyondOneBatch(t *testing.T) {
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, sub.Id).Error)
 	require.EqualValues(t, 100, got.AmountUsed)
+
+	_, _, err = ApplyBillingSettlementOnce(resetBillingFinalize(sub, requestID))
+	require.NoError(t, err)
+	_, err = AdminResetUserSubscriptionsByPlan(sub.UserId, plan.Id, false)
+	require.NoError(t, err, "all applied reservations across batches must pass validation")
+	require.NoError(t, DB.First(&got, sub.Id).Error)
+	require.Zero(t, got.AmountUsed)
 }
 
 func TestSubscriptionResetAllowsEffectOnlyRecovery(t *testing.T) {
