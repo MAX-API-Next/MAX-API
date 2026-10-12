@@ -47,23 +47,26 @@ func billingProcessFundingCases() []billingProcessFunding {
 }
 
 type billingProcessConfig struct {
-	Database      string
-	Ready         string
-	Release       string
-	Role          string
-	Phase         string
-	Preference    string
-	Source        string
-	Quota         int
-	Refund        bool
-	Playground    bool
-	AdmissionOnly bool
+	Database       string
+	SeparateLogDB  bool
+	LogUnavailable bool
+	Ready          string
+	Release        string
+	Role           string
+	Phase          string
+	Preference     string
+	Source         string
+	Quota          int
+	Refund         bool
+	Playground     bool
+	AdmissionOnly  bool
 }
 
 type billingProcessBarrier struct {
 	PID               int
 	Phase             string
 	Table             string
+	Database          string
 	InsideTransaction bool
 }
 
@@ -81,7 +84,17 @@ func TestBillingProcessHelper(t *testing.T) {
 	require.NoError(t, common.Unmarshal(data, &cfg))
 	require.Equal(t, filepath.Join(filepath.Dir(configPath), "ledger.sqlite"), cfg.Database)
 	db := openBillingProcessDB(t, cfg.Database)
-	model.DB, model.LOG_DB = db, db
+	logDB := db
+	if cfg.SeparateLogDB {
+		logDB = openBillingProcessDB(t, filepath.Join(filepath.Dir(cfg.Database), "logs.sqlite"))
+	}
+	model.DB, model.LOG_DB = db, logDB
+	if cfg.LogUnavailable {
+		require.True(t, cfg.SeparateLogDB, "only the independent log connection may be closed")
+		logSQL, err := logDB.DB()
+		require.NoError(t, err)
+		require.NoError(t, logSQL.Close())
+	}
 	common.UsingSQLite, common.RedisEnabled, common.BatchUpdateEnabled = true, false, false
 	common.LogConsumeEnabled, common.DataExportEnabled = true, false
 	gin.SetMode(gin.TestMode)
@@ -92,7 +105,7 @@ func TestBillingProcessHelper(t *testing.T) {
 	if cfg.Role == "work" {
 		c, info := billingProcessContext(cfg)
 		if cfg.AdmissionOnly {
-			installBillingProcessBarrier(t, db, cfg)
+			installBillingProcessBarrier(t, db, logDB, cfg)
 		}
 		session, apiErr := NewBillingSession(c, info, 100)
 		require.Nil(t, apiErr)
@@ -104,7 +117,7 @@ func TestBillingProcessHelper(t *testing.T) {
 			}
 			return
 		}
-		installBillingProcessBarrier(t, db, cfg)
+		installBillingProcessBarrier(t, db, logDB, cfg)
 		if cfg.Refund {
 			input, err := session.PrepareRefundSettlement()
 			require.NoError(t, err)
@@ -150,7 +163,7 @@ func TestBillingProcessHelper(t *testing.T) {
 			}
 		}
 	}
-	installBillingProcessBarrier(t, db, cfg)
+	installBillingProcessBarrier(t, db, logDB, cfg)
 	if cfg.Role == "refund_competitor" {
 		c, info := billingProcessContext(cfg)
 		// The original session's refund intent competes with the already durable
@@ -251,11 +264,28 @@ func openBillingProcessDB(t *testing.T, path string) *gorm.DB {
 
 func seedBillingProcessDB(t *testing.T, funding billingProcessFunding) (string, *gorm.DB) {
 	t.Helper()
+	dir, db, _ := seedBillingProcessDatabases(t, funding, false)
+	return dir, db
+}
+
+func seedBillingProcessDatabases(t *testing.T, funding billingProcessFunding, separateLog bool) (string, *gorm.DB, *gorm.DB) {
+	t.Helper()
 	dir := t.TempDir()
 	db := openBillingProcessDB(t, filepath.Join(dir, "ledger.sqlite"))
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.BillingLogReceipt{},
+	logDB := db
+	if separateLog {
+		logDB = openBillingProcessDB(t, filepath.Join(dir, "logs.sqlite"))
+	}
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{},
 		&model.BillingSettlement{}, &model.BillingPreConsumeSelection{}, &model.CacheInvalidationTask{},
 		&model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.SubscriptionPlan{}))
+	require.NoError(t, logDB.AutoMigrate(&model.Log{}, &model.BillingLogReceipt{}))
+	if separateLog {
+		require.False(t, db.Migrator().HasTable(&model.Log{}), "the business DB must not silently receive consume logs")
+		require.False(t, db.Migrator().HasTable(&model.BillingLogReceipt{}))
+		require.False(t, logDB.Migrator().HasTable(&model.User{}))
+		require.False(t, logDB.Migrator().HasTable(&model.BillingSettlement{}))
+	}
 	require.NoError(t, db.Create(&model.User{Id: 951, Username: "synthetic-process-recovery", Quota: funding.wallet}).Error)
 	require.NoError(t, db.Create(&model.Token{Id: 952, UserId: 951, Key: "synthetic-process-recovery-key",
 		Name: "synthetic-process-token", RemainQuota: 1000, Status: common.TokenStatusEnabled}).Error)
@@ -266,24 +296,31 @@ func seedBillingProcessDB(t *testing.T, funding billingProcessFunding) (string, 
 	require.NoError(t, db.Create(&model.UserSubscription{Id: 955, UserId: 951, PlanId: 954, Status: "active",
 		AmountTotal: 1000, AmountUsed: funding.subscriptionUsed, AllowWalletOverflow: funding.allowOverflow,
 		StartTime: now - 3600, EndTime: now + 86400, LastResetTime: now - 3600}).Error)
-	return dir, db
+	return dir, db, logDB
 }
 
 // Callbacks exist only in the test child. The marker is written after the SQL
 // at that boundary succeeded, and the process remains blocked until killed.
-func installBillingProcessBarrier(t *testing.T, db *gorm.DB, cfg billingProcessConfig) {
+func installBillingProcessBarrier(t *testing.T, db, logDB *gorm.DB, cfg billingProcessConfig) {
 	t.Helper()
 	if cfg.Phase == "" || cfg.Phase == "complete" {
 		return
 	}
 	var once sync.Once
+	barrierDB, database := db, "ledger"
+	if cfg.Phase == "funding_committed" || cfg.Phase == "receipt_before_log" || cfg.Phase == "log_before_commit" {
+		barrierDB = logDB
+		if cfg.SeparateLogDB {
+			database = "logs"
+		}
+	}
 	stop := func(tx *gorm.DB) {
 		if tx.Error != nil {
 			return
 		}
 		once.Do(func() {
 			_, inTx := tx.Statement.ConnPool.(*sql.Tx)
-			pauseBillingProcess(t, cfg, billingProcessBarrier{Phase: cfg.Phase, Table: tx.Statement.Table, InsideTransaction: inTx})
+			pauseBillingProcess(t, cfg, billingProcessBarrier{Phase: cfg.Phase, Table: tx.Statement.Table, Database: database, InsideTransaction: inTx})
 		})
 	}
 	create := func(tx *gorm.DB) {
@@ -322,15 +359,15 @@ func installBillingProcessBarrier(t *testing.T, db *gorm.DB, cfg billingProcessC
 	}
 	const name = "test:billing-process-barrier"
 	if cfg.Phase == "intent_committed" {
-		require.NoError(t, db.Callback().Create().After("gorm:commit_or_rollback_transaction").Register(name, create))
+		require.NoError(t, barrierDB.Callback().Create().After("gorm:commit_or_rollback_transaction").Register(name, create))
 	} else if cfg.Phase == "funding_committed" {
-		require.NoError(t, db.Callback().Create().Before("gorm:create").Register(name, create))
+		require.NoError(t, barrierDB.Callback().Create().Before("gorm:create").Register(name, create))
 	} else if cfg.Phase == "receipt_before_log" || cfg.Phase == "log_before_commit" {
-		require.NoError(t, db.Callback().Create().After("gorm:create").Register(name, create))
+		require.NoError(t, barrierDB.Callback().Create().After("gorm:create").Register(name, create))
 	} else if cfg.Phase == "log_committed" {
-		require.NoError(t, db.Callback().Update().Before("gorm:update").Register(name, update))
+		require.NoError(t, barrierDB.Callback().Update().Before("gorm:update").Register(name, update))
 	} else if cfg.Phase == "funding_before_commit" || cfg.Phase == "usage_before_commit" {
-		require.NoError(t, db.Callback().Update().After("gorm:update").Register(name, update))
+		require.NoError(t, barrierDB.Callback().Update().After("gorm:update").Register(name, update))
 	} else {
 		t.Fatalf("unknown interruption phase %q", cfg.Phase)
 	}
@@ -434,7 +471,7 @@ func billingProcessMarkerNotReady(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32))
 }
 
-func killBillingTestProcess(t *testing.T, p *billingTestProcess, phase string) {
+func killBillingTestProcess(t *testing.T, p *billingTestProcess, phase string) billingProcessBarrier {
 	t.Helper()
 	event := awaitBillingProcessBarrier(t, p)
 	require.Equal(t, phase, event.Phase)
@@ -446,7 +483,8 @@ func killBillingTestProcess(t *testing.T, p *billingTestProcess, phase string) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr, "an OS-forced termination must not be a normal test exit")
 	require.False(t, exitErr.Success())
-	t.Logf("forced termination pid=%d phase=%s table=%s inside_transaction=%t", event.PID, phase, event.Table, event.InsideTransaction)
+	t.Logf("forced termination pid=%d phase=%s database=%s table=%s inside_transaction=%t", event.PID, phase, event.Database, event.Table, event.InsideTransaction)
+	return event
 }
 
 func finishBillingTestProcess(t *testing.T, p *billingTestProcess) {
@@ -462,6 +500,11 @@ func billingProcessRecord(t *testing.T, db *gorm.DB) model.BillingSettlement {
 }
 
 func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProcessFunding, quota int, phase string, refund bool, playground ...bool) {
+	t.Helper()
+	assertBillingProcessDatabases(t, db, db, funding, quota, phase, refund, playground...)
+}
+
+func assertBillingProcessDatabases(t *testing.T, db, logDB *gorm.DB, funding billingProcessFunding, quota int, phase string, refund bool, playground ...bool) {
 	t.Helper()
 	beforeFunding := phase == "intent_committed" || phase == "funding_before_commit"
 	fundedQuota := quota
@@ -503,8 +546,8 @@ func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProces
 	require.EqualValues(t, wantUsed, channel.UsedQuota)
 	var logs []model.Log
 	var receipts []model.BillingLogReceipt
-	require.NoError(t, db.Find(&logs).Error)
-	require.NoError(t, db.Find(&receipts).Error)
+	require.NoError(t, logDB.Find(&logs).Error)
+	require.NoError(t, logDB.Find(&receipts).Error)
 	wantLogs := 0
 	if !refund && (phase == "log_committed" || phase == "usage_before_commit" || phase == "complete") {
 		wantLogs = 1
@@ -582,6 +625,11 @@ func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProces
 
 func billingProcessSnapshot(t *testing.T, db *gorm.DB) [32]byte {
 	t.Helper()
+	return billingProcessDatabasesSnapshot(t, db, db)
+}
+
+func billingProcessDatabasesSnapshot(t *testing.T, db, logDB *gorm.DB) [32]byte {
+	t.Helper()
 	var snapshot struct {
 		Users       []model.User
 		Tokens      []model.Token
@@ -595,8 +643,11 @@ func billingProcessSnapshot(t *testing.T, db *gorm.DB) [32]byte {
 		Outbox      []model.CacheInvalidationTask
 	}
 	for _, target := range []any{&snapshot.Users, &snapshot.Tokens, &snapshot.Channels, &snapshot.Subs, &snapshot.Reserved,
-		&snapshot.Selections, &snapshot.Settlements, &snapshot.Logs, &snapshot.Receipts, &snapshot.Outbox} {
+		&snapshot.Selections, &snapshot.Settlements, &snapshot.Outbox} {
 		require.NoError(t, db.Order("id").Find(target).Error)
+	}
+	for _, target := range []any{&snapshot.Logs, &snapshot.Receipts} {
+		require.NoError(t, logDB.Order("id").Find(target).Error)
 	}
 	data, err := common.Marshal(snapshot)
 	require.NoError(t, err)
