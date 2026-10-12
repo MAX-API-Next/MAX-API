@@ -84,6 +84,7 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 								frames = append(frames, `{broken`)
 							}
 							var calls atomic.Int32
+							upstreamCanceled := make(chan bool, 1)
 							upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 								calls.Add(1)
 								w.Header().Set("Content-Type", "text/event-stream")
@@ -95,7 +96,9 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 								if ending == "cancel" {
 									select {
 									case <-r.Context().Done():
+										upstreamCanceled <- true
 									case <-time.After(3 * time.Second):
+										upstreamCanceled <- false
 									}
 								}
 							}))
@@ -149,6 +152,12 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 							if cancelWriter != nil {
 								require.True(t, cancelWriter.triggered.Load())
 								require.ErrorIs(t, c.Request.Context().Err(), context.Canceled)
+								select {
+								case canceled := <-upstreamCanceled:
+									require.True(t, canceled, "client cancellation must reach the upstream request")
+								case <-time.After(3 * time.Second):
+									t.Fatal("upstream handler did not finish within its cancellation guard")
+								}
 							}
 							assertStreamFundingBalances(t, db, funding, requestID, finalQuota, true, prompt, completion)
 							var log model.Log

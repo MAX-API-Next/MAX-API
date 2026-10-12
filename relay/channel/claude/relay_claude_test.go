@@ -241,7 +241,7 @@ func TestHandleStreamResponseDataConvertsResponsesFormat(t *testing.T) {
 	for _, data := range streamData {
 		require.Nil(t, HandleStreamResponseData(c, info, claudeInfo, data))
 	}
-	HandleStreamFinalResponse(c, info, claudeInfo)
+	require.Nil(t, HandleStreamFinalResponse(c, info, claudeInfo))
 
 	body := recorder.Body.String()
 	assert.Contains(t, body, "response.created")
