@@ -47,15 +47,17 @@ func billingProcessFundingCases() []billingProcessFunding {
 }
 
 type billingProcessConfig struct {
-	Database   string
-	Ready      string
-	Release    string
-	Role       string
-	Phase      string
-	Preference string
-	Source     string
-	Quota      int
-	Refund     bool
+	Database      string
+	Ready         string
+	Release       string
+	Role          string
+	Phase         string
+	Preference    string
+	Source        string
+	Quota         int
+	Refund        bool
+	Playground    bool
+	AdmissionOnly bool
 }
 
 type billingProcessBarrier struct {
@@ -89,10 +91,19 @@ func TestBillingProcessHelper(t *testing.T) {
 
 	if cfg.Role == "work" {
 		c, info := billingProcessContext(cfg)
+		if cfg.AdmissionOnly {
+			installBillingProcessBarrier(t, db, cfg)
+		}
 		session, apiErr := NewBillingSession(c, info, 100)
 		require.Nil(t, apiErr)
 		require.Equal(t, cfg.Source, info.BillingSource)
 		require.Equal(t, 100, session.GetPreConsumedQuota())
+		if cfg.AdmissionOnly {
+			if cfg.Phase == "complete" {
+				pauseBillingProcess(t, cfg, billingProcessBarrier{Phase: cfg.Phase})
+			}
+			return
+		}
 		installBillingProcessBarrier(t, db, cfg)
 		if cfg.Refund {
 			input, err := session.PrepareRefundSettlement()
@@ -104,7 +115,7 @@ func TestBillingProcessHelper(t *testing.T) {
 			prompt, completion := billingProcessUsage(cfg.Quota)
 			effect := newConsumeBillingSettlementEffect(info, model.RecordConsumeLogParams{
 				Content: "synthetic process recovery", ChannelId: 953,
-				ModelName: "process-recovery-model", TokenId: 952, TokenName: "synthetic-process-token",
+				ModelName: "process-recovery-model", TokenId: info.TokenId, TokenName: "synthetic-process-token",
 				Group: "default", Quota: cfg.Quota, PromptTokens: prompt, CompletionTokens: completion,
 			}, info.RequestId, "", true)
 			require.NoError(t, session.SettleWithEffect(cfg.Quota, effect))
@@ -149,6 +160,9 @@ func TestBillingProcessHelper(t *testing.T) {
 			funding = &SubscriptionFunding{requestId: info.RequestId, userId: 951, subscriptionId: 955, preConsumed: 100}
 		}
 		session := &BillingSession{relayInfo: info, funding: funding, preConsumedQuota: 100, tokenConsumed: 100}
+		if cfg.Playground {
+			session.tokenConsumed = 0
+		}
 		session.Refund(c)
 		// The current durable Refund completes synchronously, including conflicts.
 		session.mu.Lock()
@@ -161,7 +175,21 @@ func TestBillingProcessHelper(t *testing.T) {
 	// effect-only repair. It reconstructs inputs from the first persisted intent.
 	model.ProcessPendingBillingSettlementsOnce()
 	model.ProcessPendingBillingSettlementsOnce()
-	record := billingProcessRecord(t, db)
+	if cfg.Role == "refund_admission" {
+		c, info := billingProcessContext(cfg)
+		var initial model.BillingSettlement
+		require.NoError(t, db.Where("operation_key = ?", "request:process-recovery-request:pre-consume").First(&initial).Error)
+		require.Equal(t, model.BillingSettlementStatusApplied, initial.Status)
+		session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: 951, consumed: int(initial.AppliedFundingDelta)}, preConsumedQuota: int(initial.AppliedFundingDelta)}
+		session.Refund(c)
+		session.Refund(c)
+	}
+	var record model.BillingSettlement
+	if cfg.AdmissionOnly {
+		require.NoError(t, db.Where("operation_key = ?", "request:process-recovery-request:pre-consume").First(&record).Error)
+	} else {
+		record = billingProcessRecord(t, db)
+	}
 	t.Logf("recovery pid=%d status=%s effect=%s attempts=%d next_attempt=%d", os.Getpid(), record.Status, record.EffectStatus, record.Attempts, record.NextAttempt)
 	if record.Status == model.BillingSettlementStatusApplied {
 		var effect *model.BillingSettlementEffect
@@ -194,6 +222,9 @@ func billingProcessContext(cfg billingProcessConfig) (*gin.Context, *relaycommon
 	info := &relaycommon.RelayInfo{RequestId: "process-recovery-request", UserId: 951, TokenId: 952,
 		TokenKey: "synthetic-process-recovery-key", OriginModelName: "process-recovery-model", ForcePreConsume: true,
 		UserSetting: dto.UserSetting{BillingPreference: cfg.Preference}}
+	if cfg.Playground {
+		info.IsPlayground, info.TokenId, info.TokenKey = true, 0, ""
+	}
 	return c, info
 }
 
@@ -258,7 +289,11 @@ func installBillingProcessBarrier(t *testing.T, db *gorm.DB, cfg billingProcessC
 	create := func(tx *gorm.DB) {
 		switch cfg.Phase {
 		case "intent_committed":
-			if record, ok := tx.Statement.Dest.(*model.BillingSettlement); ok && record.OperationKey == model.BillingRequestFinalizeOperationKey("process-recovery-request") {
+			target := model.BillingRequestFinalizeOperationKey("process-recovery-request")
+			if cfg.AdmissionOnly {
+				target = "request:process-recovery-request:pre-consume"
+			}
+			if record, ok := tx.Statement.Dest.(*model.BillingSettlement); ok && record.OperationKey == target {
 				stop(tx)
 			}
 		case "funding_committed", "receipt_before_log":
@@ -426,7 +461,7 @@ func billingProcessRecord(t *testing.T, db *gorm.DB) model.BillingSettlement {
 	return record
 }
 
-func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProcessFunding, quota int, phase string, refund bool) {
+func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProcessFunding, quota int, phase string, refund bool, playground ...bool) {
 	t.Helper()
 	beforeFunding := phase == "intent_committed" || phase == "funding_before_commit"
 	fundedQuota := quota
@@ -452,8 +487,12 @@ func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProces
 	}
 	require.EqualValues(t, wallet, user.Quota)
 	require.EqualValues(t, subUsed, sub.AmountUsed)
-	require.EqualValues(t, 1000-fundedQuota, token.RemainQuota)
-	require.EqualValues(t, fundedQuota, token.UsedQuota)
+	tokenFunded, tokenID, tokenDelta := fundedQuota, 952, quota-100
+	if len(playground) > 0 && playground[0] {
+		tokenFunded, tokenID, tokenDelta = 0, 0, 0
+	}
+	require.EqualValues(t, 1000-tokenFunded, token.RemainQuota)
+	require.EqualValues(t, tokenFunded, token.UsedQuota)
 	counted := phase == "complete" && !refund
 	wantUsed, wantRequests := 0, 0
 	if counted {
@@ -483,9 +522,9 @@ func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProces
 	record := billingProcessRecord(t, db)
 	require.Equal(t, funding.source, record.Source)
 	require.EqualValues(t, 951, record.UserID)
-	require.EqualValues(t, 952, record.TokenID)
+	require.EqualValues(t, tokenID, record.TokenID)
 	require.EqualValues(t, quota-100, record.FundingDelta)
-	require.EqualValues(t, quota-100, record.TokenDelta)
+	require.EqualValues(t, tokenDelta, record.TokenDelta)
 	if beforeFunding {
 		require.Equal(t, model.BillingSettlementStatusPending, record.Status)
 		require.Zero(t, record.AppliedFundingDelta)
@@ -494,7 +533,7 @@ func assertBillingProcessLedger(t *testing.T, db *gorm.DB, funding billingProces
 	} else {
 		require.Equal(t, model.BillingSettlementStatusApplied, record.Status)
 		require.EqualValues(t, quota-100, record.AppliedFundingDelta)
-		require.EqualValues(t, quota-100, record.AppliedTokenDelta)
+		require.EqualValues(t, tokenDelta, record.AppliedTokenDelta)
 		if !refund {
 			if counted {
 				require.Equal(t, model.BillingSettlementEffectApplied, record.EffectStatus)

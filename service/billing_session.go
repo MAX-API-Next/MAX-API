@@ -655,6 +655,9 @@ func (s *BillingSession) needsRefundLocked() bool {
 	if s.tokenConsumed > 0 {
 		return true
 	}
+	if wallet, ok := s.funding.(*WalletFunding); ok && wallet.consumed > 0 {
+		return true
+	}
 	// 订阅可能在 tokenConsumed=0 时仍预扣了额度
 	if sub, ok := s.funding.(*SubscriptionFunding); ok && sub.preConsumed > 0 {
 		return true
@@ -723,7 +726,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 
 	s.preConsumedQuota += delta
-	s.tokenConsumed += delta
+	if !s.relayInfo.IsPlayground {
+		s.tokenConsumed += delta
+	}
 	s.extraReserved += delta
 	s.syncRelayInfo()
 	return nil
@@ -737,8 +742,8 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 // 任一步骤失败时原子回滚已完成的步骤。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIError {
 	if _, wallet := s.funding.(*WalletFunding); wallet && s.relayInfo.IsPlayground {
-		// Playground wallets use legacy hooks without an operation key. Never
-		// let that path reinterpret an already persisted paid reservation.
+		// Reject persisted identities and lookup failures before wallet admission.
+		// The atomic source claim below also closes the empty-lookup race.
 		_, persisted, err := model.ResolveBillingPreConsumeSource(s.relayInfo.RequestId)
 		if err != nil {
 			return mapAtomicPreConsumeError(err)
@@ -760,7 +765,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 	}
 
 	atomicPreConsumed := false
-	if !s.relayInfo.IsPlayground {
+	if _, wallet := s.funding.(*WalletFunding); !s.relayInfo.IsPlayground || wallet {
 		switch funding := s.funding.(type) {
 		case *WalletFunding:
 			if s.relayInfo.RequestId == "" {
@@ -769,6 +774,12 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				}
 				break
 			}
+			tokenDelta := int64(effectiveQuota)
+			if s.relayInfo.IsPlayground {
+				// Playground has no paid API token, but its wallet reservation
+				// must claim the same durable identity before any debit.
+				tokenDelta = 0
+			}
 			applied, _, err := model.ApplyBillingSettlementOnce(model.BillingSettlementInput{
 				OperationKey:             "request:" + s.relayInfo.RequestId + ":pre-consume",
 				Source:                   model.BillingSettlementSourceWallet,
@@ -776,7 +787,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				TokenID:                  s.relayInfo.TokenId,
 				TokenKey:                 s.relayInfo.TokenKey,
 				FundingDelta:             int64(effectiveQuota),
-				TokenDelta:               int64(effectiveQuota),
+				TokenDelta:               tokenDelta,
 				ManualOnFailure:          true,
 				PreConsumeRequestID:      s.relayInfo.RequestId,
 				PreConsumeModelName:      s.relayInfo.OriginModelName,
@@ -790,7 +801,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 				return mapAtomicPreConsumeError(fmt.Errorf("wallet pre-consume applied unexpected amount: requested=%d applied=%d", effectiveQuota, applied))
 			}
 			funding.consumed = int(applied)
-			s.tokenConsumed = int(applied)
+			s.tokenConsumed = int(tokenDelta)
 			atomicPreConsumed = true
 		case *SubscriptionFunding:
 			if effectiveQuota <= 0 {
@@ -814,8 +825,8 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.MaxAPIErro
 		}
 	}
 
-	// Custom funding sources and playground requests retain their existing
-	// hooks; normal wallet/subscription requests use the atomic branches above.
+	// Custom sources and Playground subscriptions retain their existing hooks;
+	// wallets and normal subscriptions use the durable atomic branches above.
 	if !atomicPreConsumed && effectiveQuota > 0 {
 		if err := PreConsumeTokenQuota(s.relayInfo, effectiveQuota); err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
