@@ -171,10 +171,10 @@ func runNativeMissingOutputLedger(t *testing.T, scenario nativeMissingOutputCase
 				if usage == "terminal_zero" {
 					// A terminal snapshot supplies usage in that one terminal;
 					// emitting a second response.completed violates the protocol.
-					var copy map[string]any
-					require.NoError(t, common.UnmarshalJsonStr(encode(frame), &copy))
-					copy["response"].(map[string]any)["usage"] = map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-					frame = copy
+					var terminalFrame map[string]any
+					require.NoError(t, common.UnmarshalJsonStr(encode(frame), &terminalFrame))
+					terminalFrame["response"].(map[string]any)["usage"] = map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+					frame = terminalFrame
 				}
 			}
 			frames = append(frames, encode(frame))
