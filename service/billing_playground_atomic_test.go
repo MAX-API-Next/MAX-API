@@ -194,10 +194,17 @@ func TestPlaygroundWalletDurableReservationRefundAndRollback(t *testing.T) {
 				tx.AddError(errors.New("synthetic Playground funding transaction failure"))
 			}
 		}))
+		callbackRemoved := false
+		t.Cleanup(func() {
+			if !callbackRemoved {
+				_ = model.DB.Callback().Update().Remove(callback)
+			}
+		})
 		c, info := playgroundAtomicContext("playground-rollback", true)
 		_, apiErr := NewBillingSession(c, info, 10)
 		require.NotNil(t, apiErr)
 		require.NoError(t, model.DB.Callback().Update().Remove(callback))
+		callbackRemoved = true
 		require.EqualValues(t, 100, getUserQuota(t, 991))
 		require.EqualValues(t, 100, getTokenRemainQuota(t, 992))
 		var count int64
