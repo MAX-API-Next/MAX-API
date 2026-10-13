@@ -29,7 +29,7 @@ func SupportsOpenAIResponsesUpstreamForBaseURL(channelType int, baseURL string) 
 		return false
 	}
 	apiType, _ := common.ChannelType2APIType(channelType)
-	if apiType == constant.APITypeZhipuV4 {
+	if apiType == constant.APITypeZhipuV4 || apiType == constant.APITypeVolcEngine {
 		_, codingPlan := constant.ChannelSpecialBases[baseURL]
 		return !codingPlan
 	}

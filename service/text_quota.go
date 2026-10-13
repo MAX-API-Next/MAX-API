@@ -50,6 +50,7 @@ type textQuotaSummary struct {
 	UsageSemantic            string
 	WebSearchPrice           float64
 	WebSearchCallCount       int
+	WebSearchToolUsage       map[string]webSearchToolUsage
 	ClaudeWebSearchPrice     float64
 	ClaudeWebSearchCallCount int
 	FileSearchPrice          float64
@@ -58,6 +59,11 @@ type textQuotaSummary struct {
 	ImageGenerationCallPrice float64
 	CustomToolUsage          relaycommon.ToolUsageSnapshot
 	ToolCallSurchargeQuota   decimal.Decimal
+}
+
+type webSearchToolUsage struct {
+	CallCount int     `json:"call_count"`
+	Price     float64 `json:"price"`
 }
 
 func (s *textQuotaSummary) hasBillableUsage(relayInfo *relaycommon.RelayInfo) bool {
@@ -128,14 +134,34 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	summary.CustomToolUsage, surcharge = calculateCustomToolCallSurcharge(relayInfo, summary.GroupRatio)
 
 	if relayInfo.ResponsesUsageInfo != nil {
-		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool.CallCount > 0 {
-			summary.WebSearchCallCount = webSearchTool.CallCount
-			summary.WebSearchPrice = relayInfo.FrozenToolPrice("web_search_preview")
-			surcharge = surcharge.Add(decimal.NewFromFloat(summary.WebSearchPrice).
-				Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))).
+		var webSearchCost decimal.Decimal
+		webSearchCalls := 0
+		var webSearchUsage map[string]webSearchToolUsage
+		for _, toolName := range []string{dto.BuildInToolWebSearchPreview, dto.BuildInToolWebSearch} {
+			webSearchTool := relayInfo.ResponsesUsageInfo.BuiltInTools[toolName]
+			if webSearchTool == nil || webSearchTool.CallCount <= 0 {
+				continue
+			}
+			price := relayInfo.FrozenToolPrice(toolName)
+			if webSearchUsage == nil {
+				webSearchUsage = make(map[string]webSearchToolUsage, 2)
+			}
+			webSearchUsage[toolName] = webSearchToolUsage{CallCount: webSearchTool.CallCount, Price: price}
+			webSearchCalls += webSearchTool.CallCount
+			webSearchCost = webSearchCost.Add(decimal.NewFromFloat(price).Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))))
+		}
+		summary.WebSearchCallCount = webSearchCalls
+		summary.WebSearchToolUsage = webSearchUsage
+		if webSearchCalls > 0 {
+			// Keep the aggregate log fields compatible; charge the exact sum
+			// from frozen per-tool prices, rather than this display average.
+			summary.WebSearchPrice = webSearchCost.Div(decimal.NewFromInt(int64(summary.WebSearchCallCount))).InexactFloat64()
+			surcharge = surcharge.Add(webSearchCost.
 				Div(decimal.NewFromInt(1000)).
 				Mul(dGroupRatio).
 				Mul(dQuotaPerUnit))
+		} else {
+			summary.WebSearchPrice = 0
 		}
 	} else if strings.HasSuffix(summary.ModelName, "search-preview") {
 		summary.WebSearchCallCount = 1
@@ -547,6 +573,7 @@ func postTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["web_search"] = true
 		other["web_search_call_count"] = summary.WebSearchCallCount
 		other["web_search_price"] = summary.WebSearchPrice
+		other["web_search_tool_usage"] = summary.WebSearchToolUsage
 	} else if summary.ClaudeWebSearchCallCount > 0 {
 		other["web_search"] = true
 		other["web_search_call_count"] = summary.ClaudeWebSearchCallCount

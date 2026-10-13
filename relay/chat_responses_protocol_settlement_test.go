@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,17 +32,27 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 		name, wire, converter string
 		channelType           int
 		baseAlias             string
+		claudeClient          bool
 	}{
-		{"claude", "claude", "", constant.ChannelTypeAnthropic, ""},
-		{"gemini", "gemini", "", constant.ChannelTypeGemini, ""},
-		{"openai", "responses", "", constant.ChannelTypeOpenAI, ""},
-		{"custom_none", "responses", dto.AdvancedCustomConverterNone, constant.ChannelTypeAdvancedCustom, ""},
-		{"custom_claude", "claude", dto.AdvancedCustomConverterOpenAIChatCompletionsToAnthropicMessages, constant.ChannelTypeAdvancedCustom, ""},
-		{"custom_gemini", "gemini", dto.AdvancedCustomConverterOpenAIChatCompletionsToGeminiGenerateContent, constant.ChannelTypeAdvancedCustom, ""},
-		{"custom_responses", "responses", dto.AdvancedCustomConverterOpenAIChatCompletionsToOpenAIResponses, constant.ChannelTypeAdvancedCustom, ""},
-		{"zhipu_standard", "responses", "", constant.ChannelTypeZhipu_v4, ""},
-		{"zhipu_coding", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan"},
-		{"zhipu_coding_international", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan-international"},
+		{"claude", "claude", "", constant.ChannelTypeAnthropic, "", false},
+		{"gemini", "gemini", "", constant.ChannelTypeGemini, "", false},
+		{"openai", "responses", "", constant.ChannelTypeOpenAI, "", false},
+		{"custom_none", "responses", dto.AdvancedCustomConverterNone, constant.ChannelTypeAdvancedCustom, "", false},
+		{"custom_claude", "claude", dto.AdvancedCustomConverterOpenAIChatCompletionsToAnthropicMessages, constant.ChannelTypeAdvancedCustom, "", false},
+		{"custom_gemini", "gemini", dto.AdvancedCustomConverterOpenAIChatCompletionsToGeminiGenerateContent, constant.ChannelTypeAdvancedCustom, "", false},
+		{"custom_responses", "responses", dto.AdvancedCustomConverterOpenAIChatCompletionsToOpenAIResponses, constant.ChannelTypeAdvancedCustom, "", false},
+		{"zhipu_standard", "responses", "", constant.ChannelTypeZhipu_v4, "", false},
+		{"zhipu_coding", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan", false},
+		{"zhipu_coding_international", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan-international", false},
+		{"volc_standard", "responses", "", constant.ChannelTypeVolcEngine, "", false},
+		{"volc_kimi_coding", "chat_native", "", constant.ChannelTypeVolcEngine, "kimi-coding-plan", false},
+		{"volc_doubao_coding", "chat_native", "", constant.ChannelTypeVolcEngine, "doubao-coding-plan", false},
+		{"claude_zhipu_standard", "responses", "", constant.ChannelTypeZhipu_v4, "", true},
+		{"claude_volc_standard", "responses", "", constant.ChannelTypeVolcEngine, "", true},
+		{"claude_zhipu_coding", "claude", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan", true},
+		{"claude_zhipu_coding_international", "claude", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan-international", true},
+		{"claude_volc_kimi_coding", "claude", "", constant.ChannelTypeVolcEngine, "kimi-coding-plan", true},
+		{"claude_volc_doubao_coding", "claude", "", constant.ChannelTypeVolcEngine, "doubao-coding-plan", true},
 	}
 	for _, provider := range providers {
 		modes := []bool{true}
@@ -83,13 +94,21 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 							original := constant.ChannelSpecialBases[provider.baseAlias]
 							synthetic := original
 							synthetic.OpenAIBaseURL = upstream.URL + "/coding"
+							synthetic.ClaudeBaseURL = upstream.URL + "/coding"
 							constant.ChannelSpecialBases[provider.baseAlias] = synthetic
 							t.Cleanup(func() { constant.ChannelSpecialBases[provider.baseAlias] = original })
 							c.Set(string(constant.ContextKeyChannelBaseUrl), provider.baseAlias)
 							// The adaptor still resolves the real alias, but its HTTP target is local.
 						}
 						info.IsStream = stream
-						info.Request.(*dto.GeneralOpenAIRequest).Stream = common.GetPointer(stream)
+						if provider.claudeClient {
+							info.RelayFormat = types.RelayFormatClaude
+							info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(stream)}
+							c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+							info.RequestURLPath = "/v1/messages"
+						} else {
+							info.Request.(*dto.GeneralOpenAIRequest).Stream = common.GetPointer(stream)
+						}
 						model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: enabled, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
 						if provider.channelType == constant.ChannelTypeAdvancedCustom {
 							path := "/v1/responses"
@@ -101,10 +120,20 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 							c.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{IncomingPath: "/v1/chat/completions", UpstreamPath: path, Converter: provider.converter}}}})
 						}
 						require.Nil(t, service.PreConsumeBilling(c, 100, info))
-						apiErr := TextHelper(c, info)
+						var apiErr *types.MaxAPIError
+						if provider.claudeClient {
+							apiErr = ClaudeHelper(c, info)
+						} else {
+							apiErr = TextHelper(c, info)
+						}
 						require.Nil(t, apiErr, "global policy must not send native replies to a Responses parser")
 						require.Contains(t, recorder.Body.String(), "partial output")
-						require.Contains(t, recorder.Body.String(), "chat.completion")
+						if provider.claudeClient {
+							require.Equal(t, types.RelayFormat(types.RelayFormatClaude), info.RelayFormat)
+							require.Contains(t, recorder.Body.String(), `"type":"message`)
+						} else {
+							require.Contains(t, recorder.Body.String(), "chat.completion")
+						}
 						require.EqualValues(t, 1, calls.Load())
 						select {
 						case request := <-requests:
@@ -126,6 +155,8 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 								path := "/v1/responses"
 								if provider.channelType == constant.ChannelTypeZhipu_v4 {
 									path = "/api/v1/responses"
+								} else if provider.channelType == constant.ChannelTypeVolcEngine {
+									path = "/api/v3/responses"
 								}
 								require.Equal(t, path, request.path)
 								require.Contains(t, request.body, "input")
@@ -242,65 +273,71 @@ func TestGlobalResponsesBridgeRejectsNativeBeforeUpstreamAndRefunds(t *testing.T
 	}
 }
 
-func TestGlobalResponsesBridgeZhipuEndpointEligibility(t *testing.T) {
+func TestGlobalResponsesBridgeEndpointEligibility(t *testing.T) {
 	initRequestReplayTests(t)
 	bases := []string{"", "https://open.bigmodel.cn", "https://synthetic.invalid"}
 	for alias := range constant.ChannelSpecialBases {
 		bases = append(bases, alias)
 	}
-	for _, base := range bases {
-		t.Run(base, func(t *testing.T) {
-			c, info, _ := streamFundingContext(t, "chat_native", "zhipu-capability", base, constant.ChannelTypeZhipu_v4, streamFundingCases()[3])
-			info.InitChannelMeta(c)
-			adaptor := GetAdaptor(info.ApiType)
-			adaptor.Init(info)
-			info.RelayMode = relayconstant.RelayModeResponses
-			_, err := adaptor.GetRequestURL(info)
-			info.RelayMode = relayconstant.RelayModeChatCompletions
-			model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
-			require.Equal(t, err == nil, shouldUseGlobalResponsesBridge(c, info), "eligibility must match the actual adaptor URL capability")
-		})
+	for _, channelType := range []int{constant.ChannelTypeZhipu_v4, constant.ChannelTypeVolcEngine} {
+		for _, base := range bases {
+			t.Run(fmt.Sprintf("channel_%d/%s", channelType, base), func(t *testing.T) {
+				c, info, _ := streamFundingContext(t, "chat_native", "endpoint-capability", base, channelType, streamFundingCases()[3])
+				info.InitChannelMeta(c)
+				adaptor := GetAdaptor(info.ApiType)
+				adaptor.Init(info)
+				info.RelayMode = relayconstant.RelayModeResponses
+				requestURL, err := adaptor.GetRequestURL(info)
+				parsed, parseErr := url.ParseRequestURI(requestURL)
+				expected := err == nil && parseErr == nil && parsed.Scheme != "" && parsed.Host != ""
+				info.RelayMode = relayconstant.RelayModeChatCompletions
+				model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+				require.Equal(t, expected, shouldUseGlobalResponsesBridge(c, info), "eligibility must match the actual adaptor URL capability")
+			})
+		}
 	}
 }
 
-func TestDirectResponsesBridgeRejectsZhipuCodingAliasesAndRefunds(t *testing.T) {
+func TestDirectResponsesBridgeRejectsCodingAliasesAndRefunds(t *testing.T) {
 	initRequestReplayTests(t)
-	for alias := range constant.ChannelSpecialBases {
-		for _, funding := range streamFundingCases() {
-			t.Run(alias+"/"+funding.name, func(t *testing.T) {
-				db := setupStreamFundingLedger(t, funding)
-				var calls atomic.Int32
-				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
-				t.Cleanup(upstream.Close)
-				original := constant.ChannelSpecialBases[alias]
-				synthetic := original
-				synthetic.OpenAIBaseURL = upstream.URL
-				constant.ChannelSpecialBases[alias] = synthetic
-				t.Cleanup(func() { constant.ChannelSpecialBases[alias] = original })
-				requestID := "rejected-zhipu-coding"
-				c, info, recorder := streamFundingContext(t, "chat_native", requestID, alias, constant.ChannelTypeZhipu_v4, funding)
-				info.InitChannelMeta(c)
-				info.RequestURLPath = "/v1/chat/completions"
-				adaptor := &responsesConversionProbe{Adaptor: GetAdaptor(info.ApiType)}
-				adaptor.Init(info)
-				require.Nil(t, service.PreConsumeBilling(c, 100, info))
-				usage, apiErr := chatCompletionsViaResponses(c, info, adaptor, info.Request.(*dto.GeneralOpenAIRequest))
-				require.Zero(t, adaptor.conversions, "unsupported endpoint must be rejected before converting the request")
-				require.Nil(t, usage)
-				require.NotNil(t, apiErr)
-				require.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
-				require.True(t, types.IsSkipRetryError(apiErr))
-				require.Zero(t, calls.Load())
-				require.Empty(t, recorder.Body.String())
-				require.Equal(t, relayconstant.RelayModeChatCompletions, info.RelayMode)
-				require.Equal(t, "/v1/chat/completions", info.RequestURLPath)
-				service.HandleFailedBilling(c, info, apiErr)
-				service.HandleFailedBilling(c, info, apiErr)
-				assertStreamFundingBalances(t, db, funding, requestID, 0, false, 0, 0)
-				before := requestReplaySnapshot(t, db)
-				model.ProcessPendingBillingSettlementsOnce()
-				require.Equal(t, before, requestReplaySnapshot(t, db))
-			})
+	for _, channelType := range []int{constant.ChannelTypeZhipu_v4, constant.ChannelTypeVolcEngine} {
+		for alias := range constant.ChannelSpecialBases {
+			for _, funding := range streamFundingCases() {
+				t.Run(fmt.Sprintf("channel_%d/%s/%s", channelType, alias, funding.name), func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					var calls atomic.Int32
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+					t.Cleanup(upstream.Close)
+					original := constant.ChannelSpecialBases[alias]
+					synthetic := original
+					synthetic.OpenAIBaseURL = upstream.URL
+					constant.ChannelSpecialBases[alias] = synthetic
+					t.Cleanup(func() { constant.ChannelSpecialBases[alias] = original })
+					requestID := "rejected-zhipu-coding"
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, alias, channelType, funding)
+					info.InitChannelMeta(c)
+					info.RequestURLPath = "/v1/chat/completions"
+					adaptor := &responsesConversionProbe{Adaptor: GetAdaptor(info.ApiType)}
+					adaptor.Init(info)
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					usage, apiErr := chatCompletionsViaResponses(c, info, adaptor, info.Request.(*dto.GeneralOpenAIRequest))
+					require.Zero(t, adaptor.conversions, "unsupported endpoint must be rejected before converting the request")
+					require.Nil(t, usage)
+					require.NotNil(t, apiErr)
+					require.Equal(t, types.ErrorCodeConvertRequestFailed, apiErr.GetErrorCode())
+					require.True(t, types.IsSkipRetryError(apiErr))
+					require.Zero(t, calls.Load())
+					require.Empty(t, recorder.Body.String())
+					require.Equal(t, relayconstant.RelayModeChatCompletions, info.RelayMode)
+					require.Equal(t, "/v1/chat/completions", info.RequestURLPath)
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					assertStreamFundingBalances(t, db, funding, requestID, 0, false, 0, 0)
+					before := requestReplaySnapshot(t, db)
+					model.ProcessPendingBillingSettlementsOnce()
+					require.Equal(t, before, requestReplaySnapshot(t, db))
+				})
+			}
 		}
 	}
 }

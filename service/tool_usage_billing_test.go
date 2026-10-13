@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -168,6 +169,58 @@ func TestCalculateTextToolCallSurchargeSkipsPerRequestModels(t *testing.T) {
 	summary := textQuotaSummary{ModelName: "gpt-test", GroupRatio: 1}
 	require.True(t, calculateTextToolCallSurcharge(ctx, info, &summary).IsZero())
 	require.Empty(t, summary.CustomToolUsage.Items)
+}
+
+func TestWebSearchSurchargeRetainsFrozenPricesAndDistinctCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		previewCalls, webCalls int
+		webPrice, groupRatio   float64
+	}{
+		{"preview", 2, 0, 0.02, 1},
+		{"web", 0, 3, 0.02, 1},
+		{"both", 2, 3, 0.02, 1},
+		{"free_group", 2, 3, 0.02, 0},
+		{"free_web", 0, 3, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setServiceToolPricesForTest(t, map[string]float64{dto.BuildInToolWebSearchPreview: 0.03, dto.BuildInToolWebSearch: tc.webPrice})
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{OriginModelName: "gpt-test", ToolUsage: relaycommon.NewToolUsageLedger("gpt-test"),
+				ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+					dto.BuildInToolWebSearchPreview: {ToolName: dto.BuildInToolWebSearchPreview},
+					dto.BuildInToolWebSearch:        {ToolName: dto.BuildInToolWebSearch},
+				}}}
+			info.ToolUsage.BeginAttempt(0)
+			for toolName, count := range map[string]int{dto.BuildInToolWebSearchPreview: tc.previewCalls, dto.BuildInToolWebSearch: tc.webCalls} {
+				for i := 0; i < count; i++ {
+					identity := relaycommon.ToolCallIdentity{Scope: "openai-responses", CallID: fmt.Sprintf("%s-%d", toolName, i)}
+					billable := toolName != dto.BuildInToolWebSearch || tc.webPrice > 0
+					require.Equal(t, billable, info.ObserveBuiltInToolCall(toolName, identity))
+					require.False(t, info.ObserveBuiltInToolCall(toolName, identity))
+				}
+			}
+			setServiceToolPricesForTest(t, map[string]float64{dto.BuildInToolWebSearchPreview: 99, dto.BuildInToolWebSearch: 99})
+			summary := textQuotaSummary{ModelName: "gpt-test", GroupRatio: tc.groupRatio}
+			cost := decimal.NewFromFloat(0.03).Mul(decimal.NewFromInt(int64(tc.previewCalls))).Add(decimal.NewFromFloat(tc.webPrice).Mul(decimal.NewFromInt(int64(tc.webCalls))))
+			expected := cost.Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Mul(decimal.NewFromFloat(tc.groupRatio))
+			actual := calculateTextToolCallSurcharge(ctx, info, &summary)
+			require.True(t, expected.Equal(actual), "expected %s, actual %s; frozen preview=%g, web=%g", expected, actual, info.FrozenToolPrice(dto.BuildInToolWebSearchPreview), info.FrozenToolPrice(dto.BuildInToolWebSearch))
+			calls := tc.previewCalls + tc.webCalls
+			if tc.webPrice == 0 {
+				calls -= tc.webCalls // The existing ledger excludes free tool calls.
+			}
+			require.Equal(t, calls, summary.WebSearchCallCount)
+			require.True(t, expected.Equal(calculateTextToolCallSurcharge(ctx, info, &summary)))
+			require.Equal(t, calls, summary.WebSearchCallCount, "recomputing a summary must not duplicate observed calls")
+			if calls == 0 {
+				require.Zero(t, summary.WebSearchPrice)
+				return
+			}
+			average, _ := cost.Div(decimal.NewFromInt(int64(calls))).Float64()
+			require.Equal(t, average, summary.WebSearchPrice)
+		})
+	}
 }
 
 func TestCalculateTextQuotaSummaryBillsProjectedResponsesBuiltInToolOnce(t *testing.T) {

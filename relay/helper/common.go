@@ -163,7 +163,7 @@ func ResponsesStreamEventHasOutput(event dto.ResponsesStreamResponse) bool {
 		return event.Delta != ""
 	case dto.ResponsesOutputTypeItemAdded, dto.ResponsesOutputTypeItemDone:
 		if event.Item != nil {
-			if event.Item.Type == dto.BuildInCallFileSearchCall {
+			if event.Item.Type == dto.BuildInCallFileSearchCall || event.Item.Type == dto.BuildInCallWebSearchCall {
 				// A search lifecycle/failed item is metadata. Only a finished
 				// invocation carries a delivered result and its existing fee.
 				status := strings.ToLower(strings.TrimSpace(event.Item.Status))

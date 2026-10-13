@@ -31,20 +31,29 @@ type fileSearchCancelWriter struct {
 	recorder  *httptest.ResponseRecorder
 	cancel    context.CancelFunc
 	triggered atomic.Bool
+	callType  string
 }
 
 func (w *fileSearchCancelWriter) Flush() {
 	w.ResponseWriter.Flush()
-	if strings.Contains(w.recorder.Body.String(), `"type":"file_search_call"`) && w.triggered.CompareAndSwap(false, true) {
+	callType := w.callType
+	if callType == "" {
+		callType = dto.BuildInCallFileSearchCall
+	}
+	if strings.Contains(w.recorder.Body.String(), `"type":"`+callType+`"`) && w.triggered.CompareAndSwap(false, true) {
 		w.cancel()
 	}
 }
 
 func setFileSearchLedgerPriceForTest(t *testing.T, price float64) {
+	setSearchLedgerPriceForTest(t, dto.BuildInToolFileSearch, price)
+}
+
+func setSearchLedgerPriceForTest(t *testing.T, toolName string, price float64) {
 	t.Helper()
 	prices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
 	oldPrices := prices.Prices
-	prices.Prices = map[string]float64{dto.BuildInToolFileSearch: price}
+	prices.Prices = map[string]float64{toolName: price}
 	operation_setting.RebuildToolPriceIndex()
 	t.Cleanup(func() {
 		prices.Prices = oldPrices
@@ -53,12 +62,21 @@ func setFileSearchLedgerPriceForTest(t *testing.T, price float64) {
 }
 
 func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
+	testSearchInterruptedStreamRetainsOriginalFunding(t, dto.BuildInToolFileSearch, dto.BuildInCallFileSearchCall)
+}
+
+func TestWebSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
+	testSearchInterruptedStreamRetainsOriginalFunding(t, dto.BuildInToolWebSearch, dto.BuildInCallWebSearchCall)
+}
+
+func testSearchInterruptedStreamRetainsOriginalFunding(t *testing.T, toolName, callType string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
 	service.InitTokenEncoders()
 	oldEmpty, oldRetries := common.EmptyCompletionRetryEnabled, common.RetryTimes
 	common.RetryTimes = 2
-	setFileSearchLedgerPriceForTest(t, 0.02)
+	setSearchLedgerPriceForTest(t, toolName, 0.02)
 	t.Cleanup(func() {
 		common.EmptyCompletionRetryEnabled, common.RetryTimes = oldEmpty, oldRetries
 	})
@@ -71,7 +89,7 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 							common.EmptyCompletionRetryEnabled = retry
 							db := setupStreamFundingLedger(t, funding)
 							_, frames := metadataFundingFrames(t, "responses_native", usageKind)
-							item := map[string]any{"type": "file_search_call", "id": "fs_completed", "queries": []string{"synthetic query"},
+							item := map[string]any{"type": callType, "id": "search_completed", "queries": []string{"synthetic query"},
 								"results": []any{map[string]any{"file_id": "file_synthetic", "text": "synthetic-search-result"}}}
 							if status == "completed" {
 								item["status"] = "completed"
@@ -106,11 +124,30 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 							fingerprint := sha256.Sum256([]byte(t.Name()))
 							requestID := fmt.Sprintf("file-search-%x", fingerprint[:16])
 							c, info, recorder := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
-							info.Request.(*dto.OpenAIResponsesRequest).Tools = []byte(`[{"type":"file_search","vector_store_ids":["vs_synthetic"]}]`)
+							if callType == dto.BuildInCallFileSearchCall {
+								info.Request.(*dto.OpenAIResponsesRequest).Tools = []byte(`[{"type":"file_search","vector_store_ids":["vs_synthetic"]}]`)
+							} else {
+								info.Request.(*dto.OpenAIResponsesRequest).Tools = []byte(`[{"type":"web_search"}]`)
+							}
 							info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
-								dto.BuildInToolFileSearch: {ToolName: dto.BuildInToolFileSearch},
+								toolName: {ToolName: toolName},
 							}}
+							if callType == dto.BuildInCallWebSearchCall {
+								info.ToolUsage = relaycommon.NewToolUsageLedger(info.OriginModelName)
+							}
 							require.Nil(t, service.PreConsumeBilling(c, 100, info))
+							if callType == dto.BuildInCallWebSearchCall {
+								prices := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+								original := prices.Prices
+								changed := make(map[string]float64, len(original))
+								for name, price := range original {
+									changed[name] = price
+								}
+								changed[toolName] = 99
+								prices.Prices = changed
+								operation_setting.RebuildToolPriceIndex()
+								t.Cleanup(func() { prices.Prices = original; operation_setting.RebuildToolPriceIndex() })
+							}
 							require.Equal(t, funding.source, info.BillingSource)
 							require.NoError(t, db.Create(&model.UserSubscription{Id: 956, UserId: 951, PlanId: 954, Status: "active", AmountTotal: 1000,
 								StartTime: time.Now().Unix() - 1800, EndTime: time.Now().Unix() + 1800}).Error)
@@ -123,7 +160,7 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 								ctx, cancel := context.WithCancel(c.Request.Context())
 								t.Cleanup(cancel)
 								c.Request = c.Request.WithContext(ctx)
-								cancelWriter = &fileSearchCancelWriter{ResponseWriter: c.Writer, recorder: recorder, cancel: cancel}
+								cancelWriter = &fileSearchCancelWriter{ResponseWriter: c.Writer, recorder: recorder, cancel: cancel, callType: callType}
 								c.Writer = cancelWriter
 							}
 							apiErr := ResponsesHelper(c, info)
@@ -145,7 +182,7 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 							require.True(t, types.IsSkipRetryError(apiErr))
 							require.True(t, info.HasRecordedChannelFirstResult())
 							require.False(t, info.FirstResultTime.IsZero())
-							require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch].CallCount)
+							require.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[toolName].CallCount)
 							require.Contains(t, recorder.Body.String(), "synthetic-search-result")
 							require.NotContains(t, recorder.Body.String(), "response.completed")
 							require.EqualValues(t, 1, calls.Load())
@@ -164,8 +201,16 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 							require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
 							var other map[string]any
 							require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-							require.EqualValues(t, 1, other["file_search_call_count"])
-							require.EqualValues(t, 0.02, other["file_search_price"])
+							require.EqualValues(t, 1, other[toolName+"_call_count"])
+							require.EqualValues(t, 0.02, other[toolName+"_price"])
+							if callType == dto.BuildInCallWebSearchCall {
+								toolUsage, ok := other["web_search_tool_usage"].(map[string]any)
+								require.True(t, ok, "per-tool search usage must be a JSON object")
+								details, ok := toolUsage[toolName].(map[string]any)
+								require.True(t, ok, "the completed search kind must be present in the audit record")
+								require.EqualValues(t, 1, details["call_count"])
+								require.EqualValues(t, 0.02, details["price"])
+							}
 							var outbox int64
 							require.NoError(t, db.Model(&model.CacheInvalidationTask{}).Count(&outbox).Error)
 							for range 2 {
@@ -197,52 +242,71 @@ func TestFileSearchInterruptedStreamRetainsOriginalFunding(t *testing.T) {
 }
 
 func TestFileSearchLifecycleItemsRefundOriginalFunding(t *testing.T) {
+	testSearchLifecycleItemsRefundOriginalFunding(t, dto.BuildInToolFileSearch, dto.BuildInCallFileSearchCall)
+}
+
+func TestWebSearchLifecycleItemsRefundOriginalFunding(t *testing.T) {
+	testSearchLifecycleItemsRefundOriginalFunding(t, dto.BuildInToolWebSearch, dto.BuildInCallWebSearchCall)
+}
+
+func testSearchLifecycleItemsRefundOriginalFunding(t *testing.T, toolName, callType string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
 	service.InitTokenEncoders()
 	oldEmpty := common.EmptyCompletionRetryEnabled
 	common.EmptyCompletionRetryEnabled = false
 	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldEmpty })
-	setFileSearchLedgerPriceForTest(t, 0.02)
-	for _, funding := range streamFundingCases() {
-		for _, tc := range []struct{ name, event, status string }{
-			{"added_running", dto.ResponsesOutputTypeItemAdded, "in_progress"},
-			{"added_completed", dto.ResponsesOutputTypeItemAdded, "completed"},
-			{"done_running", dto.ResponsesOutputTypeItemDone, "in_progress"},
-			{"done_failed", dto.ResponsesOutputTypeItemDone, "failed"},
-			{"done_cancelled", dto.ResponsesOutputTypeItemDone, "cancelled"},
-			{"done_unknown", dto.ResponsesOutputTypeItemDone, "future_status"},
-			{"nil_item", dto.ResponsesOutputTypeItemDone, ""},
-		} {
-			t.Run(funding.name+"/"+tc.name, func(t *testing.T) {
-				db := setupStreamFundingLedger(t, funding)
-				_, frames := metadataFundingFrames(t, "responses_native", "known")
-				event := dto.ResponsesStreamResponse{Type: tc.event, Item: &dto.ResponsesOutput{Type: dto.BuildInCallFileSearchCall, ID: "fs_metadata", Status: tc.status}}
-				if tc.name == "nil_item" {
-					event.Item = nil
+	setSearchLedgerPriceForTest(t, toolName, 0.02)
+	usageKinds := []string{"known"}
+	if callType == dto.BuildInCallWebSearchCall {
+		usageKinds = append(usageKinds, "zero", "missing")
+	}
+	for _, usageKind := range usageKinds {
+		for _, funding := range streamFundingCases() {
+			for _, tc := range []struct{ name, event, status string }{
+				{"added_running", dto.ResponsesOutputTypeItemAdded, "in_progress"},
+				{"added_completed", dto.ResponsesOutputTypeItemAdded, "completed"},
+				{"done_running", dto.ResponsesOutputTypeItemDone, "in_progress"},
+				{"done_failed", dto.ResponsesOutputTypeItemDone, "failed"},
+				{"done_cancelled", dto.ResponsesOutputTypeItemDone, "cancelled"},
+				{"done_unknown", dto.ResponsesOutputTypeItemDone, "future_status"},
+				{"nil_item", dto.ResponsesOutputTypeItemDone, ""},
+			} {
+				name := funding.name + "/" + tc.name
+				if callType == dto.BuildInCallWebSearchCall {
+					name = usageKind + "/" + name
 				}
-				data, err := common.Marshal(event)
-				require.NoError(t, err)
-				frames = append(frames, string(data))
-				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					w.Header().Set("Content-Type", "text/event-stream")
-					_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n")
-				}))
-				t.Cleanup(upstream.Close)
-				requestID := "file-search-lifecycle-" + funding.name + "-" + tc.name
-				c, info, _ := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
-				info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
-					dto.BuildInToolFileSearch: {ToolName: dto.BuildInToolFileSearch},
-				}}
-				require.Nil(t, service.PreConsumeBilling(c, 100, info))
-				apiErr := ResponsesHelper(c, info)
-				require.NotNil(t, apiErr)
-				service.HandleFailedBilling(c, info, apiErr)
-				service.HandleFailedBilling(c, info, apiErr)
-				require.False(t, info.HasRecordedChannelFirstResult())
-				require.Zero(t, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch].CallCount)
-				assertStreamFundingBalances(t, db, funding, requestID, 0, false, 0, 0)
-			})
+				t.Run(name, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					_, frames := metadataFundingFrames(t, "responses_native", usageKind)
+					event := dto.ResponsesStreamResponse{Type: tc.event, Item: &dto.ResponsesOutput{Type: callType, ID: "search_metadata", Status: tc.status}}
+					if tc.name == "nil_item" {
+						event.Item = nil
+					}
+					data, err := common.Marshal(event)
+					require.NoError(t, err)
+					frames = append(frames, string(data))
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := "file-search-lifecycle-" + funding.name + "-" + tc.name
+					c, info, _ := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+					info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+						toolName: {ToolName: toolName},
+					}}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					apiErr := ResponsesHelper(c, info)
+					require.NotNil(t, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.False(t, info.HasRecordedChannelFirstResult())
+					require.Zero(t, info.ResponsesUsageInfo.BuiltInTools[toolName].CallCount)
+					assertStreamFundingBalances(t, db, funding, requestID, 0, false, 0, 0)
+				})
+			}
 		}
 	}
 }

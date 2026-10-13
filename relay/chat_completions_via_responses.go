@@ -153,7 +153,14 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	var requestBody io.Reader = body
 
 	var httpResp *http.Response
-	resp, err := adaptor.DoRequest(c, info, requestBody)
+	// URL/header selection describes the converted upstream protocol. Restore
+	// the client format before converting the reply or recording settlement.
+	resp, err := func() (any, error) {
+		savedFormat := info.RelayFormat
+		info.RelayFormat = types.RelayFormatOpenAIResponses
+		defer func() { info.RelayFormat = savedFormat }()
+		return adaptor.DoRequest(c, info, requestBody)
+	}()
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}

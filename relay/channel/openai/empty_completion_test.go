@@ -131,6 +131,19 @@ func TestIsEmptyResponsesCompletion(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSearchLifecycleRequiresCompletedItem(t *testing.T) {
+	for _, status := range []string{"in_progress", "searching", "failed", "incomplete", "future_status", "completed", ""} {
+		for _, eventType := range []string{dto.ResponsesOutputTypeItemAdded, dto.ResponsesOutputTypeItemDone} {
+			t.Run(eventType+"/"+status, func(t *testing.T) {
+				item := &dto.ResponsesOutput{Type: dto.BuildInCallWebSearchCall, Status: status}
+				expected := eventType == dto.ResponsesOutputTypeItemDone && (status == "completed" || status == "")
+				require.Equal(t, expected, responsesStreamHasVisibleOutput(&dto.ResponsesStreamResponse{Type: eventType, Item: item}))
+				require.Equal(t, status == "completed" || status == "", responsesHasVisibleOutput(&dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{*item}}))
+			})
+		}
+	}
+}
+
 func TestShouldRetryEmptyCompletionOnlyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

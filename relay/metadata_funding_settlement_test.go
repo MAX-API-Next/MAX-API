@@ -65,7 +65,12 @@ func metadataFundingFrames(t *testing.T, route, usage string) (int, []string) {
 		if route == "responses_to_chat_custom" {
 			channel = constant.ChannelTypeAdvancedCustom
 		}
-		return channel, []string{encode(map[string]any{"type": "response.created", "response": response})}
+		frames := []string{encode(map[string]any{"type": "response.created", "response": response})}
+		if route == "responses_web_search" {
+			frames = append(frames, encode(map[string]any{"type": "response.output_item.added", "output_index": 0,
+				"item": map[string]any{"type": "web_search_call", "id": "ws_metadata", "status": "in_progress"}}))
+		}
+		return channel, frames
 	}
 }
 
@@ -91,7 +96,7 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 	oldEmptyRetry := common.EmptyCompletionRetryEnabled
 	common.EmptyCompletionRetryEnabled = false
 	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldEmptyRetry })
-	for _, route := range []string{"responses_native", "chat_native", "chat_to_responses", "responses_to_chat_custom", "responses_to_chat_global", "claude_to_responses", "gemini_to_responses"} {
+	for _, route := range []string{"responses_native", "responses_web_search", "chat_native", "chat_to_responses", "responses_to_chat_custom", "responses_to_chat_global", "claude_to_responses", "gemini_to_responses"} {
 		for _, funding := range streamFundingCases() {
 			for _, usage := range []string{"known", "zero", "missing"} {
 				for _, ending := range []string{"eof", "transport", "malformed", "cancel", "timeout", "eof_terminal_write_failure"} {
