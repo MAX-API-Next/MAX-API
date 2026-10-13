@@ -41,6 +41,8 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 		{"custom_claude", "claude", dto.AdvancedCustomConverterOpenAIChatCompletionsToAnthropicMessages, constant.ChannelTypeAdvancedCustom, "", false},
 		{"custom_gemini", "gemini", dto.AdvancedCustomConverterOpenAIChatCompletionsToGeminiGenerateContent, constant.ChannelTypeAdvancedCustom, "", false},
 		{"custom_responses", "responses", dto.AdvancedCustomConverterOpenAIChatCompletionsToOpenAIResponses, constant.ChannelTypeAdvancedCustom, "", false},
+		{"claude_custom_chat", "chat_complete", dto.AdvancedCustomConverterAnthropicMessagesToOpenAIChatCompletions, constant.ChannelTypeAdvancedCustom, "", true},
+		{"claude_custom_none", "responses", dto.AdvancedCustomConverterNone, constant.ChannelTypeAdvancedCustom, "", true},
 		{"zhipu_standard", "responses", "", constant.ChannelTypeZhipu_v4, "", false},
 		{"zhipu_coding", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan", false},
 		{"zhipu_coding_international", "chat_native", "", constant.ChannelTypeZhipu_v4, "glm-coding-plan-international", false},
@@ -56,7 +58,7 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 	}
 	for _, provider := range providers {
 		modes := []bool{true}
-		if provider.name == "claude" || provider.name == "gemini" || provider.baseAlias != "" {
+		if provider.name == "claude" || provider.name == "gemini" || provider.name == "claude_custom_chat" || provider.baseAlias != "" {
 			modes = []bool{false, true}
 		}
 		for _, enabled := range modes {
@@ -103,6 +105,8 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 						info.IsStream = stream
 						if provider.claudeClient {
 							info.RelayFormat = types.RelayFormatClaude
+							info.IsFirstRequest = true
+							info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
 							info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(stream)}
 							c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 							info.RequestURLPath = "/v1/messages"
@@ -114,10 +118,12 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 							path := "/v1/responses"
 							if provider.wire == "claude" {
 								path = "/v1/messages"
+							} else if provider.wire == "chat_complete" {
+								path = "/v1/chat/completions"
 							} else if provider.wire == "gemini" {
 								path = "/v1beta/models/{model}:generateContent"
 							}
-							c.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{IncomingPath: "/v1/chat/completions", UpstreamPath: path, Converter: provider.converter}}}})
+							c.Set(string(constant.ContextKeyChannelOtherSetting), dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{IncomingPath: c.Request.URL.Path, UpstreamPath: path, Converter: provider.converter}}}})
 						}
 						require.Nil(t, service.PreConsumeBilling(c, 100, info))
 						var apiErr *types.MaxAPIError
@@ -147,8 +153,12 @@ func TestGlobalChatResponsesProtocolRetainsOriginalFunding(t *testing.T) {
 								require.Contains(t, strings.ToLower(request.path), "generatecontent")
 								require.Contains(t, request.body, "contents")
 								require.NotContains(t, request.body, "input")
-							case "chat_native":
-								require.Equal(t, "/coding/chat/completions", request.path)
+							case "chat_native", "chat_complete":
+								path := "/coding/chat/completions"
+								if provider.channelType == constant.ChannelTypeAdvancedCustom {
+									path = "/v1/chat/completions"
+								}
+								require.Equal(t, path, request.path)
 								require.Contains(t, request.body, "messages")
 								require.NotContains(t, request.body, "input")
 							default:
@@ -356,7 +366,7 @@ func globalBridgeWireBody(t *testing.T, wire string, stream bool) string {
 	t.Helper()
 	if !stream {
 		switch wire {
-		case "chat_native":
+		case "chat_native", "chat_complete":
 			return `{"id":"chat_funding","object":"chat.completion","model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"partial output"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`
 		case "claude":
 			return `{"id":"msg_funding","type":"message","role":"assistant","model":"gpt-test","content":[{"type":"text","text":"partial output"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}}`
@@ -368,8 +378,16 @@ func globalBridgeWireBody(t *testing.T, wire string, stream bool) string {
 	}
 	var frames []string
 	switch wire {
-	case "chat_native":
+	case "chat_native", "chat_complete":
 		_, frames = streamFundingFrames(t, "chat_native", "known")
+		if wire == "chat_complete" {
+			// The Claude reply converter requires a complete Chat protocol, not
+			// the deliberately interrupted funding fixture's content/usage pair.
+			role := `{"id":"chat_funding","choices":[{"index":0,"delta":{"role":"assistant"}}]}`
+			finish := `{"id":"chat_funding","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+			usage := `{"id":"chat_funding","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`
+			frames = []string{role, frames[0], finish, usage}
+		}
 		for i, frame := range frames {
 			var chunk map[string]any
 			require.NoError(t, common.UnmarshalJsonStr(frame, &chunk))
