@@ -655,6 +655,9 @@ func billingProcessDatabasesSnapshot(t *testing.T, db, logDB *gorm.DB) [32]byte 
 }
 
 func TestBillingProcessCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	phases := []string{"intent_committed", "funding_before_commit", "funding_committed", "receipt_before_log",
 		"log_before_commit", "log_committed", "usage_before_commit", "complete"}
 	for _, funding := range billingProcessFundingCases() {
@@ -681,6 +684,9 @@ func TestBillingProcessCrashRecovery(t *testing.T) {
 }
 
 func TestBillingProcessRefundRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, funding := range billingProcessFundingCases() {
 		for _, phase := range []string{"intent_committed", "funding_before_commit", "complete"} {
 			t.Run(funding.name+"/"+phase, func(t *testing.T) {
@@ -700,6 +706,9 @@ func TestBillingProcessRefundRecovery(t *testing.T) {
 }
 
 func TestBillingProcessRepeatedCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, funding := range billingProcessFundingCases() {
 		for _, quota := range []int{130, 0} {
 			t.Run(fmt.Sprintf("%s/quota_%d", funding.name, quota), func(t *testing.T) {
@@ -725,6 +734,9 @@ func TestBillingProcessRepeatedCrashRecovery(t *testing.T) {
 }
 
 func TestBillingProcessConcurrentRecoveryAndRefund(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, funding := range billingProcessFundingCases() {
 		for _, quota := range []int{130, 0} {
 			t.Run(fmt.Sprintf("%s/quota_%d", funding.name, quota), func(t *testing.T) {
@@ -777,6 +789,9 @@ func TestBillingProcessConcurrentRecoveryAndRefund(t *testing.T) {
 }
 
 func TestBillingProcessUnsupportedStateIsNotRetried(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, funding := range billingProcessFundingCases()[:2] {
 		t.Run(funding.name, func(t *testing.T) {
 			dir, db := seedBillingProcessDB(t, funding)
@@ -796,6 +811,9 @@ func TestBillingProcessUnsupportedStateIsNotRetried(t *testing.T) {
 }
 
 func TestBillingProcessSubscriptionPeriodRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	funding := billingProcessFundingCases()[1]
 	for _, phase := range []string{"intent_committed", "funding_committed"} {
 		t.Run(phase, func(t *testing.T) {

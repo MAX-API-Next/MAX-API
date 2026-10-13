@@ -31,6 +31,9 @@ func (c billingSeparateLogCase) config(quota int, phase string) billingProcessCo
 }
 
 func TestBillingSeparateLogProcessCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	// The first three barriers belong to the independent log transaction; the
 	// last two belong to the business transaction that applies usage counters.
 	phases := []string{"funding_committed", "receipt_before_log", "log_before_commit", "log_committed", "usage_before_commit"}
@@ -62,6 +65,9 @@ func TestBillingSeparateLogProcessCrashRecovery(t *testing.T) {
 }
 
 func TestBillingSeparateLogProcessRepeatedCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, c := range billingSeparateLogCases()[:2] {
 		for _, quota := range []int{130, 0} {
 			t.Run(fmt.Sprintf("%s/quota_%d", c.name, quota), func(t *testing.T) {
@@ -88,6 +94,9 @@ func TestBillingSeparateLogProcessRepeatedCrashRecovery(t *testing.T) {
 }
 
 func TestBillingSeparateLogProcessUnavailableRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, c := range billingSeparateLogCases() {
 		for _, quota := range []int{130, 0} {
 			t.Run(fmt.Sprintf("%s/quota_%d", c.name, quota), func(t *testing.T) {
@@ -117,6 +126,9 @@ func TestBillingSeparateLogProcessUnavailableRecovery(t *testing.T) {
 }
 
 func TestBillingSeparateLogProcessConcurrentRecoveryAndRefund(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	cases := billingSeparateLogCases()
 	for _, c := range []billingSeparateLogCase{cases[0], cases[1], cases[4]} {
 		for _, quota := range []int{130, 0} {
@@ -150,6 +162,9 @@ func TestBillingSeparateLogProcessConcurrentRecoveryAndRefund(t *testing.T) {
 }
 
 func TestBillingSeparateLogProcessRefundRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	for _, c := range billingSeparateLogCases() {
 		for _, phase := range []string{"intent_committed", "funding_before_commit", "complete"} {
 			t.Run(c.name+"/"+phase, func(t *testing.T) {
@@ -170,6 +185,9 @@ func TestBillingSeparateLogProcessRefundRecovery(t *testing.T) {
 }
 
 func TestBillingSeparateLogProcessSubscriptionPeriodRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	c := billingSeparateLogCases()[1]
 	for _, quota := range []int{130, 0} {
 		t.Run(fmt.Sprintf("quota_%d", quota), func(t *testing.T) {

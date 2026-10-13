@@ -9,6 +9,9 @@ import (
 )
 
 func TestBillingPlaygroundProcessCrashRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	funding := billingProcessFundingCases()[0]
 	phases := []string{"intent_committed", "funding_before_commit", "funding_committed", "receipt_before_log",
 		"log_before_commit", "log_committed", "usage_before_commit", "complete"}
@@ -33,6 +36,9 @@ func TestBillingPlaygroundProcessCrashRecovery(t *testing.T) {
 }
 
 func TestBillingPlaygroundProcessRefundRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	funding := billingProcessFundingCases()[0]
 	for _, phase := range []string{"intent_committed", "funding_before_commit", "complete"} {
 		t.Run(phase, func(t *testing.T) {
@@ -51,6 +57,9 @@ func TestBillingPlaygroundProcessRefundRecovery(t *testing.T) {
 }
 
 func TestBillingPlaygroundProcessAdmissionRecovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("OS-process recovery matrix; run without -short")
+	}
 	funding := billingProcessFundingCases()[0]
 	for _, phase := range []string{"intent_committed", "funding_before_commit", "complete"} {
 		t.Run(phase, func(t *testing.T) {
