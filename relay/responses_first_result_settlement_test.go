@@ -125,6 +125,7 @@ func TestResponsesFirstResultTimeoutSettlesDeliveredWhitespace(t *testing.T) {
 							StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix()}).Error)
 					}
 					var calls atomic.Int32
+					upstreamCanceled := make(chan bool, 1)
 					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						calls.Add(1)
 						w.Header().Set("Content-Type", "text/event-stream")
@@ -132,7 +133,9 @@ func TestResponsesFirstResultTimeoutSettlesDeliveredWhitespace(t *testing.T) {
 						w.(http.Flusher).Flush()
 						select {
 						case <-r.Context().Done():
+							upstreamCanceled <- true
 						case <-time.After(3 * time.Second):
+							upstreamCanceled <- false
 						}
 					}))
 					t.Cleanup(upstream.Close)
@@ -164,6 +167,12 @@ func TestResponsesFirstResultTimeoutSettlesDeliveredWhitespace(t *testing.T) {
 					apiErr := ResponsesHelper(c, info)
 					require.NotNil(t, apiErr)
 					require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())
+					select {
+					case canceled := <-upstreamCanceled:
+						require.True(t, canceled, "first-result timeout must reach the upstream request")
+					case <-time.After(3 * time.Second):
+						t.Fatal("upstream handler did not finish within its cancellation guard")
+					}
 					require.True(t, types.IsSkipRetryError(apiErr))
 					require.Equal(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason)
 					require.False(t, info.HasRecordedChannelFirstResult())

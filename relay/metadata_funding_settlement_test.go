@@ -119,6 +119,7 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 							frames = append(frames, `{broken`)
 						}
 						var calls atomic.Int32
+						upstreamCanceled := make(chan bool, 1)
 						upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 							calls.Add(1)
 							w.Header().Set("Content-Type", "text/event-stream")
@@ -130,7 +131,9 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 							if ending == "timeout" || ending == "cancel" {
 								select {
 								case <-r.Context().Done():
+									upstreamCanceled <- true
 								case <-time.After(3 * time.Second):
+									upstreamCanceled <- false
 								}
 							}
 						}))
@@ -171,6 +174,14 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 							apiErr = ResponsesHelper(c, info)
 						}
 						require.NotNil(t, apiErr)
+						if ending == "cancel" || ending == "timeout" {
+							select {
+							case canceled := <-upstreamCanceled:
+								require.True(t, canceled, "cancellation or timeout must reach the upstream request")
+							case <-time.After(3 * time.Second):
+								t.Fatal("upstream handler did not finish within its cancellation guard")
+							}
+						}
 						require.False(t, info.HasRecordedChannelFirstResult())
 						require.True(t, info.FirstResultTime.IsZero())
 						if bufferedMetadata {
