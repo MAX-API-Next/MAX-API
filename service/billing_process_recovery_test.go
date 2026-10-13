@@ -83,10 +83,23 @@ func TestBillingProcessHelper(t *testing.T) {
 	var cfg billingProcessConfig
 	require.NoError(t, common.Unmarshal(data, &cfg))
 	require.Equal(t, filepath.Join(filepath.Dir(configPath), "ledger.sqlite"), cfg.Database)
-	db := openBillingProcessDB(t, cfg.Database)
-	logDB := db
+	var db, logDB *gorm.DB
 	if cfg.SeparateLogDB {
-		logDB = openBillingProcessDB(t, filepath.Join(filepath.Dir(cfg.Database), "logs.sqlite"))
+		// Use the real startup configuration instead of injecting two handles.
+		t.Setenv("SQL_DSN", "local")
+		t.Setenv("LOG_SQL_DSN", "")
+		t.Setenv("LOG_SQLITE_PATH", filepath.Join(filepath.Dir(cfg.Database), "logs.sqlite"))
+		common.SQLitePath = cfg.Database
+		common.IsMasterNode = false // The isolated fixture already owns its schema.
+		require.NoError(t, model.InitDB())
+		require.NoError(t, model.InitLogDB())
+		db, logDB = model.DB, model.LOG_DB
+		require.NotSame(t, db, logDB)
+		configureBillingProcessDB(t, db)
+		configureBillingProcessDB(t, logDB)
+	} else {
+		db = openBillingProcessDB(t, cfg.Database)
+		logDB = db
 	}
 	model.DB, model.LOG_DB = db, logDB
 	if cfg.LogUnavailable {
@@ -252,6 +265,13 @@ func openBillingProcessDB(t *testing.T, path string) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
+	configureBillingProcessDB(t, db)
+	return db
+}
+
+func configureBillingProcessDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	db.Logger = logger.Default.LogMode(logger.Silent)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
@@ -259,7 +279,6 @@ func openBillingProcessDB(t *testing.T, path string) *gorm.DB {
 	// synchronous=OFF or memory/WAL shortcuts weaken the interruption test.
 	require.NoError(t, db.Exec("PRAGMA busy_timeout = 30000").Error)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	return db
 }
 
 func seedBillingProcessDB(t *testing.T, funding billingProcessFunding) (string, *gorm.DB) {
@@ -319,7 +338,7 @@ func installBillingProcessBarrier(t *testing.T, db, logDB *gorm.DB, cfg billingP
 			return
 		}
 		once.Do(func() {
-			_, inTx := tx.Statement.ConnPool.(*sql.Tx)
+			inTx := billingProcessHasSQLTransaction(tx.Statement.ConnPool)
 			pauseBillingProcess(t, cfg, billingProcessBarrier{Phase: cfg.Phase, Table: tx.Statement.Table, Database: database, InsideTransaction: inTx})
 		})
 	}
@@ -465,6 +484,33 @@ func awaitBillingProcessBarrier(t *testing.T, p *billingTestProcess) billingProc
 	}
 }
 
+func billingProcessHasSQLTransaction(pool gorm.ConnPool) bool {
+	switch tx := pool.(type) {
+	case *sql.Tx:
+		return tx != nil
+	case *gorm.PreparedStmtTX:
+		return tx != nil && billingProcessHasSQLTransaction(tx.Tx)
+	default:
+		return false
+	}
+}
+
+func TestBillingProcessTransactionDetection(t *testing.T) {
+	db := openBillingProcessDB(t, filepath.Join(t.TempDir(), "transaction.sqlite"))
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared_%t", prepared), func(t *testing.T) {
+			connection := db.Session(&gorm.Session{PrepareStmt: prepared})
+			require.False(t, billingProcessHasSQLTransaction(connection.Statement.ConnPool), "an open connection is not a transaction")
+			tx := connection.Begin()
+			require.NoError(t, tx.Error)
+			t.Cleanup(func() { require.NoError(t, tx.Rollback().Error) })
+			require.True(t, billingProcessHasSQLTransaction(tx.Statement.ConnPool), "the marker must unwrap to a real SQL transaction")
+		})
+	}
+	require.False(t, billingProcessHasSQLTransaction((*sql.Tx)(nil)))
+	require.False(t, billingProcessHasSQLTransaction((*gorm.PreparedStmtTX)(nil)))
+}
+
 func billingProcessMarkerNotReady(err error) bool {
 	// Windows can temporarily deny access while the atomic rename is observed.
 	// Retry only ERROR_SHARING_VIOLATION (32), never arbitrary I/O failures.
@@ -489,7 +535,8 @@ func killBillingTestProcess(t *testing.T, p *billingTestProcess, phase string) b
 
 func finishBillingTestProcess(t *testing.T, p *billingTestProcess) {
 	t.Helper()
-	require.NoError(t, <-p.done, "child process failed\n%s", p.output.text())
+	err := <-p.done
+	require.NoError(t, err, "child process failed\n%s", p.output.text())
 }
 
 func billingProcessRecord(t *testing.T, db *gorm.DB) model.BillingSettlement {

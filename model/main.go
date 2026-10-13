@@ -52,14 +52,30 @@ var userOAuthIdentityMigrations = []userOAuthIdentityMigration{
 	{column: "linux_do_id", indexName: "ux_users_linux_do_id", mysqlGeneratedColumn: "linux_do_id_unique"},
 }
 
+func hasSeparateLogDatabase() bool {
+	return os.Getenv("LOG_SQL_DSN") != "" || strings.TrimSpace(os.Getenv("LOG_SQLITE_PATH")) != ""
+}
+
+func sqliteDatabasePath(isLog bool) string {
+	if isLog {
+		if path := strings.TrimSpace(os.Getenv("LOG_SQLITE_PATH")); path != "" {
+			return path
+		}
+	}
+	return common.SQLitePath
+}
+
 func logRetryMarkerBackfillCompletionKey() string {
 	logDSN := strings.TrimSpace(os.Getenv("LOG_SQL_DSN"))
-	if logDSN == "" {
+	if !hasSeparateLogDatabase() {
 		return logRetryMarkerBackfillOptionKey
+	}
+	if logDSN == "" {
+		logDSN = "local"
 	}
 
 	if strings.HasPrefix(logDSN, "local") {
-		logDSN = logDSN + "\n" + common.SQLitePath
+		logDSN = logDSN + "\n" + sqliteDatabasePath(true)
 	}
 
 	fingerprint := common.Sha1([]byte(common.LogSqlType + "\n" + logDSN))
@@ -79,7 +95,7 @@ func initCol() {
 		commonTrueVal = "1"
 		commonFalseVal = "0"
 	}
-	if os.Getenv("LOG_SQL_DSN") != "" {
+	if hasSeparateLogDatabase() {
 		switch common.LogSqlType {
 		case common.DatabaseTypePostgreSQL:
 			logGroupCol = `"group"`
@@ -92,7 +108,7 @@ func initCol() {
 			logKeyCol = "`key`"
 		}
 	} else {
-		// LOG_SQL_DSN 为空时，日志数据库与主数据库相同
+		// No separate log database is configured.
 		if common.UsingPostgreSQL {
 			logGroupCol = `"group"`
 			logKeyCol = `"key"`
@@ -171,6 +187,9 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		initCol()
 	}()
 	dsn := os.Getenv(envName)
+	if isLog && strings.TrimSpace(os.Getenv("LOG_SQLITE_PATH")) != "" && dsn != "" && !strings.HasPrefix(dsn, "local") {
+		return nil, errors.New("LOG_SQLITE_PATH requires an empty or local LOG_SQL_DSN")
+	}
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
@@ -194,7 +213,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 			} else {
 				common.LogSqlType = common.DatabaseTypeSQLite
 			}
-			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+			return gorm.Open(sqlite.Open(sqliteDatabasePath(isLog)), &gorm.Config{
 				PrepareStmt: true, // precompile SQL
 			})
 		}
@@ -224,7 +243,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	} else {
 		common.LogSqlType = common.DatabaseTypeSQLite
 	}
-	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+	return gorm.Open(sqlite.Open(sqliteDatabasePath(isLog)), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
 }
@@ -266,40 +285,47 @@ func InitDB() (err error) {
 }
 
 func InitLogDB() (err error) {
-	if os.Getenv("LOG_SQL_DSN") == "" {
+	if !hasSeparateLogDatabase() {
 		LOG_DB = DB
 		return
 	}
 	db, err := chooseDB("LOG_SQL_DSN", true)
-	if err == nil {
-		if common.DebugEnabled {
-			db = db.Debug()
+	if err != nil {
+		if db != nil {
+			_ = closeDB(db)
 		}
-		LOG_DB = db
-		// If log DB is MySQL, also ensure Chinese-capable charset
-		if common.LogSqlType == common.DatabaseTypeMySQL {
-			if err := checkMySQLChineseSupport(LOG_DB); err != nil {
-				panic(err)
-			}
-		}
-		sqlDB, err := LOG_DB.DB()
-		if err != nil {
-			return err
-		}
-		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
-		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
-		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
-
-		if !common.IsMasterNode {
-			return nil
-		}
-		common.SysLog("database migration started")
-		err = migrateLOGDB()
-		return err
-	} else {
-		common.FatalLog(err)
+		return fmt.Errorf("failed to initialize log database: %w", err)
 	}
-	return err
+	previousLogDB := LOG_DB
+	defer func() {
+		if err != nil {
+			_ = closeDB(db)
+			LOG_DB = previousLogDB
+		}
+	}()
+	if common.DebugEnabled {
+		db = db.Debug()
+	}
+	LOG_DB = db
+	// If log DB is MySQL, also ensure Chinese-capable charset
+	if common.LogSqlType == common.DatabaseTypeMySQL {
+		if err := checkMySQLChineseSupport(LOG_DB); err != nil {
+			panic(err)
+		}
+	}
+	sqlDB, err := LOG_DB.DB()
+	if err != nil {
+		return err
+	}
+	sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
+	sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
+	sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
+
+	if !common.IsMasterNode {
+		return nil
+	}
+	common.SysLog("database migration started")
+	return migrateLOGDB()
 }
 
 func migrateDB() error {
@@ -403,7 +429,7 @@ func migrateDB() error {
 	if err := migrateSubscriptionPlanPolicyDefaults(planTableExisted, planWalletColumnExisted, planDowngradeColumnExisted); err != nil {
 		return err
 	}
-	if os.Getenv("LOG_SQL_DSN") == "" {
+	if !hasSeparateLogDatabase() {
 		LOG_DB = DB
 		scheduleLogRetryMarkerBackfill()
 	}
