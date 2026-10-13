@@ -255,7 +255,8 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types
 }
 
 func shouldUseGlobalResponsesBridge(c *gin.Context, info *relaycommon.RelayInfo) bool {
-	if info == nil || !service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+	if info == nil || !service.SupportsOpenAIResponsesUpstreamForBaseURL(info.ChannelType, info.ChannelBaseUrl) ||
+		!service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		return false
 	}
 	if info.ChannelType != constant.ChannelTypeAdvancedCustom {

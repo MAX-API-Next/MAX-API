@@ -16,3 +16,7 @@ func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, mod
 func SupportsOpenAIResponsesUpstream(channelType int) bool {
 	return openaicompat.SupportsOpenAIResponsesUpstream(channelType)
 }
+
+func SupportsOpenAIResponsesUpstreamForBaseURL(channelType int, baseURL string) bool {
+	return openaicompat.SupportsOpenAIResponsesUpstreamForBaseURL(channelType, baseURL)
+}

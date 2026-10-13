@@ -71,7 +71,7 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 }
 
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.MaxAPIError) {
-	if info == nil || adaptor == nil || !service.SupportsOpenAIResponsesUpstream(info.ChannelType) {
+	if info == nil || adaptor == nil || !service.SupportsOpenAIResponsesUpstreamForBaseURL(info.ChannelType, info.ChannelBaseUrl) {
 		return nil, types.NewError(fmt.Errorf("channel does not use OpenAI Responses upstream"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	chatJSON, err := common.Marshal(request)

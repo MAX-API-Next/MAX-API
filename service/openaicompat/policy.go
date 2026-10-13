@@ -22,6 +22,20 @@ func SupportsOpenAIResponsesUpstream(channelType int) bool {
 	}
 }
 
+// Endpoint aliases can narrow a Responses-capable adaptor's support. Use the
+// same alias registry as its URL resolver, while retaining standard endpoints.
+func SupportsOpenAIResponsesUpstreamForBaseURL(channelType int, baseURL string) bool {
+	if !SupportsOpenAIResponsesUpstream(channelType) {
+		return false
+	}
+	apiType, _ := common.ChannelType2APIType(channelType)
+	if apiType == constant.APITypeZhipuV4 {
+		_, codingPlan := constant.ChannelSpecialBases[baseURL]
+		return !codingPlan
+	}
+	return true
+}
+
 func ShouldChatCompletionsUseResponsesPolicy(policy model_setting.ChatCompletionsToResponsesPolicy, channelID int, channelType int, model string) bool {
 	if !SupportsOpenAIResponsesUpstream(channelType) || !policy.IsChannelEnabled(channelID, channelType) {
 		return false
