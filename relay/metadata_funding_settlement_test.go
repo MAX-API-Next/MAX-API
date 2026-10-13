@@ -13,6 +13,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -248,6 +249,96 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
+func TestChatToResponsesDoneToolFunding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	oldRetry := common.EmptyCompletionRetryEnabled
+	common.EmptyCompletionRetryEnabled = false
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled = oldRetry })
+	for _, kind := range []string{"unnamed", "function", "custom"} {
+		for _, usageKind := range []string{"known", "zero", "missing"} {
+			for _, funding := range streamFundingCases() {
+				t.Run(kind+"/"+usageKind+"/"+funding.name, func(t *testing.T) {
+					var baseline [3]int
+					for _, late := range []bool{false, true} {
+						t.Run(fmt.Sprintf("late_%t", late), func(t *testing.T) {
+							db := setupStreamFundingLedger(t, funding)
+							name := "lookup"
+							if kind == "unnamed" {
+								name = ""
+							}
+							encode := func(value map[string]any) string {
+								data, err := common.Marshal(value)
+								require.NoError(t, err)
+								return string(data)
+							}
+							frames := []string{encode(map[string]any{"id": "chat_done_tool", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{
+								"content": "kept text", "tool_calls": []any{map[string]any{"index": 0, "id": "call_done", "type": "function", "function": map[string]any{"name": name, "arguments": `{"input":"original"}`}}},
+							}}}}), encode(map[string]any{"id": "chat_done_tool", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}})}
+							if late {
+								frames = append(frames, encode(map[string]any{"id": "chat_done_tool", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{
+									"tool_calls": []any{map[string]any{"index": 0, "id": "call_done", "type": "function", "function": map[string]any{"name": "lookup", "arguments": "late-arguments"}}},
+								}}}}))
+							}
+							if usageKind != "missing" {
+								prompt, completion := 4, 2
+								if usageKind == "zero" {
+									prompt, completion = 0, 0
+								}
+								frames = append(frames, encode(map[string]any{"id": "chat_done_tool", "choices": []any{}, "usage": map[string]any{"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}}))
+							}
+							var calls atomic.Int32
+							upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+								calls.Add(1)
+								w.Header().Set("Content-Type", "text/event-stream")
+								_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\ndata: [DONE]\n\n")
+							}))
+							t.Cleanup(upstream.Close)
+							fingerprint := sha256.Sum256([]byte(t.Name()))
+							requestID := fmt.Sprintf("done-tool-%x", fingerprint[:16])
+							c, info, recorder := streamFundingContext(t, "chat_to_responses", requestID, upstream.URL, constant.ChannelTypeAdvancedCustom, funding)
+							if kind == "custom" {
+								info.Request.(*dto.OpenAIResponsesRequest).Tools = []byte(`[{"type":"custom","name":"lookup"}]`)
+							}
+							require.Nil(t, service.PreConsumeBilling(c, 100, info))
+							require.Nil(t, ResponsesHelper(c, info))
+							require.NotContains(t, recorder.Body.String(), "late-arguments")
+							require.Contains(t, recorder.Body.String(), "kept text")
+							var settlement model.BillingSettlement
+							require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+							var effect model.BillingSettlementEffect
+							require.NoError(t, common.UnmarshalJsonStr(settlement.EffectPayload, &effect))
+							actual := [3]int{int(effect.Quota), effect.PromptTokens, effect.CompletionTokens}
+							if !late {
+								baseline = actual
+							} else {
+								require.Equal(t, baseline, actual, "stale tool fragments must not change accepted output billing")
+							}
+							if usageKind == "known" {
+								require.Equal(t, [3]int{6, 4, 2}, actual)
+							}
+							if usageKind == "zero" {
+								require.Equal(t, [3]int{}, actual)
+							}
+							assertStreamFundingBalances(t, db, funding, requestID, actual[0], true, actual[1], actual[2])
+							replayInfo := &relaycommon.RelayInfo{RequestId: requestID, UserId: info.UserId, TokenId: info.TokenId, TokenKey: info.TokenKey, OriginModelName: info.OriginModelName, ForcePreConsume: true, UserSetting: info.UserSetting}
+							replay, replayErr := service.NewBillingSession(c, replayInfo, 100)
+							require.Nil(t, replayErr)
+							require.NoError(t, replay.SettleWithEffect(actual[0], &effect))
+							require.NoError(t, replay.SettleWithEffect(actual[0], &effect))
+							replay.Refund(c)
+							model.ProcessPendingBillingSettlementsOnce()
+							assertStreamFundingBalances(t, db, funding, requestID, actual[0], true, actual[1], actual[2])
+							require.EqualValues(t, 1, calls.Load())
+						})
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestMetadataOnlyCompletedResponsesPreservesReportedUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service.InitHttpClient()
@@ -269,6 +360,94 @@ func TestMetadataOnlyCompletedResponsesPreservesReportedUsage(t *testing.T) {
 			require.Nil(t, ResponsesHelper(c, info), "a real terminal event keeps normal reported-usage billing")
 			assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
 		})
+	}
+}
+
+func TestNativeResponsesTerminalSnapshotFunding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	oldRetry, oldTimes := common.EmptyCompletionRetryEnabled, common.RetryTimes
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled, common.RetryTimes = oldRetry, oldTimes })
+	common.RetryTimes = 1
+	const payload = "terminal snapshot output"
+	for _, event := range []string{"response.completed", "response.incomplete", "response.done"} {
+		for _, kind := range []string{"text", "function_call", "custom_tool_call"} {
+			for _, usageKind := range []string{"known", "zero", "missing"} {
+				for _, retry := range []bool{false, true} {
+					for _, funding := range streamFundingCases() {
+						t.Run(fmt.Sprintf("%s/%s/%s/retry_%t/%s", event, kind, usageKind, retry, funding.name), func(t *testing.T) {
+							common.EmptyCompletionRetryEnabled = retry
+							db := setupStreamFundingLedger(t, funding)
+							output := map[string]any{"type": kind, "id": "item_snapshot", "status": "completed"}
+							estimatedText := payload
+							if kind == "text" {
+								output["type"], output["role"] = "message", "assistant"
+								output["content"] = []any{map[string]any{"type": "output_text", "text": payload}}
+							} else {
+								output["name"], output["call_id"] = "lookup", "call_snapshot"
+								field := "arguments"
+								if kind == "custom_tool_call" {
+									field = "input"
+								}
+								output[field] = payload
+								estimatedText = "lookup" + payload
+							}
+							response := map[string]any{"id": "resp_snapshot", "status": "completed", "output": []any{output}}
+							if event == "response.incomplete" {
+								response["status"] = "incomplete"
+								response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+							}
+							prompt, completion := 4, 2
+							if usageKind == "zero" {
+								prompt, completion = 0, 0
+							}
+							if usageKind != "missing" {
+								response["usage"] = map[string]int{"input_tokens": prompt, "output_tokens": completion, "total_tokens": prompt + completion}
+							} else {
+								prompt, completion = 10, service.CountTextToken(estimatedText, "gpt-test")
+							}
+							frame, err := common.Marshal(map[string]any{"type": event, "response": response})
+							require.NoError(t, err)
+							var calls atomic.Int32
+							upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+								calls.Add(1)
+								w.Header().Set("Content-Type", "text/event-stream")
+								_, _ = fmt.Fprint(w, "data: "+string(frame)+"\n\n")
+							}))
+							t.Cleanup(upstream.Close)
+							fingerprint := sha256.Sum256([]byte(t.Name()))
+							requestID := fmt.Sprintf("terminal-snapshot-%x", fingerprint[:16])
+							c, info, recorder := streamFundingContext(t, "responses_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+							require.Nil(t, service.PreConsumeBilling(c, 100, info))
+							require.Nil(t, ResponsesHelper(c, info), "terminal snapshot output must not enter empty retry")
+							require.True(t, info.HasRecordedChannelFirstResult())
+							require.Contains(t, recorder.Body.String(), payload)
+							require.EqualValues(t, 1, calls.Load())
+							quota := prompt + completion
+							assertStreamFundingBalances(t, db, funding, requestID, quota, true, prompt, completion)
+							var settlement model.BillingSettlement
+							require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+							require.Equal(t, funding.source, settlement.Source)
+							require.EqualValues(t, quota-100, settlement.AppliedFundingDelta)
+							var effect model.BillingSettlementEffect
+							require.NoError(t, common.UnmarshalJsonStr(settlement.EffectPayload, &effect))
+							require.True(t, effect.QuotaIsActual)
+							require.EqualValues(t, quota, effect.Quota)
+							replayInfo := &relaycommon.RelayInfo{RequestId: requestID, UserId: info.UserId, TokenId: info.TokenId, TokenKey: info.TokenKey,
+								OriginModelName: info.OriginModelName, ForcePreConsume: true, UserSetting: info.UserSetting}
+							replay, replayErr := service.NewBillingSession(c, replayInfo, 100)
+							require.Nil(t, replayErr)
+							require.NoError(t, replay.SettleWithEffect(quota, &effect))
+							require.NoError(t, replay.SettleWithEffect(quota, &effect))
+							replay.Refund(c)
+							model.ProcessPendingBillingSettlementsOnce()
+							assertStreamFundingBalances(t, db, funding, requestID, quota, true, prompt, completion)
+						})
+					}
+				}
+			}
+		}
 	}
 }
 

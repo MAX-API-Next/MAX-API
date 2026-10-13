@@ -25,6 +25,7 @@ const maxPendingResponsesStreamEvents = 32
 // arguments twice. This estimate never replaces upstream-reported token counts.
 type responsesOutputEstimate struct {
 	text         strings.Builder
+	textSnapshot string
 	tools        []*responsesToolEstimate
 	toolsByAlias map[string]*responsesToolEstimate
 }
@@ -112,16 +113,31 @@ func (e *responsesOutputEstimate) observe(event dto.ResponsesStreamResponse) {
 		}
 	case "response.completed", "response.incomplete", "response.done":
 		if event.Response != nil {
+			var snapshot strings.Builder
 			for i, item := range event.Response.Output {
 				e.observe(dto.ResponsesStreamResponse{Type: "response.output_item.done", Item: &item, OutputIndex: &i})
+				if item.Type == "message" && (item.Role == "" || item.Role == "assistant") {
+					for _, content := range item.Content {
+						snapshot.WriteString(content.Text)
+						snapshot.WriteString(content.Refusal)
+					}
+				}
 			}
+			e.textSnapshot = snapshot.String()
 		}
 	}
 }
 
 func (e *responsesOutputEstimate) textForTokens() string {
 	var text strings.Builder
-	text.WriteString(e.text.String())
+	deliveredText := e.text.String()
+	// Terminal-only text is delivered in the full snapshot. Matching deltas
+	// are a prefix of that snapshot, so count its extension once. Preserve
+	// delivered deltas when a snapshot is empty or contradicts them.
+	if strings.HasPrefix(e.textSnapshot, deliveredText) {
+		deliveredText = e.textSnapshot
+	}
+	text.WriteString(deliveredText)
 	for _, tool := range e.tools {
 		text.WriteString(tool.name)
 		arguments := tool.deltas.String()

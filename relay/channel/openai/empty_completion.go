@@ -240,7 +240,7 @@ func responsesStreamHasVisibleOutput(streamResp *dto.ResponsesStreamResponse) bo
 			return helper.ResponsesStreamEventHasOutput(*streamResp)
 		}
 		return responsesOutputHasVisiblePayload(streamResp.Item)
-	case "response.completed":
+	case "response.completed", "response.incomplete", "response.done":
 		return responsesHasVisibleOutput(streamResp.Response)
 	default:
 		return false

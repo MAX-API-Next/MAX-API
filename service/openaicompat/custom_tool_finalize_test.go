@@ -46,6 +46,54 @@ func TestFlushChatCompletionsStreamToResponsesOutputDefersTerminalUsage(t *testi
 	}
 }
 
+func TestChatToResponsesDoneToolIgnoresLateDeltas(t *testing.T) {
+	for _, kind := range []string{"unnamed", "function", "custom"} {
+		for _, changedIdentity := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/changed_identity_%t", kind, changedIdentity), func(t *testing.T) {
+				state := NewChatToResponsesStreamState("resp_late", "test")
+				state.CustomToolNames = map[string]struct{}{"lookup": {}}
+				if kind != "custom" {
+					state.CustomToolNames = nil
+				}
+				name := "lookup"
+				if kind == "unnamed" {
+					name = ""
+				}
+				_, err := ChatCompletionsStreamChunkToResponsesEvents(&dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{
+					{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{{Index: common.GetPointer(0), ID: "call_late", Function: dto.FunctionResponse{Name: name, Arguments: `{"input":"original"}`}}}}},
+				}}, state)
+				require.NoError(t, err)
+				_, err = ChatCompletionsStreamChunkToResponsesEvents(&dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{
+					{FinishReason: common.GetPointer("tool_calls")},
+				}}, state)
+				require.NoError(t, err)
+				before, err := common.Marshal(state.finalResponse())
+				require.NoError(t, err)
+				id, lateName := "call_late", "lookup"
+				if changedIdentity {
+					id, lateName = "call_changed", "changed_name"
+				}
+				events, err := ChatCompletionsStreamChunkToResponsesEvents(&dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{
+					{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{{Index: common.GetPointer(0), ID: id, Function: dto.FunctionResponse{Name: lateName, Arguments: "late-arguments"}}}}},
+				}}, state)
+				require.NoError(t, err, "completed tool identity is frozen; stale fragments have no authority")
+				require.Empty(t, events, "no new item or arguments may follow tool done")
+				after, err := common.Marshal(state.finalResponse())
+				require.NoError(t, err)
+				require.JSONEq(t, string(before), string(after))
+				terminal := FinalizeChatCompletionsStreamToResponses(state)
+				require.Len(t, terminal, 1)
+				if kind == "unnamed" {
+					require.Equal(t, "response.incomplete", terminal[0].Type)
+					require.Equal(t, "missing_tool_name", terminal[0].Payload.Response.IncompleteDetails.Reason)
+					require.Empty(t, terminal[0].Payload.Response.Output)
+				}
+				require.Empty(t, FinalizeChatCompletionsStreamToResponses(state))
+			})
+		}
+	}
+}
+
 func TestChatToResponsesUnnamedToolCallCannotComplete(t *testing.T) {
 	for _, finish := range []string{"", "tool_calls", "length"} {
 		for _, flushFirst := range []bool{false, true} {

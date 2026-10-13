@@ -382,6 +382,9 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 		chatIndex = *toolCall.Index
 	}
 	tool := s.toolsByIndex[chatIndex]
+	if tool != nil && tool.Done {
+		return nil, nil
+	}
 	events := make([]ChatToResponsesStreamEvent, 0, 2)
 	if tool == nil {
 		tool = &chatToResponsesStreamTool{

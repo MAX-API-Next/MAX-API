@@ -16,6 +16,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNativeResponsesDeliveredTextSnapshotEstimate(t *testing.T) {
+	for _, kind := range []string{"output_text", "refusal"} {
+		for _, delta := range []string{"", "terminal", "terminal snapshot output", "contradicting delta"} {
+			t.Run(kind+"/delta_"+delta, func(t *testing.T) {
+				var estimate responsesOutputEstimate
+				if delta != "" {
+					estimate.observe(dto.ResponsesStreamResponse{Type: "response." + map[string]string{"output_text": "output_text", "refusal": "refusal"}[kind] + ".delta", Delta: delta})
+				}
+				content := dto.ResponsesOutputContent{Type: kind}
+				if kind == "refusal" {
+					content.Refusal = "terminal snapshot output"
+				} else {
+					content.Text = "terminal snapshot output"
+				}
+				estimate.observe(dto.ResponsesStreamResponse{Type: "response.incomplete", Response: &dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{
+					{Type: "message", Role: "assistant", Content: []dto.ResponsesOutputContent{content}},
+				}}})
+				expected := "terminal snapshot output"
+				if delta == "contradicting delta" {
+					expected = delta
+				}
+				require.Equal(t, expected, estimate.textForTokens(), "snapshots extend matching delivered prefixes once")
+				estimate.observe(dto.ResponsesStreamResponse{Type: "response.done", Response: &dto.OpenAIResponsesResponse{}})
+				require.Equal(t, delta, estimate.textForTokens(), "empty snapshots preserve already delivered deltas")
+			})
+		}
+	}
+}
+
 func TestResponsesToChatLegalTerminalEvents(t *testing.T) {
 	for _, terminal := range []struct {
 		name, event, status, reason, finish string
