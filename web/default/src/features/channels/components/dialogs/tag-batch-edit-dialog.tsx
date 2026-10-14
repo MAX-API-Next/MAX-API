@@ -36,12 +36,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { MultiSelect } from '@/components/multi-select'
-import {
-  getTagModels,
-  editTagChannels,
-  getAllModels,
-  getGroups,
-} from '../../api'
+import { getTagModels, editTagChannels, getGroups } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 import type { TagOperationParams } from '../../types'
 import { useChannels } from '../channels-provider'
@@ -118,7 +113,6 @@ function TagBatchEditDialogContent({
         if (tagModelsResponse.success && tagModelsResponse.data) {
           setModels(tagModelsResponse.data)
         }
-        await getAllModels()
       } catch (error: unknown) {
         if (!cancelled) {
           reportLoadError(error)

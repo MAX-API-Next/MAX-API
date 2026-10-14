@@ -34,6 +34,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
   value: testEnv.dom.window.localStorage,
 })
+
 const { ChannelsProvider, useChannels } = await import('../channels-provider')
 const { TagBatchEditDialog } = await import('./tag-batch-edit-dialog')
 after(() => {
@@ -128,6 +129,63 @@ test('a late response for a previous tag cannot overwrite the current tag', asyn
     assert.deepEqual(requests, ['first', 'second'])
     assert.equal(groupRequests, 1)
   } finally {
+    await view.unmount()
+    client.clear()
+    api.defaults.adapter = originalAdapter
+  }
+})
+
+test('tag models become editable without waiting for an unused all-models request', async () => {
+  const originalAdapter = api.defaults.adapter
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  let auxiliaryRequests = 0
+  let releaseAuxiliary: () => void = () => {}
+  api.defaults.adapter = async (config) => {
+    assert.equal(config.method, 'get')
+    let data: unknown = { success: true, data: [] }
+    if (config.url === '/api/channel/tag/models') {
+      data = { success: true, data: 'tag-only-model' }
+    } else if (config.url === '/api/channel/models') {
+      auxiliaryRequests += 1
+      data = await new Promise((resolve) => {
+        releaseAuxiliary = () => resolve({ success: true, data: [] })
+      })
+    }
+    return { data, config, status: 200, statusText: 'OK', headers: {} }
+  }
+  function Harness() {
+    const { setCurrentTag } = useChannels()
+    return (
+      <>
+        <button onClick={() => setCurrentTag('ready')}>Select ready tag</button>
+        <TagBatchEditDialog open onOpenChange={() => {}} />
+      </>
+    )
+  }
+  const view = await testEnv.render(
+    <QueryClientProvider client={client}>
+      <ChannelsProvider>
+        <Harness />
+      </ChannelsProvider>
+    </QueryClientProvider>
+  )
+  try {
+    await view.click(
+      within(view.container).getByRole('button', { name: 'Select ready tag' })
+    )
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    })
+    const models = within(testEnv.dom.window.document.body).queryByLabelText(
+      'Models'
+    ) as HTMLTextAreaElement | null
+    assert.equal(models !== null, true)
+    assert.equal(models?.value, 'tag-only-model')
+    assert.equal(auxiliaryRequests, 0)
+  } finally {
+    await act(async () => releaseAuxiliary())
     await view.unmount()
     client.clear()
     api.defaults.adapter = originalAdapter
