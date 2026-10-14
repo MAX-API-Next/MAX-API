@@ -110,11 +110,11 @@ export function MultiKeyManageDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentRow?.id])
 
-  const loadKeyStatus = async (
+  async function loadKeyStatus(
     page: number = currentPage,
     size: number = pageSize,
     status: number | null = statusFilter
-  ) => {
+  ) {
     if (!currentRow) return
 
     setIsLoading(true)

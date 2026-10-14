@@ -95,7 +95,10 @@ type SettingsPageFormActionsProps = {
   saveButtonRef?: RefObject<HTMLButtonElement | null>
 }
 
-export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
+export function SettingsPageFormActions({
+  saveButtonRef,
+  ...props
+}: SettingsPageFormActionsProps) {
   const { t } = useTranslation()
   const saveLabel = props.isSaving
     ? (props.savingLabel ?? 'Saving...')
@@ -116,7 +119,7 @@ export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
         </Button>
       )}
       <Button
-        ref={props.saveButtonRef}
+        ref={saveButtonRef}
         type='button'
         size='sm'
         onClick={props.onSave}
