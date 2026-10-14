@@ -662,22 +662,16 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      await waitFor(() => {
-        assert.ok(
-          within(view.container).getByRole('button', {
-            name: 'Enter exact quota',
-          })
-        )
-      })
-      const causeErrorButton = view.container.querySelector(
-        'button'
-      ) as HTMLButtonElement
-      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
-      await view.click(
+      const exactQuotaButton = await waitFor(() =>
         within(view.container).getByRole('button', {
           name: 'Enter exact quota',
         })
       )
+      const causeErrorButton = view.container.querySelector(
+        'button'
+      ) as HTMLButtonElement
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(exactQuotaButton)
 
       const dialog = await waitFor(() => {
         const currentDialog = document.body.querySelector(

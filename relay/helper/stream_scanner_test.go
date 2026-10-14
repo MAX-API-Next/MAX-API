@@ -302,58 +302,91 @@ func TestStreamScannerHandler_ScannerDecoupledFromSlowHandler(t *testing.T) {
 	t.Parallel()
 
 	const numChunks = 50
-	const upstreamDelay = 10 * time.Millisecond
-	const handlerDelay = 20 * time.Millisecond
-
 	pr, pw := io.Pipe()
-	var upstreamBusy atomic.Int64
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	handlerEntered := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	readAhead := make(chan struct{})
+	producerDone := make(chan struct{})
+	done := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		cancel()
+		releaseOnce.Do(func() { close(releaseHandler) })
+		_ = pr.Close()
+		_ = pw.Close()
+		for _, worker := range []<-chan struct{}{producerDone, done} {
+			select {
+			case <-worker:
+			case <-time.After(time.Second):
+				t.Error("stream test worker did not stop after cancellation")
+			}
+		}
+	})
 	go func() {
+		defer close(producerDone)
 		defer pw.Close()
-		feedStart := time.Now()
 		for i := 0; i < numChunks; i++ {
-			fmt.Fprintf(pw, "data: {\"id\":%d}\n", i)
-			time.Sleep(upstreamDelay)
+			if _, err := fmt.Fprintf(pw, "data: {\"id\":%d}\n", i); err != nil {
+				return
+			}
+			if i == 1 {
+				close(readAhead)
+			}
 		}
 		fmt.Fprint(pw, "data: [DONE]\n")
-		upstreamBusy.Store(int64(time.Since(feedStart)))
 	}()
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
 
 	resp := &http.Response{Body: pr}
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	var count atomic.Int64
-	var handlerBusy atomic.Int64
-	start := time.Now()
-	done := make(chan struct{})
+	var received []string
 	go func() {
+		defer close(done)
 		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
-			chunkStart := time.Now()
-			time.Sleep(handlerDelay)
-			handlerBusy.Add(int64(time.Since(chunkStart)))
-			count.Add(1)
+			if count.Add(1) == 1 {
+				close(handlerEntered)
+				select {
+				case <-releaseHandler:
+				case <-ctx.Done():
+					return
+				}
+			}
+			received = append(received, data)
 		})
-		close(done)
 	}()
 
+	// A coupled scanner cannot read the second pipe write while its first
+	// callback is blocked. Synchronize that contract without sleep-speed ratios.
+	for _, phase := range []struct {
+		name string
+		done <-chan struct{}
+	}{{"first handler", handlerEntered}, {"scanner read-ahead", readAhead}} {
+		select {
+		case <-phase.done:
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for %s", phase.name)
+		}
+	}
+	assert.Equal(t, int64(1), count.Load(), "only the blocked first callback can run")
+	releaseOnce.Do(func() { close(releaseHandler) })
 	select {
 	case <-done:
-	case <-time.After(15 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("StreamScannerHandler did not complete in time")
 	}
-
-	elapsed := time.Since(start)
 	assert.Equal(t, int64(numChunks), count.Load())
-
-	// 用实测耗时估算"耦合"基线，避免系统繁忙时 sleep 超时偏移导致名义值失真
-	coupledTime := time.Duration(upstreamBusy.Load() + handlerBusy.Load())
-	t.Logf("elapsed=%v, coupled_estimate=%v", elapsed, coupledTime)
-
-	assert.Less(t, elapsed, coupledTime*85/100,
-		"decoupled elapsed time (%v) should be significantly less than coupled estimate (%v)", elapsed, coupledTime)
+	assert.Equal(t, numChunks, info.ReceivedResponseCount)
+	require.Len(t, received, numChunks)
+	for i, data := range received {
+		assert.Equal(t, fmt.Sprintf("{\"id\":%d}", i), data)
+	}
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 }
 
 func TestStreamScannerHandler_SlowUpstreamFastHandler(t *testing.T) {
