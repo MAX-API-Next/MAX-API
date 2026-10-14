@@ -133,6 +133,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
 
   return (
     <>
+      <button type='button'>Unrelated control</button>
       <button type='button' onClick={() => setFailed(true)}>
         Cause reconciliation error
       </button>
@@ -662,14 +663,29 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      const exactQuotaButton = await waitFor(() =>
-        within(view.container).getByRole('button', {
-          name: 'Enter exact quota',
+      const { exactQuotaButton, causeErrorButton } = await waitFor(() => {
+        // Resolve both controls by role and accessible name in one scan.
+        const names = new Map<Element, string>()
+        const buttons = within(view.container).getAllByRole('button', {
+          name: (name: string, element: Element): boolean => {
+            names.set(element, name)
+            return true
+          },
         })
-      )
-      const causeErrorButton = view.container.querySelector(
-        'button'
-      ) as HTMLButtonElement
+        const namedButton = (name: string): HTMLElement => {
+          const matches = buttons.filter((button) => names.get(button) === name)
+          assert.equal(
+            matches.length,
+            1,
+            `expected one accessible ${name} button`
+          )
+          return matches[0]
+        }
+        return {
+          exactQuotaButton: namedButton('Enter exact quota'),
+          causeErrorButton: namedButton('Cause reconciliation error'),
+        }
+      })
       assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
       await view.click(exactQuotaButton)
 
@@ -742,6 +758,9 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
+      const causeErrorButton = within(view.container).getByRole('button', {
+        name: 'Cause reconciliation error',
+      })
       await view.click(
         await waitFor(() =>
           within(view.container).getByRole('checkbox', {
@@ -779,9 +798,6 @@ describe('SmartOps active alerts', () => {
         return button
       })
 
-      const causeErrorButton = view.container.querySelector(
-        'button'
-      ) as HTMLButtonElement
       assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
       await view.click(causeErrorButton)
       await waitFor(() => {
