@@ -35,7 +35,6 @@ import {
   downsampleUptimeSeries,
   getUptimeAxisDomain,
 } from '@/features/pricing/components/model-details-chart-utils'
-import { ModelPerformanceDetailsContent } from '@/features/pricing/components/model-details-performance'
 import { UptimeSparkline } from '@/features/pricing/components/model-details-uptime-sparkline'
 import type { ModelPerformanceData } from './types'
 
@@ -43,9 +42,40 @@ const testEnv = createReactTestEnvironment()
 let ModelPerformance: typeof import('./model-performance').ModelPerformance
 let ModelPerformanceCollectionStateAlert: typeof import('./model-performance').ModelPerformanceCollectionStateAlert
 let ModelPerformanceDetailGrid: typeof import('./model-performance').ModelPerformanceDetailGrid
+let ModelPerformanceDetailsContent: typeof import('@/features/pricing/components/model-details-performance').ModelPerformanceDetailsContent
+let canvasContextSpy:
+  | { mock: { calls: unknown[][] }; mockRestore: () => void }
+  | undefined
 
 before(async () => {
   await testEnv.setup()
+  // Load the Bun-only test API at runtime; the app typecheck uses Node types.
+  const testRuntimeModule = 'bun:test'
+  const { mock, spyOn } = (await import(testRuntimeModule)) as {
+    mock: {
+      module: (name: string, factory: () => Record<string, unknown>) => void
+    }
+    spyOn: (
+      target: object,
+      method: string
+    ) => { mock: { calls: unknown[][] }; mockRestore: () => void }
+  }
+  canvasContextSpy = spyOn(
+    testEnv.dom.window.HTMLCanvasElement.prototype,
+    'getContext'
+  )
+  // These assertions cover page content and aggregation. Canvas rendering is
+  // outside the JSDOM test seam and belongs in browser integration coverage.
+  mock.module('@visactor/react-vchart', () => ({
+    VChart: () => <div data-testid='performance-chart' />,
+  }))
+  // useChartTheme imports the engine separately from the React component.
+  mock.module('@visactor/vchart', () => ({
+    ThemeManager: { setCurrentTheme: () => undefined },
+  }))
+  ModelPerformanceDetailsContent = (
+    await import('@/features/pricing/components/model-details-performance')
+  ).ModelPerformanceDetailsContent
   const module = await import('./model-performance')
   ModelPerformance = module.ModelPerformance
   ModelPerformanceCollectionStateAlert =
@@ -53,7 +83,10 @@ before(async () => {
   ModelPerformanceDetailGrid = module.ModelPerformanceDetailGrid
 })
 
-after(() => testEnv.teardown())
+after(() => {
+  canvasContextSpy?.mockRestore()
+  testEnv.teardown()
+})
 
 const modelPerformanceData: ModelPerformanceData = {
   storage_mode: 'legacy_log',
@@ -546,6 +579,18 @@ describe('ModelPerformance manual queries', () => {
       assert.ok(detailText.includes('Per-group performance'))
       assert.ok(detailText.includes('Latency trend (last 24h)'))
       assert.ok(detailText.includes('Availability (last 24h)'))
+      await waitFor(() => {
+        assert.equal(
+          view.container.querySelectorAll('[data-testid="performance-chart"]')
+            .length,
+          2
+        )
+      })
+      assert.equal(
+        canvasContextSpy?.mock.calls.length,
+        0,
+        'page-content tests must not initialize the browser Canvas engine'
+      )
       assert.ok(detailText.includes('default'))
       assert.ok(detailText.includes(formatThroughput(48.5)))
     } finally {

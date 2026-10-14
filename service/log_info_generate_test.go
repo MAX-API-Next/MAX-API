@@ -51,6 +51,19 @@ func TestGenerateTextOtherInfoDoesNotMarkSingleChannelAsRetry(t *testing.T) {
 	require.NotContains(t, other, "retry_log")
 }
 
+func TestGenerateTextOtherInfoSeparatesFirstFrameAndResultLatency(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	start := time.Unix(100, 0)
+	info := &relaycommon.RelayInfo{StartTime: start, FirstResponseTime: start.Add(10 * time.Millisecond),
+		FirstResultTime: start.Add(200 * time.Millisecond), ChannelMeta: &relaycommon.ChannelMeta{}}
+	other := GenerateTextOtherInfo(ctx, info, 1, 1, 1, 0, 0, 0, 1)
+	require.Equal(t, float64(10), other["frt"])
+	require.Equal(t, float64(200), other["first_result_ms"])
+	info.FirstResultTime = time.Time{}
+	other = GenerateTextOtherInfo(ctx, info, 1, 1, 1, 0, 0, 0, 1)
+	require.NotContains(t, other, "first_result_ms", "missing output must not be logged as zero latency")
+}
+
 func TestAttachQuotaSaturationToOtherPreservesMalformedAdminInfo(t *testing.T) {
 	clamp := &common.QuotaClamp{
 		Op:       "test",

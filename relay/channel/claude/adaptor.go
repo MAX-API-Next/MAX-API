@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -120,8 +121,11 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	chatRequest, err := service.ResponsesRequestToChatCompletionsRequest(&request)
+	if err != nil {
+		return nil, err
+	}
+	return a.ConvertOpenAIRequest(c, info, chatRequest)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

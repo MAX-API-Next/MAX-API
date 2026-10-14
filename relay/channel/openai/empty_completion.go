@@ -9,6 +9,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -232,9 +233,14 @@ func responsesStreamHasVisibleOutput(streamResp *dto.ResponsesStreamResponse) bo
 		"response.reasoning_summary_text.delta",
 		"response.function_call_arguments.delta":
 		return strings.TrimSpace(streamResp.Delta) != ""
+	case "response.custom_tool_call_input.delta":
+		return strings.TrimSpace(streamResp.Delta) != ""
 	case dto.ResponsesOutputTypeItemAdded, dto.ResponsesOutputTypeItemDone:
+		if streamResp.Item != nil && (streamResp.Item.Type == dto.BuildInCallFileSearchCall || streamResp.Item.Type == dto.BuildInCallWebSearchCall) {
+			return helper.ResponsesStreamEventHasOutput(*streamResp)
+		}
 		return responsesOutputHasVisiblePayload(streamResp.Item)
-	case "response.completed":
+	case "response.completed", "response.incomplete", "response.done":
 		return responsesHasVisibleOutput(streamResp.Response)
 	default:
 		return false
@@ -246,8 +252,10 @@ func responsesOutputHasVisiblePayload(output *dto.ResponsesOutput) bool {
 		return false
 	}
 	switch output.Type {
-	case "function_call", dto.ResponsesOutputTypeImageGenerationCall, dto.BuildInCallWebSearchCall:
+	case "function_call", dto.BuildInCallCustomToolCall, dto.ResponsesOutputTypeImageGenerationCall:
 		return true
+	case dto.BuildInCallWebSearchCall:
+		return isBillableResponsesToolStatus(output.Status)
 	case "message":
 		if output.Role != "" && output.Role != "assistant" {
 			return false

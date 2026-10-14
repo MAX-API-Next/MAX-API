@@ -157,6 +157,38 @@ func TestStreamStatus_IsNormalEnd_NilSafe(t *testing.T) {
 	assert.True(t, s.IsNormalEnd())
 }
 
+func TestStreamStatus_HandlerStopWithErrorIsAbnormal(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+	err := fmt.Errorf("invalid provider frame")
+	s.RecordFatalError(err)
+	s.SetEndReason(StreamEndReasonHandlerStop, err)
+
+	assert.False(t, s.IsNormalEnd())
+	assert.True(t, s.IsAbnormalEnd())
+	assert.Equal(t, err, s.FatalError())
+}
+
+func TestStreamStatus_HandlerErrorSurvivesEOFRace(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+	s.SetEndReason(StreamEndReasonEOF, nil)
+	s.RecordFatalError(fmt.Errorf("handler failed after scanner EOF"))
+
+	assert.False(t, s.IsNormalEnd())
+	assert.True(t, s.IsAbnormalEnd())
+	assert.Contains(t, s.Summary(), "handler failed after scanner EOF")
+}
+
+func TestStreamStatus_HandlerStopWithoutErrorRemainsNormal(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+	s.SetEndReason(StreamEndReasonHandlerStop, nil)
+
+	assert.True(t, s.IsNormalEnd())
+	assert.False(t, s.IsAbnormalEnd())
+}
+
 func TestStreamStatus_Summary(t *testing.T) {
 	t.Parallel()
 

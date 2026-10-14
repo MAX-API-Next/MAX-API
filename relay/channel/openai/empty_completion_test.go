@@ -8,12 +8,52 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
+
+func TestOaiResponsesRetrySuccessRequiresProtocolTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitTokenEncoders()
+	for _, ending := range []string{"eof", "done", "completed", "incomplete"} {
+		t.Run(ending, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			retry := map[string]any{"empty_retry": true, "empty_retry_result": "retrying"}
+			c.Set(string(constant.ContextKeyEmptyCompletionInfo), retry)
+			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIResponses, OriginModelName: "gpt-test", DisablePing: true,
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+			body := "data: " + `{"type":"response.output_text.delta","delta":"visible"}` + "\n\n"
+			terminal := ending == "completed" || ending == "incomplete"
+			if terminal {
+				body += "data: " + `{"type":"response.` + ending + `","response":{"id":"resp_retry","status":"` + ending + `","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}` + "\n\n"
+			} else if ending == "done" {
+				body += "data: [DONE]\n\n"
+			}
+			usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(body))})
+			require.NotNil(t, usage)
+			require.Contains(t, recorder.Body.String(), "visible")
+			if terminal {
+				require.Nil(t, apiErr)
+				require.Equal(t, "success", retry["empty_retry_result"])
+				require.Equal(t, 6, usage.TotalTokens)
+			} else {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.Equal(t, "retrying", retry["empty_retry_result"])
+				require.NotContains(t, retry, "final_usage")
+			}
+		})
+	}
+}
 
 func TestIsEmptyResponsesCompletion(t *testing.T) {
 	tests := []struct {
@@ -88,6 +128,19 @@ func TestIsEmptyResponsesCompletion(t *testing.T) {
 				t.Fatalf("isEmptyResponsesCompletion() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResponsesWebSearchLifecycleRequiresCompletedItem(t *testing.T) {
+	for _, status := range []string{"in_progress", "searching", "failed", "incomplete", "future_status", "completed", ""} {
+		for _, eventType := range []string{dto.ResponsesOutputTypeItemAdded, dto.ResponsesOutputTypeItemDone} {
+			t.Run(eventType+"/"+status, func(t *testing.T) {
+				item := &dto.ResponsesOutput{Type: dto.BuildInCallWebSearchCall, Status: status}
+				expected := eventType == dto.ResponsesOutputTypeItemDone && (status == "completed" || status == "")
+				require.Equal(t, expected, responsesStreamHasVisibleOutput(&dto.ResponsesStreamResponse{Type: eventType, Item: item}))
+				require.Equal(t, status == "completed" || status == "", responsesHasVisibleOutput(&dto.OpenAIResponsesResponse{Output: []dto.ResponsesOutput{*item}}))
+			})
+		}
 	}
 }
 
@@ -258,9 +311,9 @@ func TestOaiResponsesStreamHandlerFlushesImmediatelyWhenEmptyRetryDisabled(t *te
 		},
 	}
 
-	_, err := OaiResponsesStreamHandler(c, info, resp)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	if err == nil || !types.IsSkipRetryError(err) || usage != nil {
+		t.Fatalf("metadata-only EOF must return no billable partial usage and forbid replay: usage=%+v, err=%v", usage, err)
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, "response.created") {
 		t.Fatalf("response body = %q, want forwarded pre-content event", body)
@@ -299,9 +352,9 @@ func TestOaiResponsesStreamHandlerCapsPendingEvents(t *testing.T) {
 		},
 	}
 
-	_, err := OaiResponsesStreamHandler(c, info, resp)
-	if err != nil {
-		t.Fatalf("unexpected error after pending cap forces forwarding: %v", err)
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	if err == nil || !types.IsSkipRetryError(err) || usage != nil {
+		t.Fatalf("flushing pending metadata must not turn an incomplete stream into a billable result: usage=%+v, err=%v", usage, err)
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, "response.created") {
 		t.Fatalf("response body = %q, want forwarded events after cap", body)

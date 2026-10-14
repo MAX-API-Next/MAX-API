@@ -101,6 +101,7 @@ type RelayInfo struct {
 	TokenUnlimited                 bool
 	StartTime                      time.Time
 	FirstResponseTime              time.Time
+	FirstResultTime                time.Time
 	isFirstResponse                bool
 	channelAttemptStartTime        time.Time
 	channelFirstResponseMu         sync.Mutex
@@ -108,6 +109,9 @@ type RelayInfo struct {
 	channelFirstResponseEvaluating bool
 	channelFirstResponseRecorded   atomic.Bool
 	channelFirstResponseSignal     chan struct{}
+	channelFirstResultTracking     bool
+	channelFirstResultRecorded     atomic.Bool
+	channelFirstResultSignal       chan struct{}
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -271,6 +275,11 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.channelAttemptStartTime = time.Now()
 	info.channelFirstResponseRecorded.Store(false)
 	info.channelFirstResponseSignal = make(chan struct{})
+	info.channelFirstResultTracking = false
+	info.channelFirstResultRecorded.Store(false)
+	info.channelFirstResultSignal = nil
+	info.channelFirstResponseEvaluating = false
+	info.channelFirstResponseEvalAt = time.Time{}
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
 		info.ReasoningEffort = ""
 	} else {
@@ -785,7 +794,9 @@ func (info *RelayInfo) setFirstResponseTimeLocked() {
 		return
 	}
 	info.recordChannelHealthObservation("first_response")
-	info.recordChannelHealthSuccess()
+	if !info.channelFirstResultTracking {
+		info.recordChannelHealthSuccess()
+	}
 }
 
 const firstResponseEvaluationGrace = 100 * time.Millisecond
@@ -799,7 +810,7 @@ func (info *RelayInfo) BeginFirstResponseEvaluation() func() {
 		return func() {}
 	}
 	info.channelFirstResponseMu.Lock()
-	if !info.channelFirstResponseRecorded.Load() {
+	if !info.HasRecordedChannelFirstResult() {
 		info.channelFirstResponseEvaluating = true
 		info.channelFirstResponseEvalAt = time.Now()
 	}
@@ -828,9 +839,9 @@ func (info *RelayInfo) FirstResponseDeadlineExpired() bool {
 	return true
 }
 
-// FirstResponseSignal is closed once the current channel attempt has produced
-// a first valid, deliverable result. It is used by the stream watchdog without
-// exposing the internal deduplication state to relay callers.
+// FirstResponseSignal is closed after the first accepted response frame for
+// this attempt. Metadata may close it; strict adapters use FirstResultSignal
+// for their output deadline instead.
 func (info *RelayInfo) FirstResponseSignal() <-chan struct{} {
 	if info == nil {
 		return nil
@@ -991,7 +1002,7 @@ func (info *RelayInfo) RecordChannelTimeout(event string) {
 		if start.IsZero() || threshold <= 0 || observedAt.Sub(start) < time.Duration(threshold)*time.Second {
 			return
 		}
-		if info.IsStream && !info.channelFirstResponseRecorded.Load() {
+		if info.IsStream && !info.HasRecordedChannelFirstResult() {
 			timeoutKind = channelhealth.TimeoutKindStreamingFirstResult
 		} else if !info.IsStream {
 			timeoutKind = channelhealth.TimeoutKindNonStreamingResponse

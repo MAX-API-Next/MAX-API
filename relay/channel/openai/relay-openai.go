@@ -159,7 +159,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	})
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
 	}
 

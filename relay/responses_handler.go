@@ -141,6 +141,15 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *
 
 	usage, maxAPIError := adaptor.DoResponse(c, httpResp, info)
 	if maxAPIError != nil {
+		// Responses streams can deliver billable output before an upstream
+		// cancellation, disconnect, or incomplete terminal event. Reuse the
+		// existing partial settlement path instead of refunding the whole
+		// reservation or claiming a successful request.
+		if partial, ok := usage.(*dto.Usage); ok && partial != nil &&
+			types.IsSkipRetryError(maxAPIError) && info.IsStream &&
+			info.RelayMode == relayconstant.RelayModeResponses {
+			service.PostPartialConsumeQuota(c, info, partial)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError

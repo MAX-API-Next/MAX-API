@@ -6,21 +6,25 @@ import (
 
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 )
 
 // FirstResultTimeoutError converts a stream scanner timeout that happened
-// before any channel response was recorded into the retryable API error used
-// by relay settlement and retry handling. A stream that already delivered a
-// channel response keeps its existing terminal handling.
-func FirstResultTimeoutError(info *relaycommon.RelayInfo) *types.MaxAPIError {
+// before a generation payload into the API error used by relay settlement and
+// retry handling. Even metadata or ping delivery forbids transparent replay.
+func FirstResultTimeoutError(c *gin.Context, info *relaycommon.RelayInfo) *types.MaxAPIError {
 	if info == nil || info.StreamStatus == nil ||
 		info.StreamStatus.EndReason != relaycommon.StreamEndReasonTimeout ||
-		info.HasRecordedChannelFirstResponse() {
+		info.HasRecordedChannelFirstResult() {
 		return nil
 	}
-	return types.NewOpenAIError(
-		errors.New("upstream stream timed out before the first response"),
+	apiErr := types.NewOpenAIError(
+		errors.New("upstream stream timed out before the first result"),
 		types.ErrorCodeChannelResponseTimeExceeded,
 		http.StatusRequestTimeout,
 	)
+	if info.HasRecordedChannelFirstResponse() || (c != nil && c.Writer != nil && c.Writer.Written()) {
+		types.ErrOptionWithSkipRetry()(apiErr)
+	}
+	return apiErr
 }

@@ -36,6 +36,9 @@ type StreamStatus struct {
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
 	ErrorCount int
+
+	fatalMu    sync.Mutex
+	fatalError error
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -67,6 +70,30 @@ func (s *StreamStatus) RecordError(msg string) {
 	}
 }
 
+// RecordFatalError preserves a handler error even when the scanner has
+// already recorded EOF. The scanner and handler run concurrently, so the
+// first transport end reason is not sufficient to classify a fatal callback
+// failure.
+func (s *StreamStatus) RecordFatalError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.fatalMu.Lock()
+	defer s.fatalMu.Unlock()
+	if s.fatalError == nil {
+		s.fatalError = err
+	}
+}
+
+func (s *StreamStatus) FatalError() error {
+	if s == nil {
+		return nil
+	}
+	s.fatalMu.Lock()
+	defer s.fatalMu.Unlock()
+	return s.fatalError
+}
+
 func (s *StreamStatus) HasErrors() bool {
 	if s == nil {
 		return false
@@ -89,9 +116,32 @@ func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true
 	}
-	return s.EndReason == StreamEndReasonDone ||
+	return !s.IsAbnormalEnd() && (s.EndReason == StreamEndReasonDone ||
 		s.EndReason == StreamEndReasonEOF ||
-		s.EndReason == StreamEndReasonHandlerStop
+		s.EndReason == StreamEndReasonHandlerStop)
+}
+
+// IsAbnormalEnd reports transport or handler endings that must not be treated
+// as a successful provider completion. Plain EOF is intentionally excluded:
+// callers still need to verify a protocol terminal event when a provider
+// closes the stream without sending [DONE] or an equivalent event. A fatal
+// handler error remains abnormal even if the scanner won the EOF race.
+func (s *StreamStatus) IsAbnormalEnd() bool {
+	if s == nil {
+		return false
+	}
+	if s.FatalError() != nil {
+		return true
+	}
+	switch s.EndReason {
+	case StreamEndReasonTimeout, StreamEndReasonClientGone,
+		StreamEndReasonScannerErr, StreamEndReasonPanic, StreamEndReasonPingFail:
+		return true
+	case StreamEndReasonHandlerStop:
+		return s.EndError != nil
+	default:
+		return false
+	}
 }
 
 func (s *StreamStatus) Summary() string {
@@ -100,8 +150,12 @@ func (s *StreamStatus) Summary() string {
 	}
 	b := &strings.Builder{}
 	fmt.Fprintf(b, "reason=%s", s.EndReason)
-	if s.EndError != nil {
-		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
+	endError := s.EndError
+	if endError == nil {
+		endError = s.FatalError()
+	}
+	if endError != nil {
+		fmt.Fprintf(b, " end_error=%q", endError.Error())
 	}
 	s.mu.Lock()
 	if s.ErrorCount > 0 {

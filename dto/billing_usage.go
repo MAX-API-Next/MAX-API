@@ -12,9 +12,12 @@ const (
 )
 
 type BillingUsage struct {
-	Source              string               `json:"source,omitempty"`
-	Semantic            string               `json:"semantic,omitempty"`
-	Estimated           bool                 `json:"estimated,omitempty"`
+	Source    string `json:"source,omitempty"`
+	Semantic  string `json:"semantic,omitempty"`
+	Estimated bool   `json:"estimated,omitempty"`
+	// TokenCountsReported distinguishes numeric zero from absent/null counters.
+	// Set only from provider wire fields, never inferred from Go zero values.
+	TokenCountsReported bool                 `json:"token_counts_reported,omitempty"`
 	OpenAIUsage         *Usage               `json:"openai_usage,omitempty"`
 	ClaudeUsage         *ClaudeUsage         `json:"claude_usage,omitempty"`
 	GeminiUsageMetadata *GeminiUsageMetadata `json:"gemini_usage_metadata,omitempty"`
@@ -56,6 +59,23 @@ func NewOpenAIChatBillingUsage(usage *Usage) *BillingUsage {
 
 func NewOpenAIResponsesBillingUsage(usage *Usage) *BillingUsage {
 	return newOpenAIBillingUsage(BillingUsageSourceOAIResponses, usage)
+}
+
+// Reported usage constructors retain an explicit zero pair for settlement.
+func NewReportedOpenAIChatBillingUsage(usage *Usage) *BillingUsage {
+	return newReportedOpenAIBillingUsage(BillingUsageSourceOAIChat, usage)
+}
+
+func NewReportedOpenAIResponsesBillingUsage(usage *Usage) *BillingUsage {
+	return newReportedOpenAIBillingUsage(BillingUsageSourceOAIResponses, usage)
+}
+
+func newReportedOpenAIBillingUsage(source string, usage *Usage) *BillingUsage {
+	if usage == nil {
+		return nil
+	}
+	return &BillingUsage{Source: source, Semantic: BillingUsageSemanticOpenAI,
+		TokenCountsReported: true, OpenAIUsage: cloneOpenAIUsage(usage)}
 }
 
 func newOpenAIBillingUsage(source string, usage *Usage) *BillingUsage {

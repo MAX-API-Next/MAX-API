@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -70,6 +71,9 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 }
 
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.MaxAPIError) {
+	if info == nil || adaptor == nil || !service.SupportsOpenAIResponsesUpstreamForBaseURL(info.ChannelType, info.ChannelBaseUrl) {
+		return nil, types.NewError(fmt.Errorf("channel does not use OpenAI Responses upstream"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
 	chatJSON, err := common.Marshal(request)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -112,6 +116,17 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	// An inconsistent adaptor must fail before HTTP, never send a native
+	// Messages/GenerateContent payload to the hardcoded Responses reply parser.
+	switch converted := convertedRequest.(type) {
+	case dto.OpenAIResponsesRequest:
+	case *dto.OpenAIResponsesRequest:
+		if converted == nil {
+			return nil, types.NewError(fmt.Errorf("nil OpenAI Responses upstream request"), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+	default:
+		return nil, types.NewError(fmt.Errorf("unexpected Responses upstream request type %T", convertedRequest), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
 	convertedRequest, err = filterResponsesRequestFields(convertedRequest, info, adaptor)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -138,7 +153,14 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	var requestBody io.Reader = body
 
 	var httpResp *http.Response
-	resp, err := adaptor.DoRequest(c, info, requestBody)
+	// URL/header selection describes the converted upstream protocol. Restore
+	// the client format before converting the reply or recording settlement.
+	resp, err := func() (any, error) {
+		savedFormat := info.RelayFormat
+		info.RelayFormat = types.RelayFormatOpenAIResponses
+		defer func() { info.RelayFormat = savedFormat }()
+		return adaptor.DoRequest(c, info, requestBody)
+	}()
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
@@ -160,7 +182,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		usage, maxApiErr := openaichannel.OaiResponsesToChatStreamHandler(c, info, httpResp)
 		if maxApiErr != nil {
 			service.ResetStatusCode(maxApiErr, statusCodeMappingStr)
-			return nil, maxApiErr
+			return usage, maxApiErr
 		}
 		return usage, nil
 	}

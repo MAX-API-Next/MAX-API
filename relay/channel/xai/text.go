@@ -66,7 +66,7 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			sr.Error(err)
 		}
 	})
-	if apiErr := helper.FirstResultTimeoutError(info); apiErr != nil {
+	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
 	}
 
