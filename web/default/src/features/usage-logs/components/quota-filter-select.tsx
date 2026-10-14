@@ -26,17 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  QUOTA_FILTER_ALL_VALUE,
-  QUOTA_FILTER_VALUES,
-  QUOTA_FILTERS,
-} from '../constants'
-
-export type QuotaFilterValue = (typeof QUOTA_FILTER_VALUES)[number]
-
-export function isQuotaFilterValue(value: string): value is QuotaFilterValue {
-  return (QUOTA_FILTER_VALUES as readonly string[]).includes(value)
-}
+import { QUOTA_FILTER_ALL_VALUE, QUOTA_FILTERS } from '../constants'
+import { isQuotaFilterValue, type QuotaFilterValue } from '../lib/quota-filter'
 
 interface QuotaFilterSelectProps {
   value: QuotaFilterValue

@@ -109,7 +109,6 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
   useEffect(() => {
     const prices = parseInitialPrices(defaultValue)
     const initialRows = objectToRows(prices)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRows(initialRows)
     setJsonText(JSON.stringify(prices, null, 2))
     setJsonError('')

@@ -123,6 +123,31 @@ function getInputValueByLabel(container: HTMLElement, labelText: string) {
   return input.value
 }
 
+function getInputsByLabels(
+  container: HTMLElement,
+  labels: readonly string[]
+): Map<string, HTMLInputElement[]> {
+  const expected = new Set(labels)
+  const matches = new Map<string, Set<HTMLInputElement>>()
+  const returned = new Set(
+    within(container).getAllByLabelText((name, element) => {
+      if (!expected.has(name)) return false
+      if (element instanceof dom.window.HTMLInputElement) {
+        const fields = matches.get(name) ?? new Set<HTMLInputElement>()
+        fields.add(element)
+        matches.set(name, fields)
+      }
+      return true
+    })
+  )
+  return new Map(
+    labels.map((label): [string, HTMLInputElement[]] => [
+      label,
+      [...(matches.get(label) ?? [])].filter((field) => returned.has(field)),
+    ])
+  )
+}
+
 const modelA: ModelRatioData = {
   name: 'model-a',
   billingMode: 'tiered_expr',
@@ -531,9 +556,14 @@ describe('optional zero prices in the actual editor', () => {
           />
         )
       }
+      let modePicker: HTMLElement | undefined
       const selectMode = async (name: string): Promise<void> => {
+        assert.ok(
+          modePicker?.isConnected,
+          'editor mode control must stay mounted'
+        )
         await act(async () => {
-          fireEvent.keyDown(within(container).getAllByRole('combobox')[0], {
+          fireEvent.keyDown(modePicker!, {
             key: 'ArrowDown',
           })
         })
@@ -554,6 +584,9 @@ describe('optional zero prices in the actual editor', () => {
             </I18nextProvider>
           )
         )
+        modePicker = within(container).getByRole('combobox', {
+          name: 'Editor mode',
+        })
         assert.equal(saved, expected)
         if (supported) await selectMode('Expression editor')
         await selectMode('Visual editor')
@@ -742,8 +775,12 @@ describe('optional zero prices in the actual editor', () => {
             'len < 200000 ? tier("base", p * 3 + c * 15) : tier("tier_2", p * 3 + c * 15)'
           )
         }
+        const fields = getInputsByLabels(
+          container,
+          BILLING_EXTRA_VARS.map((variable) => variable.label)
+        )
         for (const variable of BILLING_EXTRA_VARS) {
-          const inputs = within(container).getAllByLabelText(variable.label)
+          const inputs = fields.get(variable.label) ?? []
           assert.equal(inputs.length, 2)
           for (const input of inputs) {
             assert.equal(
