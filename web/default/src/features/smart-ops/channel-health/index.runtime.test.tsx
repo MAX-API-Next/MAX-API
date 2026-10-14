@@ -27,6 +27,8 @@ import { api } from '@/lib/api'
 const errorKey = 'We could not load the channel health policy.'
 const frenchError = 'Impossible de charger la politique des canaux.'
 const testEnv = createReactTestEnvironment({
+  lng: 'fr',
+  fallbackLng: 'en',
   resources: {
     en: { translation: { [errorKey]: errorKey } },
     fr: { translation: { [errorKey]: frenchError } },
@@ -63,14 +65,16 @@ test('policy errors translate without changing the data cache or repeating the p
   try {
     await waitFor(() => {
       assert.equal(client.getQueryState(queryKey)?.status, 'error')
-      assert.ok(view.container.textContent?.includes(errorKey))
+      assert.ok(view.container.textContent?.includes(frenchError))
     })
     const cachedError = client.getQueryState(queryKey)?.error
+    assert.ok(cachedError instanceof Error)
+    assert.equal(cachedError.message, errorKey)
     await act(async () => {
-      await testEnv.i18n.changeLanguage('fr')
+      await testEnv.i18n.changeLanguage('en')
     })
     await waitFor(() => {
-      assert.ok(view.container.textContent?.includes(frenchError))
+      assert.ok(view.container.textContent?.includes(errorKey))
     })
     assert.equal(client.getQueryState(queryKey)?.error, cachedError)
     assert.equal(policyRequests, 1)
