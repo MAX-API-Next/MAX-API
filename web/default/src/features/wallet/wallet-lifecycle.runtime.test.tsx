@@ -21,6 +21,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
+import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
 import {
   subscriptionPlanSchema,
@@ -137,6 +138,48 @@ test('wallet custom zero stays explicit instead of being initialized again', asy
         { target: { value: '0' } }
       )
     })
+    await act(async () => {
+      fireEvent.change(
+        fields.getByRole('spinbutton', { name: 'Custom Amount' }),
+        { target: { value: '05' } }
+      )
+    })
+    assert.equal(
+      (
+        fields.getByRole('spinbutton', {
+          name: 'Custom Amount',
+        }) as HTMLInputElement
+      ).value,
+      '05'
+    )
+    await act(async () => {
+      fireEvent.change(
+        fields.getByRole('spinbutton', { name: 'Custom Amount' }),
+        { target: { value: '1.5' } }
+      )
+    })
+    assert.equal(
+      (
+        fields.getByRole('spinbutton', {
+          name: 'Custom Amount',
+        }) as HTMLInputElement
+      ).value,
+      '1.5'
+    )
+    await act(async () => {
+      fireEvent.change(
+        fields.getByRole('spinbutton', { name: 'Custom Amount' }),
+        { target: { value: '' } }
+      )
+    })
+    assert.equal(
+      (
+        fields.getByRole('spinbutton', {
+          name: 'Custom Amount',
+        }) as HTMLInputElement
+      ).value,
+      ''
+    )
     await view.click(fields.getByText('Render wallet again'))
     assert.equal(
       (
@@ -144,14 +187,100 @@ test('wallet custom zero stays explicit instead of being initialized again', asy
           name: 'Custom Amount',
         }) as HTMLInputElement
       ).value,
-      '0'
+      ''
     )
-    assert.deepEqual(quotes, [10, 0])
+    assert.deepEqual(quotes, [10, 0, 5, 1, 0])
     assert.deepEqual(mutations, [])
   } finally {
     await view.unmount()
     client.clear()
     api.defaults.adapter = adapter
+  }
+})
+
+test('subscription reads ignore stale responses after the auth session changes', async () => {
+  const adapter = api.defaults.adapter
+  const previousUser = useAuthStore.getState().auth.user
+  const pending: Array<() => void> = []
+  const subscription = (id: number) => ({
+    id,
+    user_id: id,
+    plan_id: 1,
+    status: 'active',
+    start_time: 1710000000,
+    end_time: 1910000000,
+    amount_total: 100,
+    amount_used: 0,
+  })
+  try {
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 1, username: 'first-user', role: 1 })
+    api.defaults.adapter = async (config) => {
+      assert.equal(config.method, 'get')
+      if (config.url === '/api/subscription/plans') {
+        return {
+          config,
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          data: { success: true, data: [] },
+        }
+      }
+      if (config.url === '/api/subscription/self') {
+        const index = pending.length
+        return new Promise((resolve) => {
+          pending.push(() =>
+            resolve({
+              config,
+              status: 200,
+              statusText: 'OK',
+              headers: {},
+              data: {
+                success: true,
+                data: {
+                  billing_preference:
+                    index === 0 ? 'wallet_first' : 'wallet_only',
+                  subscriptions: [
+                    { subscription: subscription(index === 0 ? 1 : 2) },
+                  ],
+                  all_subscriptions: [
+                    { subscription: subscription(index === 0 ? 1 : 2) },
+                  ],
+                },
+              },
+            })
+          )
+        })
+      }
+      throw new Error(`Unexpected ${config.url}`)
+    }
+    const view = await env.render(
+      <SubscriptionPlansCard topupInfo={null} userQuota={0} />
+    )
+    try {
+      await waitFor(() => assert.equal(pending.length, 1))
+      await act(async () => {
+        useAuthStore
+          .getState()
+          .auth.setUser({ id: 2, username: 'second-user', role: 1 })
+      })
+      await waitFor(() => assert.equal(pending.length, 2))
+      await act(async () => pending[1]())
+      await waitFor(() =>
+        assert.match(view.container.textContent || '', /Subscription #2/)
+      )
+      await act(async () => pending[0]())
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      assert.match(view.container.textContent || '', /Subscription #2/)
+      assert.doesNotMatch(view.container.textContent || '', /Subscription #1/)
+    } finally {
+      pending.forEach((release) => release())
+      await view.unmount()
+    }
+  } finally {
+    api.defaults.adapter = adapter
+    useAuthStore.getState().auth.setUser(previousUser)
   }
 })
 
