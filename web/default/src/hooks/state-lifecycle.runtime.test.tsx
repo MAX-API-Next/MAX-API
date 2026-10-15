@@ -19,12 +19,12 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { act, useState } from 'react'
 import { AxiosError } from 'axios'
 import { createReactTestEnvironment } from '@/test/react'
-import { within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
 import { useThemeRadiusPx } from '@/lib/theme-radius'
+import type { UserProfile } from '@/features/profile/types'
 import { useMinimumLoadingTime } from './use-minimum-loading-time'
 import { useIsMobile } from './use-mobile'
 import { useReadScope } from './use-read-scope'
@@ -32,8 +32,140 @@ import { useResettableState } from './use-resettable-state'
 
 const env = createReactTestEnvironment()
 await env.setup()
+const { fireEvent, within } = await import('@testing-library/react/pure')
 const { useProfile } = await import('@/features/profile/hooks/use-profile')
+const { NotificationTab } =
+  await import('@/features/profile/components/tabs/notification-tab')
 after(() => env.teardown())
+
+test('notification draft survives an unchanged profile refresh and resets for saved settings or account', async () => {
+  const adapter = api.defaults.adapter
+  const writes: Array<{
+    quota_warning_threshold?: number
+    record_ip_log?: boolean
+  }> = []
+  let updated = 0
+  const initial: UserProfile = {
+    id: 1,
+    username: 'notification-user',
+    display_name: 'Notification user',
+    role: 1,
+    group: 'default',
+    quota: 0,
+    used_quota: 0,
+    request_count: 0,
+    status: 1,
+    aff_count: 0,
+    aff_quota: 0,
+    aff_history_quota: 0,
+    created_time: 0,
+    setting: JSON.stringify({
+      notify_type: 'email',
+      quota_warning_threshold: 100,
+      record_ip_log: false,
+    }),
+  }
+  api.defaults.adapter = async (config) => {
+    assert.equal(config.method, 'put')
+    assert.equal(config.url, '/api/user/setting')
+    writes.push(JSON.parse(config.data))
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true },
+    }
+  }
+  function Harness() {
+    const [profile, setProfile] = useState(initial)
+    return (
+      <>
+        <button
+          onClick={() =>
+            setProfile((previous) => ({
+              ...previous,
+              quota: previous.quota + 1,
+            }))
+          }
+        >
+          Refresh same settings
+        </button>
+        <button
+          onClick={() =>
+            setProfile((previous) => ({
+              ...previous,
+              setting: JSON.stringify({
+                notify_type: 'email',
+                quota_warning_threshold: 10,
+                record_ip_log: false,
+              }),
+            }))
+          }
+        >
+          Change saved settings
+        </button>
+        <button
+          onClick={() => setProfile((previous) => ({ ...previous, id: 2 }))}
+        >
+          Switch account
+        </button>
+        <button
+          onClick={() =>
+            setProfile((previous) => ({
+              ...previous,
+              setting: JSON.stringify({
+                notify_type: 'email',
+                quota_warning_threshold: 0,
+                record_ip_log: false,
+              }),
+            }))
+          }
+        >
+          Save explicit zero
+        </button>
+        <NotificationTab
+          profile={profile}
+          onUpdate={() => {
+            updated += 1
+          }}
+        />
+      </>
+    )
+  }
+  const view = await env.render(<Harness />)
+  const fields = within(view.container)
+  const threshold = () =>
+    fields.getByRole('spinbutton', {
+      name: 'Quota Warning Threshold',
+    }) as HTMLInputElement
+  const editZero = () =>
+    act(async () => {
+      fireEvent.change(threshold(), { target: { value: '0' } })
+    })
+  try {
+    assert.equal(threshold().value, '100')
+    await editZero()
+    assert.equal(threshold().value, '0')
+    await view.click(fields.getByText('Refresh same settings'))
+    assert.equal(threshold().value, '0')
+    await view.click(fields.getByText('Change saved settings'))
+    assert.equal(threshold().value, '10')
+    await editZero()
+    await view.click(fields.getByText('Switch account'))
+    assert.equal(threshold().value, '10')
+    await view.click(fields.getByText('Save explicit zero'))
+    assert.equal(threshold().value, '0')
+    await view.click(fields.getByRole('button', { name: 'Save Settings' }))
+    assert.equal(writes.length, 1)
+    assert.equal(writes[0].quota_warning_threshold, 0)
+    assert.equal(writes[0].record_ip_log, false)
+    assert.equal(updated, 1)
+  } finally {
+    await view.unmount()
+    api.defaults.adapter = adapter
+  }
+})
 
 test('failed settings writes do not log credential-bearing request bodies or retry', async () => {
   const adapter = api.defaults.adapter

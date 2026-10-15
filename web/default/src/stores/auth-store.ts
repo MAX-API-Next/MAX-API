@@ -68,14 +68,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
       set((state) => {
         const previous = state.auth.user
         const identityChanged =
-          !user ||
-          !previous ||
-          user.id !== previous?.id ||
-          user.role !== previous.role ||
-          user.status !== previous.status ||
-          user.group !== previous.group ||
-          JSON.stringify(user.permissions ?? null) !==
-            JSON.stringify(previous.permissions ?? null)
+          user === null || previous === null
+            ? user !== previous
+            : user.id !== previous.id ||
+              user.role !== previous.role ||
+              user.status !== previous.status ||
+              user.group !== previous.group ||
+              JSON.stringify(user.permissions ?? null) !==
+                JSON.stringify(previous.permissions ?? null)
         return {
           ...state,
           sessionRevision: state.sessionRevision + (identityChanged ? 1 : 0),

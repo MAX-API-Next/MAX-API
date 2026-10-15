@@ -25,6 +25,45 @@ import { appSessionVerifier } from '@/features/auth/lib/app-session-verifier'
 import { api } from './api'
 import { handleQueryAuthenticationError } from './auth-errors'
 
+test('anonymous no-op assignment preserves a pending GET while explicit reset invalidates it', async () => {
+  const adapter = api.defaults.adapter,
+    user = useAuthStore.getState().auth.user
+  const releases: Array<() => void> = [],
+    calls: Array<Promise<unknown>> = []
+  let transports = 0
+  api.defaults.adapter = async (config) => {
+    transports += 1
+    await new Promise<void>((resolve) => releases.push(resolve))
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true },
+    }
+  }
+  try {
+    useAuthStore.getState().auth.reset()
+    const revision = useAuthStore.getState().sessionRevision
+    const first = api.get('/test/anonymous-no-op')
+    calls.push(first)
+    useAuthStore.getState().auth.setUser(null)
+    assert.equal(useAuthStore.getState().sessionRevision, revision)
+    assert.equal(api.get('/test/anonymous-no-op'), first)
+    useAuthStore.getState().auth.reset()
+    assert.equal(useAuthStore.getState().sessionRevision, revision + 1)
+    const next = api.get('/test/anonymous-no-op')
+    calls.push(next)
+    assert.notEqual(next, first)
+    assert.equal(transports, 2)
+  } finally {
+    releases.forEach((resolve) => resolve())
+    await Promise.allSettled(calls)
+    api.defaults.adapter = adapter
+    useAuthStore.getState().auth.setUser(user)
+  }
+})
+
 test('GET dedup stays within a login session, including same-user logout and login', async () => {
   const adapter = api.defaults.adapter
   const user = useAuthStore.getState().auth.user
