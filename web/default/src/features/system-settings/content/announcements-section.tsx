@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -24,6 +24,7 @@ import { Plus, Edit, Trash2, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import dayjs from '@/lib/dayjs'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -144,8 +145,20 @@ export function AnnouncementsSection({
 }: AnnouncementsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const [announcements, setAnnouncements] = useState<Announcement[]>([])
-  const [isEnabled, setIsEnabled] = useState(enabled)
+  const [announcements, setAnnouncements] = useResettableState<Announcement[]>(
+    () => {
+      try {
+        const parsed = JSON.parse(data || '[]')
+        return Array.isArray(parsed)
+          ? parsed.map((item, index) => ({ ...item, id: item.id || index + 1 }))
+          : []
+      } catch {
+        return []
+      }
+    },
+    data
+  )
+  const [isEnabled, setIsEnabled] = useResettableState(enabled, enabled)
   const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showDialog, setShowDialog] = useState(false)
@@ -163,26 +176,6 @@ export function AnnouncementsSection({
       extra: '',
     },
   })
-
-  useEffect(() => {
-    try {
-      const parsed = JSON.parse(data || '[]')
-      if (Array.isArray(parsed)) {
-        setAnnouncements(
-          parsed.map((item, idx) => ({
-            ...item,
-            id: item.id || idx + 1,
-          }))
-        )
-      }
-    } catch {
-      setAnnouncements([])
-    }
-  }, [data])
-
-  useEffect(() => {
-    setIsEnabled(enabled)
-  }, [enabled])
 
   const handleToggleEnabled = async (checked: boolean) => {
     try {

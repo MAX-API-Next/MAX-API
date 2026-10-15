@@ -1,0 +1,428 @@
+/*
+Copyright (C) 2023-2026 MAX-API-Next
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
+*/
+import { act, useState } from 'react'
+import { AxiosError } from 'axios'
+import { createReactTestEnvironment } from '@/test/react'
+import { within } from '@testing-library/react'
+import assert from 'node:assert/strict'
+import { after, test } from 'node:test'
+import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
+import { useThemeRadiusPx } from '@/lib/theme-radius'
+import { useMinimumLoadingTime } from './use-minimum-loading-time'
+import { useIsMobile } from './use-mobile'
+import { useReadScope } from './use-read-scope'
+import { useResettableState } from './use-resettable-state'
+
+const env = createReactTestEnvironment()
+await env.setup()
+const { useProfile } = await import('@/features/profile/hooks/use-profile')
+after(() => env.teardown())
+
+test('failed settings writes do not log credential-bearing request bodies or retry', async () => {
+  const adapter = api.defaults.adapter
+  const originalLog = Object.getOwnPropertyDescriptor(console, 'error')!
+  const logs: unknown[][] = []
+  const marker = 'synthetic-private-marker'
+  let writes = 0
+  api.defaults.adapter = async (config) => {
+    if (config.method === 'get')
+      return {
+        config,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data: {
+          success: true,
+          data: { id: 1, username: 'logging-profile', role: 1 },
+        },
+      }
+    writes += 1
+    throw new AxiosError(
+      'Synthetic update failure',
+      'ERR_BAD_RESPONSE',
+      config,
+      undefined,
+      { config, status: 500, statusText: 'Error', headers: {}, data: {} }
+    )
+  }
+  Object.defineProperty(console, 'error', {
+    ...originalLog,
+    value: (...args: unknown[]) => logs.push(args),
+  })
+  function Probe() {
+    const { updateSettings } = useProfile()
+    const [result, setResult] = useState('pending')
+    return (
+      <>
+        <output>{result}</output>
+        <button
+          onClick={async () =>
+            setResult(String(await updateSettings({ webhook_secret: marker })))
+          }
+        >
+          Save private setting
+        </button>
+      </>
+    )
+  }
+  const view = await env.render(<Probe />)
+  try {
+    await view.click(within(view.container).getByText('Save private setting'))
+    assert.equal(
+      within(view.container).getByRole('status').textContent,
+      'false'
+    )
+    assert.equal(writes, 1)
+    assert.ok(logs.length > 0)
+    assert.equal(JSON.stringify(logs).includes(marker), false)
+  } finally {
+    await view.unmount()
+    Object.defineProperty(console, 'error', originalLog)
+    api.defaults.adapter = adapter
+  }
+})
+
+test('a silent refresh can finish a visible profile load without leaving its spinner stuck', async () => {
+  const adapter = api.defaults.adapter
+  let release!: () => void
+  let requests = 0
+  api.defaults.adapter = async (config) => {
+    requests += 1
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: {
+        success: true,
+        data: { id: 1, username: 'profile-ready', role: 1 },
+      },
+    }
+  }
+  function Probe() {
+    const { loading, profile, refreshProfile } = useProfile()
+    return (
+      <>
+        <output aria-label='Loading'>{String(loading)}</output>
+        <output aria-label='Profile'>{profile?.username || '-'}</output>
+        <button onClick={() => void refreshProfile()}>Silent refresh</button>
+      </>
+    )
+  }
+  const view = await env.render(<Probe />)
+  const fields = within(view.container)
+  try {
+    assert.equal(
+      fields.getByRole('status', { name: 'Loading' }).textContent,
+      'true'
+    )
+    await view.click(fields.getByText('Silent refresh'))
+    await act(async () => release())
+    assert.equal(
+      fields.getByRole('status', { name: 'Loading' }).textContent,
+      'false'
+    )
+    assert.equal(
+      fields.getByRole('status', { name: 'Profile' }).textContent,
+      'profile-ready'
+    )
+    assert.equal(requests, 1)
+  } finally {
+    release?.()
+    await view.unmount()
+    api.defaults.adapter = adapter
+  }
+})
+
+test('drafts keep local edits on rerender and reset explicit zero and false with their source', async () => {
+  const oldSetters: Array<
+    (value: { count: number; enabled: boolean }) => void
+  > = []
+  function Harness() {
+    const [source, setSource] = useState(1)
+    const [, setRevision] = useState(0)
+    const [draft, setDraft] = useResettableState(
+      { count: 0, enabled: false },
+      source
+    )
+    return (
+      <>
+        <output>{JSON.stringify(draft)}</output>
+        <button
+          onClick={() => {
+            oldSetters.push(setDraft)
+            setDraft({ count: 7, enabled: true })
+          }}
+        >
+          Edit
+        </button>
+        <button onClick={() => setRevision((value) => value + 1)}>
+          Render again
+        </button>
+        <button onClick={() => setSource((value) => value + 1)}>
+          Change source
+        </button>
+        <button onClick={() => setSource(1)}>Reuse first source</button>
+      </>
+    )
+  }
+  const view = await env.render(<Harness />)
+  const fields = within(view.container)
+  try {
+    await view.click(fields.getByText('Edit'))
+    await view.click(fields.getByText('Render again'))
+    assert.equal(
+      fields.getByRole('status').textContent,
+      '{"count":7,"enabled":true}'
+    )
+    await view.click(fields.getByText('Change source'))
+    assert.equal(
+      fields.getByRole('status').textContent,
+      '{"count":0,"enabled":false}'
+    )
+    await view.click(fields.getByText('Reuse first source'))
+    await act(async () => oldSetters[0]({ count: 99, enabled: true }))
+    assert.equal(
+      fields.getByRole('status').textContent,
+      '{"count":0,"enabled":false}'
+    )
+  } finally {
+    await view.unmount()
+  }
+})
+
+test('read scopes reject older requests, changed entities, sessions and unmounted results', async () => {
+  const previousUser = useAuthStore.getState().auth.user
+  const reads: Array<() => boolean> = []
+  const starts: Array<() => () => boolean> = []
+  function Harness() {
+    const [key, setKey] = useState(1)
+    const begin = useReadScope(key)
+    return (
+      <>
+        <button
+          onClick={() => {
+            starts.push(begin)
+            reads.push(begin())
+          }}
+        >
+          Read
+        </button>
+        <button onClick={() => setKey((value) => value + 1)}>Next</button>
+        <button onClick={() => setKey(1)}>First again</button>
+      </>
+    )
+  }
+  const view = await env.render(<Harness />)
+  const fields = within(view.container)
+  try {
+    await view.click(fields.getByText('Read'))
+    await view.click(fields.getByText('Read'))
+    assert.equal(reads[0](), false)
+    assert.equal(reads[1](), true)
+    await view.click(fields.getByText('Next'))
+    assert.equal(reads[1](), false)
+    await view.click(fields.getByText('Read'))
+    assert.equal(reads[2](), true)
+    assert.equal(starts[0]()(), false)
+    assert.equal(reads[2](), true)
+    await view.click(fields.getByText('First again'))
+    await view.click(fields.getByText('Read'))
+    assert.equal(starts[0]()(), false)
+    assert.equal(reads[3](), true)
+    await act(async () => useAuthStore.getState().auth.reset())
+    assert.equal(reads[3](), false)
+    await view.click(fields.getByText('Read'))
+    await view.unmount()
+    assert.equal(reads[4](), false)
+  } finally {
+    useAuthStore.getState().auth.setUser(previousUser)
+  }
+})
+
+test('mobile snapshot starts at the current width and unsubscribes on unmount', async () => {
+  const original = env.dom.window.matchMedia
+  const width = Object.getOwnPropertyDescriptor(env.dom.window, 'innerWidth')
+  const listeners = new Set<() => void>()
+  let currentWidth = 500
+  Object.defineProperty(env.dom.window, 'innerWidth', {
+    configurable: true,
+    get: () => currentWidth,
+  })
+  Object.defineProperty(env.dom.window, 'matchMedia', {
+    configurable: true,
+    value: () => ({
+      addEventListener: (_event: string, listener: () => void) =>
+        listeners.add(listener),
+      removeEventListener: (_event: string, listener: () => void) =>
+        listeners.delete(listener),
+    }),
+  })
+  function Probe() {
+    return <output>{String(useIsMobile())}</output>
+  }
+  const view = await env.render(<Probe />)
+  try {
+    assert.equal(view.container.textContent, 'true')
+    await act(async () => {
+      currentWidth = 900
+      listeners.forEach((notify) => notify())
+    })
+    assert.equal(view.container.textContent, 'false')
+    await view.unmount()
+    assert.equal(listeners.size, 0)
+  } finally {
+    Object.defineProperty(env.dom.window, 'matchMedia', {
+      configurable: true,
+      value: original,
+    })
+    if (width) Object.defineProperty(env.dom.window, 'innerWidth', width)
+  }
+})
+
+test('minimum loading lasts for the current cycle and old timers cannot end a newer cycle', async () => {
+  const descriptors = new Map(
+    ['setTimeout', 'clearTimeout'].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key)!,
+    ])
+  )
+  const originalNow = Date.now
+  const timers = new Map<number, { at: number; run: () => void }>()
+  let now = 0,
+    nextId = 0
+  Date.now = () => now
+  Object.defineProperty(globalThis, 'setTimeout', {
+    configurable: true,
+    value: (run: () => void, delay = 0) => {
+      const id = ++nextId
+      timers.set(id, { at: now + delay, run })
+      return id
+    },
+  })
+  Object.defineProperty(globalThis, 'clearTimeout', {
+    configurable: true,
+    value: (id: number) => timers.delete(id),
+  })
+  const advance = async (milliseconds: number) =>
+    act(async () => {
+      now += milliseconds
+      for (const [id, timer] of [...timers])
+        if (timer.at <= now) {
+          timers.delete(id)
+          timer.run()
+        }
+    })
+  function Harness() {
+    const [loading, setLoading] = useState(false)
+    const visible = useMinimumLoadingTime(loading, 100)
+    return (
+      <>
+        <output>{String(visible)}</output>
+        <button onClick={() => setLoading(true)}>Start</button>
+        <button onClick={() => setLoading(false)}>Stop</button>
+      </>
+    )
+  }
+  const view = await env.render(<Harness />)
+  const fields = within(view.container)
+  const visible = () => fields.getByRole('status').textContent
+  try {
+    assert.equal(visible(), 'false')
+    await view.click(fields.getByText('Start'))
+    await advance(40)
+    await view.click(fields.getByText('Stop'))
+    assert.equal(visible(), 'true')
+    await advance(60)
+    assert.equal(visible(), 'false')
+    await view.click(fields.getByText('Start'))
+    await advance(100)
+    assert.equal(visible(), 'true')
+    await view.click(fields.getByText('Stop'))
+    assert.equal(visible(), 'false')
+    await view.click(fields.getByText('Start'))
+    await advance(20)
+    await view.click(fields.getByText('Stop'))
+    await view.click(fields.getByText('Start'))
+    await view.click(fields.getByText('Stop'))
+    await advance(80)
+    assert.equal(visible(), 'true')
+    await advance(20)
+    assert.equal(visible(), 'false')
+  } finally {
+    await view.unmount()
+    assert.equal(timers.size, 0)
+    Date.now = originalNow
+    for (const [key, descriptor] of descriptors)
+      Object.defineProperty(globalThis, key, descriptor)
+  }
+})
+
+test('theme radius follows DOM changes and a refresh key without leaving resize listeners', async () => {
+  const computed = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'getComputedStyle'
+  )!
+  let radius = 12,
+    measurements = 0
+  Object.defineProperty(globalThis, 'getComputedStyle', {
+    configurable: true,
+    value: () => {
+      measurements += 1
+      return { borderTopLeftRadius: `${radius}px` }
+    },
+  })
+  function Harness() {
+    const [revision, setRevision] = useState(0)
+    const value = useThemeRadiusPx('--radius-md', String(revision))
+    return (
+      <>
+        <output>{String(value)}</output>
+        <button onClick={() => setRevision((value) => value + 1)}>
+          Refresh
+        </button>
+      </>
+    )
+  }
+  const view = await env.render(<Harness />)
+  try {
+    assert.equal(within(view.container).getByRole('status').textContent, '12')
+    await act(async () => {
+      radius = 24
+      env.dom.window.document.documentElement.setAttribute(
+        'data-theme',
+        'test-dark'
+      )
+    })
+    assert.equal(within(view.container).getByRole('status').textContent, '24')
+    radius = 36
+    await view.click(within(view.container).getByText('Refresh'))
+    assert.equal(within(view.container).getByRole('status').textContent, '36')
+    await view.unmount()
+    const before = measurements
+    env.dom.window.dispatchEvent(new env.dom.window.Event('resize'))
+    assert.equal(measurements, before)
+  } finally {
+    Object.defineProperty(globalThis, 'getComputedStyle', computed)
+  }
+})

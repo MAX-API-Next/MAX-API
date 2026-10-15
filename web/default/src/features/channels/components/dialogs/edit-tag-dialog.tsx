@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -66,11 +67,14 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
   const queryClient = useQueryClient()
 
   // Form state
-  const [newTag, setNewTag] = useState('')
-  const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const [customModel, setCustomModel] = useState('')
-  const [modelMapping, setModelMapping] = useState('')
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  const draftKey = JSON.stringify([open, currentTag])
+  const [newTag, setNewTag] = useResettableState(currentTag || '', draftKey)
+  const [customModel, setCustomModel] = useResettableState('', draftKey)
+  const [modelMapping, setModelMapping] = useResettableState('', draftKey)
+  const [selectedGroups, setSelectedGroups] = useResettableState<string[]>(
+    [],
+    draftKey
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Fetch tag models
@@ -98,23 +102,10 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
     allModelsData?.data?.map((m) => m.id).filter(Boolean) || []
   const availableGroups = groupsData?.data || []
 
-  // Initialize form when tag changes
-  useEffect(() => {
-    if (open && currentTag) {
-      setNewTag(currentTag)
-      setModelMapping('')
-      setSelectedGroups([])
-      setCustomModel('')
-
-      // Load tag models
-      if (tagModelsData?.data) {
-        const models = tagModelsData.data.split(',').filter(Boolean)
-        setSelectedModels(models)
-      } else {
-        setSelectedModels([])
-      }
-    }
-  }, [open, currentTag, tagModelsData])
+  const [selectedModels, setSelectedModels] = useResettableState<string[]>(
+    () => tagModelsData?.data?.split(',').filter(Boolean) || [],
+    JSON.stringify([open, currentTag, tagModelsData?.data])
+  )
 
   const handleAddCustomModel = () => {
     if (!customModel.trim()) return

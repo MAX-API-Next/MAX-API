@@ -52,6 +52,7 @@ export interface AuthUser {
 }
 
 interface AuthState {
+  sessionRevision: number
   auth: {
     user: AuthUser | null
     setUser: (user: AuthUser | null) => void
@@ -60,13 +61,31 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
+  sessionRevision: 0,
   auth: {
     user: null,
     setUser: (user) =>
-      set((state) => ({ ...state, auth: { ...state.auth, user } })),
+      set((state) => {
+        const previous = state.auth.user
+        const identityChanged =
+          !user ||
+          !previous ||
+          user.id !== previous?.id ||
+          user.role !== previous.role ||
+          user.status !== previous.status ||
+          user.group !== previous.group ||
+          JSON.stringify(user.permissions ?? null) !==
+            JSON.stringify(previous.permissions ?? null)
+        return {
+          ...state,
+          sessionRevision: state.sessionRevision + (identityChanged ? 1 : 0),
+          auth: { ...state.auth, user },
+        }
+      }),
     reset: () =>
       set((state) => ({
         ...state,
+        sessionRevision: state.sessionRevision + 1,
         auth: { ...state.auth, user: null },
       })),
   },

@@ -2332,6 +2332,7 @@ export function ChannelMutateDrawer({
                           )}
 
                           <CodexOAuthDialog
+                            scopeKey={JSON.stringify([open, channelId])}
                             open={codexOAuthDialogOpen}
                             onOpenChange={setCodexOAuthDialogOpen}
                             onKeyGenerated={(key) => {

@@ -31,6 +31,8 @@ import {
   type CustomOAuthBinding,
 } from '@/lib/oauth'
 import { useDialogs } from '@/hooks/use-dialog'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -61,7 +63,10 @@ export function AccountBindingsTab({
   const { t } = useTranslation()
   const dialogs = useDialogs<DialogKey>()
   const { status, loading } = useStatus()
-  const [customBindings, setCustomBindings] = useState<CustomOAuthBinding[]>([])
+  const beginRead = useReadScope(profile?.id)
+  const [customBindings, setCustomBindings] = useResettableState<
+    CustomOAuthBinding[]
+  >([], profile?.id)
   const [unbindTarget, setUnbindTarget] = useState<CustomOAuthBinding | null>(
     null
   )
@@ -75,17 +80,19 @@ export function AccountBindingsTab({
     | Array<{ id: number; name: string }>
     | undefined
 
-  const fetchCustomBindings = useCallback(async () => {
-    if (!customProviders || customProviders.length === 0) return
-    try {
-      const res = await getSelfOAuthBindings()
-      if (res.success && res.data) {
-        setCustomBindings(res.data)
-      }
-    } catch {
-      // ignore
-    }
-  }, [customProviders])
+  const fetchCustomBindings = useCallback(() => {
+    if (!customProviders || customProviders.length === 0)
+      return Promise.resolve()
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getSelfOAuthBindings()
+      .then((res) => {
+        if (current() && res.success && res.data) setCustomBindings(res.data)
+      })
+      .catch(() => {
+        /* retain the last successful read */
+      })
+  }, [customProviders, beginRead, setCustomBindings])
 
   useEffect(() => {
     fetchCustomBindings()

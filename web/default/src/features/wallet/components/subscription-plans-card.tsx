@@ -109,6 +109,7 @@ export function SubscriptionPlansCard({
     useState('subscription_first')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [now, setNow] = useState(() => Date.now() / 1000)
 
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
@@ -122,40 +123,63 @@ export function SubscriptionPlansCard({
     [topupInfo?.pay_methods]
   )
 
-  const fetchPlans = useCallback(async () => {
-    try {
-      const res = await getPublicPlans()
-      if (res.success) {
-        setPlans(res.data || [])
-      }
-    } catch {
-      setPlans([])
-    }
-  }, [])
+  const fetchPlans = useCallback(
+    () =>
+      getPublicPlans()
+        .then((res) => {
+          if (res.success) setPlans(res.data || [])
+        })
+        .catch(() => setPlans([])),
+    []
+  )
 
-  const fetchSelfSubscription = useCallback(async () => {
-    try {
-      const res = await getSelfSubscriptionFull()
-      if (res.success && res.data) {
-        setBillingPreference(
-          res.data.billing_preference || 'subscription_first'
-        )
-        setActiveSubscriptions(res.data.subscriptions || [])
-        setAllSubscriptions(res.data.all_subscriptions || [])
-      }
-    } catch {
-      // ignore
-    }
-  }, [])
+  const fetchSelfSubscription = useCallback(
+    () =>
+      getSelfSubscriptionFull()
+        .then((res) => {
+          if (res.success && res.data) {
+            setBillingPreference(
+              res.data.billing_preference || 'subscription_first'
+            )
+            setActiveSubscriptions(res.data.subscriptions || [])
+            setAllSubscriptions(res.data.all_subscriptions || [])
+            setNow(Date.now() / 1000)
+          }
+        })
+        .catch(() => {
+          /* retain the last successful read */
+        }),
+    []
+  )
 
   useEffect(() => {
-    const init = async () => {
-      setLoading(true)
-      await Promise.all([fetchPlans(), fetchSelfSubscription()])
-      setLoading(false)
+    let current = true
+    void Promise.all([fetchPlans(), fetchSelfSubscription()]).then(() => {
+      if (current) setLoading(false)
+    })
+    return () => {
+      current = false
     }
-    init()
   }, [fetchPlans, fetchSelfSubscription])
+  useEffect(() => {
+    const current = Date.now()
+    const day = 86_400_000
+    let next = Infinity
+    for (const { subscription } of allSubscriptions) {
+      const remaining = (subscription.end_time || 0) * 1000 - current
+      if (
+        subscription.status !== 'active' ||
+        !Number.isFinite(remaining) ||
+        remaining < 0
+      )
+        continue
+      const boundary = remaining % day || (remaining === 0 ? 0 : day)
+      next = Math.min(next, boundary + 1)
+    }
+    if (!Number.isFinite(next)) return
+    const timer = setTimeout(() => setNow(Date.now() / 1000), next)
+    return () => clearTimeout(timer)
+  }, [allSubscriptions, now])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -222,7 +246,6 @@ export function SubscriptionPlansCard({
   const getRemainingDays = (sub: UserSubscriptionRecord) => {
     const endTime = sub?.subscription?.end_time || 0
     if (!endTime) return 0
-    const now = Date.now() / 1000
     return Math.max(0, Math.ceil((endTime - now) / 86400))
   }
 
@@ -403,7 +426,6 @@ export function SubscriptionPlansCard({
                     planTitleMap.get(subscription?.plan_id) || ''
                   const remainDays = getRemainingDays(sub)
                   const usagePercent = getUsagePercent(sub)
-                  const now = Date.now() / 1000
                   const isExpired = (subscription?.end_time || 0) < now
                   const isCancelled = subscription?.status === 'cancelled'
                   const isActive =

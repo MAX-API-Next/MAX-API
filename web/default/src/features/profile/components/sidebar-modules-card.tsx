@@ -22,6 +22,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -49,9 +51,13 @@ type SectionDef = {
 export function SidebarModulesCard() {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
-  const [config, setConfig] = useState<SidebarModulesConfig>({})
   const currentUser = useAuthStore((s) => s.auth.user)
   const setUser = useAuthStore((s) => s.auth.setUser)
+  const beginRead = useReadScope(currentUser?.id)
+  const [config, setConfig] = useResettableState<SidebarModulesConfig>(
+    {},
+    currentUser?.id
+  )
 
   const sectionDefs: SectionDef[] = [
     {
@@ -122,26 +128,31 @@ export function SidebarModulesCard() {
     },
   ]
 
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await api.get('/api/user/self')
-      if (res.data.success && res.data.data?.sidebar_modules) {
-        const raw = res.data.data.sidebar_modules
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-        setConfig(parsed)
-      } else {
-        const defaults: SidebarModulesConfig = {}
-        for (const sec of sectionDefs) {
-          defaults[sec.key] = { enabled: true }
-          for (const mod of sec.modules) defaults[sec.key][mod.key] = true
+  const loadConfig = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return api
+      .get('/api/user/self')
+      .then((res) => {
+        if (!current()) return
+        if (res.data.success && res.data.data?.sidebar_modules) {
+          const raw = res.data.data.sidebar_modules
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+          setConfig(parsed)
+        } else {
+          const defaults: SidebarModulesConfig = {}
+          for (const sec of sectionDefs) {
+            defaults[sec.key] = { enabled: true }
+            for (const mod of sec.modules) defaults[sec.key][mod.key] = true
+          }
+          setConfig(defaults)
         }
-        setConfig(defaults)
-      }
-    } catch {
-      /* ignore */
-    }
+      })
+      .catch(() => {
+        /* retain the last valid configuration */
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [beginRead, setConfig])
 
   useEffect(() => {
     loadConfig()

@@ -41,20 +41,21 @@ type LogoutRequestConfig = AxiosRequestConfig & {
 export function useOAuthLogin(status: SystemStatus | null) {
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
-  const [githubButtonText, setGithubButtonText] = useState('')
+  const [githubButtonMessage, setGithubButtonText] = useState(
+    'Continue with GitHub'
+  )
+  const githubButtonText = t(githubButtonMessage)
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const { auth } = useAuthStore()
 
   useEffect(() => {
-    setGithubButtonText(t('Continue with GitHub'))
-
     return () => {
       if (githubTimeoutRef.current) {
         clearTimeout(githubTimeoutRef.current)
       }
     }
-  }, [t])
+  }, [])
 
   const resetSession = async () => {
     try {
@@ -77,7 +78,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
 
     setIsLoading(true)
     setGithubButtonDisabled(true)
-    setGithubButtonText(t('Redirecting to GitHub...'))
+    setGithubButtonText('Redirecting to GitHub...')
 
     if (githubTimeoutRef.current) {
       clearTimeout(githubTimeoutRef.current)
@@ -86,7 +87,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     githubTimeoutRef.current = setTimeout(() => {
       setIsLoading(false)
       setGithubButtonText(
-        t('Request timed out, please refresh and restart GitHub login')
+        'Request timed out, please refresh and restart GitHub login'
       )
       setGithubButtonDisabled(true)
     }, 20000)
@@ -100,7 +101,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
           clearTimeout(githubTimeoutRef.current)
         }
         setIsLoading(false)
-        setGithubButtonText(t('Continue with GitHub'))
+        setGithubButtonText('Continue with GitHub')
         setGithubButtonDisabled(false)
         return
       }
@@ -113,7 +114,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
         clearTimeout(githubTimeoutRef.current)
       }
       setIsLoading(false)
-      setGithubButtonText(t('Continue with GitHub'))
+      setGithubButtonText('Continue with GitHub')
       setGithubButtonDisabled(false)
     }
   }

@@ -16,9 +16,39 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { act, createElement, useState, type ChangeEvent } from 'react'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createReactTestEnvironment } from './react'
+
+test('controlled input changes reach React after installing browser globals', async () => {
+  const env = createReactTestEnvironment()
+  await env.setup()
+  const { fireEvent } = await import('@testing-library/react/pure')
+  const observed: string[] = []
+  function Probe() {
+    const [value, setValue] = useState('initial')
+    return createElement('input', {
+      value,
+      onChange: (event: ChangeEvent<HTMLInputElement>) => {
+        observed.push(event.target.value)
+        setValue(event.target.value)
+      },
+    })
+  }
+  const view = await env.render(createElement(Probe))
+  try {
+    await act(async () => {
+      fireEvent.change(view.container.querySelector('input')!, {
+        target: { value: 'updated' },
+      })
+    })
+    assert.deepEqual(observed, ['updated'])
+  } finally {
+    await view.unmount()
+    env.teardown()
+  }
+})
 
 test('teardown cancels pending animation frames before removing browser globals', async (): Promise<void> => {
   const testEnv = createReactTestEnvironment()

@@ -19,8 +19,12 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useState, useEffect, useCallback } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
+import { getSafeErrorDebugInfo } from '@/lib/handle-server-error'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { getAffiliateCode, transferAffiliateQuota } from '../api'
 import { generateAffiliateLink } from '../lib'
 
@@ -29,30 +33,46 @@ import { generateAffiliateLink } from '../lib'
 // ============================================================================
 
 export function useAffiliate() {
-  const [affiliateCode, setAffiliateCode] = useState<string>('')
-  const [affiliateLink, setAffiliateLink] = useState<string>('')
-  const [loading, setLoading] = useState(true)
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const beginRead = useReadScope(sessionRevision)
+  const [affiliateCode, setAffiliateCode] = useResettableState(
+    '',
+    sessionRevision
+  )
+  const [affiliateLink, setAffiliateLink] = useResettableState(
+    '',
+    sessionRevision
+  )
+  const [loading, setLoading] = useResettableState(true, sessionRevision)
   const [transferring, setTransferring] = useState(false)
   const { copyToClipboard } = useCopyToClipboard()
 
-  // Fetch affiliate code
-  const fetchAffiliateCode = useCallback(async () => {
-    try {
-      setLoading(true)
-      const response = await getAffiliateCode()
-
-      if (response.success && response.data) {
-        setAffiliateCode(response.data)
-        const link = generateAffiliateLink(response.data)
-        setAffiliateLink(link)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch affiliate code:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const loadAffiliateCode = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getAffiliateCode()
+      .then((response) => {
+        if (current() && response.success && response.data) {
+          setAffiliateCode(response.data)
+          setAffiliateLink(generateAffiliateLink(response.data))
+        }
+      })
+      .catch((error) => {
+        if (!current()) return
+        // eslint-disable-next-line no-console
+        console.error(
+          'Failed to fetch affiliate code:',
+          getSafeErrorDebugInfo(error)
+        )
+      })
+      .finally(() => {
+        if (current()) setLoading(false)
+      })
+  }, [beginRead, setAffiliateCode, setAffiliateLink, setLoading])
+  const fetchAffiliateCode = useCallback(() => {
+    setLoading(true)
+    return loadAffiliateCode()
+  }, [loadAffiliateCode, setLoading])
 
   // Copy affiliate link
   const copyAffiliateLink = useCallback(() => {
@@ -82,8 +102,8 @@ export function useAffiliate() {
   }, [])
 
   useEffect(() => {
-    fetchAffiliateCode()
-  }, [fetchAffiliateCode])
+    void loadAffiliateCode()
+  }, [loadAffiliateCode])
 
   return {
     affiliateCode,

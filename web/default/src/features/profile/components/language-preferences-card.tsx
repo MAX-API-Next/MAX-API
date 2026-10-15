@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   INTERFACE_LANGUAGE_OPTIONS,
   normalizeInterfaceLanguage,
@@ -25,6 +25,7 @@ import { Languages, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import {
   Select,
   SelectContent,
@@ -53,11 +54,10 @@ export function LanguagePreferencesCard(props: LanguagePreferencesCardProps) {
     return normalizeInterfaceLanguage(settings.language || i18n.language)
   }, [props.profile?.setting, i18n.language])
 
-  const [currentLanguage, setCurrentLanguage] = useState(savedLanguage)
-
-  useEffect(() => {
-    setCurrentLanguage(savedLanguage)
-  }, [savedLanguage])
+  const [currentLanguage, setCurrentLanguage] = useResettableState(
+    savedLanguage,
+    savedLanguage
+  )
 
   const handleLanguageChange = async (language: string | null) => {
     if (!language) return
