@@ -16,62 +16,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  type ReactElement,
-  type ReactNode,
-} from 'react'
+import { useCallback, useMemo, type ReactElement, type ReactNode } from 'react'
 import { useSecureVerification } from '../hooks/use-secure-verification'
-import type { StartVerificationOptions, VerificationMethod } from '../types'
+import { SecureVerificationContext } from '../lib/verification-context'
+import type { VerificationMethod } from '../types'
 import { SecureVerificationDialog } from './secure-verification-dialog'
 
 type SecureVerificationProviderProps = {
   children: ReactNode
 }
 
-interface SecureVerificationContextValue {
-  withVerification: <T>(
-    apiCall: () => Promise<T>,
-    config?: StartVerificationOptions
-  ) => Promise<T | null>
-}
-
-export const SecureVerificationContext =
-  createContext<SecureVerificationContextValue | null>(null)
-
-export function useSecureVerificationGate(): SecureVerificationContextValue {
-  const context = useContext(SecureVerificationContext)
-  if (!context) {
-    throw new Error(
-      'useSecureVerificationGate must be used within SecureVerificationProvider'
-    )
-  }
-  return context
-}
-
 export function SecureVerificationProvider(
   props: SecureVerificationProviderProps
 ): ReactElement {
   const secureVerification = useSecureVerification()
+  const executeVerification = secureVerification.executeVerification
+  const withVerification = secureVerification.withVerification
 
   const handleVerification = useCallback(
     async (method: VerificationMethod, code?: string): Promise<void> => {
       try {
-        await secureVerification.executeVerification(method, code)
+        await executeVerification(method, code)
       } catch {
         // The shared verification hook reports the error and keeps retryable
         // verification failures inside the dialog.
       }
     },
-    [secureVerification.executeVerification]
+    [executeVerification]
   )
-  const contextValue = useMemo(
-    () => ({ withVerification: secureVerification.withVerification }),
-    [secureVerification.withVerification]
-  )
+  const contextValue = useMemo(() => ({ withVerification }), [withVerification])
 
   return (
     <SecureVerificationContext.Provider value={contextValue}>
