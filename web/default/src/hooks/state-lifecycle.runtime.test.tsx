@@ -18,6 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { act, useState } from 'react'
 import { AxiosError } from 'axios'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
@@ -25,6 +26,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
 import { useThemeRadiusPx } from '@/lib/theme-radius'
 import type { UserProfile } from '@/features/profile/types'
+import type { ChannelAffinitySettings } from '@/features/system-settings/general/channel-affinity/types'
 import { useMinimumLoadingTime } from './use-minimum-loading-time'
 import { useIsMobile } from './use-mobile'
 import { useReadScope } from './use-read-scope'
@@ -36,7 +38,126 @@ const { fireEvent, within } = await import('@testing-library/react/pure')
 const { useProfile } = await import('@/features/profile/hooks/use-profile')
 const { NotificationTab } =
   await import('@/features/profile/components/tabs/notification-tab')
+const { ChannelAffinitySection } =
+  await import('@/features/system-settings/general/channel-affinity')
+const { SettingsPageProvider } =
+  await import('@/features/system-settings/components/settings-page-context')
 after(() => env.teardown())
+
+test('channel affinity drafts survive equal saved values and reset together after a saved change', async () => {
+  const adapter = api.defaults.adapter
+  const requests: string[] = []
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const actions = env.dom.window.document.createElement('div')
+  env.dom.window.document.body.append(actions)
+  const initial: ChannelAffinitySettings = {
+    'channel_affinity_setting.enabled': true,
+    'channel_affinity_setting.switch_on_success': true,
+    'channel_affinity_setting.keep_on_channel_disabled': false,
+    'channel_affinity_setting.max_entries': 100,
+    'channel_affinity_setting.default_ttl_seconds': 60,
+    'channel_affinity_setting.rules': '[]',
+  }
+  api.defaults.adapter = async (config) => {
+    requests.push(config.method || '')
+    assert.equal(config.method, 'get')
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true, data: null },
+    }
+  }
+  function Harness() {
+    const [saved, setSaved] = useState(initial)
+    const [, setRevision] = useState(0)
+    return (
+      <>
+        <button onClick={() => setRevision((value) => value + 1)}>
+          Refresh affinity host
+        </button>
+        <button
+          onClick={() =>
+            setSaved({
+              ...initial,
+              'channel_affinity_setting.max_entries': 222,
+              'channel_affinity_setting.rules': '[{"name":"saved-rule"}]',
+            })
+          }
+        >
+          Change saved affinity
+        </button>
+        <ChannelAffinitySection defaultValues={{ ...saved }} />
+      </>
+    )
+  }
+  const view = await env.render(
+    <QueryClientProvider client={client}>
+      <SettingsPageProvider actionsContainer={actions}>
+        <Harness />
+      </SettingsPageProvider>
+    </QueryClientProvider>
+  )
+  const fields = within(view.container),
+    controls = within(actions)
+  const switches = () => fields.getAllByRole('switch')
+  const amounts = () => fields.getAllByRole('spinbutton') as HTMLInputElement[]
+  try {
+    for (const field of switches()) await view.click(field)
+    await act(async () => {
+      fireEvent.change(amounts()[0], { target: { value: '0' } })
+      fireEvent.change(amounts()[1], { target: { value: '0' } })
+    })
+    await view.click(controls.getByRole('button', { name: 'JSON' }))
+    const draft = '[{"name":"unsaved-rule","ttl_seconds":0}]'
+    await act(async () => {
+      fireEvent.change(fields.getByRole('textbox'), {
+        target: { value: draft },
+      })
+    })
+    await view.click(fields.getByText('Refresh affinity host'))
+    assert.deepEqual(
+      switches().map((field) => field.getAttribute('aria-checked')),
+      ['false', 'false', 'true']
+    )
+    assert.deepEqual(
+      amounts().map((field) => field.value),
+      ['0', '0']
+    )
+    assert.equal(
+      (fields.getByRole('textbox') as HTMLTextAreaElement).value,
+      draft
+    )
+    await view.click(controls.getByRole('button', { name: 'Visual' }))
+    await view.click(fields.getByText('Refresh affinity host'))
+    assert.ok(fields.getByText('unsaved-rule'))
+    await view.click(fields.getByText('Change saved affinity'))
+    assert.deepEqual(
+      switches().map((field) => field.getAttribute('aria-checked')),
+      ['true', 'true', 'false']
+    )
+    assert.deepEqual(
+      amounts().map((field) => field.value),
+      ['222', '60']
+    )
+    assert.equal(fields.queryByText('unsaved-rule'), null)
+    assert.ok(fields.getByText('saved-rule'))
+    await view.click(controls.getByRole('button', { name: 'JSON' }))
+    assert.deepEqual(
+      JSON.parse((fields.getByRole('textbox') as HTMLTextAreaElement).value),
+      [{ name: 'saved-rule' }]
+    )
+    assert.deepEqual(requests, ['get'])
+  } finally {
+    await view.unmount()
+    actions.remove()
+    client.clear()
+    api.defaults.adapter = adapter
+  }
+})
 
 test('notification draft survives an unchanged profile refresh and resets for saved settings or account', async () => {
   const adapter = api.defaults.adapter

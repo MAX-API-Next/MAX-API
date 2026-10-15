@@ -95,30 +95,31 @@ interface Props {
 export function ChannelAffinitySection(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const resetKey = JSON.stringify(props.defaultValues)
 
   const [enabled, setEnabled] = useResettableState(
     props.defaultValues['channel_affinity_setting.enabled'],
-    props.defaultValues
+    resetKey
   )
   const [switchOnSuccess, setSwitchOnSuccess] = useResettableState(
     props.defaultValues['channel_affinity_setting.switch_on_success'],
-    props.defaultValues
+    resetKey
   )
   const [keepOnChannelDisabled, setKeepOnChannelDisabled] = useResettableState(
     props.defaultValues['channel_affinity_setting.keep_on_channel_disabled'],
-    props.defaultValues
+    resetKey
   )
   const [maxEntries, setMaxEntries] = useResettableState(
     props.defaultValues['channel_affinity_setting.max_entries'],
-    props.defaultValues
+    resetKey
   )
   const [defaultTtl, setDefaultTtl] = useResettableState(
     props.defaultValues['channel_affinity_setting.default_ttl_seconds'],
-    props.defaultValues
+    resetKey
   )
   const [rules, setRules] = useResettableState<AffinityRule[]>(
     () => parseRules(props.defaultValues['channel_affinity_setting.rules']),
-    props.defaultValues
+    resetKey
   )
 
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
@@ -131,7 +132,7 @@ export function ChannelAffinitySection(props: Props) {
         null,
         2
       ),
-    props.defaultValues
+    resetKey
   )
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null)
   const [cacheLoading, setCacheLoading] = useState(true)
