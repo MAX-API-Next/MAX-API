@@ -1,5 +1,9 @@
 # SQLite 升级验收 / SQLite upgrade acceptance
 
+备份、清单校验和隔离恢复命令见[SQLite 运维备份与恢复](sqlite-operations.md)。
+
+See [SQLite operations backup and restore](sqlite-operations.md) for the archive, manifest verification, and isolated restore commands.
+
 升级前停止接收新请求，在原数据库完成待处理资金结算及日志副作用，停止服务后一起备份业务库、日志库和配置。SQLite 使用 WAL 时，保留尚未合并的 WAL 文件；运行中的单个数据库文件复制不能作为完整备份。
 
 Before upgrading, stop new traffic, finish pending funding settlements and log effects against their original databases, stop the service, and back up the business database, log database, and configuration together. Preserve uncheckpointed WAL files. Copying only a database file while it is in use does not establish a complete backup.
