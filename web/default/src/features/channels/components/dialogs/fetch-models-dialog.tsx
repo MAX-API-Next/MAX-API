@@ -145,7 +145,7 @@ export function FetchModelsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeChannel?.id, customFetcher])
 
-  const handleFetchModels = async () => {
+  async function handleFetchModels() {
     if (!activeChannel && !customFetcher) return
 
     setIsFetching(true)

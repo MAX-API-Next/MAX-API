@@ -91,14 +91,16 @@ export function RiskAcknowledgementDialog({
     NormalizedRequiredTextPart[]
   >(() => {
     let inputIndex = 0
-    return requiredTextParts.map((part) => {
+    const parts: NormalizedRequiredTextPart[] = []
+    for (const part of requiredTextParts) {
       if (part.type === 'input') {
-        const normalizedPart = { ...part, inputIndex }
+        parts.push({ ...part, inputIndex })
         inputIndex += 1
-        return normalizedPart
+      } else {
+        parts.push(part)
       }
-      return part
-    })
+    }
+    return parts
   }, [requiredTextParts])
 
   const requiredTextInputCount = useMemo(
