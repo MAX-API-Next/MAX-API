@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { act, type ReactElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { createInstance, type Resource } from 'i18next'
 import { JSDOM } from 'jsdom'
 import { I18nextProvider } from 'react-i18next'
@@ -187,6 +186,7 @@ export function createReactTestEnvironment(options?: {
       dom.window.close()
     },
     async render(element: ReactElement) {
+      const { createRoot } = await import('react-dom/client')
       const container = dom.window.document.createElement('div')
       dom.window.document.body.append(container)
       const root = createRoot(container)

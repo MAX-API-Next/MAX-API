@@ -19,6 +19,10 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import { useState, useEffect, useCallback } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { getSafeErrorDebugInfo } from '@/lib/handle-server-error'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { getUserProfile, updateUserProfile, updateUserSettings } from '../api'
 import type {
   UserProfile,
@@ -31,33 +35,46 @@ import type {
 // ============================================================================
 
 export function useProfile() {
-  const [profile, setProfile] = useState<UserProfile | null>(null)
-  const [loading, setLoading] = useState(true)
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const beginRead = useReadScope(sessionRevision)
+  const [profile, setProfile] = useResettableState<UserProfile | null>(
+    null,
+    sessionRevision
+  )
+  const [loading, setLoading] = useResettableState(true, sessionRevision)
   const [updating, setUpdating] = useState(false)
 
-  // Fetch user profile (with optional silent mode)
-  const fetchProfile = useCallback(async (silent = false) => {
-    try {
-      if (!silent) {
-        setLoading(true)
-      }
-      const response = await getUserProfile()
-
-      if (response.success && response.data) {
-        setProfile(response.data)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch profile:', error)
-      if (!silent) {
-        toast.error(i18next.t('Failed to load profile'))
-      }
-    } finally {
-      if (!silent) {
-        setLoading(false)
-      }
-    }
-  }, [])
+  const loadProfile = useCallback(
+    (silent = false) => {
+      const current = beginRead()
+      if (!current()) return Promise.resolve()
+      return getUserProfile()
+        .then((response) => {
+          if (current() && response.success && response.data)
+            setProfile(response.data)
+        })
+        .catch((error) => {
+          if (!current()) return
+          // eslint-disable-next-line no-console
+          console.error(
+            'Failed to fetch profile:',
+            getSafeErrorDebugInfo(error)
+          )
+          if (!silent) toast.error(i18next.t('Failed to load profile'))
+        })
+        .finally(() => {
+          if (current()) setLoading(false)
+        })
+    },
+    [beginRead, setProfile, setLoading]
+  )
+  const fetchProfile = useCallback(
+    (silent = false) => {
+      if (!silent) setLoading(true)
+      return loadProfile(silent)
+    },
+    [loadProfile, setLoading]
+  )
 
   // Refresh profile silently (without loading state)
   const refreshProfile = useCallback(async () => {
@@ -81,7 +98,7 @@ export function useProfile() {
         return false
       } catch (error) {
         // eslint-disable-next-line no-console
-        console.error('Failed to update profile:', error)
+        console.error('Failed to update profile:', getSafeErrorDebugInfo(error))
         toast.error(i18next.t('Failed to update profile'))
         return false
       } finally {
@@ -108,7 +125,10 @@ export function useProfile() {
         return false
       } catch (error) {
         // eslint-disable-next-line no-console
-        console.error('Failed to update settings:', error)
+        console.error(
+          'Failed to update settings:',
+          getSafeErrorDebugInfo(error)
+        )
         toast.error(i18next.t('Failed to update settings'))
         return false
       } finally {
@@ -120,8 +140,8 @@ export function useProfile() {
 
   // Initial fetch
   useEffect(() => {
-    fetchProfile()
-  }, [fetchProfile])
+    void loadProfile()
+  }, [loadProfile])
 
   return {
     profile,

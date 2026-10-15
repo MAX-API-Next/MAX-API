@@ -23,13 +23,13 @@ import {
   createContext,
   type ReactNode,
   useContext,
-  useEffect,
   useState,
 } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import dayjs from '@/lib/dayjs'
 import { cn } from '@/lib/utils'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -162,12 +162,7 @@ export const WebPreviewUrl = ({
 }: WebPreviewUrlProps) => {
   const { t } = useTranslation()
   const { url, setUrl } = useWebPreview()
-  const [inputValue, setInputValue] = useState(url)
-
-  // Sync input value with context URL when it changes externally
-  useEffect(() => {
-    setInputValue(url)
-  }, [url])
+  const [inputValue, setInputValue] = useResettableState(url, url)
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(event.target.value)

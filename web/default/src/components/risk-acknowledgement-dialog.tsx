@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -83,9 +84,6 @@ export function RiskAcknowledgementDialog({
   className,
 }: RiskAcknowledgementDialogProps) {
   const { t } = useTranslation()
-  const [checkedItems, setCheckedItems] = useState<boolean[]>([])
-  const [typedText, setTypedText] = useState('')
-  const [typedTextParts, setTypedTextParts] = useState<string[]>([])
 
   const normalizedRequiredTextParts = useMemo<
     NormalizedRequiredTextPart[]
@@ -114,12 +112,16 @@ export function RiskAcknowledgementDialog({
     ? normalizedRequiredTextParts.map((part) => part.text).join('')
     : requiredText
 
-  useEffect(() => {
-    if (!open) return
-    setCheckedItems(Array(checklist.length).fill(false))
-    setTypedText('')
-    setTypedTextParts(Array(requiredTextInputCount).fill(''))
-  }, [open, checklist.length, requiredTextInputCount])
+  const draftKey = `${open}:${checklist.length}:${requiredTextInputCount}`
+  const [checkedItems, setCheckedItems] = useResettableState<boolean[]>(
+    () => Array(checklist.length).fill(false),
+    draftKey
+  )
+  const [typedText, setTypedText] = useResettableState('', draftKey)
+  const [typedTextParts, setTypedTextParts] = useResettableState<string[]>(
+    () => Array(requiredTextInputCount).fill(''),
+    draftKey
+  )
 
   const allChecked = useMemo(() => {
     if (checklist.length === 0) return true

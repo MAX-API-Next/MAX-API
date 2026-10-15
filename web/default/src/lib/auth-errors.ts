@@ -16,22 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import * as React from 'react'
+import { AxiosError } from 'axios'
 
-const MOBILE_BREAKPOINT = 768
+export function isStaleAuthResponse(error: unknown): boolean {
+  return error instanceof AxiosError && error.config?.staleAuthResponse === true
+}
 
-export function useIsMobile() {
-  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
-
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    }
-    mql.addEventListener('change', onChange)
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
-    return () => mql.removeEventListener('change', onChange)
-  }, [])
-
-  return !!isMobile
+export function handleQueryAuthenticationError(
+  error: unknown,
+  onExpired: () => void
+): void {
+  if (
+    error instanceof AxiosError &&
+    error.response?.status === 401 &&
+    !isStaleAuthResponse(error)
+  )
+    onExpired()
 }

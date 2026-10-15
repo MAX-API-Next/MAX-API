@@ -18,7 +18,11 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
+import { getSafeErrorDebugInfo } from '@/lib/handle-server-error'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { SectionPageLayout } from '@/components/layout'
@@ -58,16 +62,36 @@ interface WalletProps {
 
 export function Wallet(props: WalletProps) {
   const { t } = useTranslation()
-  const [user, setUser] = useState<UserWalletData | null>(null)
-  const [userLoading, setUserLoading] = useState(true)
-  const [topupAmount, setTopupAmount] = useState(0)
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const beginRead = useReadScope()
+  const [user, setUser] = useResettableState<UserWalletData | null>(
+    null,
+    sessionRevision
+  )
+  const [userLoading, setUserLoading] = useResettableState(
+    true,
+    sessionRevision
+  )
+  const [topupAmountDraft, setTopupAmount] = useResettableState<number | null>(
+    null,
+    sessionRevision
+  )
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
     useState<PaymentMethod>()
   const [paymentLoading, setPaymentLoading] = useState<string | null>(null)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
-  const [billingDialogOpen, setBillingDialogOpen] = useState(false)
+  const [billingDialogOpen, setBillingDialogOpen] = useState(
+    Boolean(props.initialShowHistory)
+  )
+  const [previousShowHistory, setPreviousShowHistory] = useState(
+    props.initialShowHistory
+  )
+  if (previousShowHistory !== props.initialShowHistory) {
+    setPreviousShowHistory(props.initialShowHistory)
+    if (props.initialShowHistory) setBillingDialogOpen(true)
+  }
   const [redemptionCode, setRedemptionCode] = useState('')
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
@@ -79,6 +103,8 @@ export function Wallet(props: WalletProps) {
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
 
   // Calculate effective exchange rate - when display type is USD, use rate of 1
+  const topupAmount =
+    topupAmountDraft ?? (topupInfo ? getMinTopupAmount(topupInfo) : 0)
   const effectiveUsdExchangeRate = useMemo(() => {
     return currency?.quotaDisplayType === 'USD'
       ? 1
@@ -103,44 +129,50 @@ export function Wallet(props: WalletProps) {
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
 
-  // Fetch and refresh user data
-  const fetchUser = useCallback(async () => {
-    try {
-      setUserLoading(true)
-      const response = await getSelf()
-      if (response.success && response.data) {
-        setUser(response.data as UserWalletData)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch user data:', error)
-    } finally {
-      setUserLoading(false)
-    }
-  }, [])
-
+  const loadUser = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getSelf()
+      .then((response) => {
+        if (current() && response.success && response.data)
+          setUser(response.data as UserWalletData)
+      })
+      .catch((error) => {
+        if (!current()) return
+        // eslint-disable-next-line no-console
+        console.error(
+          'Failed to fetch user data:',
+          getSafeErrorDebugInfo(error)
+        )
+      })
+      .finally(() => {
+        if (current()) setUserLoading(false)
+      })
+  }, [beginRead, setUser, setUserLoading])
+  const fetchUser = useCallback(() => {
+    setUserLoading(true)
+    return loadUser()
+  }, [loadUser, setUserLoading])
   useEffect(() => {
-    fetchUser()
-  }, [fetchUser])
+    void loadUser()
+  }, [loadUser])
 
   useEffect(() => {
     if (props.initialShowHistory) {
-      setBillingDialogOpen(true)
       window.history.replaceState({}, '', window.location.pathname)
     }
   }, [props.initialShowHistory])
 
   // Initialize topup amount when topup info is loaded
   useEffect(() => {
-    if (topupInfo && topupAmount === 0) {
+    if (topupInfo && topupAmountDraft === null) {
       const minTopup = getMinTopupAmount(topupInfo)
-      setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
       const defaultPaymentType = getDefaultPaymentType(topupInfo)
       calculatePaymentAmount(minTopup, defaultPaymentType)
     }
-  }, [topupInfo, topupAmount, calculatePaymentAmount])
+  }, [topupInfo, topupAmountDraft, calculatePaymentAmount])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {

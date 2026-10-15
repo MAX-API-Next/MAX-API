@@ -16,13 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/use-mobile'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -59,27 +60,30 @@ export function SyncWizardDialog({
     syncWizardOptions,
   } = useModels()
   const isMobile = useIsMobile()
-  const [locale, setLocale] = useState<SyncLocale>('zh')
-  const [source, setSource] = useState<SyncSource>('official')
   const [isSyncing, setIsSyncing] = useState(false)
 
   // Get translated options
   const SYNC_SOURCE_OPTIONS = getSyncSourceOptions(t)
   const SYNC_LOCALE_OPTIONS = getSyncLocaleOptions(t)
 
-  useEffect(() => {
-    if (open) {
-      setLocale(syncWizardOptions.locale || 'zh')
-      const preferredSource = SYNC_SOURCE_OPTIONS.find(
-        (option) => option.value === syncWizardOptions.source
-      )
-      setSource(
-        preferredSource && !preferredSource.disabled
-          ? (preferredSource.value as SyncSource)
-          : 'official'
-      )
-    }
-  }, [open, syncWizardOptions, SYNC_SOURCE_OPTIONS])
+  const draftKey = JSON.stringify([
+    open,
+    syncWizardOptions.locale,
+    syncWizardOptions.source,
+  ])
+  const [locale, setLocale] = useResettableState<SyncLocale>(
+    syncWizardOptions.locale || 'zh',
+    draftKey
+  )
+  const preferredSource = SYNC_SOURCE_OPTIONS.find(
+    (option) => option.value === syncWizardOptions.source
+  )
+  const [source, setSource] = useResettableState<SyncSource>(
+    preferredSource && !preferredSource.disabled
+      ? preferredSource.value
+      : 'official',
+    draftKey
+  )
 
   const handleSync = async () => {
     setIsSyncing(true)

@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { ExternalLink, Copy, Check, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { tryPrettyJson } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -39,33 +41,36 @@ type CodexOAuthDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   onKeyGenerated: (key: string) => void
+  scopeKey?: string
 }
 
 export function CodexOAuthDialog({
   open,
   onOpenChange,
   onKeyGenerated,
+  scopeKey,
 }: CodexOAuthDialogProps) {
   const { t } = useTranslation()
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
 
-  const [state, setState] = useState({
-    authorizeUrl: '',
-    callbackUrl: '',
-    isStarting: false,
-    isCompleting: false,
-  })
-
-  useEffect(() => {
-    if (!open) {
-      setState({
-        authorizeUrl: '',
-        callbackUrl: '',
-        isStarting: false,
-        isCompleting: false,
-      })
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const draftKey = JSON.stringify([open, scopeKey, sessionRevision])
+  const lifecycle = useRef(0)
+  useLayoutEffect(() => {
+    lifecycle.current += 1
+    return () => {
+      lifecycle.current += 1
     }
-  }, [open])
+  }, [draftKey])
+  const [state, setState] = useResettableState(
+    () => ({
+      authorizeUrl: '',
+      callbackUrl: '',
+      isStarting: false,
+      isCompleting: false,
+    }),
+    draftKey
+  )
 
   const canCopyAuthorizeUrl = Boolean(state.authorizeUrl && !state.isStarting)
   const canComplete = useMemo(
@@ -74,9 +79,15 @@ export function CodexOAuthDialog({
   )
 
   const handleStart = async () => {
+    if (!open) return
+    const generation = lifecycle.current
+    const current = () =>
+      lifecycle.current === generation &&
+      useAuthStore.getState().sessionRevision === sessionRevision
     setState((prev) => ({ ...prev, isStarting: true }))
     try {
       const res = await startCodexOAuth()
+      if (!current()) return
       if (!res.success) {
         throw new Error(res.message || 'Failed to start OAuth')
       }
@@ -90,25 +101,31 @@ export function CodexOAuthDialog({
       try {
         window.open(url, '_blank', 'noopener,noreferrer')
         toast.success(t('Opened authorization page'))
-      } catch (error) {
+      } catch {
         // eslint-disable-next-line no-console
-        console.warn('Failed to open authorization page:', error)
+        console.warn('Failed to open authorization page')
         toast.warning(t('Please manually copy and open the authorization link'))
       }
     } catch (error) {
+      if (!current()) return
       toast.error(
         error instanceof Error ? error.message : t('OAuth start failed')
       )
     } finally {
-      setState((prev) => ({ ...prev, isStarting: false }))
+      if (current()) setState((prev) => ({ ...prev, isStarting: false }))
     }
   }
 
   const handleComplete = async () => {
-    if (!state.callbackUrl.trim()) return
+    if (!open || !state.callbackUrl.trim()) return
+    const generation = lifecycle.current
+    const current = () =>
+      lifecycle.current === generation &&
+      useAuthStore.getState().sessionRevision === sessionRevision
     setState((prev) => ({ ...prev, isCompleting: true }))
     try {
       const res = await completeCodexOAuth(state.callbackUrl.trim())
+      if (!current()) return
       if (!res.success) {
         throw new Error(res.message || 'OAuth failed')
       }
@@ -122,9 +139,10 @@ export function CodexOAuthDialog({
       toast.success(t('Credential generated'))
       onOpenChange(false)
     } catch (error) {
+      if (!current()) return
       toast.error(error instanceof Error ? error.message : t('OAuth failed'))
     } finally {
-      setState((prev) => ({ ...prev, isCompleting: false }))
+      if (current()) setState((prev) => ({ ...prev, isCompleting: false }))
     }
   }
 

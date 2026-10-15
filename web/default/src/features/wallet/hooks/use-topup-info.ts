@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
+import { useAuthStore } from '@/stores/auth-store'
+import { getSafeErrorDebugInfo } from '@/lib/handle-server-error'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { getTopupInfo } from '../api'
 import {
   generatePresetAmounts,
@@ -162,60 +166,75 @@ function parseDiscountMap(data: unknown): Record<number, number> {
 }
 
 export function useTopupInfo() {
-  const [topupInfo, setTopupInfo] = useState<TopupInfo | null>(null)
-  const [presetAmounts, setPresetAmounts] = useState<PresetAmount[]>([])
-  const [loading, setLoading] = useState(true)
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const beginRead = useReadScope(sessionRevision)
+  const [topupInfo, setTopupInfo] = useResettableState<TopupInfo | null>(
+    null,
+    sessionRevision
+  )
+  const [presetAmounts, setPresetAmounts] = useResettableState<PresetAmount[]>(
+    [],
+    sessionRevision
+  )
+  const [loading, setLoading] = useResettableState(true, sessionRevision)
 
-  const fetchTopupInfo = async () => {
-    try {
-      setLoading(true)
+  const loadTopupInfo = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getTopupInfo()
+      .then((response) => {
+        if (!current()) return
 
-      const response = await getTopupInfo()
+        if (!response.success || !response.data) {
+          // eslint-disable-next-line no-console
+          console.error('Failed to fetch topup info')
+          return
+        }
 
-      if (!response.success || !response.data) {
+        const processedData: TopupInfo = {
+          ...response.data,
+          pay_methods: parsePaymentMethods(
+            response.data.pay_methods,
+            response.data.stripe_min_topup
+          ),
+          amount_options: parseAmountOptions(response.data.amount_options),
+          discount: parseDiscountMap(response.data.discount),
+          creem_products: parseCreemProducts(response.data.creem_products),
+          waffo_pay_methods: parseWaffoPayMethods(
+            response.data.waffo_pay_methods
+          ),
+        }
+
+        setTopupInfo(processedData)
+
+        if (processedData.amount_options.length > 0) {
+          const customPresets = mergePresetAmounts(
+            processedData.amount_options,
+            processedData.discount || {}
+          )
+          setPresetAmounts(customPresets)
+        } else {
+          const minTopup = getMinTopupAmount(processedData)
+          const defaultPresets = generatePresetAmounts(minTopup)
+          setPresetAmounts(defaultPresets)
+        }
+      })
+      .catch((err) => {
+        if (!current()) return
         // eslint-disable-next-line no-console
-        console.error('Failed to fetch topup info:', response.message)
-        return
-      }
-
-      const processedData: TopupInfo = {
-        ...response.data,
-        pay_methods: parsePaymentMethods(
-          response.data.pay_methods,
-          response.data.stripe_min_topup
-        ),
-        amount_options: parseAmountOptions(response.data.amount_options),
-        discount: parseDiscountMap(response.data.discount),
-        creem_products: parseCreemProducts(response.data.creem_products),
-        waffo_pay_methods: parseWaffoPayMethods(
-          response.data.waffo_pay_methods
-        ),
-      }
-
-      setTopupInfo(processedData)
-
-      if (processedData.amount_options.length > 0) {
-        const customPresets = mergePresetAmounts(
-          processedData.amount_options,
-          processedData.discount || {}
-        )
-        setPresetAmounts(customPresets)
-      } else {
-        const minTopup = getMinTopupAmount(processedData)
-        const defaultPresets = generatePresetAmounts(minTopup)
-        setPresetAmounts(defaultPresets)
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch topup info:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
+        console.error('Failed to fetch topup info:', getSafeErrorDebugInfo(err))
+      })
+      .finally(() => {
+        if (current()) setLoading(false)
+      })
+  }, [beginRead, setTopupInfo, setPresetAmounts, setLoading])
+  const fetchTopupInfo = useCallback(() => {
+    setLoading(true)
+    return loadTopupInfo()
+  }, [loadTopupInfo, setLoading])
   useEffect(() => {
-    fetchTopupInfo()
-  }, [])
+    void loadTopupInfo()
+  }, [loadTopupInfo])
 
   return {
     topupInfo,

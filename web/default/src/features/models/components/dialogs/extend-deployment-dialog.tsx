@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -50,12 +51,8 @@ export function ExtendDeploymentDialog({
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [hours, setHours] = useState(1)
+  const [hours, setHours] = useResettableState(1, `${open}:${deploymentId}`)
   const [isSubmitting, setIsSubmitting] = useState(false)
-
-  useEffect(() => {
-    if (open) setHours(1)
-  }, [open])
 
   const { data: detailsRes, isLoading: isLoadingDetails } = useQuery({
     queryKey: ['deployment-details-for-extend', deploymentId],
