@@ -41,6 +41,16 @@ go run ./tools/sqliteops restore `
 
 Verification rejects missing, modified, path-escaping, and unlisted files. Restore copies only verified database files and WAL sidecars; configuration must be supplied separately through a secure channel. Run initialization, restart, and business-snapshot checks against the restored copy before any traffic is admitted.
 
+## 业务快照验收 / Business snapshot rehearsal
+
+仓库中的合成验收会使用当前模型创建主库和独立日志库，执行归档与两次隔离恢复，然后重新打开恢复文件，比较用户额度、Token、渠道用量、订阅周期与预消费、settlement、日志和 receipt。它只验证文件归档及当前 SQLite 模型数据的可读性，不代表真实生产库、跨库原子性或外部支付状态已经验证：
+
+```powershell
+go test ./model -run TestSQLiteOperationsAcceptancePreservesBusinessSnapshot -count=1
+```
+
+The repository rehearsal creates a synthetic primary database and independent log database from the current models, archives them, restores them twice into isolated directories, reopens both copies, and compares wallet quota, token and channel usage, subscription/pre-consume state, settlement, logs, and receipts. It validates the archive and current SQLite model readability only; it does not establish production-database, cross-database atomicity, or external-payment correctness.
+
 ## 边界 / Boundaries
 
 - `--quiesced` 是强制门禁；运行中复制单个 SQLite 文件不能证明恢复点一致。
@@ -48,9 +58,11 @@ Verification rejects missing, modified, path-escaping, and unlisted files. Resto
 - manual、unknown outcome、跨订阅周期和外部已接受但本地未完成的结算必须单独对账。
 - 新版本写入不保证旧版本可以直接降级；回退使用完整升级前归档，并核对期间新增写入。
 - 本工具不验证 MySQL/PostgreSQL、Redis、多主机、真实渠道、OAuth、掉电恢复或浏览器流程。
+- 合成业务快照测试不能替代真实进程启动、真实计费/渠道调用或 MySQL/PostgreSQL 兼容性测试。
 
 - `--quiesced` is mandatory; copying one SQLite file while it is live does not establish a consistent restore point.
 - An archive is not an atomic snapshot across the business database, log database, and external payment state.
 - Manual, unknown-outcome, cross-period, and externally accepted but locally incomplete settlements require separate reconciliation.
 - New-version writes are not guaranteed to support direct downgrade; rollback uses the complete pre-upgrade archive and reconciles writes made during the rehearsal.
 - This tool does not validate MySQL/PostgreSQL, Redis, multi-host operation, real providers, OAuth, power loss, or browser flows.
+- The synthetic business-snapshot test does not replace live-process startup, real billing/provider calls, or MySQL/PostgreSQL compatibility testing.
