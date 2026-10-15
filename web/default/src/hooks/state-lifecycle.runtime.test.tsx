@@ -42,7 +42,62 @@ const { ChannelAffinitySection } =
   await import('@/features/system-settings/general/channel-affinity')
 const { SettingsPageProvider } =
   await import('@/features/system-settings/components/settings-page-context')
+const { SidebarModulesCard } =
+  await import('@/features/profile/components/sidebar-modules-card')
 after(() => env.teardown())
+
+test('sidebar settings recover malformed values and preserve explicit false without autosaving', async () => {
+  const adapter = api.defaults.adapter,
+    previousUser = useAuthStore.getState().auth.user
+  const defaults = {
+    chat: { enabled: true, playground: true, chat: true },
+    console: {
+      enabled: true,
+      detail: true,
+      token: true,
+      log: true,
+      midjourney: true,
+      task: true,
+    },
+    personal: { enabled: true, topup: true, personal: true },
+  }
+  const valid = { chat: { enabled: false, chat: false } }
+  const cases = ['{broken', 'null', '[]', 'false', '42', JSON.stringify(valid)]
+  try {
+    for (const [index, raw] of cases.entries()) {
+      useAuthStore
+        .getState()
+        .auth.setUser({ id: 30 + index, username: 'sidebar-user', role: 1 })
+      const saved: unknown[] = []
+      api.defaults.adapter = async (config) => {
+        assert.equal(config.url, '/api/user/self')
+        if (config.method === 'put')
+          saved.push(JSON.parse(JSON.parse(config.data).sidebar_modules))
+        else assert.equal(config.method, 'get')
+        return {
+          config,
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          data: { success: true, data: { sidebar_modules: raw } },
+        }
+      }
+      const view = await env.render(<SidebarModulesCard />)
+      try {
+        assert.equal(saved.length, 0)
+        await view.click(
+          within(view.container).getByRole('button', { name: 'Save Changes' })
+        )
+        assert.deepEqual(saved, [index === cases.length - 1 ? valid : defaults])
+      } finally {
+        await view.unmount()
+      }
+    }
+  } finally {
+    api.defaults.adapter = adapter
+    useAuthStore.getState().auth.setUser(previousUser)
+  }
+})
 
 test('channel affinity drafts survive equal saved values and reset together after a saved change', async () => {
   const adapter = api.defaults.adapter

@@ -102,10 +102,24 @@ export function EditTagDialog({ open, onOpenChange }: EditTagDialogProps) {
     allModelsData?.data?.map((m) => m.id).filter(Boolean) || []
   const availableGroups = groupsData?.data || []
 
-  const [selectedModels, setSelectedModels] = useResettableState<string[]>(
-    () => tagModelsData?.data?.split(',').filter(Boolean) || [],
-    JSON.stringify([open, currentTag, tagModelsData?.data])
+  const [modelDraft, setModelDraft] = useResettableState(
+    () => ({
+      source: tagModelsData?.data,
+      edited: false,
+      models: tagModelsData?.data?.split(',').filter(Boolean) || [],
+    }),
+    draftKey
   )
+  if (!modelDraft.edited && modelDraft.source !== tagModelsData?.data) {
+    setModelDraft({
+      source: tagModelsData?.data,
+      edited: false,
+      models: tagModelsData?.data?.split(',').filter(Boolean) || [],
+    })
+  }
+  const selectedModels = modelDraft.models
+  const setSelectedModels = (models: string[]) =>
+    setModelDraft((previous) => ({ ...previous, edited: true, models }))
 
   const handleAddCustomModel = () => {
     if (!customModel.trim()) return

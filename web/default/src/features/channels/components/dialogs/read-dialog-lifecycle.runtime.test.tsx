@@ -35,10 +35,12 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
   value: env.dom.window.localStorage,
 })
-const { within, waitFor } = await import('@testing-library/react/pure')
+const { fireEvent, within, waitFor } =
+  await import('@testing-library/react/pure')
 const { ChannelsProvider, useChannels } = await import('../channels-provider')
 const { MultiKeyManageDialog } = await import('./multi-key-manage-dialog')
 const { BalanceQueryDialog } = await import('./balance-query-dialog')
+const { EditTagDialog } = await import('./edit-tag-dialog')
 const { UserBindingDialog } =
   await import('@/features/users/components/dialogs/user-binding-dialog')
 after(() => {
@@ -75,6 +77,142 @@ function ChannelHarness({ mode }: { mode: 'keys' | 'usage' }) {
     </>
   )
 }
+
+test('tag model drafts accept fresh pristine data and protect edits until scope changes', async () => {
+  const adapter = api.defaults.adapter
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const pending: Array<(models: string) => void> = []
+  let tagReads = 0,
+    writes = 0
+  api.defaults.adapter = async (config) => {
+    if (config.method !== 'get') writes += 1
+    let data: unknown = []
+    if (config.url === '/api/channel/tag/models') {
+      if (config.params.tag === 'first') {
+        tagReads += 1
+        data =
+          tagReads <= 3
+            ? await new Promise<string>((resolve) => pending.push(resolve))
+            : 'server-refetched'
+      } else data = 'second-model'
+    }
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true, data },
+    }
+  }
+  function Harness() {
+    const { setCurrentTag } = useChannels()
+    const [open, setOpen] = useState(true)
+    const [, setRevision] = useState(0)
+    return (
+      <>
+        <button onClick={() => setCurrentTag('first')}>Edit first tag</button>
+        <button onClick={() => setCurrentTag('second')}>Edit second tag</button>
+        <button onClick={() => setOpen((value) => !value)}>
+          Toggle tag editor
+        </button>
+        <button onClick={() => setRevision((value) => value + 1)}>
+          Render tag host again
+        </button>
+        <EditTagDialog open={open} onOpenChange={setOpen} />
+      </>
+    )
+  }
+  const view = await env.render(
+    <QueryClientProvider client={client}>
+      <ChannelsProvider>
+        <Harness />
+      </ChannelsProvider>
+    </QueryClientProvider>
+  )
+  const body = within(env.dom.window.document.body),
+    host = within(view.container)
+  try {
+    await view.click(host.getByText('Edit first tag'))
+    await waitFor(() => assert.equal(pending.length, 1))
+    await act(async () => {
+      fireEvent.change(
+        body.getByPlaceholderText('Enter new tag name or leave empty'),
+        { target: { value: 'renamed-first' } }
+      )
+      pending[0]('server-initial')
+    })
+    await waitFor(() => assert.ok(body.queryByText(/server-initial/)))
+    let pristineRefetch: Promise<void> | undefined
+    await act(async () => {
+      pristineRefetch = client.refetchQueries({
+        queryKey: ['tag-models', 'first'],
+        exact: true,
+      })
+    })
+    await waitFor(() => assert.equal(pending.length, 2))
+    await act(async () => {
+      pending[1]('server-pristine')
+      await pristineRefetch
+    })
+    assert.equal(
+      client.getQueryData<{ data: string }>(['tag-models', 'first'])?.data,
+      'server-pristine'
+    )
+    await view.click(host.getByText('Render tag host again'))
+    assert.ok(body.queryByText(/server-pristine/))
+    await act(async () => {
+      fireEvent.change(
+        body.getByPlaceholderText('Custom model (comma-separated)'),
+        { target: { value: 'local-model' } }
+      )
+    })
+    await view.click(body.getByRole('button', { name: 'Add' }))
+    assert.ok(body.queryByText(/local-model/))
+    let refetch: Promise<void> | undefined
+    await act(async () => {
+      refetch = client.refetchQueries({
+        queryKey: ['tag-models', 'first'],
+        exact: true,
+      })
+    })
+    await waitFor(() => assert.equal(pending.length, 3))
+    await act(async () => {
+      pending[2]('server-refetched')
+      await refetch
+    })
+    assert.equal(
+      client.getQueryData<{ data: string }>(['tag-models', 'first'])?.data,
+      'server-refetched'
+    )
+    await view.click(host.getByText('Render tag host again'))
+    assert.ok(body.queryByText(/local-model/))
+    assert.ok(body.queryByText(/server-pristine/))
+    assert.equal(
+      (
+        body.getByPlaceholderText(
+          'Enter new tag name or leave empty'
+        ) as HTMLInputElement
+      ).value,
+      'renamed-first'
+    )
+    await view.click(host.getByText('Toggle tag editor'))
+    await view.click(host.getByText('Toggle tag editor'))
+    await waitFor(() => assert.ok(body.queryByText(/server-refetched/)))
+    assert.equal(body.queryByText(/local-model/), null)
+    await view.click(host.getByText('Edit second tag'))
+    await waitFor(() => assert.ok(body.queryByText(/second-model/)))
+    assert.equal(body.queryByText(/server-refetched/), null)
+    assert.equal(writes, 0)
+    assert.ok(tagReads >= 3)
+  } finally {
+    pending.forEach((release) => release('server-refetched'))
+    await view.unmount()
+    client.clear()
+    api.defaults.adapter = adapter
+  }
+})
 
 test('late multi-key results cannot replace the current channel keys', async () => {
   const adapter = api.defaults.adapter

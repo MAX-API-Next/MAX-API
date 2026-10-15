@@ -145,7 +145,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const [channelDialogOpen, setChannelDialogOpen] = useState(false)
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([])
-  const [endpointOverrides, setChannelEndpoints] = useState<
+  const [endpointOverrides, setEndpointOverrides] = useState<
     Record<number, string>
   >({})
   const [differences, setDifferences] = useState<DifferencesMap>({})
@@ -544,7 +544,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         selectedChannelIds={selectedChannelIds}
         onSelectedChannelIdsChange={setSelectedChannelIds}
         channelEndpoints={channelEndpoints}
-        onChannelEndpointsChange={setChannelEndpoints}
+        onChannelEndpointsChange={setEndpointOverrides}
         onConfirm={handleConfirmChannelSelection}
       />
 
