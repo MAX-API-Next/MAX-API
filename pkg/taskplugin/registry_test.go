@@ -95,7 +95,6 @@ func TestRegistryConcurrentPublicationPreservesAllUniquePlugins(t *testing.T) {
 	var group sync.WaitGroup
 	errors := make(chan error, count)
 	for index := 0; index < count; index++ {
-		index := index
 		group.Add(1)
 		go func() {
 			defer group.Done()

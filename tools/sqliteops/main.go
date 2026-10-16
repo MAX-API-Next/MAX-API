@@ -395,7 +395,7 @@ func writeManifest(root string, value manifest) error {
 	return os.WriteFile(filepath.Join(root, manifestName), data, 0o600)
 }
 
-func fingerprintFile(path string) (configurationHash, error) {
+func fingerprintFile(path string) (result configurationHash, err error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return configurationHash{}, err
@@ -407,7 +407,11 @@ func fingerprintFile(path string) (configurationHash, error) {
 	if err != nil {
 		return configurationHash{}, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return configurationHash{}, err
@@ -423,7 +427,12 @@ func copyRegularFile(source, destination string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	inputClosed := false
+	defer func() {
+		if !inputClosed {
+			_ = input.Close()
+		}
+	}()
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
@@ -442,6 +451,10 @@ func copyRegularFile(source, destination string, mode os.FileMode) error {
 		return err
 	}
 	if err := output.Close(); err != nil {
+		return err
+	}
+	inputClosed = true
+	if err := input.Close(); err != nil {
 		return err
 	}
 	remove = false
@@ -518,5 +531,15 @@ func isWithin(root, path string) bool {
 func samePath(left, right string) bool {
 	leftAbs, _ := filepath.Abs(left)
 	rightAbs, _ := filepath.Abs(right)
-	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
+	leftClean := filepath.Clean(leftAbs)
+	rightClean := filepath.Clean(rightAbs)
+	if leftClean == rightClean {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(leftClean)
+	rightInfo, rightErr := os.Stat(rightClean)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return os.SameFile(leftInfo, rightInfo)
 }
