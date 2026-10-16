@@ -21,6 +21,12 @@ package model
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
+	"database/sql"
+	"encoding/hex"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -36,6 +42,32 @@ import (
 )
 
 var mysqlMigrationAcceptanceDatabase = regexp.MustCompile(`^maxapi_mysql_acceptance_[a-z0-9_]{1,32}$`)
+
+func TestMySQLSchemaCompatibilityReadOnly(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("TEST_MYSQL_SCHEMA_AUDIT_DSN"))
+	if dsn == "" {
+		t.Skip("set TEST_MYSQL_SCHEMA_AUDIT_DSN to run the read-only MySQL schema audit")
+	}
+	config, err := mysqldriver.ParseDSN(dsn)
+	require.NoError(t, err)
+	allowedDatabase := strings.TrimSpace(os.Getenv("TEST_MYSQL_SCHEMA_AUDIT_DATABASE"))
+	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) && config.DBName != allowedDatabase {
+		t.Fatalf("refusing MySQL schema audit target with unsafe database name")
+	}
+
+	db, sqlDB := openMySQLAcceptanceDB(t, dsn)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	for _, model := range []any{
+		&User{}, &Token{}, &Channel{}, &Option{}, &BillingSettlement{}, &BillingPreConsumeSelection{},
+		&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &Log{}, &BillingLogReceipt{},
+	} {
+		require.True(t, db.Migrator().HasTable(model), "expected existing table for %T", model)
+	}
+	require.True(t, db.Migrator().HasColumn(&User{}, "normalized_email"))
+	require.True(t, db.Migrator().HasColumn(&UserSubscription{}, "allow_wallet_overflow"))
+	require.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "allow_wallet_overflow"))
+	require.True(t, db.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_reconciliation"))
+}
 
 // TestMySQLStartupMigrationOnEmptyDatabase is opt-in. It intentionally
 // refuses a normal application database: migration acceptance must use a
@@ -54,14 +86,11 @@ func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) && config.DBName != allowedDatabase {
 		t.Fatalf("refusing MySQL migration target with unsafe database name")
 	}
-	if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify) {
+	if strings.TrimSpace(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")) == "" && config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify) {
 		t.Fatalf("refusing MySQL migration target without certificate-validating TLS")
 	}
 
-	db, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
+	db, sqlDB := openMySQLAcceptanceDB(t, dsn)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	sqlDB.SetMaxOpenConns(4)
 
@@ -103,4 +132,37 @@ func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 
 func testEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
+}
+
+func openMySQLAcceptanceDB(t *testing.T, dsn string) (*gorm.DB, *sql.DB) {
+	t.Helper()
+	config, err := mysqldriver.ParseDSN(dsn)
+	require.NoError(t, err)
+	if fingerprint := strings.TrimSpace(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")); fingerprint != "" {
+		expected, err := hex.DecodeString(fingerprint)
+		require.NoError(t, err)
+		require.Len(t, expected, sha256.Size)
+		config.TLS = &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
+			VerifyConnection: func(state tls.ConnectionState) error {
+				if len(state.PeerCertificates) == 0 {
+					return errors.New("mysql server returned no certificate")
+				}
+				actual := sha256.Sum256(state.PeerCertificates[0].Raw)
+				if !hmac.Equal(actual[:], expected) {
+					return errors.New("mysql certificate pin mismatch")
+				}
+				return nil
+			},
+		}
+	} else if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify) {
+		t.Fatalf("refusing MySQL target without certificate-validating TLS")
+	}
+	connector, err := mysqldriver.NewConnector(config)
+	require.NoError(t, err)
+	sqlDB := sql.OpenDB(connector)
+	db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: sqlDB}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	return db, sqlDB
 }
