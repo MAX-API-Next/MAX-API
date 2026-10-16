@@ -39,7 +39,9 @@ var mysqlMigrationAcceptanceDatabase = regexp.MustCompile(`^maxapi_mysql_accepta
 
 // TestMySQLStartupMigrationOnEmptyDatabase is opt-in. It intentionally
 // refuses a normal application database: migration acceptance must use a
-// fresh, disposable schema so a mistaken DSN cannot alter user data.
+// fresh, disposable schema so a mistaken DSN cannot alter user data. A
+// non-standard schema name requires an explicit TEST_MYSQL_MIGRATION_DATABASE
+// value in the same process and is still required to be empty.
 func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 	dsn := strings.TrimSpace(testEnv("TEST_MYSQL_MIGRATION_DSN"))
 	if dsn == "" {
@@ -48,7 +50,8 @@ func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 
 	config, err := mysqldriver.ParseDSN(dsn)
 	require.NoError(t, err)
-	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) {
+	allowedDatabase := strings.TrimSpace(os.Getenv("TEST_MYSQL_MIGRATION_DATABASE"))
+	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) && config.DBName != allowedDatabase {
 		t.Fatalf("refusing MySQL migration target with unsafe database name")
 	}
 	if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify) {
