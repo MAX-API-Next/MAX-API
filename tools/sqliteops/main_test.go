@@ -134,6 +134,25 @@ func TestBackupRejectsDestinationInsideSource(t *testing.T) {
 	require.ErrorContains(t, err, "source directory")
 }
 
+func TestBackupFailureLeavesDestinationEmpty(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "ledger.sqlite")
+	config := filepath.Join(t.TempDir(), "config-directory")
+	require.NoError(t, os.WriteFile(primary, []byte("ledger"), 0o600))
+	require.NoError(t, os.Mkdir(config, 0o700))
+	destination := filepath.Join(t.TempDir(), "archive")
+	require.NoError(t, os.Mkdir(destination, 0o700))
+	err := runBackup([]string{
+		"--quiesced",
+		"--primary", primary,
+		"--config", config,
+		"--destination", destination,
+	})
+	require.ErrorContains(t, err, "not a regular file")
+	entries, readErr := os.ReadDir(destination)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+}
+
 func TestBackupRejectsDestinationInsideSymlinkedSource(t *testing.T) {
 	source := t.TempDir()
 	primary := filepath.Join(source, "ledger.sqlite")

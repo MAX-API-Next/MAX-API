@@ -127,6 +127,16 @@ func runBackup(args []string) error {
 	if err != nil {
 		return err
 	}
+	stageRoot, err := createStagingDirectory(root)
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	sources, err := collectSources(*primary, *logPath)
 	if err != nil {
 		return err
@@ -137,7 +147,7 @@ func runBackup(args []string) error {
 		Tool:          "MAX-API sqliteops",
 	}
 	for _, source := range sources {
-		entry, err := archiveSource(root, source)
+		entry, err := archiveSource(stageRoot, source)
 		if err != nil {
 			return err
 		}
@@ -152,10 +162,17 @@ func runBackup(args []string) error {
 		m.Configuration = &fingerprint
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].ArchivePath < m.Files[j].ArchivePath })
-	if err := writeManifest(root, m); err != nil {
+	if err := writeManifest(stageRoot, m); err != nil {
 		return err
 	}
-	return verifyArchive(root)
+	if err := verifyArchive(stageRoot); err != nil {
+		return err
+	}
+	if err := publishStagingDirectory(stageRoot, root); err != nil {
+		return err
+	}
+	published = true
+	return nil
 }
 
 func runVerify(args []string) error {
@@ -203,9 +220,16 @@ func runRestore(args []string) error {
 	if pathsOverlap(backupRoot, targetRoot) {
 		return errors.New("restore target must not overlap the backup archive")
 	}
-	if err := os.MkdirAll(targetRoot, 0o700); err != nil {
+	stageRoot, err := createStagingDirectory(targetRoot)
+	if err != nil {
 		return err
 	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	m, err := readManifest(backupRoot)
 	if err != nil {
 		return err
@@ -215,7 +239,7 @@ func runRestore(args []string) error {
 		if err != nil {
 			return err
 		}
-		destination, err := safeArchivePath(targetRoot, item.ArchivePath)
+		destination, err := safeArchivePath(stageRoot, item.ArchivePath)
 		if err != nil {
 			return err
 		}
@@ -226,7 +250,14 @@ func runRestore(args []string) error {
 			return err
 		}
 	}
-	return copyRegularFile(filepath.Join(backupRoot, manifestName), filepath.Join(targetRoot, manifestName), 0o600)
+	if err := copyRegularFile(filepath.Join(backupRoot, manifestName), filepath.Join(stageRoot, manifestName), 0o600); err != nil {
+		return err
+	}
+	if err := publishStagingDirectory(stageRoot, targetRoot); err != nil {
+		return err
+	}
+	published = true
+	return nil
 }
 
 func collectSources(primary, logPath string) ([]sourceFile, error) {
@@ -318,6 +349,35 @@ func prepareDestination(destination, primary, logPath, config string) (string, e
 		}
 	}
 	return root, nil
+}
+
+func createStagingDirectory(destination string) (string, error) {
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(parent, "."+filepath.Base(destination)+".tmp-")
+}
+
+func publishStagingDirectory(stage, destination string) error {
+	if info, err := os.Stat(destination); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("destination is not a directory: %s", destination)
+		}
+		entries, err := os.ReadDir(destination)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("destination must remain empty until publish: %s", destination)
+		}
+		if err := os.Remove(destination); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(stage, destination)
 }
 
 func verifyArchive(root string) error {
