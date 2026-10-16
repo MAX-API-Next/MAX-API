@@ -105,6 +105,14 @@ func TestBackupRejectsDestinationInsideSource(t *testing.T) {
 	require.ErrorContains(t, err, "source directory")
 }
 
+func TestSamePathUsesExactOrExistingFileIdentity(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "ledger.sqlite")
+	require.NoError(t, os.WriteFile(file, []byte("ledger"), 0o600))
+	require.True(t, samePath(file, filepath.Join(root, ".", "ledger.sqlite")))
+	require.False(t, samePath(file, filepath.Join(root, "other.sqlite")))
+}
+
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -143,6 +143,7 @@ func openMySQLAcceptanceDB(t *testing.T, dsn string) (*gorm.DB, *sql.DB) {
 		require.NoError(t, err)
 		require.Len(t, expected, sha256.Size)
 		config.TLS = &tls.Config{
+			//nolint:gosec // VerifyConnection enforces the configured exact leaf SHA-256 pin.
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 			VerifyConnection: func(state tls.ConnectionState) error {

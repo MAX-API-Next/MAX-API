@@ -123,9 +123,11 @@ func validateModels(models []string) (map[string]struct{}, error) {
 	}
 	set := make(map[string]struct{}, len(models))
 	for _, model := range models {
-		model = strings.TrimSpace(model)
 		if model == "" {
 			return nil, fmt.Errorf("task plugin model must not be empty")
+		}
+		if model != strings.TrimSpace(model) {
+			return nil, fmt.Errorf("task plugin model %q must not have surrounding whitespace", model)
 		}
 		if _, exists := set[model]; exists {
 			return nil, fmt.Errorf("duplicate task plugin model %q", model)
@@ -194,6 +196,9 @@ func validateRoutes(routes []Route, models map[string]struct{}) error {
 			if !identifierPattern.MatchString(route.Render) {
 				return fmt.Errorf("query route %q requires a valid render hook", route.Path)
 			}
+			if route.TaskIDParam != "" && !routeHasParameter(route.Path, route.TaskIDParam) {
+				return fmt.Errorf("query route %q task id parameter %q is not in the path", route.Path, route.TaskIDParam)
+			}
 		} else {
 			if !identifierPattern.MatchString(route.Decode) || !identifierPattern.MatchString(route.Render) {
 				return fmt.Errorf("route %q requires valid decode and render hooks", route.Path)
@@ -211,6 +216,15 @@ func validateRoutes(routes []Route, models map[string]struct{}) error {
 		}
 	}
 	return nil
+}
+
+func routeHasParameter(path, parameter string) bool {
+	for _, part := range strings.Split(path, "/") {
+		if strings.HasPrefix(part, ":") && strings.TrimPrefix(part, ":") == parameter {
+			return true
+		}
+	}
+	return false
 }
 
 func routeShape(rawPath string) (string, error) {
@@ -318,8 +332,11 @@ func validateUsageSchema(schema map[string]UsageField) error {
 }
 
 func isASCII(value string) bool {
+	if !utf8.ValidString(value) {
+		return false
+	}
 	for _, r := range value {
-		if r > 127 || !utf8.ValidString(value) {
+		if r > 127 {
 			return false
 		}
 	}

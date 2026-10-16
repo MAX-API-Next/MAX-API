@@ -103,6 +103,7 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 					return nil, "", errTaskBillingUnsafeDatabase
 				}
 				config.TLS = &tls.Config{
+					//nolint:gosec // VerifyConnection enforces the configured exact leaf SHA-256 pin.
 					InsecureSkipVerify: true,
 					MinVersion:         tls.VersionTLS12,
 					VerifyConnection: func(state tls.ConnectionState) error {

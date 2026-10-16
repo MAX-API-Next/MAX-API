@@ -97,3 +97,24 @@ func TestValidateManifestRejectsUndeclaredRouteModel(t *testing.T) {
 		t.Fatal("expected undeclared route model to be rejected")
 	}
 }
+
+func TestValidateManifestRejectsInvalidQueryTaskIDParameter(t *testing.T) {
+	manifest := validManifest()
+	manifest.Routes[1].TaskIDParam = "missing"
+	if err := ValidateManifest(manifest); err == nil {
+		t.Fatal("expected query route task id parameter to match a path parameter")
+	}
+	manifest = validManifest()
+	manifest.Routes[1].TaskIDParam = "task_id"
+	if err := ValidateManifest(manifest); err != nil {
+		t.Fatalf("expected matching query task id parameter to pass: %v", err)
+	}
+}
+
+func TestValidateManifestRejectsPaddedModelNames(t *testing.T) {
+	manifest := validManifest()
+	manifest.Models[0] = " vendor-model"
+	if err := ValidateManifest(manifest); err == nil {
+		t.Fatal("expected padded model name to be rejected")
+	}
+}
