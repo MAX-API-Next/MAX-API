@@ -68,6 +68,8 @@ func taskBillingTestCheck(t *testing.T, err error, stage string) {
 }
 
 // Each external invocation needs a freshly provisioned disposable database.
+// A non-standard name is accepted only when the same process explicitly sets
+// TEST_TASK_BILLING_MYSQL_DATABASE to that exact database name.
 // Nothing is dropped: successful and partial migrations are retained for audit.
 // The unique ownership table rejects a second harness targeting the same DB.
 type taskBillingTestOwnership struct {
@@ -83,7 +85,8 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		if !taskBillingTestDatabaseName.MatchString(config.DBName) {
+		allowedDatabase := strings.TrimSpace(os.Getenv("TEST_TASK_BILLING_MYSQL_DATABASE"))
+		if !taskBillingTestDatabaseName.MatchString(config.DBName) && config.DBName != allowedDatabase {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
 		// External contract tests may never put database credentials on a
@@ -165,6 +168,21 @@ func TestOpenTaskBillingTestSQLRejectsPlaintextNetworkVariants(t *testing.T) {
 				t.Fatalf("expected plaintext %s DSN to be rejected", network)
 			}
 		})
+	}
+}
+
+func TestOpenTaskBillingTestSQLAllowsExplicitDedicatedDatabase(t *testing.T) {
+	t.Setenv("TEST_TASK_BILLING_MYSQL_DATABASE", "test3")
+	t.Setenv("TEST_MYSQL_TLS_CERT_SHA256", strings.Repeat("0", 64))
+	db, name, err := openTaskBillingTestSQL("mysql", "user:password@tcp(127.0.0.1:3306)/test3")
+	if err != nil {
+		t.Fatalf("expected explicitly authorized database name to pass validation: %v", err)
+	}
+	if name != "test3" {
+		t.Fatalf("expected database name test3, got %q", name)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close validated database handle: %v", err)
 	}
 }
 
