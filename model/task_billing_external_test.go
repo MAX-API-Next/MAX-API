@@ -2,7 +2,11 @@ package model
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -86,8 +90,32 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		// plaintext network connection. Unix sockets are local-only; every
 		// other network type (including tcp4/tcp6) requires certificate-
 		// validating TLS and must not permit plaintext fallback.
-		if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext) {
+		if config.Net != "unix" && config.AllowFallbackToPlaintext {
 			return nil, "", errTaskBillingUnsafeDatabase
+		}
+		if config.Net != "unix" {
+			if fingerprint := strings.TrimSpace(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")); fingerprint != "" {
+				expected, err := hex.DecodeString(fingerprint)
+				if err != nil || len(expected) != sha256.Size {
+					return nil, "", errTaskBillingUnsafeDatabase
+				}
+				config.TLS = &tls.Config{
+					InsecureSkipVerify: true,
+					MinVersion:         tls.VersionTLS12,
+					VerifyConnection: func(state tls.ConnectionState) error {
+						if len(state.PeerCertificates) == 0 {
+							return errors.New("mysql server returned no certificate")
+						}
+						actual := sha256.Sum256(state.PeerCertificates[0].Raw)
+						if !hmac.Equal(actual[:], expected) {
+							return errors.New("mysql certificate pin mismatch")
+						}
+						return nil
+					},
+				}
+			} else if config.TLS == nil || config.TLS.InsecureSkipVerify {
+				return nil, "", errTaskBillingUnsafeDatabase
+			}
 		}
 		config.Timeout, config.ReadTimeout, config.WriteTimeout = 5*time.Second, 10*time.Second, 10*time.Second
 		connector, err := mysqldriver.NewConnector(config)
