@@ -43,6 +43,10 @@ import (
 
 var mysqlMigrationAcceptanceDatabase = regexp.MustCompile(`^maxapi_mysql_acceptance_[a-z0-9_]{1,32}$`)
 
+func mysqlAcceptanceDatabaseAllowed(name, override string, pattern *regexp.Regexp) bool {
+	return pattern.MatchString(name) || (override != "" && name == override)
+}
+
 func TestMySQLSchemaCompatibilityReadOnly(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("TEST_MYSQL_SCHEMA_AUDIT_DSN"))
 	if dsn == "" {
@@ -51,7 +55,7 @@ func TestMySQLSchemaCompatibilityReadOnly(t *testing.T) {
 	config, err := mysqldriver.ParseDSN(dsn)
 	require.NoError(t, err)
 	allowedDatabase := strings.TrimSpace(os.Getenv("TEST_MYSQL_SCHEMA_AUDIT_DATABASE"))
-	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) && config.DBName != allowedDatabase {
+	if !mysqlAcceptanceDatabaseAllowed(config.DBName, allowedDatabase, mysqlMigrationAcceptanceDatabase) {
 		t.Fatalf("refusing MySQL schema audit target with unsafe database name")
 	}
 
@@ -83,7 +87,7 @@ func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 	config, err := mysqldriver.ParseDSN(dsn)
 	require.NoError(t, err)
 	allowedDatabase := strings.TrimSpace(os.Getenv("TEST_MYSQL_MIGRATION_DATABASE"))
-	if !mysqlMigrationAcceptanceDatabase.MatchString(config.DBName) && config.DBName != allowedDatabase {
+	if !mysqlAcceptanceDatabaseAllowed(config.DBName, allowedDatabase, mysqlMigrationAcceptanceDatabase) {
 		t.Fatalf("refusing MySQL migration target with unsafe database name")
 	}
 	if strings.TrimSpace(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")) == "" && config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify) {
@@ -128,6 +132,25 @@ func TestMySQLStartupMigrationOnEmptyDatabase(t *testing.T) {
 	require.True(t, db.Migrator().HasColumn(&UserSubscription{}, "allow_wallet_overflow"))
 	require.True(t, db.Migrator().HasColumn(&SubscriptionPlan{}, "allow_wallet_overflow"))
 	require.True(t, db.Migrator().HasIndex(&BillingSettlement{}, "idx_billing_settlement_reconciliation"))
+}
+
+func TestMySQLAcceptanceDatabaseGuardRequiresExplicitOverride(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern *regexp.Regexp
+		valid   string
+	}{
+		{name: "task billing", pattern: taskBillingTestDatabaseName, valid: "maxapi_task_billing_test_fixture"},
+		{name: "migration", pattern: mysqlMigrationAcceptanceDatabase, valid: "maxapi_mysql_acceptance_fixture"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.False(t, mysqlAcceptanceDatabaseAllowed("", "", test.pattern))
+			require.False(t, mysqlAcceptanceDatabaseAllowed("production", "", test.pattern))
+			require.True(t, mysqlAcceptanceDatabaseAllowed("dedicated_override", "dedicated_override", test.pattern))
+			require.True(t, mysqlAcceptanceDatabaseAllowed(test.valid, "", test.pattern))
+		})
+	}
 }
 
 func testEnv(name string) string {

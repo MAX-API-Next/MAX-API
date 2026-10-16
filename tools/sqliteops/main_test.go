@@ -93,6 +93,35 @@ func TestVerifyRejectsTamperingAndUnlistedFiles(t *testing.T) {
 	require.ErrorContains(t, verifyArchive(archive2), "unlisted file")
 }
 
+func TestVerifyRejectsManifestWithoutPrimaryDatabase(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "ledger.sqlite")
+	require.NoError(t, os.WriteFile(primary, []byte("ledger"), 0o600))
+	archive := filepath.Join(t.TempDir(), "archive")
+	require.NoError(t, runBackup([]string{"--quiesced", "--primary", primary, "--destination", archive}))
+	value, err := readManifest(archive)
+	require.NoError(t, err)
+	for index := range value.Files {
+		value.Files[index].Roles = []string{"log"}
+	}
+	require.NoError(t, writeManifest(archive, value))
+	require.ErrorContains(t, verifyArchive(archive), "missing the primary database")
+}
+
+func TestVerifyRejectsSymlinkedArchiveFile(t *testing.T) {
+	primary := filepath.Join(t.TempDir(), "ledger.sqlite")
+	require.NoError(t, os.WriteFile(primary, []byte("ledger"), 0o600))
+	archive := filepath.Join(t.TempDir(), "archive")
+	require.NoError(t, runBackup([]string{"--quiesced", "--primary", primary, "--destination", archive}))
+	archiveFile := filepath.Join(archive, "primary", "ledger.sqlite")
+	target := filepath.Join(t.TempDir(), "target.sqlite")
+	require.NoError(t, os.WriteFile(target, []byte("ledger"), 0o600))
+	require.NoError(t, os.Remove(archiveFile))
+	if err := os.Symlink(target, archiveFile); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	require.ErrorContains(t, verifyArchive(archive), "regular and not a symlink")
+}
+
 func TestBackupRejectsDestinationInsideSource(t *testing.T) {
 	source := t.TempDir()
 	primary := filepath.Join(source, "ledger.sqlite")
@@ -101,6 +130,22 @@ func TestBackupRejectsDestinationInsideSource(t *testing.T) {
 		"--quiesced",
 		"--primary", primary,
 		"--destination", filepath.Join(source, "archive"),
+	})
+	require.ErrorContains(t, err, "source directory")
+}
+
+func TestBackupRejectsDestinationInsideSymlinkedSource(t *testing.T) {
+	source := t.TempDir()
+	primary := filepath.Join(source, "ledger.sqlite")
+	require.NoError(t, os.WriteFile(primary, []byte("ledger"), 0o600))
+	alias := filepath.Join(t.TempDir(), "source-link")
+	if err := os.Symlink(source, alias); err != nil {
+		t.Skipf("symlink creation is unavailable: %v", err)
+	}
+	err := runBackup([]string{
+		"--quiesced",
+		"--primary", primary,
+		"--destination", filepath.Join(alias, "archive"),
 	})
 	require.ErrorContains(t, err, "source directory")
 }

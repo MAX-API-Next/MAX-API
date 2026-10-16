@@ -93,7 +93,15 @@ func (registry *Registry) Publish(manifest Manifest) (uint64, error) {
 		}
 		for method := range next.byMethod {
 			sort.SliceStable(next.byMethod[method], func(i, j int) bool {
-				return routeSpecificity(next.byMethod[method][i].route.Path) > routeSpecificity(next.byMethod[method][j].route.Path)
+				a, b := next.byMethod[method][i], next.byMethod[method][j]
+				sa, sb := routeSpecificity(a.route.Path), routeSpecificity(b.route.Path)
+				if sa != sb {
+					return sa > sb
+				}
+				if a.pluginKey != b.pluginKey {
+					return a.pluginKey < b.pluginKey
+				}
+				return a.route.Path < b.route.Path
 			})
 		}
 		if registry.state.CompareAndSwap(current, next) {

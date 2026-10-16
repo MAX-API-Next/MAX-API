@@ -86,7 +86,7 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 			return nil, "", err
 		}
 		allowedDatabase := strings.TrimSpace(os.Getenv("TEST_TASK_BILLING_MYSQL_DATABASE"))
-		if !taskBillingTestDatabaseName.MatchString(config.DBName) && config.DBName != allowedDatabase {
+		if !mysqlAcceptanceDatabaseAllowed(config.DBName, allowedDatabase, taskBillingTestDatabaseName) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
 		// External contract tests may never put database credentials on a

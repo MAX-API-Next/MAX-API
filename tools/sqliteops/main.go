@@ -338,6 +338,9 @@ func verifyArchive(root string) error {
 		if err != nil {
 			return err
 		}
+		if err := requireRegularFile(path); err != nil {
+			return fmt.Errorf("verify %s: %w", item.ArchivePath, err)
+		}
 		actual, err := fingerprintFile(path)
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", item.ArchivePath, err)
@@ -382,6 +385,22 @@ func readManifest(root string) (manifest, error) {
 	}
 	if result.SchemaVersion != manifestVersion || len(result.Files) == 0 {
 		return manifest{}, errors.New("unsupported or empty archive manifest")
+	}
+	roles := map[string]bool{}
+	mainRoles := map[string]bool{}
+	for _, item := range result.Files {
+		for _, role := range item.Roles {
+			roles[role] = true
+			if !strings.HasSuffix(item.ArchivePath, "-wal") && !strings.HasSuffix(item.ArchivePath, "-shm") {
+				mainRoles[role] = true
+			}
+		}
+	}
+	if !mainRoles["primary"] {
+		return manifest{}, errors.New("archive manifest is missing the primary database")
+	}
+	if roles["log"] && !mainRoles["log"] {
+		return manifest{}, errors.New("archive manifest is missing the log database")
 	}
 	return result, nil
 }
@@ -513,9 +532,38 @@ func safeArchivePath(root, relative string) (string, error) {
 }
 
 func pathsOverlap(left, right string) bool {
-	leftAbs, _ := filepath.Abs(left)
-	rightAbs, _ := filepath.Abs(right)
-	return isWithin(leftAbs, rightAbs) || isWithin(rightAbs, leftAbs)
+	leftResolved := resolveOverlapPath(left)
+	rightResolved := resolveOverlapPath(right)
+	return isWithin(leftResolved, rightResolved) || isWithin(rightResolved, leftResolved)
+}
+
+func resolveOverlapPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	current := filepath.Clean(abs)
+	var missing []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return filepath.Clean(abs)
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved)
+		} else if !os.IsNotExist(err) {
+			return filepath.Clean(abs)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(abs)
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func isWithin(root, path string) bool {

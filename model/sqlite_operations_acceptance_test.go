@@ -119,6 +119,8 @@ func TestSQLiteOperationsAcceptancePreservesBusinessSnapshot(t *testing.T) {
 
 	seedSQLiteOperationsDataset(t, primaryPath, logPath)
 	before := readSQLiteOperationsSnapshot(t, primaryPath, logPath)
+	walDB := seedSQLiteOperationsWALFixture(t, primaryPath)
+	t.Cleanup(func() { require.NoError(t, closeSQLiteOperationsDatabase(walDB)) })
 
 	archivePath := filepath.Join(workDir, "archive")
 	runSQLiteOperationsCLI(t, root, "backup", "--quiesced", "--primary", primaryPath, "--log", logPath, "--config", configPath, "--destination", archivePath)
@@ -133,6 +135,11 @@ func TestSQLiteOperationsAcceptancePreservesBusinessSnapshot(t *testing.T) {
 		filepath.Join(firstRestore, "primary", filepath.Base(primaryPath)),
 		filepath.Join(firstRestore, "log", filepath.Base(logPath)),
 	)
+	restoredDB := openSQLiteOperationsDatabase(t, filepath.Join(firstRestore, "primary", filepath.Base(primaryPath)))
+	var walMarker Option
+	require.NoError(t, restoredDB.Where("key = ?", "sqliteops-wal-marker").First(&walMarker).Error)
+	require.Equal(t, "committed-in-wal", walMarker.Value)
+	require.NoError(t, closeSQLiteOperationsDatabase(restoredDB))
 	// Reopening the restored files models a second cold start and catches
 	// archives that are readable only while the first connection is open.
 	secondStartSnapshot := readSQLiteOperationsSnapshot(t,
@@ -167,6 +174,7 @@ func seedSQLiteOperationsDataset(t *testing.T, primaryPath, logPath string) {
 	require.NoError(t, db.AutoMigrate(
 		&User{}, &Token{}, &Channel{}, &SubscriptionPlan{}, &UserSubscription{},
 		&SubscriptionPreConsumeRecord{}, &BillingPreConsumeSelection{}, &BillingSettlement{},
+		&Option{},
 	))
 	require.NoError(t, db.Create(&User{
 		Id: userID, Username: "sqliteops-acceptance", Password: "synthetic-password",
@@ -224,6 +232,17 @@ func seedSQLiteOperationsDataset(t *testing.T, primaryPath, logPath string) {
 		OperationKey: operationKey, ClaimToken: "synthetic-claim-token", CreatedAt: now,
 	}).Error)
 	require.NoError(t, closeSQLiteOperationsDatabase(logDB))
+}
+
+func seedSQLiteOperationsWALFixture(t *testing.T, primaryPath string) *gorm.DB {
+	db := openSQLiteOperationsDatabase(t, primaryPath)
+	require.NoError(t, db.Exec("PRAGMA journal_mode=WAL").Error)
+	require.NoError(t, db.Exec("PRAGMA wal_autocheckpoint=0").Error)
+	require.NoError(t, db.Create(&Option{Key: "sqliteops-wal-marker", Value: "committed-in-wal"}).Error)
+	walInfo, err := os.Stat(primaryPath + "-wal")
+	require.NoError(t, err, "the committed fixture row must remain in a real WAL sidecar")
+	require.Greater(t, walInfo.Size(), int64(0), "the committed fixture row must remain in a non-empty WAL sidecar")
+	return db
 }
 
 func readSQLiteOperationsSnapshot(t *testing.T, primaryPath, logPath string) sqliteOperationsBusinessSnapshot {
