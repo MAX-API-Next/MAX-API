@@ -159,7 +159,7 @@ func (snapshot Snapshot) MatchRoute(method, requestPath, model string) (RouteMat
 			continue
 		}
 		manifest, ok := snapshot.state.plugins[binding.pluginKey]
-		if !ok {
+		if !ok || !declaresModel(manifest, model) {
 			continue
 		}
 		return RouteMatch{PluginKey: binding.pluginKey, Manifest: cloneManifest(manifest), Route: cloneRoute(binding.route)}, true
@@ -201,6 +201,15 @@ func routeAllowsModel(route Route, model string) bool {
 	}
 	for _, allowed := range route.Models {
 		if allowed == model {
+			return true
+		}
+	}
+	return false
+}
+
+func declaresModel(manifest Manifest, model string) bool {
+	for _, candidate := range manifest.Models {
+		if candidate == model {
 			return true
 		}
 	}
@@ -254,8 +263,9 @@ func cloneManifest(manifest Manifest) Manifest {
 	manifest.AllowedHosts = append([]string(nil), manifest.AllowedHosts...)
 	manifest.Upstreams = append([]string(nil), manifest.Upstreams...)
 	if manifest.UsageSchema != nil {
+		schema := manifest.UsageSchema
 		manifest.UsageSchema = make(map[string]UsageField, len(manifest.UsageSchema))
-		for key, field := range manifest.UsageSchema {
+		for key, field := range schema {
 			field.Enum = append([]string(nil), field.Enum...)
 			manifest.UsageSchema[key] = field
 		}

@@ -140,8 +140,9 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Key            string `json:"key,omitempty"`
-	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	PluginBinding  *types.TaskPluginBinding `json:"plugin_binding,omitempty"` // host-issued immutable plugin identity; never client-visible
+	Key            string                   `json:"key,omitempty"`
+	UpstreamTaskID string                   `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	// AwaitingUpstreamID distinguishes a newly persisted placeholder from
 	// legacy rows where TaskID itself is the provider task identifier.
 	AwaitingUpstreamID bool   `json:"awaiting_upstream_id,omitempty"`
