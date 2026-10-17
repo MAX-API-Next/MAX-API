@@ -85,7 +85,7 @@ func TestPluginFetchSeparatesCredentialsAndDoesNotFollowRedirects(t *testing.T) 
 }
 
 func TestPluginFetchBudgetsRevocationAndRedactedErrors(t *testing.T) {
-	t.Run("body and calls", func(t *testing.T) {
+	t.Run("body", func(t *testing.T) {
 		scope := testFetchScope(t)
 		scope.client.Transport = pluginRoundTrip(func(*http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: 200, Header: http.Header{}, ContentLength: -1, Body: io.NopCloser(strings.NewReader(strings.Repeat("x", MaxFetchBytes+1)))}, nil
@@ -93,11 +93,21 @@ func TestPluginFetchBudgetsRevocationAndRedactedErrors(t *testing.T) {
 		_, err := scope.Fetch("https://channel.vendor.example/status?token=synthetic-only")
 		require.ErrorIs(t, err, ErrFetchRejected)
 		require.NotContains(t, err.Error(), "synthetic-only")
-		for i := 1; i < MaxFetchCalls; i++ {
-			_, _ = scope.Fetch("https://unlisted.invalid")
+	})
+	t.Run("calls", func(t *testing.T) {
+		scope := testFetchScope(t)
+		calls := 0
+		scope.client.Transport = pluginRoundTrip(func(*http.Request) (*http.Response, error) {
+			calls++
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("ok"))}, nil
+		})
+		for i := 0; i < MaxFetchCalls; i++ {
+			_, err := scope.Fetch("https://channel.vendor.example/status")
+			require.NoError(t, err)
 		}
-		_, err = scope.Fetch("https://channel.vendor.example/status")
+		_, err := scope.Fetch("https://channel.vendor.example/status")
 		require.ErrorIs(t, err, ErrFetchRejected)
+		require.Equal(t, MaxFetchCalls, calls, "exhausted scope must reject before transport")
 	})
 	t.Run("revoked", func(t *testing.T) {
 		scope := testFetchScope(t)
