@@ -277,6 +277,89 @@ func TestTaskPluginCatalogConcurrentBootstrapSQLite(t *testing.T) {
 	runTaskPluginCatalogConcurrentBootstrap(t, db)
 }
 
+func TestTaskPluginCatalogLoadDistinguishesBootstrapConflictAndOrphans(t *testing.T) {
+	for _, appeared := range []bool{true, false} {
+		t.Run(fmt.Sprintf("head_appeared_%t", appeared), func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "observations.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(t, err)
+			pool, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, pool.Close()) })
+			require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}))
+			_, entry := catalogFixture(t, "observed", "1.0.0", "original")
+			store := NewTaskPluginCatalogStore(db)
+			_, err = store.CompareAndSwap(context.Background(), 0, []taskplugin.StoredPackage{entry})
+			require.NoError(t, err)
+			if !appeared {
+				require.NoError(t, db.Delete(&TaskPluginCatalogHead{}, 1).Error)
+			}
+			headReads := 0
+			callback := "test_catalog_head_observations"
+			headTable := db.NamingStrategy.TableName("TaskPluginCatalogHead")
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+				if tx.Statement.Table != headTable {
+					return
+				}
+				headReads++
+				if appeared && headReads == 1 {
+					// Supply the first READ COMMITTED observation: the head was
+					// absent, then a complete bootstrap became visible.
+					*tx.Statement.Dest.(*TaskPluginCatalogHead) = TaskPluginCatalogHead{}
+					tx.RowsAffected = 0
+					tx.Error = gorm.ErrRecordNotFound
+				}
+			}))
+			t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
+			_, err = store.Load(context.Background())
+			if appeared {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogConflict)
+			} else {
+				require.ErrorIs(t, err, taskplugin.ErrCatalogInvalid, "genuine orphan rows must remain rejected")
+			}
+			require.Equal(t, 2, headReads, "classify the snapshot only after checking whether the head changed")
+		})
+	}
+}
+
+func runTaskPluginCatalogReadCommittedBootstrap(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}))
+	_, entry := catalogFixture(t, "read-committed", "1.0.0", "original")
+	installed := false
+	var writerErr error
+	callback := "test_catalog_bootstrap_between_reads"
+	headTable := db.NamingStrategy.TableName("TaskPluginCatalogHead")
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if installed || tx.Statement.Table != headTable || !errors.Is(tx.Error, gorm.ErrRecordNotFound) {
+			return
+		}
+		installed = true
+		// The reader holds a dedicated connection and transaction. Bootstrap
+		// commits on another connection before its version query can start.
+		_, writerErr = NewTaskPluginCatalogStore(db).CompareAndSwap(context.Background(), 0, []taskplugin.StoredPackage{entry})
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
+	require.NoError(t, db.Connection(func(reader *gorm.DB) error {
+		// Apply only to the next transaction on this connection, leaving the
+		// pool's session isolation unchanged for subsequent tests.
+		if err := reader.Exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED").Error; err != nil {
+			return err
+		}
+		_, err := NewTaskPluginCatalogStore(reader).Load(context.Background())
+		require.True(t, installed)
+		require.NoError(t, writerErr)
+		require.ErrorIs(t, err, taskplugin.ErrCatalogConflict, "committed bootstrap is a retryable change, not corruption")
+		return nil
+	}))
+	catalog, err := taskplugin.OpenCatalog(context.Background(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	info, revision, err := catalog.List(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 1, revision)
+	require.Len(t, info, 1)
+	require.Equal(t, "read-committed", info[0].Key)
+}
+
 // Opt-in, isolated two-table fixtures. Existing billing/task/user tables are
 // untouched; cleanup drops only this invocation's random-prefixed tables.
 func TestTaskPluginCatalogMySQL(t *testing.T) {
@@ -292,16 +375,19 @@ func TestTaskPluginCatalogMySQL(t *testing.T) {
 	}
 	_, sqlDB := openMySQLAcceptanceDB(t, dsn)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	for _, name := range []string{"contract", "concurrent"} {
+	for _, name := range []string{"contract", "concurrent", "read_committed_bootstrap"} {
 		t.Run(name, func(t *testing.T) {
 			prefix := "tpc_" + common.GetUUID()[:12] + "_"
 			db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: sqlDB, SkipInitializeWithVersion: true}), &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: prefix}, Logger: logger.Default.LogMode(logger.Silent)})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(&TaskPluginVersion{}, &TaskPluginCatalogHead{})) })
-			if name == "contract" {
+			switch name {
+			case "contract":
 				runTaskPluginCatalogStoreContract(t, db)
-			} else {
+			case "concurrent":
 				runTaskPluginCatalogConcurrentBootstrap(t, db)
+			case "read_committed_bootstrap":
+				runTaskPluginCatalogReadCommittedBootstrap(t, db)
 			}
 		})
 	}

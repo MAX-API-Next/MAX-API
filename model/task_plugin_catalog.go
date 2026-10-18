@@ -133,9 +133,6 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil {
 			return err
 		}
-		if missing && len(rows) != 0 {
-			return taskplugin.ErrCatalogInvalid
-		}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent
@@ -143,6 +140,9 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if missing {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return taskplugin.ErrCatalogConflict
+			}
+			if len(rows) != 0 {
+				return taskplugin.ErrCatalogInvalid
 			}
 		} else if err != nil || head != after {
 			return taskplugin.ErrCatalogConflict
