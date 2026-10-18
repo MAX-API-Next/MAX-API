@@ -19,7 +19,7 @@ The service validates task ownership and the frozen usage contract before attach
 
 ## 持久目录与恢复 / Durable catalog and recovery
 
-`taskplugin.OpenCatalog(ctx, model.NewTaskPluginCatalogStore(db))` 加载内部目录，`catalog.Host()` 提供既有绑定与恢复能力。应用启动由 `InitializeTaskPluginCatalog` 完成恢复；缺表、损坏包或无效状态会阻止启动。目录仍没有公开管理路由或自动加载 JS 的行为。
+`taskplugin.OpenCatalog(ctx, model.NewTaskPluginCatalogStore(db))` 加载内部目录，`catalog.Host()` 提供既有绑定与恢复能力。应用启动由 `InitializeTaskPluginCatalog` 完成恢复；损坏包或无效状态会阻止启动。迁移仍由主节点执行，非主节点在恢复前只读等待两张目录表，最长 10 分钟且可取消；等待超时或恢复失败均阻止开放流量。目录仍没有公开管理路由或自动加载 JS 的行为。
 
 - `Install` 批量校验并保存完整包，原始文档字节和摘要保持不变；同 key/version 不允许替换内容。安装版本成为该 key 的启用版本，历史版本保留。
 - `SetEnabled(false)` 停止新任务绑定，旧任务仍能按历史版本恢复。`Activate` 显式切换已有版本，不自动选择“最新”版本。
@@ -27,10 +27,13 @@ The service validates task ownership and the frozen usage contract before attach
 - `task_plugin_catalog_heads` 的版本号条件更新与 `task_plugin_versions` 的变更在同一事务内提交。事务成功后一次发布宿主状态；存储失败、结果未知或刷新失败会暂停宿主，成功 `Refresh` 后恢复。
 - 包文档在 MySQL 使用 LONGTEXT，在 SQLite/PostgreSQL 使用 TEXT；版本身份使用固定长度摘要索引。升级会新增这两张表，备份与恢复应包含两表的一致状态。
 - 其他节点的变更通过显式 `Refresh` 读取。本阶段没有后台同步任务，不保证跨节点实时撤销；后续执行器接入时必须定义刷新时机。目录容量沿用 64 MiB 历史包原始字节上限。
+- 读取快照遇到并发版本冲突时最多尝试 3 次，首次冲突先暂停旧宿主，只有成功读取并验证完整快照才恢复；持续冲突、取消或其他存储错误仍暂停。不自动重试写入、提交结果未知或任务操作。
 
-`OpenCatalog` restores the internal catalog through a GORM store. Startup restores it before serving traffic and stops on missing tables, corrupt bytes or invalid state. Batch installation preserves exact package bytes and immutable key/version identities. Disabling blocks new admission but preserves historical task recovery; activation explicitly selects a retained version. Revocation is permanent and invalidates existing sessions on their next use. Historical versions are never automatically deleted or replaced.
+`OpenCatalog` restores the internal catalog through a GORM store. Startup restores it before serving traffic and stops on corrupt bytes or invalid state. Only the master runs migrations; non-master nodes wait read-only for both catalog tables for at most ten minutes, respecting cancellation. A timeout or failed restoration prevents serving traffic. Batch installation preserves exact package bytes and immutable key/version identities. Disabling blocks new admission but preserves historical task recovery; activation explicitly selects a retained version. Revocation is permanent and invalidates existing sessions on their next use. Historical versions are never automatically deleted or replaced.
 
 A singleton revision CAS serializes metadata transactions across nodes, including concurrent bootstrap. Publication follows commit; uncertain writes or failed refreshes suspend the managed host until a successful refresh. MySQL stores documents as LONGTEXT; SQLite and PostgreSQL use TEXT. Migrations add `task_plugin_catalog_heads` and `task_plugin_versions`; back up and restore both consistently. Other nodes' changes require explicit `Refresh`; background synchronization and immediate multi-node revocation are outside this stage. Retained document bytes remain capped at 64 MiB. The catalog registers no public routes and never evaluates JavaScript.
+
+Snapshot reads retry concurrent revision conflicts for at most three attempts. The first conflict suspends the old host; only a fully read and validated snapshot restores it. Persistent conflicts, cancellation or other storage errors leave it suspended. Writes, ambiguous commits and task operations are never automatically retried.
 
 ## HTTP 能力 / HTTP capability
 

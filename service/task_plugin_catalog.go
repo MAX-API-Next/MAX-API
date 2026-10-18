@@ -22,6 +22,7 @@ package service
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -29,6 +30,37 @@ import (
 )
 
 var taskPluginCatalog atomic.Pointer[taskplugin.Catalog]
+
+// WaitForTaskPluginCatalogSchema lets non-master nodes wait for the master to
+// create both tables, without DDL or exposing traffic. It waits at most ten
+// minutes and respects an earlier caller deadline or cancellation.
+func WaitForTaskPluginCatalogSchema(ctx context.Context, db *gorm.DB) error {
+	return waitForTaskPluginCatalogSchema(ctx, db, time.Second)
+}
+
+func waitForTaskPluginCatalogSchema(ctx context.Context, db *gorm.DB, interval time.Duration) error {
+	if ctx == nil || db == nil {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	store := model.NewTaskPluginCatalogStore(db)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if store.SchemaReady(ctx) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 
 // InitializeTaskPluginCatalog restores all pinned versions and revocations
 // before startup opens traffic. Corrupt/missing storage must stop startup.

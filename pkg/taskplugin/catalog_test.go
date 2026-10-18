@@ -22,6 +22,7 @@ package taskplugin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -34,11 +35,25 @@ type memoryCatalogStore struct {
 	snapshot             CatalogSnapshot
 	failLoad, failCommit bool
 	commitUnknown        bool
+	loadErrors           []error
+	loadCalls            int
+	onLoad               func(int)
 }
 
 func (s *memoryCatalogStore) Load(context.Context) (CatalogSnapshot, error) {
 	s.Lock()
 	defer s.Unlock()
+	s.loadCalls++
+	if s.onLoad != nil {
+		s.onLoad(s.loadCalls)
+	}
+	if len(s.loadErrors) > 0 {
+		err := s.loadErrors[0]
+		s.loadErrors = s.loadErrors[1:]
+		if err != nil {
+			return CatalogSnapshot{}, err
+		}
+	}
 	if s.failLoad {
 		return CatalogSnapshot{}, errors.New("synthetic load failure")
 	}
@@ -211,4 +226,93 @@ func TestCatalogRefreshAppliesAnotherNodesRevocationToExistingSession(t *testing
 	require.NoError(t, first.Refresh(ctx))
 	_, err = session.UsageEnvelope(nil)
 	require.ErrorIs(t, err, ErrBindingRejected)
+}
+
+func TestCatalogReadConflictRetriesRestoreAuthoritativeRevocation(t *testing.T) {
+	ctx := context.Background()
+	store := &memoryCatalogStore{}
+	catalog, err := OpenCatalog(ctx, store)
+	require.NoError(t, err)
+	require.NoError(t, catalog.Install(ctx, testPackage(t, validManifest(), "original")))
+	actor := Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "read-conflict"}
+	binding, err := catalog.Host().Bind(actor, "POST", "/vendor/v1/jobs", "vendor-model", taskusage.MiniMaxH3Contract())
+	require.NoError(t, err)
+	session, err := catalog.Host().Resolve(binding, actor)
+	require.NoError(t, err)
+	store.snapshot.Revision++
+	store.snapshot.Packages[0].Revoked = true
+	store.loadCalls = 0
+	store.loadErrors = []error{ErrCatalogConflict, fmt.Errorf("mixed snapshot: %w", ErrCatalogConflict)}
+	store.onLoad = func(call int) {
+		if call > 1 {
+			require.Nil(t, catalog.Host().state.Load(), "a conflict must suspend stale admission during retries")
+		}
+	}
+	require.NoError(t, catalog.Refresh(ctx))
+	require.Equal(t, 3, store.loadCalls)
+	_, err = session.UsageEnvelope(nil)
+	require.ErrorIs(t, err, ErrBindingRejected, "only the authoritative revoked state may be published")
+}
+
+func TestCatalogReadFailuresAreBoundedAndSuspendExistingSessions(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		errors []error
+		calls  int
+		cancel bool
+	}{
+		{name: "persistent conflict", errors: []error{ErrCatalogConflict, ErrCatalogConflict, ErrCatalogConflict, nil}, calls: 3},
+		{name: "storage failure", errors: []error{errors.New("storage unavailable"), nil}, calls: 1},
+		{name: "cancelled conflict", errors: []error{ErrCatalogConflict, nil}, calls: 1, cancel: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(ctx, store)
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(ctx, testPackage(t, validManifest(), "original")))
+			actor := Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "suspended-session"}
+			binding, err := catalog.Host().Bind(actor, "POST", "/vendor/v1/jobs", "vendor-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			session, err := catalog.Host().Resolve(binding, actor)
+			require.NoError(t, err)
+			store.loadCalls = 0
+			store.loadErrors = test.errors
+			if test.cancel {
+				store.onLoad = func(int) { cancel() }
+			}
+			require.ErrorIs(t, catalog.Refresh(ctx), ErrCatalogUnavailable)
+			require.Equal(t, test.calls, store.loadCalls)
+			require.Nil(t, catalog.Host().state.Load())
+			_, err = session.UsageEnvelope(nil)
+			require.ErrorIs(t, err, ErrBindingRejected)
+			_, err = session.NewFetchScope(context.Background(), "https://example.com", "")
+			require.ErrorIs(t, err, ErrBindingRejected)
+		})
+	}
+}
+
+func TestCatalogReadRetriesApplyToListAndMutation(t *testing.T) {
+	for _, operation := range []string{"list", "mutation"} {
+		t.Run(operation, func(t *testing.T) {
+			ctx := context.Background()
+			store := &memoryCatalogStore{}
+			catalog, err := OpenCatalog(ctx, store)
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(ctx, testPackage(t, validManifest(), "original")))
+			before := store.snapshot.Revision
+			store.loadCalls = 0
+			store.loadErrors = []error{ErrCatalogConflict}
+			if operation == "list" {
+				_, _, err = catalog.List(ctx)
+				require.Equal(t, before, store.snapshot.Revision)
+			} else {
+				err = catalog.SetEnabled(ctx, "vendor", false)
+				require.Equal(t, before+1, store.snapshot.Revision, "retrying a read must not repeat a write")
+			}
+			require.NoError(t, err)
+			require.Equal(t, 2, store.loadCalls)
+		})
+	}
 }

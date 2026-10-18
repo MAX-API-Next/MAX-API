@@ -93,12 +93,25 @@ func (catalog *Catalog) Refresh(ctx context.Context) error {
 }
 
 func (catalog *Catalog) refreshLocked(ctx context.Context) error {
-	if ctx == nil {
+	if ctx == nil || ctx.Err() != nil {
 		catalog.host.state.Store(nil)
 		return ErrCatalogUnavailable
 	}
-	snapshot, err := catalog.store.Load(ctx)
-	if err != nil {
+	var snapshot CatalogSnapshot
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		snapshot, err = catalog.store.Load(ctx)
+		if !errors.Is(err, ErrCatalogConflict) {
+			break
+		}
+		// A concurrent commit may revoke a version. Suspend stale sessions
+		// while retrying reads; writes and unknown outcomes are never retried.
+		catalog.host.state.Store(nil)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if err != nil || ctx.Err() != nil {
 		catalog.host.state.Store(nil)
 		return ErrCatalogUnavailable
 	}

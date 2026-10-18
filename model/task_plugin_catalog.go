@@ -77,6 +77,16 @@ func NewTaskPluginCatalogStore(db *gorm.DB) *TaskPluginCatalogStore {
 
 var _ taskplugin.CatalogStore = (*TaskPluginCatalogStore)(nil)
 
+// SchemaReady only observes the two catalog tables. Replica startup must not
+// perform DDL; the master remains responsible for migrations.
+func (store *TaskPluginCatalogStore) SchemaReady(ctx context.Context) bool {
+	if store == nil || store.db == nil || ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	db := store.db.WithContext(ctx)
+	return db.Migrator().HasTable(&TaskPluginCatalogHead{}) && db.Migrator().HasTable(&TaskPluginVersion{})
+}
+
 func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, error) {
 	var records []TaskPluginVersion
 	if err := tx.Order("identity").Find(&records).Error; err != nil {
