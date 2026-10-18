@@ -25,13 +25,19 @@ The service validates task ownership and the frozen usage contract before attach
 - `SetEnabled(false)` 停止新任务绑定，旧任务仍能按历史版本恢复。`Activate` 显式切换已有版本，不自动选择“最新”版本。
 - `Revoke` 永久撤销指定版本，新绑定和现有 session 的下一次使用均被拒绝；接口不提供撤销回滚或历史版本删除。
 - `task_plugin_catalog_heads` 的版本号条件更新与 `task_plugin_versions` 的变更在同一事务内提交。事务成功后一次发布宿主状态；存储失败、结果未知或刷新失败会暂停宿主，成功 `Refresh` 后恢复。
-- 包文档在 MySQL 使用 LONGTEXT，在 SQLite/PostgreSQL 使用 TEXT；版本身份使用固定长度摘要索引。升级会新增这两张表，备份与恢复应包含两表的一致状态。
+- 包文档在 MySQL 使用 LONGTEXT，在 SQLite/PostgreSQL 使用 TEXT；新写入采用带版本前缀的 ASCII base64 封装，读取后还原原始字节再校验摘要，避免列字符集改变载荷。旧草稿中的原始 JSON 行仍可读取，不依赖 TEXT 到二进制列的隐式迁移；损坏封装拒绝加载。编码不提供加密或来源认证。版本身份使用固定长度摘要索引，备份与恢复应包含两表的一致状态。
 - 其他节点的变更通过显式 `Refresh` 读取。本阶段没有后台同步任务，不保证跨节点实时撤销；后续执行器接入时必须定义刷新时机。目录容量沿用 64 MiB 历史包原始字节上限。
 - 读取快照遇到并发版本冲突时最多尝试 3 次，首次冲突先暂停旧宿主，只有成功读取并验证完整快照才恢复；持续冲突、取消或其他存储错误仍暂停。不自动重试写入、提交结果未知或任务操作。
+
+64 MiB 容量限制按解码后的原文计算，存储封装有编码体积开销。旧草稿节点不能读取新封装；滚动升级期间应暂停插件安装及新版本写入，所有节点升级完成后再恢复。新编码不能修复已被旧存储破坏的原文，摘要仍会拒绝这些记录；降级应恢复兼容版本与一致备份，不重写摘要来绕过校验。
 
 `OpenCatalog` restores the internal catalog through a GORM store. Startup restores it before serving traffic and stops on corrupt bytes or invalid state. Only the master runs migrations; non-master nodes wait read-only for both catalog tables for at most ten minutes, respecting cancellation. A timeout or failed restoration prevents serving traffic. Batch installation preserves exact package bytes and immutable key/version identities. Disabling blocks new admission but preserves historical task recovery; activation explicitly selects a retained version. Revocation is permanent and invalidates existing sessions on their next use. Historical versions are never automatically deleted or replaced.
 
 A singleton revision CAS serializes metadata transactions across nodes, including concurrent bootstrap. Publication follows commit; uncertain writes or failed refreshes suspend the managed host until a successful refresh. MySQL stores documents as LONGTEXT; SQLite and PostgreSQL use TEXT. Migrations add `task_plugin_catalog_heads` and `task_plugin_versions`; back up and restore both consistently. Other nodes' changes require explicit `Refresh`; background synchronization and immediate multi-node revocation are outside this stage. Retained document bytes remain capped at 64 MiB. The catalog registers no public routes and never evaluates JavaScript.
+
+New documents use a version-prefixed ASCII base64 envelope inside the existing text column. Reads restore the original bytes before digest validation, avoiding character-set-dependent payload changes. Legacy raw JSON rows remain readable without an implicit text-to-binary migration; malformed envelopes fail closed. This encoding provides neither encryption nor source authentication. The 64 MiB retention limit applies to decoded document bytes; stored envelopes add encoding overhead.
+
+Older draft nodes cannot read the new envelope. Pause plugin installation and new-version writes during a rolling upgrade until every node has the new reader. Already damaged legacy documents still fail digest validation; the encoding cannot recover their original bytes. Downgrades require compatible code and a consistent backup, never a rewritten digest that bypasses validation.
 
 Snapshot reads retry concurrent revision conflicts for at most three attempts. The first conflict suspends the old host; only a fully read and validated snapshot restores it. Persistent conflicts, cancellation or other storage errors leave it suspended. Writes, ambiguous commits and task operations are never automatically retried.
 

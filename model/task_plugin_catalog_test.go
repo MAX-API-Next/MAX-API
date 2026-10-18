@@ -267,6 +267,47 @@ func TestTaskPluginCatalogPayloadDialectTypes(t *testing.T) {
 	}
 }
 
+func TestTaskPluginCatalogDocumentEncodingAndLegacyRoundtrip(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "encoding.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	pool, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}))
+	_, entry := catalogFixture(t, "encoding", "1.0.0", "中文🚀😀é\\n\t")
+	store := NewTaskPluginCatalogStore(db)
+	_, err = store.CompareAndSwap(context.Background(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	var stored string
+	require.NoError(t, db.Model(&TaskPluginVersion{}).Select("document").Scan(&stored).Error)
+	require.True(t, strings.HasPrefix(stored, taskPluginDocumentPrefix))
+	require.NotRegexp(t, `[^\x00-\x7F]`, stored, "database text contains only ASCII")
+	loaded, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, entry.Document, loaded.Packages[0].Document)
+	// Preserve old drafts' raw JSON rows and their original digest without
+	// depending on a database-specific implicit text-to-binary conversion.
+	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("digest = ?", entry.Digest).
+		UpdateColumn("document", gorm.Expr("?", string(entry.Document))).Error)
+	require.NoError(t, db.AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}))
+	loaded, err = NewTaskPluginCatalogStore(db).Load(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, entry.Document, loaded.Packages[0].Document)
+	require.NoError(t, db.Model(&TaskPluginVersion{}).Where("digest = ?", entry.Digest).
+		UpdateColumn("document", gorm.Expr("?", taskPluginDocumentPrefix+"%%%")).Error)
+	_, err = store.Load(context.Background())
+	require.Error(t, err, "corrupt envelope must never fall back to legacy JSON")
+	for _, value := range []any{nil, 1, taskPluginDocumentPrefix + "Zh==", taskPluginDocumentPrefix + strings.Repeat("A", 2*taskplugin.MaxPackageBytes)} {
+		var document taskPluginDocument
+		require.ErrorIs(t, document.Scan(value), taskplugin.ErrCatalogInvalid)
+	}
+	legacy := []byte(`{"legacy":"bytes"}`)
+	var document taskPluginDocument
+	require.NoError(t, document.Scan(legacy))
+	legacy[0] = '!'
+	require.Equal(t, []byte(`{"legacy":"bytes"}`), []byte(document), "scanner must own the source bytes")
+}
+
 func TestTaskPluginCatalogConcurrentBootstrapSQLite(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "concurrent.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
@@ -360,6 +401,41 @@ func runTaskPluginCatalogReadCommittedBootstrap(t *testing.T, db *gorm.DB) {
 	require.Equal(t, "read-committed", info[0].Key)
 }
 
+func runTaskPluginCatalogCharsetRoundtrip(t *testing.T, db *gorm.DB, charset string) {
+	t.Helper()
+	// MySQL 5.7's utf8 and the startup-supported GBK charset cannot represent
+	// supplementary Unicode. MySQL 8 names three-byte utf8 as utf8mb3.
+	require.Contains(t, []string{"utf8", "gbk"}, charset)
+	require.NoError(t, db.Set("gorm:table_options", "DEFAULT CHARACTER SET "+charset).AutoMigrate(&TaskPluginCatalogHead{}, &TaskPluginVersion{}))
+	var actualCharset string
+	table := db.NamingStrategy.TableName("TaskPluginVersion")
+	require.NoError(t, db.Raw("SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'document'", table).Scan(&actualCharset).Error)
+	if charset == "utf8" {
+		require.Contains(t, []string{"utf8", "utf8mb3"}, actualCharset)
+	} else {
+		require.Equal(t, charset, actualCharset)
+	}
+	_, entry := catalogFixture(t, "unicode", "1.0.0", strings.Repeat("中文🚀😀é\\n", 9000))
+	require.Greater(t, len(entry.Document), 65535)
+	identity, err := taskPluginStorageIdentity(entry)
+	require.NoError(t, err)
+	// Bypass the new Valuer to reproduce the original plain-string write on
+	// this same table. A charset error is distinct from a schema/key failure.
+	err = db.Table(table).Create(map[string]any{"identity": identity, "digest": entry.Digest, "document": string(entry.Document), "active": true, "enabled": true, "revoked": false}).Error
+	var charsetErr *mysqldriver.MySQLError
+	require.ErrorAs(t, err, &charsetErr)
+	// MySQL 8.0.22+ may reject prepared-parameter conversion before INSERT
+	// with ER_IMPOSSIBLE_STRING_CONVERSION instead of incorrect-string1366.
+	require.Contains(t, []uint16{1366, 3988}, charsetErr.Number)
+	store := NewTaskPluginCatalogStore(db)
+	_, err = store.CompareAndSwap(context.Background(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err, "pinned bytes must roundtrip regardless of the text column's charset")
+	snapshot, err := NewTaskPluginCatalogStore(db).Load(context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Packages, 1)
+	require.Equal(t, entry.Document, snapshot.Packages[0].Document)
+}
+
 // Opt-in, isolated two-table fixtures. Existing billing/task/user tables are
 // untouched; cleanup drops only this invocation's random-prefixed tables.
 func TestTaskPluginCatalogMySQL(t *testing.T) {
@@ -375,7 +451,7 @@ func TestTaskPluginCatalogMySQL(t *testing.T) {
 	}
 	_, sqlDB := openMySQLAcceptanceDB(t, dsn)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	for _, name := range []string{"contract", "concurrent", "read_committed_bootstrap"} {
+	for _, name := range []string{"contract", "concurrent", "read_committed_bootstrap", "charset_roundtrip", "charset_gbk_roundtrip"} {
 		t.Run(name, func(t *testing.T) {
 			prefix := "tpc_" + common.GetUUID()[:12] + "_"
 			db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: sqlDB, SkipInitializeWithVersion: true}), &gorm.Config{NamingStrategy: schema.NamingStrategy{TablePrefix: prefix}, Logger: logger.Default.LogMode(logger.Silent)})
@@ -388,6 +464,10 @@ func TestTaskPluginCatalogMySQL(t *testing.T) {
 				runTaskPluginCatalogConcurrentBootstrap(t, db)
 			case "read_committed_bootstrap":
 				runTaskPluginCatalogReadCommittedBootstrap(t, db)
+			case "charset_roundtrip":
+				runTaskPluginCatalogCharsetRoundtrip(t, db, "utf8")
+			case "charset_gbk_roundtrip":
+				runTaskPluginCatalogCharsetRoundtrip(t, db, "gbk")
 			}
 		})
 	}

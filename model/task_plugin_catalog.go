@@ -23,6 +23,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql/driver"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"math"
@@ -43,7 +45,41 @@ type TaskPluginCatalogHead struct {
 	MutationID string `gorm:"size:64;not null"`
 }
 
-type taskPluginDocument string
+type taskPluginDocument []byte
+
+const taskPluginDocumentPrefix = "maxapi:taskplugin:base64:v1:"
+
+// Value preserves pinned bytes across database character sets without altering
+// existing text columns. This is an encoding, not encryption or authentication.
+func (document taskPluginDocument) Value() (driver.Value, error) {
+	return taskPluginDocumentPrefix + base64.StdEncoding.EncodeToString(document), nil
+}
+
+// Scan also accepts legacy raw JSON documents. Their digest is still checked
+// by the catalog loader; a malformed versioned envelope must not fall back.
+func (document *taskPluginDocument) Scan(value any) error {
+	var raw []byte
+	switch value := value.(type) {
+	case string:
+		raw = []byte(value)
+	case []byte:
+		raw = bytes.Clone(value)
+	default:
+		return taskplugin.ErrCatalogInvalid
+	}
+	if encoded, ok := bytes.CutPrefix(raw, []byte(taskPluginDocumentPrefix)); ok {
+		if len(encoded) > base64.StdEncoding.EncodedLen(taskplugin.MaxPackageBytes) {
+			return taskplugin.ErrCatalogInvalid
+		}
+		decoded, err := base64.StdEncoding.Strict().DecodeString(string(encoded))
+		if err != nil {
+			return taskplugin.ErrCatalogInvalid
+		}
+		raw = decoded
+	}
+	*document = taskPluginDocument(raw)
+	return nil
+}
 
 func (taskPluginDocument) GormDataType() string { return "string" }
 func (taskPluginDocument) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
