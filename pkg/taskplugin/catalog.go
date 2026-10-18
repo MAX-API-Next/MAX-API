@@ -113,6 +113,9 @@ func (catalog *Catalog) refreshLocked(ctx context.Context) error {
 	}
 	if err != nil || ctx.Err() != nil {
 		catalog.host.state.Store(nil)
+		if ctx.Err() == nil && errors.Is(err, ErrCatalogInvalid) {
+			return ErrCatalogInvalid
+		}
 		return ErrCatalogUnavailable
 	}
 	state, err := buildCatalogState(snapshot, catalog.snapshot, catalog.state != nil)

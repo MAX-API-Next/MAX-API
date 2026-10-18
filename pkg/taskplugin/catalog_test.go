@@ -260,10 +260,13 @@ func TestCatalogReadFailuresAreBoundedAndSuspendExistingSessions(t *testing.T) {
 		errors []error
 		calls  int
 		cancel bool
+		want   error
 	}{
 		{name: "persistent conflict", errors: []error{ErrCatalogConflict, ErrCatalogConflict, ErrCatalogConflict, nil}, calls: 3},
 		{name: "storage failure", errors: []error{errors.New("storage unavailable"), nil}, calls: 1},
 		{name: "cancelled conflict", errors: []error{ErrCatalogConflict, nil}, calls: 1, cancel: true},
+		{name: "corrupt storage", errors: []error{fmt.Errorf("corrupt head: %w", ErrCatalogInvalid)}, calls: 1, want: ErrCatalogInvalid},
+		{name: "cancelled corruption", errors: []error{ErrCatalogInvalid}, calls: 1, cancel: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -282,7 +285,11 @@ func TestCatalogReadFailuresAreBoundedAndSuspendExistingSessions(t *testing.T) {
 			if test.cancel {
 				store.onLoad = func(int) { cancel() }
 			}
-			require.ErrorIs(t, catalog.Refresh(ctx), ErrCatalogUnavailable)
+			want := test.want
+			if want == nil {
+				want = ErrCatalogUnavailable
+			}
+			require.ErrorIs(t, catalog.Refresh(ctx), want)
 			require.Equal(t, test.calls, store.loadCalls)
 			require.Nil(t, catalog.Host().state.Load())
 			_, err = session.UsageEnvelope(nil)

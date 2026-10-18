@@ -153,7 +153,7 @@ func TestTaskPluginCatalogReadySchemaStillRejectsCorruption(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.TaskPluginCatalogHead{}, &model.TaskPluginVersion{}))
 	require.NoError(t, db.Create(&model.TaskPluginCatalogHead{ID: 1, Revision: 0, MutationID: "corrupt"}).Error)
 	require.NoError(t, WaitForTaskPluginCatalogSchema(context.Background(), db))
-	require.ErrorIs(t, InitializeTaskPluginCatalog(context.Background(), db), taskplugin.ErrCatalogUnavailable)
+	require.ErrorIs(t, InitializeTaskPluginCatalog(context.Background(), db), taskplugin.ErrCatalogInvalid)
 	_, err = CurrentTaskPluginCatalog()
 	require.ErrorIs(t, err, taskplugin.ErrCatalogUnavailable)
 }
