@@ -46,6 +46,7 @@ type Package struct {
 	source   string
 	digest   string
 	size     int
+	document []byte
 }
 
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
@@ -85,8 +86,11 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 		// and credentials out of any caller's logs and API error response.
 		return nil, errors.New("invalid task plugin package manifest")
 	}
-	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data)}, nil
+	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data}, nil
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }
 func (p *Package) Digest() string     { return p.digest }
+
+// Document returns the exact pinned bytes, not a re-encoded manifest/source.
+func (p *Package) Document() []byte { return append([]byte(nil), p.document...) }

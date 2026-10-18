@@ -11,11 +11,26 @@
 - 路由只匹配 manifest 声明的上游模型；省略 `route.Models` 表示继承 manifest 的范围，指定时进一步收窄。缺失或未知模型拒绝绑定。
 - `BindMapped` 固定插件版本、包摘要、原始及映射后模型，以及宿主拥有的 usage contract；`Resolve` 使用历史包恢复任务，不自动切换最新版本。
 - `AttachTaskPluginBinding` 校验用户、Token、渠道、请求、模型及冻结用量契约，写入 `Task.PrivateData`。调用方必须在发起付费请求前通过现有事务保存任务；该函数自身不执行数据库写入或上游提交。
-- 重启时必须重新加载所需历史包，并在开放流量前恢复宿主的撤销记录。缺失历史包、无效契约、身份变化或已撤销版本均拒绝恢复，不自动重提任务。当前没有自动保存插件目录或撤销清单的管理服务。
+- 持久目录在开放流量前恢复历史包和撤销记录。缺失历史包、摘要不匹配、无效契约、身份变化或已撤销版本均拒绝恢复，不自动重提任务。
 
 The loader accepts at most 1 MiB and verifies an externally trusted SHA-256 of the whole document. Batch installation publishes packages and routes together; a conflict leaves the previous generation intact. A key/version cannot silently change contents. Routes match only manifest-declared upstream models; an omitted `route.Models` inherits that set, while an explicit list narrows it. Missing or unknown models cannot bind. Bindings freeze package, usage contract, client model alias and upstream model. Recovery resolves historical packages rather than the latest version.
 
-The service validates task ownership and the frozen usage contract before attaching private metadata. The caller must persist it in the existing transaction before any billable request. The host must reload retained historical packages and revocations before serving traffic after restart. Missing or revoked identities fail closed and never cause automatic submission. Automatic catalog/revocation storage is not implemented here.
+The service validates task ownership and the frozen usage contract before attaching private metadata. The caller must persist it in the existing transaction before any billable request. The durable catalog restores historical packages and revocations before startup serves traffic. Missing, altered or revoked identities fail closed and never cause automatic submission.
+
+## 持久目录与恢复 / Durable catalog and recovery
+
+`taskplugin.OpenCatalog(ctx, model.NewTaskPluginCatalogStore(db))` 加载内部目录，`catalog.Host()` 提供既有绑定与恢复能力。应用启动由 `InitializeTaskPluginCatalog` 完成恢复；缺表、损坏包或无效状态会阻止启动。目录仍没有公开管理路由或自动加载 JS 的行为。
+
+- `Install` 批量校验并保存完整包，原始文档字节和摘要保持不变；同 key/version 不允许替换内容。安装版本成为该 key 的启用版本，历史版本保留。
+- `SetEnabled(false)` 停止新任务绑定，旧任务仍能按历史版本恢复。`Activate` 显式切换已有版本，不自动选择“最新”版本。
+- `Revoke` 永久撤销指定版本，新绑定和现有 session 的下一次使用均被拒绝；接口不提供撤销回滚或历史版本删除。
+- `task_plugin_catalog_heads` 的版本号条件更新与 `task_plugin_versions` 的变更在同一事务内提交。事务成功后一次发布宿主状态；存储失败、结果未知或刷新失败会暂停宿主，成功 `Refresh` 后恢复。
+- 包文档在 MySQL 使用 LONGTEXT，在 SQLite/PostgreSQL 使用 TEXT；版本身份使用固定长度摘要索引。升级会新增这两张表，备份与恢复应包含两表的一致状态。
+- 其他节点的变更通过显式 `Refresh` 读取。本阶段没有后台同步任务，不保证跨节点实时撤销；后续执行器接入时必须定义刷新时机。目录容量沿用 64 MiB 历史包原始字节上限。
+
+`OpenCatalog` restores the internal catalog through a GORM store. Startup restores it before serving traffic and stops on missing tables, corrupt bytes or invalid state. Batch installation preserves exact package bytes and immutable key/version identities. Disabling blocks new admission but preserves historical task recovery; activation explicitly selects a retained version. Revocation is permanent and invalidates existing sessions on their next use. Historical versions are never automatically deleted or replaced.
+
+A singleton revision CAS serializes metadata transactions across nodes, including concurrent bootstrap. Publication follows commit; uncertain writes or failed refreshes suspend the managed host until a successful refresh. MySQL stores documents as LONGTEXT; SQLite and PostgreSQL use TEXT. Migrations add `task_plugin_catalog_heads` and `task_plugin_versions`; back up and restore both consistently. Other nodes' changes require explicit `Refresh`; background synchronization and immediate multi-node revocation are outside this stage. Retained document bytes remain capped at 64 MiB. The catalog registers no public routes and never evaluates JavaScript.
 
 ## HTTP 能力 / HTTP capability
 
@@ -37,6 +52,7 @@ Limits are four calls, 15 seconds per call, a 30-second scope deadline, 1 MiB re
 go test ./pkg/taskplugin ./pkg/taskusage -count=1
 go test ./service -run TestTaskPluginHost -count=1
 go test ./model -run TestTaskPluginHost -count=1
+go test ./pkg/taskplugin ./model ./service -run 'TestCatalog|TestTaskPluginCatalog' -count=1
 ```
 
 这些合成测试不代表真实供应商、JS 隔离、多节点撤销传播或 MySQL/PostgreSQL 实库验收已通过。

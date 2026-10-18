@@ -447,6 +447,9 @@ func InitResources() error {
 	}
 
 	model.CheckSetup()
+	if err := service.InitializeTaskPluginCatalog(context.Background(), model.DB); err != nil {
+		return fmt.Errorf("initialize task plugin catalog: %w", err)
+	}
 
 	// Initialize options, should after model.InitDB()
 	model.InitOptionMap()

@@ -421,6 +421,8 @@ func migrateDB() error {
 		&QuotaDataSnapshot{},
 		&QuotaDataSnapshotRetry{},
 		&Task{},
+		&TaskPluginCatalogHead{},
+		&TaskPluginVersion{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},

@@ -47,7 +47,10 @@ type hostState struct {
 
 // Host atomically publishes a complete route/package generation. Historical
 // packages are retained so an upgrade cannot reinterpret an in-flight task.
-type Host struct{ state atomic.Pointer[hostState] }
+type Host struct {
+	state   atomic.Pointer[hostState]
+	managed bool // immutable after construction; mutations belong to Catalog
+}
 
 const MaxRetainedPackageBytes = 64 << 20
 
@@ -62,7 +65,7 @@ func packageIdentity(key, version string) string { return key + "@" + version }
 // Install publishes a batch all-or-nothing. Reusing a key/version with different
 // bytes is rejected, including after a later version has become active.
 func (host *Host) Install(packages ...*Package) (uint64, error) {
-	if host == nil || host.state.Load() == nil || len(packages) == 0 {
+	if host == nil || host.managed || host.state.Load() == nil || len(packages) == 0 {
 		return 0, errors.New("task plugin host or package batch is empty")
 	}
 	seen := map[string]bool{}
@@ -113,7 +116,7 @@ func (host *Host) Install(packages ...*Package) (uint64, error) {
 // Revoke disables both new bindings and old sessions for one immutable version.
 // A process restart must reapply host-owned revocations before serving traffic.
 func (host *Host) Revoke(key, version string) error {
-	if host == nil || host.state.Load() == nil {
+	if host == nil || host.managed || host.state.Load() == nil {
 		return ErrBindingRejected
 	}
 	id := packageIdentity(key, version)
@@ -155,10 +158,13 @@ func (host *Host) Bind(actor Actor, method, path, model string, contract types.T
 // BindMapped preserves the client's model alias while resolving the declared
 // upstream model. Neither identity may be replaced during later polling.
 func (host *Host) BindMapped(actor Actor, method, path, model, upstreamModel string, contract types.TaskUsageContract) (types.TaskPluginBinding, error) {
-	if host == nil || host.state.Load() == nil || !validActor(actor) {
+	if host == nil || !validActor(actor) {
 		return types.TaskPluginBinding{}, ErrBindingRejected
 	}
 	state := host.state.Load()
+	if state == nil {
+		return types.TaskPluginBinding{}, ErrBindingRejected
+	}
 	match, ok := state.routes.MatchRoute(method, path, upstreamModel)
 	if !ok {
 		return types.TaskPluginBinding{}, ErrBindingRejected
@@ -180,10 +186,13 @@ func (host *Host) BindMapped(actor Actor, method, path, model, upstreamModel str
 // Resolve uses persisted identity, never the currently active version. Missing
 // history or revoked code fails closed; it never retries a provider submission.
 func (host *Host) Resolve(binding types.TaskPluginBinding, actor Actor) (*Session, error) {
-	if host == nil || host.state.Load() == nil || !validActor(actor) || binding.UserID != actor.UserID || binding.TokenID != actor.TokenID || binding.ChannelID != actor.ChannelID || binding.RequestID != actor.RequestID {
+	if host == nil || !validActor(actor) || binding.UserID != actor.UserID || binding.TokenID != actor.TokenID || binding.ChannelID != actor.ChannelID || binding.RequestID != actor.RequestID {
 		return nil, ErrBindingRejected
 	}
 	state := host.state.Load()
+	if state == nil {
+		return nil, ErrBindingRejected
+	}
 	id := packageIdentity(binding.PluginKey, binding.Version)
 	p := state.history[id]
 	if p == nil || state.revoked[id] || binding.PackageDigest != p.digest || binding.Model == "" || binding.Model != strings.TrimSpace(binding.Model) || !declaresModel(p.manifest, binding.UpstreamModel) {
