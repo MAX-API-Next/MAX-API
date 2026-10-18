@@ -2,7 +2,11 @@ package model
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -64,6 +68,8 @@ func taskBillingTestCheck(t *testing.T, err error, stage string) {
 }
 
 // Each external invocation needs a freshly provisioned disposable database.
+// A non-standard name is accepted only when the same process explicitly sets
+// TEST_TASK_BILLING_MYSQL_DATABASE to that exact database name.
 // Nothing is dropped: successful and partial migrations are retained for audit.
 // The unique ownership table rejects a second harness targeting the same DB.
 type taskBillingTestOwnership struct {
@@ -79,15 +85,41 @@ func openTaskBillingTestSQL(dialect, dsn string) (*sql.DB, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		if !taskBillingTestDatabaseName.MatchString(config.DBName) {
+		allowedDatabase := strings.TrimSpace(os.Getenv("TEST_TASK_BILLING_MYSQL_DATABASE"))
+		if !mysqlAcceptanceDatabaseAllowed(config.DBName, allowedDatabase, taskBillingTestDatabaseName) {
 			return nil, "", errTaskBillingUnsafeDatabase
 		}
 		// External contract tests may never put database credentials on a
 		// plaintext network connection. Unix sockets are local-only; every
 		// other network type (including tcp4/tcp6) requires certificate-
 		// validating TLS and must not permit plaintext fallback.
-		if config.Net != "unix" && (config.TLS == nil || config.TLS.InsecureSkipVerify || config.AllowFallbackToPlaintext) {
+		if config.Net != "unix" && config.AllowFallbackToPlaintext {
 			return nil, "", errTaskBillingUnsafeDatabase
+		}
+		if config.Net != "unix" {
+			if fingerprint := strings.TrimSpace(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")); fingerprint != "" {
+				expected, err := hex.DecodeString(fingerprint)
+				if err != nil || len(expected) != sha256.Size {
+					return nil, "", errTaskBillingUnsafeDatabase
+				}
+				config.TLS = &tls.Config{
+					//nolint:gosec // VerifyConnection enforces the configured exact leaf SHA-256 pin.
+					InsecureSkipVerify: true,
+					MinVersion:         tls.VersionTLS12,
+					VerifyConnection: func(state tls.ConnectionState) error {
+						if len(state.PeerCertificates) == 0 {
+							return errors.New("mysql server returned no certificate")
+						}
+						actual := sha256.Sum256(state.PeerCertificates[0].Raw)
+						if !hmac.Equal(actual[:], expected) {
+							return errors.New("mysql certificate pin mismatch")
+						}
+						return nil
+					},
+				}
+			} else if config.TLS == nil || config.TLS.InsecureSkipVerify {
+				return nil, "", errTaskBillingUnsafeDatabase
+			}
 		}
 		config.Timeout, config.ReadTimeout, config.WriteTimeout = 5*time.Second, 10*time.Second, 10*time.Second
 		connector, err := mysqldriver.NewConnector(config)
@@ -137,6 +169,21 @@ func TestOpenTaskBillingTestSQLRejectsPlaintextNetworkVariants(t *testing.T) {
 				t.Fatalf("expected plaintext %s DSN to be rejected", network)
 			}
 		})
+	}
+}
+
+func TestOpenTaskBillingTestSQLAllowsExplicitDedicatedDatabase(t *testing.T) {
+	t.Setenv("TEST_TASK_BILLING_MYSQL_DATABASE", "test3")
+	t.Setenv("TEST_MYSQL_TLS_CERT_SHA256", strings.Repeat("0", 64))
+	db, name, err := openTaskBillingTestSQL("mysql", "user:password@tcp(127.0.0.1:3306)/test3")
+	if err != nil {
+		t.Fatalf("expected explicitly authorized database name to pass validation: %v", err)
+	}
+	if name != "test3" {
+		t.Fatalf("expected database name test3, got %q", name)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close validated database handle: %v", err)
 	}
 }
 

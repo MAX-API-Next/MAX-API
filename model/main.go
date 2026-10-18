@@ -2,7 +2,11 @@ package model
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -16,6 +20,7 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/glebarez/sqlite"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -219,6 +224,11 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		}
 		// Use MySQL
 		common.SysLog("using MySQL as database")
+		pinnedDSN, err := mysqlDSNWithPinnedCertificate(dsn)
+		if err != nil {
+			return nil, err
+		}
+		dsn = pinnedDSN
 		// check parseTime
 		if !strings.Contains(dsn, "parseTime") {
 			if strings.Contains(dsn, "?") {
@@ -246,6 +256,48 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	return gorm.Open(sqlite.Open(sqliteDatabasePath(isLog)), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
+}
+
+var mysqlPinnedTLSConfigs sync.Map
+
+func mysqlDSNWithPinnedCertificate(dsn string) (string, error) {
+	fingerprint := strings.TrimSpace(os.Getenv("MYSQL_TLS_CERT_SHA256"))
+	if fingerprint == "" {
+		return dsn, nil
+	}
+	expected, err := hex.DecodeString(fingerprint)
+	if err != nil || len(expected) != sha256.Size {
+		return "", errors.New("MYSQL_TLS_CERT_SHA256 must be a 64-character SHA-256 fingerprint")
+	}
+	configName := "max-api-mysql-pin-" + hex.EncodeToString(expected)
+	if _, loaded := mysqlPinnedTLSConfigs.LoadOrStore(configName, struct{}{}); !loaded {
+		config := &tls.Config{
+			//nolint:gosec // VerifyConnection enforces the configured exact leaf SHA-256 pin.
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
+			VerifyConnection: func(state tls.ConnectionState) error {
+				if len(state.PeerCertificates) == 0 {
+					return errors.New("mysql server returned no certificate")
+				}
+				actual := sha256.Sum256(state.PeerCertificates[0].Raw)
+				if !hmac.Equal(actual[:], expected) {
+					return errors.New("mysql certificate pin mismatch")
+				}
+				return nil
+			},
+		}
+		if err := mysqldriver.RegisterTLSConfig(configName, config); err != nil {
+			mysqlPinnedTLSConfigs.Delete(configName)
+			return "", fmt.Errorf("register MySQL certificate pin: %w", err)
+		}
+	}
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse MySQL DSN: %w", err)
+	}
+	cfg.TLS = nil
+	cfg.TLSConfig = configName
+	return cfg.FormatDSN(), nil
 }
 
 func InitDB() (err error) {

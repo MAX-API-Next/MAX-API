@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -376,6 +378,58 @@ func runTaskBillingSettlementContracts(t *testing.T, db *gorm.DB) {
 		f.assertBalances(t, db, -100)
 		f.assertProjection(t, db, 0, 1)
 	})
+}
+
+func TestMockTaskPluginUsageFlowsThroughSQLiteSettlementReplay(t *testing.T) {
+	truncateTables(t)
+	outputDuration := int64(5_000)
+	imageCount := int64(0)
+	driver, err := taskplugin.NewMockDriver(taskusage.MiniMaxH3Contract(), &types.TaskUsage{
+		OutputDurationMs: &outputDuration,
+		InputImageCount:  &imageCount,
+		Completeness:     types.TaskUsageCompletenessComplete,
+	})
+	require.NoError(t, err)
+	taskID, err := driver.Submit()
+	require.NoError(t, err)
+	_, err = driver.Poll(taskID)
+	require.NoError(t, err)
+	terminal, err := driver.Poll(taskID)
+	require.NoError(t, err)
+	require.NotNil(t, terminal.UsageEnvelope)
+
+	fixture := newTaskBillingContractFixture(t, DB, 9901, BillingSettlementSourceWallet, -20)
+	require.NotNil(t, fixture.task.PrivateData.BillingContext)
+	fixture.task.PrivateData.BillingContext.TaskUsageEnvelope = terminal.UsageEnvelope
+	require.NoError(t, DB.Save(&fixture.task).Error)
+
+	applied, replay, err := ApplyBillingSettlementOnce(fixture.input)
+	require.NoError(t, err)
+	require.EqualValues(t, -20, applied)
+	require.False(t, replay)
+	require.NoError(t, ProcessBillingSettlementEffect(fixture.input.OperationKey))
+
+	_, replay, err = ApplyBillingSettlementOnce(fixture.input)
+	require.NoError(t, err)
+	require.True(t, replay)
+	require.NoError(t, ProcessBillingSettlementEffect(fixture.input.OperationKey))
+	fixture.assertProjection(t, DB, 80, 1)
+	var user User
+	var token Token
+	var task Task
+	require.NoError(t, DB.First(&user, fixture.user.Id).Error)
+	require.NoError(t, DB.First(&token, fixture.token.Id).Error)
+	require.NoError(t, DB.First(&task, fixture.task.ID).Error)
+	require.EqualValues(t, 920, user.Quota)
+	require.EqualValues(t, 920, token.RemainQuota)
+	require.EqualValues(t, 80, token.UsedQuota)
+	require.EqualValues(t, 80, task.Quota)
+
+	var stored Task
+	require.NoError(t, DB.First(&stored, fixture.task.ID).Error)
+	require.NotNil(t, stored.PrivateData.BillingContext)
+	require.NotNil(t, stored.PrivateData.BillingContext.TaskUsageEnvelope)
+	require.Equal(t, terminal.UsageEnvelope.EvidenceDigest, stored.PrivateData.BillingContext.TaskUsageEnvelope.EvidenceDigest)
 }
 
 // Guard parsing is tested without a live server or any user credentials.
