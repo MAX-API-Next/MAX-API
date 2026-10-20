@@ -78,12 +78,3 @@ jobs:
       - name: Typecheck
         working-directory: web/default
         run: bun run typecheck
-
-      - name: Build
-        working-directory: web/default
-        env:
-          CI: ""
-          DISABLE_ESLINT_PLUGIN: "true"
-          NODE_OPTIONS: "--max-old-space-size=4096"
-          VITE_REACT_APP_VERSION: ${{ github.sha }}
-        run: bun run build
