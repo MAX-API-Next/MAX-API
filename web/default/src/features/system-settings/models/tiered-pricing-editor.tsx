@@ -285,7 +285,11 @@ const TieredPricingEditorContent = memo(function TieredPricingEditorContent({
           value={editorMode}
           onValueChange={(value) => handleModeChange(value as EditorMode)}
         >
-          <SelectTrigger className='w-44' size='sm'>
+          <SelectTrigger
+            aria-label={t('Editor mode')}
+            className='w-44'
+            size='sm'
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false}>

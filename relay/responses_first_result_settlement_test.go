@@ -135,7 +135,9 @@ func TestResponsesFirstResultTimeoutSettlesDeliveredWhitespace(t *testing.T) {
 						case <-r.Context().Done():
 							upstreamCanceled <- true
 						case <-time.After(3 * time.Second):
-							upstreamCanceled <- false
+							// A delayed select may see both channels ready. Confirm
+							// the request state before reporting a missing cancellation.
+							upstreamCanceled <- r.Context().Err() != nil
 						}
 					}))
 					t.Cleanup(upstream.Close)

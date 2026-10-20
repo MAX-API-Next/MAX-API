@@ -20,8 +20,11 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
@@ -97,18 +100,30 @@ export function SubscriptionPlansCard({
   onPurchaseSuccess,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const beginPlansRead = useReadScope(sessionRevision)
+  const beginSubscriptionRead = useReadScope(sessionRevision)
 
-  const [plans, setPlans] = useState<PlanRecord[]>([])
-  const [activeSubscriptions, setActiveSubscriptions] = useState<
+  const [plans, setPlans] = useResettableState<PlanRecord[]>(
+    [],
+    sessionRevision
+  )
+  const [activeSubscriptions, setActiveSubscriptions] = useResettableState<
     UserSubscriptionRecord[]
-  >([])
-  const [allSubscriptions, setAllSubscriptions] = useState<
+  >([], sessionRevision)
+  const [allSubscriptions, setAllSubscriptions] = useResettableState<
     UserSubscriptionRecord[]
-  >([])
-  const [billingPreference, setBillingPreference] =
-    useState('subscription_first')
-  const [loading, setLoading] = useState(true)
+  >([], sessionRevision)
+  const [billingPreference, setBillingPreference] = useResettableState(
+    'subscription_first',
+    sessionRevision
+  )
+  const [loading, setLoading] = useResettableState(true, sessionRevision)
   const [refreshing, setRefreshing] = useState(false)
+  const [now, setNow] = useResettableState(
+    () => Date.now() / 1000,
+    sessionRevision
+  )
 
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
@@ -122,40 +137,73 @@ export function SubscriptionPlansCard({
     [topupInfo?.pay_methods]
   )
 
-  const fetchPlans = useCallback(async () => {
-    try {
-      const res = await getPublicPlans()
-      if (res.success) {
-        setPlans(res.data || [])
-      }
-    } catch {
-      setPlans([])
-    }
-  }, [])
+  const fetchPlans = useCallback(() => {
+    const current = beginPlansRead()
+    if (!current()) return Promise.resolve()
+    return getPublicPlans()
+      .then((res) => {
+        if (!current()) return
+        if (res.success) setPlans(res.data || [])
+      })
+      .catch(() => {
+        if (current()) setPlans([])
+      })
+  }, [beginPlansRead, setPlans])
 
-  const fetchSelfSubscription = useCallback(async () => {
-    try {
-      const res = await getSelfSubscriptionFull()
-      if (res.success && res.data) {
-        setBillingPreference(
-          res.data.billing_preference || 'subscription_first'
-        )
-        setActiveSubscriptions(res.data.subscriptions || [])
-        setAllSubscriptions(res.data.all_subscriptions || [])
-      }
-    } catch {
-      // ignore
-    }
-  }, [])
+  const fetchSelfSubscription = useCallback(() => {
+    const current = beginSubscriptionRead()
+    if (!current()) return Promise.resolve()
+    return getSelfSubscriptionFull()
+      .then((res) => {
+        if (!current()) return
+        if (res.success && res.data) {
+          setBillingPreference(
+            res.data.billing_preference || 'subscription_first'
+          )
+          setActiveSubscriptions(res.data.subscriptions || [])
+          setAllSubscriptions(res.data.all_subscriptions || [])
+          setNow(Date.now() / 1000)
+        }
+      })
+      .catch(() => {
+        /* retain the last successful read */
+      })
+  }, [
+    beginSubscriptionRead,
+    setActiveSubscriptions,
+    setAllSubscriptions,
+    setBillingPreference,
+    setNow,
+  ])
 
   useEffect(() => {
-    const init = async () => {
-      setLoading(true)
-      await Promise.all([fetchPlans(), fetchSelfSubscription()])
-      setLoading(false)
+    let current = true
+    void Promise.all([fetchPlans(), fetchSelfSubscription()]).then(() => {
+      if (current) setLoading(false)
+    })
+    return () => {
+      current = false
     }
-    init()
-  }, [fetchPlans, fetchSelfSubscription])
+  }, [fetchPlans, fetchSelfSubscription, setLoading])
+  useEffect(() => {
+    const current = Date.now()
+    const day = 86_400_000
+    let next = Infinity
+    for (const { subscription } of allSubscriptions) {
+      const remaining = (subscription.end_time || 0) * 1000 - current
+      if (
+        subscription.status !== 'active' ||
+        !Number.isFinite(remaining) ||
+        remaining < 0
+      )
+        continue
+      const boundary = remaining % day || (remaining === 0 ? 0 : day)
+      next = Math.min(next, boundary + 1)
+    }
+    if (!Number.isFinite(next)) return
+    const timer = setTimeout(() => setNow(Date.now() / 1000), next)
+    return () => clearTimeout(timer)
+  }, [allSubscriptions, now, setNow])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -222,7 +270,6 @@ export function SubscriptionPlansCard({
   const getRemainingDays = (sub: UserSubscriptionRecord) => {
     const endTime = sub?.subscription?.end_time || 0
     if (!endTime) return 0
-    const now = Date.now() / 1000
     return Math.max(0, Math.ceil((endTime - now) / 86400))
   }
 
@@ -403,7 +450,6 @@ export function SubscriptionPlansCard({
                     planTitleMap.get(subscription?.plan_id) || ''
                   const remainDays = getRemainingDays(sub)
                   const usagePercent = getUsagePercent(sub)
-                  const now = Date.now() / 1000
                   const isExpired = (subscription?.end_time || 0) < now
                   const isCancelled = subscription?.status === 'cancelled'
                   const isActive =

@@ -22,6 +22,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -46,12 +48,28 @@ type SectionDef = {
   modules: { key: string; title: string; description: string }[]
 }
 
+function buildDefaultSidebarConfig(
+  sections: SectionDef[]
+): SidebarModulesConfig {
+  const defaults: SidebarModulesConfig = {}
+  for (const section of sections) {
+    defaults[section.key] = { enabled: true }
+    for (const module of section.modules)
+      defaults[section.key][module.key] = true
+  }
+  return defaults
+}
+
 export function SidebarModulesCard() {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
-  const [config, setConfig] = useState<SidebarModulesConfig>({})
   const currentUser = useAuthStore((s) => s.auth.user)
   const setUser = useAuthStore((s) => s.auth.setUser)
+  const beginRead = useReadScope(currentUser?.id)
+  const [config, setConfig] = useResettableState<SidebarModulesConfig>(
+    {},
+    currentUser?.id
+  )
 
   const sectionDefs: SectionDef[] = [
     {
@@ -122,26 +140,34 @@ export function SidebarModulesCard() {
     },
   ]
 
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await api.get('/api/user/self')
-      if (res.data.success && res.data.data?.sidebar_modules) {
-        const raw = res.data.data.sidebar_modules
-        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-        setConfig(parsed)
-      } else {
-        const defaults: SidebarModulesConfig = {}
-        for (const sec of sectionDefs) {
-          defaults[sec.key] = { enabled: true }
-          for (const mod of sec.modules) defaults[sec.key][mod.key] = true
+  const loadConfig = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return api
+      .get('/api/user/self')
+      .then((res) => {
+        if (!current()) return
+        let parsed: unknown = res.data.success
+          ? res.data.data?.sidebar_modules
+          : undefined
+        if (typeof parsed === 'string') {
+          try {
+            parsed = JSON.parse(parsed)
+          } catch {
+            parsed = null
+          }
         }
-        setConfig(defaults)
-      }
-    } catch {
-      /* ignore */
-    }
+        setConfig(
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as SidebarModulesConfig)
+            : buildDefaultSidebarConfig(sectionDefs)
+        )
+      })
+      .catch(() => {
+        /* retain the last valid configuration */
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [beginRead, setConfig])
 
   useEffect(() => {
     loadConfig()
@@ -190,12 +216,7 @@ export function SidebarModulesCard() {
   }
 
   const handleReset = () => {
-    const defaults: SidebarModulesConfig = {}
-    for (const sec of sectionDefs) {
-      defaults[sec.key] = { enabled: true }
-      for (const mod of sec.modules) defaults[sec.key][mod.key] = true
-    }
-    setConfig(defaults)
+    setConfig(buildDefaultSidebarConfig(sectionDefs))
     toast.success(t('Reset to default configuration'))
   }
 

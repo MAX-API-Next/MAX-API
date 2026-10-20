@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckSquare, RefreshCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -145,7 +145,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   const [channelDialogOpen, setChannelDialogOpen] = useState(false)
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false)
   const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>([])
-  const [channelEndpoints, setChannelEndpoints] = useState<
+  const [endpointOverrides, setEndpointOverrides] = useState<
     Record<number, string>
   >({})
   const [differences, setDifferences] = useState<DifferencesMap>({})
@@ -159,25 +159,15 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
     enabled: channelDialogOpen,
   })
 
-  // Memoize the channels list so the effect below only re-runs when the query
-  // data actually changes, instead of on every render (the `|| []` fallback
-  // would otherwise produce a new array reference each render).
   const channels = useMemo(() => channelsData?.data ?? [], [channelsData?.data])
-
-  useEffect(() => {
-    if (channels.length === 0) return
-    setChannelEndpoints((prev) => {
-      let mutated = false
-      const next = { ...prev }
-      for (const channel of channels) {
-        if (!next[channel.id]) {
-          next[channel.id] = getDefaultEndpointForChannel(channel)
-          mutated = true
-        }
-      }
-      return mutated ? next : prev
-    })
-  }, [channels])
+  const channelEndpoints = useMemo(() => {
+    const endpoints = { ...endpointOverrides }
+    for (const channel of channels) {
+      if (endpoints[channel.id] === undefined)
+        endpoints[channel.id] = getDefaultEndpointForChannel(channel)
+    }
+    return endpoints
+  }, [channels, endpointOverrides])
 
   const fetchMutation = useMutation({
     mutationFn: fetchUpstreamRatios,
@@ -554,7 +544,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         selectedChannelIds={selectedChannelIds}
         onSelectedChannelIdsChange={setSelectedChannelIds}
         channelEndpoints={channelEndpoints}
-        onChannelEndpointsChange={setChannelEndpoints}
+        onChannelEndpointsChange={setEndpointOverrides}
         onConfirm={handleConfirmChannelSelection}
       />
 

@@ -21,18 +21,54 @@ import { createReactTestEnvironment } from '@/test/react'
 import { within } from '@testing-library/react'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { after, before, describe, test } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, test } from 'node:test'
 import { useSystemConfigStore } from '@/stores/system-config-store'
+import { api } from '@/lib/api'
+import type { PerformanceMetricsData } from '@/features/performance-metrics/types'
 import type { PricingModel } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelDetailsContent } from './model-details'
 import { ModelTierPricing } from './model-tier-pricing'
 
 const testEnv = createReactTestEnvironment()
+const originalAdapter = api.defaults.adapter
+let unexpectedRequests = 0
+let metricsReads: string[] = []
 
 before(() => testEnv.setup())
 
-after(() => testEnv.teardown())
+beforeEach(() => {
+  unexpectedRequests = 0
+  metricsReads = []
+  api.defaults.adapter = async (config) => {
+    const modelName = config.params?.model
+    if (
+      config.method !== 'get' ||
+      config.url !== '/api/perf-metrics' ||
+      config.params?.hours !== 24 ||
+      (modelName !== 'time-priced-model' && modelName !== 'MiniMax-H3')
+    ) {
+      unexpectedRequests += 1
+      throw new Error('Unexpected request in model-pricing fixture')
+    }
+    metricsReads.push(modelName)
+    const data: PerformanceMetricsData = {
+      success: true,
+      data: { model_name: modelName, groups: [] },
+    }
+    return { config, status: 200, statusText: 'OK', headers: {}, data }
+  }
+})
+
+afterEach(() => {
+  api.defaults.adapter = originalAdapter
+  assert.equal(unexpectedRequests, 0, 'All model-pricing reads need a fixture')
+})
+
+after(() => {
+  api.defaults.adapter = originalAdapter
+  testEnv.teardown()
+})
 
 describe('Model square expression pricing', () => {
   const displayOptions = {
@@ -258,7 +294,9 @@ describe('Model square expression pricing', () => {
   })
 
   test('separates prices from conditions in the actual model square without changing the log layout', async () => {
-    const queryClient = new QueryClient()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
         <ModelDetailsContent
@@ -282,6 +320,7 @@ describe('Model square expression pricing', () => {
       </QueryClientProvider>
     )
     try {
+      assert.deepEqual(metricsReads, ['time-priced-model'])
       const square = within(view.container).getByRole('region', {
         name: 'Tiered price table',
       })
@@ -490,7 +529,9 @@ describe('ModelDetailsContent structured task pricing', () => {
     queryClient: QueryClient
     view: Awaited<ReturnType<typeof testEnv.render>>
   }> {
-    const queryClient = new QueryClient()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     const view = await testEnv.render(
       <QueryClientProvider client={queryClient}>
         <ModelDetailsContent

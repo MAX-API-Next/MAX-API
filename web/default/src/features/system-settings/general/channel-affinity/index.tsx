@@ -20,6 +20,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Edit, FileText, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -93,38 +95,48 @@ interface Props {
 export function ChannelAffinitySection(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const resetKey = JSON.stringify(props.defaultValues)
 
-  const [enabled, setEnabled] = useState(
-    props.defaultValues['channel_affinity_setting.enabled']
+  const [enabled, setEnabled] = useResettableState(
+    props.defaultValues['channel_affinity_setting.enabled'],
+    resetKey
   )
-  const [switchOnSuccess, setSwitchOnSuccess] = useState(
-    props.defaultValues['channel_affinity_setting.switch_on_success']
+  const [switchOnSuccess, setSwitchOnSuccess] = useResettableState(
+    props.defaultValues['channel_affinity_setting.switch_on_success'],
+    resetKey
   )
-  const [keepOnChannelDisabled, setKeepOnChannelDisabled] = useState(
-    props.defaultValues['channel_affinity_setting.keep_on_channel_disabled']
+  const [keepOnChannelDisabled, setKeepOnChannelDisabled] = useResettableState(
+    props.defaultValues['channel_affinity_setting.keep_on_channel_disabled'],
+    resetKey
   )
-  const [maxEntries, setMaxEntries] = useState(
-    props.defaultValues['channel_affinity_setting.max_entries']
+  const [maxEntries, setMaxEntries] = useResettableState(
+    props.defaultValues['channel_affinity_setting.max_entries'],
+    resetKey
   )
-  const [defaultTtl, setDefaultTtl] = useState(
-    props.defaultValues['channel_affinity_setting.default_ttl_seconds']
+  const [defaultTtl, setDefaultTtl] = useResettableState(
+    props.defaultValues['channel_affinity_setting.default_ttl_seconds'],
+    resetKey
   )
-  const [rules, setRules] = useState<AffinityRule[]>(() =>
-    parseRules(props.defaultValues['channel_affinity_setting.rules'])
+  const [rules, setRules] = useResettableState<AffinityRule[]>(
+    () => parseRules(props.defaultValues['channel_affinity_setting.rules']),
+    resetKey
   )
 
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
-  const [jsonText, setJsonText] = useState(() =>
-    JSON.stringify(
-      parseRules(props.defaultValues['channel_affinity_setting.rules']).map(
-        ({ id: _, ...r }) => r
+  const [jsonText, setJsonText] = useResettableState(
+    () =>
+      JSON.stringify(
+        parseRules(props.defaultValues['channel_affinity_setting.rules']).map(
+          ({ id: _, ...r }) => r
+        ),
+        null,
+        2
       ),
-      null,
-      2
-    )
+    resetKey
   )
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null)
-  const [cacheLoading, setCacheLoading] = useState(false)
+  const [cacheLoading, setCacheLoading] = useState(true)
+  const beginRead = useReadScope()
   const [saving, setSaving] = useState(false)
 
   const [ruleEditorOpen, setRuleEditorOpen] = useState(false)
@@ -134,46 +146,27 @@ export function ChannelAffinitySection(props: Props) {
   const [clearRuleName, setClearRuleName] = useState<string | null>(null)
   const [fillTemplateDialogOpen, setFillTemplateDialogOpen] = useState(false)
 
-  useEffect(() => {
-    setEnabled(props.defaultValues['channel_affinity_setting.enabled'])
-    setSwitchOnSuccess(
-      props.defaultValues['channel_affinity_setting.switch_on_success']
-    )
-    setKeepOnChannelDisabled(
-      props.defaultValues['channel_affinity_setting.keep_on_channel_disabled']
-    )
-    setMaxEntries(props.defaultValues['channel_affinity_setting.max_entries'])
-    setDefaultTtl(
-      props.defaultValues['channel_affinity_setting.default_ttl_seconds']
-    )
-    const parsed = parseRules(
-      props.defaultValues['channel_affinity_setting.rules']
-    )
-    setRules(parsed)
-    setJsonText(
-      JSON.stringify(
-        parsed.map(({ id: _, ...r }) => r),
-        null,
-        2
-      )
-    )
-  }, [props.defaultValues])
-
-  const refreshCache = useCallback(async () => {
+  const loadCache = useCallback(() => {
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getCacheStats()
+      .then((res) => {
+        if (current() && res.success) setCacheStats(res.data || null)
+      })
+      .catch(() => {
+        if (current()) toast.error(t('Failed to refresh cache stats'))
+      })
+      .finally(() => {
+        if (current()) setCacheLoading(false)
+      })
+  }, [beginRead, t])
+  const refreshCache = useCallback(() => {
     setCacheLoading(true)
-    try {
-      const res = await getCacheStats()
-      if (res.success) setCacheStats(res.data || null)
-    } catch {
-      toast.error(t('Failed to refresh cache stats'))
-    } finally {
-      setCacheLoading(false)
-    }
-  }, [t])
-
+    return loadCache()
+  }, [loadCache])
   useEffect(() => {
-    refreshCache()
-  }, [refreshCache])
+    void loadCache()
+  }, [loadCache])
 
   const appendCliTemplates = () => {
     const existingNames = new Set(

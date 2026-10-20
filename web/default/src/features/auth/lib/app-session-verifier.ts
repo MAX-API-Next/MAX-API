@@ -18,12 +18,41 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
+import { isStaleAuthResponse } from '@/lib/auth-errors'
 import { createSessionVerifier } from './session-verifier'
+
+async function getSelfForVerification() {
+  while (true) {
+    const starting = useAuthStore.getState()
+    try {
+      const response = await getSelf()
+      const current = useAuthStore.getState()
+      // Authenticated identities include the revision below. When both are
+      // anonymous, the verifier cannot see a reset, so refresh this pure read.
+      if (
+        current.sessionRevision === starting.sessionRevision ||
+        starting.auth.user ||
+        current.auth.user
+      )
+        return response
+    } catch (error) {
+      const current = useAuthStore.getState()
+      if (
+        isStaleAuthResponse(error) &&
+        !starting.auth.user &&
+        !current.auth.user
+      )
+        continue
+      throw error
+    }
+  }
+}
 
 export const appSessionVerifier = createSessionVerifier({
   getAuthState: () => useAuthStore.getState().auth,
-  getSelf,
-  getUserIdentity: (user) => user.id,
+  getSelf: getSelfForVerification,
+  getUserIdentity: (user) =>
+    `${useAuthStore.getState().sessionRevision}:${user.id}`,
   isUnauthorized: (error: unknown) =>
     (error as { response?: { status?: number } })?.response?.status === 401,
 })

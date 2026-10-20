@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useEffectEvent } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatQuota, formatCompactNumber } from '@/lib/format'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import {
   Dialog,
   DialogContent,
@@ -38,54 +40,55 @@ interface UserInfoDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+type InfoItemProps = {
+  label: string
+  value: string | number
+}
+
+function InfoItem(props: InfoItemProps) {
+  return (
+    <div className='space-y-1.5'>
+      <Label className='text-muted-foreground text-xs'>{props.label}</Label>
+      <div className='text-sm font-semibold'>{props.value}</div>
+    </div>
+  )
+}
+
 export function UserInfoDialog({
   userId,
   open,
   onOpenChange,
 }: UserInfoDialogProps) {
   const { t } = useTranslation()
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-
-  const fetchUserInfo = useCallback(
-    async (id: number) => {
-      setIsLoading(true)
-      try {
-        const result = await getUserInfo(id)
-        if (result.success) {
-          setUserInfo(result.data || null)
-        } else {
-          toast.error(result.message || t('Failed to fetch user information'))
-        }
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error('Failed to fetch user info:', error)
-        toast.error(t('Failed to fetch user information'))
-      } finally {
-        setIsLoading(false)
-      }
-    },
-    [t]
+  const scopeKey = JSON.stringify([open, userId])
+  const beginRead = useReadScope(scopeKey)
+  const [userInfo, setUserInfo] = useResettableState<UserInfo | null>(
+    null,
+    beginRead
   )
-
+  const [isLoading, setIsLoading] = useResettableState(
+    Boolean(open && userId),
+    beginRead
+  )
+  const reportFailure = useEffectEvent((message?: string) =>
+    toast.error(message || t('Failed to fetch user information'))
+  )
   useEffect(() => {
-    if (open && userId) {
-      fetchUserInfo(userId)
-    }
-  }, [open, userId, fetchUserInfo])
-
-  const InfoItem = ({
-    label,
-    value,
-  }: {
-    label: string
-    value: string | number
-  }) => (
-    <div className='space-y-1.5'>
-      <Label className='text-muted-foreground text-xs'>{label}</Label>
-      <div className='text-sm font-semibold'>{value}</div>
-    </div>
-  )
+    if (!open || !userId) return
+    const current = beginRead()
+    void getUserInfo(userId)
+      .then((result) => {
+        if (!current()) return
+        if (result.success) setUserInfo(result.data || null)
+        else reportFailure(result.message)
+      })
+      .catch(() => {
+        if (current()) reportFailure()
+      })
+      .finally(() => {
+        if (current()) setIsLoading(false)
+      })
+  }, [open, userId, beginRead, setUserInfo, setIsLoading])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

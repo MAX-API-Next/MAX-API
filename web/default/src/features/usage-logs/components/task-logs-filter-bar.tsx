@@ -24,6 +24,7 @@ import { useTranslation } from 'react-i18next'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { QUOTA_FILTER_ALL_VALUE } from '../constants'
 import { buildSearchParams } from '../lib/filter'
+import { isQuotaFilterValue, type QuotaFilterValue } from '../lib/quota-filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { DrawingLogFilters, LogCategory, TaskLogFilters } from '../types'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
@@ -32,11 +33,7 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
-import {
-  isQuotaFilterValue,
-  QuotaFilterSelect,
-  type QuotaFilterValue,
-} from './quota-filter-select'
+import { QuotaFilterSelect } from './quota-filter-select'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 

@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import {
-  createContext,
   useContext,
   type ComponentProps,
   type ReactNode,
@@ -27,18 +26,7 @@ import { RotateCcw, Save } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-
-type SettingsPageContextValue = {
-  actionsContainer: HTMLDivElement | null
-  titleStatusContainer: HTMLSpanElement | null
-  suppressSectionHeader: boolean
-}
-
-const SettingsPageContext = createContext<SettingsPageContextValue>({
-  actionsContainer: null,
-  titleStatusContainer: null,
-  suppressSectionHeader: false,
-})
+import { SettingsPageContext } from '../lib/settings-page-context'
 
 type SettingsPageProviderProps = {
   actionsContainer: HTMLDivElement | null
@@ -59,10 +47,6 @@ export function SettingsPageProvider(props: SettingsPageProviderProps) {
       {props.children}
     </SettingsPageContext.Provider>
   )
-}
-
-export function useSuppressSettingsSectionHeader() {
-  return useContext(SettingsPageContext).suppressSectionHeader
 }
 
 type SettingsPageTitleStatusPortalProps = {
@@ -111,7 +95,10 @@ type SettingsPageFormActionsProps = {
   saveButtonRef?: RefObject<HTMLButtonElement | null>
 }
 
-export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
+export function SettingsPageFormActions({
+  saveButtonRef,
+  ...props
+}: SettingsPageFormActionsProps) {
   const { t } = useTranslation()
   const saveLabel = props.isSaving
     ? (props.savingLabel ?? 'Saving...')
@@ -132,7 +119,7 @@ export function SettingsPageFormActions(props: SettingsPageFormActionsProps) {
         </Button>
       )}
       <Button
-        ref={props.saveButtonRef}
+        ref={saveButtonRef}
         type='button'
         size='sm'
         onClick={props.onSave}
