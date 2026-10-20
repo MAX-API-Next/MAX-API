@@ -26,26 +26,34 @@ export function useMinimumLoadingTime(
   loading: boolean,
   minimumTime = 1000
 ): boolean {
-  const [showSkeleton, setShowSkeleton] = useState(loading)
-  // eslint-disable-next-line react-hooks/purity
-  const loadingStartRef = useRef(Date.now())
-
+  const [period, setPeriod] = useState(() => ({
+    loading,
+    cycle: loading ? 1 : 0,
+    elapsed: !loading,
+  }))
+  const started = useRef({ cycle: 0, time: 0 })
+  if (period.loading !== loading) {
+    setPeriod({
+      loading,
+      cycle: loading ? period.cycle + 1 : period.cycle,
+      elapsed: loading ? false : period.elapsed,
+    })
+  }
+  const cycle = period.cycle
   useEffect(() => {
-    if (loading) {
-      loadingStartRef.current = Date.now()
-      setShowSkeleton(true)
-    } else {
-      const elapsed = Date.now() - loadingStartRef.current
-      const remaining = Math.max(0, minimumTime - elapsed)
-
-      if (remaining === 0) {
-        setShowSkeleton(false)
-      } else {
-        const timer = setTimeout(() => setShowSkeleton(false), remaining)
-        return () => clearTimeout(timer)
-      }
-    }
-  }, [loading, minimumTime])
-
-  return showSkeleton
+    if (cycle === 0) return
+    if (started.current.cycle !== cycle)
+      started.current = { cycle, time: Date.now() }
+    const remaining = Math.max(
+      0,
+      minimumTime - (Date.now() - started.current.time)
+    )
+    const timer = setTimeout(() => {
+      setPeriod((previous) =>
+        previous.cycle === cycle ? { ...previous, elapsed: true } : previous
+      )
+    }, remaining)
+    return () => clearTimeout(timer)
+  }, [cycle, minimumTime])
+  return loading || (minimumTime > 0 && cycle > 0 && !period.elapsed)
 }

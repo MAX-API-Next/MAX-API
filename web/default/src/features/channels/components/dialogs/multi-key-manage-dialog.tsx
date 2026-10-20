@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, RefreshCw, Trash2, Power, PowerOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -83,68 +85,85 @@ export function MultiKeyManageDialog({
   const { currentRow } = useChannels()
   const queryClient = useQueryClient()
 
+  const channelId = currentRow?.id
+  const beginRead = useReadScope(JSON.stringify([open, channelId]))
+
   // Data state
-  const [isLoading, setIsLoading] = useState(false)
-  const [keys, setKeys] = useState<KeyStatus[]>([])
-  const [currentPage, setCurrentPage] = useState(1)
+  const [isLoading, setIsLoading] = useResettableState(
+    Boolean(open && channelId),
+    beginRead
+  )
+  const [keys, setKeys] = useResettableState<KeyStatus[]>([], beginRead)
+  const [currentPage, setCurrentPage] = useResettableState(1, beginRead)
   const [pageSize, setPageSize] = useState(10)
-  const [total, setTotal] = useState(0)
-  const [totalPages, setTotalPages] = useState(0)
-  const [enabledCount, setEnabledCount] = useState(0)
-  const [manualDisabledCount, setManualDisabledCount] = useState(0)
-  const [autoDisabledCount, setAutoDisabledCount] = useState(0)
+  const [total, setTotal] = useResettableState(0, beginRead)
+  const [totalPages, setTotalPages] = useResettableState(0, beginRead)
+  const [enabledCount, setEnabledCount] = useResettableState(0, beginRead)
+  const [manualDisabledCount, setManualDisabledCount] = useResettableState(
+    0,
+    beginRead
+  )
+  const [autoDisabledCount, setAutoDisabledCount] = useResettableState(
+    0,
+    beginRead
+  )
 
   // UI state
-  const [statusFilter, setStatusFilter] = useState<number | null>(null)
+  const [statusFilter, setStatusFilter] = useResettableState<number | null>(
+    null,
+    beginRead
+  )
   const [confirmAction, setConfirmAction] =
-    useState<MultiKeyConfirmAction | null>(null)
+    useResettableState<MultiKeyConfirmAction | null>(null, beginRead)
   const [isPerformingAction, setIsPerformingAction] = useState(false)
 
-  // Reset and load data when dialog opens
+  const readInitialKeys = useEffectEvent(() => readKeyStatus(1, pageSize, null))
   useEffect(() => {
-    if (open && currentRow) {
-      setCurrentPage(1)
-      setStatusFilter(null)
-      loadKeyStatus(1, pageSize, null)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, currentRow?.id])
+    if (open && channelId) void readInitialKeys()
+  }, [open, channelId, beginRead])
 
-  const loadKeyStatus = async (
-    page: number = currentPage,
-    size: number = pageSize,
-    status: number | null = statusFilter
-  ) => {
-    if (!currentRow) return
-
+  function readKeyStatus(page: number, size: number, status: number | null) {
+    if (!channelId) return Promise.resolve()
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getMultiKeyStatus(
+      channelId,
+      page,
+      size,
+      status === null ? undefined : status
+    )
+      .then((response) => {
+        if (!current()) return
+        if (response.success && response.data) {
+          setKeys(response.data.keys || [])
+          setTotal(response.data.total || 0)
+          setCurrentPage(response.data.page || 1)
+          setPageSize(response.data.page_size || 10)
+          setTotalPages(response.data.total_pages || 0)
+          setEnabledCount(response.data.enabled_count || 0)
+          setManualDisabledCount(response.data.manual_disabled_count || 0)
+          setAutoDisabledCount(response.data.auto_disabled_count || 0)
+        } else toast.error(response.message || t('Failed to load key status'))
+      })
+      .catch((error: unknown) => {
+        if (current())
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load key status')
+          )
+      })
+      .finally(() => {
+        if (current()) setIsLoading(false)
+      })
+  }
+  function loadKeyStatus(
+    page = currentPage,
+    size = pageSize,
+    status = statusFilter
+  ) {
     setIsLoading(true)
-    try {
-      const response = await getMultiKeyStatus(
-        currentRow.id,
-        page,
-        size,
-        status === null ? undefined : status
-      )
-
-      if (response.success && response.data) {
-        setKeys(response.data.keys || [])
-        setTotal(response.data.total || 0)
-        setCurrentPage(response.data.page || 1)
-        setPageSize(response.data.page_size || 10)
-        setTotalPages(response.data.total_pages || 0)
-        setEnabledCount(response.data.enabled_count || 0)
-        setManualDisabledCount(response.data.manual_disabled_count || 0)
-        setAutoDisabledCount(response.data.auto_disabled_count || 0)
-      } else {
-        toast.error(response.message || t('Failed to load key status'))
-      }
-    } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to load key status')
-      )
-    } finally {
-      setIsLoading(false)
-    }
+    return readKeyStatus(page, size, status)
   }
 
   const handleStatusFilterChange = (value: string) => {

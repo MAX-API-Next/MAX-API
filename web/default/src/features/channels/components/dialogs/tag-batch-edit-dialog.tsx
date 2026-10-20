@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useEffectEvent, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -36,12 +36,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { MultiSelect } from '@/components/multi-select'
-import {
-  getTagModels,
-  editTagChannels,
-  getAllModels,
-  getGroups,
-} from '../../api'
+import { getTagModels, editTagChannels, getGroups } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 import type { TagOperationParams } from '../../types'
 import { useChannels } from '../channels-provider'
@@ -52,27 +47,44 @@ type TagBatchEditDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
-export function TagBatchEditDialog({
-  open,
-  onOpenChange,
-}: TagBatchEditDialogProps) {
-  const { t } = useTranslation()
+export function TagBatchEditDialog(props: TagBatchEditDialogProps) {
   const { currentTag } = useChannels()
-  const queryClient = useQueryClient()
-  const [isLoading, setIsLoading] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-
-  // Form fields
-  const [newTag, setNewTag] = useState('')
-  const [models, setModels] = useState('')
-  const [modelMapping, setModelMapping] = useState('')
-  const [groups, setGroups] = useState<string[]>([])
-
-  // Fetch available groups
   const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
     queryKey: ['groups'],
     queryFn: getGroups,
   })
+  return (
+    <TagBatchEditDialogContent
+      key={props.open ? `open:${currentTag}` : 'closed'}
+      {...props}
+      currentTag={currentTag}
+      groupsData={groupsData}
+      isLoadingGroups={isLoadingGroups}
+    />
+  )
+}
+
+function TagBatchEditDialogContent({
+  open,
+  onOpenChange,
+  currentTag,
+  groupsData,
+  isLoadingGroups,
+}: TagBatchEditDialogProps & {
+  currentTag: string | null
+  groupsData: Awaited<ReturnType<typeof getGroups>> | undefined
+  isLoadingGroups: boolean
+}) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [isLoading, setIsLoading] = useState(Boolean(open && currentTag))
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Form fields
+  const [newTag, setNewTag] = useState(currentTag ?? '')
+  const [models, setModels] = useState('')
+  const [modelMapping, setModelMapping] = useState('')
+  const [groups, setGroups] = useState<string[]>([])
 
   // Transform groups to multi-select options
   const groupOptions = useMemo(() => {
@@ -84,40 +96,36 @@ export function TagBatchEditDialog({
     }))
   }, [groupsData, groups])
 
+  const reportLoadError = useEffectEvent((error: unknown) => {
+    toast.error(
+      error instanceof Error ? error.message : t('Failed to load tag data')
+    )
+  })
+
   useEffect(() => {
-    if (open && currentTag) {
-      loadTagData()
+    if (!open || !currentTag) return
+    const tag = currentTag
+    let cancelled = false
+    async function loadTagData() {
+      try {
+        const tagModelsResponse = await getTagModels(tag)
+        if (cancelled) return
+        if (tagModelsResponse.success && tagModelsResponse.data) {
+          setModels(tagModelsResponse.data)
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          reportLoadError(error)
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void loadTagData()
+    return () => {
+      cancelled = true
+    }
   }, [open, currentTag])
-
-  const loadTagData = async () => {
-    if (!currentTag) return
-
-    setIsLoading(true)
-    try {
-      // Fetch current tag models
-      const tagModelsResponse = await getTagModels(currentTag)
-      if (tagModelsResponse.success && tagModelsResponse.data) {
-        setModels(tagModelsResponse.data)
-      }
-
-      // Fetch all available models (for future use if needed)
-      const allModelsResponse = await getAllModels()
-      if (allModelsResponse.success && allModelsResponse.data) {
-        // Available models could be used for autocomplete in the future
-      }
-
-      // Initialize new tag with current tag name
-      setNewTag(currentTag)
-    } catch (_error: unknown) {
-      toast.error(
-        _error instanceof Error ? _error.message : t('Failed to load tag data')
-      )
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
   const handleSave = async () => {
     if (!currentTag) return

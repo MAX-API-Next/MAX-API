@@ -27,6 +27,8 @@ declare module 'axios' {
     skipBusinessError?: boolean
     skipErrorHandler?: boolean
     disableDuplicate?: boolean
+    authSessionRevision?: number
+    staleAuthResponse?: boolean
   }
 }
 
@@ -55,6 +57,9 @@ export const api = axios.create({
 // Deduplicate concurrent GET requests to the same URL
 // Prevents multiple identical requests from being sent simultaneously
 const inFlightGet = new Map<string, Promise<unknown>>()
+useAuthStore.subscribe((state, previous) => {
+  if (state.sessionRevision !== previous.sessionRevision) inFlightGet.clear()
+})
 const originalGet = api.get.bind(api)
 
 api.get = ((url: string, config: ApiRequestConfig = {}) => {
@@ -62,7 +67,7 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
   if (disableDuplicate) return originalGet(url, config)
 
   const params = config.params ? JSON.stringify(config.params) : '{}'
-  const key = `${url}?${params}`
+  const key = `${useAuthStore.getState().sessionRevision}:${url}?${params}`
 
   // Return existing in-flight request if available
   if (inFlightGet.has(key)) return inFlightGet.get(key)!
@@ -102,6 +107,13 @@ api.interceptors.response.use(
     const status = error?.response?.status
 
     if (status === 401) {
+      const belongsToCurrentSession =
+        error?.config?.authSessionRevision ===
+        useAuthStore.getState().sessionRevision
+      if (!belongsToCurrentSession) {
+        if (error.config) error.config.staleAuthResponse = true
+        return Promise.reject(error)
+      }
       try {
         useAuthStore.getState().auth.reset()
       } catch {
@@ -160,14 +172,20 @@ export function getCommonHeaders(): Record<string, string> {
 // ============================================================================
 
 // Attach user ID header for all requests
-api.interceptors.request.use((config) => {
-  const uid = getUserId()
-  if (uid) {
-    // Custom header for user identification
-    ;(config.headers as Record<string, string>)['Max-Api-User'] = uid
-  }
-  return config
-})
+api.interceptors.request.use(
+  (config) => {
+    config.authSessionRevision = useAuthStore.getState().sessionRevision
+    config.staleAuthResponse = false
+    const uid = getUserId()
+    if (uid) {
+      // Custom header for user identification
+      ;(config.headers as Record<string, string>)['Max-Api-User'] = uid
+    }
+    return config
+  },
+  undefined,
+  { synchronous: true }
+)
 
 // ============================================================================
 // Common API Functions

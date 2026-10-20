@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import {
+  useState,
+  useEffect,
+  useEffectEvent,
+  useCallback,
+  useMemo,
+} from 'react'
 import {
   Mail,
   Globe,
@@ -32,6 +38,8 @@ import { useTranslation } from 'react-i18next'
 import { SiGithub, SiDiscord } from 'react-icons/si'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -165,58 +173,79 @@ function CustomProviderIcon(props: { iconUrl?: string }) {
 
 export function UserBindingDialog(props: Props) {
   const { t } = useTranslation()
-  const [user, setUser] = useState<User | null>(null)
-  const [oauthBindings, setOauthBindings] = useState<OAuthBinding[]>([])
-  const [statusInfo, setStatusInfo] = useState<StatusInfo>({})
-  const [loading, setLoading] = useState(false)
-  const [showBoundOnly, setShowBoundOnly] = useState(true)
-  const [unbindTarget, setUnbindTarget] = useState<BindingItem | null>(null)
+  const beginRead = useReadScope(JSON.stringify([props.open, props.userId]))
+  const [user, setUser] = useResettableState<User | null>(null, beginRead)
+  const [oauthBindings, setOauthBindings] = useResettableState<OAuthBinding[]>(
+    [],
+    beginRead
+  )
+  const [statusInfo, setStatusInfo] = useResettableState<StatusInfo>(
+    {},
+    beginRead
+  )
+  const [loading, setLoading] = useResettableState(
+    Boolean(props.open && props.userId),
+    beginRead
+  )
+  const [showBoundOnly, setShowBoundOnly] = useResettableState(true, beginRead)
+  const [unbindTarget, setUnbindTarget] =
+    useResettableState<BindingItem | null>(null, beginRead)
   const [unbinding, setUnbinding] = useState(false)
 
-  const fetchData = useCallback(async () => {
-    if (!props.userId) return
-    setLoading(true)
-    try {
-      const [userRes, oauthRes, statusRes] = await Promise.all([
-        getUser(props.userId),
-        getUserOAuthBindings(props.userId).catch(() => ({
+  const loadData = useCallback(() => {
+    if (!props.userId) return Promise.resolve()
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return Promise.all([
+      getUser(props.userId),
+      getUserOAuthBindings(props.userId).catch(() => ({
+        success: false,
+        data: [],
+      })),
+      api
+        .get('/api/status')
+        .then((r) => r.data)
+        .catch(() => ({
           success: false,
-          data: [],
+          data: {},
         })),
-        api
-          .get('/api/status')
-          .then((r) => r.data)
-          .catch(() => ({
-            success: false,
-            data: {},
-          })),
-      ])
-      if (userRes.success && userRes.data) {
-        setUser(userRes.data)
-      }
-      if (oauthRes.success && oauthRes.data) {
-        setOauthBindings(oauthRes.data as OAuthBinding[])
-      }
-      if (statusRes.success && statusRes.data) {
-        setStatusInfo(statusRes.data as StatusInfo)
-      }
-    } catch {
-      toast.error(t('Failed to load'))
-    } finally {
-      setLoading(false)
-    }
-  }, [props.userId, t])
+    ])
+      .then(([userRes, oauthRes, statusRes]) => {
+        if (!current()) return
+        if (userRes.success && userRes.data) {
+          setUser(userRes.data)
+        }
+        if (oauthRes.success && oauthRes.data) {
+          setOauthBindings(oauthRes.data as OAuthBinding[])
+        }
+        if (statusRes.success && statusRes.data) {
+          setStatusInfo(statusRes.data as StatusInfo)
+        }
+      })
+      .catch(() => {
+        if (current()) toast.error(t('Failed to load'))
+      })
+      .finally(() => {
+        if (current()) setLoading(false)
+      })
+  }, [
+    props.userId,
+    beginRead,
+    setUser,
+    setOauthBindings,
+    setStatusInfo,
+    setLoading,
+    t,
+  ])
+  const fetchData = useCallback(() => {
+    setLoading(true)
+    return loadData()
+  }, [loadData, setLoading])
 
+  const readInitialData = useEffectEvent(() => loadData())
   useEffect(() => {
-    if (props.open && props.userId) {
-      setShowBoundOnly(true)
-      fetchData()
-    } else {
-      setUser(null)
-      setOauthBindings([])
-      setStatusInfo({})
-    }
-  }, [props.open, props.userId, fetchData])
+    if (props.open && props.userId) void readInitialData()
+  }, [props.open, props.userId, beginRead])
 
   const allBindings = useMemo<BindingItem[]>(() => {
     const items: BindingItem[] = []

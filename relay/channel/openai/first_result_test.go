@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -16,13 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Use the real adapters and keep the provider open after metadata. The close
-// is a bounded fallback: a broken watchdog must fail rather than hang the suite.
+// Keep the provider open after metadata until cleanup. The request deadline
+// bounds a broken watchdog without racing it against a fixture-generated EOF.
 func stalledFirstResultStream(t *testing.T, frames []string) *http.Response {
 	t.Helper()
 	r, w := io.Pipe()
 	finished := make(chan struct{})
-	t.Cleanup(func() { _ = r.Close(); _ = w.Close(); <-finished })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release); _ = r.Close(); _ = w.Close(); <-finished })
 	go func() {
 		defer close(finished)
 		defer w.Close()
@@ -31,7 +33,7 @@ func stalledFirstResultStream(t *testing.T, frames []string) *http.Response {
 				return
 			}
 		}
-		time.Sleep(1500 * time.Millisecond)
+		<-release
 	}()
 	return &http.Response{StatusCode: http.StatusOK, Body: r}
 }
@@ -57,6 +59,9 @@ func TestAdaptersMetadataDoesNotEndFirstResultWait(t *testing.T) {
 			*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{StreamingFirstResultTimeoutSeconds: 1}
 			t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldSetting })
 			c, recorder, info := newChatStreamTest(t)
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+			defer cancel()
+			c.Request = c.Request.WithContext(ctx)
 			info.InitChannelMeta(c)
 			info.UpstreamModelName = "gpt-test"
 			common.EmptyCompletionRetryEnabled = test.buffer

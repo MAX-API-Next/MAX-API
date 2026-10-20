@@ -16,8 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useEffect, useCallback } from 'react'
+import { useEffect, useCallback } from 'react'
+import { useAuthStore } from '@/stores/auth-store'
 import { get2FAStatus } from '@/lib/api'
+import { getSafeErrorDebugInfo } from '@/lib/handle-server-error'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import type { TwoFAStatus } from '../types'
 
 // ============================================================================
@@ -31,29 +35,44 @@ const DEFAULT_STATUS: TwoFAStatus = {
 }
 
 export function useTwoFA(enabled = true) {
-  const [loading, setLoading] = useState(true)
-  const [status, setStatus] = useState<TwoFAStatus>(DEFAULT_STATUS)
+  const sessionRevision = useAuthStore((state) => state.sessionRevision)
+  const scopeKey = JSON.stringify([sessionRevision, enabled])
+  const beginRead = useReadScope(scopeKey)
+  const [loading, setLoading] = useResettableState(enabled, scopeKey)
+  const [status, setStatus] = useResettableState<TwoFAStatus>(
+    DEFAULT_STATUS,
+    scopeKey
+  )
 
-  const fetchStatus = useCallback(async () => {
-    if (!enabled) return
-
-    try {
-      setLoading(true)
-      const response = await get2FAStatus()
-      if (response.success && response.data) {
-        setStatus(response.data)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch 2FA status:', error)
-    } finally {
-      setLoading(false)
-    }
-  }, [enabled])
-
+  const loadStatus = useCallback(() => {
+    if (!enabled) return Promise.resolve()
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return get2FAStatus()
+      .then((response) => {
+        if (current() && response.success && response.data)
+          setStatus(response.data)
+      })
+      .catch((error) => {
+        if (!current()) return
+        // eslint-disable-next-line no-console
+        console.error(
+          'Failed to fetch 2FA status:',
+          getSafeErrorDebugInfo(error)
+        )
+      })
+      .finally(() => {
+        if (current()) setLoading(false)
+      })
+  }, [enabled, beginRead, setStatus, setLoading])
+  const fetchStatus = useCallback(() => {
+    if (!enabled) return Promise.resolve()
+    setLoading(true)
+    return loadStatus()
+  }, [enabled, loadStatus, setLoading])
   useEffect(() => {
-    fetchStatus()
-  }, [fetchStatus])
+    void loadStatus()
+  }, [loadStatus])
 
   return {
     status,

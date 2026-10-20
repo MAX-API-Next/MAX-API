@@ -29,6 +29,7 @@ import type { ApiKeyGroupOption } from './api-key-group-combobox'
 let ApiKeyRoutingEditor: typeof import('./api-key-routing-editor').ApiKeyRoutingEditor
 let cleanup: typeof import('@testing-library/react/pure').cleanup
 let fireEvent: typeof import('@testing-library/react/pure').fireEvent
+let isInaccessible: typeof import('@testing-library/react/pure').isInaccessible
 let render: typeof import('@testing-library/react/pure').render
 let within: typeof import('@testing-library/react/pure').within
 
@@ -87,7 +88,7 @@ before(async (): Promise<void> => {
     }),
   })
   // React and Base UI must detect the browser before mounting interactive portals.
-  ;({ cleanup, fireEvent, render, within } =
+  ;({ cleanup, fireEvent, isInaccessible, render, within } =
     await import('@testing-library/react/pure'))
   ;({ ApiKeyRoutingEditor } = await import('./api-key-routing-editor'))
 })
@@ -147,6 +148,37 @@ function RoutingHarness(props: RoutingHarnessProps): ReactElement {
   )
 }
 
+async function findRoutingOptions(
+  view: ReturnType<typeof render>
+): Promise<Map<string, HTMLElement>> {
+  // Compute each visible option's accessible name once instead of rescanning
+  // every option for each group. Keep the same role, visibility and name checks.
+  const names = new Map<Element, string>()
+  const options = await view.findAllByRole('option', {
+    name: (name: string, element: Element): boolean => {
+      names.set(element, name)
+      return true
+    },
+  })
+  const result = new Map<string, HTMLElement>()
+  for (const option of options) {
+    const name = names.get(option)
+    assert.ok(name !== undefined)
+    assert.equal(result.has(name), false, `duplicate option name: ${name}`)
+    result.set(name, option)
+  }
+  return result
+}
+
+function routingOption(
+  options: Map<string, HTMLElement>,
+  name: string
+): HTMLElement {
+  const option = options.get(name)
+  assert.ok(option, `missing accessible routing option: ${name}`)
+  return option
+}
+
 describe('ApiKeyRoutingEditor', (): void => {
   for (const initialGroups of [[], groups]) {
     test(`clears ${initialGroups.length} stored manual selections when automatic routing is disabled`, async (): Promise<void> => {
@@ -164,15 +196,13 @@ describe('ApiKeyRoutingEditor', (): void => {
       )
 
       fireEvent.click(view.getByRole('combobox', { name: 'Select groups' }))
-      const options = await view.findAllByRole('option')
-      assert.equal(options.length, availableGroups.length)
+      const options = await findRoutingOptions(view)
+      assert.equal(options.size, availableGroups.length)
       for (const group of availableGroups) {
-        const option = view.getByRole('option', {
-          name: `${group}1x Ratio`,
-        })
+        const option = routingOption(options, `${group}1x Ratio`)
         assert.notEqual(option.getAttribute('aria-disabled'), 'true')
       }
-      fireEvent.click(view.getByRole('option', { name: 'group-141x Ratio' }))
+      fireEvent.click(routingOption(options, 'group-141x Ratio'))
       within(view.getByRole('combobox', { name: 'Select groups' })).getByText(
         'group-14'
       )
@@ -225,27 +255,28 @@ describe('ApiKeyRoutingEditor', (): void => {
     fireEvent.click(trigger)
 
     assert.equal(trigger.getAttribute('aria-expanded'), 'true')
-    const options = await view.findAllByRole('option')
-    assert.equal(options.length, availableGroups.length)
+    const options = await findRoutingOptions(view)
+    assert.equal(options.size, availableGroups.length)
     for (const group of availableGroups) {
-      const option = view.getByRole('option', {
-        name: `${group}${group}1x Ratio`,
-      })
+      const option = routingOption(options, `${group}${group}1x Ratio`)
       assert.equal(
         option.getAttribute('aria-disabled'),
         String(!groups.includes(group))
       )
     }
-    fireEvent.click(
-      view.getByRole('option', { name: 'group-14group-141x Ratio' })
-    )
+    fireEvent.click(routingOption(options, 'group-14group-141x Ratio'))
     assert.equal(changedGroups, undefined)
 
-    const removeButtons = view.getAllByRole('button', {
-      name: /^Remove group-/,
-    })
+    const removeButtons = view.getAllByLabelText(/^Remove group-/)
     assert.equal(removeButtons.length, MAX_MANUAL_ROUTING_GROUPS)
     for (const removeButton of removeButtons) {
+      assert.equal(removeButton.tagName, 'BUTTON')
+      assert.ok(
+        removeButton.getAttribute('role') === null ||
+          removeButton.getAttribute('role') === 'button'
+      )
+      assert.equal(removeButton.getAttribute('aria-labelledby'), null)
+      assert.equal(isInaccessible(removeButton), false)
       assert.equal(trigger.contains(removeButton), false)
     }
 

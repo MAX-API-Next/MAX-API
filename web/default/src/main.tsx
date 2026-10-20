@@ -29,12 +29,19 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { getStatus } from '@/lib/api'
+import {
+  handleQueryAuthenticationError,
+  isStaleAuthResponse,
+} from '@/lib/auth-errors'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { normalizeDefaultLogo } from '@/lib/constants'
 import '@/lib/dayjs'
 import { applyFaviconToDom } from '@/lib/dom-utils'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
-import { handleServerError } from '@/lib/handle-server-error'
+import {
+  getSafeErrorDebugInfo,
+  handleServerError,
+} from '@/lib/handle-server-error'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
 import { ThemeProvider } from './context/theme-provider'
@@ -53,8 +60,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
-        // eslint-disable-next-line no-console
-        if (import.meta.env.DEV) console.log({ failureCount, error })
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.log({ failureCount, error: getSafeErrorDebugInfo(error) })
+        }
 
         if (failureCount >= 0 && import.meta.env.DEV) return false
         if (failureCount > 3 && import.meta.env.PROD) return false
@@ -69,6 +78,7 @@ const queryClient = new QueryClient({
     },
     mutations: {
       onError: (error) => {
+        if (isStaleAuthResponse(error)) return
         handleServerError(error)
 
         if (error instanceof AxiosError) {
@@ -81,14 +91,12 @@ const queryClient = new QueryClient({
   },
   queryCache: new QueryCache({
     onError: (error) => {
-      if (error instanceof AxiosError) {
-        if (error.response?.status === 401) {
-          toast.error(i18next.t('Session expired!'))
-          useAuthStore.getState().auth.reset()
-          const redirect = `${router.history.location.href}`
-          router.navigate({ to: '/sign-in', search: { redirect } })
-        }
-      }
+      handleQueryAuthenticationError(error, () => {
+        toast.error(i18next.t('Session expired!'))
+        useAuthStore.getState().auth.reset()
+        const redirect = `${router.history.location.href}`
+        router.navigate({ to: '/sign-in', search: { redirect } })
+      })
     },
   }),
 })

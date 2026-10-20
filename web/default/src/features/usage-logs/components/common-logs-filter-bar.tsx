@@ -46,6 +46,7 @@ import {
   QUOTA_FILTER_ALL_VALUE,
 } from '../constants'
 import { buildSearchParams } from '../lib/filter'
+import { isQuotaFilterValue, type QuotaFilterValue } from '../lib/quota-filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
@@ -55,11 +56,7 @@ import {
   LogsFilterInput,
   LogsFilterToolbar,
 } from './logs-filter-toolbar'
-import {
-  isQuotaFilterValue,
-  QuotaFilterSelect,
-  type QuotaFilterValue,
-} from './quota-filter-select'
+import { QuotaFilterSelect } from './quota-filter-select'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
