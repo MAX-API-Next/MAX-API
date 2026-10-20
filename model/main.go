@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -270,9 +269,10 @@ func mysqlDSNWithPinnedCertificate(dsn string) (string, error) {
 	if err != nil || len(expected) != sha256.Size {
 		return "", errors.New("MYSQL_TLS_CERT_SHA256 must be a 64-character SHA-256 fingerprint")
 	}
-	configName := "max-api-mysql-pin-" + hex.EncodeToString(expected[:8])
+	configName := "max-api-mysql-pin-" + hex.EncodeToString(expected)
 	if _, loaded := mysqlPinnedTLSConfigs.LoadOrStore(configName, struct{}{}); !loaded {
 		config := &tls.Config{
+			//nolint:gosec // VerifyConnection enforces the configured exact leaf SHA-256 pin.
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 			VerifyConnection: func(state tls.ConnectionState) error {
@@ -291,16 +291,13 @@ func mysqlDSNWithPinnedCertificate(dsn string) (string, error) {
 			return "", fmt.Errorf("register MySQL certificate pin: %w", err)
 		}
 	}
-	base, rawQuery, hasQuery := strings.Cut(dsn, "?")
-	values, err := url.ParseQuery(rawQuery)
+	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
-		return "", fmt.Errorf("parse MySQL DSN query: %w", err)
+		return "", fmt.Errorf("parse MySQL DSN: %w", err)
 	}
-	values.Set("tls", configName)
-	if !hasQuery {
-		return base + "?" + values.Encode(), nil
-	}
-	return base + "?" + values.Encode(), nil
+	cfg.TLS = nil
+	cfg.TLSConfig = configName
+	return cfg.FormatDSN(), nil
 }
 
 func InitDB() (err error) {

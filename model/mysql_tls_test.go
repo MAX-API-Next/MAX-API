@@ -47,7 +47,7 @@ func TestMySQLDSNWithPinnedCertificateAddsReusableTLSConfig(t *testing.T) {
 	got, err := mysqlDSNWithPinnedCertificate(dsn)
 	require.NoError(t, err)
 	require.Contains(t, got, "parseTime=true")
-	require.Contains(t, got, "tls=max-api-mysql-pin-aaaaaaaaaaaaaaaa")
+	require.Contains(t, got, "tls=max-api-mysql-pin-"+fingerprint)
 
 	reused, err := mysqlDSNWithPinnedCertificate(dsn)
 	require.NoError(t, err)
@@ -58,6 +58,17 @@ func TestMySQLDSNWithPinnedCertificateReplacesUnpinnedTLSOption(t *testing.T) {
 	t.Setenv("MYSQL_TLS_CERT_SHA256", strings.Repeat("b", 64))
 	got, err := mysqlDSNWithPinnedCertificate("user:password@tcp(127.0.0.1:3306)/database?tls=skip-verify&parseTime=true")
 	require.NoError(t, err)
-	require.Contains(t, got, "tls=max-api-mysql-pin-bbbbbbbbbbbbbbbb")
+	require.Contains(t, got, "tls=max-api-mysql-pin-"+strings.Repeat("b", 64))
 	require.NotContains(t, got, "tls=skip-verify")
+}
+
+func TestMySQLDSNWithPinnedCertificatePreservesDriverDSNParsing(t *testing.T) {
+	fingerprint := strings.Repeat("c", 64)
+	t.Setenv("MYSQL_TLS_CERT_SHA256", fingerprint)
+	dsn := "user:pa?ss@tcp(127.0.0.1:3306)/database?parseTime=true&loc=Asia%2FShanghai"
+	got, err := mysqlDSNWithPinnedCertificate(dsn)
+	require.NoError(t, err)
+	require.Contains(t, got, "tls=max-api-mysql-pin-"+fingerprint)
+	require.Contains(t, got, "parseTime=true")
+	require.Contains(t, got, "loc=Asia%2FShanghai")
 }

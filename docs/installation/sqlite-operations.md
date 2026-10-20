@@ -43,13 +43,13 @@ Verification rejects missing, modified, path-escaping, and unlisted files. Resto
 
 ## 业务快照验收 / Business snapshot rehearsal
 
-仓库中的合成验收会使用当前模型创建主库和独立日志库，执行归档与两次隔离恢复，然后重新打开恢复文件，比较用户额度、Token、渠道用量、订阅周期与预消费、settlement、日志和 receipt。它只验证文件归档及当前 SQLite 模型数据的可读性，不代表真实生产库、跨库原子性或外部支付状态已经验证：
+仓库中的合成验收会使用当前模型创建主库和独立日志库，执行归档与两次隔离恢复，然后重新打开恢复文件，比较用户额度、Token、渠道用量、订阅周期与预消费、settlement、日志和 receipt；主库还会在保持连接期间写入已提交但未检查点的真实 WAL 标记，并在恢复后核对。它只验证文件归档及当前 SQLite 模型数据的可读性，不代表真实生产库、跨库原子性或外部支付状态已经验证：
 
 ```powershell
 go test ./model -run TestSQLiteOperationsAcceptancePreservesBusinessSnapshot -count=1
 ```
 
-The repository rehearsal creates a synthetic primary database and independent log database from the current models, archives them, restores them twice into isolated directories, reopens both copies, and compares wallet quota, token and channel usage, subscription/pre-consume state, settlement, logs, and receipts. It validates the archive and current SQLite model readability only; it does not establish production-database, cross-database atomicity, or external-payment correctness.
+The repository rehearsal creates a synthetic primary database and independent log database from the current models, archives them, restores them twice into isolated directories, reopens both copies, and compares wallet quota, token and channel usage, subscription/pre-consume state, settlement, logs, and receipts. It also keeps the primary connection open while a committed, uncheckpointed WAL marker is archived and verifies that marker after restore. It validates the archive and current SQLite model readability only; it does not establish production-database, cross-database atomicity, or external-payment correctness.
 
 ## 边界 / Boundaries
 

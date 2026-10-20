@@ -261,8 +261,8 @@ func TestSQLiteUpgradeProcessHelper(t *testing.T) {
 	common.LogConsumeEnabled, common.DebugEnabled = true, false
 	logRetryMarkerBackfillAsyncRunner = func(fn func()) { fn() }
 	require.NoError(t, InitDB())
-	t.Cleanup(func() { require.NoError(t, CloseDB()) })
 	require.NoError(t, InitLogDB())
+	t.Cleanup(func() { require.NoError(t, CloseDB()) })
 	DB.Logger, LOG_DB.Logger = logger.Default.LogMode(logger.Silent), logger.Default.LogMode(logger.Silent)
 	var history User
 	require.NoError(t, DB.First(&history, 8700).Error)

@@ -127,6 +127,16 @@ func runBackup(args []string) error {
 	if err != nil {
 		return err
 	}
+	stageRoot, err := createStagingDirectory(root)
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	sources, err := collectSources(*primary, *logPath)
 	if err != nil {
 		return err
@@ -137,7 +147,7 @@ func runBackup(args []string) error {
 		Tool:          "MAX-API sqliteops",
 	}
 	for _, source := range sources {
-		entry, err := archiveSource(root, source)
+		entry, err := archiveSource(stageRoot, source)
 		if err != nil {
 			return err
 		}
@@ -152,10 +162,17 @@ func runBackup(args []string) error {
 		m.Configuration = &fingerprint
 	}
 	sort.Slice(m.Files, func(i, j int) bool { return m.Files[i].ArchivePath < m.Files[j].ArchivePath })
-	if err := writeManifest(root, m); err != nil {
+	if err := writeManifest(stageRoot, m); err != nil {
 		return err
 	}
-	return verifyArchive(root)
+	if err := verifyArchive(stageRoot); err != nil {
+		return err
+	}
+	if err := publishStagingDirectory(stageRoot, root); err != nil {
+		return err
+	}
+	published = true
+	return nil
 }
 
 func runVerify(args []string) error {
@@ -203,9 +220,16 @@ func runRestore(args []string) error {
 	if pathsOverlap(backupRoot, targetRoot) {
 		return errors.New("restore target must not overlap the backup archive")
 	}
-	if err := os.MkdirAll(targetRoot, 0o700); err != nil {
+	stageRoot, err := createStagingDirectory(targetRoot)
+	if err != nil {
 		return err
 	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	m, err := readManifest(backupRoot)
 	if err != nil {
 		return err
@@ -215,7 +239,7 @@ func runRestore(args []string) error {
 		if err != nil {
 			return err
 		}
-		destination, err := safeArchivePath(targetRoot, item.ArchivePath)
+		destination, err := safeArchivePath(stageRoot, item.ArchivePath)
 		if err != nil {
 			return err
 		}
@@ -226,7 +250,14 @@ func runRestore(args []string) error {
 			return err
 		}
 	}
-	return copyRegularFile(filepath.Join(backupRoot, manifestName), filepath.Join(targetRoot, manifestName), 0o600)
+	if err := copyRegularFile(filepath.Join(backupRoot, manifestName), filepath.Join(stageRoot, manifestName), 0o600); err != nil {
+		return err
+	}
+	if err := publishStagingDirectory(stageRoot, targetRoot); err != nil {
+		return err
+	}
+	published = true
+	return nil
 }
 
 func collectSources(primary, logPath string) ([]sourceFile, error) {
@@ -320,6 +351,35 @@ func prepareDestination(destination, primary, logPath, config string) (string, e
 	return root, nil
 }
 
+func createStagingDirectory(destination string) (string, error) {
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(parent, "."+filepath.Base(destination)+".tmp-")
+}
+
+func publishStagingDirectory(stage, destination string) error {
+	if info, err := os.Stat(destination); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("destination is not a directory: %s", destination)
+		}
+		entries, err := os.ReadDir(destination)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("destination must remain empty until publish: %s", destination)
+		}
+		if err := os.Remove(destination); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(stage, destination)
+}
+
 func verifyArchive(root string) error {
 	m, err := readManifest(root)
 	if err != nil {
@@ -337,6 +397,9 @@ func verifyArchive(root string) error {
 		path, err := safeArchivePath(root, item.ArchivePath)
 		if err != nil {
 			return err
+		}
+		if err := requireRegularFile(path); err != nil {
+			return fmt.Errorf("verify %s: %w", item.ArchivePath, err)
 		}
 		actual, err := fingerprintFile(path)
 		if err != nil {
@@ -383,6 +446,22 @@ func readManifest(root string) (manifest, error) {
 	if result.SchemaVersion != manifestVersion || len(result.Files) == 0 {
 		return manifest{}, errors.New("unsupported or empty archive manifest")
 	}
+	roles := map[string]bool{}
+	mainRoles := map[string]bool{}
+	for _, item := range result.Files {
+		for _, role := range item.Roles {
+			roles[role] = true
+			if !strings.HasSuffix(item.ArchivePath, "-wal") && !strings.HasSuffix(item.ArchivePath, "-shm") {
+				mainRoles[role] = true
+			}
+		}
+	}
+	if !mainRoles["primary"] {
+		return manifest{}, errors.New("archive manifest is missing the primary database")
+	}
+	if roles["log"] && !mainRoles["log"] {
+		return manifest{}, errors.New("archive manifest is missing the log database")
+	}
 	return result, nil
 }
 
@@ -395,7 +474,7 @@ func writeManifest(root string, value manifest) error {
 	return os.WriteFile(filepath.Join(root, manifestName), data, 0o600)
 }
 
-func fingerprintFile(path string) (configurationHash, error) {
+func fingerprintFile(path string) (result configurationHash, err error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return configurationHash{}, err
@@ -407,7 +486,11 @@ func fingerprintFile(path string) (configurationHash, error) {
 	if err != nil {
 		return configurationHash{}, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return configurationHash{}, err
@@ -423,7 +506,12 @@ func copyRegularFile(source, destination string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	inputClosed := false
+	defer func() {
+		if !inputClosed {
+			_ = input.Close()
+		}
+	}()
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
@@ -442,6 +530,10 @@ func copyRegularFile(source, destination string, mode os.FileMode) error {
 		return err
 	}
 	if err := output.Close(); err != nil {
+		return err
+	}
+	inputClosed = true
+	if err := input.Close(); err != nil {
 		return err
 	}
 	remove = false
@@ -500,9 +592,38 @@ func safeArchivePath(root, relative string) (string, error) {
 }
 
 func pathsOverlap(left, right string) bool {
-	leftAbs, _ := filepath.Abs(left)
-	rightAbs, _ := filepath.Abs(right)
-	return isWithin(leftAbs, rightAbs) || isWithin(rightAbs, leftAbs)
+	leftResolved := resolveOverlapPath(left)
+	rightResolved := resolveOverlapPath(right)
+	return isWithin(leftResolved, rightResolved) || isWithin(rightResolved, leftResolved)
+}
+
+func resolveOverlapPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	current := filepath.Clean(abs)
+	var missing []string
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return filepath.Clean(abs)
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved)
+		} else if !os.IsNotExist(err) {
+			return filepath.Clean(abs)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(abs)
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func isWithin(root, path string) bool {
@@ -518,5 +639,15 @@ func isWithin(root, path string) bool {
 func samePath(left, right string) bool {
 	leftAbs, _ := filepath.Abs(left)
 	rightAbs, _ := filepath.Abs(right)
-	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
+	leftClean := filepath.Clean(leftAbs)
+	rightClean := filepath.Clean(rightAbs)
+	if leftClean == rightClean {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(leftClean)
+	rightInfo, rightErr := os.Stat(rightClean)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return os.SameFile(leftInfo, rightInfo)
 }

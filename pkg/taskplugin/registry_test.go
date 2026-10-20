@@ -62,6 +62,25 @@ func TestRegistryPublishesAtomicSnapshotAndMatchesRoute(t *testing.T) {
 	}
 }
 
+func TestRegistryBreaksEqualSpecificityTiesDeterministically(t *testing.T) {
+	for _, order := range [][]string{{"beta", "alpha"}, {"alpha", "beta"}} {
+		registry := NewRegistry()
+		routes := map[string]string{
+			"alpha": "/jobs/:id",
+			"beta":  "/:kind/latest",
+		}
+		for _, key := range order {
+			if _, err := registry.Publish(registryManifest(key, routes[key])); err != nil {
+				t.Fatalf("publish %s: %v", key, err)
+			}
+		}
+		match, ok := registry.Snapshot().MatchRoute("GET", "/jobs/latest", "vendor-model")
+		if !ok || match.PluginKey != "alpha" {
+			t.Fatalf("expected alpha to win equal-specificity tie, got %#v, %v", match, ok)
+		}
+	}
+}
+
 func TestRegistryRejectsDuplicatePluginAndRouteConflict(t *testing.T) {
 	registry := NewRegistry()
 	if _, err := registry.Publish(registryManifest("alpha", "/jobs/:task_id")); err != nil {
@@ -95,7 +114,6 @@ func TestRegistryConcurrentPublicationPreservesAllUniquePlugins(t *testing.T) {
 	var group sync.WaitGroup
 	errors := make(chan error, count)
 	for index := 0; index < count; index++ {
-		index := index
 		group.Add(1)
 		go func() {
 			defer group.Done()
