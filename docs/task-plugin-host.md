@@ -12,11 +12,35 @@
 - 路由只匹配 manifest 声明的上游模型；省略 `route.Models` 表示继承 manifest 的范围，指定时进一步收窄。缺失或未知模型拒绝绑定。
 - `BindMapped` 固定插件版本、包摘要、原始及映射后模型，以及宿主拥有的 usage contract；`Resolve` 使用历史包恢复任务，不自动切换最新版本。
 - `AttachTaskPluginBinding` 校验用户、Token、渠道、请求、模型及冻结用量契约，写入 `Task.PrivateData`。调用方必须在发起付费请求前通过现有事务保存任务；该函数自身不执行数据库写入或上游提交。
-- 重启时必须重新加载所需历史包，并在开放流量前恢复宿主的撤销记录。缺失历史包、无效契约、身份变化或已撤销版本均拒绝恢复，不自动重提任务。当前没有自动保存插件目录或撤销清单的管理服务。
+- 持久目录在开放流量前恢复历史包和撤销记录。缺失历史包、摘要不匹配、无效契约、身份变化或已撤销版本均拒绝恢复，不自动重提任务。
 
 The loader accepts at most 1 MiB and verifies an externally trusted SHA-256 of the whole document. `Host.Install` explicitly activates the chosen versions, including operator-selected rollbacks, and publishes packages and routes together; a conflict leaves the previous generation intact. `Host.Retain` restores history without changing active versions or routes, and accepts several versions of one key in a batch. Use `Retain` rather than `Install` when loading historical task packages. Digest conflicts, revocations and the total retention limit still apply; revocations must be restored before traffic resumes. A key/version cannot silently change contents. Routes match only manifest-declared upstream models; an omitted `route.Models` inherits that set, while an explicit list narrows it. Missing or unknown models cannot bind. Bindings freeze package, usage contract, client model alias and upstream model. Recovery resolves historical packages rather than the latest version.
 
-The service validates task ownership and the frozen usage contract before attaching private metadata. The caller must persist it in the existing transaction before any billable request. The host must reload retained historical packages and revocations before serving traffic after restart. Missing or revoked identities fail closed and never cause automatic submission. Automatic catalog/revocation storage is not implemented here.
+The service validates task ownership and the frozen usage contract before attaching private metadata. The caller must persist it in the existing transaction before any billable request. The durable catalog restores historical packages and revocations before startup serves traffic. Missing, altered or revoked identities fail closed and never cause automatic submission.
+
+## 持久目录与恢复 / Durable catalog and recovery
+
+`taskplugin.OpenCatalog(ctx, model.NewTaskPluginCatalogStore(db))` 加载内部目录，`catalog.Host()` 提供既有绑定与恢复能力。应用启动由 `InitializeTaskPluginCatalog` 完成恢复；损坏包或无效状态会阻止启动。迁移仍由主节点执行，非主节点在恢复前只读等待两张目录表，最长 10 分钟且可取消；等待超时或恢复失败均阻止开放流量。目录仍没有公开管理路由或自动加载 JS 的行为。
+
+- `Install` 批量校验并保存完整包，原始文档字节和摘要保持不变；同 key/version 不允许替换内容。安装版本成为该 key 的启用版本，历史版本保留。
+- `SetEnabled(false)` 停止新任务绑定，旧任务仍能按历史版本恢复。`Activate` 显式切换已有版本，不自动选择“最新”版本。
+- `Revoke` 永久撤销指定版本，新绑定和现有 session 的下一次使用均被拒绝；接口不提供撤销回滚或历史版本删除。
+- `task_plugin_catalog_heads` 的版本号条件更新与 `task_plugin_versions` 的变更在同一事务内提交。事务成功后一次发布宿主状态；存储失败、结果未知或刷新失败会暂停宿主，成功 `Refresh` 后恢复。
+- 包文档在 MySQL 使用 LONGTEXT，在 SQLite/PostgreSQL 使用 TEXT；新写入采用带版本前缀的 ASCII base64 封装，读取后还原原始字节再校验摘要，避免列字符集改变载荷。旧草稿中的原始 JSON 行仍可读取，不依赖 TEXT 到二进制列的隐式迁移；损坏封装拒绝加载。编码不提供加密或来源认证。版本身份使用固定长度摘要索引，备份与恢复应包含两表的一致状态。
+- 其他节点的变更通过显式 `Refresh` 读取。本阶段没有后台同步任务，不保证跨节点实时撤销；后续执行器接入时必须定义刷新时机。目录容量沿用 64 MiB 历史包原始字节上限。
+- 读取快照遇到并发版本冲突时最多尝试 3 次，首次冲突先暂停旧宿主，只有成功读取并验证完整快照才恢复；持续冲突、取消或其他存储错误仍暂停。不自动重试写入、提交结果未知或任务操作。
+
+64 MiB 容量限制按解码后的原文计算，存储封装有编码体积开销。旧草稿节点不能读取新封装；滚动升级期间应暂停插件安装及新版本写入，所有节点升级完成后再恢复。新编码不能修复已被旧存储破坏的原文，摘要仍会拒绝这些记录；降级应恢复兼容版本与一致备份，不重写摘要来绕过校验。
+
+`OpenCatalog` restores the internal catalog through a GORM store. Startup restores it before serving traffic and stops on corrupt bytes or invalid state. Only the master runs migrations; non-master nodes wait read-only for both catalog tables for at most ten minutes, respecting cancellation. A timeout or failed restoration prevents serving traffic. Batch installation preserves exact package bytes and immutable key/version identities. Disabling blocks new admission but preserves historical task recovery; activation explicitly selects a retained version. Revocation is permanent and invalidates existing sessions on their next use. Historical versions are never automatically deleted or replaced.
+
+A singleton revision CAS serializes metadata transactions across nodes, including concurrent bootstrap. Publication follows commit; uncertain writes or failed refreshes suspend the managed host until a successful refresh. MySQL stores documents as LONGTEXT; SQLite and PostgreSQL use TEXT. Migrations add `task_plugin_catalog_heads` and `task_plugin_versions`; back up and restore both consistently. Other nodes' changes require explicit `Refresh`; background synchronization and immediate multi-node revocation are outside this stage. Retained document bytes remain capped at 64 MiB. The catalog registers no public routes and never evaluates JavaScript.
+
+New documents use a version-prefixed ASCII base64 envelope inside the existing text column. Reads restore the original bytes before digest validation, avoiding character-set-dependent payload changes. Legacy raw JSON rows remain readable without an implicit text-to-binary migration; malformed envelopes fail closed. This encoding provides neither encryption nor source authentication. The 64 MiB retention limit applies to decoded document bytes; stored envelopes add encoding overhead.
+
+Older draft nodes cannot read the new envelope. Pause plugin installation and new-version writes during a rolling upgrade until every node has the new reader. Already damaged legacy documents still fail digest validation; the encoding cannot recover their original bytes. Downgrades require compatible code and a consistent backup, never a rewritten digest that bypasses validation.
+
+Snapshot reads retry concurrent revision conflicts for at most three attempts. The first conflict suspends the old host; only a fully read and validated snapshot restores it. Persistent conflicts, cancellation or other storage errors leave it suspended. Writes, ambiguous commits and task operations are never automatically retried.
 
 ## HTTP 能力 / HTTP capability
 
@@ -38,6 +62,7 @@ Limits are four calls, 15 seconds per call, a 30-second scope deadline, 1 MiB re
 go test ./pkg/taskplugin ./pkg/taskusage -count=1
 go test ./service -run TestTaskPluginHost -count=1
 go test ./model -run TestTaskPluginHost -count=1
+go test ./pkg/taskplugin ./model ./service -run 'TestCatalog|TestTaskPluginCatalog' -count=1
 ```
 
 这些合成测试不代表真实供应商、JS 隔离、多节点撤销传播或 MySQL/PostgreSQL 实库验收已通过。
