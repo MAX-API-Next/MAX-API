@@ -123,21 +123,40 @@ func (store *TaskPluginCatalogStore) SchemaReady(ctx context.Context) bool {
 	return db.Migrator().HasTable(&TaskPluginCatalogHead{}) && db.Migrator().HasTable(&TaskPluginVersion{})
 }
 
+<<<<<<< HEAD
 func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, error) {
 	var records []TaskPluginVersion
 	if err := tx.Order("identity").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	result := make([]taskplugin.StoredPackage, 0, len(records))
+=======
+func loadTaskPluginVersions(tx *gorm.DB) ([]taskplugin.StoredPackage, []string, error) {
+	var records []TaskPluginVersion
+	if err := tx.Order("identity").Find(&records).Error; err != nil {
+		return nil, nil, err
+	}
+	result := make([]taskplugin.StoredPackage, 0, len(records))
+	identities := make([]string, 0, len(records))
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 	for _, record := range records {
 		entry := taskplugin.StoredPackage{Document: []byte(record.Document), Digest: record.Digest, Active: record.Active, Enabled: record.Enabled, Revoked: record.Revoked}
 		identity, err := taskPluginStorageIdentity(entry)
 		if err != nil || identity != record.Identity {
+<<<<<<< HEAD
 			return nil, taskplugin.ErrCatalogInvalid
 		}
 		result = append(result, entry)
 	}
 	return result, nil
+=======
+			return nil, nil, taskplugin.ErrCatalogInvalid
+		}
+		result = append(result, entry)
+		identities = append(identities, identity)
+	}
+	return result, identities, nil
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 }
 
 func taskPluginStorageIdentity(entry taskplugin.StoredPackage) (string, error) {
@@ -165,7 +184,11 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if !missing && (head.Revision <= 0 || head.MutationID == "") {
 			return taskplugin.ErrCatalogInvalid
 		}
+<<<<<<< HEAD
 		rows, err := loadTaskPluginVersions(tx)
+=======
+		rows, _, err := loadTaskPluginVersions(tx)
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 		if err != nil {
 			return err
 		}
@@ -206,6 +229,19 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 	if err := taskplugin.ValidateCatalogTransition(taskplugin.CatalogSnapshot{}, next); err != nil {
 		return 0, err
 	}
+<<<<<<< HEAD
+=======
+	// Input identities do not depend on database state. Compute them before
+	// taking the singleton head lock; keep transition validation in the transaction.
+	nextIdentities := make([]string, len(next.Packages))
+	for i, entry := range next.Packages {
+		identity, err := taskPluginStorageIdentity(entry)
+		if err != nil {
+			return 0, err
+		}
+		nextIdentities[i] = identity
+	}
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 	mutationID := common.GetUUID()
 	err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if revision == 0 {
@@ -230,7 +266,11 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 				return taskplugin.ErrCatalogConflict
 			}
 		}
+<<<<<<< HEAD
 		previousRows, err := loadTaskPluginVersions(tx)
+=======
+		previousRows, previousIdentities, err := loadTaskPluginVersions(tx)
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 		if err != nil {
 			return err
 		}
@@ -241,6 +281,7 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 		if err := taskplugin.ValidateCatalogTransition(previous, next); err != nil {
 			return err
 		}
+<<<<<<< HEAD
 		known := make(map[string]bool, len(previousRows))
 		for _, old := range previousRows {
 			identity, err := taskPluginStorageIdentity(old)
@@ -254,6 +295,14 @@ func (store *TaskPluginCatalogStore) CompareAndSwap(ctx context.Context, revisio
 			if err != nil {
 				return err
 			}
+=======
+		known := make(map[string]bool, len(previousIdentities))
+		for _, identity := range previousIdentities {
+			known[identity] = true
+		}
+		for i, entry := range next.Packages {
+			identity := nextIdentities[i]
+>>>>>>> b2f25b05258df93a0b2a9935521d6c91cfe6c61f
 			if known[identity] {
 				if err := tx.Model(&TaskPluginVersion{}).Where("identity = ?", identity).
 					Updates(map[string]any{"active": entry.Active, "enabled": entry.Enabled, "revoked": entry.Revoked}).Error; err != nil {

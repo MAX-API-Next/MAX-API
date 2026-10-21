@@ -1,7 +1,7 @@
 # Backend-only build for frontend development
 # Skips frontend build, uses a placeholder for //go:embed web/dist
 
-FROM golang:1.26.1-alpine AS builder
+FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
 
 ENV GO111MODULE=on CGO_ENABLED=0
 ARG TARGETOS
@@ -19,7 +19,8 @@ COPY . .
 RUN mkdir -p web/default/dist && \
     echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/default/dist/index.html
 
-RUN go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(cat VERSION)'" -o max-api
+RUN go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(cat VERSION)'" -o max-api \
+    && go version -m max-api
 
 FROM debian:bookworm-slim
 

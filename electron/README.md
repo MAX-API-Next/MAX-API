@@ -37,6 +37,8 @@ This will:
 
 ## Building for Production
 
+Build the backend with **Go 1.26.10** before packaging Electron. This is the security baseline for CVE-2026-111943; replace any previously built backend binary, since rebuilding only the Electron wrapper does not update Go's embedded standard library. The root `go.mod` defines the version used by CI.
+
 ### Quick Build
 ```bash
 # Ensure Go binary exists in parent directory
