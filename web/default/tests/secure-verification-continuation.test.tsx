@@ -104,7 +104,7 @@ mock.module('../src/features/auth/secure-verification/api', () => ({
 }))
 
 mock.module(
-  '../src/features/auth/secure-verification/components/secure-verification-provider',
+  '../src/features/auth/secure-verification/hooks/use-secure-verification-gate',
   () => ({
     useSecureVerificationGate: () => ({
       withVerification: gateWithVerification,

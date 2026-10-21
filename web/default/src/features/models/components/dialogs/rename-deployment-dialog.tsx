@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -46,12 +47,11 @@ export function RenameDeploymentDialog({
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [name, setName] = useState(currentName || '')
+  const [name, setName] = useResettableState(
+    currentName || '',
+    JSON.stringify([open, deploymentId, currentName])
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
-
-  useEffect(() => {
-    if (open) setName(currentName || '')
-  }, [open, currentName])
 
   const trimmed = name.trim()
 

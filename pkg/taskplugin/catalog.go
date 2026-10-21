@@ -83,7 +83,7 @@ func OpenCatalog(ctx context.Context, store CatalogStore) (*Catalog, error) {
 	return catalog, nil
 }
 
-// Host supports binding/restoration, but rejects direct Install/Revoke calls.
+// Host supports binding/restoration, but rejects direct Install/Retain/Revoke calls.
 func (catalog *Catalog) Host() *Host { return catalog.host }
 
 func (catalog *Catalog) Refresh(ctx context.Context) error {

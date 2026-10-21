@@ -388,7 +388,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/moderations") {
 		if modelRequest.Model == "" {
-			modelRequest.Model = "text-moderation-stable"
+			modelRequest.Model = "omni-moderation-latest"
 		}
 	}
 	if strings.HasSuffix(c.Request.URL.Path, "embeddings") {

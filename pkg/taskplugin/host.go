@@ -62,18 +62,36 @@ func NewHost() *Host {
 
 func packageIdentity(key, version string) string { return key + "@" + version }
 
-// Install publishes a batch all-or-nothing. Reusing a key/version with different
-// bytes is rejected, including after a later version has become active.
+// Install explicitly activates a batch all-or-nothing, including operator-chosen
+// rollbacks. Use Retain to restore history without changing the active version.
 func (host *Host) Install(packages ...*Package) (uint64, error) {
+	return host.publishPackages(packages, true)
+}
+
+// Retain restores immutable historical packages without activating their routes
+// or changing the active version. Several versions of one key may be retained
+// together. Digest conflicts, revocations and the shared retention limit apply.
+func (host *Host) Retain(packages ...*Package) (uint64, error) {
+	return host.publishPackages(packages, false)
+}
+
+func (host *Host) publishPackages(packages []*Package, activate bool) (uint64, error) {
 	if host == nil || host.managed || host.state.Load() == nil || len(packages) == 0 {
 		return 0, errors.New("task plugin host or package batch is empty")
 	}
 	seen := map[string]bool{}
 	for _, p := range packages {
-		if p == nil || p.digest == "" || seen[p.manifest.Key] {
+		if p == nil || p.digest == "" {
 			return 0, errors.New("invalid or duplicate task plugin package")
 		}
-		seen[p.manifest.Key] = true
+		identity := packageIdentity(p.manifest.Key, p.manifest.Version)
+		if activate {
+			identity = p.manifest.Key
+		}
+		if seen[identity] {
+			return 0, errors.New("invalid or duplicate task plugin package")
+		}
+		seen[identity] = true
 	}
 	for {
 		current := host.state.Load()
@@ -86,7 +104,10 @@ func (host *Host) Install(packages ...*Package) (uint64, error) {
 			if current.revoked[id] {
 				return 0, errors.New("task plugin package is revoked")
 			}
-			next.active[p.manifest.Key], next.history[id] = p, p
+			next.history[id] = p
+			if activate {
+				next.active[p.manifest.Key] = p
+			}
 		}
 		total := 0
 		for _, p := range next.history {
@@ -95,18 +116,20 @@ func (host *Host) Install(packages ...*Package) (uint64, error) {
 		if total > MaxRetainedPackageBytes {
 			return 0, errors.New("task plugin retained package limit reached; historical packages were preserved")
 		}
-		registry := NewRegistry()
-		keys := make([]string, 0, len(next.active))
-		for key := range next.active {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if _, err := registry.Publish(next.active[key].manifest); err != nil {
-				return 0, errors.New("task plugin batch has conflicting routes")
+		if activate {
+			registry := NewRegistry()
+			keys := make([]string, 0, len(next.active))
+			for key := range next.active {
+				keys = append(keys, key)
 			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if _, err := registry.Publish(next.active[key].manifest); err != nil {
+					return 0, errors.New("task plugin batch has conflicting routes")
+				}
+			}
+			next.routes = registry.Snapshot()
 		}
-		next.routes = registry.Snapshot()
 		if host.state.CompareAndSwap(current, next) {
 			return next.generation, nil
 		}

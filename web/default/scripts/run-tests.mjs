@@ -274,6 +274,7 @@ function runTestFiles(files, label, bunArguments) {
   if (files.length === 0) return 'skipped'
 
   console.log(`\n==> ${label} (${files.length} file${files.length === 1 ? '' : 's'})`)
+  const startedAt = performance.now()
   const result = Bun.spawnSync({
     cmd: buildTestCommand(files, bunArguments),
     cwd: projectRoot,
@@ -281,6 +282,14 @@ function runTestFiles(files, label, bunArguments) {
     stdout: 'pipe',
     stderr: 'pipe',
   })
+  console.log(
+    `MAX_API_TEST_STAGE ${JSON.stringify({
+      label,
+      fileCount: files.length,
+      exitCode: result.exitCode,
+      wallMilliseconds: Math.round(performance.now() - startedAt),
+    })}`
+  )
   writeChildOutput(result)
   if (result.exitCode === 0) return 'passed'
 

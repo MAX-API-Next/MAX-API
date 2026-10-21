@@ -133,6 +133,7 @@ function ManualSettlementEvidenceHarness(): ReactElement {
 
   return (
     <>
+      <button type='button'>Unrelated control</button>
       <button type='button' onClick={() => setFailed(true)}>
         Cause reconciliation error
       </button>
@@ -662,22 +663,31 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      await waitFor(() => {
-        assert.ok(
-          within(view.container).getByRole('button', {
-            name: 'Enter exact quota',
-          })
-        )
-      })
-      const causeErrorButton = view.container.querySelector(
-        'button'
-      ) as HTMLButtonElement
-      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
-      await view.click(
-        within(view.container).getByRole('button', {
-          name: 'Enter exact quota',
+      const { exactQuotaButton, causeErrorButton } = await waitFor(() => {
+        // Resolve both controls by role and accessible name in one scan.
+        const names = new Map<Element, string>()
+        const buttons = within(view.container).getAllByRole('button', {
+          name: (name: string, element: Element): boolean => {
+            names.set(element, name)
+            return true
+          },
         })
-      )
+        const namedButton = (name: string): HTMLElement => {
+          const matches = buttons.filter((button) => names.get(button) === name)
+          assert.equal(
+            matches.length,
+            1,
+            `expected one accessible ${name} button`
+          )
+          return matches[0]
+        }
+        return {
+          exactQuotaButton: namedButton('Enter exact quota'),
+          causeErrorButton: namedButton('Cause reconciliation error'),
+        }
+      })
+      assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
+      await view.click(exactQuotaButton)
 
       const dialog = await waitFor(() => {
         const currentDialog = document.body.querySelector(
@@ -748,6 +758,9 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
+      const causeErrorButton = within(view.container).getByRole('button', {
+        name: 'Cause reconciliation error',
+      })
       await view.click(
         await waitFor(() =>
           within(view.container).getByRole('checkbox', {
@@ -785,9 +798,6 @@ describe('SmartOps active alerts', () => {
         return button
       })
 
-      const causeErrorButton = view.container.querySelector(
-        'button'
-      ) as HTMLButtonElement
       assert.equal(causeErrorButton.textContent, 'Cause reconciliation error')
       await view.click(causeErrorButton)
       await waitFor(() => {
@@ -1188,13 +1198,31 @@ describe('SmartOps active alerts', () => {
     )
 
     try {
-      await waitFor(() => {
+      const singleZeroButton = await waitFor(() => {
         const screen = within(view.container)
-        assert.ok(
-          screen.getAllByRole('button', {
-            name: 'Confirm zero-quota settlement',
-          }).length > 0
-        )
+        const controls = new Map<string, HTMLElement[]>()
+        const buttons = screen.getAllByRole('button', {
+          name: (name, element) => {
+            if (
+              name !== 'Confirm zero-quota settlement' &&
+              name !== 'Review and close selected (0)'
+            )
+              return false
+            if (element instanceof window.HTMLElement) {
+              const matches = controls.get(name) ?? []
+              matches.push(element)
+              controls.set(name, matches)
+            }
+            return true
+          },
+        })
+        const zeroButtons = (
+          controls.get('Confirm zero-quota settlement') ?? []
+        ).filter((button) => buttons.includes(button))
+        const reviewButtons = (
+          controls.get('Review and close selected (0)') ?? []
+        ).filter((button) => buttons.includes(button))
+        assert.ok(zeroButtons.length > 0)
         assert.equal(
           screen
             .getByRole('checkbox', {
@@ -1203,31 +1231,21 @@ describe('SmartOps active alerts', () => {
             .hasAttribute('data-disabled'),
           false
         )
-        assert.equal(
-          screen
-            .getByRole('button', {
-              name: 'Review and close selected (0)',
-            })
-            .hasAttribute('disabled'),
-          true
-        )
+        assert.equal(reviewButtons.length, 1)
+        assert.equal(reviewButtons[0].hasAttribute('disabled'), true)
+        return zeroButtons[0]
       })
+      await view.click(singleZeroButton)
+      const cancelledZeroDialog = within(document.body).getByRole('alertdialog')
       await view.click(
-        within(view.container).getAllByRole('button', {
-          name: 'Confirm zero-quota settlement',
-        })[0]
-      )
-      await view.click(
-        within(document.body).getByRole('button', { name: 'Cancel' })
+        within(cancelledZeroDialog).getByRole('button', { name: 'Cancel' })
       )
       assert.deepEqual(writes, [])
+      assert.ok(singleZeroButton.isConnected)
+      await view.click(singleZeroButton)
+      const singleZeroDialog = within(document.body).getByRole('alertdialog')
       await view.click(
-        within(view.container).getAllByRole('button', {
-          name: 'Confirm zero-quota settlement',
-        })[0]
-      )
-      await view.click(
-        within(document.body).getByRole('button', {
+        within(singleZeroDialog).getByRole('button', {
           name: 'Apply zero-quota settlements',
         })
       )
@@ -1256,8 +1274,9 @@ describe('SmartOps active alerts', () => {
       })
       assert.equal(zeroBatchButton.hasAttribute('disabled'), false)
       await view.click(zeroBatchButton)
+      const batchZeroDialog = within(document.body).getByRole('alertdialog')
       await view.click(
-        within(document.body).getByRole('button', {
+        within(batchZeroDialog).getByRole('button', {
           name: 'Apply zero-quota settlements',
         })
       )
@@ -1276,20 +1295,16 @@ describe('SmartOps active alerts', () => {
         )
       })
       assert.equal(within(document.body).queryByRole('dialog'), null)
-      assert.ok(
-        within(view.container).getAllByRole('button', {
-          name: 'Enter exact quota',
-        }).length > 0
-      )
+      const exactButtons = within(view.container).getAllByRole('button', {
+        name: 'Enter exact quota',
+      })
+      assert.ok(exactButtons.length > 0)
 
       // The H3 zero-quota shortcut must not hide the exact settlement path.
       // Open the real dialog and verify that the exact input remains available
       // instead of being replaced by the zero-quota batch action.
-      await view.click(
-        within(view.container).getAllByRole('button', {
-          name: 'Enter exact quota',
-        })[0]
-      )
+      await view.click(exactButtons[0])
+      const exactDialog = within(document.body).getByRole('dialog')
       const exactQuotaInput = document.getElementById(
         'manual-task-actual-quota'
       ) as HTMLInputElement
@@ -1300,7 +1315,7 @@ describe('SmartOps active alerts', () => {
       assert.equal(exactQuotaInput.max, '100')
       assert.equal(
         (
-          within(document.body).getByRole('button', {
+          within(exactDialog).getByRole('button', {
             name: 'Apply exact settlement',
           }) as HTMLButtonElement
         ).disabled,
@@ -1308,7 +1323,7 @@ describe('SmartOps active alerts', () => {
       )
 
       await view.click(
-        within(document.body).getByRole('button', { name: 'Cancel' })
+        within(exactDialog).getByRole('button', { name: 'Cancel' })
       )
       // The exact dialog was opened from the manual-task rows above. After it
       // closes, select only the ordinary alert to verify that manual task

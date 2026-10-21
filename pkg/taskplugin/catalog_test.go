@@ -122,6 +122,13 @@ func TestCatalogValidatesBeforeCommitAndFailsClosedOnStorageFailure(t *testing.T
 	require.Equal(t, before, store.snapshot.Revision)
 	require.Error(t, catalog.Install(ctx, testPackage(t, validManifest(), "changed")))
 	require.Equal(t, before, store.snapshot.Revision)
+	published := catalog.Host().state.Load()
+	manifest := validManifest()
+	manifest.Version = "2.0.0"
+	_, err = catalog.Host().Retain(testPackage(t, manifest, "history-only"))
+	require.Error(t, err, "managed host must not retain history outside persistence")
+	require.Same(t, published, catalog.Host().state.Load(), "rejected history must not publish a generation")
+	require.Equal(t, before, store.snapshot.Revision)
 	_, err = catalog.Host().Install(first)
 	require.Error(t, err, "managed host must not bypass persistence")
 	require.Error(t, catalog.Host().Revoke("vendor", "1.0.0"))

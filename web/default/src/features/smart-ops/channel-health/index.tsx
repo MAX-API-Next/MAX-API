@@ -397,7 +397,7 @@ export function ChannelHealth(): ReactElement {
         )
       if (!hasAllOptions) {
         throw new Error(
-          response.message || t('We could not load the channel health policy.')
+          response.message || 'We could not load the channel health policy.'
         )
       }
       return response

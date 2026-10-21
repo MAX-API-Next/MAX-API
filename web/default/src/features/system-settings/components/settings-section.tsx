@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 import { cn } from '@/lib/utils'
-import { useSuppressSettingsSectionHeader } from './settings-page-context'
+import { useSuppressSettingsSectionHeader } from '../hooks/use-suppress-settings-section-header'
 
 type SettingsSectionProps = {
   title: string

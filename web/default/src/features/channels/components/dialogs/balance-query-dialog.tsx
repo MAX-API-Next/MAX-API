@@ -16,13 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, RefreshCw, DollarSign } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
+import { useReadScope } from '@/hooks/use-read-scope'
+import { useResettableState } from '@/hooks/use-resettable-state'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -52,48 +54,67 @@ export function BalanceQueryDialog({
   const { t } = useTranslation()
   const { currentRow, setCurrentRow } = useChannels()
   const queryClient = useQueryClient()
-  const [isQuerying, setIsQuerying] = useState(false)
-  const [balance, setBalance] = useState<number | null>(null)
-  const [balanceUpdatedTime, setBalanceUpdatedTime] = useState<number | null>(
-    null
-  )
-  const [codexUsageResponse, setCodexUsageResponse] =
-    useState<CodexUsageDialogData | null>(null)
-
+  const channelId = currentRow?.id
   const isCodex = currentRow?.type === 57
-
-  const handleQueryCodexUsage = async () => {
-    const row = currentRow
-    if (!row) return
+  const beginRead = useReadScope(JSON.stringify([open, channelId]))
+  const [isQuerying, setIsQuerying] = useResettableState(
+    Boolean(open && isCodex && channelId),
+    beginRead
+  )
+  const [balance, setBalance] = useResettableState<number | null>(
+    null,
+    beginRead
+  )
+  const [balanceUpdatedTime, setBalanceUpdatedTime] = useResettableState<
+    number | null
+  >(null, beginRead)
+  const [codexUsageResponse, setCodexUsageResponse] =
+    useResettableState<CodexUsageDialogData | null>(null, beginRead)
+  const loadCodexUsage = useCallback(() => {
+    if (!channelId) return Promise.resolve()
+    const current = beginRead()
+    if (!current()) return Promise.resolve()
+    return getCodexUsage(channelId)
+      .then((res) => {
+        if (!current()) return
+        if (!res.success)
+          throw new Error(res.message || t('Failed to fetch usage'))
+        setCodexUsageResponse(res)
+      })
+      .catch((error: unknown) => {
+        if (current())
+          toast.error(
+            error instanceof Error ? error.message : t('Failed to fetch usage')
+          )
+      })
+      .finally(() => {
+        if (current()) setIsQuerying(false)
+      })
+  }, [channelId, beginRead, setCodexUsageResponse, setIsQuerying, t])
+  const handleQueryCodexUsage = () => {
     setIsQuerying(true)
-    try {
-      const res = await getCodexUsage(row.id)
-      if (!res.success) {
-        throw new Error(res.message || t('Failed to fetch usage'))
-      }
-      setCodexUsageResponse(res)
-    } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to fetch usage')
-      )
-    } finally {
-      setIsQuerying(false)
-    }
+    return loadCodexUsage()
   }
-
+  const readInitialUsage = useEffectEvent(() => loadCodexUsage())
   useEffect(() => {
-    if (!isCodex) return
-    if (!open) return
-    handleQueryCodexUsage()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isCodex])
+    if (open && isCodex) void readInitialUsage()
+  }, [open, isCodex, channelId, beginRead])
 
   if (!currentRow) return null
 
   const handleQueryBalance = async () => {
+    const current = beginRead()
+    if (!current()) return
     setIsQuerying(true)
     try {
       const response = await updateChannelBalance(currentRow.id)
+      if (!current()) {
+        if (response.success && response.balance !== undefined)
+          void queryClient.invalidateQueries({
+            queryKey: channelsQueryKeys.lists(),
+          })
+        return
+      }
       if (response.success && response.balance !== undefined) {
         const newBalance = response.balance
         const now = Math.floor(Date.now() / 1000)
@@ -117,11 +138,12 @@ export function BalanceQueryDialog({
         toast.error(response.message || t('Failed to query balance'))
       }
     } catch (error: unknown) {
+      if (!current()) return
       toast.error(
         error instanceof Error ? error.message : t('Failed to query balance')
       )
     } finally {
-      setIsQuerying(false)
+      if (current()) setIsQuerying(false)
     }
   }
 

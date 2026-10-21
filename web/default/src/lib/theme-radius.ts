@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useEffect, useState } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 
 export function resolveThemeRadiusPx(
   cssVariable = '--radius-md'
@@ -37,15 +37,51 @@ export function resolveThemeRadiusPx(
   return Number.isFinite(parsedRadius) ? parsedRadius : undefined
 }
 
+function createRadiusStore(options: {
+  cssVariable: string
+  refreshKey?: string
+}) {
+  let radius: number | undefined
+  const listeners = new Set<() => void>()
+  const measure = () => {
+    const next = resolveThemeRadiusPx(options.cssVariable)
+    if (Object.is(next, radius)) return
+    radius = next
+    for (const notify of listeners) notify()
+  }
+  return {
+    getSnapshot: () => radius,
+    getServerSnapshot: () => undefined,
+    subscribe: (notify: () => void) => {
+      listeners.add(notify)
+      const observer = new MutationObserver(measure)
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme'],
+      })
+      window.addEventListener('resize', measure)
+      measure()
+      return () => {
+        listeners.delete(notify)
+        observer.disconnect()
+        window.removeEventListener('resize', measure)
+      }
+    },
+  }
+}
+
 export function useThemeRadiusPx(
   cssVariable = '--radius-md',
   refreshKey?: string
 ): number | undefined {
-  const [radius, setRadius] = useState<number | undefined>()
-
-  useEffect(() => {
-    setRadius(resolveThemeRadiusPx(cssVariable))
-  }, [cssVariable, refreshKey])
-
-  return radius
+  // A changed theme key creates a fresh measurement after the DOM commits.
+  const store = useMemo(
+    () => createRadiusStore({ cssVariable, refreshKey }),
+    [cssVariable, refreshKey]
+  )
+  return useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot
+  )
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSecureVerificationGate } from '../components/secure-verification-provider'
+import { useSecureVerificationGate } from './use-secure-verification-gate'
 
 const defaultApiTokenVerificationDescription =
   'Confirm your identity before sending an API key to a chat client.'
@@ -27,15 +27,15 @@ export function useApiTokenVerification(
   description?: string
 ): <T>(apiCall: () => Promise<T>) => Promise<T | null> {
   const { t } = useTranslation()
-  const secureVerificationGate = useSecureVerificationGate()
+  const withVerification = useSecureVerificationGate().withVerification
 
   return useCallback(
     <T>(apiCall: () => Promise<T>): Promise<T | null> =>
-      secureVerificationGate.withVerification(apiCall, {
+      withVerification(apiCall, {
         scope: 'api_token',
         title: t('Security verification'),
         description: description ?? t(defaultApiTokenVerificationDescription),
       }),
-    [description, t, secureVerificationGate.withVerification]
+    [description, t, withVerification]
   )
 }

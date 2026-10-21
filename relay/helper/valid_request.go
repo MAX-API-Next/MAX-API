@@ -309,7 +309,7 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 	}
 
 	if relayMode == relayconstant.RelayModeModerations && textRequest.Model == "" {
-		textRequest.Model = "text-moderation-latest"
+		textRequest.Model = "omni-moderation-latest"
 	}
 	if relayMode == relayconstant.RelayModeEmbeddings && textRequest.Model == "" {
 		textRequest.Model = c.Param("model")
