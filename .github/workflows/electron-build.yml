@@ -39,7 +39,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '>=1.25.1'
+          go-version-file: go.mod
 
       - name: Build frontend
         env:
@@ -63,6 +63,7 @@ jobs:
         run: |
           go mod download
           go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(git describe --tags)'" -o max-api.exe
+          go version -m max-api.exe
 
       - name: Update Electron version
         run: |

@@ -13,7 +13,7 @@ COPY ./VERSION .
 WORKDIR /build/default
 RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
 
-FROM golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039 AS builder2
+FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder2
 ENV GO111MODULE=on CGO_ENABLED=0
 
 ARG TARGETOS
@@ -28,7 +28,8 @@ RUN go mod download
 
 COPY . .
 COPY --from=builder /build/default/dist ./web/default/dist
-RUN go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(cat VERSION)'" -o max-api
+RUN go build -ldflags "-s -w -X 'github.com/MAX-API-Next/MAX-API/common.Version=$(cat VERSION)'" -o max-api \
+    && go version -m max-api
 
 FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
 

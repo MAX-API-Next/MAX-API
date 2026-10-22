@@ -1,7 +1,7 @@
 module github.com/MAX-API-Next/MAX-API
 
-// +heroku goVersion go1.25
-go 1.25.1
+// +heroku goVersion go1.26.10
+go 1.26.10
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1

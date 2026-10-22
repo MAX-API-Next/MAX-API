@@ -291,6 +291,8 @@ MAX API n'est pas un modèle de fondation et ne prétend pas avoir déjà attein
 
 ## 🚢 Guide de déploiement
 
+La référence de sécurité pour les compilations depuis les sources est **Go 1.26.10**, qui inclut le correctif de vérification des certificats pour CVE-2026-111943. Recompilez avec la chaîne d'outils corrigée et remplacez le binaire du backend lors de la mise à niveau ; installer une nouvelle version de Go ou redémarrer un ancien binaire ne met pas à jour sa bibliothèque standard. Les compilations CI et Docker utilisent cette même version.
+
 Les étapes suivantes prennent une version stable comme exemple. Figez le tag et le commit utilisés, puis préparez la sauvegarde, la vérification et le retour arrière avant toute mise à niveau.
 
 Docker Compose est recommandé :

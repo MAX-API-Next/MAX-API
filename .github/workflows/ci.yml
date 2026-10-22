@@ -44,7 +44,9 @@ jobs:
           bun run build
 
       - name: Download dependencies
-        run: go mod download
+        run: |
+          go version
+          go mod download
 
       - name: Test
         run: go test ./...

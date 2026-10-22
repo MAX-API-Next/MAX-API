@@ -291,6 +291,8 @@ MAX API is not a foundation model and does not claim to have already achieved AG
 
 ## 🚢 Deployment guide
 
+The security baseline for source builds is **Go 1.26.10**, which includes the certificate verification fix for CVE-2026-111943. Recompile with the patched toolchain and replace the backend binary when upgrading; installing a newer Go version or restarting an old binary does not update its standard library. CI and Docker builds use this version consistently.
+
 The following steps use a stable release as an example. Pin the version tag and commit, and complete backup, verification, and rollback preparation before upgrading.
 
 Docker Compose is recommended:
