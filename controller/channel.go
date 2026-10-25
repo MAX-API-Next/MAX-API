@@ -178,7 +178,7 @@ func GetAllChannels(c *gin.Context) {
 		typeCounts[r.Type] = r.Count
 	}
 	common.ApiSuccess(c, gin.H{
-		"items":       channelData,
+		"items":       service.BuildChannelRoutingHealthViews(c.Request.Context(), channelData),
 		"total":       total,
 		"page":        pageInfo.GetPage(),
 		"page_size":   pageInfo.GetPageSize(),
@@ -373,7 +373,7 @@ func SearchChannels(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"items":       pagedData,
+			"items":       service.BuildChannelRoutingHealthViews(c.Request.Context(), pagedData),
 			"total":       total,
 			"type_counts": typeCounts,
 		},
@@ -398,7 +398,7 @@ func GetChannel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    channel,
+		"data":    service.BuildChannelRoutingHealthViews(c.Request.Context(), []*model.Channel{channel})[0],
 	})
 	return
 }
