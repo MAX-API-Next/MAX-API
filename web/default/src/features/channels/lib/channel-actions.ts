@@ -55,6 +55,29 @@ export const channelsQueryKeys = {
     [...channelsQueryKeys.lists(), params] as const,
   details: () => [...channelsQueryKeys.all, 'detail'] as const,
   detail: (id: number) => [...channelsQueryKeys.details(), id] as const,
+  runtimes: () => [...channelsQueryKeys.all, 'runtime'] as const,
+  runtime: (id: number) => [...channelsQueryKeys.runtimes(), id] as const,
+}
+
+export function invalidateChannelConfiguration(
+  queryClient: QueryClient,
+  id?: number
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() }),
+    queryClient.invalidateQueries({
+      queryKey:
+        id === undefined
+          ? channelsQueryKeys.details()
+          : channelsQueryKeys.detail(id),
+    }),
+    queryClient.invalidateQueries({
+      queryKey:
+        id === undefined
+          ? channelsQueryKeys.runtimes()
+          : channelsQueryKeys.runtime(id),
+    }),
+  ])
 }
 
 export type ChannelTestCachePatch = {
@@ -326,7 +349,7 @@ export async function handleUpdateChannelField(
           value,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      if (queryClient) await invalidateChannelConfiguration(queryClient, id)
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -360,7 +383,7 @@ export async function handleUpdateTagField(
           tag,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      if (queryClient) await invalidateChannelConfiguration(queryClient)
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t(ERROR_MESSAGES.UPDATE_FAILED))

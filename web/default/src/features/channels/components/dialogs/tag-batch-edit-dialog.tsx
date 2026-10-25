@@ -37,7 +37,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { MultiSelect } from '@/components/multi-select'
 import { getTagModels, editTagChannels, getGroups } from '../../api'
-import { channelsQueryKeys } from '../../lib'
+import { invalidateChannelConfiguration } from '../../lib'
 import type { TagOperationParams } from '../../types'
 import { useChannels } from '../channels-provider'
 import { ModelMappingEditor } from '../model-mapping-editor'
@@ -173,7 +173,7 @@ function TagBatchEditDialogContent({
       )
       if (response.success) {
         toast.success(t('Tag updated successfully'))
-        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+        void invalidateChannelConfiguration(queryClient)
         handleClose()
       } else {
         toast.error(response.message || t('Failed to update tag'))

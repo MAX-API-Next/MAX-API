@@ -5858,6 +5858,22 @@
     "Recovery requires a successful probe.": "復旧にはプローブの成功が必要です。",
     "Waiting for a successful recovery probe": "復旧プローブの成功待ち",
     "Waiting for a fresh runtime snapshot": "実行時スナップショットの更新待ち",
-    "Estimated recovery: {{time}}": "復旧予定：{{time}}"
+    "Estimated recovery: {{time}}": "復旧予定：{{time}}",
+    "Automatic channel refresh is paused while editing or confirming changes.": "編集中または変更の確認中は、チャネルの自動更新を停止します。",
+    "Unable to load channel configuration. Retry before editing.": "チャネル設定を読み込めません。再試行してから編集してください。",
+    "Current routing state": "現在のルーティング状態",
+    "Refresh runtime state": "実行時状態を更新",
+    "Based on saved configuration. Unsaved edits are not reflected here.": "保存済みの設定に基づきます。未保存の変更は反映されません。",
+    "Runtime refresh failed. The previous snapshot may be outdated.": "実行時状態の更新に失敗しました。前回のスナップショットは古い可能性があります。",
+    "Open channel health settings": "チャネルヘルス設定を開く",
+    "Waiting for the current results. Previous runtime values are hidden.": "現在の結果を取得中です。前回の実行時の値は非表示です。",
+    "Channel refresh failed. Displayed results may be outdated.": "チャネルの更新に失敗しました。表示中の結果は古い可能性があります。",
+    "Runtime snapshot may be outdated.": "実行時スナップショットは古い可能性があります。",
+    "Snapshot effective priority": "スナップショットの実効優先度",
+    "Routing state snapshot": "ルーティング状態のスナップショット",
+    "Penalty expiry in this snapshot: {{time}}": "このスナップショットでのペナルティ期限：{{time}}",
+    "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "通常の優先度ルーティングが対象です。ノードの設定、ポリシー、実行時キャッシュがこのスナップショットと一致する必要があります。グループ、モデル、再試行、重みも選択に影響します。",
+    "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "不明は、画面で実行時状態を確認できなかったことを示します。ルーティングではキャッシュされた状態や設定優先度が使われる場合があります。",
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "スナップショット時刻は応答ノードの計算時刻であり、グローバルな状態バージョンや過去のリクエストの記録ではありません。"
   }
 }

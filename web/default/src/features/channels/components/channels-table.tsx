@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
-import { useState, useMemo, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
   getCoreRowModel,
@@ -46,6 +46,10 @@ import {
   CHANNEL_STATUS_OPTIONS,
 } from '../constants'
 import {
+  useChannelHealthRefresh,
+  CHANNEL_HEALTH_REFRESH_MS,
+} from '../hooks/use-channel-health-refresh'
+import {
   channelsQueryKeys,
   aggregateChannelsByTag,
   isTagAggregateRow,
@@ -53,6 +57,7 @@ import {
   getChannelTypeLabel,
 } from '../lib'
 import type { Channel, ChannelSortBy } from '../types'
+import { ChannelHealthSnapshotContext } from './channel-health-snapshot-context'
 import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
@@ -76,7 +81,8 @@ function isDisabledChannelRow(channel: Channel) {
 
 export function ChannelsTable() {
   const { t } = useTranslation()
-  const { enableTagMode, idSort } = useChannels()
+  const { enableTagMode, idSort, refreshPaused } = useChannels()
+  const queryClient = useQueryClient()
   const isMobile = useMediaQuery('(max-width: 640px)')
 
   // Table state
@@ -198,7 +204,7 @@ export function ChannelsTable() {
 
   // Fetch channels data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
-  const { data, isLoading, isFetching } = useQuery({
+  const query = useQuery({
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
@@ -220,53 +226,92 @@ export function ChannelsTable() {
       p: pagination.pageIndex + 1,
       page_size: pagination.pageSize,
     }),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
+      const config = {
+        signal,
+        disableDuplicate: true,
+        skipBusinessError: true,
+        skipErrorHandler: true,
+        timeout: 10_000,
+      }
       if (shouldSearch) {
-        return searchChannels({
-          keyword: globalFilter,
-          model: modelFilter,
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          id_sort: idSort,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
+        const response = await searchChannels(
+          {
+            keyword: globalFilter,
+            model: modelFilter,
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            id_sort: idSort,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          },
+          config
+        )
+        if (!response.success) throw new Error('Channel search unavailable')
+        return response
       } else {
-        return getChannels({
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          type:
-            typeFilter.length > 0 && !typeFilter.includes('all')
-              ? Number(typeFilter[0])
-              : undefined,
-          tag_mode: enableTagMode,
-          id_sort: idSort,
-          ...sortParams,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
+        const response = await getChannels(
+          {
+            group:
+              groupFilter.length > 0 && !groupFilter.includes('all')
+                ? groupFilter[0]
+                : undefined,
+            status:
+              statusFilter.length > 0 && !statusFilter.includes('all')
+                ? statusFilter[0]
+                : undefined,
+            type:
+              typeFilter.length > 0 && !typeFilter.includes('all')
+                ? Number(typeFilter[0])
+                : undefined,
+            tag_mode: enableTagMode,
+            id_sort: idSort,
+            ...sortParams,
+            p: pagination.pageIndex + 1,
+            page_size: pagination.pageSize,
+          },
+          config
+        )
+        if (!response.success) throw new Error('Channel list unavailable')
+        return response
       }
     },
     placeholderData: (previousData) => previousData,
+    enabled: !refreshPaused,
+    staleTime: CHANNEL_HEALTH_REFRESH_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
   })
+  const { data, isLoading, isFetching, isPlaceholderData, isError, refetch } =
+    query
+  const refresh = useCallback(
+    () => refetch({ cancelRefetch: false }),
+    [refetch]
+  )
+  const snapshots = useMemo(() => data?.data?.items ?? [], [data])
+  const now = useChannelHealthRefresh({
+    snapshots,
+    receivedAt: data?.observation.receivedAt,
+    paused: refreshPaused,
+    refetch: refresh,
+  })
+  useEffect(() => {
+    if (refreshPaused)
+      void queryClient.cancelQueries({ queryKey: channelsQueryKeys.lists() })
+  }, [refreshPaused, queryClient])
 
   // Apply tag aggregation if tag mode is enabled
   const channels = useMemo(() => {
@@ -379,69 +424,106 @@ export function ChannelsTable() {
   ]
 
   return (
-    <DataTablePage
-      table={table}
-      columns={columns}
-      isLoading={isLoading}
-      isFetching={isFetching}
-      emptyTitle={t('No Channels Found')}
-      emptyDescription={t(
-        'No channels available. Create your first channel to get started.'
-      )}
-      skeletonKeyPrefix='channel-skeleton'
-      applyHeaderSize
-      toolbarProps={{
-        searchPlaceholder: t('Filter by name, ID, or key...'),
-        onSearch: handleSearch,
-        searchValue: globalFilterInput,
-        onSearchValueChange: onGlobalFilterInputChange,
-        onReset: handleReset,
-        hasAdditionalFilters: Boolean(modelFilterInput.trim()),
-        searchLoading: isFetching,
-        additionalSearch: (
-          <Input
-            placeholder={t('Filter by model...')}
-            aria-label={t('Filter by model...')}
-            value={modelFilterInput}
-            onChange={(e) => handleModelFilterChange(e.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                handleSearch()
-              }
-            }}
-            className='w-full sm:w-[150px] lg:w-[180px]'
-          />
-        ),
-        filters: [
-          {
-            columnId: 'status',
-            title: t('Status'),
-            options: [...CHANNEL_STATUS_OPTIONS],
-            singleSelect: true,
-          },
-          {
-            columnId: 'type',
-            title: t('Type'),
-            options: typeFilterOptions,
-            singleSelect: true,
-          },
-          {
-            columnId: 'group',
-            title: t('Group'),
-            options: groupFilterOptions,
-            singleSelect: true,
-          },
-        ],
+    <ChannelHealthSnapshotContext
+      value={{
+        now,
+        receivedAt: data?.observation.receivedAt,
+        placeholder: isPlaceholderData,
       }}
-      getRowClassName={(row, { isMobile }) =>
-        isDisabledChannelRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
-      }
-      bulkActions={<DataTableBulkActions table={table} />}
-    />
+    >
+      <div className='space-y-2'>
+        {refreshPaused && (
+          <p role='status' className='text-muted-foreground text-sm'>
+            {t(
+              'Automatic channel refresh is paused while editing or confirming changes.'
+            )}
+          </p>
+        )}
+        {isPlaceholderData && (
+          <p role='status' className='text-muted-foreground text-sm'>
+            {t(
+              'Waiting for the current results. Previous runtime values are hidden.'
+            )}
+          </p>
+        )}
+        {isError && (
+          <p role='status' className='text-destructive text-sm'>
+            {t('Channel refresh failed. Displayed results may be outdated.')}{' '}
+            <button
+              type='button'
+              className='underline'
+              disabled={refreshPaused || isFetching}
+              onClick={() => void refresh()}
+            >
+              {t('Retry')}
+            </button>
+          </p>
+        )}
+        <DataTablePage
+          table={table}
+          columns={columns}
+          isLoading={isLoading}
+          isFetching={isFetching}
+          emptyTitle={t('No Channels Found')}
+          emptyDescription={t(
+            'No channels available. Create your first channel to get started.'
+          )}
+          skeletonKeyPrefix='channel-skeleton'
+          applyHeaderSize
+          toolbarProps={{
+            searchPlaceholder: t('Filter by name, ID, or key...'),
+            onSearch: handleSearch,
+            searchValue: globalFilterInput,
+            onSearchValueChange: onGlobalFilterInputChange,
+            onReset: handleReset,
+            hasAdditionalFilters: Boolean(modelFilterInput.trim()),
+            searchLoading: isFetching,
+            additionalSearch: (
+              <Input
+                placeholder={t('Filter by model...')}
+                aria-label={t('Filter by model...')}
+                value={modelFilterInput}
+                onChange={(e) => handleModelFilterChange(e.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    handleSearch()
+                  }
+                }}
+                className='w-full sm:w-[150px] lg:w-[180px]'
+              />
+            ),
+            filters: [
+              {
+                columnId: 'status',
+                title: t('Status'),
+                options: [...CHANNEL_STATUS_OPTIONS],
+                singleSelect: true,
+              },
+              {
+                columnId: 'type',
+                title: t('Type'),
+                options: typeFilterOptions,
+                singleSelect: true,
+              },
+              {
+                columnId: 'group',
+                title: t('Group'),
+                options: groupFilterOptions,
+                singleSelect: true,
+              },
+            ],
+          }}
+          getRowClassName={(row, { isMobile }) =>
+            isDisabledChannelRow(row.original)
+              ? isMobile
+                ? DISABLED_ROW_MOBILE
+                : DISABLED_ROW_DESKTOP
+              : undefined
+          }
+          bulkActions={<DataTableBulkActions table={table} />}
+        />
+      </div>
+    </ChannelHealthSnapshotContext>
   )
 }

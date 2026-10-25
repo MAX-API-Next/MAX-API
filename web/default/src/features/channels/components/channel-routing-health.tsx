@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
+import { useContext } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   readChannelRoutingHealth,
@@ -24,11 +25,17 @@ import {
 } from '../lib/channel-routing-health'
 import { isTagAggregateRow, type TagRow } from '../lib/channel-utils'
 import type { Channel } from '../types'
+import { ChannelHealthSnapshotContext } from './channel-health-snapshot-context'
 
 function RecoveryNote(props: { health: ChannelRoutingHealth }) {
   const { t, i18n } = useTranslation()
   const health = props.health
-  const evaluatedAt = Date.parse(health.evaluated_at)
+  const snapshot = useContext(ChannelHealthSnapshotContext)
+  const elapsed =
+    snapshot.now !== null && snapshot.receivedAt !== undefined
+      ? Math.max(0, snapshot.now - snapshot.receivedAt)
+      : 0
+  const evaluatedAt = Date.parse(health.evaluated_at) + elapsed
   const formatTime = (value: string) =>
     new Date(value).toLocaleString(i18n.resolvedLanguage || i18n.language)
   if (health.status === 'runtime_disabled') {
@@ -63,16 +70,17 @@ function RecoveryNote(props: { health: ChannelRoutingHealth }) {
   }
   return (
     <span>
-      {t('Estimated recovery: {{time}}', {
+      {t('Penalty expiry in this snapshot: {{time}}', {
         time: formatTime(health.penalty_until),
       })}
     </span>
   )
 }
 
-function SingleChannelHealth(props: { channel: Channel }) {
+export function ChannelRoutingHealthDetails(props: { routingHealth: unknown }) {
   const { t, i18n } = useTranslation()
-  const observation = readChannelRoutingHealth(props.channel.routing_health)
+  const snapshot = useContext(ChannelHealthSnapshotContext)
+  const observation = readChannelRoutingHealth(props.routingHealth)
   if (observation.kind !== 'known') {
     let message = t('Runtime state unavailable')
     if (observation.kind === 'missing') {
@@ -84,6 +92,11 @@ function SingleChannelHealth(props: { channel: Channel }) {
       <div className='text-muted-foreground space-y-1 text-xs'>
         <span>—</span>
         <p>{message}</p>
+        <p>
+          {t(
+            'Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.'
+          )}
+        </p>
       </div>
     )
   }
@@ -106,12 +119,26 @@ function SingleChannelHealth(props: { channel: Channel }) {
     health.effective_priority === 0
   return (
     <div className='space-y-1 text-xs'>
+      {snapshot.now !== null &&
+        snapshot.receivedAt !== undefined &&
+        snapshot.now - snapshot.receivedAt > 60_000 && (
+          <p className='text-muted-foreground'>
+            {t('Runtime snapshot may be outdated.')}
+          </p>
+        )}
       <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
         <span className='font-mono font-medium tabular-nums'>
           {health.effective_priority ?? '—'}
         </span>
         <span>{label}</span>
       </div>
+      {health.status === 'unknown' && (
+        <p className='text-muted-foreground'>
+          {t(
+            'Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.'
+          )}
+        </p>
+      )}
       {atFloor && (
         <p className='text-muted-foreground'>
           {t('Priority is at its minimum')}
@@ -159,6 +186,16 @@ function SingleChannelHealth(props: { channel: Channel }) {
               'This snapshot describes runtime restrictions, not upstream health.'
             )}
           </p>
+          <p>
+            {t(
+              'Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.'
+            )}
+          </p>
+          <p>
+            {t(
+              'Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.'
+            )}
+          </p>
         </div>
       </details>
     </div>
@@ -199,12 +236,25 @@ function TagChannelHealth(props: { channel: TagRow }) {
 }
 
 export function ChannelRoutingHealthCell(props: { channel: Channel }) {
+  const { t } = useTranslation()
+  const snapshot = useContext(ChannelHealthSnapshotContext)
+  if (snapshot.placeholder) {
+    return (
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Waiting for the current results. Previous runtime values are hidden.'
+        )}
+      </p>
+    )
+  }
   return (
     <div className='max-w-full min-w-0 [overflow-wrap:anywhere] whitespace-normal'>
       {isTagAggregateRow(props.channel) ? (
         <TagChannelHealth channel={props.channel} />
       ) : (
-        <SingleChannelHealth channel={props.channel} />
+        <ChannelRoutingHealthDetails
+          routingHealth={props.channel.routing_health}
+        />
       )}
     </div>
   )

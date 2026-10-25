@@ -5858,6 +5858,22 @@
     "Recovery requires a successful probe.": "Cần kiểm tra thăm dò thành công để khôi phục.",
     "Waiting for a successful recovery probe": "Đang chờ kiểm tra khôi phục thành công",
     "Waiting for a fresh runtime snapshot": "Đang chờ ảnh chụp trạng thái vận hành mới",
-    "Estimated recovery: {{time}}": "Dự kiến khôi phục: {{time}}"
+    "Estimated recovery: {{time}}": "Dự kiến khôi phục: {{time}}",
+    "Automatic channel refresh is paused while editing or confirming changes.": "Tự động làm mới kênh tạm dừng khi đang chỉnh sửa hoặc xác nhận thay đổi.",
+    "Unable to load channel configuration. Retry before editing.": "Không thể tải cấu hình kênh. Vui lòng thử lại trước khi chỉnh sửa.",
+    "Current routing state": "Trạng thái định tuyến hiện tại",
+    "Refresh runtime state": "Làm mới trạng thái vận hành",
+    "Based on saved configuration. Unsaved edits are not reflected here.": "Dựa trên cấu hình đã lưu. Thay đổi chưa lưu không được phản ánh ở đây.",
+    "Runtime refresh failed. The previous snapshot may be outdated.": "Không thể làm mới trạng thái. Ảnh chụp trước đó có thể đã cũ.",
+    "Open channel health settings": "Mở cài đặt tình trạng kênh",
+    "Waiting for the current results. Previous runtime values are hidden.": "Đang chờ kết quả hiện tại. Giá trị vận hành của kết quả trước đã được ẩn.",
+    "Channel refresh failed. Displayed results may be outdated.": "Không thể làm mới kênh. Kết quả đang hiển thị có thể đã cũ.",
+    "Runtime snapshot may be outdated.": "Ảnh chụp trạng thái vận hành có thể đã cũ.",
+    "Snapshot effective priority": "Độ ưu tiên hiệu lực trong ảnh chụp",
+    "Routing state snapshot": "Ảnh chụp trạng thái định tuyến",
+    "Penalty expiry in this snapshot: {{time}}": "Thời điểm hết phạt trong ảnh chụp này: {{time}}",
+    "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Chỉ áp dụng cho định tuyến thông thường theo độ ưu tiên. Cấu hình, chính sách và bộ nhớ đệm trạng thái của nút phải khớp ảnh chụp; nhóm, mô hình, lần thử lại và trọng số cũng ảnh hưởng lựa chọn.",
+    "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Không rõ nghĩa là giao diện chưa xác nhận được trạng thái. Định tuyến có thể dùng trạng thái trong bộ nhớ đệm hoặc độ ưu tiên đã cấu hình.",
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Thời gian ảnh chụp là thời điểm nút phản hồi tính toán, không phải phiên bản trạng thái toàn cục hay bản ghi của yêu cầu trước đó."
   }
 }

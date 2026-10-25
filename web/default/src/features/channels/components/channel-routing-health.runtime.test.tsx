@@ -325,7 +325,7 @@ test('actual mobile columns show both priorities and editing sends only configur
   try {
     const fields = within(view.container)
     assert.ok(fields.getByText('Configured priority', { exact: true }))
-    assert.ok(fields.getByText('Current effective priority', { exact: true }))
+    assert.ok(fields.getByText('Snapshot effective priority', { exact: true }))
     assert.ok(fields.getByText('10', { exact: true }))
     assert.ok(fields.getByText('9', { exact: true }))
     await view.click(fields.getByRole('button', { name: 'Increment' }))

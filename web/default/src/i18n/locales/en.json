@@ -5861,6 +5861,22 @@
     "Recovery requires a successful probe.": "Recovery requires a successful probe.",
     "Waiting for a successful recovery probe": "Waiting for a successful recovery probe",
     "Waiting for a fresh runtime snapshot": "Waiting for a fresh runtime snapshot",
-    "Estimated recovery: {{time}}": "Estimated recovery: {{time}}"
+    "Estimated recovery: {{time}}": "Estimated recovery: {{time}}",
+    "Automatic channel refresh is paused while editing or confirming changes.": "Automatic channel refresh is paused while editing or confirming changes.",
+    "Unable to load channel configuration. Retry before editing.": "Unable to load channel configuration. Retry before editing.",
+    "Current routing state": "Current routing state",
+    "Refresh runtime state": "Refresh runtime state",
+    "Based on saved configuration. Unsaved edits are not reflected here.": "Based on saved configuration. Unsaved edits are not reflected here.",
+    "Runtime refresh failed. The previous snapshot may be outdated.": "Runtime refresh failed. The previous snapshot may be outdated.",
+    "Open channel health settings": "Open channel health settings",
+    "Waiting for the current results. Previous runtime values are hidden.": "Waiting for the current results. Previous runtime values are hidden.",
+    "Channel refresh failed. Displayed results may be outdated.": "Channel refresh failed. Displayed results may be outdated.",
+    "Runtime snapshot may be outdated.": "Runtime snapshot may be outdated.",
+    "Snapshot effective priority": "Snapshot effective priority",
+    "Routing state snapshot": "Routing state snapshot",
+    "Penalty expiry in this snapshot: {{time}}": "Penalty expiry in this snapshot: {{time}}",
+    "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.",
+    "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.",
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request."
   }
 }

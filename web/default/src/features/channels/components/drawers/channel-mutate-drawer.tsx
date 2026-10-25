@@ -116,6 +116,7 @@ import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
   channelsQueryKeys,
+  invalidateChannelConfiguration,
   transformChannelToFormDefaults,
   type ChannelFormValues,
   deduplicateKeys,
@@ -143,6 +144,7 @@ import {
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
 import { ChannelCapabilityMatrix } from '../channel-capability-matrix'
+import { ChannelRoutingHealthCard } from '../channel-routing-health-card'
 import { useChannels } from '../channels-provider'
 import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { CodexOAuthDialog } from '../dialogs/codex-oauth-dialog'
@@ -239,12 +241,37 @@ export function ChannelMutateDrawer({
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
+  const initializedEditorRef = useRef<number | 'new' | null>(null)
+  const [initializedEditorId, setInitializedEditorId] = useState<
+    number | 'new' | null
+  >(null)
 
   // Fetch channel details if editing
-  const { data: channelData, isLoading: isChannelLoading } = useQuery({
+  const {
+    data: channelData,
+    dataUpdatedAt: channelDataUpdatedAt,
+    isError: isChannelError,
+    refetch: refetchChannelDetail,
+    isFetching: isChannelFetching,
+  } = useQuery({
     queryKey: channelsQueryKeys.detail(currentRow?.id || 0),
-    queryFn: () => getChannel(currentRow!.id),
-    enabled: isEditing && Boolean(currentRow?.id),
+    queryFn: async ({ signal }) => {
+      const response = await getChannel(currentRow!.id, {
+        signal,
+        disableDuplicate: true,
+        timeout: 8_000,
+        skipBusinessError: true,
+        skipErrorHandler: true,
+      })
+      if (!response.success || response.data?.id !== currentRow!.id)
+        throw new Error('Channel details unavailable')
+      return response
+    },
+    enabled: open && isEditing && Boolean(currentRow?.id),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: 'always',
+    retry: false,
   })
 
   // Fetch available groups
@@ -436,7 +463,7 @@ export function ChannelMutateDrawer({
   // Helper computed values
   const isBatchMode =
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
-  const isChannelDetailLoading = isEditing && isChannelLoading
+  const isChannelDetailLoading = isEditing && initializedEditorId !== channelId
   const advancedCustomStats = useMemo(
     () => getAdvancedCustomStats(currentAdvancedCustom),
     [currentAdvancedCustom]
@@ -766,9 +793,29 @@ export function ChannelMutateDrawer({
     isEditing,
   })
 
+  useEffect(() => {
+    initializedEditorRef.current = null
+    setInitializedEditorId(null)
+  }, [open, channelId])
+
   // Load channel data into form when editing
   useEffect(() => {
-    if (isEditing && channelData?.data) {
+    if (!open) {
+      initializedEditorRef.current = null
+      return
+    }
+    // Initialize once per channel/open session. Broad cache invalidations and
+    // credential refreshes must not reset an in-progress configuration draft.
+    if (
+      isEditing &&
+      !isChannelError &&
+      channelData?.success &&
+      channelData.data?.id === channelId
+    ) {
+      if (initializedEditorRef.current === channelId || isChannelFetching)
+        return
+      initializedEditorRef.current = channelId
+      setInitializedEditorId(channelId)
       const defaults = transformChannelToFormDefaults(channelData.data)
       const shouldOpenAdvancedSettings =
         readAdvancedSettingsPreference() ||
@@ -788,7 +835,9 @@ export function ChannelMutateDrawer({
       initialModelMappingRef.current = channelData.data.model_mapping || ''
       initialStatusCodeMappingRef.current =
         channelData.data.status_code_mapping || ''
-    } else if (!isEditing) {
+    } else if (!isEditing && initializedEditorRef.current !== 'new') {
+      initializedEditorRef.current = 'new'
+      setInitializedEditorId('new')
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       setAdvancedSettingsOpen(false)
       setExpandedEditorNavItemId(undefined)
@@ -797,7 +846,15 @@ export function ChannelMutateDrawer({
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
     }
-  }, [isEditing, channelData, form])
+  }, [
+    open,
+    channelId,
+    isEditing,
+    channelData,
+    isChannelFetching,
+    isChannelError,
+    form,
+  ])
 
   useEffect(() => {
     if (currentType !== CHANNEL_TYPE_DOUBAO_VIDEO) {
@@ -971,12 +1028,7 @@ export function ChannelMutateDrawer({
 
   // Handle successful submission
   const handleSuccess = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
-    if (channelId) {
-      queryClient.invalidateQueries({
-        queryKey: channelsQueryKeys.detail(channelId),
-      })
-    }
+    void invalidateChannelConfiguration(queryClient, channelId ?? undefined)
     onOpenChange(false)
     setOpen(null)
   }, [channelId, queryClient, onOpenChange, setOpen])
@@ -1346,7 +1398,27 @@ export function ChannelMutateDrawer({
               className={sideDrawerFormClassName('gap-5')}
             >
               {isChannelDetailLoading ? (
-                <ChannelEditorLoadingState />
+                <div>
+                  {isChannelError && (
+                    <Alert>
+                      <AlertDescription>
+                        {t(
+                          'Unable to load channel configuration. Retry before editing.'
+                        )}{' '}
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='sm'
+                          disabled={isChannelFetching}
+                          onClick={() => void refetchChannelDetail()}
+                        >
+                          {t('Retry')}
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {!isChannelError && <ChannelEditorLoadingState />}
+                </div>
               ) : (
                 <div className='grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start'>
                   <ChannelEditorNav
@@ -2491,7 +2563,9 @@ export function ChannelMutateDrawer({
                                 name='priority'
                                 render={({ field }) => (
                                   <FormItem>
-                                    <FormLabel>{t('Priority')}</FormLabel>
+                                    <FormLabel>
+                                      {t('Configured priority')}
+                                    </FormLabel>
                                     <FormControl>
                                       <Input
                                         type='number'
@@ -2534,6 +2608,18 @@ export function ChannelMutateDrawer({
                                 )}
                               />
                             </div>
+
+                            {open &&
+                              isEditing &&
+                              channelData?.success &&
+                              channelData.data?.id === channelId && (
+                                <ChannelRoutingHealthCard
+                                  key={channelId}
+                                  initialChannel={channelData.data}
+                                  initialUpdatedAt={channelDataUpdatedAt}
+                                  initialObservation={channelData.observation}
+                                />
+                              )}
 
                             <FormField
                               control={form.control}
@@ -3895,7 +3981,11 @@ export function ChannelMutateDrawer({
             >
               {t('Cancel')}
             </SheetClose>
-            <Button form='channel-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='channel-form'
+              type='submit'
+              disabled={isSubmitting || isChannelDetailLoading}
+            >
               {isSubmitting && (
                 <Loader2 className='mr-2 h-4 w-4 animate-spin' />
               )}

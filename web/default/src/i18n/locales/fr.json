@@ -5858,6 +5858,22 @@
     "Recovery requires a successful probe.": "La reprise nécessite une sonde réussie.",
     "Waiting for a successful recovery probe": "En attente d’une sonde de reprise réussie",
     "Waiting for a fresh runtime snapshot": "En attente d’un nouvel instantané de fonctionnement",
-    "Estimated recovery: {{time}}": "Reprise estimée : {{time}}"
+    "Estimated recovery: {{time}}": "Reprise estimée : {{time}}",
+    "Automatic channel refresh is paused while editing or confirming changes.": "L’actualisation automatique des canaux est suspendue pendant la modification ou la confirmation.",
+    "Unable to load channel configuration. Retry before editing.": "Impossible de charger la configuration du canal. Réessayez avant de modifier.",
+    "Current routing state": "État actuel du routage",
+    "Refresh runtime state": "Actualiser l’état de fonctionnement",
+    "Based on saved configuration. Unsaved edits are not reflected here.": "Basé sur la configuration enregistrée. Les modifications non enregistrées ne sont pas affichées ici.",
+    "Runtime refresh failed. The previous snapshot may be outdated.": "Échec de l’actualisation. L’instantané précédent peut être obsolète.",
+    "Open channel health settings": "Ouvrir les paramètres de santé des canaux",
+    "Waiting for the current results. Previous runtime values are hidden.": "En attente des résultats actuels. Les anciennes valeurs de fonctionnement sont masquées.",
+    "Channel refresh failed. Displayed results may be outdated.": "Échec de l’actualisation des canaux. Les résultats affichés peuvent être obsolètes.",
+    "Runtime snapshot may be outdated.": "L’instantané de fonctionnement peut être obsolète.",
+    "Snapshot effective priority": "Priorité effective de l’instantané",
+    "Routing state snapshot": "Instantané de l’état du routage",
+    "Penalty expiry in this snapshot: {{time}}": "Expiration de la pénalité dans cet instantané : {{time}}",
+    "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Concerne le routage ordinaire par priorité. La configuration, la politique et les caches d’exécution du nœud doivent correspondre à cet instantané ; le groupe, le modèle, les tentatives et les poids influencent aussi la sélection.",
+    "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Inconnu signifie que l’affichage n’a pas pu confirmer l’état d’exécution. Le routage peut utiliser un état en cache ou la priorité configurée.",
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "L’heure de l’instantané est celle du calcul par le nœud répondant, pas une version globale de l’état ni un relevé d’une requête passée."
   }
 }

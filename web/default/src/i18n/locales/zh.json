@@ -5861,6 +5861,22 @@
     "Recovery requires a successful probe.": "恢复需通过探测。",
     "Waiting for a successful recovery probe": "等待恢复探测成功",
     "Waiting for a fresh runtime snapshot": "等待刷新运行态快照",
-    "Estimated recovery: {{time}}": "预计恢复时间：{{time}}"
+    "Estimated recovery: {{time}}": "预计恢复时间：{{time}}",
+    "Automatic channel refresh is paused while editing or confirming changes.": "编辑或确认修改期间，渠道自动刷新已暂停。",
+    "Unable to load channel configuration. Retry before editing.": "无法读取渠道配置，请重试后再编辑。",
+    "Current routing state": "当前路由状态",
+    "Refresh runtime state": "刷新运行态",
+    "Based on saved configuration. Unsaved edits are not reflected here.": "基于已保存配置；此处不反映尚未保存的修改。",
+    "Runtime refresh failed. The previous snapshot may be outdated.": "运行态刷新失败，保留的快照可能已过期。",
+    "Open channel health settings": "打开渠道健康设置",
+    "Waiting for the current results. Previous runtime values are hidden.": "正在获取当前结果，已隐藏上一批结果的运行态数值。",
+    "Channel refresh failed. Displayed results may be outdated.": "渠道刷新失败，当前显示的结果可能已过期。",
+    "Runtime snapshot may be outdated.": "运行态快照可能已过期。",
+    "Snapshot effective priority": "快照有效优先级",
+    "Routing state snapshot": "路由状态快照",
+    "Penalty expiry in this snapshot: {{time}}": "此快照的惩罚截止时间：{{time}}",
+    "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "仅适用于常规优先级选路。节点配置、策略及运行态缓存须与此快照一致；分组、模型、重试与权重也会影响选择。",
+    "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "未知表示界面无法确认运行态；选路可能使用缓存状态或配置优先级。",
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "快照时间是响应节点的计算时间，不是全局状态版本，也不代表历史请求当时的状态。"
   }
 }
