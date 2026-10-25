@@ -529,6 +529,7 @@ export function aggregateChannelsByTag(
       // Create tag aggregate row
       const tagRow = {
         ...channel,
+        routing_health: undefined,
         key: tag,
         id: tag as unknown as number,
         tag: tag,
@@ -538,7 +539,7 @@ export function aggregateChannelsByTag(
         group: '',
         used_quota: 0,
         response_time: 0,
-        priority: -1 as unknown as number | null,
+        priority: null,
         weight: -1 as unknown as number | null,
         balance: 0,
         test_time: 0,
@@ -566,9 +567,10 @@ export function aggregateChannelsByTag(
       childCount
 
     // Aggregate priority (same value or null if different)
-    if (tagRow.priority === -1) {
-      tagRow.priority = channel.priority
-    } else if (tagRow.priority !== channel.priority) {
+    const configuredPriority = channel.priority ?? 0
+    if (childCount === 1) {
+      tagRow.priority = configuredPriority
+    } else if (tagRow.priority !== configuredPriority) {
       tagRow.priority = null
     }
 

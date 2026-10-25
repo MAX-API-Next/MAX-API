@@ -56,6 +56,9 @@ export const channelSchema = z.object({
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
+  // Keep unsupported observations isolated from the editable channel contract.
+  // The routing-health view validates this optional snapshot independently.
+  routing_health: z.unknown().optional(),
   auto_ban: z.number().nullish(),
   other_info: z.string().default(''),
   tag: z.string().nullish(),

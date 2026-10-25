@@ -72,6 +72,7 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { ChannelRoutingHealthCell } from './channel-routing-health'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -181,6 +182,11 @@ function PriorityCell({ channel }: { channel: Channel }) {
           }}
           min={-999}
         />
+        {priority == null && (
+          <p className='text-muted-foreground text-xs'>
+            {t('Multiple configured priorities')}
+          </p>
+        )}
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
@@ -913,12 +919,27 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
     // Priority column
     {
       accessorKey: 'priority',
-      meta: { label: t('Priority'), mobileHidden: true },
+      meta: { label: t('Configured priority') },
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Priority')} />
+        <DataTableColumnHeader
+          column={column}
+          title={t('Configured priority')}
+        />
       ),
       cell: ({ row }) => <PriorityCell channel={row.original} />,
-      size: 100,
+      size: 160,
+    },
+
+    {
+      id: 'effective_priority',
+      meta: {
+        label: t('Current effective priority'),
+        cellClassName: 'whitespace-normal',
+      },
+      header: t('Current effective priority'),
+      cell: ({ row }) => <ChannelRoutingHealthCell channel={row.original} />,
+      enableSorting: false,
+      size: 220,
     },
 
     // Weight column
