@@ -50,7 +50,7 @@ import {
   handleTestAllChannels,
   handleUpdateAllBalances,
 } from '../lib'
-import { useChannels } from './channels-provider'
+import { useChannels, useChannelRefreshLock } from './channels-provider'
 
 export function ChannelsPrimaryButtons() {
   const { t } = useTranslation()
@@ -65,6 +65,7 @@ export function ChannelsPrimaryButtons() {
   } = useChannels()
   const queryClient = useQueryClient()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  useChannelRefreshLock(showDeleteDialog)
 
   const handleTagModeToggle = (checked: boolean) => {
     localStorage.setItem('enable-tag-mode', String(checked))

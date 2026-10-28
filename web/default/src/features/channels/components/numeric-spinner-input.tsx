@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label'
 interface NumericSpinnerInputProps {
   value: number | null | undefined
   onChange: (value: number) => void
+  onEditingChange?: (editing: boolean) => void
   min?: number
   max?: number
   step?: number
@@ -36,6 +37,7 @@ interface NumericSpinnerInputProps {
 export function NumericSpinnerInput({
   value,
   onChange,
+  onEditingChange,
   min = 0,
   max,
   step = 1,
@@ -81,6 +83,7 @@ export function NumericSpinnerInput({
   const handleStartEdit = () => {
     if (disabled) return
     setEditing(true)
+    onEditingChange?.(true)
     requestAnimationFrame(() => inputRef.current?.select())
   }
 
@@ -96,6 +99,7 @@ export function NumericSpinnerInput({
 
   const commitValue = () => {
     setEditing(false)
+    onEditingChange?.(false)
     const num = Number(localValue)
     if (isNaN(num) || localValue === '' || localValue === '-') {
       setLocalValue(String(value ?? 0))
@@ -114,6 +118,7 @@ export function NumericSpinnerInput({
       commitValue()
     } else if (e.key === 'Escape') {
       setEditing(false)
+      onEditingChange?.(false)
       setLocalValue(String(value ?? 0))
     }
   }

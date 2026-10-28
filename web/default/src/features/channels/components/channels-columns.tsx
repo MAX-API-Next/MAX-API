@@ -17,9 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
+import type { TFunction } from 'i18next'
 import {
   AlertTriangle,
   ChevronDown,
@@ -72,7 +73,8 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
-import { useChannels } from './channels-provider'
+import { ChannelRoutingHealthCell } from './channel-routing-health'
+import { useChannels, useChannelRefreshLock } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
 import {
@@ -165,6 +167,30 @@ function PriorityCell({ channel }: { channel: Channel }) {
   const priority = channel.priority
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useChannelRefreshLock(editing || confirmOpen || saving)
+  const save = async (value: number) => {
+    setSaving(true)
+    try {
+      if (isTagRow)
+        await handleUpdateTagField(
+          channel.tag || '',
+          'priority',
+          value,
+          queryClient
+        )
+      else
+        await handleUpdateChannelField(
+          channel.id,
+          'priority',
+          value,
+          queryClient
+        )
+    } finally {
+      setSaving(false)
+    }
+  }
 
   // Tag row - editable with confirmation for all tag channels
   if (isTagRow) {
@@ -175,12 +201,19 @@ function PriorityCell({ channel }: { channel: Channel }) {
       <>
         <NumericSpinnerInput
           value={priority ?? 0}
+          onEditingChange={setEditing}
+          disabled={saving}
           onChange={(value) => {
             setPendingValue(value)
             setConfirmOpen(true)
           }}
           min={-999}
         />
+        {priority == null && (
+          <p className='text-muted-foreground text-xs'>
+            {t('Multiple configured priorities')}
+          </p>
+        )}
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
@@ -189,7 +222,7 @@ function PriorityCell({ channel }: { channel: Channel }) {
           confirmText='Update'
           handleConfirm={() => {
             if (pendingValue !== null) {
-              handleUpdateTagField(tag, 'priority', pendingValue, queryClient)
+              void save(pendingValue)
             }
             setConfirmOpen(false)
           }}
@@ -202,8 +235,10 @@ function PriorityCell({ channel }: { channel: Channel }) {
   return (
     <NumericSpinnerInput
       value={priority ?? 0}
+      onEditingChange={setEditing}
+      disabled={saving}
       onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'priority', value, queryClient)
+        void save(value)
       }}
       min={-999}
     />
@@ -220,6 +255,25 @@ function WeightCell({ channel }: { channel: Channel }) {
   const weight = channel.weight
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  useChannelRefreshLock(editing || confirmOpen || saving)
+  const save = async (value: number) => {
+    setSaving(true)
+    try {
+      if (isTagRow)
+        await handleUpdateTagField(
+          channel.tag || '',
+          'weight',
+          value,
+          queryClient
+        )
+      else
+        await handleUpdateChannelField(channel.id, 'weight', value, queryClient)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   // Tag row - editable with confirmation for all tag channels
   if (isTagRow) {
@@ -230,6 +284,8 @@ function WeightCell({ channel }: { channel: Channel }) {
       <>
         <NumericSpinnerInput
           value={weight ?? 0}
+          onEditingChange={setEditing}
+          disabled={saving}
           onChange={(value) => {
             setPendingValue(value)
             setConfirmOpen(true)
@@ -244,7 +300,7 @@ function WeightCell({ channel }: { channel: Channel }) {
           confirmText='Update'
           handleConfirm={() => {
             if (pendingValue !== null) {
-              handleUpdateTagField(tag, 'weight', pendingValue, queryClient)
+              void save(pendingValue)
             }
             setConfirmOpen(false)
           }}
@@ -257,8 +313,10 @@ function WeightCell({ channel }: { channel: Channel }) {
   return (
     <NumericSpinnerInput
       value={weight ?? 0}
+      onEditingChange={setEditing}
+      disabled={saving}
       onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'weight', value, queryClient)
+        void save(value)
       }}
       min={0}
     />
@@ -421,8 +479,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
 /**
  * Generate channels columns configuration
  */
-export function useChannelsColumns(): ColumnDef<Channel>[] {
-  const { t } = useTranslation()
+function createChannelsColumns(t: TFunction): ColumnDef<Channel>[] {
   return [
     // Checkbox column
     {
@@ -913,12 +970,27 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
     // Priority column
     {
       accessorKey: 'priority',
-      meta: { label: t('Priority'), mobileHidden: true },
+      meta: { label: t('Configured priority') },
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Priority')} />
+        <DataTableColumnHeader
+          column={column}
+          title={t('Configured priority')}
+        />
       ),
       cell: ({ row }) => <PriorityCell channel={row.original} />,
-      size: 100,
+      size: 160,
+    },
+
+    {
+      id: 'effective_priority',
+      meta: {
+        label: t('Snapshot effective priority'),
+        cellClassName: 'whitespace-normal',
+      },
+      header: t('Snapshot effective priority'),
+      cell: ({ row }) => <ChannelRoutingHealthCell channel={row.original} />,
+      enableSorting: false,
+      size: 220,
     },
 
     // Weight column
@@ -1028,4 +1100,9 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       enableHiding: false,
     },
   ]
+}
+
+export function useChannelsColumns(): ColumnDef<Channel>[] {
+  const { t } = useTranslation()
+  return useMemo(() => createChannelsColumns(t), [t])
 }

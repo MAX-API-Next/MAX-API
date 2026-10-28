@@ -51,6 +51,15 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Two-node routing health integration
+        shell: bash
+        env:
+          MAXAPI_RUN_P43: '1'
+        run: |
+          set -euo pipefail
+          go test ./controller -run '^TestP43TwoNodeRoutingHealthFaultsAndRecovery$' -count=1 -v | tee "$RUNNER_TEMP/channel-routing-two-node.log"
+          grep -F -- '--- PASS: TestP43TwoNodeRoutingHealthFaultsAndRecovery' "$RUNNER_TEMP/channel-routing-two-node.log"
+
       - name: Vet
         run: go vet ./...
 

@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues
 */
 /* eslint-disable react-refresh/only-export-components */
-import React, { createContext, useContext, useState, useCallback } from 'react'
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+  useId,
+} from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChannelUpstreamUpdates } from '../hooks/use-channel-upstream-updates'
 import { channelsQueryKeys } from '../lib'
@@ -54,6 +61,8 @@ type ChannelsContextType = {
   idSort: boolean
   setIdSort: (enabled: boolean) => void
   upstream: UpstreamUpdateState
+  refreshPaused: boolean
+  setRefreshLock: (id: string, paused: boolean) => void
 }
 
 // ============================================================================
@@ -72,6 +81,16 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState<DialogType>(null)
   const [currentRow, setCurrentRow] = useState<Channel | null>(null)
   const [currentTag, setCurrentTag] = useState<string | null>(null)
+  const [refreshLocks, setRefreshLocks] = useState<Set<string>>(() => new Set())
+  const setRefreshLock = useCallback((id: string, paused: boolean) => {
+    setRefreshLocks((previous) => {
+      if (previous.has(id) === paused) return previous
+      const next = new Set(previous)
+      if (paused) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
   const [enableTagMode, setEnableTagMode] = useState(() => {
     return localStorage.getItem('enable-tag-mode') === 'true'
   })
@@ -99,6 +118,9 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
         idSort,
         setIdSort,
         upstream,
+        refreshPaused:
+          open !== null || upstream.showModal || refreshLocks.size > 0,
+        setRefreshLock,
       }}
     >
       {children}
@@ -116,4 +138,13 @@ export function useChannels() {
     throw new Error('useChannels must be used within ChannelsProvider')
   }
   return context
+}
+
+export function useChannelRefreshLock(paused: boolean) {
+  const { setRefreshLock } = useChannels()
+  const id = useId()
+  useEffect(() => {
+    setRefreshLock(id, paused)
+    return () => setRefreshLock(id, false)
+  }, [id, paused, setRefreshLock])
 }

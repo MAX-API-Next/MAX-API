@@ -45,6 +45,7 @@ import {
   handleBatchSetTag,
 } from '../lib'
 import type { Channel } from '../types'
+import { useChannelRefreshLock } from './channels-provider'
 
 interface DataTableBulkActionsProps<TData> {
   table: Table<TData>
@@ -58,6 +59,7 @@ export function DataTableBulkActions<TData>({
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [tagValue, setTagValue] = useState('')
+  useChannelRefreshLock(showTagDialog || showDeleteConfirm)
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedIds = selectedRows.reduce<number[]>((ids, row) => {

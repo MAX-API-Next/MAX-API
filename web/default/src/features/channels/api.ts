@@ -95,28 +95,90 @@ export type CodexCredentialRefreshResponse = {
  * Get paginated list of channels
  */
 export async function getChannels(
-  params: GetChannelsParams = {}
-): Promise<GetChannelsResponse> {
-  const res = await api.get('/api/channel', { params })
-  return res.data
+  params: GetChannelsParams = {},
+  config: ApiRequestConfig = {}
+): Promise<GetChannelsResponse & { observation: ChannelReadObservation }> {
+  return observeChannelRead<GetChannelsResponse>(async () => {
+    const res = await api.get('/api/channel', { ...config, params })
+    return res.data
+  })
 }
 
 /**
  * Search channels with filters
  */
 export async function searchChannels(
-  params: SearchChannelsParams
-): Promise<SearchChannelsResponse> {
-  const res = await api.get('/api/channel/search', { params })
-  return res.data
+  params: SearchChannelsParams,
+  config: ApiRequestConfig = {}
+): Promise<SearchChannelsResponse & { observation: ChannelReadObservation }> {
+  return observeChannelRead<SearchChannelsResponse>(async () => {
+    const res = await api.get('/api/channel/search', { ...config, params })
+    return res.data
+  })
 }
 
 /**
  * Get single channel by ID
  */
-export async function getChannel(id: number): Promise<GetChannelResponse> {
-  const res = await api.get(`/api/channel/${id}`)
-  return res.data
+export async function getChannel(
+  id: number,
+  config: ApiRequestConfig = {}
+): Promise<GetChannelResponse & { observation: ChannelReadObservation }> {
+  return observeChannelRead<GetChannelResponse>(async () => {
+    const res = await api.get(`/api/channel/${id}`, config)
+    return res.data
+  })
+}
+
+// Browser-local metadata, never sent to the API or used as a distributed version.
+export type ChannelReadObservation = {
+  requestOrder: number
+  receivedAt: number
+}
+let channelReadOrder = 0
+async function observeChannelRead<T extends object>(read: () => Promise<T>) {
+  const requestOrder = ++channelReadOrder
+  const response = await read()
+  return {
+    ...response,
+    observation: { requestOrder, receivedAt: performance.now() },
+  }
+}
+
+// Keep the polling cache limited to the saved routing projection. Independent
+// cancellation must not cancel a concurrent configuration-details request.
+export type ChannelRoutingSnapshot = Pick<
+  Channel,
+  'id' | 'priority' | 'routing_health'
+> & { observation: ChannelReadObservation }
+
+export function toChannelRoutingSnapshot(
+  channel: Channel,
+  observation: ChannelReadObservation
+): ChannelRoutingSnapshot {
+  return {
+    id: channel.id,
+    priority: channel.priority,
+    routing_health: channel.routing_health,
+    observation,
+  }
+}
+
+export async function getChannelRoutingSnapshot(
+  id: number,
+  signal?: AbortSignal
+): Promise<ChannelRoutingSnapshot> {
+  const response = await getChannel(id, {
+    signal,
+    disableDuplicate: true,
+    timeout: 8_000,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  if (!response.success || !response.data || response.data.id !== id) {
+    throw new Error('Channel routing snapshot unavailable')
+  }
+  return toChannelRoutingSnapshot(response.data, response.observation)
 }
 
 /**
