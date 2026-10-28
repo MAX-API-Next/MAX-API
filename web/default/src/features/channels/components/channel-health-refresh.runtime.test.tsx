@@ -262,6 +262,165 @@ test(
 )
 
 test(
+  'P44 mixed-version refreshes replace incompatible snapshots without resetting or submitting the draft',
+  { timeout: 60_000 },
+  async () => {
+    const queryClient = client()
+    const adapter = api.defaults.adapter
+    let snapshot: unknown = undefined
+    let configuredPriority = 10
+    let failure = false
+    const writes: Record<string, unknown>[] = []
+    api.defaults.adapter = async (config) => {
+      if (config.method === 'put') {
+        writes.push(JSON.parse(String(config.data)))
+      }
+      const data = channel(7, snapshot, configuredPriority)
+      // The helper has a default health argument. Delete the property so this
+      // really exercises an old server's absent field, rather than a null value.
+      if (snapshot === undefined) delete data.routing_health
+      return {
+        config,
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        data:
+          config.url === '/api/channel/7' && failure
+            ? { success: false, message: 'synthetic-p44-read-failure' }
+            : {
+                success: true,
+                data: config.url === '/api/channel/7' ? data : [],
+              },
+      }
+    }
+    function Editor() {
+      const [open, setOpen] = useState(true)
+      return (
+        <ChannelMutateDrawer
+          open={open}
+          onOpenChange={setOpen}
+          currentRow={channel(7)}
+        />
+      )
+    }
+    const view = await renderPage(<Editor />, queryClient)
+    const body = within(document.body)
+    try {
+      await waitFor(() =>
+        assert.ok(body.queryByLabelText('Configured priority'))
+      )
+      const input = body.getByLabelText(
+        'Configured priority'
+      ) as HTMLInputElement
+      await waitFor(() => assert.equal(input.value, '10'))
+      const card = within(body.getByLabelText('Routing state snapshot'))
+      const missing = 'Runtime state display is not supported by this server.'
+      await waitFor(() => assert.ok(card.queryByText(missing)))
+      assert.equal(card.queryByText('No runtime restriction'), null)
+      await act(async () =>
+        fireEvent.change(input, { target: { value: '20' } })
+      )
+      const refresh = async (expected: string) => {
+        const button = card.getByRole('button', {
+          name: 'Refresh runtime state',
+        }) as HTMLButtonElement
+        await waitFor(() => assert.equal(button.disabled, false))
+        await view.click(button)
+        await waitFor(() =>
+          assert.equal(
+            queryClient.getQueryData<{ routing_health?: unknown }>(
+              channelsQueryKeys.runtime(7)
+            )!.routing_health,
+            snapshot
+          )
+        )
+        await waitFor(() => assert.ok(card.queryByText(expected)))
+        assert.equal(
+          input.value,
+          '20',
+          'version changes must preserve the draft'
+        )
+      }
+      snapshot = { ...health(), schema_version: 2 }
+      await refresh('Unsupported runtime state version')
+      assert.equal(card.queryByText(missing), null)
+      snapshot = { ...health(), effective_priority: 'broken' }
+      await refresh('Runtime state unavailable')
+      assert.equal(card.queryByText('Unsupported runtime state version'), null)
+      snapshot = health({
+        status: 'unknown',
+        source: 'unavailable',
+        effective_priority: null,
+        active_penalty: null,
+        stored_penalty: null,
+        stored_runtime_disabled: null,
+        runtime_disabled: null,
+        penalty_recovery_mode: null,
+        unavailable_reason: 'redis_read_failed',
+      })
+      await refresh('Runtime state unavailable')
+      assert.ok(card.getByText('—', { exact: true }))
+      assert.equal(card.queryByText('0', { exact: true }), null)
+      configuredPriority = 0
+      snapshot = health({
+        status: 'normal',
+        base_priority: 0,
+        effective_priority: 0,
+        stored_penalty: 0,
+        active_penalty: 0,
+        penalty_recovery_mode: null,
+      })
+      await refresh('No runtime restriction')
+      assert.ok(card.getByText('0', { exact: true }))
+      assert.equal(card.queryByText('Runtime state unavailable'), null)
+      failure = true
+      await refresh(
+        'Runtime refresh failed. The previous snapshot may be outdated.'
+      )
+      assert.ok(
+        card.getByText('0', { exact: true }),
+        'failed reads retain zero'
+      )
+      failure = false
+      snapshot = undefined
+      configuredPriority = 10
+      await refresh(missing)
+      assert.equal(card.queryByText('0', { exact: true }), null)
+      assert.equal(card.queryByText('No runtime restriction'), null)
+      assert.equal(
+        card.queryByText(
+          'Runtime refresh failed. The previous snapshot may be outdated.'
+        ),
+        null
+      )
+      snapshot = health({
+        effective_priority: 8,
+        active_penalty: 2,
+        stored_penalty: 2,
+      })
+      await refresh('Timeout penalty: 2')
+      assert.ok(card.getByText('8', { exact: true }))
+      assert.equal(card.queryByText(missing), null)
+      await view.click(body.getByText('Update Channel', { selector: 'button' }))
+      await waitFor(() => assert.equal(writes.length, 1))
+      assert.equal(writes[0].priority, 20)
+      for (const field of [
+        'routing_health',
+        'effective_priority',
+        'active_penalty',
+        'observation',
+      ]) {
+        assert.equal(Object.hasOwn(writes[0], field), false)
+      }
+    } finally {
+      await view.unmount()
+      queryClient.clear()
+      api.defaults.adapter = adapter
+    }
+  }
+)
+
+test(
   'cached configuration stays blocked until a successful read and new channels have no runtime card',
   { timeout: 20_000 },
   async () => {

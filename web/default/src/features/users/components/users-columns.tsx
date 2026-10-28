@@ -129,6 +129,17 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { label: t('Username'), mobileTitle: true },
     },
     {
+      accessorKey: 'email',
+      header: t('Email'),
+      cell: ({ row }) => (
+        <LongText className='max-w-[280px]'>
+          {row.original.email || '—'}
+        </LongText>
+      ),
+      enableSorting: false,
+      meta: { label: t('Email') },
+    },
+    {
       accessorKey: 'status',
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Account Status')} />
