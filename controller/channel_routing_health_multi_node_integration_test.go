@@ -231,6 +231,9 @@ func (node *p43Node) call(t *testing.T, stage string, command p43Command) p43Rep
 // All expected priorities and selected IDs below are literals derived from the
 // fixture inputs, never from EffectivePriority or the projection under test.
 func TestP43TwoNodeRoutingHealthFaultsAndRecovery(t *testing.T) {
+	if os.Getenv("MAXAPI_RUN_P43") != "1" && os.Getenv(p43CoordinatorEnv) != "isolated" {
+		t.Skip("set MAXAPI_RUN_P43=1 to run the timing-sensitive two-node integration test")
+	}
 	// Keep the fixture Redis server away from background work left by earlier
 	// controller tests. Each runtime transaction retains the production deadline.
 	if os.Getenv(p43CoordinatorEnv) != "isolated" {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -60,13 +61,14 @@ func buildChannelRoutingHealthViews(ctx context.Context, channels []*model.Chann
 		failureReason = "redis_unconfigured"
 	} else {
 		for start := 0; start < len(ids); start += channelRoutingHealthBatchSize {
-			if ctx.Err() != nil {
+			if err := ctx.Err(); err != nil {
+				failureReason = channelRoutingHealthReadFailureReason(err)
 				break
 			}
 			end := min(start+channelRoutingHealthBatchSize, len(ids))
 			loaded, err := read(ctx, ids[start:end])
 			if err != nil {
-				failureReason = "redis_read_failed"
+				failureReason = channelRoutingHealthReadFailureReason(err)
 				break
 			}
 			for _, id := range ids[start:end] {
@@ -111,6 +113,17 @@ func buildChannelRoutingHealthViews(ctx context.Context, channels []*model.Chann
 		views[index] = view
 	}
 	return views
+}
+
+func channelRoutingHealthReadFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "redis_read_timeout"
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	default:
+		return "redis_read_failed"
+	}
 }
 
 func unknownChannelRoutingHealth(base int64, now time.Time, reason string) dto.ChannelRoutingHealth {

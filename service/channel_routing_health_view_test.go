@@ -237,3 +237,78 @@ func TestBuildChannelRoutingHealthViewsPreservesSuccessfulBatchesOnTimeout(t *te
 	require.Equal(t, dto.ChannelRoutingHealthUnknown, views[200].RoutingHealth.Status)
 	require.Nil(t, views[200].RoutingHealth.EffectivePriority)
 }
+
+func TestBuildChannelRoutingHealthViewsDistinguishesContextAndChannelBudgets(t *testing.T) {
+	withChannelRoutingHealthRedis(t)
+	for _, test := range []struct {
+		name        string
+		deadline    bool
+		cancelAfter bool
+		reason      string
+	}{
+		{name: "canceled_before_read", reason: "context_canceled"},
+		{name: "expired_before_read", deadline: true, reason: "redis_read_timeout"},
+		{name: "canceled_after_successful_batch", cancelAfter: true, reason: "context_canceled"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if test.deadline {
+				cancel()
+				ctx, cancel = context.WithDeadline(context.Background(), time.Time{})
+			} else if !test.cancelAfter {
+				cancel()
+			}
+			defer cancel()
+			channels := make([]*model.Channel, 1001)
+			for index := range channels {
+				channels[index] = &model.Channel{Id: index + 1}
+			}
+			calls := 0
+			views := buildChannelRoutingHealthViews(ctx, channels, operation_setting.MonitorSetting{AutoPriorityDemotionEnabled: true},
+				func(_ context.Context, ids []int) (map[int]channelhealth.RuntimeStateReadResult, error) {
+					calls++
+					states := make(map[int]channelhealth.RuntimeStateReadResult)
+					for _, id := range ids {
+						states[id] = channelhealth.RuntimeStateReadResult{}
+					}
+					cancel()
+					return states, nil
+				})
+			if test.cancelAfter {
+				require.Equal(t, 1, calls)
+				require.Equal(t, dto.ChannelRoutingHealthNormal, views[0].RoutingHealth.Status)
+			} else {
+				require.Zero(t, calls)
+			}
+			health := views[999].RoutingHealth
+			require.Equal(t, dto.ChannelRoutingHealthUnknown, health.Status)
+			require.Nil(t, health.EffectivePriority)
+			require.Equal(t, test.reason, *health.UnavailableReason)
+			require.Equal(t, "projection_budget_exceeded", *views[1000].RoutingHealth.UnavailableReason)
+		})
+	}
+}
+
+func TestBuildChannelRoutingHealthViewsClassifiesReadFailures(t *testing.T) {
+	withChannelRoutingHealthRedis(t)
+	for _, test := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"deadline", errors.Join(errors.New("private diagnostic"), context.DeadlineExceeded), "redis_read_timeout"},
+		{"canceled", errors.Join(errors.New("private diagnostic"), context.Canceled), "context_canceled"},
+		{"transport", errors.New("private diagnostic"), "redis_read_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			views := buildChannelRoutingHealthViews(context.Background(), []*model.Channel{{Id: 1}}, operation_setting.MonitorSetting{AutoPriorityDemotionEnabled: true},
+				func(context.Context, []int) (map[int]channelhealth.RuntimeStateReadResult, error) {
+					return nil, test.err
+				})
+			health := views[0].RoutingHealth
+			require.Equal(t, dto.ChannelRoutingHealthUnknown, health.Status)
+			require.Nil(t, health.EffectivePriority)
+			require.Equal(t, test.reason, *health.UnavailableReason)
+		})
+	}
+}

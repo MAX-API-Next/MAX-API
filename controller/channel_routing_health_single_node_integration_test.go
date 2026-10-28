@@ -126,4 +126,9 @@ func TestP42SingleNodeSaveProjectionAndRouting(t *testing.T) {
 	response = decodeAPIResponse(t, recorder)
 	require.True(t, response.Success, response.Message)
 	require.Equal(t, beforeRuntime, redisServer.Dump())
+	stored, err = model.GetChannelById(primary.Id, false)
+	require.NoError(t, err)
+	require.EqualValues(t, 10, stored.GetPriority(), "routing_health in a PUT must not overwrite configuration")
+	item = getList()
+	require.EqualValues(t, 8, item["routing_health"].(map[string]any)["effective_priority"])
 }
