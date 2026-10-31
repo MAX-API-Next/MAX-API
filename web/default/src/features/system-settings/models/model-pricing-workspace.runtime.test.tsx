@@ -535,6 +535,52 @@ test('visible editor saves explicit zero with hidden plugin data and base guards
   assert.equal(v.methods.includes('put'), false)
 })
 
+test('quote display removes binary tails without hiding tiny nonzero amounts or changing server facts', async () => {
+  const f = setup()
+  const pricingAdapter = api.defaults.adapter
+  let estimate = 0.30000000000000004,
+    final = 0.000000000001
+  let emitted: ReturnType<typeof quoted> | undefined
+  api.defaults.adapter = async (config) => {
+    if (config.url?.endsWith('/quote')) {
+      emitted = quoted(JSON.parse(config.data))
+      emitted.preview.estimate.amount = estimate
+      emitted.preview.final!.amount = final
+      return {
+        config,
+        data: { success: true, data: emitted },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+      }
+    }
+    if (typeof pricingAdapter !== 'function')
+      throw new Error('Missing fixture adapter')
+    return pricingAdapter(config)
+  }
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))
+  fireEvent.click(f.getByRole('button', { name: 'kling-v1' }))
+  await waitFor(() => assert.ok(f.queryByLabelText('Pricing source')))
+  fireEvent.change(f.getByLabelText('Pricing source'), {
+    target: { value: 'channel:1' },
+  })
+  fireEvent.change(f.getByLabelText('Quote sample JSON'), {
+    target: {
+      value: '{"group":"default","submit":{"units":3},"actual":{"units":1}}',
+    },
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Calculate task quote' }))
+  await waitFor(() => assert.ok(f.queryByText('Estimate: USD 0.3')))
+  assert.ok(f.queryByText('Final amount: USD 0.000000000001'))
+  assert.equal(emitted?.preview.estimate.amount, 0.30000000000000004)
+  assert.equal(emitted?.preview.final?.amount, 0.000000000001)
+  estimate = 0
+  final = 0
+  fireEvent.click(f.getByRole('button', { name: 'Calculate task quote' }))
+  await waitFor(() => assert.ok(f.queryByText('Estimate: USD 0')))
+  assert.ok(f.queryByText('Final amount: USD 0'))
+})
+
 test('typing decimal prices preserves every zero instead of turning 0.05 into 5', async () => {
   const f = setup()
   await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))

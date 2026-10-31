@@ -12,7 +12,11 @@ export function ModelPricingQuotePanel(props: {
   session: ModelPricingDraftSession
   run: (action: () => Promise<boolean>) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const amountFormat = new Intl.NumberFormat(
+    i18n.resolvedLanguage ?? i18n.language,
+    { maximumSignificantDigits: 15 }
+  )
   const d = props.document
   const context = d.base?.contexts.find((c) => c.id === d.source)
   const result = d.quote?.result
@@ -69,7 +73,8 @@ export function ModelPricingQuotePanel(props: {
           aria-label={t('Quote result')}
         >
           <p>
-            {t('Estimate')}: USD {result.preview.estimate.amount}
+            {t('Estimate')}: USD{' '}
+            {amountFormat.format(result.preview.estimate.amount)}
           </p>
           <p>
             {t('Reserved quota')}: {result.preview.reserved_quota} (
@@ -78,7 +83,7 @@ export function ModelPricingQuotePanel(props: {
           <p>
             {t('Final amount')}:{' '}
             {result.preview.final
-              ? `USD ${result.preview.final.amount}`
+              ? `USD ${amountFormat.format(result.preview.final.amount)}`
               : t('Actual usage not provided')}
           </p>
           <p>
