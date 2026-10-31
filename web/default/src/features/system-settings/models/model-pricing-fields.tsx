@@ -10,9 +10,12 @@ import type {
 import { modelPricingNumericKeys } from './model-pricing-types'
 import type { TaskUsageField } from './task-pricing-contract'
 
-function describeUsageField(field: TaskUsageField): string {
+function describeUsageField(
+  field: TaskUsageField,
+  booleanLabel: string
+): string {
   if ('unit' in field) return field.unit
-  if (field.type === 'boolean') return 'boolean'
+  if (field.type === 'boolean') return booleanLabel
   return field.enum.join('/')
 }
 
@@ -87,17 +90,22 @@ export function ModelPricingFields(props: {
             {t('Mapped model')}: {selected.mapped_model}
           </p>
           <p>
-            {selected.reason ||
-              t(
-                'Configuration sample only; this does not activate task execution.'
-              )}
+            {selected.reason
+              ? t(selected.reason, {
+                  defaultValue: selected.reason,
+                  keySeparator: false,
+                  nsSeparator: false,
+                })
+              : t(
+                  'Configuration sample only; this does not activate task execution.'
+                )}
           </p>
           <p>
             {t('Usage dimensions')}:{' '}
             {Object.entries(selected.usage_schema ?? {})
               .map(
                 ([key, field]) =>
-                  `${key} (${describeUsageField(field)}; ${selected.contract?.field_policy[key]?.phase ?? '?'})`
+                  `${key} (${describeUsageField(field, t('boolean'))}; ${selected.contract?.field_policy[key]?.phase ?? '?'})`
               )
               .join(', ') || t('None')}
           </p>

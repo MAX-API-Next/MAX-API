@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "不支持的宿主计价合同",
+    "invalid channel model mapping": "渠道模型映射无效",
+    "no vetted host phase contract": "尚无已核验的宿主阶段合同",
+    "plugin disabled or revoked": "插件已禁用或撤销",
+    "channel disabled or mapped-target-only; quote its advertised alias": "渠道已禁用或仅作为映射目标；请使用其对外声明的别名报价",
+    "source unavailable": "来源不可用",
+    "boolean": "布尔值",
     "Pricing session is inactive": "价格会话未启用",
     "Pricing model is unavailable": "价格模型不可用",
     "Reconcile batch pricing before editing": "编辑前请先核对批量价格保存结果",

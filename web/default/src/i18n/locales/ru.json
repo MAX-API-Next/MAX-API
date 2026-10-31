@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "Неподдерживаемый контракт тарификации хоста",
+    "invalid channel model mapping": "Недопустимое сопоставление модели канала",
+    "no vetted host phase contract": "Нет проверенного контракта фаз хоста",
+    "plugin disabled or revoked": "Плагин отключён или отозван",
+    "channel disabled or mapped-target-only; quote its advertised alias": "Канал отключён или используется только как цель сопоставления; для расчёта используйте его объявленный псевдоним",
+    "source unavailable": "Источник недоступен",
+    "boolean": "логический тип",
     "Pricing session is inactive": "Сеанс настройки цен неактивен",
     "Pricing model is unavailable": "Модель для настройки цен недоступна",
     "Reconcile batch pricing before editing": "Перед редактированием сверьте результат пакетного сохранения цен",

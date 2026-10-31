@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "未対応のホスト料金契約",
+    "invalid channel model mapping": "チャネルのモデルマッピングが無効です",
+    "no vetted host phase contract": "検証済みのホストフェーズ契約がありません",
+    "plugin disabled or revoked": "プラグインが無効化または取り消されています",
+    "channel disabled or mapped-target-only; quote its advertised alias": "チャネルが無効、またはマッピング先のみです。公開されているエイリアスで見積もってください",
+    "source unavailable": "ソースを利用できません",
+    "boolean": "真偽値",
     "Pricing session is inactive": "価格設定セッションが無効です",
     "Pricing model is unavailable": "価格設定モデルを利用できません",
     "Reconcile batch pricing before editing": "編集前に価格の一括保存結果を確認してください",

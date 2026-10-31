@@ -19,6 +19,13 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  // Fixed host pricing reasons are translated dynamically; unknown text is retained.
+  'unsupported host pricing contract',
+  'invalid channel model mapping',
+  'no vetted host phase contract',
+  'plugin disabled or revoked',
+  'channel disabled or mapped-target-only; quote its advertised alias',
+  'source unavailable',
   // Header navigation
   'Home',
   'Console',

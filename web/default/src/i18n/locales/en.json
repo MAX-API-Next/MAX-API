@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "unsupported host pricing contract",
+    "invalid channel model mapping": "invalid channel model mapping",
+    "no vetted host phase contract": "no vetted host phase contract",
+    "plugin disabled or revoked": "plugin disabled or revoked",
+    "channel disabled or mapped-target-only; quote its advertised alias": "channel disabled or mapped-target-only; quote its advertised alias",
+    "source unavailable": "source unavailable",
+    "boolean": "boolean",
     "Pricing session is inactive": "Pricing session is inactive",
     "Pricing model is unavailable": "Pricing model is unavailable",
     "Reconcile batch pricing before editing": "Reconcile batch pricing before editing",

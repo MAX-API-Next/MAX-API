@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "Contrat de tarification hôte non pris en charge",
+    "invalid channel model mapping": "Mappage du modèle de canal non valide",
+    "no vetted host phase contract": "Aucun contrat de phase hôte validé",
+    "plugin disabled or revoked": "Plugin désactivé ou révoqué",
+    "channel disabled or mapped-target-only; quote its advertised alias": "Canal désactivé ou utilisé uniquement comme cible de mappage ; utilisez son alias annoncé pour le devis",
+    "source unavailable": "Source indisponible",
+    "boolean": "booléen",
     "Pricing session is inactive": "La session de tarification est inactive",
     "Pricing model is unavailable": "Le modèle de tarification est indisponible",
     "Reconcile batch pricing before editing": "Vérifiez le résultat du lot avant de modifier les prix",

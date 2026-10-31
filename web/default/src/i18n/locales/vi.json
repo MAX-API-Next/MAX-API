@@ -1,5 +1,12 @@
 {
   "translation": {
+    "unsupported host pricing contract": "Hợp đồng định giá của máy chủ không được hỗ trợ",
+    "invalid channel model mapping": "Ánh xạ mô hình của kênh không hợp lệ",
+    "no vetted host phase contract": "Chưa có hợp đồng giai đoạn của máy chủ được thẩm định",
+    "plugin disabled or revoked": "Plugin đã bị tắt hoặc thu hồi",
+    "channel disabled or mapped-target-only; quote its advertised alias": "Kênh đã bị tắt hoặc chỉ là đích ánh xạ; hãy báo giá bằng bí danh mà kênh công bố",
+    "source unavailable": "Nguồn không khả dụng",
+    "boolean": "kiểu boolean",
     "Pricing session is inactive": "Phiên cấu hình giá chưa hoạt động",
     "Pricing model is unavailable": "Mô hình cấu hình giá không khả dụng",
     "Reconcile batch pricing before editing": "Đối chiếu kết quả lưu giá hàng loạt trước khi chỉnh sửa",
