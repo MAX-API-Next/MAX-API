@@ -27,9 +27,10 @@ func ParseExprVersion(exprStr string) (version int, body string) {
 }
 
 type cachedEntry struct {
-	prog     *vm.Program
-	usedVars map[string]bool
-	version  int
+	prog      *vm.Program
+	usedVars  map[string]bool
+	version   int
+	usageKeys []string // Task references collected before AST optimization.
 }
 
 var (
@@ -86,15 +87,33 @@ func CompileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 }
 
 func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
+	entry, err := compileEntry(exprStr, hash, false)
+	if err != nil {
+		return nil, err
+	}
+	return entry.prog, nil
+}
+
+func compileEntry(exprStr, hash string, task bool) (*cachedEntry, error) {
 	cacheMu.RLock()
 	if entry, ok := cache[hash]; ok {
 		cacheMu.RUnlock()
-		return entry.prog, nil
+		return entry, nil
 	}
 	cacheMu.RUnlock()
 
 	version, body := ParseExprVersion(exprStr)
-	prog, err := expr.Compile(body, expr.Env(getCompileEnv(version)), expr.AsFloat64())
+	prototype := getCompileEnv(version)
+	var usageKeys []string
+	if task {
+		var err error
+		usageKeys, err = inspectTaskExpression(body)
+		if err != nil {
+			return nil, err
+		}
+		prototype = taskCompileEnv(prototype)
+	}
+	prog, err := expr.Compile(body, expr.Env(prototype), expr.AsFloat64())
 	if err != nil {
 		return nil, fmt.Errorf("expr compile error: %w", err)
 	}
@@ -104,18 +123,19 @@ func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 	cacheMu.Lock()
 	if entry, ok := cache[hash]; ok {
 		cacheMu.Unlock()
-		return entry.prog, nil
+		return entry, nil
 	}
 	if len(cache) >= maxCacheSize {
 		oldest := cacheOrder[0]
 		cacheOrder = cacheOrder[1:]
 		delete(cache, oldest)
 	}
-	cache[hash] = &cachedEntry{prog: prog, usedVars: vars, version: version}
+	entry := &cachedEntry{prog: prog, usedVars: vars, version: version, usageKeys: usageKeys}
+	cache[hash] = entry
 	cacheOrder = append(cacheOrder, hash)
 	cacheMu.Unlock()
 
-	return prog, nil
+	return entry, nil
 }
 
 // ExprVersion returns the version of a cached expression. Returns DefaultExprVersion

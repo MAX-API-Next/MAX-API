@@ -101,8 +101,8 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
 
 ### Rule 4: New Channel StreamOptions Support
 
-When implementing a new channel:
-- Confirm whether the provider supports `StreamOptions`.
+When implementing a channel that relays streaming model responses:
+- Confirm whether the provider supports `StreamOptions`; task-only/non-streaming channels do not require this check.
 - If supported, add the channel to `streamSupportedChannels`.
 
 ### Rule 5: Protected Project Information — DO NOT Modify or Delete
@@ -133,15 +133,15 @@ For request structs that are parsed from client JSON and then re-marshaled to up
 
 ### Rule 7: Billing Expression System — Read `pkg/billingexpr/expr.md`
 
-When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
+Before changing expression syntax, evaluation, normalization, quote conversion, or settlement semantics, read the relevant sections of `pkg/billingexpr/expr.md`. Reuse that reading while the contract is unchanged. Display-only text/layout changes do not require reading the whole billing manual. Preserve its expression versioning, token normalization, and quota-conversion contracts.
 
 ### Rule 8: Process Documents — Keep Them Under `.tmp/`
 
-All non-project process documents MUST be created and kept under `.tmp/`.
+Keep repository-local process evidence under `.tmp/`. Workspace R&D plans explicitly maintained in `../../Agentic_Engineering/projects/MAX-API/` are an authorized exception and remain canonical there.
 
 This includes investigation notes, review outputs, scratch plans, working drafts, temporary release-note or PR-copy drafts, one-off deployment notes, private operation notes, temporary diff or patch files, and any document that records internal work process rather than public project documentation.
 
-Do NOT place these files in the repository root, `docs/`, `.github/`, or source directories unless the content is explicitly intended to be public project documentation. `.tmp/` is ignored by Git; use it to prevent accidental publication of sensitive or internal process information to the open-source GitHub repository. If process documents are found outside `.tmp/`, move them into `.tmp/` before committing.
+Do not publish internal process evidence in the repository root, `docs/`, `.github/`, or source directories. `.tmp/` is ignored by Git. Do not relocate user-maintained plans or unrelated files merely to satisfy this rule; keep migrated `.tmp` files as navigation to the canonical workspace plan.
 
 Local agent workflow files, including `.agents/skills/` and `.agents/upstream-sync/`, are private project-maintenance material for this workspace and MUST NOT be committed to the public GitHub repository. Keep reusable private agent instructions there locally, or move public-safe documentation into normal project docs when it is intentionally meant to be open source.
 
@@ -158,8 +158,8 @@ Run the private upstream component check before any of the following work:
 
 Required procedure:
 
-1. Read `.agents/upstream-sync/components.json`, `.agents/upstream-sync/new-api-sync.md`, and the living implementation plan at `.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md`.
-2. Run the checker from the repository root with the cross-platform `pwsh` executable when available:
+1. Read the affected component entries in `.agents/upstream-sync/components.json`, the latest relevant sync record in `.agents/upstream-sync/new-api-sync.md`, and the current implementation entry in the canonical plan `../../Agentic_Engineering/projects/MAX-API/系统规划/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md`. The old `.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md` is navigation only; do not repeatedly load the entire historical plan.
+2. For a changed component, a new upstream observation, a release, or a claim about the latest upstream, run the checker from the repository root with the cross-platform `pwsh` executable when available. Reuse an existing report within the same iteration only when MAX HEAD, observed upstream SHA, and affected scope are unchanged; a failed or unverified report cannot establish current upstream state:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
    On Windows hosts without `pwsh`, use the equivalent Windows PowerShell fallback:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
@@ -168,8 +168,8 @@ Required procedure:
 5. Detection is not acceptance: never automatically merge or wholesale copy an upstream change. Classify it as `pending`, `accepted`, `ported`, `skipped`, `superseded`, or `blocked`, with rationale.
 6. Advance the reviewed baseline only after the affected code and compatibility gates have been inspected and the relevant tests have passed. Merely detecting a newer commit MUST NOT advance the baseline.
 7. Keep generated comparison reports under `.tmp/`. Keep the reusable checker, component registry, and local sync state under `.agents/upstream-sync/`; these remain private and uncommitted under Rule 8.
-8. Before implementing a listed capability, update the living plan with the current MAX/upstream baselines, revalidated evidence, scope, dependency, license decision, risks, and test plan; mark the item `实施中`.
-9. After each related iteration, update the same plan with actual files and key logic, test results, residual verification gaps, upstream component status, delivery status, change log, and the next iteration entry. A code change is not complete until this plan update is performed.
+8. Before implementing a listed capability, update its current plan entry with baselines, scope, dependencies, provenance/license decision, risks, and validation; mark it `实施中`. Existing authorized work does not need another approval checkpoint.
+9. At the end of the related logical change, update that same entry with actual changes, results, gaps, component/delivery status, and next step. Do not append a full duplicate history or reread/update the plan after every individual edit.
 
 RelayKit-specific requirements:
 
@@ -179,4 +179,4 @@ RelayKit-specific requirements:
 - Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
 - RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
 - If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
-- If the living plan is missing in a fresh workspace, recreate `.tmp/MAX_API_UPSTREAM_IMPLEMENTATION_PLAN.md` from the current code and upstream records before continuing; never substitute an old chat summary for the plan.
+- If a plan link is missing, check the canonical workspace location and migration navigation first. Continue independent source investigation and report a genuinely missing plan; do not silently create a competing plan at the obsolete `.tmp` path or substitute an old chat summary for evidence.

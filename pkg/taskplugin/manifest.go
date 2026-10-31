@@ -114,7 +114,7 @@ func ValidateManifest(manifest Manifest) error {
 	if err := validateUpstreams(manifest.Upstreams); err != nil {
 		return err
 	}
-	return validateUsageSchema(manifest.UsageSchema)
+	return ValidateUsageSchema(manifest.UsageSchema)
 }
 
 func validateModels(models []string) (map[string]struct{}, error) {
@@ -295,7 +295,8 @@ func validateUpstreams(upstreams []string) error {
 	return nil
 }
 
-func validateUsageSchema(schema map[string]UsageField) error {
+// ValidateUsageSchema validates the data-only usage schema shared with pricing.
+func ValidateUsageSchema(schema map[string]UsageField) error {
 	for name, field := range schema {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("task plugin usage field name must not be empty")

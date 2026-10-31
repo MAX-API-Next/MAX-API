@@ -43,7 +43,23 @@ const STATUS_RELATED_KEYS = [
   'general_setting.custom_currency_exchange_rate',
 ]
 
-const PRICING_RELATED_KEYS = ['task_billing_setting.rate_cards']
+const MODEL_PRICING_KEYS = [
+  'ModelPrice',
+  'ModelRatio',
+  'CompletionRatio',
+  'CacheRatio',
+  'CreateCacheRatio',
+  'ImageRatio',
+  'AudioRatio',
+  'AudioCompletionRatio',
+  'billing_setting.billing_mode',
+  'billing_setting.billing_expr',
+  'billing_setting.plugin_billing_expr',
+]
+const PRICING_RELATED_KEYS = [
+  'task_billing_setting.rate_cards',
+  ...MODEL_PRICING_KEYS,
+]
 
 export function invalidateQueriesAfterOptionUpdate(
   queryClient: QueryClient,
@@ -55,6 +71,9 @@ export function invalidateQueriesAfterOptionUpdate(
   }
   if (PRICING_RELATED_KEYS.includes(optionKey)) {
     queryClient.invalidateQueries({ queryKey: ['pricing'] })
+  }
+  if (MODEL_PRICING_KEYS.includes(optionKey)) {
+    queryClient.invalidateQueries({ queryKey: ['model-pricing-config'] })
   }
 }
 

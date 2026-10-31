@@ -199,6 +199,9 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	// Do not publish an older pricing read after a newer local commit.
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
 		if !IsRegisteredOptionKey(option.Key) {
@@ -240,6 +243,10 @@ func UpdateOption(key string, value string) error {
 	}
 	if err := validateOptionUpdate(key, value); err != nil {
 		return err
+	}
+	if IsModelPricingOption(key) {
+		result, err := updateModelPricingOptions(map[string]string{key: value})
+		return modelPricingPublicationError(result, err)
 	}
 
 	// Save to database first
@@ -286,6 +293,12 @@ func UpdateOptionsBulk(values map[string]string) error {
 	for k, v := range normalizedValues {
 		if err := validateOptionUpdate(k, v); err != nil {
 			return err
+		}
+	}
+	for key := range normalizedValues {
+		if IsModelPricingOption(key) {
+			result, err := updateModelPricingOptions(normalizedValues)
+			return modelPricingPublicationError(result, err)
 		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
