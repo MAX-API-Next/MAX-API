@@ -563,3 +563,48 @@ test('batch ambiguous writes reconcile independently and retain a blocked old ta
   assert.equal(await f.session.reconcileModels(['third']), true)
   assert.deepEqual(f.session.getSnapshot().blockedModels, [])
 })
+
+test('batch targets reject pricing edits while pending or unknown, then use acknowledged copied prices', async () => {
+  for (const size of [1, 2]) {
+    const f = fixture()
+    await f.session.refresh()
+    const targets = [
+      entry('second', 'old', { ModelPrice: 7 }),
+      entry('third', 'old', { ModelPrice: 9 }),
+    ].slice(0, size)
+    const pending = deferred<ModelPricingCommit>()
+    f.transport.save = () => pending.promise
+    f.transport.saveMany = () => pending.promise
+    f.transport.read = async (name) =>
+      structuredClone(targets.find((t) => t.model_name === name)!)
+    const saving = f.session.saveBatch(targets, { ModelPrice: 0 })
+    f.session.select('second')
+    assert.throws(
+      () => f.session.editNumber('ModelRatio', '2'),
+      /Reconcile batch/
+    )
+    pending.reject(new ModelPricingError('unknown-result', 'Lost receipt'))
+    assert.equal(await saving, false)
+    assert.equal(f.view().writeState, 'unknown')
+    assert.throws(
+      () => f.session.importPricing('{"ModelPrice":7}'),
+      /Reconcile batch/
+    )
+    assert.throws(
+      () => f.session.replacePricing({ ModelPrice: 7 }),
+      /Reconcile batch/
+    )
+    f.transport.read = async (name) =>
+      entry(name, 'committed', { ModelPrice: 0 })
+    assert.equal(
+      await f.session.reconcileModels(targets.map((t) => t.model_name)),
+      true
+    )
+    f.session.editNumber('ModelRatio', '2')
+    assert.deepEqual(
+      f.view().pricing,
+      { ModelPrice: 0, ModelRatio: 2 },
+      'later edits cannot carry the old target price into a new write'
+    )
+  }
+})

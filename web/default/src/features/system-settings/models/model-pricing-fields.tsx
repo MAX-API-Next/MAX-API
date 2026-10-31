@@ -57,7 +57,14 @@ export function ModelPricingFields(props: {
     }
   }
   return (
-    <section className='space-y-4' aria-label={t('Pricing configuration')}>
+    <fieldset
+      className='space-y-4'
+      aria-label={t('Pricing configuration')}
+      disabled={
+        d.batchWrite &&
+        (d.writeState === 'saving' || d.writeState === 'unknown')
+      }
+    >
       <label className='grid gap-1 text-sm' htmlFor={`${id}-source`}>
         {t('Pricing source')}
         <select
@@ -206,6 +213,6 @@ export function ModelPricingFields(props: {
           onChange={(e) => props.session.importPricing(e.target.value)}
         />
       </details>
-    </section>
+    </fieldset>
   )
 }

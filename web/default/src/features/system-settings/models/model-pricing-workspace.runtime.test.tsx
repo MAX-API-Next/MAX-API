@@ -15,9 +15,12 @@ import {
   deferred,
 } from './__tests__/model-pricing-fixture'
 import { acknowledgePriceField } from './acknowledge-price-field'
+import { ModelPricingError } from './model-pricing-api'
+import { ModelPricingDraftSession } from './model-pricing-draft'
 import type {
   GuardedPricingChange,
   ModelPricingEntry,
+  ModelPricingCommit,
 } from './model-pricing-types'
 
 const env = createReactTestEnvironment()
@@ -33,6 +36,7 @@ Object.defineProperty(globalThis, 'localStorage', {
 const { render, cleanup, fireEvent, waitFor } =
   await import('@testing-library/react/pure')
 const { ModelPricingWorkspace } = await import('./model-pricing-workspace')
+const { ModelPricingFields } = await import('./model-pricing-fields')
 const { RatioSettingsCard } = await import('./ratio-settings-card')
 const { SettingsPageProvider } =
   await import('../components/settings-page-context')
@@ -734,6 +738,64 @@ test('batch confirmation sends both observed target guards in one request and le
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
+})
+
+test('pricing fields lock unresolved batch targets while individual pending saves remain editable', async () => {
+  let observed = 7
+  const batch = deferred<ModelPricingCommit>(),
+    single = deferred<ModelPricingCommit>()
+  const read = async (name: string) =>
+    entry(name, observed === 7 ? 'price-v1' : 'new', { ModelPrice: observed })
+  const session = new ModelPricingDraftSession({
+    read,
+    save: () => single.promise,
+    saveMany: () => batch.promise,
+    preview: async (name, pricing) => ({
+      ...entry(name, 'price-v1', pricing),
+      draft_version: 'draft',
+    }),
+    quote: async (input) => quoted(input),
+  })
+  session.select('target')
+  await session.refresh()
+  const element = () => (
+    <I18nextProvider i18n={env.i18n}>
+      <ModelPricingFields
+        document={session.getSnapshot().document!}
+        session={session}
+      />
+    </I18nextProvider>
+  )
+  const view = render(element())
+  const numeric = view.getByLabelText('ModelPrice (USD / request)')
+  const json = view.getByLabelText('Full model JSON / import')
+  assert.equal(numeric.matches(':disabled'), false)
+  const saving = session.saveBatch(
+    [await read('target'), await read('other')],
+    { ModelPrice: 0 }
+  )
+  view.rerender(element())
+  assert.equal(numeric.matches(':disabled'), true)
+  assert.equal(json.matches(':disabled'), true)
+  batch.reject(new ModelPricingError('unknown-result', 'Lost receipt'))
+  assert.equal(await saving, false)
+  view.rerender(element())
+  assert.equal(numeric.matches(':disabled'), true)
+  observed = 0
+  assert.equal(await session.reconcileModels(['target', 'other']), true)
+  view.rerender(element())
+  assert.equal(numeric.matches(':disabled'), false)
+  session.editNumber('ModelPrice', '1')
+  const individual = session.save()
+  view.rerender(element())
+  assert.equal(
+    numeric.matches(':disabled'),
+    false,
+    'individual saves retain their edit-during-write contract'
+  )
+  observed = 1
+  single.resolve(receipt(await read('target')))
+  assert.equal(await individual, true)
 })
 
 test('system-option refresh preserves an unsaved legacy JSON field beside the new editor', async () => {

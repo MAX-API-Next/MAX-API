@@ -24,6 +24,7 @@ type Write = {
   pricing?: ModelPricingValues // Unknown reset targets cannot be inferred from effective values.
   revision: number
   acknowledged: boolean
+  batch: boolean
 }
 type Document = {
   base?: ModelPricingEntry
@@ -70,7 +71,7 @@ export type PricingDraftView = Pick<
   | 'sample'
   | 'sampleText'
   | 'quote'
-> & { dirty: boolean }
+> & { dirty: boolean; batchWrite: boolean }
 export type PricingDraftSnapshot = {
   model: string | null
   document?: PricingDraftView
@@ -155,6 +156,7 @@ export class ModelPricingDraftSession {
         sample,
         sampleText,
         quote,
+        batchWrite: Boolean(d.write?.batch),
         dirty: Boolean(
           (base && pricing && !pricingEqual(base.configured, pricing)) ||
           Object.keys(inputs ?? {}).length
@@ -179,6 +181,16 @@ export class ModelPricingDraftSession {
     const d = this.documents.get(this.model)
     if (!d) throw new Error('Pricing model is unavailable')
     return [this.model, d]
+  }
+  private editable(): [string, Document] {
+    const current = this.current()
+    const d = current[1]
+    if (
+      d.write?.batch &&
+      (d.writeState === 'saving' || d.writeState === 'unknown')
+    )
+      throw new Error('Reconcile batch pricing before editing')
+    return current
   }
   private cancel(d: Document) {
     d.readId++
@@ -230,7 +242,7 @@ export class ModelPricingDraftSession {
     this.replaceDraftPricing(pricing)
   }
   private replaceDraftPricing(pricing: ModelPricingValues, jsonText?: string) {
-    const [, d] = this.current()
+    const [, d] = this.editable()
     if (!d.base) throw new Error('Load authoritative pricing before editing')
     const next = normalizePricing(pricing)
     for (const key of modelPricingNumericKeys) {
@@ -249,7 +261,7 @@ export class ModelPricingDraftSession {
     this.emit()
   }
   editNumber(key: (typeof modelPricingNumericKeys)[number], text: string) {
-    const [, d] = this.current()
+    const [, d] = this.editable()
     if (!d.pricing || !modelPricingNumericKeys.includes(key))
       throw new Error('Load pricing before editing')
     d.inputs ??= {}
@@ -275,7 +287,7 @@ export class ModelPricingDraftSession {
     this.replacePricing(next)
   }
   importPricing(text: string) {
-    const [, d] = this.current()
+    const [, d] = this.editable()
     let value: ModelPricingValues
     try {
       value = normalizePricing(JSON.parse(text))
@@ -509,7 +521,7 @@ export class ModelPricingDraftSession {
       item.d.revision++
       this.documents.set(item.model, item.d)
     }
-    return this.commit(batch)
+    return this.commit(batch, true)
   }
   async reconcileModels(models: string[]): Promise<boolean> {
     this.current()
@@ -523,7 +535,8 @@ export class ModelPricingDraftSession {
     return complete
   }
   private async commit(
-    batch: { model: string; d: Document; change: GuardedPricingChange }[]
+    batch: { model: string; d: Document; change: GuardedPricingChange }[],
+    batchWrite = false
   ): Promise<boolean> {
     const writes = batch.map((item) => {
       const write: Write = {
@@ -532,6 +545,7 @@ export class ModelPricingDraftSession {
           : structuredClone(item.change.pricing),
         revision: item.d.revision,
         acknowledged: false,
+        batch: batchWrite,
       }
       item.d.write = write
       item.d.writeState = 'saving'
