@@ -493,6 +493,55 @@ test('batch refuses dirty targets before staging any target and sends one guarde
   assert.equal(calls, 1)
 })
 
+test('rejected batches leave unopened targets clean and can retry after required reconciliation', async () => {
+  for (const kind of ['rejected', 'conflict'] as const) {
+    const f = fixture()
+    await f.session.refresh()
+    f.session.replacePricing({ ModelPrice: 0 })
+    const targets = [
+      entry('second', 'price-v1', { ModelPrice: 7 }),
+      entry('third', 'price-v1', { ModelPrice: 9 }),
+    ]
+    let calls = 0
+    f.transport.saveMany = async (changes) => {
+      calls++
+      assert.deepEqual(
+        changes.map((c) => c.pricing),
+        [{ ModelPrice: 0 }, { ModelPrice: 0 }]
+      )
+      throw new ModelPricingError(
+        kind,
+        'Synthetic batch rejection',
+        kind === 'conflict' ? 409 : 400
+      )
+    }
+    assert.equal(await f.session.saveBatch(targets, { ModelPrice: 0 }), false)
+    for (const target of targets) {
+      f.session.select(target.model_name)
+      assert.deepEqual(f.view().pricing, target.configured)
+      assert.equal(
+        f.view().dirty,
+        false,
+        'a rejected system-staged copy is not an operator draft'
+      )
+    }
+    if (kind === 'conflict') {
+      f.transport.read = async (name) =>
+        structuredClone(targets.find((t) => t.model_name === name)!)
+      assert.equal(await f.session.reconcileModels(['second', 'third']), true)
+    }
+    assert.equal(await f.session.saveBatch(targets, { ModelPrice: 0 }), false)
+    assert.equal(calls, 2)
+    f.session.select('kling-v1')
+    assert.equal(f.view().pricing?.ModelPrice, 0)
+    assert.equal(
+      f.view().dirty,
+      true,
+      'the operator source draft remains owned'
+    )
+  }
+})
+
 test('batch ambiguous writes reconcile independently and retain a blocked old target', async () => {
   const f = fixture()
   await f.session.refresh()

@@ -503,7 +503,8 @@ export class ModelPricingDraftSession {
     })
     for (const item of batch) {
       item.d.base = structuredClone(item.entry)
-      item.d.pricing = normalizePricing(pricing ?? item.entry.configured)
+      // Copied values belong to the pending write, not to an operator draft.
+      item.d.pricing = normalizePricing(item.entry.configured)
       item.d.texts = {}
       item.d.revision++
       this.documents.set(item.model, item.d)
