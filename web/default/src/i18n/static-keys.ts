@@ -26,6 +26,7 @@ export const STATIC_I18N_KEYS = [
   'plugin disabled or revoked',
   'channel disabled or mapped-target-only; quote its advertised alias',
   'source unavailable',
+  'configuration committed; local cache publication failed; reload authoritative pricing',
   // Header navigation
   'Home',
   'Console',

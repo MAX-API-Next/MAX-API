@@ -74,6 +74,33 @@ func TestFrozenTaskPlanVersionedRequestProbesRemainRejected(t *testing.T) {
 	}
 }
 
+func TestFrozenTaskPlanFreeGroupHasZeroReservation(t *testing.T) {
+	in := freezeFixture(t, fixtures(t)[1])
+	in.Prices.PluginBillingExpr[in.Source.PluginKey+"::"+in.OriginalModel] = `u("units") * 0.1`
+	in.Submit = types.TaskPricingFacts{"units": 4}
+	in.QuotaPerUnit, in.GroupRatio, in.ReservationFloor = 1000, 0, 700
+	plan, err := Freeze(in)
+	require.NoError(t, err)
+	t.Run("frozen-totals", func(t *testing.T) {
+		require.Zero(t, plan.EstimateQuota)
+		require.Zero(t, plan.ReserveQuota, "a free group must not apply the paid reservation floor")
+	})
+	// Set independent expected wire totals before replay, rather than treating
+	// Freeze's output as an oracle for its own validator or final quote.
+	plan.EstimateQuota, plan.ReserveQuota = 0, 0
+	wire, err := common.Marshal(plan)
+	require.NoError(t, err)
+	var restored types.TaskBillingPlan
+	require.NoError(t, common.Unmarshal(wire, &restored))
+	require.NoError(t, ValidateSnapshot(&restored))
+	final, err := QuoteFinal(&restored, finalFixture(&restored, types.TaskPricingFacts{"units": 2.5}))
+	require.NoError(t, err)
+	require.InDelta(t, 0.25, final.Amount, 1e-12)
+	require.Zero(t, final.QuotaAfterGroup)
+	restored.ReserveQuota = 700
+	require.Error(t, ValidateSnapshot(&restored), "a legacy nonzero floor cannot masquerade as a free-group snapshot")
+}
+
 func freezeFixture(t *testing.T, f sample) FreezeInput {
 	t.Helper()
 	in := previewInput(t, f)

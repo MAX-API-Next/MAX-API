@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "Cấu hình đã được lưu; phát hành bộ nhớ đệm cục bộ thất bại; hãy tải lại cấu hình giá từ nguồn có thẩm quyền",
     "unsupported host pricing contract": "Hợp đồng định giá của máy chủ không được hỗ trợ",
     "invalid channel model mapping": "Ánh xạ mô hình của kênh không hợp lệ",
     "no vetted host phase contract": "Chưa có hợp đồng giai đoạn của máy chủ được thẩm định",

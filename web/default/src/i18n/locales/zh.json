@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "配置已提交；本地缓存发布失败；请重新读取权威价格配置",
     "unsupported host pricing contract": "不支持的宿主计价合同",
     "invalid channel model mapping": "渠道模型映射无效",
     "no vetted host phase contract": "尚无已核验的宿主阶段合同",

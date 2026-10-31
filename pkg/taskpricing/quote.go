@@ -86,7 +86,8 @@ func ValidateExpressionContract(expression string, contract types.TaskFactContra
 
 // Preview composes the existing source resolver, contract validator and one
 // billing expression core. It applies the floor only to the complete estimate;
-// the final target uses actual facts with frozen request dimensions and terms.
+// free groups skip the floor. The final target uses actual facts with frozen
+// request dimensions and terms.
 func Preview(input PreviewInput) (PreviewResult, error) {
 	if input.Profile != NewAPITask {
 		return PreviewResult{}, fmt.Errorf("explicit task expression profile required")
@@ -125,7 +126,7 @@ func Preview(input PreviewInput) (PreviewResult, error) {
 		return PreviewResult{}, err
 	}
 	result := PreviewResult{Profile: NewAPITask, Source: input.Source, Selection: selected, ContractDigest: digest,
-		Estimate: estimate, ReservedQuota: max(input.ReservationFloor, estimate.QuotaAfterGroup)}
+		Estimate: estimate, ReservedQuota: reservationQuota(estimate.QuotaAfterGroup, input.GroupRatio, input.ReservationFloor)}
 	if input.Actual == nil {
 		return result, nil
 	}
@@ -141,4 +142,13 @@ func Preview(input PreviewInput) (PreviewResult, error) {
 	result.Final = &final
 	result.FinalMinusReserved = &delta
 	return result, nil
+}
+
+// A zero estimate may later have positive actual usage; only a free group is
+// exempt from the floor, consistently with the task relay's group-ratio gate.
+func reservationQuota(estimate int, groupRatio float64, floor int) int {
+	if groupRatio > 0 {
+		return max(floor, estimate)
+	}
+	return estimate
 }

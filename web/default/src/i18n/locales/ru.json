@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "Конфигурация сохранена; публикация локального кеша не удалась; загрузите актуальную конфигурацию цен из основного хранилища",
     "unsupported host pricing contract": "Неподдерживаемый контракт тарификации хоста",
     "invalid channel model mapping": "Недопустимое сопоставление модели канала",
     "no vetted host phase contract": "Нет проверенного контракта фаз хоста",

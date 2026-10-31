@@ -111,6 +111,37 @@ func TestTaskPreviewPhasePresenceAndZero(t *testing.T) {
 	}
 }
 
+func TestTaskPreviewReservationFloorRespectsFreeGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		group, submit float64
+		estimate      int
+		reserved      int
+		final, delta  int
+	}{
+		{"free-group", 0, 4, 0, 0, 0, 0},
+		{"paid-group", 1.5, 4, 600, 700, 375, -325},
+		{"zero-estimate-is-not-a-free-group", 1.5, 0, 0, 700, 375, -325},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := previewInput(t, fixtures(t)[1])
+			in.Prices.PluginBillingExpr[in.Source.PluginKey+"::"+in.OriginalModel] = `u("units") * 0.1`
+			in.Submit = types.TaskPricingFacts{"units": tc.submit}
+			in.Actual = types.TaskPricingFacts{"units": 2.5}
+			in.QuotaPerUnit, in.GroupRatio, in.ReservationFloor = 1000, tc.group, 700
+			view, err := Preview(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Independent constants: 4*.1*1000*1.5=600; 2.5*.1*1000*1.5=375.
+			// A zero group must reserve zero; a zero estimate can still incur a paid final.
+			if view.Estimate.QuotaAfterGroup != tc.estimate || view.ReservedQuota != tc.reserved || view.Final == nil || view.Final.QuotaAfterGroup != tc.final || view.FinalMinusReserved == nil || *view.FinalMinusReserved != tc.delta {
+				t.Fatalf("independent reservation contract mismatch: %+v", view)
+			}
+		})
+	}
+}
+
 func TestTaskPreviewStaticSchemaAndContextGuards(t *testing.T) {
 	f := fixtures(t)[1]
 	for _, mutate := range []func(*PreviewInput){

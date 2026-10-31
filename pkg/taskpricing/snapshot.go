@@ -165,7 +165,7 @@ func ValidateSnapshot(plan *types.TaskBillingPlan) error {
 	if err != nil {
 		return err
 	}
-	if plan.EstimateQuota != quote.QuotaAfterGroup || plan.ReserveQuota != max(p.ReservationFloor, quote.QuotaAfterGroup) {
+	if plan.EstimateQuota != quote.QuotaAfterGroup || plan.ReserveQuota != reservationQuota(quote.QuotaAfterGroup, plan.GroupRatio, p.ReservationFloor) {
 		return fmt.Errorf("frozen task totals do not match the expression")
 	}
 	return nil

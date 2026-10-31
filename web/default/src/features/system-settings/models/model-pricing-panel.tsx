@@ -128,7 +128,12 @@ export function ModelPricingPanel(props: {
             {t(
               'Database committed; local cache publication failed. This is not a rollback or proof of multi-node cutover.'
             )}{' '}
-            {d.warning}
+            {d.warning &&
+              t(d.warning, {
+                defaultValue: d.warning,
+                keySeparator: false,
+                nsSeparator: false,
+              })}
           </AlertDescription>
         </Alert>
       )}

@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "configuration committed; local cache publication failed; reload authoritative pricing",
     "unsupported host pricing contract": "unsupported host pricing contract",
     "invalid channel model mapping": "invalid channel model mapping",
     "no vetted host phase contract": "no vetted host phase contract",

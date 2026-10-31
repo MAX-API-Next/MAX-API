@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "設定はコミットされましたが、ローカルキャッシュの公開に失敗しました。正規の価格設定を再読み込みしてください",
     "unsupported host pricing contract": "未対応のホスト料金契約",
     "invalid channel model mapping": "チャネルのモデルマッピングが無効です",
     "no vetted host phase contract": "検証済みのホストフェーズ契約がありません",

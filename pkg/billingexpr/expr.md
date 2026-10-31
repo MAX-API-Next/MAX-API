@@ -183,7 +183,7 @@ token expressions and deterministic scalar builtins keep their current behavior.
 amount = evaluateTaskExpression(validatedFacts, frozenRequest, PricingAt)
 quotaBeforeGroup = amount * QuotaPerUnit
 quotaAfterGroup = roundHalfAwayFromZero(quotaBeforeGroup * GroupRatio)
-reservedPreview = max(reservationFloor, completeEstimate.quotaAfterGroup)
+reservedPreview = GroupRatio > 0 ? max(reservationFloor, completeEstimate.quotaAfterGroup) : completeEstimate.quotaAfterGroup
 finalTargetPreview = finalQuote.quotaAfterGroup
 finalMinusReserved = finalTargetPreview - reservedPreview
 ```
@@ -194,7 +194,11 @@ non-negative GroupRatio; zero GroupRatio is explicit free pricing. Invalid
 facts, negative/non-finite results and int32 quota overflow return an error.
 Overflow is checked before the shared rounding helper so rejected previews do
 not silently clamp or emit saturation logs. The reservation floor applies once
-after the complete estimate, never to the final target.
+after the complete estimate, never to the final target. A zero group ratio
+skips the floor and reserves zero; a zero estimate in a paid group still uses
+the floor because actual usage may later be positive. This correction also
+applies to frozen snapshot validation; earlier snapshots with a nonzero
+reservation for a zero-ratio group are rejected for manual reconciliation.
 
 `pkg/taskpricing.Preview` composes source selection, contract/guard comparison,
 submit facts and final facts with this core. Nil final usage means **unknown**,

@@ -1,5 +1,6 @@
 {
   "translation": {
+    "configuration committed; local cache publication failed; reload authoritative pricing": "Configuration enregistrée ; échec de publication du cache local ; rechargez la tarification de référence",
     "unsupported host pricing contract": "Contrat de tarification hôte non pris en charge",
     "invalid channel model mapping": "Mappage du modèle de canal non valide",
     "no vetted host phase contract": "Aucun contrat de phase hôte validé",
