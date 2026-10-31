@@ -198,7 +198,11 @@ export function ModelPricingFields(props: {
         <Textarea
           aria-label={t('Full model JSON / import')}
           rows={10}
-          value={d.inputs?.$json ?? JSON.stringify(pricing, null, 2)}
+          value={
+            d.inputs?.$json ??
+            d.texts?.$json ??
+            JSON.stringify(pricing, null, 2)
+          }
           onChange={(e) => props.session.importPricing(e.target.value)}
         />
       </details>

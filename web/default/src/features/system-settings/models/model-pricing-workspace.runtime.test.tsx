@@ -556,6 +556,31 @@ test('typing decimal prices preserves every zero instead of turning 0.05 into 5'
   assert.equal(input.value, '0.05')
 })
 
+test('full JSON editing retains formatting through valid intermediate decimal input', async () => {
+  const f = setup()
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))
+  fireEvent.click(f.getByRole('button', { name: 'kling-v1' }))
+  await waitFor(() => assert.ok(f.queryByLabelText('Full model JSON / import')))
+  const input = f.getByLabelText(
+    'Full model JSON / import'
+  ) as HTMLTextAreaElement
+  for (const text of [
+    '{ "ModelPrice": 0. }',
+    '{ "ModelPrice": 0.0 }',
+    '{ "ModelPrice": 0.05 }',
+  ]) {
+    fireEvent.change(input, { target: { value: text } })
+    assert.equal(
+      input.value,
+      text,
+      'valid JSON is still editable text, not canonical display JSON'
+    )
+  }
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.ok(f.queryByText('Database commit acknowledged.')))
+  assert.equal(f.writes[0][0].pricing.ModelPrice, 0.05)
+})
+
 test('incomplete visible input survives refresh and switching models without permitting a save', async () => {
   const v = setup([entry(), entry('second')])
   await waitFor(() => assert.ok(v.getByRole('button', { name: 'kling-v1' })))

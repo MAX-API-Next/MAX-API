@@ -111,6 +111,68 @@ func TestModelPricingLegacyTieredReturnsOnlyChangedEntries(t *testing.T) {
 	require.Len(t, result.Entries, 1)
 	require.Equal(t, "changed", result.Entries[0].ModelName)
 }
+
+func TestModelPricingBillingMapsRejectNonStringsBeforeCommit(t *testing.T) {
+	for _, key := range []string{"billing_setting.billing_mode", "billing_setting.billing_expr", billing_setting.PluginBillingExprOption} {
+		for _, raw := range []string{`{"sample":1}`, `{"sample":null}`, `[]`} {
+			t.Run(key+raw, func(t *testing.T) {
+				db := setupModelPricingTest(t)
+				err := UpdateOption(key, raw)
+				require.Error(t, err)
+				var count int64
+				require.NoError(t, db.Model(&Option{}).Where(commonKeyCol+" = ?", key).Count(&count).Error)
+				require.Zero(t, count, "invalid string maps must not commit even if cache publication would reject them")
+			})
+		}
+	}
+}
+
+func TestModelPricingInvalidBillingEntryIsVisibleAndRepairable(t *testing.T) {
+	db := setupModelPricingTest(t)
+	require.NoError(t, db.Create(&Option{Key: "billing_setting.billing_expr", Value: `{"broken":1,"healthy":"p"}`}).Error)
+	require.NoError(t, db.Create(&Option{Key: "billing_setting.billing_mode", Value: `{"healthy":"tiered_expr"}`}).Error)
+	snapshot, err := GetModelPricingSnapshot([]string{"broken", "healthy"})
+	require.NoError(t, err)
+	require.Len(t, snapshot.Entries, 2)
+	require.NotEmpty(t, snapshot.Entries[0].ConfigurationError)
+	require.Empty(t, snapshot.Entries[1].ConfigurationError)
+	require.NotContains(t, snapshot.Entries[0].Configured, "billing_setting.billing_expr", "wrong-typed fields cannot break the strict read DTO")
+	require.Equal(t, `{"broken":1,"healthy":"p"}`, snapshot.Options["billing_setting.billing_expr"])
+	require.NoError(t, UpdateOption("billing_setting.billing_expr", `{"broken":"p * 2","healthy":"p"}`))
+	require.Empty(t, pricingEntryForTest(t, db, "broken").ConfigurationError)
+}
+
+func TestModelPricingRepairDoesNotCommitOrPublishUnrelatedInvalidBillingRow(t *testing.T) {
+	db := setupModelPricingTest(t)
+	require.NoError(t, db.Create(&Option{Key: "billing_setting.billing_expr", Value: `{"repair":1}`}).Error)
+	require.NoError(t, db.Create(&Option{Key: "billing_setting.billing_mode", Value: `{"other":false}`}).Error)
+	entry := pricingEntryForTest(t, db, "repair")
+	result, err := UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_expr": "p"})})
+	require.NoError(t, err)
+	require.True(t, result.Committed)
+	require.False(t, result.CachePublished, "unrelated corrupt runtime map still requires repair; never claim full publication")
+	require.Equal(t, "p", rawPricingObjectForTest(t, db, "billing_setting.billing_expr")["repair"])
+	require.Equal(t, false, rawPricingObjectForTest(t, db, "billing_setting.billing_mode")["other"])
+	require.Empty(t, pricingEntryForTest(t, db, "repair").ConfigurationError)
+	require.NotEmpty(t, pricingEntryForTest(t, db, "other").ConfigurationError)
+}
+
+func TestModelPricingMalformedPluginValuesKeepRawAuthorityAndRejectQuotes(t *testing.T) {
+	db := setupModelPricingTest(t)
+	channel := pricingChannelForTest(t, db, constant.ChannelTypeKling, "kling-v1")
+	require.NoError(t, db.Create(&Option{Key: billing_setting.PluginBillingExprOption, Value: `{"bad::kling-v1":1,"stale::kling-v1":"0"}`}).Error)
+	entry := pricingEntryForTest(t, db, "kling-v1")
+	require.NotEmpty(t, entry.ConfigurationError)
+	require.Equal(t, map[string]any{"stale": "0"}, entry.Configured[billing_setting.PluginBillingExprOption])
+	require.Equal(t, float64(1), rawPricingObjectForTest(t, db, billing_setting.PluginBillingExprOption)["bad::kling-v1"])
+	_, err := QuoteModelPricing(ModelPricingQuoteRequest{ModelName: "kling-v1", ContextID: fmt.Sprintf("channel:%d", channel.Id), ExpectedVersion: entry.Version, ExpectedContractDigest: entry.ContractDigest, ExpectedBindingVersion: entry.BindingVersion, Group: "default", Submit: types.TaskPricingFacts{"units": 1.0}})
+	require.Error(t, err, "projection sanitization cannot make corrupt authority quotable")
+	_, err = UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `u("units") * 0.1`})})
+	require.NoError(t, err)
+	after := pricingEntryForTest(t, db, "kling-v1")
+	require.NotEqual(t, entry.Version, after.Version, "guards must cover raw corrupt values, not only typed projection")
+	require.Empty(t, after.ConfigurationError)
+}
 func rawPricingObjectForTest(t *testing.T, db *gorm.DB, key string) map[string]any {
 	t.Helper()
 	var row Option

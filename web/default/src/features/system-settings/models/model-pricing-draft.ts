@@ -227,6 +227,9 @@ export class ModelPricingDraftSession {
     d.quote = undefined
   }
   replacePricing(pricing: ModelPricingValues) {
+    this.replaceDraftPricing(pricing)
+  }
+  private replaceDraftPricing(pricing: ModelPricingValues, jsonText?: string) {
     const [, d] = this.current()
     if (!d.base) throw new Error('Load authoritative pricing before editing')
     const next = normalizePricing(pricing)
@@ -238,6 +241,8 @@ export class ModelPricingDraftSession {
       )
         delete d.texts![key]
     }
+    if (jsonText !== undefined) d.texts = { $json: jsonText }
+    else if (d.texts) delete d.texts.$json
     d.pricing = next
     d.revision++
     this.invalidateSamples(d)
@@ -282,8 +287,7 @@ export class ModelPricingDraftSession {
       return false
     }
     d.inputs = {}
-    d.texts = {}
-    this.replacePricing(value)
+    this.replaceDraftPricing(value, text)
     return true
   }
   selectSource(source: string) {

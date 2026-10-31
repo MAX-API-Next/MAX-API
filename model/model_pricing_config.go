@@ -98,14 +98,12 @@ func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil || entries == nil {
 			return nil, fmt.Errorf("invalid model pricing object: %s", row.Key)
 		}
-		if strings.HasPrefix(row.Key, "billing_setting.") {
-			for _, value := range entries {
-				if _, ok := value.(string); !ok {
-					return nil, fmt.Errorf("invalid stored string pricing map: %s", row.Key)
-				}
+		// Legacy billing entry type errors belong to their model, so a valid
+		// replacement can repair them. Structural/DB errors still fail closed.
+		if !strings.HasPrefix(row.Key, "billing_setting.") {
+			if err := validateOptionUpdate(row.Key, row.Value); err != nil {
+				return nil, fmt.Errorf("invalid stored numeric pricing map: %s", row.Key)
 			}
-		} else if err := validateOptionUpdate(row.Key, row.Value); err != nil {
-			return nil, fmt.Errorf("invalid stored numeric pricing map: %s", row.Key)
 		}
 		values[row.Key] = entries
 	}
@@ -292,11 +290,11 @@ func mutateModelPricingWithPublisher(db *gorm.DB, mutate func(pricingMaps, *pric
 			if len(encoded) > 2*1024*1024 {
 				return errors.New("pricing option exceeds authority read size limit")
 			}
-			if err := validateOptionUpdate(key, string(encoded)); err != nil {
-				return err
-			}
 			if pricingDigest(prior[key]) == pricingDigest(values[key]) {
 				continue
+			}
+			if err := validateOptionUpdate(key, string(encoded)); err != nil {
+				return err
 			}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&Option{Key: key, Value: string(encoded)}).Error; err != nil {
 				return err

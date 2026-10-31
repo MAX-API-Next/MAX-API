@@ -334,7 +334,37 @@ func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string
 		}
 	}
 	sort.Slice(entry.PluginVariants, func(i, j int) bool { return entry.PluginVariants[i].ID < entry.PluginVariants[j].ID })
+	// Read DTOs stay typed even when historical billing rows are corrupt. The
+	// error is explicit; snapshot.Options and the equality token retain raw data.
+	if omitInvalidBillingValues(entry.Configured) {
+		entry.ConfigurationError += "; invalid stored billing values omitted from editable projection; raw values remain in options"
+	}
+	omitInvalidBillingValues(entry.Effective)
 	return entry
+}
+
+func omitInvalidBillingValues(values types.ModelPricingValues) bool {
+	omitted := false
+	for _, key := range []string{"billing_setting.billing_mode", "billing_setting.billing_expr"} {
+		if value, exists := values[key]; exists {
+			if _, ok := value.(string); !ok {
+				delete(values, key)
+				omitted = true
+			}
+		}
+	}
+	if variants, ok := values[billing_setting.PluginBillingExprOption].(map[string]any); ok {
+		for key, value := range variants {
+			if _, ok := value.(string); !ok {
+				delete(variants, key)
+				omitted = true
+			}
+		}
+		if len(variants) == 0 {
+			delete(values, billing_setting.PluginBillingExprOption)
+		}
+	}
+	return omitted
 }
 func taskPriceMaps(values pricingMaps) types.TaskPricingMaps {
 	result := types.TaskPricingMaps{BillingMode: map[string]string{}, BillingExpr: map[string]string{}, PluginBillingExpr: map[string]string{}}

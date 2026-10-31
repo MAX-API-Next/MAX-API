@@ -181,7 +181,11 @@ function PricingWorkspace(props: {
               onClick={() => {
                 void draft.session
                   .reconcileModels(draft.blockedModels)
-                  .catch((e) => setError(String(e)))
+                  .catch((e) =>
+                    setError(
+                      e instanceof Error ? e.message : t('Request failed')
+                    )
+                  )
               }}
             >
               {t('Recheck unresolved writes')}
