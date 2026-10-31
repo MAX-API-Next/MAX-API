@@ -655,6 +655,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		if terminalDecision.UsesPlan && task.PrivateData.BillingContext != nil {
 			task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(terminalDecision.Usage)
 			task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(terminalDecision.UsageEnvelope)
+			task.PrivateData.BillingContext.PricingUsageEnvelope = types.CloneTaskPricingUsageEnvelope(terminalDecision.PricingUsageEnvelope)
 			persistPendingTaskTerminalEvidence(task, taskResult, time.Now().Unix())
 			won, intentErr := task.UpdateWithStatusAndSettlementIntent(snap.Status, expectedUpdatedAt, *terminalDecision.Settlement)
 			if intentErr != nil {
@@ -977,6 +978,7 @@ func recoverManualTaskBillingSettlement(
 		candidate.PrivateData.BillingContext = &billingContext
 		candidate.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
 		candidate.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
+		candidate.PrivateData.BillingContext.PricingUsageEnvelope = types.CloneTaskPricingUsageEnvelope(decision.PricingUsageEnvelope)
 	}
 	persistPendingTaskTerminalEvidence(&candidate, providerResult, time.Now().Unix())
 	won, err := candidate.UpdateWithStatusAndPendingTerminalEvidence(fromStatus, expectedUpdatedAt)
@@ -987,9 +989,8 @@ func recoverManualTaskBillingSettlement(
 		return false, nil
 	}
 	*task = candidate
-	const h3UsageManualReasonPrefix = "H3 terminal usage requires manual reconciliation:"
-	recoveryNote := "H3 task settlement automatically recovered after a complete provider usage response"
-	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, h3UsageManualReasonPrefix, recoveryNote)
+	usageManualReasonPrefix, recoveryNote := taskUsageRecoveryReason(task)
+	ready, err := model.PromoteManualTaskBillingSettlement(*decision.Settlement, usageManualReasonPrefix, recoveryNote)
 	if errors.Is(err, model.ErrBillingSettlementOperationConflict) {
 		// A different manual reason or a concurrent/permanent recovery failure
 		// must remain operator-gated; do not turn that durable state into a
@@ -1015,6 +1016,7 @@ func persistTaskManualBillingDecision(task *model.Task, fromStatus model.TaskSta
 	task.Status = fromStatus
 	task.PrivateData.BillingContext.TaskUsage = types.CloneTaskUsage(decision.Usage)
 	task.PrivateData.BillingContext.TaskUsageEnvelope = types.CloneTaskUsageEnvelope(decision.UsageEnvelope)
+	task.PrivateData.BillingContext.PricingUsageEnvelope = types.CloneTaskPricingUsageEnvelope(decision.PricingUsageEnvelope)
 	task.UpdatedAt = time.Now().Unix()
 	return task.UpdateWithStatusAndManualSettlement(fromStatus, expectedUpdatedAt, *decision.Settlement, decision.ManualReason)
 }

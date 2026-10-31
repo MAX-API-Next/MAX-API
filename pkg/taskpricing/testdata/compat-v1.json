@@ -1,0 +1,90 @@
+{
+  "fixture_version": 1,
+  "provenance": {
+    "repository": "https://github.com/QuantumNous/new-api",
+    "commit": "a2defd2a8256abe039e5295bd583aeb2d02f111f",
+    "files": ["model/model_pricing_config.go", "setting/billing_setting/tiered_billing.go", "pkg/jsplugin/registry.go", "plugins/tasks/hailuo/plugin.js", "plugins/tasks/kling/plugin.js", "plugins/tasks/doubao/plugin.js"],
+    "note": "Schemas reference upstream; bounds, phases and all currency prices are synthetic MAX host fixtures, not published provider tariffs. No plugin JS or financial path runs here."
+  },
+  "profiles": [
+    {
+      "id": "hailuo-h3", "plugin_key": "hailuo", "models": ["MiniMax-H3"],
+      "contract": {
+        "version": 1,
+        "usage_schema": {
+          "seconds": {"type": "number", "unit": "second"},
+          "resolution": {"enum": ["768P", "2K"], "description": {"en": "Output resolution"}},
+          "input_images": {"type": "number", "unit": "count"},
+          "input_video_seconds": {"type": "number", "unit": "second"}
+        },
+        "field_policy": {
+          "seconds": {"phase": "actual", "required": true, "min": 4, "max": 15},
+          "resolution": {"phase": "request", "required": true},
+          "input_images": {"phase": "actual", "required": true, "max": 20, "integer": true},
+          "input_video_seconds": {"phase": "actual", "required": true, "max": 15}
+        }
+      },
+      "expression": "u(\"seconds\") * 0.08 + u(\"input_video_seconds\") * 0.04 + max(u(\"input_images\") - 2, 0) * 0.02",
+      "submit": {"seconds": 5, "resolution": "768P", "input_images": 3, "input_video_seconds": 15},
+      "actual": {"seconds": 5, "input_images": 3, "input_video_seconds": 7.5},
+      "expected": {"submit_usd": 1.02, "final_usd": 0.72, "quota_per_unit": 1000, "group_ratio": 1, "floor": 1200, "reserved": 1200, "target": 720, "refund": 480}
+    },
+    {
+      "id": "kling-credit", "plugin_key": "kling", "models": ["kling-v1", "kling-v1-6", "kling-v2-master"],
+      "contract": {
+        "version": 1,
+        "usage_schema": {"units": {"type": "number", "unit": "credit"}},
+        "field_policy": {"units": {"phase": "actual", "required": true, "max": 10000}}
+      },
+      "expression": "u(\"units\") * 0.1",
+      "submit": {"units": 1}, "actual": {"units": 0.6},
+      "expected": {"submit_usd": 0.1, "final_usd": 0.06, "quota_per_unit": 1000, "group_ratio": 1, "floor": 0, "reserved": 100, "target": 60, "refund": 40}
+    },
+    {
+      "id": "seedance-1.5-audio", "plugin_key": "doubao", "models": ["doubao-seedance-1-5-pro-251215"],
+      "contract": {
+        "version": 1,
+        "usage_schema": {
+          "tokens": {"type": "number", "unit": "token"},
+          "resolution": {"enum": ["480p", "720p", "1080p"]},
+          "generate_audio": {"type": "boolean"}
+        },
+        "field_policy": {
+          "tokens": {"phase": "actual", "required": true, "min": 1, "max": 1000000000, "integer": true},
+          "resolution": {"phase": "request", "required": true},
+          "generate_audio": {"phase": "request", "required": true}
+        }
+      },
+      "expression": "u(\"tokens\") / 1000000 * (u(\"generate_audio\") ? 4 : 2)",
+      "submit": {"tokens": 4000000, "resolution": "720p", "generate_audio": false}, "actual": {"tokens": 2000000},
+      "expected": {"submit_usd": 8, "final_usd": 4, "quota_per_unit": 1000, "group_ratio": 1, "floor": 0, "reserved": 8000, "target": 4000, "refund": 4000}
+    },
+    {
+      "id": "seedance-2-video", "plugin_key": "doubao", "models": ["doubao-seedance-2-0-260128"],
+      "contract": {
+        "version": 1,
+        "usage_schema": {
+          "tokens": {"type": "number", "unit": "token"},
+          "resolution": {"enum": ["480p", "720p", "1080p", "4k"]},
+          "video_input": {"enum": ["none", "video"]}
+        },
+        "field_policy": {
+          "tokens": {"phase": "actual", "required": true, "min": 1, "max": 1000000000, "integer": true},
+          "resolution": {"phase": "request", "required": true},
+          "video_input": {"phase": "request", "required": true}
+        }
+      },
+      "expression": "u(\"tokens\") / 1000000 * (u(\"video_input\") == \"video\" ? 2 : 3)",
+      "submit": {"tokens": 3000000, "resolution": "4k", "video_input": "video"}, "actual": {"tokens": 2000000},
+      "expected": {"submit_usd": 6, "final_usd": 4, "quota_per_unit": 1000, "group_ratio": 2, "floor": 0, "reserved": 12000, "target": 8000, "refund": 4000}
+    }
+  ],
+  "support_boundary": {
+    "kling_not_in_reference_plugin": ["kling-v2.6", "kling-v3", "kling-v3-omni", "kling-video-o1"],
+    "legacy_rows": {"seconds": 5, "unit_quota": 1200, "fixed_target": 6000, "not_equivalent_to_actual_credit_target": 60}
+  },
+  "patch_cases": [
+    {"model_name": "kling-v1", "expected_version": "price-v1", "pricing": {"billing_setting.plugin_billing_expr": {"kling": "0"}, "ModelPrice": 0}, "reset": false, "expected_contract_digest": "contract-v1", "expected_binding_version": "binding-v1"},
+    {"model_name": "kling-v1", "expected_version": "price-v1", "pricing": {}}
+  ]
+}

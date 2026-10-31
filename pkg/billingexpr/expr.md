@@ -133,6 +133,103 @@ These are parsed and applied separately by the request rule system.
 
 ---
 
+## Task expressions: explicit `new-api-task@1` profile
+
+The token path above remains v1: `exprOutput / 1,000,000 * QuotaPerUnit`.
+Task pricing uses the same compiler/runtime through `QuoteTaskExpression`, but
+requires the explicit `new-api-task@1` profile and interprets the output as a
+**total currency amount**. A `v1:` syntax prefix alone never switches semantics.
+Task programs have a separate cache namespace. The token compiler still rejects
+`u()`; no legacy channel/task is activated or migrated by this addition.
+
+```text
+u("tokens") / 1000000 * (u("video_input") == "video" ? 2 : 3)
+u("units") * 0.1
+```
+
+`u("key")` reads host-validated scalar facts (normalized float64, boolean or
+enum string). It has no default value: a missing evaluated key is an error,
+while explicit zero and false are retained. `TaskUsageKeys` inspects the parsed
+tree **before optimization**, including unreachable branches. The host checks
+every referenced key against the selected model/source schema using
+`taskpricing.ValidateExpressionContract`. Dynamic keys, indirect/aliased `u`,
+`$env`, `fixed()` and implicit token variables such as `p`/`c` are rejected in
+task expressions. This is deliberately stricter than upstream's omission of
+dynamic usage references. An optional declared fact can be absent if not
+evaluated; a final-required fact must always be supplied under its contract.
+
+`TaskQuoteInput` requires an explicit `PricingAt`. All task time helpers use
+that instant (empty/invalid timezone falls back to UTC); they do not read the
+wall clock. Request probes retain the existing positive allowlist. The host
+must retain this time and the relevant request metadata with future task plans.
+The current token clock/allowlist behavior is unchanged.
+
+Task helpers reject the special Go timezone `Local`, including surrounding
+whitespace. Unlike an explicit IANA zone, `Local` depends on each node's system
+configuration and cannot be reproduced from PricingAt alone. Direct literal
+arguments are checked before optimization (even in hidden branches); computed
+arguments are checked at runtime and return a quote error, not a zero price.
+Empty/invalid zone fallback and the legacy token path retain their existing
+behavior. Explicit IANA zones still require consistent timezone-rule data on
+deployment nodes; the isolated tests do not certify that environment condition.
+
+The task profile also rejects Expr's `now()`, `date()` and `timezone()` builtins
+before optimization, including hidden branches. These time-object factories
+can read the wall clock or expose methods such as `.Local()` that bypass the
+frozen scalar helpers. This restriction applies only to task prices; existing
+token expressions and deterministic scalar builtins keep their current behavior.
+
+```text
+amount = evaluateTaskExpression(validatedFacts, frozenRequest, PricingAt)
+quotaBeforeGroup = amount * QuotaPerUnit
+quotaAfterGroup = roundHalfAwayFromZero(quotaBeforeGroup * GroupRatio)
+reservedPreview = max(reservationFloor, completeEstimate.quotaAfterGroup)
+finalTargetPreview = finalQuote.quotaAfterGroup
+finalMinusReserved = finalTargetPreview - reservedPreview
+```
+
+Task prices are not divided by a million again and do not apply legacy
+`OtherRatios`. Conversion requires finite positive QuotaPerUnit and finite
+non-negative GroupRatio; zero GroupRatio is explicit free pricing. Invalid
+facts, negative/non-finite results and int32 quota overflow return an error.
+Overflow is checked before the shared rounding helper so rejected previews do
+not silently clamp or emit saturation logs. The reservation floor applies once
+after the complete estimate, never to the final target.
+
+`pkg/taskpricing.Preview` composes source selection, contract/guard comparison,
+submit facts and final facts with this core. Nil final usage means **unknown**,
+not zero. Only frozen request-phase facts are inherited; final-required actual
+facts cannot reuse estimates. A positive finalMinusReserved only reports a
+funding gap; it does not authorize a debit or prove a reservation upper bound.
+
+These functions are pure calculations. They do not read prices from a database,
+check real cache freshness, invoke a provider, persist a TaskBillingPlan or
+reserve/settle funds. Current/expected guard equality alone is not a DB CAS.
+The model API/transaction/editor caller and paid task admission remain
+separate implementation stages. H3/Kling/Seedance fixtures now invoke this core;
+their expected amounts remain independently derived integer/rational constants.
+
+`taskpricing.Freeze` now produces a serializable expression branch of the existing
+`TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
+actual producer/package/channel/request/action identity, price/contract/binding
+versions, full semantic fact contract, submit facts, pricing instant, currency,
+quota conversion, group ratio, floor and rounding version. It is pure and does
+not prove authoritative reads or a provider exposure bound. Its current caller
+is an isolated task harness; the production submit gate rejects the new profile.
+
+Frozen plans reject `param` and `header` dependencies before optimization,
+including dead branches: they must be represented as declared request-phase
+facts for this slice. Read-only configuration previews retain their existing
+request-probe behavior. No raw request body or credentials are persisted in the
+new snapshot. Completion uses the frozen contract and a host-owned typed
+`TaskPricingUsageEnvelope` matching producer package version/digest, channel,
+request/action and contract; it never turns fractional credits into tokens or
+reuses missing actual usage from the estimate. Missing/incompatible evidence or
+a final target above actual reservation stays pollable under manual settlement.
+Existing durable task intents/funding/effects remain the sole accounting path;
+an explicit zero target and a zero delta still complete that lifecycle. Old H3
+plans without a profile retain their existing validator and component pricing.
+
 ## Architecture
 
 ### Data Flow
@@ -247,6 +344,90 @@ Version controls:
 This enables future evolution without breaking existing expressions.
 
 ---
+
+## Model pricing management API
+
+Root-only routes under `/api/option/model_pricing` provide GET, PATCH,
+POST `/preview`, and POST `/quote`. Prices remain in the existing Option maps;
+`billing_setting.plugin_billing_expr` stores `pluginKey::model` overrides.
+These routes do not install an executor or activate a task pricing profile.
+The first `::` separates the plugin key from the complete model name; plugin
+keys cannot contain `::`, while model names can.
+
+A task-only `u()` default cannot replace a shared model default while a channel
+advertises that model without a known Go task contract, including disabled or
+unverified channels. Saving and previewing such a draft fail before publication;
+retain its legacy default and use a plugin override or a distinct task alias.
+This is a configuration-time compatibility check, not a task executor or a
+guarantee against later incompatible channel/catalog edits. Those edits require
+revalidation; diagnosed drift is not permission for paid admission.
+
+PATCH accepts `changes[]` with a model name, `expected_version`,
+`expected_contract_digest`, `expected_binding_version`, and `pricing`.
+Each pricing object replaces that model's complete configuration; submit only
+dirty models but retain their unchanged fields. An omitted field removes the
+override; a numeric `0` or expression `"0"` is explicit zero. `reset: true`
+restores the compiled model defaults. All changes validate and commit together.
+Equality-token conflicts return 409. Tokens include inherited alias/mapped price
+dependencies and host schema/binding metadata, and cannot be sorted as revisions.
+
+Preview returns the authoritative base `version` separately from `draft_version`;
+it never saves its candidate. Quote selects a server-issued `context_id` and
+checks all three base guards. The outer `contract_digest` covers model contexts;
+`preview.contract_digest` identifies the single selected fact contract. Group
+ratio/floor come from database configuration and quota conversion from the node's
+server context; clients cannot supply arbitrary multipliers. The quote exposes
+those terms, its evaluation time, selected expression and resulting amounts.
+
+Quotes are configuration samples with `admission_ready: false`, not request
+admission, provider validation, reservation-bound certification or actual charges.
+They exclude user-specific group overrides. `pricing_at` only controls this
+read-only sample; real task submission must freeze host-issued terms independently.
+Known Go source contracts are intentionally finite. A plugin schema supports
+schema-checked editing but does not establish phase semantics: without a vetted
+host phase contract, plugin quoting fails even if its key resembles a known provider.
+
+Writes use an internal coordination row in the existing options table; it is
+not another price/version store. Only changed price maps are persisted. Successful
+responses distinguish `committed` from `cache_published`; a failed local cache
+publication does not roll back the committed database state. After a lost response,
+reread authoritative configuration instead of blindly overwriting it. Neither
+local cache publication nor a successful save proves immediate multi-node cutover.
+
+Legacy Option/tiered-editor writes share the transaction. Unversioned writes that
+would create or change protected task expressions/plugin prices are rejected; unrelated
+legacy prices remain editable. Deploy this protection only with the compatible
+model-price editor. Read-only preview/quote retain RootAuth and do not create
+management/consumption logs or business writes.
+
+The model-price settings page uses **Model and source pricing** for guarded,
+per-model editing. It keeps a complete `configured` draft, including unshown
+plugin overrides, rather than saving the `effective` projection. Empty numeric
+inputs remove overrides; `0` stays explicit. A plugin expression left empty
+inherits the default, while `"0"` is a configured zero expression. Stored
+effective values describe the saved entry; configuration preview describes a
+candidate and never installs an executor. The full-model JSON editor replaces
+only that model's draft and requires explicit save.
+
+Copy/reset of selected models uses one atomic PATCH with each model's observed
+guards. Dirty target drafts must be resolved before batch replacement. After an
+ambiguous write, the editor rereads each model independently without replaying
+the PATCH. A lost reset receipt cannot establish its compiled target from an
+ordinary read, so it remains unresolved until an explicit operator decision.
+Adopting a server snapshot discards local work; it cannot prove an older request
+failed or will not finish later. Cache publication failure is shown separately
+from an acknowledged database commit. Successful writes invalidate management
+and public price queries; this does not certify cache cutover on every node.
+Returning from legacy tools rereads the active model without rebasing a dirty
+draft. Legacy price writes invalidate guarded price queries as well; settings
+refresh preserves dirty fields in the existing legacy forms.
+
+**Legacy price tools** retain the existing token/fixed-price editors and Option
+semantics; they do not gain guarded task writes. Protected task expressions and
+plugin overrides must use the new per-model entry. Legacy task rate cards,
+including structured MiniMax rules, remain separately configured for their
+existing execution profiles. They are not automatically converted, added to,
+or selected together with the new task-expression profile by this UI.
 
 ## File Map
 

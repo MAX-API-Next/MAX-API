@@ -36,6 +36,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { resetModelRatios } from '../api'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { acknowledgePriceField } from './acknowledge-price-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
@@ -370,21 +371,24 @@ export function RatioSettingsCard({
     }
     setSavedModelValues(modelNormalizedDefaults.current)
 
-    modelForm.reset({
-      ...modelDefaults,
-      ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
-      ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
-      CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
-      CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
-      CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
-      ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
-      AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
-      AudioCompletionRatio: formatJsonForTextarea(
-        modelDefaults.AudioCompletionRatio
-      ),
-      BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
-      BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
-    })
+    modelForm.reset(
+      {
+        ...modelDefaults,
+        ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
+        ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
+        CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
+        CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
+        CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
+        ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
+        AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
+        AudioCompletionRatio: formatJsonForTextarea(
+          modelDefaults.AudioCompletionRatio
+        ),
+        BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
+        BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
+      },
+      { keepDirtyValues: true }
+    )
   }, [modelDefaults, modelForm])
 
   useEffect(() => {
@@ -404,21 +408,24 @@ export function RatioSettingsCard({
       ),
     }
 
-    groupForm.reset({
-      ...groupDefaults,
-      GroupRatio: formatJsonForTextarea(groupDefaults.GroupRatio),
-      TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
-      UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
-      GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
-      AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
-      AutoGroupRoutes: formatAutoGroupRoutesForTextarea(
-        groupDefaults.AutoGroupRoutes,
-        groupDefaults.AutoGroups
-      ),
-      GroupSpecialUsableGroup: formatJsonForTextarea(
-        groupDefaults.GroupSpecialUsableGroup
-      ),
-    })
+    groupForm.reset(
+      {
+        ...groupDefaults,
+        GroupRatio: formatJsonForTextarea(groupDefaults.GroupRatio),
+        TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
+        UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
+        GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
+        AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
+        AutoGroupRoutes: formatAutoGroupRoutesForTextarea(
+          groupDefaults.AutoGroupRoutes,
+          groupDefaults.AutoGroups
+        ),
+        GroupSpecialUsableGroup: formatJsonForTextarea(
+          groupDefaults.GroupSpecialUsableGroup
+        ),
+      },
+      { keepDirtyValues: true }
+    )
   }, [groupDefaults, groupForm])
 
   const saveModelRatios = useCallback(
@@ -455,13 +462,26 @@ export function RatioSettingsCard({
 
       for (const key of updates) {
         const apiKey = apiKeyMap[key as string] || (key as string)
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+        // The mutation hook reports failures; only explicit success clears dirtiness.
+        const response = await updateOption
+          .mutateAsync({ key: apiKey, value: normalized[key] })
+          .catch(() => null)
+        if (!response?.success) return
+        const confirmed =
+          typeof normalized[key] === 'string'
+            ? formatJsonForTextarea(normalized[key])
+            : normalized[key]
+        acknowledgePriceField(modelForm, key, values[key], confirmed)
+        Object.assign(modelNormalizedDefaults.current, {
+          [key]: normalized[key],
+        })
+        setSavedModelValues((previous) => ({
+          ...previous,
+          [key]: normalized[key],
+        }))
       }
-
-      modelNormalizedDefaults.current = normalized
-      setSavedModelValues(normalized)
     },
-    [t, updateOption]
+    [t, updateOption, modelForm]
   )
 
   const saveGroupRatios = useCallback(
@@ -506,10 +526,21 @@ export function RatioSettingsCard({
 
       for (const key of updates) {
         const apiKey = apiKeyMap[key] || key
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+        const response = await updateOption
+          .mutateAsync({ key: apiKey, value: normalized[key] })
+          .catch(() => null)
+        if (!response?.success) return
+        const confirmed =
+          typeof normalized[key] === 'string'
+            ? formatJsonForTextarea(normalized[key])
+            : normalized[key]
+        acknowledgePriceField(groupForm, key, values[key], confirmed)
+        Object.assign(groupNormalizedDefaults.current, {
+          [key]: normalized[key],
+        })
       }
     },
-    [t, updateOption]
+    [t, updateOption, groupForm]
   )
 
   const handleResetRatios = useCallback(() => {

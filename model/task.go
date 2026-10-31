@@ -165,17 +165,18 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice              float64                  `json:"model_price,omitempty"`  // 模型单价
-	GroupRatio              float64                  `json:"group_ratio,omitempty"`  // 分组倍率
-	ModelRatio              float64                  `json:"model_ratio,omitempty"`  // 模型倍率
-	OtherRatios             map[string]float64       `json:"other_ratios,omitempty"` // 附加倍率（时长、分辨率等）
-	TaskBilling             *types.TaskBillingResult `json:"task_billing,omitempty"`
-	TaskBillingPlan         *types.TaskBillingPlan   `json:"task_billing_plan,omitempty"`
-	TaskUsage               *types.TaskUsage         `json:"task_usage,omitempty"`
-	TaskUsageEnvelope       *types.TaskUsageEnvelope `json:"task_usage_envelope,omitempty"`
-	OriginModelName         string                   `json:"origin_model_name,omitempty"`         // 模型名称，必须为OriginModelName
-	PerCallBilling          bool                     `json:"per_call_billing,omitempty"`          // 按次计费：跳过轮询阶段的差额结算
-	DeltaSettlementDisabled *bool                    `json:"delta_settlement_disabled,omitempty"` // 渠道关闭完成态差额结算时按提交快照跳过
+	ModelPrice              float64                         `json:"model_price,omitempty"`  // 模型单价
+	GroupRatio              float64                         `json:"group_ratio,omitempty"`  // 分组倍率
+	ModelRatio              float64                         `json:"model_ratio,omitempty"`  // 模型倍率
+	OtherRatios             map[string]float64              `json:"other_ratios,omitempty"` // 附加倍率（时长、分辨率等）
+	TaskBilling             *types.TaskBillingResult        `json:"task_billing,omitempty"`
+	TaskBillingPlan         *types.TaskBillingPlan          `json:"task_billing_plan,omitempty"`
+	TaskUsage               *types.TaskUsage                `json:"task_usage,omitempty"`
+	TaskUsageEnvelope       *types.TaskUsageEnvelope        `json:"task_usage_envelope,omitempty"`
+	PricingUsageEnvelope    *types.TaskPricingUsageEnvelope `json:"pricing_usage_envelope,omitempty"`
+	OriginModelName         string                          `json:"origin_model_name,omitempty"`         // 模型名称，必须为OriginModelName
+	PerCallBilling          bool                            `json:"per_call_billing,omitempty"`          // 按次计费：跳过轮询阶段的差额结算
+	DeltaSettlementDisabled *bool                           `json:"delta_settlement_disabled,omitempty"` // 渠道关闭完成态差额结算时按提交快照跳过
 }
 
 func (t *Task) DeltaSettlementDisabledForChannel(channelType int, channelSettings ...dto.ChannelOtherSettings) bool {
