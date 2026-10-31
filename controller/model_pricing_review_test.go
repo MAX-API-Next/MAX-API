@@ -100,3 +100,36 @@ func TestModelPricingReviewLegacyTieredHTTPRejectsFirstTaskPrice(t *testing.T) {
 }
 
 func stringPointerForPricingReview(s string) *string { return &s }
+
+func TestModelPricingReviewRejectedLegacyRatiosPreserveCommittedCache(t *testing.T) {
+	for _, cache := range []struct {
+		key string
+		get func() string
+	}{
+		{"ImageRatio", ratio_setting.ImageRatio2JSONString},
+		{"AudioRatio", ratio_setting.AudioRatio2JSONString},
+		{"AudioCompletionRatio", ratio_setting.AudioCompletionRatio2JSONString},
+		{"CreateCacheRatio", ratio_setting.CreateCacheRatio2JSONString},
+	} {
+		t.Run(cache.key, func(t *testing.T) {
+			engine := setupModelPricingControllerTest(t)
+			require.NoError(t, model.DB.Create(&model.Channel{Type: constant.ChannelTypeKling, Status: 1, Models: "kling-v1", Group: "default", Key: "synthetic"}).Error)
+			entry := pricingControllerEntry(t, engine, "kling-v1")
+			draft := types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `u("units") * 0.1`, cache.key: float64(2)}
+			response := pricingControllerRequest(t, engine, http.MethodPatch, "/pricing", map[string]any{"changes": []types.ModelPricingChange{controllerPricingChange(entry, draft)}})
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var stored model.Option
+			require.NoError(t, model.DB.Where("key = ?", cache.key).First(&stored).Error)
+			before := cache.get()
+			response = pricingControllerRequest(t, engine, http.MethodPut, "/option", map[string]any{"key": cache.key, "value": `{"kling-v1":9}`})
+			require.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+			var after model.Option
+			require.NoError(t, model.DB.Where("key = ?", cache.key).First(&after).Error)
+			require.Equal(t, stored.Value, after.Value, "a rejected legacy save must not change the database")
+			var committedCache map[string]float64
+			require.NoError(t, common.UnmarshalJsonStr(before, &committedCache))
+			require.Equal(t, float64(2), committedCache["kling-v1"])
+			require.JSONEq(t, before, cache.get(), "billing must retain the committed ratio after a rejected save")
+		})
+	}
+}

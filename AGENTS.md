@@ -137,7 +137,7 @@ Before changing expression syntax, evaluation, normalization, quote conversion, 
 
 ### Rule 8: Process Documents — Keep Them Under `.tmp/`
 
-Keep repository-local process evidence under `.tmp/`. Workspace R&D plans explicitly maintained in `../../Agentic_Engineering/projects/MAX-API/` are an authorized exception and remain canonical there.
+Keep repository-local process evidence under `.tmp/`. Authorized exceptions are the canonical workspace R&D plans in `../../Agentic_Engineering/projects/MAX-API/` and the private upstream synchronization records/state in `.agents/upstream-sync/` required by Rule 9.
 
 This includes investigation notes, review outputs, scratch plans, working drafts, temporary release-note or PR-copy drafts, one-off deployment notes, private operation notes, temporary diff or patch files, and any document that records internal work process rather than public project documentation.
 

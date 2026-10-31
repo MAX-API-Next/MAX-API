@@ -72,6 +72,45 @@ func pricingEntryForTest(t *testing.T, db *gorm.DB, name string) ModelPricingEnt
 func pricingChangeForTest(entry ModelPricingEntry, values types.ModelPricingValues) types.ModelPricingChange {
 	return types.ModelPricingChange{ModelName: entry.ModelName, ExpectedVersion: entry.Version, ExpectedContractDigest: entry.ContractDigest, ExpectedBindingVersion: entry.BindingVersion, Pricing: values}
 }
+
+func TestModelPricingLegacyFullMapReturnsOnlyChangedEntries(t *testing.T) {
+	setupModelPricingTest(t)
+	_, err := updateModelPricingOptions(map[string]string{"ModelPrice": `{"unchanged":2,"changed":3}`})
+	require.NoError(t, err)
+	result, err := updateModelPricingOptions(map[string]string{"ModelPrice": `{"unchanged":2,"changed":0,"added":4}`})
+	require.NoError(t, err)
+	names := []string{}
+	for _, entry := range result.Entries {
+		names = append(names, entry.ModelName)
+	}
+	require.Equal(t, []string{"added", "changed"}, names)
+	result, err = updateModelPricingOptions(map[string]string{"ModelPrice": `{"unchanged":2,"changed":0,"added":4}`})
+	require.NoError(t, err)
+	require.Empty(t, result.Entries, "an unchanged full-map save needs no entry projection")
+}
+
+func TestModelPricingLegacyTieredReturnsOnlyChangedEntries(t *testing.T) {
+	setupModelPricingTest(t)
+	config := map[string]LegacyTieredPricingItem{
+		"unchanged": {Enabled: true, Expr: "p"},
+		"changed":   {Enabled: true, Expr: "p * 2"},
+	}
+	_, err := updateLegacyTieredPricing(config)
+	require.NoError(t, err)
+	config["changed"] = LegacyTieredPricingItem{Enabled: true, Expr: "p * 3"}
+	result, err := updateLegacyTieredPricing(config)
+	require.NoError(t, err)
+	require.Len(t, result.Entries, 1)
+	require.Equal(t, "changed", result.Entries[0].ModelName)
+	result, err = updateLegacyTieredPricing(config)
+	require.NoError(t, err)
+	require.Empty(t, result.Entries)
+	delete(config, "changed")
+	result, err = updateLegacyTieredPricing(config)
+	require.NoError(t, err)
+	require.Len(t, result.Entries, 1)
+	require.Equal(t, "changed", result.Entries[0].ModelName)
+}
 func rawPricingObjectForTest(t *testing.T, db *gorm.DB, key string) map[string]any {
 	t.Helper()
 	var row Option

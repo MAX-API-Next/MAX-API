@@ -8,6 +8,13 @@ import type {
   PricingDraftView,
 } from './model-pricing-draft'
 import { modelPricingNumericKeys } from './model-pricing-types'
+import type { TaskUsageField } from './task-pricing-contract'
+
+function describeUsageField(field: TaskUsageField): string {
+  if ('unit' in field) return field.unit
+  if (field.type === 'boolean') return 'boolean'
+  return field.enum.join('/')
+}
 
 export function ModelPricingFields(props: {
   document: PricingDraftView
@@ -83,7 +90,7 @@ export function ModelPricingFields(props: {
             {Object.entries(selected.usage_schema ?? {})
               .map(
                 ([key, field]) =>
-                  `${key} (${'unit' in field ? field.unit : field.type === 'boolean' ? 'boolean' : field.enum.join('/')}; ${selected.contract?.field_policy[key]?.phase ?? '?'})`
+                  `${key} (${describeUsageField(field)}; ${selected.contract?.field_policy[key]?.phase ?? '?'})`
               )
               .join(', ') || t('None')}
           </p>
@@ -124,13 +131,15 @@ export function ModelPricingFields(props: {
                 <label htmlFor={`${id}-${key}`}>
                   {key}
                   {key === 'ModelPrice'
-                    ? ' (USD / request)'
+                    ? ` (${t('USD / request')})`
                     : ` (${t('Ratio')})`}
                 </label>
                 <Input
                   id={`${id}-${key}`}
                   inputMode='decimal'
-                  value={d.inputs?.[key] ?? pricing[key] ?? ''}
+                  value={
+                    d.inputs?.[key] ?? d.texts?.[key] ?? pricing[key] ?? ''
+                  }
                   placeholder={t('Inherit')}
                   aria-invalid={d.inputs?.[key] !== undefined}
                   onChange={(e) =>

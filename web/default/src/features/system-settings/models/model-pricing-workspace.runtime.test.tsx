@@ -531,6 +531,31 @@ test('visible editor saves explicit zero with hidden plugin data and base guards
   assert.equal(v.methods.includes('put'), false)
 })
 
+test('typing decimal prices preserves every zero instead of turning 0.05 into 5', async () => {
+  const f = setup()
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))
+  fireEvent.click(f.getByRole('button', { name: 'kling-v1' }))
+  await waitFor(() =>
+    assert.ok(f.queryByLabelText('ModelPrice (USD / request)'))
+  )
+  const input = f.getByLabelText(
+    'ModelPrice (USD / request)'
+  ) as HTMLInputElement
+  for (const amount of ['0.002', '1.05', '0.05']) {
+    fireEvent.change(input, { target: { value: '' } })
+    let prefix = ''
+    for (const character of amount) {
+      prefix += character
+      fireEvent.change(input, { target: { value: input.value + character } })
+      assert.equal(input.value, prefix, 'each keystroke must remain visible')
+    }
+  }
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.ok(f.queryByText('Database commit acknowledged.')))
+  assert.equal(f.writes[0][0].pricing.ModelPrice, 0.05)
+  assert.equal(input.value, '0.05')
+})
+
 test('incomplete visible input survives refresh and switching models without permitting a save', async () => {
   const v = setup([entry(), entry('second')])
   await waitFor(() => assert.ok(v.getByRole('button', { name: 'kling-v1' })))

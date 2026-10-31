@@ -410,6 +410,7 @@ func updateModelPricingOptions(updates map[string]string) (*ModelPricingCommit, 
 			ordered = append(ordered, name)
 		}
 		sort.Strings(ordered)
+		changed := []string{}
 		for _, name := range ordered {
 			prior, draft := modelPricingValues(previous, name), modelPricingValues(values, name)
 			if pricingDigest(prior) == pricingDigest(draft) {
@@ -421,8 +422,9 @@ func updateModelPricingOptions(updates map[string]string) (*ModelPricingCommit, 
 			if err := validateLegacyModelPricing(name, draft, prior, authority.contexts(name)); err != nil {
 				return nil, err
 			}
+			changed = append(changed, name)
 		}
-		return ordered, nil
+		return changed, nil
 	}, filterNonPricingOptions(updates))
 }
 func filterNonPricingOptions(values map[string]string) map[string]string {

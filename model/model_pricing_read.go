@@ -296,7 +296,12 @@ type LegacyTieredPricingItem struct {
 }
 
 func UpdateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) error {
-	_, err := mutateModelPricing(DB, func(values pricingMaps, a *pricingAuthority) ([]string, error) {
+	_, err := updateLegacyTieredPricing(config)
+	return err
+}
+
+func updateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) (*ModelPricingCommit, error) {
+	return mutateModelPricing(DB, func(values pricingMaps, a *pricingAuthority) ([]string, error) {
 		prior := clonePricingMaps(values)
 		for name, mode := range values["billing_setting.billing_mode"] {
 			if mode == "tiered_expr" {
@@ -324,6 +329,7 @@ func UpdateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) error 
 			}
 		}
 		ordered := slices.Sorted(maps.Keys(names))
+		changed := []string{}
 		for _, name := range ordered {
 			old, draft := modelPricingValues(prior, name), modelPricingValues(values, name)
 			if pricingDigest(old) == pricingDigest(draft) {
@@ -335,8 +341,8 @@ func UpdateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) error 
 			if err := validateLegacyModelPricing(name, draft, old, a.contexts(name)); err != nil {
 				return nil, err
 			}
+			changed = append(changed, name)
 		}
-		return ordered, nil
+		return changed, nil
 	}, nil)
-	return err
 }

@@ -29,6 +29,7 @@ type Document = {
   base?: ModelPricingEntry
   pricing?: ModelPricingValues
   inputs?: Record<string, string>
+  texts?: Record<string, string>
   revision: number
   source: string
   remote?: ModelPricingEntry
@@ -55,6 +56,7 @@ export type PricingDraftView = Pick<
   | 'base'
   | 'pricing'
   | 'inputs'
+  | 'texts'
   | 'revision'
   | 'source'
   | 'remote'
@@ -120,6 +122,7 @@ export class ModelPricingDraftSession {
         base,
         pricing,
         inputs,
+        texts,
         revision,
         source,
         remote,
@@ -138,6 +141,7 @@ export class ModelPricingDraftSession {
         base,
         pricing,
         inputs,
+        texts,
         revision,
         source,
         remote,
@@ -225,7 +229,16 @@ export class ModelPricingDraftSession {
   replacePricing(pricing: ModelPricingValues) {
     const [, d] = this.current()
     if (!d.base) throw new Error('Load authoritative pricing before editing')
-    d.pricing = normalizePricing(pricing)
+    const next = normalizePricing(pricing)
+    for (const key of modelPricingNumericKeys) {
+      const text = d.texts?.[key]
+      if (
+        text !== undefined &&
+        (text === '' ? undefined : Number(text)) !== next[key]
+      )
+        delete d.texts![key]
+    }
+    d.pricing = next
     d.revision++
     this.invalidateSamples(d)
     this.emit()
@@ -250,6 +263,7 @@ export class ModelPricingDraftSession {
       return
     }
     delete d.inputs[key]
+    d.texts = { ...d.texts, [key]: text }
     const next = { ...d.pricing }
     if (text === '') delete next[key]
     else next[key] = value
@@ -268,6 +282,7 @@ export class ModelPricingDraftSession {
       return false
     }
     d.inputs = {}
+    d.texts = {}
     this.replacePricing(value)
     return true
   }
@@ -308,6 +323,7 @@ export class ModelPricingDraftSession {
       throw new Error('Refresh and reconcile pricing before discarding')
     d.pricing = normalizePricing(d.base.configured)
     d.inputs = {}
+    d.texts = {}
     d.error = undefined
     d.revision++
     this.invalidateSamples(d)
@@ -316,8 +332,10 @@ export class ModelPricingDraftSession {
   private applyRead(d: Document, entry: ModelPricingEntry, revision: number) {
     if (d.write) {
       if (d.write.pricing && pricingEqual(entry.configured, d.write.pricing)) {
-        if (d.revision === d.write.revision)
+        if (d.revision === d.write.revision) {
           d.pricing = normalizePricing(entry.configured)
+          d.texts = {}
+        }
         d.base = structuredClone(entry)
         d.commitKnown = d.write.acknowledged
         d.write = undefined
@@ -335,6 +353,7 @@ export class ModelPricingDraftSession {
     const edited =
       d.revision !== revision ||
       Object.keys(d.inputs ?? {}).length > 0 ||
+      Object.keys(d.texts ?? {}).length > 0 ||
       Boolean(
         d.base && d.pricing && !pricingEqual(d.base.configured, d.pricing)
       )
@@ -356,6 +375,7 @@ export class ModelPricingDraftSession {
     d.base = structuredClone(entry)
     d.pricing = normalizePricing(entry.configured)
     d.inputs = {}
+    d.texts = {}
     d.remote = undefined
     d.writeState = 'idle'
     d.revision++
@@ -403,6 +423,7 @@ export class ModelPricingDraftSession {
     d.base = structuredClone(d.remote)
     d.pricing = normalizePricing(d.remote.configured)
     d.inputs = {}
+    d.texts = {}
     d.remote = undefined
     d.write = undefined
     d.writeState = 'idle'
@@ -479,6 +500,7 @@ export class ModelPricingDraftSession {
     for (const item of batch) {
       item.d.base = structuredClone(item.entry)
       item.d.pricing = normalizePricing(pricing ?? item.entry.configured)
+      item.d.texts = {}
       item.d.revision++
       this.documents.set(item.model, item.d)
     }

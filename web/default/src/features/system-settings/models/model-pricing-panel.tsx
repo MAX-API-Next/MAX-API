@@ -188,7 +188,7 @@ export function ModelPricingPanel(props: {
               if (d?.remote) props.session.adoptRemote()
               else props.session.discardLocal()
             } catch (e) {
-              setError(String(e))
+              setError(e instanceof Error ? e.message : t('Request failed'))
             }
           }
         }}
