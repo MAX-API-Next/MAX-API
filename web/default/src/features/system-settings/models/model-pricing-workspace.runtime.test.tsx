@@ -585,6 +585,76 @@ test('full JSON editing retains formatting through valid intermediate decimal in
   assert.equal(f.writes[0][0].pricing.ModelPrice, 0.05)
 })
 
+test('empty default expression removes its override while expression zero remains explicit', async () => {
+  const f = setup([
+    entry('kling-v1', 'price-v1', {
+      ModelPrice: 7,
+      'billing_setting.billing_expr': 'p',
+    }),
+  ])
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))
+  fireEvent.click(f.getByRole('button', { name: 'kling-v1' }))
+  await waitFor(() => assert.ok(f.queryByLabelText('Default expression')))
+  fireEvent.change(f.getByLabelText('Default expression'), {
+    target: { value: '0' },
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  await waitFor(() =>
+    assert.ok(f.queryByText('Authoritative configuration observed.'))
+  )
+  assert.equal(f.writes[0][0].pricing['billing_setting.billing_expr'], '0')
+  fireEvent.change(f.getByLabelText('Default expression'), {
+    target: { value: '' },
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Save model pricing' }))
+  await waitFor(() => assert.equal(f.writes.length, 2))
+  assert.equal(
+    Object.hasOwn(f.writes[1][0].pricing, 'billing_setting.billing_expr'),
+    false
+  )
+})
+
+test('pricing errors translate known messages and preserve unknown server text literally', async (t) => {
+  const f = setup()
+  await waitFor(() => assert.ok(f.getByRole('button', { name: 'kling-v1' })))
+  fireEvent.click(f.getByRole('button', { name: 'kling-v1' }))
+  await waitFor(() =>
+    assert.ok(f.queryByLabelText('ModelPrice (USD / request)'))
+  )
+  env.i18n.addResource(
+    'fr',
+    'translation',
+    'Reconcile authoritative pricing before saving',
+    'Vérifiez les prix de référence avant l’enregistrement'
+  )
+  t.after(async () => {
+    await act(async () => {
+      await env.i18n.changeLanguage('en')
+    })
+  })
+  await act(async () => {
+    await env.i18n.changeLanguage('fr')
+  })
+  let message = 'Reconcile authoritative pricing before saving'
+  api.defaults.adapter = async (config) => ({
+    data: { success: false, message },
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    config,
+  })
+  fireEvent.click(f.getByRole('button', { name: 'Refresh pricing' }))
+  await waitFor(() =>
+    assert.ok(
+      f.queryByText('Vérifiez les prix de référence avant l’enregistrement')
+    )
+  )
+  message = 'provider: billing.rule.missing'
+  fireEvent.click(f.getByRole('button', { name: 'Refresh pricing' }))
+  await waitFor(() => assert.ok(f.queryByText(message)))
+})
+
 test('incomplete visible input survives refresh and switching models without permitting a save', async () => {
   const v = setup([entry(), entry('second')])
   await waitFor(() => assert.ok(v.getByRole('button', { name: 'kling-v1' })))

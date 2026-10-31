@@ -68,6 +68,7 @@ function PricingWorkspace(props: {
     enabled: props.active,
   })
   const entries = query.data?.entries ?? []
+  const errorMessage = error || query.error?.message || ''
   const visible = entries.filter(
     (e) =>
       e.model_name.toLowerCase().includes(search.toLowerCase()) &&
@@ -156,7 +157,11 @@ function PricingWorkspace(props: {
       {(query.isError || error) && (
         <Alert variant='destructive'>
           <AlertDescription role='alert'>
-            {error || query.error?.message}
+            {t(errorMessage, {
+              defaultValue: errorMessage,
+              keySeparator: false,
+              nsSeparator: false,
+            })}
           </AlertDescription>
         </Alert>
       )}

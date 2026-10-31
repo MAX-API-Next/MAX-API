@@ -41,12 +41,12 @@ export function ModelPricingFields(props: {
   // variant from the next entry. A source label must never silently become Default.
   if (d.source) sources.set(d.source, d.source)
   const setExpression = (text: string) => {
-    if (!plugin)
-      props.session.replacePricing({
-        ...pricing,
-        'billing_setting.billing_expr': text,
-      })
-    else {
+    if (!plugin) {
+      const next = { ...pricing }
+      if (text === '') delete next['billing_setting.billing_expr']
+      else next['billing_setting.billing_expr'] = text
+      props.session.replacePricing(next)
+    } else {
       const next = { ...variants }
       if (text === '') delete next[plugin]
       else next[plugin] = text

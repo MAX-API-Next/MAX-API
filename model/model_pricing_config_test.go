@@ -173,6 +173,19 @@ func TestModelPricingMalformedPluginValuesKeepRawAuthorityAndRejectQuotes(t *tes
 	require.NotEqual(t, entry.Version, after.Version, "guards must cover raw corrupt values, not only typed projection")
 	require.Empty(t, after.ConfigurationError)
 }
+
+func TestModelPricingPublicationCannotActivateAnUnpublishedExpression(t *testing.T) {
+	setupModelPricingTest(t)
+	require.NoError(t, updateOptionMap("billing_setting.billing_expr", `{"affected":"2"}`))
+	require.NoError(t, updateOptionMap("billing_setting.billing_mode", `{"affected":"ratio"}`))
+	err := publishModelPricingOptions(map[string]string{
+		"billing_setting.billing_expr": `{"affected":"9","corrupt":1}`,
+		"billing_setting.billing_mode": `{"affected":"tiered_expr"}`,
+	})
+	require.Error(t, err)
+	require.Equal(t, "ratio", billing_setting.GetBillingModeCopy()["affected"], "must not activate the old cached expression 2 when the intended expression 9 failed publication")
+	require.Equal(t, "2", billing_setting.GetBillingExprCopy()["affected"])
+}
 func rawPricingObjectForTest(t *testing.T, db *gorm.DB, key string) map[string]any {
 	t.Helper()
 	var row Option

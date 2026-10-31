@@ -38,6 +38,11 @@ export function ModelPricingPanel(props: {
   }
   const invalid = Boolean(Object.keys(d?.inputs ?? {}).length)
   const blocked = !d?.base || d.loading || d.writeState !== 'idle' || invalid
+  const errorMessage =
+    error ||
+    d?.error?.message ||
+    d?.base?.configuration_error ||
+    'Complete or correct invalid pricing inputs before saving or previewing.'
   return (
     <section
       className='min-w-0 space-y-4 rounded-lg border p-4'
@@ -106,12 +111,11 @@ export function ModelPricingPanel(props: {
       {(error || d?.error || d?.base?.configuration_error || invalid) && (
         <Alert variant='destructive'>
           <AlertDescription role='alert'>
-            {error ||
-              d?.error?.message ||
-              d?.base?.configuration_error ||
-              t(
-                'Complete or correct invalid pricing inputs before saving or previewing.'
-              )}
+            {t(errorMessage, {
+              defaultValue: errorMessage,
+              keySeparator: false,
+              nsSeparator: false,
+            })}
           </AlertDescription>
         </Alert>
       )}
