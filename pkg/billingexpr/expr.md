@@ -205,9 +205,30 @@ funding gap; it does not authorize a debit or prove a reservation upper bound.
 These functions are pure calculations. They do not read prices from a database,
 check real cache freshness, invoke a provider, persist a TaskBillingPlan or
 reserve/settle funds. Current/expected guard equality alone is not a DB CAS.
-The model API/transaction/editor caller and actual task integration remain
+The model API/transaction/editor caller and paid task admission remain
 separate implementation stages. H3/Kling/Seedance fixtures now invoke this core;
 their expected amounts remain independently derived integer/rational constants.
+
+`taskpricing.Freeze` now produces a serializable expression branch of the existing
+`TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
+actual producer/package/channel/request/action identity, price/contract/binding
+versions, full semantic fact contract, submit facts, pricing instant, currency,
+quota conversion, group ratio, floor and rounding version. It is pure and does
+not prove authoritative reads or a provider exposure bound. Its current caller
+is an isolated task harness; the production submit gate rejects the new profile.
+
+Frozen plans reject `param` and `header` dependencies before optimization,
+including dead branches: they must be represented as declared request-phase
+facts for this slice. Read-only configuration previews retain their existing
+request-probe behavior. No raw request body or credentials are persisted in the
+new snapshot. Completion uses the frozen contract and a host-owned typed
+`TaskPricingUsageEnvelope` matching producer package version/digest, channel,
+request/action and contract; it never turns fractional credits into tokens or
+reuses missing actual usage from the estimate. Missing/incompatible evidence or
+a final target above actual reservation stays pollable under manual settlement.
+Existing durable task intents/funding/effects remain the sole accounting path;
+an explicit zero target and a zero delta still complete that lifecycle. Old H3
+plans without a profile retain their existing validator and component pricing.
 
 ## Architecture
 

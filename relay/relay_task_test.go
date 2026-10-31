@@ -31,6 +31,17 @@ type recordingTaskReservationBilling struct {
 	settleTo    []int
 }
 
+func TestTaskExpressionPaidAdmissionRemainsDisabled(t *testing.T) {
+	for _, plan := range []*types.TaskBillingPlan{
+		{Profile: "new-api-task@1", EstimateQuota: 1, ReserveQuota: 1},
+		{ExpressionPlan: &types.TaskExpressionPlan{}, EstimateQuota: 1, ReserveQuota: 1},
+	} {
+		_, _, usesPlan, err := resolveTaskBillingQuotas(&relaycommon.RelayInfo{TaskBillingPlan: plan})
+		require.True(t, usesPlan)
+		require.ErrorContains(t, err, "paid admission is not enabled")
+	}
+}
+
 func TestTaskBillingPlanCapabilityFollowsSelectedAdaptor(t *testing.T) {
 	unsupported := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeDoubaoVideo)))
 	require.NotNil(t, unsupported)
