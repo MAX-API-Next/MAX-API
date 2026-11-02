@@ -220,10 +220,17 @@ func cloneCatalogSnapshot(snapshot CatalogSnapshot) CatalogSnapshot {
 }
 
 func (catalog *Catalog) update(ctx context.Context, change func(*CatalogSnapshot) error) error {
+	return catalog.updateExpected(ctx, nil, change)
+}
+
+func (catalog *Catalog) updateExpected(ctx context.Context, expected *int64, change func(*CatalogSnapshot) error) error {
 	catalog.mu.Lock()
 	defer catalog.mu.Unlock()
 	if err := catalog.refreshLocked(ctx); err != nil {
 		return err
+	}
+	if expected != nil && catalog.snapshot.Revision != *expected {
+		return ErrCatalogConflict
 	}
 	if catalog.snapshot.Revision == math.MaxInt64 {
 		return ErrCatalogInvalid
@@ -255,38 +262,40 @@ func (catalog *Catalog) Install(ctx context.Context, packages ...*Package) error
 	if len(packages) == 0 {
 		return ErrCatalogInvalid
 	}
-	return catalog.update(ctx, func(next *CatalogSnapshot) error {
-		seen := map[string]bool{}
-		for _, p := range packages {
-			if p == nil || seen[p.manifest.Key] {
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return installCatalogPackages(next, packages...) })
+}
+
+func installCatalogPackages(next *CatalogSnapshot, packages ...*Package) error {
+	seen := map[string]bool{}
+	for _, p := range packages {
+		if p == nil || seen[p.manifest.Key] {
+			return ErrCatalogInvalid
+		}
+		seen[p.manifest.Key] = true
+		index := -1
+		for i := range next.Packages {
+			old, err := LoadPackage(bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
+			if err != nil {
 				return ErrCatalogInvalid
 			}
-			seen[p.manifest.Key] = true
-			index := -1
-			for i := range next.Packages {
-				old, err := LoadPackage(bytes.NewReader(next.Packages[i].Document), next.Packages[i].Digest)
-				if err != nil {
+			if old.manifest.Key != p.manifest.Key {
+				continue
+			}
+			if old.manifest.Version == p.manifest.Version {
+				if old.digest != p.digest || next.Packages[i].Revoked {
 					return ErrCatalogInvalid
 				}
-				if old.manifest.Key != p.manifest.Key {
-					continue
-				}
-				if old.manifest.Version == p.manifest.Version {
-					if old.digest != p.digest || next.Packages[i].Revoked {
-						return ErrCatalogInvalid
-					}
-					index = i
-				}
-				next.Packages[i].Active = false
+				index = i
 			}
-			if index < 0 {
-				next.Packages = append(next.Packages, StoredPackage{Document: p.Document(), Digest: p.Digest()})
-				index = len(next.Packages) - 1
-			}
-			next.Packages[index].Active, next.Packages[index].Enabled = true, true
+			next.Packages[i].Active = false
 		}
-		return nil
-	})
+		if index < 0 {
+			next.Packages = append(next.Packages, StoredPackage{Document: p.Document(), Digest: p.Digest()})
+			index = len(next.Packages) - 1
+		}
+		next.Packages[index].Active, next.Packages[index].Enabled = true, true
+	}
+	return nil
 }
 
 func catalogVersion(snapshot *CatalogSnapshot, key, version string, activeOnly bool) (int, error) {
@@ -303,48 +312,54 @@ func catalogVersion(snapshot *CatalogSnapshot, key, version string, activeOnly b
 }
 
 func (catalog *Catalog) Activate(ctx context.Context, key, version string) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error {
-		index, err := catalogVersion(next, key, version, false)
-		if err != nil {
-			return err
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return activateCatalogVersion(next, key, version) })
+}
+
+func activateCatalogVersion(next *CatalogSnapshot, key, version string) error {
+	index, err := catalogVersion(next, key, version, false)
+	if err != nil {
+		return err
+	}
+	if next.Packages[index].Revoked {
+		return ErrBindingRejected
+	}
+	for i, entry := range next.Packages {
+		p, _ := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+		if p.manifest.Key == key {
+			next.Packages[i].Active = i == index
 		}
-		if next.Packages[index].Revoked {
-			return ErrBindingRejected
-		}
-		for i, entry := range next.Packages {
-			p, _ := LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
-			if p.manifest.Key == key {
-				next.Packages[i].Active = i == index
-			}
-		}
-		next.Packages[index].Enabled = true
-		return nil
-	})
+	}
+	next.Packages[index].Enabled = true
+	return nil
 }
 
 func (catalog *Catalog) SetEnabled(ctx context.Context, key string, enabled bool) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error {
-		index, err := catalogVersion(next, key, "", true)
-		if err != nil {
-			return err
-		}
-		if enabled && next.Packages[index].Revoked {
-			return ErrBindingRejected
-		}
-		next.Packages[index].Enabled = enabled
-		return nil
-	})
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return setCatalogEnabled(next, key, enabled) })
+}
+
+func setCatalogEnabled(next *CatalogSnapshot, key string, enabled bool) error {
+	index, err := catalogVersion(next, key, "", true)
+	if err != nil {
+		return err
+	}
+	if enabled && next.Packages[index].Revoked {
+		return ErrBindingRejected
+	}
+	next.Packages[index].Enabled = enabled
+	return nil
 }
 
 func (catalog *Catalog) Revoke(ctx context.Context, key, version string) error {
-	return catalog.update(ctx, func(next *CatalogSnapshot) error {
-		index, err := catalogVersion(next, key, version, false)
-		if err != nil {
-			return err
-		}
-		next.Packages[index].Revoked, next.Packages[index].Enabled = true, false
-		return nil
-	})
+	return catalog.update(ctx, func(next *CatalogSnapshot) error { return revokeCatalogVersion(next, key, version) })
+}
+
+func revokeCatalogVersion(next *CatalogSnapshot, key, version string) error {
+	index, err := catalogVersion(next, key, version, false)
+	if err != nil {
+		return err
+	}
+	next.Packages[index].Revoked, next.Packages[index].Enabled = true, false
+	return nil
 }
 
 // List refreshes durable state and returns metadata without source bytes.

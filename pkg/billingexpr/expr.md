@@ -213,6 +213,134 @@ The model API/transaction/editor caller and paid task admission remain
 separate implementation stages. H3/Kling/Seedance fixtures now invoke this core;
 their expected amounts remain independently derived integer/rational constants.
 
+`model.ReadTaskPricingShadowContext` provides a read-only configured-channel
+observation from the existing database price/source transaction. It accepts only
+model, channel and configured group, selects an explicit task profile and host
+phase contract, and returns the selected expression, mapping, contract and
+equality tokens. It does not read draft prices or fall back to node price caches.
+The node's QuotaPerUnit is captured once and included in the matching terms
+token; it is not a globally coordinated database setting. Configured group
+pricing excludes user-specific group overrides. Recheck errors return no partial
+observation. Repeated-read equality is not an atomic admission CAS, a global
+cutover, or proof that configuration remains unchanged afterwards.
+
+This shadow observation always reports admission unavailable: a configured Go
+channel is not proof of the actual executor, plugin package loading or a provider
+exposure bound. It does not create a TaskBillingPlan, reserve funds or enable a
+route. Existing package-history and future admission checks remain separate.
+
+`BindTaskPricingPlugin` uses the existing Catalog/Host route selection to pin
+actual package key/version/digest to the existing private `TaskPluginBinding`.
+Its optional `profile` and `action` distinguish new typed fact contracts from
+legacy `TaskUsageContract`; old bindings omit both fields. The service checks
+ownership, frozen plan identity and the complete manifest type/unit/enum schema.
+Matching schema does not vet request/estimate/actual phase semantics: a trusted
+host phase contract for that exact package remains a separate prerequisite.
+
+New binding and restoration refresh the authoritative Catalog with a bounded,
+service-owned lifecycle context. Already canceled contexts stop before refresh;
+failed in-flight refresh suspends the Host by its existing policy, with no stale
+fallback. Restoration uses persisted history, never the latest active package.
+Disabling a plugin prevents new binds; revocation or missing history rejects
+old sessions. This is local verification, not instantaneous global revocation.
+`ApplyTaskPricingPluginFacts` attaches validated typed final facts without
+writing canonical tokens, settling funds or invoking JS/provider code. The
+existing polling intent/funding/effect lifecycle alone performs settlement.
+
+`ResolveTaskPricingGoExecutor` compares routed host metadata and the shadow
+observation before constructing the existing MiniMax/Kling/Doubao Go adaptor.
+It does not initialize or submit it, certify price freshness/exposure bounds,
+or enable the production profile. No production submit path calls these new
+identity seams yet; the paid-admission rejection remains in place.
+
+`taskpricing.PhaseRegistry` is an immutable host assertion keyed by exact
+plugin key/version/package digest/model/action. It stores reviewed fact policy
+and an evidence reference, never prices. Registration does not perform the
+review: trusted host code must establish phase semantics and any usage caps.
+No real package is automatically approved. Resolve checks the exact mapped
+model's full type/unit/enum schema and returns detached policy; names or schema
+equality cannot approve an upgrade.
+
+**Package compatibility:** per-model `usageProfiles` require MAX transport format
+2. Upgrade all Catalog consumers before installing a format-2 package. Older
+nodes reject it and may suspend their entire local Host on Catalog refresh;
+mixed-node rollout is not safe. Existing format-1 packages without profiles
+retain their schema and wire behavior. Profiles cover every declared model
+exactly once; each is a complete schema, which may add fields absent from the
+fallback union (for example Seedance 1.5 `generate_audio`). Unknown/alias models
+cannot borrow a profile. This data-only transport does not load New API's JS ABI.
+
+Reviewed `FactProjection` policy may omit only named undeclared compatibility
+facts with exact scalar values, separately for submit and completion. It never
+discards a declared field or creates actual facts from estimates. Required
+actual numeric facts are checked against bounded original completion JSON,
+reviewed successful status and ordered raw paths. Only absence allows a
+secondary path; explicit zero, null or invalid data never falls through.
+Whole decimal strings may witness numeric hook facts; prefix junk, booleans,
+non-finite and out-of-range values are rejected. Request facts remain frozen.
+
+Projection policy is included in `ApprovalID`. `PhaseRegistry.Bind` persists
+that ID in the optional private `phase_approval_id`; replacing a review cannot
+reinterpret an old binding. `ApplyApprovedTaskPluginFacts` resolves the pinned
+historical package and exact policy before attaching its typed envelope. The
+older typed-facts entrypoint rejects such reviewed bindings. Neither entrypoint
+settles funds. The caller still owns raw-response/task association; a matching
+number is not provider authenticity or a production execution permit. Current
+Hailuo/Kling/Seedance policies and source observations are test fixtures only.
+
+`ReadApprovedTaskPricingPluginContext` binds the actual route-selected package,
+checks policy, and reuses the existing authoritative price transaction. Its
+configured channel/group/profile/model mapping and active package must match.
+The binding equality token includes the exact package, request identity and
+approval ID. No public API, JS runtime or automatic policy registration is
+enabled by this internal read-only seam. User-specific ratios remain excluded.
+
+`taskpricing.QuoteExposure` requires the explicit new task profile and proves
+only a deliberately small nonnegative,
+monotone arithmetic subset: numeric u(), nonnegative literals, +/* with a
+normalized float operand, division by a positive literal, and conditionals
+depending only on frozen request facts. Pure integer arithmetic is refused
+because wrapping can invalidate monotonicity. Referenced actual numeric facts
+need explicit host-reviewed maxima; missing maxima and unsupported syntax
+return an unproved result/error, never an inferred estimate-based cap.
+
+The upper endpoint is evaluated by QuoteTaskExpression itself; there is no
+second money evaluator. Its synthetic endpoint facts are proof witnesses,
+never provider evidence. The informational required reservation is
+GroupRatio > 0 ? max(maximumChargeQuota, floor) : maximumChargeQuota.
+A zero estimate cannot reduce a positive maximum. The result always reports
+admission_ready=false and provider_cost_proven=false: the charge bound is
+conditional on the reviewed fact domain, not proof of upstream cost limits,
+JS enforcement, atomic admission or actual reserved funding. Existing Freeze,
+funding and production rejection are unchanged; this sample must not be used
+as a paid permit or supplied as completion usage.
+
+`taskpricing.FreezeBounded` explicitly emits `expression_plan.version = 2`.
+It retains the unfloored submit estimate, and stores `charge_bound.method` plus
+the maximum charge quota derived from the frozen expression, semantic contract,
+request facts and scalar terms. Its reserve is `max(maximumChargeQuota, floor)`
+once; a zero-ratio group still reserves zero. Validation recomputes that bound
+with the existing quote core, rejects altered proof/totals, and never treats its
+synthetic endpoint as completion usage. `Freeze` and version-1 snapshots keep
+their original estimate/floor contract; a v1 snapshot cannot claim a v2 bound.
+
+**Upgrade every task-snapshot reader before persisting expression-plan v2.**
+This version is independent of MAX package format 1/2. Older readers reject v2
+even when its reserve happens to equal the old floor. There is no DDL change:
+the proof lives inside the existing private plan JSON. A bound proves only a
+host-reviewed charge domain, not JavaScript enforcement or provider costs.
+
+`FreezeApprovedTaskPricingPluginPlan` is an internal configured-group preparation.
+It refreshes the actual routed package and rereads the configured-price authority,
+then checks price/contract/binding and quote-terms equality tokens before calling
+the shared bounded freezer. Its temporary selected-rule view is not another
+price store. It returns the plan and precise plugin binding without writing a
+task or moving money; `AdmissionReady` remains false. It excludes user-specific
+ratio resolution and does not atomically commit configuration, a plan and funds.
+No production route calls it. An eventual paid caller still needs the complete
+execution, durable handoff, funding and environment gates; isolated fixtures
+alone must not open admission. Uncapped referenced actual dimensions are refused.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding

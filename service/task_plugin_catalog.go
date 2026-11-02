@@ -73,8 +73,8 @@ func InitializeTaskPluginCatalog(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-// CurrentTaskPluginCatalog is internal; no public management or relay routes
-// are registered here. Call Refresh to observe other nodes' committed changes.
+// CurrentTaskPluginCatalog returns the local host catalog. Management handlers
+// refresh authoritative state; no billable relay route is enabled by this getter.
 func CurrentTaskPluginCatalog() (*taskplugin.Catalog, error) {
 	catalog := taskPluginCatalog.Load()
 	if catalog == nil {

@@ -71,6 +71,35 @@ func Freeze(input FreezeInput) (*types.TaskBillingPlan, error) {
 	return plan, nil
 }
 
+// FreezeBounded carries a host-reviewed charge-domain bound into a version-2
+// snapshot. It does not reserve money, establish authority freshness or prove
+// executor/provider limits. Older snapshot readers must reject version 2.
+func FreezeBounded(input FreezeInput) (*types.TaskBillingPlan, error) {
+	plan, err := Freeze(input)
+	if err != nil {
+		return nil, err
+	}
+	bound, err := snapshotExposure(plan)
+	if err != nil {
+		return nil, err
+	}
+	plan.ExpressionPlan.Version = 2
+	plan.ExpressionPlan.ChargeBound = &types.TaskChargeBound{Method: bound.Method, MaximumQuota: bound.Maximum.QuotaAfterGroup}
+	plan.ReserveQuota = bound.RequiredReservationQuota
+	if err := ValidateSnapshot(plan); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func snapshotExposure(plan *types.TaskBillingPlan) (*ExposureQuote, error) {
+	p := plan.ExpressionPlan
+	return QuoteExposure(ExposureInput{
+		Profile: plan.Profile, Expression: p.Expression, Contract: p.Contract, Submit: p.SubmitFacts,
+		PricingAt: p.PricingAt, QuotaPerUnit: plan.QuotaPerUnit, GroupRatio: plan.GroupRatio, ReservationFloor: p.ReservationFloor,
+	})
+}
+
 func expressionRuleKey(selected Selection) string {
 	if selected.PluginKey != "" {
 		return selected.PluginKey + "::" + selected.Model
@@ -110,7 +139,8 @@ func ValidateSnapshot(plan *types.TaskBillingPlan) error {
 		return fmt.Errorf("explicit task expression snapshot required")
 	}
 	p := plan.ExpressionPlan
-	if p.Version != 1 || plan.SchemaVersion != 1 || plan.Mode != types.TaskBillingPlanModeBoundedActual ||
+	validVersion := p.Version == 1 && p.ChargeBound == nil || p.Version == 2 && p.ChargeBound != nil
+	if !validVersion || plan.SchemaVersion != 1 || plan.Mode != types.TaskBillingPlanModeBoundedActual ||
 		plan.Source != "task_expression" || plan.Currency != "USD" || plan.ConfigHash == "" ||
 		p.BindingVersion == "" || p.ChannelID <= 0 || strings.TrimSpace(p.Action) == "" ||
 		strings.TrimSpace(p.RequestID) == "" || p.PricingAt.IsZero() || p.Rounding != ExpressionPlanRounding ||
@@ -165,7 +195,18 @@ func ValidateSnapshot(plan *types.TaskBillingPlan) error {
 	if err != nil {
 		return err
 	}
-	if plan.EstimateQuota != quote.QuotaAfterGroup || plan.ReserveQuota != reservationQuota(quote.QuotaAfterGroup, plan.GroupRatio, p.ReservationFloor) {
+	reservation := reservationQuota(quote.QuotaAfterGroup, plan.GroupRatio, p.ReservationFloor)
+	if p.ChargeBound != nil {
+		bound, err := snapshotExposure(plan)
+		if err != nil {
+			return err
+		}
+		if p.ChargeBound.Method != ChargeBoundMethod || p.ChargeBound.MaximumQuota != bound.Maximum.QuotaAfterGroup {
+			return fmt.Errorf("frozen task charge bound does not match its contract/expression")
+		}
+		reservation = bound.RequiredReservationQuota
+	}
+	if plan.EstimateQuota != quote.QuotaAfterGroup || plan.ReserveQuota != reservation {
 		return fmt.Errorf("frozen task totals do not match the expression")
 	}
 	return nil

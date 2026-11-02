@@ -221,6 +221,15 @@ func (host *Host) Resolve(binding types.TaskPluginBinding, actor Actor) (*Sessio
 	if p == nil || state.revoked[id] || binding.PackageDigest != p.digest || binding.Model == "" || binding.Model != strings.TrimSpace(binding.Model) || !declaresModel(p.manifest, binding.UpstreamModel) {
 		return nil, ErrBindingRejected
 	}
+	if binding.Profile != "" {
+		if binding.Profile != types.TaskPluginExpressionProfile || !validPricingBinding(binding) {
+			return nil, ErrBindingRejected
+		}
+		return &Session{host: host, binding: binding, actor: actor, plugin: p}, nil
+	}
+	if binding.Action != "" || binding.PhaseApprovalID != "" {
+		return nil, ErrBindingRejected
+	}
 	contract, err := taskusage.ResolveContract(binding.SourceID, binding.SchemaVersion, binding.ContractDigest)
 	if err != nil {
 		return nil, ErrBindingRejected
@@ -257,6 +266,9 @@ func (session *Session) UsageContract() types.TaskUsageContract {
 // UsageEnvelope accepts facts only. Funding and task state stay in MAX-API's
 // existing settlement and polling layers, including explicit-zero semantics.
 func (session *Session) UsageEnvelope(usage *types.TaskUsage) (*types.TaskUsageEnvelope, error) {
+	if session == nil || session.binding.Profile != "" {
+		return nil, ErrBindingRejected // New facts must not be coerced into legacy token/media usage.
+	}
 	if err := session.validate(); err != nil {
 		return nil, err
 	}

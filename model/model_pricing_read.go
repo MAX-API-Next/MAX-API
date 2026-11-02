@@ -172,6 +172,12 @@ type ModelPricingQuote struct {
 var quoteTermKeys = []string{"GroupRatio", "group_ratio_setting.group_ratio", "PreConsumedQuota"}
 
 func readQuoteTerms(tx *gorm.DB, group string) (float64, int, string, error) {
+	return readQuoteTermsWithUnit(tx, group, common.QuotaPerUnit)
+}
+
+// The unit is captured by the host caller. It is node configuration, not a
+// database price row, and must match the unit recorded in this terms digest.
+func readQuoteTermsWithUnit(tx *gorm.DB, group string, quotaPerUnit float64) (float64, int, string, error) {
 	var rows []Option
 	if err := tx.Where(map[string]any{"key": quoteTermKeys}).Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).Find(&rows).Error; err != nil {
 		return 0, 0, "", err
@@ -214,7 +220,7 @@ func readQuoteTerms(tx *gorm.DB, group string) (float64, int, string, error) {
 		Group string
 		Ratio float64
 		Floor int
-	}{rows, common.QuotaPerUnit, group, ratio, floor}), nil
+	}{rows, quotaPerUnit, group, ratio, floor}), nil
 }
 func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, error) {
 	if !validPricingName(request.ModelName) || request.ContextID == "" || request.Group == "" {
