@@ -16,11 +16,19 @@ import (
 )
 
 func pricingAPIError(c *gin.Context, err error) {
-	status := http.StatusBadRequest
+	status := http.StatusInternalServerError
+	if errors.Is(err, model.ErrModelPricingValidation) {
+		status = http.StatusBadRequest
+	}
 	if errors.Is(err, model.ErrModelPricingConflict) || errors.Is(err, model.ErrModelPricingLegacyWrite) {
 		status = http.StatusConflict
 	}
 	c.JSON(status, gin.H{"success": false, "message": err.Error()})
+}
+
+// Request decoding is a definite rejection: no write has started.
+func pricingBadRequest(c *gin.Context, err error) {
+	c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 }
 
 // Bounded whole-document decode rejects trailing JSON and unknown/null fields.
@@ -52,19 +60,19 @@ func GetModelPricingConfig(c *gin.Context) {
 func UpdateModelPricingConfig(c *gin.Context) {
 	_, fields, err := pricingRequestFields(c, map[string]string{"changes": "array"})
 	if err != nil {
-		pricingAPIError(c, err)
+		pricingBadRequest(c, err)
 		return
 	}
 	var raw []json.RawMessage
 	if err := common.Unmarshal(fields["changes"], &raw); err != nil {
-		pricingAPIError(c, errors.New("changes array required"))
+		pricingBadRequest(c, errors.New("changes array required"))
 		return
 	}
 	changes := make([]types.ModelPricingChange, 0, len(raw))
 	for _, item := range raw {
 		change, err := taskpricing.DecodePricingChange(item)
 		if err != nil {
-			pricingAPIError(c, err)
+			pricingBadRequest(c, err)
 			return
 		}
 		changes = append(changes, change)
@@ -84,11 +92,11 @@ func UpdateModelPricingConfig(c *gin.Context) {
 func PreviewModelPricing(c *gin.Context) {
 	data, fields, err := pricingRequestFields(c, map[string]string{"model_name": "string", "pricing": "object"})
 	if err != nil {
-		pricingAPIError(c, err)
+		pricingBadRequest(c, err)
 		return
 	}
 	if fields["model_name"] == nil || fields["pricing"] == nil {
-		pricingAPIError(c, errors.New("model_name and pricing required"))
+		pricingBadRequest(c, errors.New("model_name and pricing required"))
 		return
 	}
 	var request struct {
@@ -96,7 +104,7 @@ func PreviewModelPricing(c *gin.Context) {
 		Pricing   types.ModelPricingValues `json:"pricing"`
 	}
 	if err := common.Unmarshal(data, &request); err != nil {
-		pricingAPIError(c, err)
+		pricingBadRequest(c, err)
 		return
 	}
 	entry, err := model.PreviewModelPricing(request.ModelName, request.Pricing)
@@ -109,12 +117,12 @@ func PreviewModelPricing(c *gin.Context) {
 func QuoteModelPricing(c *gin.Context) {
 	data, _, err := pricingRequestFields(c, map[string]string{"model_name": "string", "context_id": "string", "expected_version": "string", "expected_contract_digest": "string", "expected_binding_version": "string", "pricing": "object", "submit": "object", "actual": "object", "group": "string", "pricing_at": "string", "request_body": "object", "request_headers": "object"})
 	if err != nil {
-		pricingAPIError(c, err)
+		pricingBadRequest(c, err)
 		return
 	}
 	var request model.ModelPricingQuoteRequest
 	if err := common.Unmarshal(data, &request); err != nil {
-		pricingAPIError(c, err)
+		pricingBadRequest(c, err)
 		return
 	}
 	result, err := model.QuoteModelPricing(request)

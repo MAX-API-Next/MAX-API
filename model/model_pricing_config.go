@@ -25,6 +25,23 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// ErrModelPricingValidation marks a known rejection before commit. Database,
+// transaction and stored-authority faults must remain unmarked.
+var ErrModelPricingValidation = errors.New("invalid model pricing input")
+
+type modelPricingValidationError struct{ error }
+
+func (e *modelPricingValidationError) Is(target error) bool {
+	return target == ErrModelPricingValidation
+}
+func (e *modelPricingValidationError) Unwrap() error { return e.error }
+func modelPricingValidation(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &modelPricingValidationError{err}
+}
+
 var ErrModelPricingConflict = errors.New("model pricing context changed; reload before saving")
 var ErrModelPricingCacheNotPublished = errors.New("configuration committed; local cache publication failed; reload authoritative pricing")
 
@@ -208,7 +225,19 @@ func validateModelPricing(name string, draft, previous types.ModelPricingValues,
 				continue
 			}
 			keys, taskErr := billingexpr.TaskUsageKeys(expression)
-			if taskErr == nil && len(keys) > 0 {
+			// An explicit task profile also gives constants task-money semantics.
+			// A known contract alone must not migrate a legacy default.
+			taskDefault := len(keys) > 0
+			for _, context := range contexts {
+				if draft["billing_setting.billing_mode"] == "tiered_expr" && context.Profile == taskpricing.NewAPITask {
+					taskDefault = true
+					break
+				}
+			}
+			if taskDefault {
+				if taskErr != nil {
+					return taskErr
+				}
 				if err := validateDefaultTaskPricing(expression, draft, contexts, keys); err != nil {
 					return err
 				}
@@ -290,13 +319,13 @@ func mutateModelPricingWithPublisher(db *gorm.DB, mutate func(pricingMaps, *pric
 				return err
 			}
 			if len(encoded) > 2*1024*1024 {
-				return errors.New("pricing option exceeds authority read size limit")
+				return modelPricingValidation(errors.New("pricing option exceeds authority read size limit"))
 			}
 			if pricingDigest(prior[key]) == pricingDigest(values[key]) {
 				continue
 			}
 			if err := validateOptionUpdate(key, string(encoded)); err != nil {
-				return err
+				return modelPricingValidation(err)
 			}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&Option{Key: key, Value: string(encoded)}).Error; err != nil {
 				return err
@@ -340,12 +369,12 @@ func UpdateModelPricing(changes []types.ModelPricingChange) (*ModelPricingCommit
 }
 func updateModelPricing(db *gorm.DB, changes []types.ModelPricingChange) (*ModelPricingCommit, error) {
 	if len(changes) == 0 || len(changes) > 200 {
-		return nil, errors.New("expected 1..200 pricing changes")
+		return nil, modelPricingValidation(errors.New("expected 1..200 pricing changes"))
 	}
 	seen := map[string]bool{}
 	for _, change := range changes {
 		if seen[change.ModelName] || !validPricingName(change.ModelName) {
-			return nil, errors.New("invalid or duplicate model pricing change")
+			return nil, modelPricingValidation(errors.New("invalid or duplicate model pricing change"))
 		}
 		seen[change.ModelName] = true
 	}
@@ -365,7 +394,7 @@ func updateModelPricing(db *gorm.DB, changes []types.ModelPricingChange) (*Model
 				draft = modelPricingValues(defaultPricingMaps(), change.ModelName)
 			}
 			if err := validateModelPricing(change.ModelName, draft, previous, authority.contexts(change.ModelName)); err != nil {
-				return nil, err
+				return nil, modelPricingValidation(err)
 			}
 			replaceModelPricing(values, change.ModelName, draft)
 			names = append(names, change.ModelName)

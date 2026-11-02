@@ -163,6 +163,7 @@ Required procedure:
    `pwsh -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
    On Windows hosts without `pwsh`, use the equivalent Windows PowerShell fallback:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .agents/upstream-sync/check-new-api.ps1`.
+   If a fresh workspace lacks the private checker, registry, synchronization records, canonical plan, or a usable PowerShell executable, record the missing prerequisite. Perform the equivalent remote commit/path comparison where possible and mark the automated check unavailable; do not silently skip the check or treat an unverified baseline as current.
 3. Treat the ignored `new-api/new-api` source copy as reference material only. Its presence does not prove that it matches upstream HEAD.
 4. If the remote state cannot be verified, report `需要进一步验证`; do not describe the local copy as current.
 5. Detection is not acceptance: never automatically merge or wholesale copy an upstream change. Classify it as `pending`, `accepted`, `ported`, `skipped`, `superseded`, or `blocked`, with rationale.
@@ -178,5 +179,4 @@ RelayKit-specific requirements:
 - Verify explicit zero-value preservation, tool calls, multimodal input, reasoning content, finish reasons, and usage mapping.
 - Review changes to converter identity, quality, steps, usage, and diagnostics as compatibility-sensitive interface changes.
 - RelayKit does not own billing. Preserve MAX-API's billing, reservation, settlement, retry, and logging invariants, and prove that normalized usage is applied exactly once.
-- If the private checker or registry is unavailable in a fresh workspace, perform the equivalent remote commit/path comparison manually and record the missing maintenance prerequisite instead of silently skipping the check.
 - If a plan link is missing, check the canonical workspace location and migration navigation first. Continue independent source investigation and report a genuinely missing plan; do not silently create a competing plan at the obsolete `.tmp` path or substitute an old chat summary for evidence.
