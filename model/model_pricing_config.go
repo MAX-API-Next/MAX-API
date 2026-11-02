@@ -114,14 +114,17 @@ func readModelPricingMaps(tx *gorm.DB) (pricingMaps, error) {
 			return nil, errors.New("model pricing option exceeds size limit")
 		}
 		var entries map[string]any
-		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil || entries == nil {
-			return nil, fmt.Errorf("invalid model pricing object: %s", row.Key)
+		if err := common.UnmarshalJsonStr(row.Value, &entries); err != nil {
+			return nil, fmt.Errorf("invalid model pricing object: %s: %w", row.Key, err)
+		}
+		if entries == nil {
+			return nil, fmt.Errorf("invalid model pricing object: %s: value is null", row.Key)
 		}
 		// Legacy billing entry type errors belong to their model, so a valid
 		// replacement can repair them. Structural/DB errors still fail closed.
 		if !strings.HasPrefix(row.Key, "billing_setting.") {
 			if err := validateOptionUpdate(row.Key, row.Value); err != nil {
-				return nil, fmt.Errorf("invalid stored numeric pricing map: %s", row.Key)
+				return nil, fmt.Errorf("invalid stored numeric pricing map: %s: %w", row.Key, err)
 			}
 		}
 		values[row.Key] = entries
