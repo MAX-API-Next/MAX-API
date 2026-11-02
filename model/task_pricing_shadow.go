@@ -9,7 +9,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskpricing"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"gorm.io/gorm"
@@ -74,7 +73,7 @@ func readTaskPricingShadowWithPlugin(db *gorm.DB, ctx context.Context, request T
 	}
 	// QuotaPerUnit is node configuration. Freeze this one value, rather than
 	// letting the result and terms token describe different reads of it.
-	unit := common.QuotaPerUnit
+	unit := readModelPricingQuotaUnit()
 	if unit <= 0 || math.IsNaN(unit) || math.IsInf(unit, 0) {
 		return nil, errors.New("invalid node quota unit")
 	}
