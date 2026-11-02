@@ -33,9 +33,12 @@ import {
 } from '@/lib/auto-routes'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { resetModelRatios } from '../api'
+import { resetModelRatios, updateTieredBillingConfig } from '../api'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  invalidateQueriesAfterOptionUpdate,
+  useUpdateOption,
+} from '../hooks/use-update-option'
 import { acknowledgePriceField } from './acknowledge-price-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
@@ -261,6 +264,20 @@ export function RatioSettingsCard({
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
 
+  const tieredMutation = useMutation({
+    mutationFn: updateTieredBillingConfig,
+    retry: false,
+    onSuccess: (data) => {
+      if (!data.success)
+        toast.error(data.message || t('Failed to save tiered billing config'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to save tiered billing config'))
+    },
+  })
+
+  const { mutateAsync: saveTieredPair } = tieredMutation
+
   const resetMutation = useMutation({
     mutationFn: resetModelRatios,
     onSuccess: (data) => {
@@ -444,11 +461,6 @@ export function RatioSettingsCard({
         BillingExpr: normalizeJsonString(values.BillingExpr),
       }
 
-      const apiKeyMap: Record<string, string> = {
-        BillingMode: 'billing_setting.billing_mode',
-        BillingExpr: 'billing_setting.billing_expr',
-      }
-
       const updates = (
         Object.keys(normalized) as Array<keyof ModelFormValues>
       ).filter(
@@ -460,8 +472,41 @@ export function RatioSettingsCard({
         return
       }
 
+      const tieredKeys = ['BillingMode', 'BillingExpr'] as const
+      if (
+        updates.some((key) => key === 'BillingMode' || key === 'BillingExpr')
+      ) {
+        const response = await saveTieredPair({
+          options: {
+            'billing_setting.billing_mode': normalized.BillingMode,
+            'billing_setting.billing_expr': normalized.BillingExpr,
+          },
+        }).catch(() => null)
+        if (!response?.success) return
+        for (const key of tieredKeys) {
+          acknowledgePriceField(
+            modelForm,
+            key,
+            values[key],
+            formatJsonForTextarea(normalized[key])
+          )
+          modelNormalizedDefaults.current[key] = normalized[key]
+        }
+        setSavedModelValues((previous) => ({
+          ...previous,
+          BillingMode: normalized.BillingMode,
+          BillingExpr: normalized.BillingExpr,
+        }))
+        invalidateQueriesAfterOptionUpdate(
+          queryClient,
+          'billing_setting.billing_mode'
+        )
+        toast.success(t('Setting updated successfully'))
+      }
+
       for (const key of updates) {
-        const apiKey = apiKeyMap[key as string] || (key as string)
+        if (key === 'BillingMode' || key === 'BillingExpr') continue
+        const apiKey = key
         // The mutation hook reports failures; only explicit success clears dirtiness.
         const response = await updateOption
           .mutateAsync({ key: apiKey, value: normalized[key] })
@@ -481,7 +526,7 @@ export function RatioSettingsCard({
         }))
       }
     },
-    [t, updateOption, modelForm]
+    [t, updateOption, saveTieredPair, queryClient, modelForm]
   )
 
   const saveGroupRatios = useCallback(
@@ -577,7 +622,7 @@ export function RatioSettingsCard({
           savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
-          isSaving={updateOption.isPending}
+          isSaving={updateOption.isPending || tieredMutation.isPending}
           isResetting={resetMutation.isPending}
           variant={tab === 'unset-models' ? 'unset' : 'default'}
         />

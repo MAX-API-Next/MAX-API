@@ -130,8 +130,10 @@ function setup(values: ModelPricingEntry[] = [entry()]) {
   return { ...view, writes, methods, server }
 }
 
-type LegacyOptionWrite = { key: string; value: string | boolean }
-async function legacyCard(tab: 'models' | 'groups' = 'models') {
+type LegacyOptionWrite =
+  | { key: string; value: string | boolean; options?: never }
+  | { options: Record<string, string>; key?: never; value?: never }
+async function legacyCard(tab: 'models' | 'groups' = 'models', visual = false) {
   const f = setup([entry('legacy-model', 'price-v1', { ModelPrice: 7 })])
   await act(async () => cleanup())
   const pricingAdapter = api.defaults.adapter
@@ -168,8 +170,8 @@ async function legacyCard(tab: 'models' | 'groups' = 'models') {
     AudioRatio: '{}',
     AudioCompletionRatio: '{}',
     ExposeRatioEnabled: false,
-    BillingMode: '{}',
-    BillingExpr: '{}',
+    BillingMode: visual ? '{"dormant-model":"ratio"}' : '{}',
+    BillingExpr: visual ? '{"dormant-model":"legacy"}' : '{}',
   }
   let groupDefaults = {
     GroupRatio: '{"default":1}',
@@ -202,7 +204,8 @@ async function legacyCard(tab: 'models' | 'groups' = 'models') {
     )
     fireEvent.click(view.getByRole('button', { name: 'Legacy price tools' }))
   }
-  fireEvent.click(view.getByRole('button', { name: 'Switch to JSON' }))
+  if (!visual)
+    fireEvent.click(view.getByRole('button', { name: 'Switch to JSON' }))
   return {
     ...view,
     writes,
@@ -970,4 +973,103 @@ test('system-option refresh preserves an unsaved legacy JSON field beside the ne
     )
   )
   assert.equal(f.writes.length, 0)
+})
+
+async function stageLegacyExpression(
+  f: Awaited<ReturnType<typeof legacyCard>>
+) {
+  fireEvent.click(f.getByRole('row', { name: /Select row legacy-model/ }))
+  fireEvent.click(f.getByRole('tab', { name: 'Expression' }))
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Update' }))
+  )
+}
+
+test('legacy visual expression activation saves complete mode and expression maps in one request', async () => {
+  const f = await legacyCard('models', true)
+  await stageLegacyExpression(f)
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+  )
+  await waitFor(() => assert.ok(f.writes.some((write) => write.options)))
+  const pairs = f.writes.filter((write) => write.options)
+  assert.equal(pairs.length, 1)
+  assert.deepEqual(
+    JSON.parse(pairs[0].options!['billing_setting.billing_mode']),
+    {
+      'dormant-model': 'ratio',
+      'legacy-model': 'tiered_expr',
+    }
+  )
+  assert.deepEqual(
+    JSON.parse(pairs[0].options!['billing_setting.billing_expr']),
+    {
+      'dormant-model': 'legacy',
+      'legacy-model': 'tier("base", p * 0 + c * 0)',
+    }
+  )
+  assert.equal(
+    f.writes.some((write) => write.key?.startsWith('billing_setting.')),
+    false
+  )
+})
+
+test('rejected legacy expression pair remains dirty and retries the same complete pair', async () => {
+  const f = await legacyCard('models', true)
+  f.respond(async () => false)
+  await stageLegacyExpression(f)
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+  )
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.ok(f.writes[0].options)
+  f.respond(async () => true)
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+  )
+  await waitFor(() => assert.ok(f.writes.length >= 2))
+  assert.deepEqual(f.writes[1], f.writes[0])
+})
+
+test('legacy expression pair acknowledgement preserves a mode edit made while saving', async () => {
+  const f = await legacyCard('models', true)
+  const pending = deferred<boolean>()
+  f.respond(async (write) => (write.options ? pending.promise : true))
+  await stageLegacyExpression(f)
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+  )
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  fireEvent.click(f.getByRole('row', { name: /Select row legacy-model/ }))
+  fireEvent.click(f.getByRole('tab', { name: 'Per-request' }))
+  fireEvent.change(f.getByPlaceholderText('0.01'), { target: { value: '7' } })
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Update' }))
+  )
+  await act(async () => {
+    pending.resolve(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  await waitFor(() =>
+    assert.equal(
+      f
+        .getByRole('button', { name: 'Save model prices' })
+        .hasAttribute('disabled'),
+      false
+    )
+  )
+  f.respond(async () => true)
+  await act(async () =>
+    fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+  )
+  await waitFor(() =>
+    assert.equal(f.writes.filter((write) => write.options).length, 2)
+  )
+  const latest = f.writes.filter((write) => write.options)[1].options!
+  assert.deepEqual(JSON.parse(latest['billing_setting.billing_mode']), {
+    'dormant-model': 'ratio',
+  })
+  assert.deepEqual(JSON.parse(latest['billing_setting.billing_expr']), {
+    'dormant-model': 'legacy',
+  })
 })
