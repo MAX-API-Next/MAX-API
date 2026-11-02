@@ -116,6 +116,11 @@ func TestPinnedPluginProjectionRejectsLossyHooksAndKeepsModelFacts(t *testing.T)
 			}
 			if tc.Expected == nil {
 				require.Error(t, err)
+				// This stable observation ID has output_seconds=16 but its real
+				// upstream hook omits seconds; it proves missing-fact rejection.
+				if tc.ID == "h3-final-over" {
+					require.ErrorContains(t, err, "missing required task fact \"seconds\"")
+				}
 				require.Nil(t, out.Facts)
 				return
 			}
@@ -153,5 +158,41 @@ func TestPinnedPluginProjectionSourceBytes(t *testing.T) {
 		require.Equal(t, p.SourceSHA256, fmt.Sprintf("%x", sha256.Sum256(source)))
 		loaded := pinnedProjectionPackage(t, p.Manifest, string(source))
 		require.NotEqual(t, p.SourceSHA256, loaded.Digest(), "source SHA and MAX document SHA prove different bytes")
+	}
+}
+
+// These are synthetic host inputs, not outputs claimed for the pinned JS hook.
+// Keep the original hook observations byte-identical and exercise the host's
+// reviewed 15-second bound independently with matching raw completion evidence.
+func TestPinnedPluginProjectionH3ActualBounds(t *testing.T) {
+	var p *taskplugin.Package
+	for _, item := range readPinnedProjection(t).Packages {
+		if item.Key == "hailuo" {
+			p = pinnedProjectionPackage(t, item.Manifest, "synthetic host boundary")
+		}
+	}
+	require.NotNil(t, p)
+	registry, err := NewPhaseRegistry([]PhaseApproval{pinnedProjectionPolicy(t, p, "MiniMax-H3")})
+	require.NoError(t, err)
+	approval, err := registry.Resolve(p, "MiniMax-H3", "generate")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		seconds  int
+		rejected bool
+	}{{"maximum-15", 15, false}, {"over-16", 16, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			submit := types.TaskPricingFacts{"seconds": 5.0, "resolution": "768P", "input_images": 0.0, "input_video_seconds": 0.0}
+			facts := types.TaskPricingFacts{"seconds": float64(tc.seconds), "resolution": "768P", "input_images": 0.0, "input_video_seconds": 0.0}
+			raw := []byte(fmt.Sprintf("{\"task\":{\"status\":\"Success\",\"usage\":{\"output_seconds\":%d,\"input_image_count\":0,\"input_seconds\":0}}}", tc.seconds))
+			out, err := approval.ProjectFinal(submit, facts, raw)
+			if tc.rejected {
+				require.ErrorContains(t, err, "invalid numeric task fact \"seconds\"")
+				require.Nil(t, out.Facts)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, types.TaskPricingFacts{"seconds": 15.0, "resolution": "768P", "input_images": 0.0, "input_video_seconds": 0.0}, out.Facts)
+		})
 	}
 }

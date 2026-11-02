@@ -90,11 +90,13 @@ function hasThirdPartyCopyright(text) {
   if (!PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)) return true
   // Mixed project/upstream notices are third-party material too. Never
   // normalize them into a project-only header and erase an existing holder.
-  return block.split(/\r?\n/).some(
-    (line) =>
-      /^(?:\*\s*)?Copyright\b/i.test(line.trim()) &&
-      !line.includes('MAX-API-Next')
-  )
+  return block.split(/\r?\n/).some((line) => {
+    const notice = line.trim().replace(/^\*\s*/, '')
+    if (!/^(?:Copyright\b|SPDX-FileCopyrightText:)/i.test(notice)) return false
+    // Only a recognized, sole project holder is safe to normalize. Unknown
+    // formats and combined holders remain byte-identical, regardless of order.
+    return !/^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i.test(notice)
+  })
 }
 
 async function collectSourceFiles(dir) {
