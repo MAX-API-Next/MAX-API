@@ -1,5 +1,11 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterContextProvider,
+} from '@tanstack/react-router'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -9,6 +15,12 @@ import { I18nextProvider } from 'react-i18next'
 const endpoint = process.env.TASK_PLUGIN_ADMIN_UI_FIXTURE_URL
 const env = createReactTestEnvironment()
 await env.setup()
+const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
+// The real router scrolls on navigation; JSDOM needs this browser primitive.
+Object.defineProperty(globalThis, 'scrollTo', {
+  configurable: true,
+  value: () => {},
+})
 const { render, cleanup, fireEvent, waitFor } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
@@ -16,6 +28,9 @@ const { api } = await import('@/lib/api')
 const { useAuthStore } = await import('@/stores/auth-store')
 after(() => {
   cleanup()
+  if (originalScrollTo)
+    Object.defineProperty(globalThis, 'scrollTo', originalScrollTo)
+  else Reflect.deleteProperty(globalThis, 'scrollTo')
   env.teardown()
 })
 
@@ -41,11 +56,19 @@ test(
         mutations: { retry: false },
       },
     })
+    const rootRoute = createRootRoute({ component: TaskPlugins })
+    const router = createRouter({
+      routeTree: rootRoute,
+      history: createMemoryHistory(),
+      defaultPendingMinMs: 0,
+    })
     try {
       const view = render(
         <I18nextProvider i18n={env.i18n}>
           <QueryClientProvider client={client}>
-            <TaskPlugins />
+            <RouterContextProvider router={router}>
+              <TaskPlugins />
+            </RouterContextProvider>
           </QueryClientProvider>
         </I18nextProvider>
       )

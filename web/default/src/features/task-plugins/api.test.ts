@@ -90,6 +90,9 @@ test('mutations classify conflicts and unknown receipts without retrying', async
   for (const [status, kind] of [
     [409, 'conflict'],
     [400, 'rejected'],
+    [422, 'rejected'],
+    [408, 'unknown'],
+    [499, 'unknown'],
     [503, 'unknown'],
   ] as const) {
     const calls = respond({ message: 'controlled-error' }, status)
@@ -104,6 +107,14 @@ test('mutations classify conflicts and unknown receipts without retrying', async
       (e) => e instanceof PluginError && e.kind === kind
     )
     assert.equal(calls.length, 1)
+  }
+  for (const status of [408, 499, 503]) {
+    const reads = respond({ message: 'controlled-error' }, status)
+    await assert.rejects(
+      () => taskPluginAPI.read(),
+      (e) => e instanceof PluginError && e.kind === 'read'
+    )
+    assert.equal(reads.length, 1)
   }
   const calls = respond({
     success: true,

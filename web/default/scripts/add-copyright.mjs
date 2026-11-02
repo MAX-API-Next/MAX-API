@@ -83,9 +83,13 @@ function hasGeneratedMarker(text) {
 }
 
 function hasThirdPartyCopyright(text) {
-  return (
-    THIRD_PARTY_COPYRIGHT_PATTERN.test(text) &&
-    !PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)
+  const block = text.match(THIRD_PARTY_COPYRIGHT_PATTERN)?.[0]
+  if (!block) return false
+  if (!PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)) return true
+  // Mixed project/upstream notices are third-party material too. Never
+  // normalize them into a project-only header and erase an existing holder.
+  return block.split(/\r?\n/).some(
+    (line) => /^Copyright\b/i.test(line.trim()) && !line.includes('MAX-API-Next')
   )
 }
 

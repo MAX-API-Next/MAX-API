@@ -1,6 +1,14 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import { useMemo } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterContextProvider,
+} from '@tanstack/react-router'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after as afterAll, afterEach, test } from 'node:test'
@@ -9,6 +17,12 @@ import type { PluginEntry, PluginMutation, TaskPluginAPI } from './api'
 
 const env = createReactTestEnvironment()
 await env.setup()
+const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
+// The real router scrolls on navigation; JSDOM needs this browser primitive.
+Object.defineProperty(globalThis, 'scrollTo', {
+  configurable: true,
+  value: () => {},
+})
 const { render, cleanup, fireEvent, waitFor, act, within } =
   await import('@testing-library/react')
 const { TaskPlugins } = await import('./index')
@@ -25,8 +39,28 @@ const { SettingsPageProvider } =
 const { useSidebarConfig } = await import('@/hooks/use-sidebar-config')
 const { useStatus } = await import('@/hooks/use-status')
 const { api } = await import('@/lib/api')
-afterEach(cleanup)
-afterAll(() => env.teardown())
+const fixtureClients: QueryClient[] = []
+afterEach(async () => {
+  // Finish real query/mutation notifications before removing browser globals.
+  await waitFor(() => {
+    for (const client of fixtureClients) {
+      assert.equal(client.isFetching(), 0)
+      assert.equal(client.isMutating(), 0)
+    }
+  })
+  await act(async () => {
+    cleanup()
+    for (const client of fixtureClients) client.clear()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  })
+  fixtureClients.length = 0
+})
+afterAll(() => {
+  if (originalScrollTo)
+    Object.defineProperty(globalThis, 'scrollTo', originalScrollTo)
+  else Reflect.deleteProperty(globalThis, 'scrollTo')
+  env.teardown()
+})
 test('the management route and sidebar are restricted to the root role', () => {
   const previous = useAuthStore.getState().auth.user
   const beforeLoad = Route.options.beforeLoad!
@@ -110,15 +144,34 @@ function fixture() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
+  fixtureClients.push(client)
+  const rootRoute = createRootRoute({ component: Outlet })
+  const listRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/task-plugins',
+    component: () => <TaskPlugins transport={api} />,
+  })
+  const pricingRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/system-settings/billing/$section',
+    component: () => <p>pricing-route-reached</p>,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([listRoute, pricingRoute]),
+    history: createMemoryHistory({ initialEntries: ['/task-plugins'] }),
+    defaultPendingMinMs: 0,
+  })
   const view = () =>
     render(
       <I18nextProvider i18n={env.i18n}>
         <QueryClientProvider client={client}>
-          <TaskPlugins transport={api} />
+          <RouterContextProvider router={router}>
+            <TaskPlugins transport={api} />
+          </RouterContextProvider>
         </QueryClientProvider>
       </I18nextProvider>
     )
-  return { state, writes, api, client, view }
+  return { state, writes, api, client, view, router }
 }
 test('lists real metadata and disables with the observed revision while invalidating prices', async () => {
   const f = fixture()
@@ -143,6 +196,18 @@ test('lists real metadata and disables with the observed revision while invalida
     true
   )
   assert.ok(v.getByText(/Execution and paid admission remain unavailable/))
+  fireEvent.click(
+    v.getByRole('link', { name: 'Open model and source pricing' })
+  )
+  await waitFor(() =>
+    assert.equal(
+      f.router.state.location.pathname,
+      '/system-settings/billing/model-pricing'
+    )
+  )
+  assert.deepEqual(f.client.getQueryData(['model-pricing-config', 'fixture']), {
+    saved: true,
+  })
 })
 test('a refreshed catalog cannot silently rebase an open confirmation', async () => {
   const f = fixture(),
@@ -284,6 +349,11 @@ test('a rejected catalog operation stays visible inside the detail dialog', asyn
 
 test('an unknown operation can recover a failed reread inside the dialog without replay', async () => {
   const f = fixture()
+  // Per-operation retry:false must override aggressive client defaults.
+  f.client.setDefaultOptions({
+    queries: { retry: 3, retryDelay: 0 },
+    mutations: { retry: 3, retryDelay: 0 },
+  })
   let reads = 0
   f.api.read = async () => {
     if (++reads === 2) throw new Error('synthetic failed reread')

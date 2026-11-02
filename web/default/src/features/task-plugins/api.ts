@@ -76,6 +76,22 @@ export class PluginError extends Error {
     super(message)
   }
 }
+function classifyRequestError(
+  status: number | undefined,
+  write: boolean
+): PluginError['kind'] {
+  if (status === 409) return 'conflict'
+  if (
+    status &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 499
+  )
+    return 'rejected'
+  return write ? 'unknown' : 'read'
+}
+
 const options = { skipBusinessError: true, skipErrorHandler: true }
 const endpoint = '/api/task_plugins'
 async function request<T>(
@@ -102,18 +118,7 @@ async function request<T>(
     if (isAxiosError(error)) {
       const status = error.response?.status
       const message: unknown = error.response?.data?.message
-      const kind =
-        status === 409
-          ? 'conflict'
-          : status &&
-              status >= 400 &&
-              status < 500 &&
-              status !== 408 &&
-              status !== 499
-            ? 'rejected'
-            : write
-              ? 'unknown'
-              : 'read'
+      const kind = classifyRequestError(status, write)
       throw new PluginError(
         kind,
         typeof message === 'string' ? message : 'Task plugin request failed'
