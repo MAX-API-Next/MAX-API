@@ -171,7 +171,21 @@ type ModelPricingQuote struct {
 
 var quoteTermKeys = []string{"GroupRatio", "group_ratio_setting.group_ratio", "PreConsumedQuota"}
 
+// Sample the node setting under the same lock used by option publication.
+func readModelPricingQuotaUnit() float64 {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return common.QuotaPerUnit
+}
+
 func readQuoteTerms(tx *gorm.DB, group string) (float64, int, string, error) {
+	return readQuoteTermsWithUnit(tx, group, readModelPricingQuotaUnit())
+}
+
+func readQuoteTermsWithUnit(tx *gorm.DB, group string, quotaPerUnit float64) (float64, int, string, error) {
+	if quotaPerUnit <= 0 || math.IsNaN(quotaPerUnit) || math.IsInf(quotaPerUnit, 0) {
+		return 0, 0, "", errors.New("invalid node quota unit")
+	}
 	var rows []Option
 	if err := tx.Where(map[string]any{"key": quoteTermKeys}).Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).Find(&rows).Error; err != nil {
 		return 0, 0, "", err
@@ -217,12 +231,15 @@ func readQuoteTerms(tx *gorm.DB, group string) (float64, int, string, error) {
 		Group string
 		Ratio float64
 		Floor int
-	}{rows, common.QuotaPerUnit, group, ratio, floor}), nil
+	}{rows, quotaPerUnit, group, ratio, floor}), nil
 }
 func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, error) {
 	if !validPricingName(request.ModelName) || request.ContextID == "" || request.Group == "" {
 		return nil, modelPricingValidation(errors.New("model, host context and configured group required"))
 	}
+	// This configuration sample retains one unit through terms, preview and
+	// metadata; later publication does not relabel an already computed quote.
+	quotaPerUnit := readModelPricingQuotaUnit()
 	var result *ModelPricingQuote
 	err := readPricingState(DB, func(tx *gorm.DB, values pricingMaps, a *pricingAuthority) error {
 		entry := buildModelPricingEntry(values, a, request.ModelName)
@@ -256,7 +273,7 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 				return modelPricingValidation(err)
 			}
 		}
-		ratio, floor, terms, err := readQuoteTerms(tx, request.Group)
+		ratio, floor, terms, err := readQuoteTermsWithUnit(tx, request.Group, quotaPerUnit)
 		if err != nil {
 			return err
 		}
@@ -271,18 +288,18 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 			return err
 		}
 		guards := taskpricing.Guards{PriceVersion: entry.Version, ContractDigest: selectedDigest, BindingVersion: entry.BindingVersion}
-		preview, err := taskpricing.Preview(taskpricing.PreviewInput{Profile: taskpricing.NewAPITask, Prices: taskPriceMaps(candidate), Source: context.source, OriginalModel: request.ModelName, MappedModel: context.MappedModel, Contract: *context.Contract, Expected: guards, Current: guards, Submit: request.Submit, Actual: request.Actual, Request: billingexpr.RequestInput{Body: request.RequestBody, Headers: request.RequestHeaders}, PricingAt: at, QuotaPerUnit: common.QuotaPerUnit, GroupRatio: ratio, ReservationFloor: floor})
+		preview, err := taskpricing.Preview(taskpricing.PreviewInput{Profile: taskpricing.NewAPITask, Prices: taskPriceMaps(candidate), Source: context.source, OriginalModel: request.ModelName, MappedModel: context.MappedModel, Contract: *context.Contract, Expected: guards, Current: guards, Submit: request.Submit, Actual: request.Actual, Request: billingexpr.RequestInput{Body: request.RequestBody, Headers: request.RequestHeaders}, PricingAt: at, QuotaPerUnit: quotaPerUnit, GroupRatio: ratio, ReservationFloor: floor})
 		if err != nil {
 			return modelPricingValidation(err)
 		}
-		_, _, after, err := readQuoteTerms(tx, request.Group)
+		_, _, after, err := readQuoteTermsWithUnit(tx, request.Group, quotaPerUnit)
 		if err != nil {
 			return err
 		}
 		if terms != after {
 			return ErrModelPricingConflict
 		}
-		result = &ModelPricingQuote{Scope: "configuration_sample; configured group only; no user-specific multiplier or paid admission", PriceVersion: entry.Version, ContractDigest: entry.ContractDigest, BindingVersion: entry.BindingVersion, TermsVersion: terms, Group: request.Group, GroupRatio: ratio, QuotaPerUnit: common.QuotaPerUnit, ReservationFloor: floor, Currency: "USD", Preview: preview}
+		result = &ModelPricingQuote{Scope: "configuration_sample; configured group only; no user-specific multiplier or paid admission", PriceVersion: entry.Version, ContractDigest: entry.ContractDigest, BindingVersion: entry.BindingVersion, TermsVersion: terms, Group: request.Group, GroupRatio: ratio, QuotaPerUnit: quotaPerUnit, ReservationFloor: floor, Currency: "USD", Preview: preview}
 		return nil
 	})
 	if err != nil {

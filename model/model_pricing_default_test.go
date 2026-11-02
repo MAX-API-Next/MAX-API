@@ -10,6 +10,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 	"strings"
 	"testing"
 )
@@ -133,4 +134,43 @@ func TestModelPricingExplicitTaskConstantKeepsLegacyWritesProtected(t *testing.T
 		require.Equal(t, tc.quota, quote.Preview.Estimate.QuotaAfterGroup)
 		require.False(t, quote.AdmissionReady)
 	}
+}
+
+// Publish after the final terms query, when the old code has already sampled
+// the unit for that digest but still rereads it for the response metadata.
+func TestModelPricingQuoteUnitSurvivesLatePublication(t *testing.T) {
+	db := setupModelPricingTest(t)
+	channel := pricingChannelForTest(t, db, constant.ChannelTypeKling, "kling-v1")
+	require.NoError(t, db.Model(&channel).Update("setting", "{\"task_pricing_profile\":\"new-api-task@1\"}").Error)
+	entry := pricingEntryForTest(t, db, "kling-v1")
+	_, err := UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": "u(\"units\") * 0.5"})})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&Option{Key: "GroupRatio", Value: "{\"default\":1}"}).Error)
+	require.NoError(t, db.Create(&Option{Key: "PreConsumedQuota", Value: "0"}).Error)
+	entry = pricingEntryForTest(t, db, "kling-v1")
+	termsReads := 0
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("quote_unit_publish", func(tx *gorm.DB) {
+		if !strings.Contains(fmt.Sprint(tx.Statement.Vars), "PreConsumedQuota") {
+			return
+		}
+		termsReads++
+		if termsReads == 2 {
+			require.NoError(t, updateOptionMap("QuotaPerUnit", "2000"))
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove("quote_unit_publish") })
+	request := ModelPricingQuoteRequest{ModelName: "kling-v1", ContextID: fmt.Sprintf("channel:%d", channel.Id), ExpectedVersion: entry.Version, ExpectedContractDigest: entry.ContractDigest, ExpectedBindingVersion: entry.BindingVersion, Group: "default", Submit: types.TaskPricingFacts{"units": 1.0}}
+	quote, err := QuoteModelPricing(request)
+	require.NoError(t, err)
+	require.Equal(t, 2, termsReads, "publication must execute at the intended query boundary")
+	require.Equal(t, float64(2000), common.QuotaPerUnit)
+	require.Equal(t, float64(1000), quote.QuotaPerUnit, "one sample must describe both the quote and its metadata")
+	require.Equal(t, 500, quote.Preview.Estimate.QuotaAfterGroup, "1 unit * 0.5 USD * captured1000 * group1 = 500")
+	require.False(t, quote.AdmissionReady)
+	// A malformed node setting is an authority fault, not rejected user input.
+	require.NoError(t, updateOptionMap("QuotaPerUnit", "NaN"))
+	invalid, err := QuoteModelPricing(request)
+	require.Nil(t, invalid)
+	require.ErrorContains(t, err, "invalid node quota unit")
+	require.NotErrorIs(t, err, ErrModelPricingValidation)
 }
