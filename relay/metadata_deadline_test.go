@@ -26,7 +26,9 @@ func TestFirstResultDeadlineBeforeMetadataDoesNotPromiseDelivery(t *testing.T) {
 	t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldMonitor })
 	var calls atomic.Int32
 	var upstreamGuardExpired atomic.Bool
+	upstreamDone := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(upstreamDone)
 		calls.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -45,6 +47,11 @@ func TestFirstResultDeadlineBeforeMetadataDoesNotPromiseDelivery(t *testing.T) {
 	c, info, recorder := streamFundingContext(t, "claude_to_responses", "metadata-before-delivery", upstream.URL, constant.ChannelTypeAnthropic, funding)
 	require.Nil(t, service.PreConsumeBilling(c, 100, info))
 	apiErr := ResponsesHelper(c, info)
+	select {
+	case <-upstreamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream handler did not exit within its independent guard")
+	}
 	require.False(t, upstreamGuardExpired.Load(), "the one-second first-result deadline must cancel upstream before the independent four-second guard")
 	require.NotNil(t, apiErr)
 	require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())

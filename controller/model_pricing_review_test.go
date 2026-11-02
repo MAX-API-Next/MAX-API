@@ -133,3 +133,50 @@ func TestModelPricingReviewRejectedLegacyRatiosPreserveCommittedCache(t *testing
 		})
 	}
 }
+
+func TestLegacyPricingCommittedCacheWarningRemainsAuditedSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		payload    map[string]any
+		storedKey  string
+		expected   string
+	}{
+		{"single", "/option", map[string]any{"key": "ModelPrice", "value": `{"cache-warning":0}`}, "ModelPrice", `{"cache-warning":0}`},
+		{"pair", "/tiered", map[string]any{"options": map[string]string{"billing_setting.billing_mode": `{"cache-warning":"tiered_expr"}`, "billing_setting.billing_expr": `{"cache-warning":"p * 2"}`}}, "billing_setting.billing_mode", `{"cache-warning":"tiered_expr"}`},
+		{"old-config", "/tiered", map[string]any{"config": map[string]any{"cache-warning": map[string]any{"enabled": true, "expr": "p * 2"}}}, "billing_setting.billing_mode", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := setupModelPricingControllerTest(t)
+			engine.PUT("/tiered", UpdateTieredBillingConfig)
+			// Leave an unrelated malformed authority row unchanged. The requested write
+			// commits, but publishing that row into the typed runtime cache must fail.
+			require.NoError(t, model.DB.Create(&model.Option{Key: "billing_setting.plugin_billing_expr", Value: `{"synthetic-plugin::unrelated-corrupt":false}`}).Error)
+			response := pricingControllerRequest(t, engine, http.MethodPut, tc.path, tc.payload)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var envelope struct {
+				Success        bool   `json:"success"`
+				Committed      bool   `json:"committed"`
+				CachePublished *bool  `json:"cache_published"`
+				Message        string `json:"message"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &envelope))
+			require.True(t, envelope.Success, response.Body.String())
+			require.True(t, envelope.Committed)
+			require.NotNil(t, envelope.CachePublished)
+			require.False(t, *envelope.CachePublished)
+			require.Contains(t, envelope.Message, "configuration committed")
+			var stored model.Option
+			require.NoError(t, model.DB.Where("key = ?", tc.storedKey).First(&stored).Error)
+			if tc.expected != "" {
+				require.JSONEq(t, tc.expected, stored.Value)
+			} else {
+				require.Contains(t, stored.Value, `"cache-warning":"tiered_expr"`)
+			}
+			var logs []model.Log
+			require.NoError(t, model.LOG_DB.Where("type = ?", model.LogTypeManage).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			require.Contains(t, logs[0].Other, `"action":"option.update"`)
+			require.Contains(t, logs[0].Other, `"cache_published":false`)
+		})
+	}
+}

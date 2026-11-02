@@ -119,47 +119,30 @@ export class ModelPricingDraftSession {
     const d = this.model === null ? undefined : this.documents.get(this.model)
     let document: PricingDraftView | undefined
     if (d) {
-      const {
-        base,
-        pricing,
-        inputs,
-        texts,
-        revision,
-        source,
-        remote,
-        loading,
-        writeState,
-        cachePublished,
-        warning,
-        commitKnown,
-        error,
-        preview,
-        sample,
-        sampleText,
-        quote,
-      } = d
       document = structuredClone({
-        base,
-        pricing,
-        inputs,
-        texts,
-        revision,
-        source,
-        remote,
-        loading,
-        writeState,
-        cachePublished,
-        warning,
-        commitKnown,
-        error,
-        preview,
-        sample,
-        sampleText,
-        quote,
+        base: d.base,
+        pricing: d.pricing,
+        inputs: d.inputs,
+        texts: d.texts,
+        revision: d.revision,
+        source: d.source,
+        remote: d.remote,
+        loading: d.loading,
+        writeState: d.writeState,
+        cachePublished: d.cachePublished,
+        warning: d.warning,
+        commitKnown: d.commitKnown,
+        error: d.error,
+        preview: d.preview,
+        sample: d.sample,
+        sampleText: d.sampleText,
+        quote: d.quote,
         batchWrite: Boolean(d.write?.batch),
         dirty: Boolean(
-          (base && pricing && !pricingEqual(base.configured, pricing)) ||
-          Object.keys(inputs ?? {}).length
+          (d.base &&
+            d.pricing &&
+            !pricingEqual(d.base.configured, d.pricing)) ||
+          Object.keys(d.inputs ?? {}).length
         ),
       })
     }

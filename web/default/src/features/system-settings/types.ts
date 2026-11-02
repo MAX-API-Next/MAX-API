@@ -37,6 +37,8 @@ export type UpdateOptionRequest = {
 export type UpdateOptionResponse = {
   success: boolean
   message: string
+  committed?: boolean
+  cache_published?: boolean
 }
 
 export type ConfirmPaymentComplianceResponse = {
