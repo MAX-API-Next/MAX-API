@@ -68,7 +68,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 `
 
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
-  /^\/\*\r?\nCopyright \(C\) .+? MAX-API-Next\r?\n[\s\S]*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
+  /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
 const THIRD_PARTY_COPYRIGHT_PATTERN =
   /^\/\*[\s\S]*?Copyright[\s\S]*?\*\/\r?\n?/i
 
@@ -83,13 +83,17 @@ function hasGeneratedMarker(text) {
 }
 
 function hasThirdPartyCopyright(text) {
-  const block = text.match(THIRD_PARTY_COPYRIGHT_PATTERN)?.[0]
+  const block =
+    text.match(PROJECT_COPYRIGHT_BLOCK_PATTERN)?.[0] ??
+    text.match(THIRD_PARTY_COPYRIGHT_PATTERN)?.[0]
   if (!block) return false
   if (!PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)) return true
   // Mixed project/upstream notices are third-party material too. Never
   // normalize them into a project-only header and erase an existing holder.
   return block.split(/\r?\n/).some(
-    (line) => /^Copyright\b/i.test(line.trim()) && !line.includes('MAX-API-Next')
+    (line) =>
+      /^(?:\*\s*)?Copyright\b/i.test(line.trim()) &&
+      !line.includes('MAX-API-Next')
   )
 }
 

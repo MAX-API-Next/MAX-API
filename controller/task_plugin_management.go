@@ -74,7 +74,7 @@ func GetTaskPluginManagement(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
 	defer cancel()
 	result, err := service.ReadTaskPluginManagement(ctx, catalog)
 	if err != nil {
@@ -126,7 +126,7 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 10*time.Second)
 	defer cancel()
 	if mutation.Action == "activate" || mutation.Action == "install" {
 		format := 0

@@ -3,7 +3,6 @@ package service
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/model"
@@ -79,27 +78,7 @@ func taskPricingPluginSchemaMatches(session *taskplugin.Session, plan *types.Tas
 	if session == nil || plan == nil || plan.ExpressionPlan == nil {
 		return false
 	}
-	contract, err := taskpricing.NormalizeContract(plan.ExpressionPlan.Contract)
-	if err != nil {
-		return false
-	}
-	schema := session.PricingSchema()
-	if len(schema) != len(contract.UsageSchema) {
-		return false
-	}
-	for key, field := range contract.UsageSchema {
-		actual, found := schema[key]
-		kind := actual.Type
-		if kind == "" && len(actual.Enum) > 0 {
-			kind = "enum"
-		}
-		enum := slices.Clone(actual.Enum)
-		slices.Sort(enum)
-		if !found || kind != field.Type || actual.Unit != field.Unit || !slices.Equal(enum, field.Enum) {
-			return false
-		}
-	}
-	return true
+	return taskpricing.MatchesPluginSchema(session.PricingSchema(), plan.ExpressionPlan.Contract)
 }
 
 // ApplyTaskPricingPluginFacts attaches typed completion evidence only. Financial

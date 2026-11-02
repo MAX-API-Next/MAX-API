@@ -3,6 +3,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -183,5 +184,54 @@ func TestTaskPluginManagementUIFixture(t *testing.T) {
 	case <-stop:
 	case <-time.After(90 * time.Second):
 		t.Fatal("UI fixture expired without stop acknowledgement")
+	}
+}
+
+func TestTaskPluginManagementClientCancellationCannotSuspendHost(t *testing.T) {
+	for _, method := range []string{"GET", "POST"} {
+		t.Run(method, func(t *testing.T) {
+			engine, _, _ := taskPluginManagementEngine(t)
+			catalog, err := service.CurrentTaskPluginCatalog()
+			require.NoError(t, err)
+			document := func(key, route string) []byte {
+				data, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "synthetic cancellation fixture", Manifest: taskplugin.Manifest{APIVersion: 1, Key: key, Name: key, Version: "1.0.0", Models: []string{"fixture-model"}, Routes: []taskplugin.Route{{Method: "POST", Path: route, Type: "submit", Decode: "submit", Render: "created"}}}})
+				require.NoError(t, err)
+				return data
+			}
+			original := document("cancel-fixture", "/isolated/cancel/jobs")
+			pkg, err := taskplugin.LoadPackage(bytes.NewReader(original), fmt.Sprintf("%x", sha256.Sum256(original)))
+			require.NoError(t, err)
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			_, err = catalog.Host().PricingPackage("POST", "/isolated/cancel/jobs", "fixture-model")
+			require.NoError(t, err)
+			login := httptest.NewRecorder()
+			engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+			route := "/api/task_plugins"
+			var body []byte
+			if method == "POST" {
+				route += "/mutate"
+				data := document("next-fixture", "/isolated/cancel/next")
+				body, err = common.Marshal(map[string]any{"action": "install", "expected_revision": "1", "document": string(data), "expected_sha256": fmt.Sprintf("%x", sha256.Sum256(data))})
+				require.NoError(t, err)
+			}
+			request := httptest.NewRequest(method, route, bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			for _, cookie := range login.Result().Cookies() {
+				request.AddCookie(cookie)
+			}
+			ctx, cancel := context.WithCancel(request.Context())
+			cancel()
+			request = request.WithContext(ctx)
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			_, err = catalog.Host().PricingPackage("POST", "/isolated/cancel/jobs", "fixture-model")
+			require.NoError(t, err, "an authorized client's cancellation must not suspend other callers")
+			if method == "POST" {
+				require.Contains(t, recorder.Body.String(), "\"revision\":\"2\"")
+				_, err = catalog.Host().PricingPackage("POST", "/isolated/cancel/next", "fixture-model")
+				require.NoError(t, err)
+			}
+		})
 	}
 }
