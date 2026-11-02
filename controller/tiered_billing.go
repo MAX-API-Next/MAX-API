@@ -67,6 +67,11 @@ func UpdateTieredBillingConfig(c *gin.Context) {
 }
 
 func finishTieredBillingUpdate(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrModelPricingCacheNotPublished) {
+		recordManageAudit(c, "option.update", map[string]any{"key": "billing_setting.billing_mode,billing_setting.billing_expr", "cache_published": false})
+		respondPricingCacheWarning(c, err)
+		return
+	}
 	if err != nil {
 		if errors.Is(err, model.ErrModelPricingLegacyWrite) {
 			pricingAPIError(c, err)
@@ -76,4 +81,14 @@ func finishTieredBillingUpdate(c *gin.Context, err error) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
+// A committed price is authoritative even when this node could not publish its
+// cache. Legacy clients must not confuse that warning with a rolled-back save.
+func respondPricingCacheWarning(c *gin.Context, err error) bool {
+	if !errors.Is(err, model.ErrModelPricingCacheNotPublished) {
+		return false
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "committed": true, "cache_published": false, "message": err.Error()})
+	return true
 }

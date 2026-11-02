@@ -95,7 +95,9 @@ export function useUpdateOption() {
           }
         }
 
-        toast.success(i18next.t('Setting updated successfully'))
+        if (data.cache_published === false)
+          toast.warning(i18next.t(data.message))
+        else toast.success(i18next.t('Setting updated successfully'))
       } else {
         toast.error(data.message || i18next.t('Failed to update setting'))
       }

@@ -440,7 +440,8 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	err = model.UpdateOption(option.Key, option.Value.(string))
-	if err != nil {
+	cacheNotPublished := errors.Is(err, model.ErrModelPricingCacheNotPublished)
+	if err != nil && !cacheNotPublished {
 		if errors.Is(err, model.ErrModelPricingLegacyWrite) {
 			pricingAPIError(c, err)
 			return
@@ -448,9 +449,14 @@ func UpdateOption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "option.update", map[string]interface{}{
-		"key": option.Key,
-	})
+	auditParams := map[string]interface{}{"key": option.Key}
+	if cacheNotPublished {
+		auditParams["cache_published"] = false
+	}
+	recordManageAudit(c, "option.update", auditParams)
+	if respondPricingCacheWarning(c, err) {
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

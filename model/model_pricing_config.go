@@ -26,6 +26,8 @@ import (
 )
 
 var ErrModelPricingConflict = errors.New("model pricing context changed; reload before saving")
+var ErrModelPricingCacheNotPublished = errors.New("configuration committed; local cache publication failed; reload authoritative pricing")
+
 var ErrModelPricingLegacyWrite = errors.New("versioned task prices require the model_pricing PATCH API; reload with a compatible editor")
 var modelPricingMutationMu sync.Mutex
 
@@ -455,8 +457,8 @@ func modelPricingPublicationError(result *ModelPricingCommit, err error) error {
 	if err != nil {
 		return err
 	}
-	if result != nil && !result.CachePublished {
-		return errors.New(result.Warning)
+	if result != nil && result.Committed && !result.CachePublished {
+		return ErrModelPricingCacheNotPublished
 	}
 	return nil
 }

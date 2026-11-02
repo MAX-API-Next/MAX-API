@@ -3,11 +3,14 @@ import { act, useEffect } from 'react'
 import { useForm, type UseFormReturn } from 'react-hook-form'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createReactTestEnvironment } from '@/test/react'
+import i18next from 'i18next'
 import assert from 'node:assert/strict'
 import { after, afterEach, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import type { UpdateOptionResponse } from '../types'
 import {
   entry,
   receipt,
@@ -25,6 +28,12 @@ import type {
 
 const env = createReactTestEnvironment()
 await env.setup()
+// useUpdateOption reports through the application-wide i18next singleton.
+await i18next.init({
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: {} } },
+})
 const storageDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   'localStorage'
@@ -66,7 +75,7 @@ after(async () => {
   env.teardown()
 })
 
-function setup(values: ModelPricingEntry[] = [entry()]) {
+function setup(values: ModelPricingEntry[] = [entry()], mountWorkspace = true) {
   const server = new Map(values.map((v) => [v.model_name, structuredClone(v)]))
   const writes: GuardedPricingChange[][] = []
   const methods: string[] = []
@@ -123,7 +132,7 @@ function setup(values: ModelPricingEntry[] = [entry()]) {
   const view = render(
     <I18nextProvider i18n={env.i18n}>
       <QueryClientProvider client={client}>
-        <ModelPricingWorkspace />
+        {mountWorkspace ? <ModelPricingWorkspace /> : null}
       </QueryClientProvider>
     </I18nextProvider>
   )
@@ -134,12 +143,13 @@ type LegacyOptionWrite =
   | { key: string; value: string | boolean; options?: never }
   | { options: Record<string, string>; key?: never; value?: never }
 async function legacyCard(tab: 'models' | 'groups' = 'models', visual = false) {
-  const f = setup([entry('legacy-model', 'price-v1', { ModelPrice: 7 })])
+  const f = setup([entry('legacy-model', 'price-v1', { ModelPrice: 7 })], false)
   await act(async () => cleanup())
   const pricingAdapter = api.defaults.adapter
   const writes: LegacyOptionWrite[] = []
-  let response: (write: LegacyOptionWrite) => Promise<boolean> = async () =>
-    true
+  let response: (
+    write: LegacyOptionWrite
+  ) => Promise<boolean | UpdateOptionResponse> = async () => true
   api.defaults.adapter = async (config) => {
     if (config.method !== 'put') {
       if (typeof pricingAdapter !== 'function')
@@ -148,13 +158,17 @@ async function legacyCard(tab: 'models' | 'groups' = 'models', visual = false) {
     }
     const write = JSON.parse(config.data) as LegacyOptionWrite
     writes.push(write)
-    const success = await response(write)
+    const result = await response(write)
+    const responseData =
+      typeof result === 'boolean'
+        ? { success: result, message: result ? '' : 'Synthetic rejection' }
+        : result
     return {
       config,
       status: 200,
       statusText: 'OK',
       headers: {},
-      data: { success, message: success ? '' : 'Synthetic rejection' },
+      data: responseData,
     }
   }
   const actions = env.dom.window.document.createElement('div')
@@ -1073,3 +1087,57 @@ test('legacy expression pair acknowledgement preserves a mode edit made while sa
     'dormant-model': 'legacy',
   })
 })
+
+for (const visual of [false, true]) {
+  test(`legacy ${visual ? 'pair' : 'single'} committed cache warning is visible and acknowledges only the saved input`, async () => {
+    const warnings: string[] = []
+    const originalWarning = toast.warning
+    toast.warning = (message) => {
+      warnings.push(String(message))
+      return 0
+    }
+    try {
+      const f = await legacyCard('models', visual)
+      f.respond(async () => ({
+        success: true,
+        committed: true,
+        cache_published: false,
+        message:
+          'configuration committed; local cache publication failed; reload authoritative pricing',
+      }))
+      if (visual) await stageLegacyExpression(f)
+      else
+        await act(async () =>
+          fireEvent.change(f.getByLabelText('Model fixed pricing'), {
+            target: { value: '{"legacy-model":0}' },
+          })
+        )
+      await act(async () =>
+        fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+      )
+      await waitFor(() => assert.ok(warnings.length > 0))
+      assert.ok(
+        warnings.every((message) => message.includes('configuration committed'))
+      )
+      await waitFor(() =>
+        assert.equal(
+          f
+            .getByRole('button', { name: 'Save model prices' })
+            .hasAttribute('disabled'),
+          false
+        )
+      )
+      const count = f.writes.length
+      await act(async () =>
+        fireEvent.click(f.getByRole('button', { name: 'Save model prices' }))
+      )
+      assert.equal(
+        f.writes.length,
+        count,
+        'known commit must not be retried as if the save rolled back'
+      )
+    } finally {
+      toast.warning = originalWarning
+    }
+  })
+}

@@ -302,8 +302,8 @@ type LegacyTieredPricingItem struct {
 }
 
 func UpdateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) error {
-	_, err := updateLegacyTieredPricing(config)
-	return err
+	result, err := updateLegacyTieredPricing(config)
+	return modelPricingPublicationError(result, err)
 }
 
 func updateLegacyTieredPricing(config map[string]LegacyTieredPricingItem) (*ModelPricingCommit, error) {

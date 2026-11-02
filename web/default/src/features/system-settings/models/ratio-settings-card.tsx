@@ -270,6 +270,7 @@ export function RatioSettingsCard({
     onSuccess: (data) => {
       if (!data.success)
         toast.error(data.message || t('Failed to save tiered billing config'))
+      else if (data.cache_published === false) toast.warning(t(data.message))
     },
     onError: (error: Error) => {
       toast.error(error.message || t('Failed to save tiered billing config'))
@@ -501,7 +502,8 @@ export function RatioSettingsCard({
           queryClient,
           'billing_setting.billing_mode'
         )
-        toast.success(t('Setting updated successfully'))
+        if (response.cache_published !== false)
+          toast.success(t('Setting updated successfully'))
       }
 
       for (const key of updates) {
