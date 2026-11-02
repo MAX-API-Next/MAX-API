@@ -16,7 +16,8 @@ type TieredBillingConfigItem struct {
 }
 
 type TieredBillingUpdateRequest struct {
-	Config map[string]TieredBillingConfigItem `json:"config"`
+	Config  map[string]TieredBillingConfigItem `json:"config"`
+	Options map[string]string                  `json:"options,omitempty"`
 }
 
 func parseStringMapOption(raw string) (map[string]string, error) {
@@ -39,6 +40,16 @@ func UpdateTieredBillingConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request body"})
 		return
 	}
+	if request.Options != nil {
+		_, hasMode := request.Options["billing_setting.billing_mode"]
+		_, hasExpr := request.Options["billing_setting.billing_expr"]
+		if request.Config != nil || len(request.Options) != 2 || !hasMode || !hasExpr {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Options must contain only the complete billing mode and expression pair, without config"})
+			return
+		}
+		finishTieredBillingUpdate(c, model.UpdateOptionsBulk(request.Options))
+		return
+	}
 	if request.Config == nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Config must be a JSON object"})
 		return
@@ -52,7 +63,11 @@ func UpdateTieredBillingConfig(c *gin.Context) {
 		}
 		config[name] = model.LegacyTieredPricingItem{Enabled: item.Enabled, Expr: strings.TrimSpace(item.Expr)}
 	}
-	if err := model.UpdateLegacyTieredPricing(config); err != nil {
+	finishTieredBillingUpdate(c, model.UpdateLegacyTieredPricing(config))
+}
+
+func finishTieredBillingUpdate(c *gin.Context, err error) {
+	if err != nil {
 		if errors.Is(err, model.ErrModelPricingLegacyWrite) {
 			pricingAPIError(c, err)
 			return
