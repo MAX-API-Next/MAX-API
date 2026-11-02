@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskpricing"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -72,4 +73,64 @@ func TestModelPricingWriteLimitMatchesAuthorityReadLimit(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&Option{}).Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestModelPricingExplicitTaskConstantRejectsMixedLegacyDefault(t *testing.T) {
+	for _, expression := range []string{"0", "0.5"} {
+		t.Run(expression, func(t *testing.T) {
+			db := setupModelPricingTest(t)
+			task := pricingChannelForTest(t, db, constant.ChannelTypeKling, "kling-v1")
+			setting := `{"task_pricing_profile":"` + taskpricing.NewAPITask + `"}`
+			require.NoError(t, db.Model(&task).Update("setting", setting).Error)
+			pricingChannelForTest(t, db, constant.ChannelTypeOpenAI, "kling-v1")
+			entry := pricingEntryForTest(t, db, "kling-v1")
+			// A dormant constant has no active task-money meaning yet.
+			_, err := UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "ratio", "billing_setting.billing_expr": expression})})
+			require.NoError(t, err)
+			entry = pricingEntryForTest(t, db, "kling-v1")
+			var before []Option
+			require.NoError(t, db.Order("key").Find(&before).Error)
+			_, err = UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": expression})})
+			require.ErrorContains(t, err, "task default conflicts with legacy channel")
+			var after []Option
+			require.NoError(t, db.Order("key").Find(&after).Error)
+			require.Equal(t, before, after)
+		})
+	}
+}
+func TestModelPricingKnownContractDoesNotMigrateLegacyConstant(t *testing.T) {
+	db := setupModelPricingTest(t)
+	pricingChannelForTest(t, db, constant.ChannelTypeKling, "kling-v1")
+	pricingChannelForTest(t, db, constant.ChannelTypeOpenAI, "kling-v1")
+	for _, expression := range []string{"0.5", "0"} {
+		require.NoError(t, UpdateLegacyTieredPricing(map[string]LegacyTieredPricingItem{"kling-v1": {Enabled: true, Expr: expression}}))
+		entry := pricingEntryForTest(t, db, "kling-v1")
+		require.Equal(t, expression, entry.Configured["billing_setting.billing_expr"])
+	}
+}
+func TestModelPricingExplicitTaskConstantKeepsLegacyWritesProtected(t *testing.T) {
+	db := setupModelPricingTest(t)
+	oldUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 1000
+	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
+	task := pricingChannelForTest(t, db, constant.ChannelTypeKling, "kling-v1")
+	setting := `{"task_pricing_profile":"` + taskpricing.NewAPITask + `"}`
+	require.NoError(t, db.Model(&task).Update("setting", setting).Error)
+	require.NoError(t, db.Create(&Option{Key: "GroupRatio", Value: `{"default":1}`}).Error)
+	require.NoError(t, db.Create(&Option{Key: "PreConsumedQuota", Value: "0"}).Error)
+	for _, tc := range []struct {
+		expression string
+		quota      int
+	}{{"0", 0}, {"0.5", 500}} {
+		entry := pricingEntryForTest(t, db, "kling-v1")
+		_, err := UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": tc.expression})})
+		require.NoError(t, err)
+		require.ErrorIs(t, UpdateOption("ModelPrice", `{"kling-v1":7}`), ErrModelPricingLegacyWrite)
+		require.ErrorIs(t, UpdateLegacyTieredPricing(map[string]LegacyTieredPricingItem{}), ErrModelPricingLegacyWrite)
+		entry = pricingEntryForTest(t, db, "kling-v1")
+		quote, err := QuoteModelPricing(ModelPricingQuoteRequest{ModelName: "kling-v1", ContextID: fmt.Sprintf("channel:%d", task.Id), ExpectedVersion: entry.Version, ExpectedContractDigest: entry.ContractDigest, ExpectedBindingVersion: entry.BindingVersion, Group: "default", Submit: types.TaskPricingFacts{"units": 1.0}})
+		require.NoError(t, err)
+		require.Equal(t, tc.quota, quote.Preview.Estimate.QuotaAfterGroup)
+		require.False(t, quote.AdmissionReady)
+	}
 }

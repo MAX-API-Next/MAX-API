@@ -171,6 +171,7 @@ test('HTTP conflicts, definite rejection and ambiguous write failures remain dis
   for (const [status, kind] of [
     [409, 'conflict'],
     [400, 'rejected'],
+    [500, 'unknown-result'],
     [503, 'unknown-result'],
     [408, 'unknown-result'],
   ] as const) {
@@ -288,4 +289,83 @@ test('post-PATCH confirmation cannot reuse another component pre-PATCH in-flight
   assert.equal(await saving, true)
   assert.equal(session.getSnapshot().document?.base?.version, 'price-v2')
   assert.equal(session.getSnapshot().document?.pricing?.ModelPrice, 0)
+})
+
+test('a committed PATCH with HTTP500 stays unknown until a fresh GET and preserves a later edit', async () => {
+  let current = entry('http500-model', 'price-v1', { ModelPrice: 7 })
+  let reads = 0,
+    writes = 0
+  const readStarted = deferred<void>()
+  const readback = deferred<void>()
+  api.defaults.adapter = async (c) => {
+    if (c.method === 'patch') {
+      writes++
+      const change = JSON.parse(c.data).changes[0]
+      current = entry('http500-model', 'price-v2', change.pricing)
+      throw new AxiosError(
+        'Synthetic commit acknowledgement loss',
+        undefined,
+        c,
+        undefined,
+        {
+          config: c,
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: {},
+          data: {
+            success: false,
+            message: 'Synthetic transaction result unknown',
+          },
+        }
+      )
+    }
+    reads++
+    if (reads === 2) {
+      readStarted.resolve()
+      await readback.promise
+    }
+    return {
+      config: c,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: {
+        success: true,
+        data: {
+          entries: [structuredClone(current)],
+          options: {},
+          empty_version: 'empty',
+          authority: 'database',
+        },
+      },
+    }
+  }
+  const session = new ModelPricingDraftSession()
+  session.select('http500-model')
+  await session.refresh()
+  session.replacePricing({ ModelPrice: 0 })
+  const saving = session.save()
+  await readStarted.promise
+  try {
+    assert.equal(session.getSnapshot().document?.writeState, 'unknown')
+    assert.equal(session.getSnapshot().document?.commitKnown, false)
+    assert.equal(writes, 1)
+    await assert.rejects(session.save(), /Reconcile authoritative pricing/)
+    assert.equal(writes, 1, 'an unknown write must not be replayed')
+    session.replacePricing({ ModelPrice: 2 })
+  } finally {
+    readback.resolve()
+  }
+  await saving
+  const observed = session.getSnapshot().document!
+  assert.equal(observed.base?.configured.ModelPrice, 0)
+  assert.equal(observed.pricing?.ModelPrice, 2)
+  assert.equal(observed.dirty, true)
+  assert.equal(observed.writeState, 'idle')
+  assert.equal(
+    observed.commitKnown,
+    false,
+    'a matching observation is not an acknowledged commit'
+  )
+  assert.equal(writes, 1)
 })

@@ -56,7 +56,7 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 }
 func getModelPricingSnapshot(db *gorm.DB, names []string) (*ModelPricingSnapshot, error) {
 	if len(names) > 2000 {
-		return nil, errors.New("too many pricing models requested")
+		return nil, modelPricingValidation(errors.New("too many pricing models requested"))
 	}
 	result := &ModelPricingSnapshot{Entries: []ModelPricingEntry{}, Options: map[string]string{}, EmptyVersion: pricingDigest(map[string]any{}), Authority: "database; equality tokens only; configuration samples are not paid admission"}
 	err := readPricingState(db, func(_ *gorm.DB, values pricingMaps, a *pricingAuthority) error {
@@ -84,7 +84,7 @@ func getModelPricingSnapshot(db *gorm.DB, names []string) (*ModelPricingSnapshot
 		} else {
 			for _, name := range names {
 				if !validPricingName(name) {
-					return errors.New("invalid model name")
+					return modelPricingValidation(errors.New("invalid model name"))
 				}
 				set[name] = true
 			}
@@ -115,7 +115,7 @@ func PreviewModelPricing(name string, draft types.ModelPricingValues) (*ModelPri
 	var result ModelPricingEntry
 	err := readPricingState(DB, func(_ *gorm.DB, values pricingMaps, a *pricingAuthority) error {
 		if err := validateModelPricing(name, draft, modelPricingValues(values, name), a.contexts(name)); err != nil {
-			return err
+			return modelPricingValidation(err)
 		}
 		candidate := clonePricingMaps(values)
 		replaceModelPricing(candidate, name, draft)
@@ -211,7 +211,10 @@ func readQuoteTermsWithUnit(tx *gorm.DB, group string, quotaPerUnit float64) (fl
 		ratios = candidate
 	}
 	ratio, exists := ratios[group]
-	if !exists || group == "auto" || strings.HasPrefix(group, "auto:") || ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+	if !exists || group == "auto" || strings.HasPrefix(group, "auto:") {
+		return 0, 0, "", modelPricingValidation(errors.New("unknown or invalid configured quote group"))
+	}
+	if ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
 		return 0, 0, "", errors.New("unknown or invalid configured quote group")
 	}
 	return ratio, floor, pricingDigest(struct {
@@ -224,7 +227,7 @@ func readQuoteTermsWithUnit(tx *gorm.DB, group string, quotaPerUnit float64) (fl
 }
 func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, error) {
 	if !validPricingName(request.ModelName) || request.ContextID == "" || request.Group == "" {
-		return nil, errors.New("model, host context and configured group required")
+		return nil, modelPricingValidation(errors.New("model, host context and configured group required"))
 	}
 	var result *ModelPricingQuote
 	err := readPricingState(DB, func(tx *gorm.DB, values pricingMaps, a *pricingAuthority) error {
@@ -234,29 +237,29 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 		}
 		context, exists := findPricingContext(entry.Contexts, request.ContextID)
 		if !exists || !context.Available || context.Contract == nil {
-			return errors.New("host source has no available phase contract for quoting")
+			return modelPricingValidation(errors.New("host source has no available phase contract for quoting"))
 		}
 		if context.ChannelID > 0 && !slices.Contains(context.Groups, request.Group) {
-			return errors.New("configured channel does not serve this quote group")
+			return modelPricingValidation(errors.New("configured channel does not serve this quote group"))
 		}
 		candidate := clonePricingMaps(values)
 		if request.Pricing != nil {
 			if err := validateModelPricing(request.ModelName, request.Pricing, entry.Configured, entry.Contexts); err != nil {
-				return err
+				return modelPricingValidation(err)
 			}
 			replaceModelPricing(candidate, request.ModelName, request.Pricing)
 		}
 		if err := validateModelPricing(request.ModelName, modelPricingValues(candidate, request.ModelName), entry.Configured, entry.Contexts); err != nil {
-			return err
+			return modelPricingValidation(err)
 		}
 		selected, err := taskpricing.SelectExpression(taskPriceMaps(candidate), context.source, request.ModelName, context.MappedModel)
 		if err != nil {
-			return err
+			return modelPricingValidation(err)
 		}
 		if selected.Model != request.ModelName {
 			draft := modelPricingValues(candidate, selected.Model)
 			if err := validateModelPricing(selected.Model, draft, draft, a.contexts(selected.Model)); err != nil {
-				return err
+				return modelPricingValidation(err)
 			}
 		}
 		ratio, floor, terms, err := readQuoteTerms(tx, request.Group)
@@ -276,7 +279,7 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 		guards := taskpricing.Guards{PriceVersion: entry.Version, ContractDigest: selectedDigest, BindingVersion: entry.BindingVersion}
 		preview, err := taskpricing.Preview(taskpricing.PreviewInput{Profile: taskpricing.NewAPITask, Prices: taskPriceMaps(candidate), Source: context.source, OriginalModel: request.ModelName, MappedModel: context.MappedModel, Contract: *context.Contract, Expected: guards, Current: guards, Submit: request.Submit, Actual: request.Actual, Request: billingexpr.RequestInput{Body: request.RequestBody, Headers: request.RequestHeaders}, PricingAt: at, QuotaPerUnit: common.QuotaPerUnit, GroupRatio: ratio, ReservationFloor: floor})
 		if err != nil {
-			return err
+			return modelPricingValidation(err)
 		}
 		_, _, after, err := readQuoteTerms(tx, request.Group)
 		if err != nil {

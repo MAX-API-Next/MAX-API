@@ -2,8 +2,12 @@
 package controller
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -18,6 +22,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // Restore typed caches directly: the production legacy writer must refuse to
@@ -178,5 +183,102 @@ func TestLegacyPricingCommittedCacheWarningRemainsAuditedSuccess(t *testing.T) {
 			require.Contains(t, logs[0].Other, `"action":"option.update"`)
 			require.Contains(t, logs[0].Other, `"cache_published":false`)
 		})
+	}
+}
+
+// Inject an acknowledgement loss AFTER SQLite really commits the price. This
+// wraps the existing transaction interface, never a production database.
+type pricingReceiptLossPool struct {
+	gorm.ConnPool
+	lost atomic.Bool
+}
+
+func (p *pricingReceiptLossPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
+	tx, err := p.ConnPool.(gorm.TxBeginner).BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &pricingReceiptLossTx{Tx: tx, pool: p}, nil
+}
+
+type pricingReceiptLossTx struct {
+	*sql.Tx
+	pool *pricingReceiptLossPool
+}
+
+func (tx *pricingReceiptLossTx) Commit() error {
+	if err := tx.Tx.Commit(); err != nil {
+		return err
+	}
+	if tx.pool.lost.CompareAndSwap(false, true) {
+		return errors.New("synthetic lost pricing commit acknowledgement")
+	}
+	return nil
+}
+func TestModelPricingHTTPLostCommitReceiptRemainsUnknown(t *testing.T) {
+	engine := setupModelPricingControllerTest(t)
+	db := model.DB
+	before := pricingControllerEntry(t, engine, "lost-receipt")
+	payload := map[string]any{"changes": []types.ModelPricingChange{controllerPricingChange(before, types.ModelPricingValues{"ModelPrice": float64(0)})}}
+	pool := &pricingReceiptLossPool{ConnPool: db.ConnPool}
+	faultDB := db.Session(&gorm.Session{NewDB: true, Context: t.Context()})
+	faultDB.ConnPool, faultDB.Statement.ConnPool = pool, pool
+	model.DB = faultDB
+	t.Cleanup(func() { model.DB = db })
+	response := pricingControllerRequest(t, engine, http.MethodPatch, "/pricing", payload)
+	model.DB = db
+	require.True(t, pool.lost.Load(), response.Body.String())
+	require.Equal(t, http.StatusInternalServerError, response.Code, response.Body.String())
+	// Independent database observation proves the uncertain response was NOT a
+	// validation rejection or rollback; exact zero is the committed authority.
+	var stored model.Option
+	require.NoError(t, db.Where("key = ?", "ModelPrice").First(&stored).Error)
+	var prices map[string]float64
+	require.NoError(t, common.UnmarshalJsonStr(stored.Value, &prices))
+	require.Equal(t, float64(0), prices["lost-receipt"])
+	observed := pricingControllerEntry(t, engine, "lost-receipt")
+	require.Equal(t, float64(0), observed.Configured["ModelPrice"])
+	require.NotEqual(t, before.Version, observed.Version)
+	replay := pricingControllerRequest(t, engine, http.MethodPatch, "/pricing", payload)
+	require.Equal(t, http.StatusConflict, replay.Code, replay.Body.String())
+}
+func TestModelPricingHTTPDatabaseFailureIsNotValidation(t *testing.T) {
+	for _, phase := range []string{"query", "write"} {
+		t.Run(phase, func(t *testing.T) {
+			engine := setupModelPricingControllerTest(t)
+			db := model.DB
+			before := pricingControllerEntry(t, engine, "db-failure")
+			var rowsBefore []model.Option
+			require.NoError(t, db.Order("key").Find(&rowsBefore).Error)
+			failure := func(tx *gorm.DB) { tx.AddError(errors.New("synthetic pricing database failure")) }
+			if phase == "query" {
+				require.NoError(t, db.Callback().Query().Before("gorm:query").Register("pricing_http_fault", failure))
+				t.Cleanup(func() { _ = db.Callback().Query().Remove("pricing_http_fault") })
+			} else {
+				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("pricing_http_fault", failure))
+				t.Cleanup(func() { _ = db.Callback().Create().Remove("pricing_http_fault") })
+			}
+			if phase == "query" {
+				response := pricingControllerRequest(t, engine, http.MethodGet, "/pricing?model=db-failure", nil)
+				require.Equal(t, http.StatusInternalServerError, response.Code, response.Body.String())
+			}
+			response := pricingControllerRequest(t, engine, http.MethodPatch, "/pricing", map[string]any{"changes": []types.ModelPricingChange{controllerPricingChange(before, types.ModelPricingValues{"ModelPrice": float64(0)})}})
+			require.Equal(t, http.StatusInternalServerError, response.Code, response.Body.String())
+			if phase == "query" {
+				require.NoError(t, db.Callback().Query().Remove("pricing_http_fault"))
+			} else {
+				require.NoError(t, db.Callback().Create().Remove("pricing_http_fault"))
+			}
+			var rowsAfter []model.Option
+			require.NoError(t, db.Order("key").Find(&rowsAfter).Error)
+			require.Equal(t, rowsBefore, rowsAfter)
+		})
+	}
+}
+func TestModelPricingHTTPKnownValidationRetainsBadRequest(t *testing.T) {
+	engine := setupModelPricingControllerTest(t)
+	for _, payload := range []map[string]any{{"changes": []types.ModelPricingChange{}}, {"changes": []types.ModelPricingChange{controllerPricingChange(pricingControllerEntry(t, engine, "invalid-draft"), types.ModelPricingValues{"ModelPrice": float64(-1)})}}} {
+		response := pricingControllerRequest(t, engine, http.MethodPatch, "/pricing", payload)
+		require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
 	}
 }

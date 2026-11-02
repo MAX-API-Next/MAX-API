@@ -101,8 +101,8 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
 
 ### Rule 4: New Channel StreamOptions Support
 
-When implementing a new channel:
-- Confirm whether the provider supports `StreamOptions`.
+When implementing a channel that relays streaming model responses:
+- Confirm whether the provider supports `StreamOptions`; task-only/non-streaming channels do not require this check.
 - If supported, add the channel to `streamSupportedChannels`.
 
 ### Rule 5: Protected Project Information — DO NOT Modify or Delete
