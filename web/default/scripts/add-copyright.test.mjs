@@ -18,7 +18,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 */
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,7 +51,7 @@ export const value = 1
   assert.equal(fs.readFileSync(file, 'utf8'), original)
 })
 
-function preserveNotice(t, original, verify = (actual) => assert.equal(actual, original)) {
+function copyrightFixture(t, original) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'maxapi-copyright-'))
   t.after(() => {
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()))
@@ -61,9 +61,41 @@ function preserveNotice(t, original, verify = (actual) => assert.equal(actual, o
   fs.mkdirSync(path.join(root, 'src'))
   const file = path.join(root, 'src', 'adversarial.ts')
   fs.writeFileSync(file, original)
+  return { root, file }
+}
+
+function preserveNotice(t, original, verify = (actual) => assert.equal(actual, original)) {
+  const { root, file } = copyrightFixture(t, original)
   execFileSync(process.execPath, [script], { cwd: root })
   verify(fs.readFileSync(file, 'utf8'))
 }
+
+test('copyright check detects an outdated project header before a sole project notice', (t) => {
+  const suffix = '// Copyright (C) 2023-2026 MAX-API-Next\nexport const value = 1\n'
+  const original = '/*\nCopyright (C) 2020 MAX-API-Next\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\n' + suffix
+  const { root, file } = copyrightFixture(t, original)
+  const before = spawnSync(process.execPath, [script, '--check'], { cwd: root })
+  assert.equal(before.status, 1)
+  assert.equal(fs.readFileSync(file, 'utf8'), original)
+  execFileSync(process.execPath, [script], { cwd: root })
+  const updated = fs.readFileSync(file, 'utf8')
+  assert.ok(updated.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))
+  assert.ok(updated.endsWith('*/\n' + suffix))
+  assert.equal(spawnSync(process.execPath, [script, '--check'], { cwd: root }).status, 0)
+  assert.equal(fs.readFileSync(file, 'utf8'), updated)
+})
+
+test('copyright preserves a mixed later notice after a recognized project block', (t) => {
+  preserveNotice(t, '/*\nCopyright (C) 2020 MAX-API-Next\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\n// Copyright (C) 2023 MAX-API-Next and QuantumNous\nexport const value = 1\n')
+})
+
+test('copyright does not normalize a standalone project notice without a recognized block', (t) => {
+  preserveNotice(t, '// Copyright (C) 2020 MAX-API-Next\nexport const value = 1\n')
+})
+
+test('copyright preserves a standalone license declaration', (t) => {
+  preserveNotice(t, '/* Licensed under MIT */\nexport const value = 1\n')
+})
 test('copyright keeps a star-prefixed upstream holder inside a project block', (t) => {
   preserveNotice(t, '/*\nCopyright (C) 2023-2026 MAX-API-Next\n * Copyright (C) 2023-2026 QuantumNous\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n')
 })

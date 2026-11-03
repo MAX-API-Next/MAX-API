@@ -70,6 +70,8 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
   /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\.?\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
 const LEADING_COMMENT_PATTERN = /^\s*(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/
+const SOLE_PROJECT_NOTICE_PATTERN =
+  /^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i
 const PROJECT_HEADER_LINES = new Set(
   COPYRIGHT_HEADER.split(/\r?\n/).map((line) => line.trim())
 )
@@ -87,6 +89,7 @@ function hasGeneratedMarker(text) {
 function hasThirdPartyCopyright(text) {
   let remaining = text
   let first = true
+  let afterProjectBlock = false
   while (remaining.length > 0) {
     const match = remaining.match(LEADING_COMMENT_PATTERN)
     // Preserve an incomplete leading block rather than assign it a license.
@@ -99,12 +102,14 @@ function hasThirdPartyCopyright(text) {
     const protectedComment = body.split(/\r?\n/).some((line) => {
       const notice = line.trim().replace(/^[*/!]+\s*/, '')
       if (!projectBlock)
-        return /^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b)/i.test(notice)
+        return /^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b|Licensed\s+under\b)/i.test(notice) &&
+          !(afterProjectBlock && SOLE_PROJECT_NOTICE_PATTERN.test(notice))
       // Normalize only known project boilerplate and a sole project holder;
       // unknown attribution or license text must stay byte-identical.
-      return !PROJECT_HEADER_LINES.has(notice) && !/^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i.test(notice)
+      return !PROJECT_HEADER_LINES.has(notice) && !SOLE_PROJECT_NOTICE_PATTERN.test(notice)
     })
     if (protectedComment) return true
+    if (projectBlock) afterProjectBlock = true
     remaining = remaining.slice(match[0].length)
     first = false
   }
