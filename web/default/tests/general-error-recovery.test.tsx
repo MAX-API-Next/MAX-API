@@ -91,7 +91,7 @@ afterAll(() => {
   testEnv.teardown()
 })
 
-function createTestRouter(error: unknown) {
+function createTestRouter(error: unknown): ReturnType<typeof createRouter> {
   const root = createRootRoute({
     component: Outlet,
     errorComponent: GeneralError,
@@ -118,7 +118,9 @@ function createTestRouter(error: unknown) {
   })
 }
 
-function renderRouter(router: ReturnType<typeof createTestRouter>) {
+function renderRouter(
+  router: ReturnType<typeof createTestRouter>
+): ReturnType<typeof render> {
   return render(
     <I18nextProvider i18n={testEnv.i18n}>
       <RouterProvider router={router} />
