@@ -90,6 +90,23 @@ test('copyright preserves a standalone symbol notice', (t) => {
   preserveNotice(t, '/*\n© 2024 QuantumNous\n*/\nexport const value = 1\n')
 })
 
+for (const header of [
+  '/* Module description. */\n/* Copyright (C) 2023 Upstream */',
+  '/*! Copyright (C) 2023 Upstream */',
+  '// Module description.\n/* SPDX-FileCopyrightText: 2023 Upstream */',
+  '\n // Copyright (C) 2023 Upstream',
+  '/*! Vendor license text without a standard copyright spelling. */',
+  '/**! Copyright (C) 2023 Upstream */',
+  '//! Copyright (C) 2023 Upstream',
+  '/// Copyright (C) 2023 Upstream',
+  '/* SPDX-License-Identifier: MIT */',
+  '/** @license MIT */',
+]) {
+  test('copyright preserves leading notice sequence: ' + header, (t) => {
+    preserveNotice(t, header + '\nexport const value = 1\n')
+  })
+}
+
 test('copyright normalizes a project-only notice with a trailing period', (t) => {
   preserveNotice(t, '/*\nCopyright (C) 2020 MAX-API-Next.\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n', (actual) => {
     assert.ok(actual.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))

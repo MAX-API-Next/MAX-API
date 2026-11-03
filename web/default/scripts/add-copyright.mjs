@@ -69,7 +69,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
   /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\.?\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
-const LEADING_BLOCK_COMMENT_PATTERN = /^\/\*[\s\S]*?\*\/\r?\n?/
+const LEADING_COMMENT_PATTERN = /^\s*(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/
 const PROJECT_HEADER_LINES = new Set(
   COPYRIGHT_HEADER.split(/\r?\n/).map((line) => line.trim())
 )
@@ -85,20 +85,30 @@ function hasGeneratedMarker(text) {
 }
 
 function hasThirdPartyCopyright(text) {
-  const block = text.match(LEADING_BLOCK_COMMENT_PATTERN)?.[0]
-  if (!block) return false
-  const projectBlock = PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)
-  // Mixed project/upstream notices are third-party material too. Never
-  // normalize them into a project-only header and erase an existing holder.
-  return block.slice(2, block.lastIndexOf('*/')).split(/\r?\n/).some((line) => {
-    const notice = line.trim().replace(/^\*\s*/, '')
-    if (!projectBlock)
-      return /^(?:Copyright\b|SPDX-FileCopyrightText:|©)/i.test(notice)
-    // Only a recognized, sole project holder is safe to normalize. Unknown
-    // attribution or license lines also preserve the block, not just known
-    // copyright spellings. The standard project boilerplate may be normalized.
-    return !PROJECT_HEADER_LINES.has(notice) && !/^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i.test(notice)
-  })
+  let remaining = text
+  let first = true
+  while (remaining.length > 0) {
+    const match = remaining.match(LEADING_COMMENT_PATTERN)
+    // Preserve an incomplete leading block rather than assign it a license.
+    if (!match) return remaining.trimStart().startsWith('/*')
+    const comment = match[1]
+    // Bang comments conventionally carry licenses, even without a known notice.
+    if (/^(?:\/\*+|\/\/+)\s*!/.test(comment)) return true
+    const projectBlock = first && PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)
+    const body = comment.startsWith('//') ? comment.slice(2) : comment.slice(2, -2)
+    const protectedComment = body.split(/\r?\n/).some((line) => {
+      const notice = line.trim().replace(/^[*/!]+\s*/, '')
+      if (!projectBlock)
+        return /^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b)/i.test(notice)
+      // Normalize only known project boilerplate and a sole project holder;
+      // unknown attribution or license text must stay byte-identical.
+      return !PROJECT_HEADER_LINES.has(notice) && !/^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i.test(notice)
+    })
+    if (protectedComment) return true
+    remaining = remaining.slice(match[0].length)
+    first = false
+  }
+  return false
 }
 
 async function collectSourceFiles(dir) {
