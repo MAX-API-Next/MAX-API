@@ -70,7 +70,7 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
   /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
 const THIRD_PARTY_COPYRIGHT_PATTERN =
-  /^\/\*[\s\S]*?Copyright[\s\S]*?\*\/\r?\n?/i
+  /^\/\*[\s\S]*?(?:Copyright|SPDX-FileCopyrightText:|©)[\s\S]*?\*\/\r?\n?/i
 
 const checkMode = process.argv.includes('--check')
 
@@ -92,7 +92,7 @@ function hasThirdPartyCopyright(text) {
   // normalize them into a project-only header and erase an existing holder.
   return block.split(/\r?\n/).some((line) => {
     const notice = line.trim().replace(/^\*\s*/, '')
-    if (!/^(?:Copyright\b|SPDX-FileCopyrightText:)/i.test(notice)) return false
+    if (!/^(?:Copyright\b|SPDX-FileCopyrightText:|©)/i.test(notice)) return false
     // Only a recognized, sole project holder is safe to normalize. Unknown
     // formats and combined holders remain byte-identical, regardless of order.
     return !/^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i.test(notice)

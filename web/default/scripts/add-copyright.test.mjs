@@ -77,11 +77,17 @@ for (const notice of [
   'Copyright (C) 2023 MAX-API-Next and QuantumNous',
   'SPDX-FileCopyrightText: 2023 QuantumNous',
   '* SPDX-FileCopyrightText: 2023 QuantumNous and MAX-API-Next',
+  '© 2024 QuantumNous',
+  '* © QuantumNous (legacy attribution)',
 ]) {
   test('copyright preserves attribution: ' + notice, (t) => {
     preserveNotice(t, '/*\nCopyright (C) 2023-2026 MAX-API-Next\n' + notice + '\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n')
   })
 }
+
+test('copyright preserves a standalone symbol notice', (t) => {
+  preserveNotice(t, '/*\n© 2024 QuantumNous\n*/\nexport const value = 1\n')
+})
 
 test('copyright still normalizes a recognized sole project holder', (t) => {
   preserveNotice(t, '/*\nCopyright (C) 2020-2021 MAX-API-Next\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n', (actual) => {
