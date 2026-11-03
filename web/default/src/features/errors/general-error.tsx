@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 
 const FEEDBACK_URL = 'https://github.com/MAX-API-Next/MAX-API/issues'
 const CHUNK_RELOAD_KEY = 'maxapi:chunk-reload-build'
+const CHUNK_RELOAD_HISTORY_KEY = 'maxapi:chunk-reload-builds'
 
 type GeneralErrorProps = React.HTMLAttributes<HTMLDivElement> & {
   minimal?: boolean
@@ -68,8 +69,26 @@ export function GeneralError({
         document.querySelectorAll<HTMLScriptElement>('script[defer][src]')
       ).map((script) => script.src)
       const build = entries.length ? entries.join('\n') : error.message
-      if (window.sessionStorage.getItem(CHUNK_RELOAD_KEY) === build) return
-      window.sessionStorage.setItem(CHUNK_RELOAD_KEY, build)
+      const previous = window.sessionStorage.getItem(CHUNK_RELOAD_HISTORY_KEY)
+      let attempted: unknown = []
+      if (previous !== null) {
+        attempted = JSON.parse(previous)
+      } else {
+        // Old replicas still read/write their raw marker. Import it without
+        // replacing it with a collection that their equality check cannot read.
+        const legacy = window.sessionStorage.getItem(CHUNK_RELOAD_KEY)
+        if (legacy !== null) attempted = [legacy]
+      }
+      if (
+        !Array.isArray(attempted) ||
+        !attempted.every((entry) => typeof entry === 'string')
+      )
+        return
+      if (attempted.includes(build)) return
+      window.sessionStorage.setItem(
+        CHUNK_RELOAD_HISTORY_KEY,
+        JSON.stringify([...attempted, build])
+      )
     } catch {
       // A durable marker is required to avoid an automatic reload loop.
       return

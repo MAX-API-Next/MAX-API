@@ -79,6 +79,7 @@ for (const notice of [
   '* SPDX-FileCopyrightText: 2023 QuantumNous and MAX-API-Next',
   '© 2024 QuantumNous',
   '* © QuantumNous (legacy attribution)',
+  'Authored by QuantumNous',
 ]) {
   test('copyright preserves attribution: ' + notice, (t) => {
     preserveNotice(t, '/*\nCopyright (C) 2023-2026 MAX-API-Next\n' + notice + '\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n')
@@ -87,6 +88,22 @@ for (const notice of [
 
 test('copyright preserves a standalone symbol notice', (t) => {
   preserveNotice(t, '/*\n© 2024 QuantumNous\n*/\nexport const value = 1\n')
+})
+
+test('copyright normalizes a project-only notice with a trailing period', (t) => {
+  preserveNotice(t, '/*\nCopyright (C) 2020 MAX-API-Next.\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n', (actual) => {
+    assert.ok(actual.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))
+    assert.ok(!actual.includes('2020 MAX-API-Next.'))
+    assert.ok(actual.endsWith('export const value = 1\n'))
+  })
+})
+
+test('copyright adds its header before ordinary prose mentioning the symbol', (t) => {
+  const original = '/* Render the © symbol in the footer. */\nexport const value = 1\n'
+  preserveNotice(t, original, (actual) => {
+    assert.ok(actual.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))
+    assert.ok(actual.endsWith(original))
+  })
 })
 
 test('copyright still normalizes a recognized sole project holder', (t) => {

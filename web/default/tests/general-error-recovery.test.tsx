@@ -145,7 +145,9 @@ test.each([
 })
 
 test('limits different chunk failures to one reload per loaded build, then allows a new build', async () => {
-  for (const [index, build] of ['oldbuild', 'oldbuild', 'newbuild'].entries()) {
+  const builds = ['oldbuild', 'oldbuild', 'newbuild', 'oldbuild', 'newbuild']
+  const expectedReloads = [1, 1, 2, 2, 2]
+  for (const [index, build] of builds.entries()) {
     document.querySelector<HTMLScriptElement>('script')!.src =
       `/static/js/index.${build}.js`
     const error = Object.assign(new Error(`Loading chunk ${index} failed.`), {
@@ -156,9 +158,45 @@ test('limits different chunk failures to one reload per loaded build, then allow
     await view.findByText('Current page')
     await act(() => router.navigate({ to: '/channels' }))
     await view.findByText('Page resources could not be loaded')
-    assert.equal(reload.mock.calls.length, index === 2 ? 2 : 1)
+    assert.equal(reload.mock.calls.length, expectedReloads[index])
     view.unmount()
   }
+})
+
+test('preserves the legacy attempted build when migrating reload history', async () => {
+  const legacyBuild = document.querySelector<HTMLScriptElement>('script')!.src
+  browserWindow.sessionStorage.setItem(
+    'maxapi:chunk-reload-build',
+    legacyBuild
+  )
+  for (const build of ['newbuild', 'oldbuild']) {
+    document.querySelector<HTMLScriptElement>('script')!.src =
+      `/static/js/index.${build}.js`
+    const router = createTestRouter(new Error('Loading chunk 46 failed.'))
+    const view = renderRouter(router)
+    await view.findByText('Current page')
+    await act(() => router.navigate({ to: '/channels' }))
+    await view.findByText('Page resources could not be loaded')
+    assert.equal(reload.mock.calls.length, 1)
+    assert.equal(
+      browserWindow.sessionStorage.getItem('maxapi:chunk-reload-build'),
+      legacyBuild,
+      'new replicas must not overwrite the marker still read by old replicas'
+    )
+    view.unmount()
+  }
+})
+
+test('invalid reload history retains manual recovery without auto reload', async () => {
+  browserWindow.sessionStorage.setItem('maxapi:chunk-reload-builds', '[false]')
+  const router = createTestRouter(new Error('Loading chunk 47 failed.'))
+  const view = renderRouter(router)
+  await view.findByText('Current page')
+  await act(() => router.navigate({ to: '/channels' }))
+  await view.findByText('Page resources could not be loaded')
+  assert.equal(reload.mock.calls.length, 0)
+  fireEvent.click(view.getByRole('button', { name: 'Reload page' }))
+  assert.equal(reload.mock.calls.length, 1)
 })
 
 test('hover and failed route preload leave the page usable until navigation', async () => {
