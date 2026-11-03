@@ -40,7 +40,7 @@ func TestManagementUsesObservedRevisionAndPreservesOldSessions(t *testing.T) {
 	m.Version = "2.0.0"
 	second := testPackage(t, m, "new opaque source")
 	require.NoError(t, a.MutateExpected(t.Context(), 2, ManagementMutation{Action: "install", Package: second}))
-	require.ErrorIs(t, a.MutateExpected(t.Context(), 3, ManagementMutation{Action: "enable", Key: m.Key, Version: "1.0.0"}), ErrCatalogConflict)
+	require.ErrorIs(t, a.MutateExpected(t.Context(), 3, ManagementMutation{Action: "enable", Key: m.Key, Version: "1.0.0"}), ErrCatalogInvalid)
 	require.NoError(t, a.MutateExpected(t.Context(), 3, ManagementMutation{Action: "activate", Key: m.Key, Version: "1.0.0"}))
 	require.NoError(t, a.MutateExpected(t.Context(), 4, ManagementMutation{Action: "revoke", Key: m.Key, Version: "1.0.0"}))
 	_, err = a.Host().Resolve(binding, actor)

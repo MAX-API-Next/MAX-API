@@ -66,7 +66,7 @@ func (catalog *Catalog) MutateExpected(ctx context.Context, expected int64, muta
 				return err
 			}
 			if !next.Packages[index].Active {
-				return ErrCatalogConflict
+				return ErrCatalogInvalid
 			}
 			return setCatalogEnabled(next, mutation.Key, mutation.Action == "enable")
 		case "revoke":

@@ -209,6 +209,33 @@ test('lists real metadata and disables with the observed revision while invalida
     saved: true,
   })
 })
+test('closing details discards a pending revocation before reopening the same version', async () => {
+  const f = fixture()
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  fireEvent.click(await v.findByRole('button', { name: 'Revoke version' }))
+  assert.ok(v.getByRole('button', { name: 'Confirm' }))
+  fireEvent.click(v.getByRole('button', { name: 'Close' }))
+  await waitFor(() => assert.equal(v.queryByRole('dialog'), null))
+  fireEvent.click(v.getByRole('button', { name: 'Details' }))
+  await v.findByRole('button', { name: 'Revoke version' })
+  assert.equal(
+    v.queryByRole('button', { name: 'Confirm' }) === null,
+    true,
+    'reopening the same version requires a fresh confirmation'
+  )
+  assert.equal(
+    f.writes.length,
+    0,
+    'dismissing and reopening must not mutate the catalog'
+  )
+  fireEvent.click(v.getByRole('button', { name: 'Revoke version' }))
+  fireEvent.click(v.getByRole('button', { name: 'Confirm' }))
+  await waitFor(() => assert.equal(f.writes.length, 1))
+  assert.equal(f.writes[0].action, 'revoke')
+  assert.equal(f.writes[0].expected_revision, '1')
+})
 test('a refreshed catalog cannot silently rebase an open confirmation', async () => {
   const f = fixture(),
     v = f.view()

@@ -153,6 +153,56 @@ func TestTaskPluginManagementRootAPIAndDurableVersionGuards(t *testing.T) {
 	require.EqualValues(t, 2, head.Revision)
 }
 
+func TestTaskPluginManagementHistoricalEnableDisableIsInvalidNotConflict(t *testing.T) {
+	engine, db, _ := taskPluginManagementEngine(t)
+	catalog, err := service.CurrentTaskPluginCatalog()
+	require.NoError(t, err)
+	for _, version := range []string{"1.0.0", "2.0.0"} {
+		document, err := common.Marshal(taskplugin.PackageDocument{FormatVersion: 1, Source: "synthetic history fixture", Manifest: taskplugin.Manifest{APIVersion: 1, Key: "history-fixture", Name: "History Fixture", Version: version, Models: []string{"fixture-model"}, Routes: []taskplugin.Route{{Method: "POST", Path: "/isolated/history/jobs", Type: "submit", Decode: "submit", Render: "created"}}}})
+		require.NoError(t, err)
+		pkg, err := taskplugin.LoadPackage(bytes.NewReader(document), fmt.Sprintf("%x", sha256.Sum256(document)))
+		require.NoError(t, err)
+		require.NoError(t, catalog.Install(t.Context(), pkg))
+	}
+	before, revision, err := catalog.ManagementSnapshot(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 2, revision)
+	login := httptest.NewRecorder()
+	engine.ServeHTTP(login, httptest.NewRequest("GET", "/plugin-test-login/root", nil))
+	for _, action := range []string{"enable", "disable"} {
+		for _, observed := range []string{"1", "2"} {
+			t.Run(action+"/"+observed, func(t *testing.T) {
+				wire, err := common.Marshal(map[string]any{"action": action, "key": "history-fixture", "version": "1.0.0", "expected_revision": observed})
+				require.NoError(t, err)
+				request := httptest.NewRequest("POST", "/api/task_plugins/mutate", bytes.NewReader(wire))
+				request.Header.Set("Content-Type", "application/json")
+				for _, cookie := range login.Result().Cookies() {
+					request.AddCookie(cookie)
+				}
+				response := httptest.NewRecorder()
+				engine.ServeHTTP(response, request)
+				if observed == "1" {
+					require.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+					require.Contains(t, response.Body.String(), "catalog changed")
+				} else {
+					require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+					require.Contains(t, response.Body.String(), "transition rejected")
+				}
+				after, revision, err := catalog.ManagementSnapshot(t.Context())
+				require.NoError(t, err)
+				require.EqualValues(t, 2, revision)
+				require.Equal(t, before, after, "rejections must not change any version flags")
+				var head model.TaskPluginCatalogHead
+				require.NoError(t, db.First(&head, 1).Error)
+				require.EqualValues(t, 2, head.Revision)
+				active, err := catalog.Host().PricingPackage("POST", "/isolated/history/jobs", "fixture-model")
+				require.NoError(t, err, "a rejected transition must not suspend the host")
+				require.Equal(t, "2.0.0", active.Manifest().Version)
+			})
+		}
+	}
+}
+
 // Explicit, bounded, loopback-only harness for the real TS client/UI against
 // these actual routes. Default unit runs skip it; it never uses external DSNs.
 func TestTaskPluginManagementUIFixture(t *testing.T) {

@@ -58,7 +58,10 @@ export function PluginDetailSheet(props: Props) {
     <Sheet
       open={!!props.selected}
       onOpenChange={(open) => {
-        if (!open) props.setSelected(undefined)
+        if (!open) {
+          props.setSelected(undefined)
+          props.setConfirm(undefined)
+        }
       }}
     >
       <SheetContent className='w-full overflow-y-auto sm:max-w-2xl'>
