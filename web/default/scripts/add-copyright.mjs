@@ -70,8 +70,9 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
   /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\.?\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
 const LEADING_COMMENT_PATTERN = /^\s*(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/
+// Machine-readable SPDX metadata is protected even for a sole project holder.
 const SOLE_PROJECT_NOTICE_PATTERN =
-  /^(?:Copyright(?:\s+\(C\))?|SPDX-FileCopyrightText:)\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i
+  /^Copyright(?:\s+\(C\))?\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i
 const PROJECT_HEADER_LINES = new Set(
   COPYRIGHT_HEADER.split(/\r?\n/).map((line) => line.trim())
 )

@@ -96,6 +96,10 @@ test('copyright does not normalize a standalone project notice without a recogni
 test('copyright preserves a standalone license declaration', (t) => {
   preserveNotice(t, '/* Licensed under MIT */\nexport const value = 1\n')
 })
+
+test('copyright preserves machine-readable project SPDX metadata inside its block', (t) => {
+  preserveNotice(t, '/*\nCopyright (C) 2020 MAX-API-Next\nSPDX-FileCopyrightText: 2020 MAX-API-Next\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n')
+})
 test('copyright keeps a star-prefixed upstream holder inside a project block', (t) => {
   preserveNotice(t, '/*\nCopyright (C) 2023-2026 MAX-API-Next\n * Copyright (C) 2023-2026 QuantumNous\n\nFor commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API/issues\n*/\nexport const value = 1\n')
 })
