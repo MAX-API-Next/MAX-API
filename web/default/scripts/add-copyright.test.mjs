@@ -133,6 +133,8 @@ for (const header of [
   '/// Copyright (C) 2023 Upstream',
   '/* SPDX-License-Identifier: MIT */',
   '/** @license MIT */',
+  '/* Portions Copyright (C) 2023 QuantumNous */',
+  '/* Based on work: Copyright 2023 QuantumNous */',
 ]) {
   test('copyright preserves leading notice sequence: ' + header, (t) => {
     preserveNotice(t, header + '\nexport const value = 1\n')
@@ -149,6 +151,14 @@ test('copyright normalizes a project-only notice with a trailing period', (t) =>
 
 test('copyright adds its header before ordinary prose mentioning the symbol', (t) => {
   const original = '/* Render the © symbol in the footer. */\nexport const value = 1\n'
+  preserveNotice(t, original, (actual) => {
+    assert.ok(actual.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))
+    assert.ok(actual.endsWith(original))
+  })
+})
+
+test('copyright adds its header before prose describing the copyright label', (t) => {
+  const original = '/* Render the Copyright label in the footer. */\nexport const value = 1\n'
   preserveNotice(t, original, (actual) => {
     assert.ok(actual.startsWith('/*\nCopyright (C) 2023-2026 MAX-API-Next\n'))
     assert.ok(actual.endsWith(original))

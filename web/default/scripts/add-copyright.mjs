@@ -102,7 +102,8 @@ function hasThirdPartyCopyright(text) {
     const protectedComment = body.split(/\r?\n/).some((line) => {
       const notice = line.trim().replace(/^[*/!]+\s*/, '')
       if (!projectBlock)
-        return /^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b|Licensed\s+under\b)/i.test(notice) &&
+        return (/^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b|Licensed\s+under\b)/i.test(notice) ||
+          /\bCopyright(?:\s*\(C\))?\s+\d{4}\b/i.test(notice)) &&
           !(afterProjectBlock && SOLE_PROJECT_NOTICE_PATTERN.test(notice))
       // Normalize only known project boilerplate and a sole project holder;
       // unknown attribution or license text must stay byte-identical.
