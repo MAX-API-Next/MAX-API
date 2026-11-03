@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestTaskPricingHandoffProcessHelper(t *testing.T) {
 	// This is the existing production transaction primitive. Staging pending
 	// is already a funding decision: the restart runner is allowed to apply it.
 	require.NoError(t, task.UpdateWithSettlementIntent(&input))
-	if cfg.Phase == "intent_committed" {
+	if cfg.Phase == "intent_committed" || cfg.Phase == "intent_backoff" {
 		pause(false)
 	}
 	if cfg.Phase == "funding_before_commit" {
@@ -169,7 +170,7 @@ func TestTaskPricingHandoffProcessUnboundFundingCannotInventMissingTask(t *testi
 }
 
 func TestTaskPricingHandoffProcessCrashAndConcurrentRecovery(t *testing.T) {
-	for _, phase := range []string{"prepared", "intent_committed", "funding_before_commit", "funding_committed"} {
+	for _, phase := range []string{"prepared", "intent_committed", "intent_backoff", "funding_before_commit", "funding_committed"} {
 		t.Run(phase, func(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "handoff-isolated"), []byte("MAX isolated handoff fixture"), 0600))
@@ -204,9 +205,51 @@ func TestTaskPricingHandoffProcessCrashAndConcurrentRecovery(t *testing.T) {
 			b := startTaskPricingHandoffProcess(t, dir, "recover", release)
 			awaitBillingProcessBarrier(t, a)
 			awaitBillingProcessBarrier(t, b)
+			if phase == "intent_backoff" {
+				// Synthetic scheduling fixture: both real workers must leave a
+				// not-yet-due durable intent untouched after the release barrier.
+				require.NoError(t, f.db.Model(&model.BillingSettlement{}).
+					Where("operation_key = ?", input.OperationKey).
+					Updates(map[string]interface{}{
+						"attempts": 1, "last_error": "SQLITE_BUSY: isolated pending schedule",
+						"next_attempt": time.Now().Add(15 * time.Second).Unix(),
+					}).Error)
+			}
 			require.NoError(t, os.WriteFile(release, nil, 0600))
 			require.NoError(t, <-a.done, a.output.text())
 			require.NoError(t, <-b.done, b.output.text())
+			var recovery model.BillingSettlement
+			require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&recovery).Error)
+			t.Logf("post-contention funding=%s attempts=%d next_attempt=%d cause=%s", recovery.Status, recovery.Attempts, recovery.NextAttempt, recovery.LastError)
+			if phase == "intent_backoff" {
+				require.Equal(t, model.BillingSettlementStatusPending, recovery.Status, "the synthetic deadline must exercise deferred recovery")
+			}
+			if recovery.Status == model.BillingSettlementStatusPending {
+				require.Positive(t, recovery.Attempts)
+				require.True(t, strings.Contains(recovery.LastError, "SQLITE_BUSY") || strings.Contains(recovery.LastError, "database is locked"),
+					"only transient SQLite writer contention may defer recovery")
+				pending, err := ReadTaskPricingWalletHandoff(t.Context(), task.ID, f.actor)
+				require.NoError(t, err)
+				require.Equal(t, TaskPricingHandoffPending, pending.State)
+				require.Nil(t, pending.AppliedReservation)
+				require.Zero(t, pending.PlanReceiptBound)
+				require.Zero(t, pending.AdmissionReady)
+				require.EqualValues(t, 3000, getUserQuota(t, 901))
+				require.Equal(t, 3000, getTokenRemainQuota(t, 903))
+				require.Zero(t, countLogs(t))
+				// Honor the persisted retry deadline after all contenders exit.
+				// One new process gets one scheduled run; another failure fails
+				// this test instead of looping until the balances look correct.
+				require.Positive(t, recovery.NextAttempt)
+				wait := time.Until(time.Unix(recovery.NextAttempt, 0))
+				require.LessOrEqual(t, wait, 64*time.Second)
+				if wait > 0 {
+					timer := time.NewTimer(wait)
+					<-timer.C
+				}
+				retry := startTaskPricingHandoffProcess(t, dir, "recover", release)
+				require.NoError(t, <-retry.done, retry.output.text())
+			}
 			observed, err = ReadTaskPricingWalletHandoff(t.Context(), task.ID, f.actor)
 			require.NoError(t, err)
 			require.Equal(t, TaskPricingHandoffApplied, observed.State)
