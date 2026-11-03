@@ -43,7 +43,12 @@ type boundedPricingFixture struct {
 
 func newBoundedPricingFixture(t *testing.T) *boundedPricingFixture {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "bounded-pricing.sqlite")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	return newBoundedPricingFixtureAt(t, filepath.Join(t.TempDir(), "bounded-pricing.sqlite"))
+}
+
+func newBoundedPricingFixtureAt(t *testing.T, path string) *boundedPricingFixture {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
 	sqlDB, err := db.DB()
 	require.NoError(t, err)

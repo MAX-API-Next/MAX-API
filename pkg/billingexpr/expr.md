@@ -341,6 +341,29 @@ No production route calls it. An eventual paid caller still needs the complete
 execution, durable handoff, funding and environment gates; isolated fixtures
 alone must not open admission. Uncapped referenced actual dimensions are refused.
 
+`ReadTaskPricingWalletHandoff` is an internal read-only recovery observation,
+not a durable writer or an admission permit. It reads a persisted, undispatched
+v2 plugin plan and its wallet reservation in a DB transaction; ownership,
+request, package/model binding, exact requested/applied amounts and task quota
+must agree. It does not read current prices, refresh a plugin host, retry
+funding, or create task/intent/effect rows. Subscription and legacy receipts
+are outside this narrow observation and never fall back to wallet funding.
+
+A prepared task has no funding intent. A pending intent can be executed by the
+existing restart runner; it is not merely a prepared quotation. A manual
+intent remains manual. Applied funding must have its task-linked receipt and
+source selection; an explicitly applied zero has a non-nil zero result. Read
+errors or inconsistent evidence return no partial observation. This is a
+conditional DB sample, not a cross-node linearizability or freshness proof.
+
+The returned `PlanDigest` fingerprints the currently persisted private plan.
+Existing funding rows do not independently bind that digest: two valid plans
+can share a reservation amount. `PlanReceiptBound` and `AdmissionReady` therefore
+remain false, including after applied funding. A future writer must persist
+an immutable plan/identity receipt with its funding intent at a defined commit
+boundary and validate the database/recovery gates before production use. A
+request-only pre-consume receipt cannot reconstruct a missing task or plan.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding
