@@ -364,6 +364,36 @@ an immutable plan/identity receipt with its funding intent at a defined commit
 boundary and validate the database/recovery gates before production use. A
 request-only pre-consume receipt cannot reconstruct a missing task or plan.
 
+`taskpricing.TaskPricingReceipt` now defines the **pure wallet receipt contract**,
+not its database implementation. Version 1 is SHA-256 over the UTF-8 domain
+`max-api/task-pricing-wallet-receipt@1\n` followed by compact JSON, in this field
+order: `version`, `task_id`, `operation_key`, `source` (`wallet`), `group`, `plan`,
+`binding`. The entire existing frozen plan and exact private plugin binding are
+included. Pricing time is normalized to UTC, numeric submit facts through the
+existing scalar validator, and the cloned plan's existing semantic contract
+representation is retained. Explicit zero/false facts remain present. Equality
+does not imply authenticity, authority, chronology, or applied funds.
+Changes to this preimage order, normalization or nested snapshot serialization
+must retain a v1 reader or introduce a new receipt version.
+
+`PrepareTaskPricingWalletReceipt` checks the undispatched task and existing
+pre-consume input without any I/O. It requires the task-linked operation,
+wallet/user/token identity, all funding/token/target amounts and source-selection
+parameters to agree with the bounded v2 plan. Validation requires a separately
+retained original receipt; recalculating both sides from a replacement task is
+not historical evidence. Missing, malformed and unknown-version receipts, legacy
+profiles and subscriptions are refused by this new contract; existing legacy
+funding consumers are unchanged. Mutable status, retry scheduling and token
+credentials do not participate in this equality digest.
+
+There is **no BillingSettlement receipt column, startup migration, production
+writer or worker/replay/manual-review integration** in this slice. Test-only
+SQLite sidecar transactions and subprocess crashes explore the proposed commit
+boundary; original workers have no receipt enforcement and must not be described
+as protected by those fixtures. Production integration still requires all
+consumer upgrades, SQLite/MySQL/PostgreSQL proof and the separate execution and
+admission gates. `PlanReceiptBound` and `AdmissionReady` remain false.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding
