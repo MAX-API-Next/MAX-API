@@ -50,3 +50,31 @@ test('does not invalidate cached model pricing for unrelated settings', () => {
   assert.equal(queryClient.getQueryState(['pricing'])?.isInvalidated, false)
   queryClient.clear()
 })
+
+test('legacy price writes invalidate guarded model entries and public prices', () => {
+  for (const key of [
+    'ModelPrice',
+    'ModelRatio',
+    'CompletionRatio',
+    'CacheRatio',
+    'CreateCacheRatio',
+    'ImageRatio',
+    'AudioRatio',
+    'AudioCompletionRatio',
+    'billing_setting.billing_mode',
+    'billing_setting.billing_expr',
+    'billing_setting.plugin_billing_expr',
+  ]) {
+    const client = new QueryClient()
+    client.setQueryData(['model-pricing-config', 9], { entries: [] })
+    client.setQueryData(['pricing'], {})
+    invalidateQueriesAfterOptionUpdate(client, key)
+    assert.equal(
+      client.getQueryState(['model-pricing-config', 9])?.isInvalidated,
+      true,
+      key
+    )
+    assert.equal(client.getQueryState(['pricing'])?.isInvalidated, true, key)
+    client.clear()
+  }
+})

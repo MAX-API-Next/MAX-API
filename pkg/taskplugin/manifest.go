@@ -46,17 +46,25 @@ var (
 // deliberately data-only: executing plugin code belongs to a later sandboxed
 // driver layer and is not part of validation or registry publication.
 type Manifest struct {
-	APIVersion   int
-	Key          string
-	Name         string
-	Version      string
-	Models       []string
-	Protocols    []ProtocolClaim
-	Routes       []Route
-	BaseURL      string
-	AllowedHosts []string
-	Upstreams    []string
-	UsageSchema  map[string]UsageField
+	APIVersion    int
+	Key           string
+	Name          string
+	Version       string
+	Models        []string
+	Protocols     []ProtocolClaim
+	Routes        []Route
+	BaseURL       string
+	AllowedHosts  []string
+	Upstreams     []string
+	UsageSchema   map[string]UsageField
+	UsageProfiles []UsageProfile `json:"usageProfiles,omitempty"`
+}
+
+// UsageProfile is exact model metadata, not a price or host phase approval.
+// The fallback schema may omit fields present in a concrete profile.
+type UsageProfile struct {
+	Models []string              `json:"models"`
+	Schema map[string]UsageField `json:"schema"`
 }
 
 type ProtocolClaim struct {
@@ -114,7 +122,28 @@ func ValidateManifest(manifest Manifest) error {
 	if err := validateUpstreams(manifest.Upstreams); err != nil {
 		return err
 	}
-	return validateUsageSchema(manifest.UsageSchema)
+	if err := ValidateUsageSchema(manifest.UsageSchema); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, profile := range manifest.UsageProfiles {
+		if len(profile.Models) == 0 || len(profile.Schema) == 0 {
+			return fmt.Errorf("empty model usage profile")
+		}
+		if err := ValidateUsageSchema(profile.Schema); err != nil {
+			return err
+		}
+		for _, model := range profile.Models {
+			if _, declared := modelSet[model]; !declared || seen[model] {
+				return fmt.Errorf("unknown or ambiguous model usage profile")
+			}
+			seen[model] = true
+		}
+	}
+	if len(manifest.UsageProfiles) > 0 && len(seen) != len(modelSet) {
+		return fmt.Errorf("model usage profiles must cover every declared model")
+	}
+	return nil
 }
 
 func validateModels(models []string) (map[string]struct{}, error) {
@@ -295,7 +324,8 @@ func validateUpstreams(upstreams []string) error {
 	return nil
 }
 
-func validateUsageSchema(schema map[string]UsageField) error {
+// ValidateUsageSchema validates the data-only usage schema shared with pricing.
+func ValidateUsageSchema(schema map[string]UsageField) error {
 	for name, field := range schema {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("task plugin usage field name must not be empty")

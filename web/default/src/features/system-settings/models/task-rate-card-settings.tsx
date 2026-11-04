@@ -462,6 +462,11 @@ export const TaskRateCardSettings = memo(function TaskRateCardSettings({
         <AlertDescription className='space-y-2'>
           <p>
             {t(
+              'These are legacy rate cards, including structured MiniMax rules. They are not automatically converted or combined with task expressions. Configure new source expressions in Model and source pricing; saving prices alone does not activate a new task pricing profile.'
+            )}
+          </p>
+          <p>
+            {t(
               'Configure task billing rate cards as JSON. Matching rows override the base per-request price; non-matching strict cards are rejected.'
             )}
           </p>

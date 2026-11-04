@@ -8,18 +8,21 @@ const (
 )
 
 // TaskBillingPlan is an immutable, provider-neutral snapshot of the pricing
-// facts selected for one asynchronous task. It is intentionally limited to
-// registered components; it is not an executable expression or plugin.
+// facts selected for one asynchronous task. An absent Profile/ExpressionPlan
+// retains the legacy H3 component contract. New expression plans are data-only
+// snapshots interpreted by the shared, versioned billing core, never plugins.
 type TaskBillingPlan struct {
-	Source        string  `json:"source"`
-	RuleKey       string  `json:"rule_key"`
-	SchemaVersion int     `json:"schema_version"`
-	Mode          string  `json:"mode"`
-	ConfigHash    string  `json:"config_hash"`
-	Currency      string  `json:"currency"`
-	GroupRatio    float64 `json:"group_ratio"`
-	QuotaPerUnit  float64 `json:"quota_per_unit"`
-	Resolution    string  `json:"resolution"`
+	Profile        string              `json:"profile,omitempty"`
+	ExpressionPlan *TaskExpressionPlan `json:"expression_plan,omitempty"`
+	Source         string              `json:"source"`
+	RuleKey        string              `json:"rule_key"`
+	SchemaVersion  int                 `json:"schema_version"`
+	Mode           string              `json:"mode"`
+	ConfigHash     string              `json:"config_hash"`
+	Currency       string              `json:"currency"`
+	GroupRatio     float64             `json:"group_ratio"`
+	QuotaPerUnit   float64             `json:"quota_per_unit"`
+	Resolution     string              `json:"resolution"`
 
 	UsageProducerKind   string `json:"usage_producer_kind,omitempty"`
 	UsageSourceID       string `json:"usage_source_id,omitempty"`
@@ -51,5 +54,6 @@ func CloneTaskBillingPlan(plan *TaskBillingPlan) *TaskBillingPlan {
 	}
 	cloned := *plan
 	cloned.Components = append([]TaskBillingPlanComponent(nil), plan.Components...)
+	cloned.ExpressionPlan = CloneTaskExpressionPlan(plan.ExpressionPlan)
 	return &cloned
 }

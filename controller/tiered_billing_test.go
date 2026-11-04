@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/gin-gonic/gin"
@@ -21,10 +22,13 @@ import (
 func setupTieredBillingControllerTestDB(t *testing.T) {
 	t.Helper()
 
+	previousDB := model.DB
+	t.Cleanup(func() { model.DB = previousDB })
+	preserveModelPricingControllerCaches(t)
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Channel{}))
 	model.DB = db
 
 	common.OptionMapRWMutex.Lock()
@@ -125,4 +129,63 @@ func TestUpdateTieredBillingConfigRejectsInvalidExpression(t *testing.T) {
 	require.False(t, response.Success)
 	require.Contains(t, response.Message, "broken-model")
 	require.NotContains(t, billing_setting.GetBillingModeCopy(), "broken-model")
+}
+
+func TestUpdateTieredBillingOptionsPreservesCompletePair(t *testing.T) {
+	setupTieredBillingControllerTestDB(t)
+	options := map[string]string{
+		"billing_setting.billing_mode": `{"new-tiered":"tiered_expr","ratio-model":"ratio"}`,
+		"billing_setting.billing_expr": `{"new-tiered":"tier(\"base\", p * 2 + c * 8)","ratio-model":"legacy"}`,
+	}
+	recorder := performTieredBillingUpdate(t, gin.H{"options": options})
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success, recorder.Body.String())
+	require.Equal(t, map[string]string{"new-tiered": "tiered_expr", "ratio-model": "ratio"}, billing_setting.GetBillingModeCopy())
+	require.Equal(t, map[string]string{"new-tiered": `tier("base", p * 2 + c * 8)`, "ratio-model": "legacy"}, billing_setting.GetBillingExprCopy())
+	for key, expected := range options {
+		var stored model.Option
+		require.NoError(t, model.DB.Where("key = ?", key).First(&stored).Error)
+		require.JSONEq(t, expected, stored.Value)
+	}
+}
+
+func TestUpdateTieredBillingOptionsRejectsIncompleteOrInvalidPair(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload gin.H
+		task    bool
+		status  int
+	}{
+		{"partial", gin.H{"options": map[string]string{"billing_setting.billing_mode": "{}"}}, false, 200},
+		{"extra", gin.H{"options": map[string]string{"billing_setting.billing_mode": "{}", "billing_setting.billing_expr": "{}", "SystemName": "must-not-write"}}, false, 200},
+		{"mixed", gin.H{"options": map[string]string{"billing_setting.billing_mode": "{}", "billing_setting.billing_expr": "{}"}, "config": gin.H{}}, false, 200},
+		{"invalid-active-expression", gin.H{"options": map[string]string{"billing_setting.billing_mode": `{"broken":"tiered_expr"}`, "billing_setting.billing_expr": `{"broken":"p *"}`}}, false, 200},
+		{"task-price-requires-versioned-api", gin.H{"options": map[string]string{"billing_setting.billing_mode": `{"kling-v1":"tiered_expr"}`, "billing_setting.billing_expr": `{"kling-v1":"u(\"units\") * 0.1"}`}}, true, 409},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupTieredBillingControllerTestDB(t)
+			if tc.task {
+				require.NoError(t, model.DB.Create(&model.Channel{Type: constant.ChannelTypeKling, Status: 1, Models: "kling-v1", Group: "default", Key: "synthetic"}).Error)
+			}
+			var before []model.Option
+			require.NoError(t, model.DB.Order("key").Find(&before).Error)
+			beforeModes, beforeExprs := billing_setting.GetBillingModeCopy(), billing_setting.GetBillingExprCopy()
+			recorder := performTieredBillingUpdate(t, tc.payload)
+			require.Equal(t, tc.status, recorder.Code, recorder.Body.String())
+			var response struct {
+				Success bool `json:"success"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.False(t, response.Success)
+			var after []model.Option
+			require.NoError(t, model.DB.Order("key").Find(&after).Error)
+			require.Equal(t, before, after)
+			require.Equal(t, beforeModes, billing_setting.GetBillingModeCopy())
+			require.Equal(t, beforeExprs, billing_setting.GetBillingExprCopy())
+		})
+	}
 }

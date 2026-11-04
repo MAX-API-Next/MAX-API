@@ -753,6 +753,11 @@ func TestQuotaDataOperationLockDoesNotTrustDuplicateInsertRowsAffected(t *testin
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(4)
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	// Pin the shared in-memory database while a cancelled contender can cause
+	// database/sql to discard the query connection and empty the idle pool.
+	anchor, err := sqlDB.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = anchor.Close() })
 
 	oldDB := DB
 	oldRetry := quotaDataOperationLockRetryInterval
@@ -788,6 +793,11 @@ func TestQuotaDataOperationLockDoesNotTrustDuplicateInsertRowsAffected(t *testin
 	contender, err := acquireQuotaDataOperationLock(ctx)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Empty(t, contender)
+
+	// A cancelled query may discard its connection. Exercise that reconnect
+	// before checking the owner rather than relying on an idle pool survivor.
+	sqlDB.SetMaxIdleConns(0)
+	sqlDB.SetMaxIdleConns(4)
 
 	var current quotaDataOperationLock
 	require.NoError(t, db.Where("name = ?", quotaDataOperationLockName).First(&current).Error)

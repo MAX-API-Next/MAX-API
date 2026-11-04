@@ -40,9 +40,16 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
   return res.data
 }
 
-export async function updateTieredBillingConfig(request: {
-  config: Record<string, { enabled: boolean; expr: string }>
-}) {
+export async function updateTieredBillingConfig(
+  request:
+    | { config: Record<string, { enabled: boolean; expr: string }> }
+    | {
+        options: {
+          'billing_setting.billing_mode': string
+          'billing_setting.billing_expr': string
+        }
+      }
+) {
   const res = await api.put<UpdateOptionResponse>(
     '/api/option/tiered_billing',
     request

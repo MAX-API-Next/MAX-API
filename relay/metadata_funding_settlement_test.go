@@ -118,7 +118,13 @@ func TestMetadataOnlyFailureRetainsOriginalFunding(t *testing.T) {
 					t.Run(strings.Join([]string{route, funding.name, usage, ending}, "/"), func(t *testing.T) {
 						db := setupStreamFundingLedger(t, funding)
 						oldMonitor := *operation_setting.GetMonitorSetting()
-						*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{StreamingFirstResultTimeoutSeconds: 1}
+						// Only timeout cases exercise the one-second first-result
+						// deadline. Other endings assert metadata delivery; a scheduler
+						// delay before the first frame must not turn EOF into timeout.
+						*operation_setting.GetMonitorSetting() = operation_setting.MonitorSetting{}
+						if ending == "timeout" {
+							operation_setting.GetMonitorSetting().StreamingFirstResultTimeoutSeconds = 1
+						}
 						t.Cleanup(func() { *operation_setting.GetMonitorSetting() = oldMonitor })
 						channelType, frames := metadataFundingFrames(t, route, usage)
 						if ending == "malformed" {

@@ -68,9 +68,14 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 `
 
 const PROJECT_COPYRIGHT_BLOCK_PATTERN =
-  /^\/\*\r?\nCopyright \(C\) .+? MAX-API-Next\r?\n[\s\S]*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
-const THIRD_PARTY_COPYRIGHT_PATTERN =
-  /^\/\*[\s\S]*?Copyright[\s\S]*?\*\/\r?\n?/i
+  /^\/\*\r?\nCopyright \(C\) [^\r\n]+? MAX-API-Next\.?\r?\n(?:(?!\*\/)[\s\S])*?For commercial licensing, please contact https:\/\/github\.com\/MAX-API-Next\/MAX-API\/issues\r?\n\*\/\r?\n?/
+const LEADING_COMMENT_PATTERN = /^\s*(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/
+// Machine-readable SPDX metadata is protected even for a sole project holder.
+const SOLE_PROJECT_NOTICE_PATTERN =
+  /^Copyright(?:\s+\(C\))?\s+\d{4}(?:\s*-\s*\d{4})?\s+MAX-API-Next\.?$/i
+const PROJECT_HEADER_LINES = new Set(
+  COPYRIGHT_HEADER.split(/\r?\n/).map((line) => line.trim())
+)
 
 const checkMode = process.argv.includes('--check')
 
@@ -83,10 +88,34 @@ function hasGeneratedMarker(text) {
 }
 
 function hasThirdPartyCopyright(text) {
-  return (
-    THIRD_PARTY_COPYRIGHT_PATTERN.test(text) &&
-    !PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)
-  )
+  let remaining = text
+  let first = true
+  let afterProjectBlock = false
+  while (remaining.length > 0) {
+    const match = remaining.match(LEADING_COMMENT_PATTERN)
+    // Preserve an incomplete leading block rather than assign it a license.
+    if (!match) return remaining.trimStart().startsWith('/*')
+    const comment = match[1]
+    // Bang comments conventionally carry licenses, even without a known notice.
+    if (/^(?:\/\*+|\/\/+)\s*!/.test(comment)) return true
+    const projectBlock = first && PROJECT_COPYRIGHT_BLOCK_PATTERN.test(text)
+    const body = comment.startsWith('//') ? comment.slice(2) : comment.slice(2, -2)
+    const protectedComment = body.split(/\r?\n/).some((line) => {
+      const notice = line.trim().replace(/^[*/!]+\s*/, '')
+      if (!projectBlock)
+        return (/^(?:Copyright\b|SPDX-(?:FileCopyrightText|License-Identifier):|©|@(?:copyright|license|preserve)\b|Licensed\s+under\b)/i.test(notice) ||
+          /\bCopyright(?:\s*\(C\))?\s+\d{4}\b/i.test(notice)) &&
+          !(afterProjectBlock && SOLE_PROJECT_NOTICE_PATTERN.test(notice))
+      // Normalize only known project boilerplate and a sole project holder;
+      // unknown attribution or license text must stay byte-identical.
+      return !PROJECT_HEADER_LINES.has(notice) && !SOLE_PROJECT_NOTICE_PATTERN.test(notice)
+    })
+    if (protectedComment) return true
+    if (projectBlock) afterProjectBlock = true
+    remaining = remaining.slice(match[0].length)
+    first = false
+  }
+  return false
 }
 
 async function collectSourceFiles(dir) {

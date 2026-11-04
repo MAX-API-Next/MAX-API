@@ -270,6 +270,17 @@ func cloneManifest(manifest Manifest) Manifest {
 			manifest.UsageSchema[key] = field
 		}
 	}
+	manifest.UsageProfiles = append([]UsageProfile(nil), manifest.UsageProfiles...)
+	for i := range manifest.UsageProfiles {
+		profile := &manifest.UsageProfiles[i]
+		profile.Models = append([]string(nil), profile.Models...)
+		schema := profile.Schema
+		profile.Schema = make(map[string]UsageField, len(schema))
+		for key, field := range schema {
+			field.Enum = append([]string(nil), field.Enum...)
+			profile.Schema[key] = field
+		}
+	}
 	return manifest
 }
 

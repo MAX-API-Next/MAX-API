@@ -49,8 +49,26 @@ func RunExprByHashWithRequest(exprStr, hash string, params TokenParams, request 
 }
 
 func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (float64, TraceResult, error) {
+	return runProgramWithTask(prog, params, request, nil)
+}
+
+func runProgramWithTask(prog *vm.Program, params TokenParams, request RequestInput, task *TaskQuoteInput) (float64, TraceResult, error) {
 	trace := TraceResult{}
 	headers := normalizeHeaders(request.Headers)
+	timeForZone := timeInZone
+	if task != nil {
+		timeForZone = func(tz string) time.Time {
+			name, err := taskTimezoneName(tz)
+			if err != nil {
+				panic(err)
+			}
+			loc, err := time.LoadLocation(name)
+			if err != nil {
+				loc = time.UTC
+			}
+			return task.PricingAt.In(loc)
+		}
+	}
 
 	env := map[string]interface{}{
 		"p":     params.P,
@@ -92,16 +110,25 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			}
 			return strings.Contains(fmt.Sprint(source), substr)
 		},
-		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
-		"minute":  func(tz string) int { return timeInZone(tz).Minute() },
-		"weekday": func(tz string) int { return int(timeInZone(tz).Weekday()) },
-		"month":   func(tz string) int { return int(timeInZone(tz).Month()) },
-		"day":     func(tz string) int { return timeInZone(tz).Day() },
+		"hour":    func(tz string) int { return timeForZone(tz).Hour() },
+		"minute":  func(tz string) int { return timeForZone(tz).Minute() },
+		"weekday": func(tz string) int { return int(timeForZone(tz).Weekday()) },
+		"month":   func(tz string) int { return int(timeForZone(tz).Month()) },
+		"day":     func(tz string) int { return timeForZone(tz).Day() },
 		"max":     math.Max,
 		"min":     math.Min,
 		"abs":     math.Abs,
 		"ceil":    math.Ceil,
 		"floor":   math.Floor,
+	}
+	if task != nil {
+		env["u"] = func(key string) any {
+			value, present := task.Usage[key]
+			if !present {
+				panic(fmt.Errorf("missing task usage key %q", key))
+			}
+			return value
+		}
 	}
 
 	out, err := expr.Run(prog, env)

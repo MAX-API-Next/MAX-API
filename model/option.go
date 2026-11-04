@@ -9,6 +9,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/setting"
+	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/performance_setting"
@@ -199,6 +200,9 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	// Do not publish an older pricing read after a newer local commit.
+	modelPricingMutationMu.Lock()
+	defer modelPricingMutationMu.Unlock()
 	options, _ := AllOption()
 	for _, option := range options {
 		if !IsRegisteredOptionKey(option.Key) {
@@ -240,6 +244,10 @@ func UpdateOption(key string, value string) error {
 	}
 	if err := validateOptionUpdate(key, value); err != nil {
 		return err
+	}
+	if IsModelPricingOption(key) {
+		result, err := updateModelPricingOptions(map[string]string{key: value})
+		return modelPricingPublicationError(result, err)
 	}
 
 	// Save to database first
@@ -286,6 +294,12 @@ func UpdateOptionsBulk(values map[string]string) error {
 	for k, v := range normalizedValues {
 		if err := validateOptionUpdate(k, v); err != nil {
 			return err
+		}
+	}
+	for key := range normalizedValues {
+		if IsModelPricingOption(key) {
+			result, err := updateModelPricingOptions(normalizedValues)
+			return modelPricingPublicationError(result, err)
 		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -386,6 +400,17 @@ func validateOptionUpdate(key string, value string) error {
 		return ratio_setting.ValidateCompletionRatioJSONString(value)
 	case "ModelPrice", "CacheRatio", "CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
 		return ratio_setting.ValidatePricingMapJSONString(value)
+	case "billing_setting.billing_mode", "billing_setting.billing_expr", billing_setting.PluginBillingExprOption:
+		var entries map[string]any
+		if err := common.UnmarshalJsonStr(value, &entries); err != nil || entries == nil {
+			return errors.New("billing pricing map must be a JSON object")
+		}
+		for _, entry := range entries {
+			if _, ok := entry.(string); !ok {
+				return errors.New("billing pricing map values must be strings")
+			}
+		}
+		return nil
 	case "GroupRatio", "group_ratio_setting.group_ratio":
 		return ratio_setting.CheckGroupRatio(value)
 	case "GroupGroupRatio":

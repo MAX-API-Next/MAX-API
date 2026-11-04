@@ -10,22 +10,26 @@ import (
 )
 
 const (
-	BillingModeRatio      = "ratio"
-	BillingModeTieredExpr = "tiered_expr"
-	BillingModeField      = "billing_mode"
-	BillingExprField      = "billing_expr"
+	BillingModeRatio        = "ratio"
+	BillingModeTieredExpr   = "tiered_expr"
+	BillingModeField        = "billing_mode"
+	BillingExprField        = "billing_expr"
+	PluginBillingExprOption = "billing_setting.plugin_billing_expr"
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr
+// DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
+// billing_setting.plugin_billing_expr (management-only until task admission is wired).
 type BillingSetting struct {
-	BillingMode *types.RWMap[string, string] `json:"billing_mode"`
-	BillingExpr *types.RWMap[string, string] `json:"billing_expr"`
+	BillingMode       *types.RWMap[string, string] `json:"billing_mode"`
+	BillingExpr       *types.RWMap[string, string] `json:"billing_expr"`
+	PluginBillingExpr *types.RWMap[string, string] `json:"plugin_billing_expr"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode: types.NewRWMap[string, string](),
-	BillingExpr: types.NewRWMap[string, string](),
+	BillingMode:       types.NewRWMap[string, string](),
+	BillingExpr:       types.NewRWMap[string, string](),
+	PluginBillingExpr: types.NewRWMap[string, string](),
 }
 
 func init() {
@@ -53,6 +57,11 @@ func GetBillingModeCopy() map[string]string {
 
 func GetBillingExprCopy() map[string]string {
 	return billingSetting.BillingExpr.ReadAll()
+}
+
+// Management metadata only until the explicit task profile is connected.
+func GetPluginBillingExprCopy() map[string]string {
+	return billingSetting.PluginBillingExpr.ReadAll()
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {

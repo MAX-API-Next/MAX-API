@@ -83,6 +83,11 @@ func beginAdminAudit(c *gin.Context) *auditResponseWriter {
 	if method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" {
 		return nil
 	}
+	// Bounded read-only calculations keep RootAuth but create no management or
+	// consumption records. This exception does not cover model pricing writes.
+	if method == "POST" && (c.FullPath() == "/api/option/model_pricing/preview" || c.FullPath() == "/api/option/model_pricing/quote") {
+		return nil
+	}
 	if common.GetContextKeyBool(c, constant.ContextKeyAuditWrapped) {
 		return nil
 	}

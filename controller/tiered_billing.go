@@ -1,13 +1,12 @@
 package controller
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
-	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,7 +16,8 @@ type TieredBillingConfigItem struct {
 }
 
 type TieredBillingUpdateRequest struct {
-	Config map[string]TieredBillingConfigItem `json:"config"`
+	Config  map[string]TieredBillingConfigItem `json:"config"`
+	Options map[string]string                  `json:"options,omitempty"`
 }
 
 func parseStringMapOption(raw string) (map[string]string, error) {
@@ -35,114 +35,60 @@ func parseStringMapOption(raw string) (map[string]string, error) {
 }
 
 func UpdateTieredBillingConfig(c *gin.Context) {
-	var req TieredBillingUpdateRequest
-	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request body",
-		})
+	var request TieredBillingUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request body"})
 		return
 	}
-
-	if req.Config == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "Config must be a JSON object",
-		})
-		return
-	}
-
-	common.OptionMapRWMutex.RLock()
-	rawMode := common.Interface2String(common.OptionMap["billing_setting.billing_mode"])
-	rawExpr := common.Interface2String(common.OptionMap["billing_setting.billing_expr"])
-	common.OptionMapRWMutex.RUnlock()
-
-	modeMap, err := parseStringMapOption(rawMode)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "Existing billing mode config is invalid: " + err.Error(),
-		})
-		return
-	}
-	exprMap, err := parseStringMapOption(rawExpr)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "Existing billing expression config is invalid: " + err.Error(),
-		})
-		return
-	}
-
-	for modelName, mode := range modeMap {
-		if mode == billing_setting.BillingModeTieredExpr {
-			delete(modeMap, modelName)
-			delete(exprMap, modelName)
-		}
-	}
-
-	for modelName, item := range req.Config {
-		name := strings.TrimSpace(modelName)
-		if name == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "Model name cannot be empty",
-			})
+	if request.Options != nil {
+		_, hasMode := request.Options["billing_setting.billing_mode"]
+		_, hasExpr := request.Options["billing_setting.billing_expr"]
+		if request.Config != nil || len(request.Options) != 2 || !hasMode || !hasExpr {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Options must contain only the complete billing mode and expression pair, without config"})
 			return
 		}
-
-		delete(modeMap, modelName)
-		delete(exprMap, modelName)
-		if name != modelName {
-			delete(modeMap, name)
-			delete(exprMap, name)
-		}
-
-		if !item.Enabled {
-			continue
-		}
-
-		expr := strings.TrimSpace(item.Expr)
-		if expr == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": fmt.Sprintf("Billing expression for %s cannot be empty", name),
-			})
+		finishTieredBillingUpdate(c, model.UpdateOptionsBulk(request.Options))
+		return
+	}
+	if request.Config == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Config must be a JSON object"})
+		return
+	}
+	config := make(map[string]model.LegacyTieredPricingItem, len(request.Config))
+	for rawName, item := range request.Config {
+		name := strings.TrimSpace(rawName)
+		if _, duplicate := config[name]; duplicate {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "Duplicate normalized model name"})
 			return
 		}
-		if err := billing_setting.SmokeTestExpr(expr); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": fmt.Sprintf("Billing expression for %s is invalid: %v", name, err),
-			})
+		config[name] = model.LegacyTieredPricingItem{Enabled: item.Enabled, Expr: strings.TrimSpace(item.Expr)}
+	}
+	finishTieredBillingUpdate(c, model.UpdateLegacyTieredPricing(config))
+}
+
+func finishTieredBillingUpdate(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrModelPricingCacheNotPublished) {
+		recordManageAudit(c, "option.update", map[string]any{"key": "billing_setting.billing_mode,billing_setting.billing_expr", "cache_published": false})
+		respondPricingCacheWarning(c, err)
+		return
+	}
+	if err != nil {
+		if errors.Is(err, model.ErrModelPricingLegacyWrite) {
+			pricingAPIError(c, err)
 			return
 		}
-
-		modeMap[name] = billing_setting.BillingModeTieredExpr
-		exprMap[name] = expr
-	}
-
-	modeBytes, err := common.Marshal(modeMap)
-	if err != nil {
-		common.ApiError(c, err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	exprBytes, err := common.Marshal(exprMap)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
 
-	if err := model.UpdateOptionsBulk(map[string]string{
-		"billing_setting.billing_mode": string(modeBytes),
-		"billing_setting.billing_expr": string(exprBytes),
-	}); err != nil {
-		common.ApiError(c, err)
-		return
+// A committed price is authoritative even when this node could not publish its
+// cache. Legacy clients must not confuse that warning with a rolled-back save.
+func respondPricingCacheWarning(c *gin.Context, err error) bool {
+	if !errors.Is(err, model.ErrModelPricingCacheNotPublished) {
+		return false
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "committed": true, "cache_published": false, "message": err.Error()})
+	return true
 }

@@ -19,20 +19,27 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 
 package types
 
+// TaskPluginExpressionProfile identifies the fact-contract binding wire format.
+// Pricing validation and settlement remain owned by taskpricing and the host.
+const TaskPluginExpressionProfile = "new-api-task@1"
+
 // TaskPluginBinding is host-issued private task metadata. It carries no
 // credentials or pricing and must never be accepted from a client body.
 // Persist it with the task before sending any billable upstream request.
 type TaskPluginBinding struct {
-	PluginKey      string `json:"plugin_key"`
-	Version        string `json:"version"`
-	PackageDigest  string `json:"package_digest"`
-	SourceID       string `json:"source_id"`
-	SchemaVersion  int    `json:"schema_version"`
-	ContractDigest string `json:"contract_digest"`
-	Model          string `json:"model"`
-	UpstreamModel  string `json:"upstream_model"`
-	UserID         int    `json:"user_id"`
-	TokenID        int    `json:"token_id"`
-	ChannelID      int    `json:"channel_id"`
-	RequestID      string `json:"request_id"`
+	Profile         string `json:"profile,omitempty"` // empty retains the legacy usage contract
+	Action          string `json:"action,omitempty"`
+	PhaseApprovalID string `json:"phase_approval_id,omitempty"`
+	PluginKey       string `json:"plugin_key"`
+	Version         string `json:"version"`
+	PackageDigest   string `json:"package_digest"`
+	SourceID        string `json:"source_id"`
+	SchemaVersion   int    `json:"schema_version"`
+	ContractDigest  string `json:"contract_digest"`
+	Model           string `json:"model"`
+	UpstreamModel   string `json:"upstream_model"`
+	UserID          int    `json:"user_id"`
+	TokenID         int    `json:"token_id"`
+	ChannelID       int    `json:"channel_id"`
+	RequestID       string `json:"request_id"`
 }

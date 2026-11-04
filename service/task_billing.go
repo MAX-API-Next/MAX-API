@@ -376,11 +376,12 @@ func buildTaskFinalSettlementInput(task *model.Task, actualQuota int, reason str
 }
 
 type taskTerminalBillingDecision struct {
-	Settlement    *model.BillingSettlementInput
-	ManualReason  string
-	Usage         *types.TaskUsage
-	UsageEnvelope *types.TaskUsageEnvelope
-	UsesPlan      bool
+	Settlement           *model.BillingSettlementInput
+	ManualReason         string
+	Usage                *types.TaskUsage
+	UsageEnvelope        *types.TaskUsageEnvelope
+	PricingUsageEnvelope *types.TaskPricingUsageEnvelope
+	UsesPlan             bool
 }
 
 func prepareTaskTerminalBillingDecision(
@@ -399,6 +400,10 @@ func prepareTaskTerminalBillingDecision(
 		return taskTerminalBillingDecision{
 			Settlement: prepareTaskCompletionSettlement(ctx, adaptor, task, taskResult, channelType, channelSettings...),
 		}
+	}
+
+	if plan.Profile != "" || plan.ExpressionPlan != nil {
+		return prepareTaskExpressionTerminalDecision(task, taskResult)
 	}
 
 	var usageEnvelope *types.TaskUsageEnvelope

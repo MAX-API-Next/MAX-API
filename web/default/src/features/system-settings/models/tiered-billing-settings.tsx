@@ -180,7 +180,8 @@ export function TieredBillingSettings(props: TieredBillingSettingsProps) {
     mutationFn: updateTieredBillingConfig,
     onSuccess: (data) => {
       if (data.success) {
-        toast.success(t('Tiered billing configuration saved'))
+        if (data.cache_published === false) toast.warning(t(data.message))
+        else toast.success(t('Tiered billing configuration saved'))
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
       } else {
         toast.error(data.message || t('Failed to save tiered billing config'))

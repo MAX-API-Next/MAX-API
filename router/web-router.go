@@ -28,7 +28,10 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 	router.Use(static.Serve("/", defaultFS))
 	router.NoRoute(func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
-		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
+		urlPath := c.Request.URL.Path
+		if strings.HasPrefix(urlPath, "/v1") || strings.HasPrefix(urlPath, "/api") || strings.HasPrefix(urlPath, "/assets") || urlPath == "/static" || strings.HasPrefix(urlPath, "/static/") {
+			// A removed build chunk must never receive the SPA's HTML or be cached.
+			c.Header("Cache-Control", "no-store")
 			controller.RelayNotFound(c)
 			return
 		}

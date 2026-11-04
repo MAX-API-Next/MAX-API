@@ -101,8 +101,8 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
 
 ### Rule 4: New Channel StreamOptions Support
 
-When implementing a new channel:
-- Confirm whether the provider supports `StreamOptions`.
+When implementing a channel that relays streaming model responses:
+- Confirm whether the provider supports `StreamOptions`; task-only/non-streaming channels do not require this check.
 - If supported, add the channel to `streamSupportedChannels`.
 
 ### Rule 5: Protected Project Information — DO NOT Modify or Delete
@@ -137,10 +137,14 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 
 ### Rule 8: Process Documents — Keep Them Under `.tmp/`
 
-All non-project process documents MUST be created and kept under `.tmp/`.
+Keep repository-local process evidence under `.tmp/`. Authorized exceptions are the canonical workspace R&D plans in `../../Agentic_Engineering/projects/MAX-API/` and the private upstream synchronization records/state in `.agents/upstream-sync/` required by Rule 9.
 
 This includes investigation notes, review outputs, scratch plans, working drafts, temporary release-note or PR-copy drafts, one-off deployment notes, private operation notes, temporary diff or patch files, and any document that records internal work process rather than public project documentation.
 
-Do NOT place these files in the repository root, `docs/`, `.github/`, or source directories unless the content is explicitly intended to be public project documentation. `.tmp/` is ignored by Git; use it to prevent accidental publication of sensitive or internal process information to the open-source GitHub repository. If process documents are found outside `.tmp/`, move them into `.tmp/` before committing.
+Do not publish internal process evidence in the repository root, `docs/`, `.github/`, or source directories. `.tmp/` is ignored by Git. Do not relocate user-maintained plans or unrelated files merely to satisfy this rule; keep migrated `.tmp` files as navigation to the canonical workspace plan.
 
 Local agent workflow files, including `.agents/skills/` and `.agents/upstream-sync/`, are private project-maintenance material for this workspace and MUST NOT be committed to the public GitHub repository. Keep reusable private agent instructions there locally, or move public-safe documentation into normal project docs when it is intentionally meant to be open source.
+
+### Rule 9: Upstream Verification Workflow
+
+Follow [AGENTS.md Rule 9](AGENTS.md#rule-9-monitor-independent-new-api-upstream-modules-and-plugins) as the authoritative workflow for upstream component checks, report reuse, missing prerequisites, canonical plans, provenance, and compatibility validation. Keep this reference in place instead of maintaining a separate copy of that workflow.

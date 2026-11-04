@@ -133,6 +133,258 @@ These are parsed and applied separately by the request rule system.
 
 ---
 
+## Task expressions: explicit `new-api-task@1` profile
+
+The token path above remains v1: `exprOutput / 1,000,000 * QuotaPerUnit`.
+Task pricing uses the same compiler/runtime through `QuoteTaskExpression`, but
+requires the explicit `new-api-task@1` profile and interprets the output as a
+**total currency amount**. A `v1:` syntax prefix alone never switches semantics.
+Task programs have a separate cache namespace. The token compiler still rejects
+`u()`; no legacy channel/task is activated or migrated by this addition.
+
+```text
+u("tokens") / 1000000 * (u("video_input") == "video" ? 2 : 3)
+u("units") * 0.1
+```
+
+`u("key")` reads host-validated scalar facts (normalized float64, boolean or
+enum string). It has no default value: a missing evaluated key is an error,
+while explicit zero and false are retained. `TaskUsageKeys` inspects the parsed
+tree **before optimization**, including unreachable branches. The host checks
+every referenced key against the selected model/source schema using
+`taskpricing.ValidateExpressionContract`. Dynamic keys, indirect/aliased `u`,
+`$env`, `fixed()` and implicit token variables such as `p`/`c` are rejected in
+task expressions. This is deliberately stricter than upstream's omission of
+dynamic usage references. An optional declared fact can be absent if not
+evaluated; a final-required fact must always be supplied under its contract.
+
+`TaskQuoteInput` requires an explicit `PricingAt`. All task time helpers use
+that instant (empty/invalid timezone falls back to UTC); they do not read the
+wall clock. Request probes retain the existing positive allowlist. The host
+must retain this time and the relevant request metadata with future task plans.
+The current token clock/allowlist behavior is unchanged.
+
+Task helpers reject the special Go timezone `Local`, including surrounding
+whitespace. Unlike an explicit IANA zone, `Local` depends on each node's system
+configuration and cannot be reproduced from PricingAt alone. Direct literal
+arguments are checked before optimization (even in hidden branches); computed
+arguments are checked at runtime and return a quote error, not a zero price.
+Empty/invalid zone fallback and the legacy token path retain their existing
+behavior. Explicit IANA zones still require consistent timezone-rule data on
+deployment nodes; the isolated tests do not certify that environment condition.
+
+The task profile also rejects Expr's `now()`, `date()` and `timezone()` builtins
+before optimization, including hidden branches. These time-object factories
+can read the wall clock or expose methods such as `.Local()` that bypass the
+frozen scalar helpers. This restriction applies only to task prices; existing
+token expressions and deterministic scalar builtins keep their current behavior.
+
+```text
+amount = evaluateTaskExpression(validatedFacts, frozenRequest, PricingAt)
+quotaBeforeGroup = amount * QuotaPerUnit
+quotaAfterGroup = roundHalfAwayFromZero(quotaBeforeGroup * GroupRatio)
+reservedPreview = GroupRatio > 0 ? max(reservationFloor, completeEstimate.quotaAfterGroup) : completeEstimate.quotaAfterGroup
+finalTargetPreview = finalQuote.quotaAfterGroup
+finalMinusReserved = finalTargetPreview - reservedPreview
+```
+
+Task prices are not divided by a million again and do not apply legacy
+`OtherRatios`. Conversion requires finite positive QuotaPerUnit and finite
+non-negative GroupRatio; zero GroupRatio is explicit free pricing. Invalid
+facts, negative/non-finite results and int32 quota overflow return an error.
+Overflow is checked before the shared rounding helper so rejected previews do
+not silently clamp or emit saturation logs. The reservation floor applies once
+after the complete estimate, never to the final target. A zero group ratio
+skips the floor and reserves zero; a zero estimate in a paid group still uses
+the floor because actual usage may later be positive. This correction also
+applies to frozen snapshot validation; earlier snapshots with a nonzero
+reservation for a zero-ratio group are rejected for manual reconciliation.
+
+`pkg/taskpricing.Preview` composes source selection, contract/guard comparison,
+submit facts and final facts with this core. Nil final usage means **unknown**,
+not zero. Only frozen request-phase facts are inherited; final-required actual
+facts cannot reuse estimates. A positive finalMinusReserved only reports a
+funding gap; it does not authorize a debit or prove a reservation upper bound.
+
+These functions are pure calculations. They do not read prices from a database,
+check real cache freshness, invoke a provider, persist a TaskBillingPlan or
+reserve/settle funds. Current/expected guard equality alone is not a DB CAS.
+The model API/transaction/editor caller and paid task admission remain
+separate implementation stages. H3/Kling/Seedance fixtures now invoke this core;
+their expected amounts remain independently derived integer/rational constants.
+
+`model.ReadTaskPricingShadowContext` provides a read-only configured-channel
+observation from the existing database price/source transaction. It accepts only
+model, channel and configured group, selects an explicit task profile and host
+phase contract, and returns the selected expression, mapping, contract and
+equality tokens. It does not read draft prices or fall back to node price caches.
+The node's QuotaPerUnit is captured once and included in the matching terms
+token; it is not a globally coordinated database setting. Configured group
+pricing excludes user-specific group overrides. Recheck errors return no partial
+observation. Repeated-read equality is not an atomic admission CAS, a global
+cutover, or proof that configuration remains unchanged afterwards.
+
+This shadow observation always reports admission unavailable: a configured Go
+channel is not proof of the actual executor, plugin package loading or a provider
+exposure bound. It does not create a TaskBillingPlan, reserve funds or enable a
+route. Existing package-history and future admission checks remain separate.
+
+`BindTaskPricingPlugin` uses the existing Catalog/Host route selection to pin
+actual package key/version/digest to the existing private `TaskPluginBinding`.
+Its optional `profile` and `action` distinguish new typed fact contracts from
+legacy `TaskUsageContract`; old bindings omit both fields. The service checks
+ownership, frozen plan identity and the complete manifest type/unit/enum schema.
+Matching schema does not vet request/estimate/actual phase semantics: a trusted
+host phase contract for that exact package remains a separate prerequisite.
+
+New binding and restoration refresh the authoritative Catalog with a bounded,
+service-owned lifecycle context. Already canceled contexts stop before refresh;
+failed in-flight refresh suspends the Host by its existing policy, with no stale
+fallback. Restoration uses persisted history, never the latest active package.
+Disabling a plugin prevents new binds; revocation or missing history rejects
+old sessions. This is local verification, not instantaneous global revocation.
+`ApplyTaskPricingPluginFacts` attaches validated typed final facts without
+writing canonical tokens, settling funds or invoking JS/provider code. The
+existing polling intent/funding/effect lifecycle alone performs settlement.
+
+`ResolveTaskPricingGoExecutor` compares routed host metadata and the shadow
+observation before constructing the existing MiniMax/Kling/Doubao Go adaptor.
+It does not initialize or submit it, certify price freshness/exposure bounds,
+or enable the production profile. No production submit path calls these new
+identity seams yet; the paid-admission rejection remains in place.
+
+`taskpricing.PhaseRegistry` is an immutable host assertion keyed by exact
+plugin key/version/package digest/model/action. It stores reviewed fact policy
+and an evidence reference, never prices. Registration does not perform the
+review: trusted host code must establish phase semantics and any usage caps.
+No real package is automatically approved. Resolve checks the exact mapped
+model's full type/unit/enum schema and returns detached policy; names or schema
+equality cannot approve an upgrade.
+
+**Package compatibility:** per-model `usageProfiles` require MAX transport format
+2. Upgrade all Catalog consumers before installing a format-2 package. Older
+nodes reject it and may suspend their entire local Host on Catalog refresh;
+mixed-node rollout is not safe. Existing format-1 packages without profiles
+retain their schema and wire behavior. Profiles cover every declared model
+exactly once; each is a complete schema, which may add fields absent from the
+fallback union (for example Seedance 1.5 `generate_audio`). Unknown/alias models
+cannot borrow a profile. This data-only transport does not load New API's JS ABI.
+
+Reviewed `FactProjection` policy may omit only named undeclared compatibility
+facts with exact scalar values, separately for submit and completion. It never
+discards a declared field or creates actual facts from estimates. Required
+actual numeric facts are checked against bounded original completion JSON,
+reviewed successful status and ordered raw paths. Only absence allows a
+secondary path; explicit zero, null or invalid data never falls through.
+Whole decimal strings may witness numeric hook facts; prefix junk, booleans,
+non-finite and out-of-range values are rejected. Request facts remain frozen.
+
+Projection policy is included in `ApprovalID`. `PhaseRegistry.Bind` persists
+that ID in the optional private `phase_approval_id`; replacing a review cannot
+reinterpret an old binding. `ApplyApprovedTaskPluginFacts` resolves the pinned
+historical package and exact policy before attaching its typed envelope. The
+older typed-facts entrypoint rejects such reviewed bindings. Neither entrypoint
+settles funds. The caller still owns raw-response/task association; a matching
+number is not provider authenticity or a production execution permit. Current
+Hailuo/Kling/Seedance policies and source observations are test fixtures only.
+
+`ReadApprovedTaskPricingPluginContext` binds the actual route-selected package,
+checks policy, and reuses the existing authoritative price transaction. Its
+configured channel/group/profile/model mapping and active package must match.
+The binding equality token includes the exact package, request identity and
+approval ID. No public API, JS runtime or automatic policy registration is
+enabled by this internal read-only seam. User-specific ratios remain excluded.
+
+`taskpricing.QuoteExposure` requires the explicit new task profile and proves
+only a deliberately small nonnegative,
+monotone arithmetic subset: numeric u(), nonnegative literals, +/* with a
+normalized float operand, division by a positive literal, and conditionals
+depending only on frozen request facts. Pure integer arithmetic is refused
+because wrapping can invalidate monotonicity. Referenced actual numeric facts
+need explicit host-reviewed maxima; missing maxima and unsupported syntax
+return an unproved result/error, never an inferred estimate-based cap.
+
+The upper endpoint is evaluated by QuoteTaskExpression itself; there is no
+second money evaluator. Its synthetic endpoint facts are proof witnesses,
+never provider evidence. The informational required reservation is
+GroupRatio > 0 ? max(maximumChargeQuota, floor) : maximumChargeQuota.
+A zero estimate cannot reduce a positive maximum. The result always reports
+admission_ready=false and provider_cost_proven=false: the charge bound is
+conditional on the reviewed fact domain, not proof of upstream cost limits,
+JS enforcement, atomic admission or actual reserved funding. Existing Freeze,
+funding and production rejection are unchanged; this sample must not be used
+as a paid permit or supplied as completion usage.
+
+`taskpricing.FreezeBounded` explicitly emits `expression_plan.version = 2`.
+It retains the unfloored submit estimate, and stores `charge_bound.method` plus
+the maximum charge quota derived from the frozen expression, semantic contract,
+request facts and scalar terms. Its reserve is `max(maximumChargeQuota, floor)`
+once; a zero-ratio group still reserves zero. Validation recomputes that bound
+with the existing quote core, rejects altered proof/totals, and never treats its
+synthetic endpoint as completion usage. `Freeze` and version-1 snapshots keep
+their original estimate/floor contract; a v1 snapshot cannot claim a v2 bound.
+
+**Upgrade every task-snapshot reader before persisting expression-plan v2.**
+This version is independent of MAX package format 1/2. Older readers reject v2
+even when its reserve happens to equal the old floor. There is no DDL change:
+the proof lives inside the existing private plan JSON. A bound proves only a
+host-reviewed charge domain, not JavaScript enforcement or provider costs.
+
+`FreezeApprovedTaskPricingPluginPlan` is an internal configured-group preparation.
+It refreshes the actual routed package and rereads the configured-price authority,
+then checks price/contract/binding and quote-terms equality tokens before calling
+the shared bounded freezer. Its temporary selected-rule view is not another
+price store. It returns the plan and precise plugin binding without writing a
+task or moving money; `AdmissionReady` remains false. It excludes user-specific
+ratio resolution and does not atomically commit configuration, a plan and funds.
+No production route calls it. An eventual paid caller still needs the complete
+execution, durable handoff, funding and environment gates; isolated fixtures
+alone must not open admission. Uncapped referenced actual dimensions are refused.
+
+`ReadTaskPricingWalletHandoff` is an internal read-only recovery observation,
+not a durable writer or an admission permit. It reads a persisted, undispatched
+v2 plugin plan and its wallet reservation in a DB transaction; ownership,
+request, package/model binding, exact requested/applied amounts and task quota
+must agree. It does not read current prices, refresh a plugin host, retry
+funding, or create task/intent/effect rows. Subscription and legacy receipts
+are outside this narrow observation and never fall back to wallet funding.
+
+A prepared task has no funding intent. A pending intent can be executed by the
+existing restart runner; it is not merely a prepared quotation. A manual
+intent remains manual. Applied funding must have its task-linked receipt and
+source selection; an explicitly applied zero has a non-nil zero result. Read
+errors or inconsistent evidence return no partial observation. This is a
+conditional DB sample, not a cross-node linearizability or freshness proof.
+
+The returned `PlanDigest` fingerprints the currently persisted private plan.
+Existing funding rows do not independently bind that digest: two valid plans
+can share a reservation amount. `PlanReceiptBound` and `AdmissionReady` therefore
+remain false, including after applied funding. A future writer must persist
+an immutable plan/identity receipt with its funding intent at a defined commit
+boundary and validate the database/recovery gates before production use. A
+request-only pre-consume receipt cannot reconstruct a missing task or plan.
+
+`taskpricing.Freeze` now produces a serializable expression branch of the existing
+`TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
+actual producer/package/channel/request/action identity, price/contract/binding
+versions, full semantic fact contract, submit facts, pricing instant, currency,
+quota conversion, group ratio, floor and rounding version. It is pure and does
+not prove authoritative reads or a provider exposure bound. Its current caller
+is an isolated task harness; the production submit gate rejects the new profile.
+
+Frozen plans reject `param` and `header` dependencies before optimization,
+including dead branches: they must be represented as declared request-phase
+facts for this slice. Read-only configuration previews retain their existing
+request-probe behavior. No raw request body or credentials are persisted in the
+new snapshot. Completion uses the frozen contract and a host-owned typed
+`TaskPricingUsageEnvelope` matching producer package version/digest, channel,
+request/action and contract; it never turns fractional credits into tokens or
+reuses missing actual usage from the estimate. Missing/incompatible evidence or
+a final target above actual reservation stays pollable under manual settlement.
+Existing durable task intents/funding/effects remain the sole accounting path;
+an explicit zero target and a zero delta still complete that lifecycle. Old H3
+plans without a profile retain their existing validator and component pricing.
+
 ## Architecture
 
 ### Data Flow
@@ -247,6 +499,90 @@ Version controls:
 This enables future evolution without breaking existing expressions.
 
 ---
+
+## Model pricing management API
+
+Root-only routes under `/api/option/model_pricing` provide GET, PATCH,
+POST `/preview`, and POST `/quote`. Prices remain in the existing Option maps;
+`billing_setting.plugin_billing_expr` stores `pluginKey::model` overrides.
+These routes do not install an executor or activate a task pricing profile.
+The first `::` separates the plugin key from the complete model name; plugin
+keys cannot contain `::`, while model names can.
+
+A task-only `u()` default cannot replace a shared model default while a channel
+advertises that model without a known Go task contract, including disabled or
+unverified channels. Saving and previewing such a draft fail before publication;
+retain its legacy default and use a plugin override or a distinct task alias.
+This is a configuration-time compatibility check, not a task executor or a
+guarantee against later incompatible channel/catalog edits. Those edits require
+revalidation; diagnosed drift is not permission for paid admission.
+
+PATCH accepts `changes[]` with a model name, `expected_version`,
+`expected_contract_digest`, `expected_binding_version`, and `pricing`.
+Each pricing object replaces that model's complete configuration; submit only
+dirty models but retain their unchanged fields. An omitted field removes the
+override; a numeric `0` or expression `"0"` is explicit zero. `reset: true`
+restores the compiled model defaults. All changes validate and commit together.
+Equality-token conflicts return 409. Tokens include inherited alias/mapped price
+dependencies and host schema/binding metadata, and cannot be sorted as revisions.
+
+Preview returns the authoritative base `version` separately from `draft_version`;
+it never saves its candidate. Quote selects a server-issued `context_id` and
+checks all three base guards. The outer `contract_digest` covers model contexts;
+`preview.contract_digest` identifies the single selected fact contract. Group
+ratio/floor come from database configuration and quota conversion from the node's
+server context; clients cannot supply arbitrary multipliers. The quote exposes
+those terms, its evaluation time, selected expression and resulting amounts.
+
+Quotes are configuration samples with `admission_ready: false`, not request
+admission, provider validation, reservation-bound certification or actual charges.
+They exclude user-specific group overrides. `pricing_at` only controls this
+read-only sample; real task submission must freeze host-issued terms independently.
+Known Go source contracts are intentionally finite. A plugin schema supports
+schema-checked editing but does not establish phase semantics: without a vetted
+host phase contract, plugin quoting fails even if its key resembles a known provider.
+
+Writes use an internal coordination row in the existing options table; it is
+not another price/version store. Only changed price maps are persisted. Successful
+responses distinguish `committed` from `cache_published`; a failed local cache
+publication does not roll back the committed database state. After a lost response,
+reread authoritative configuration instead of blindly overwriting it. Neither
+local cache publication nor a successful save proves immediate multi-node cutover.
+
+Legacy Option/tiered-editor writes share the transaction. Unversioned writes that
+would create or change protected task expressions/plugin prices are rejected; unrelated
+legacy prices remain editable. Deploy this protection only with the compatible
+model-price editor. Read-only preview/quote retain RootAuth and do not create
+management/consumption logs or business writes.
+
+The model-price settings page uses **Model and source pricing** for guarded,
+per-model editing. It keeps a complete `configured` draft, including unshown
+plugin overrides, rather than saving the `effective` projection. Empty numeric
+inputs remove overrides; `0` stays explicit. A plugin expression left empty
+inherits the default, while `"0"` is a configured zero expression. Stored
+effective values describe the saved entry; configuration preview describes a
+candidate and never installs an executor. The full-model JSON editor replaces
+only that model's draft and requires explicit save.
+
+Copy/reset of selected models uses one atomic PATCH with each model's observed
+guards. Dirty target drafts must be resolved before batch replacement. After an
+ambiguous write, the editor rereads each model independently without replaying
+the PATCH. A lost reset receipt cannot establish its compiled target from an
+ordinary read, so it remains unresolved until an explicit operator decision.
+Adopting a server snapshot discards local work; it cannot prove an older request
+failed or will not finish later. Cache publication failure is shown separately
+from an acknowledged database commit. Successful writes invalidate management
+and public price queries; this does not certify cache cutover on every node.
+Returning from legacy tools rereads the active model without rebasing a dirty
+draft. Legacy price writes invalidate guarded price queries as well; settings
+refresh preserves dirty fields in the existing legacy forms.
+
+**Legacy price tools** retain the existing token/fixed-price editors and Option
+semantics; they do not gain guarded task writes. Protected task expressions and
+plugin overrides must use the new per-model entry. Legacy task rate cards,
+including structured MiniMax rules, remain separately configured for their
+existing execution profiles. They are not automatically converted, added to,
+or selected together with the new task-expression profile by this UI.
 
 ## File Map
 

@@ -42,11 +42,12 @@ type PackageDocument struct {
 // Package has already passed an administrator-supplied digest check. The hash
 // covers the entire document, including routing and network permissions.
 type Package struct {
-	manifest Manifest
-	source   string
-	digest   string
-	size     int
-	document []byte
+	manifest      Manifest
+	source        string
+	digest        string
+	size          int
+	document      []byte
+	formatVersion int
 }
 
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
@@ -78,19 +79,52 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	if err := common.Unmarshal(data, &document); err != nil {
 		return nil, errors.New("invalid task plugin package document")
 	}
-	if document.FormatVersion != 1 || document.Source == "" || !utf8.ValidString(document.Source) {
+	if (document.FormatVersion != 1 && document.FormatVersion != 2) || document.Source == "" || !utf8.ValidString(document.Source) {
 		return nil, errors.New("unsupported task plugin package format or invalid source")
+	}
+	// Old hosts ignore unknown manifest fields. Version 2 makes them reject a
+	// profile-bearing package rather than silently using its fallback schema.
+	if len(document.Manifest.UsageProfiles) > 0 && document.FormatVersion != 2 {
+		return nil, errors.New("model usage profiles require package format 2")
 	}
 	if err := ValidateManifest(document.Manifest); err != nil {
 		// Validation errors can contain attacker-supplied metadata. Keep source
 		// and credentials out of any caller's logs and API error response.
 		return nil, errors.New("invalid task plugin package manifest")
 	}
-	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data}, nil
+	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion}, nil
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }
 func (p *Package) Digest() string     { return p.digest }
+func (p *Package) FormatVersion() int { return p.formatVersion }
+
+// ModelUsageSchema returns detached metadata for the exact mapped model.
+// Profile packages never fall back for an unprofiled/unknown model.
+func (p *Package) ModelUsageSchema(model string) (map[string]UsageField, error) {
+	if p == nil {
+		return nil, errors.New("missing task plugin package")
+	}
+	m := p.Manifest()
+	declared := false
+	for _, name := range m.Models {
+		declared = declared || name == model
+	}
+	if !declared {
+		return nil, errors.New("model is not declared by pinned package")
+	}
+	if len(m.UsageProfiles) == 0 {
+		return m.UsageSchema, nil
+	}
+	for _, profile := range m.UsageProfiles {
+		for _, name := range profile.Models {
+			if name == model {
+				return profile.Schema, nil
+			}
+		}
+	}
+	return nil, errors.New("model has no exact usage profile")
+}
 
 // Document returns the exact pinned bytes, not a re-encoded manifest/source.
 func (p *Package) Document() []byte { return append([]byte(nil), p.document...) }

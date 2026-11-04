@@ -482,6 +482,11 @@ func resolveTaskBillingQuotas(info *relaycommon.RelayInfo) (estimateQuota int, r
 	estimateQuota = info.PriceData.Quota
 	reservationQuota = estimateQuota
 	if plan := info.TaskBillingPlan; plan != nil {
+		// The new profile currently has an isolated lifecycle seam only. No
+		// provider exposure/admission proof exists yet; fail before provider I/O.
+		if plan.Profile != "" || plan.ExpressionPlan != nil {
+			return 0, 0, true, errors.New("task expression paid admission is not enabled")
+		}
 		if validateErr := task_billing_setting.ValidateH3BillingPlanSnapshot(plan); validateErr != nil {
 			return 0, 0, true, validateErr
 		}
