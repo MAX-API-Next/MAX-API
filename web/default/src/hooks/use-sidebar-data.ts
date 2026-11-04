@@ -27,6 +27,7 @@ import {
   LayoutDashboard,
   ListTodo,
   MessageSquare,
+  Puzzle,
   Radio,
   Settings,
   Ticket,
@@ -35,6 +36,8 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import { type SidebarData } from '@/components/layout/types'
 
 /**
@@ -45,6 +48,7 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const isRoot = useAuthStore((s) => s.auth.user?.role === ROLE.SUPER_ADMIN)
 
   return {
     navGroups: [
@@ -127,6 +131,9 @@ export function useSidebarData(): SidebarData {
             url: '/models/metadata',
             icon: Box,
           },
+          ...(isRoot
+            ? [{ title: t('Task Plugins'), url: '/task-plugins', icon: Puzzle }]
+            : []),
           {
             title: t('Users'),
             url: '/users',

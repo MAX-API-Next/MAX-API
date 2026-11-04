@@ -182,6 +182,8 @@ func readQuoteTerms(tx *gorm.DB, group string) (float64, int, string, error) {
 	return readQuoteTermsWithUnit(tx, group, readModelPricingQuotaUnit())
 }
 
+// The unit is captured by the host caller. It is node configuration, not a
+// database price row, and must match the unit recorded in this terms digest.
 func readQuoteTermsWithUnit(tx *gorm.DB, group string, quotaPerUnit float64) (float64, int, string, error) {
 	if quotaPerUnit <= 0 || math.IsNaN(quotaPerUnit) || math.IsInf(quotaPerUnit, 0) {
 		return 0, 0, "", errors.New("invalid node quota unit")

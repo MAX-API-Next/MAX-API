@@ -195,7 +195,11 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 			Digest           string
 			Enabled, Revoked bool
 		}{entry.Digest, entry.Enabled, entry.Revoked}, source: taskpricing.Source{Driver: "task_plugin", PluginKey: manifest.Key}, Reason: "no vetted host phase contract"}
-		for key, field := range manifest.UsageSchema {
+		modelSchema, schemaErr := pkg.ModelUsageSchema(model)
+		if schemaErr != nil {
+			continue
+		}
+		for key, field := range modelSchema {
 			context.Schema[key] = types.TaskUsageField{Type: field.Type, Unit: field.Unit, Enum: field.Enum}
 		}
 		// Matching a familiar plugin key/schema is NOT approval of this pinned

@@ -22,6 +22,7 @@ package service
 import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
+	"github.com/MAX-API-Next/MAX-API/pkg/taskpricing"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -34,8 +35,14 @@ func AttachTaskPluginBinding(host *taskplugin.Host, task *model.Task, binding ty
 	if !taskPluginBindingMatches(task, binding) {
 		return taskplugin.ErrBindingRejected
 	}
-	if _, err := host.Resolve(binding, taskplugin.Actor{UserID: task.UserId, TokenID: task.PrivateData.TokenId, ChannelID: task.ChannelId, RequestID: task.PrivateData.BillingRequestId}); err != nil {
+	session, err := host.Resolve(binding, taskplugin.Actor{UserID: task.UserId, TokenID: task.PrivateData.TokenId, ChannelID: task.ChannelId, RequestID: task.PrivateData.BillingRequestId})
+	if err != nil {
 		return err
+	}
+	if binding.Profile != "" {
+		if !taskPricingPluginSchemaMatches(session, task.PrivateData.BillingContext.TaskBillingPlan) {
+			return taskplugin.ErrBindingRejected
+		}
 	}
 	if task.PrivateData.PluginBinding != nil && *task.PrivateData.PluginBinding != binding {
 		return taskplugin.ErrBindingRejected
@@ -55,13 +62,27 @@ func taskPluginBindingMatches(task *model.Task, binding types.TaskPluginBinding)
 	if upstream == "" {
 		upstream = task.Properties.OriginModelName
 	}
+	if plan != nil && (plan.Profile != "" || plan.ExpressionPlan != nil) {
+		if plan.Profile != taskpricing.NewAPITask || taskpricing.ValidateSnapshot(plan) != nil {
+			return false
+		}
+		p := plan.ExpressionPlan
+		if binding.Profile != plan.Profile || plan.UsageProducerKind != types.TaskUsageProducerKindTaskPlugin || p.Driver != types.TaskUsageProducerKindTaskPlugin ||
+			binding.PluginKey != p.PluginKey || binding.Version != p.PluginVersion || binding.PackageDigest != p.PackageDigest ||
+			binding.Action != p.Action || binding.Action != task.Action || p.ChannelID != task.ChannelId || p.RequestID != task.PrivateData.BillingRequestId ||
+			p.OriginalModel != task.Properties.OriginModelName || p.MappedModel != upstream {
+			return false
+		}
+	} else if binding.Profile != "" || binding.Action != "" {
+		return false
+	}
 	return plan != nil && binding.UserID > 0 && binding.UserID == task.UserId && binding.TokenID > 0 && binding.TokenID == task.PrivateData.TokenId && binding.ChannelID > 0 && binding.ChannelID == task.ChannelId && binding.RequestID != "" && binding.RequestID == task.PrivateData.BillingRequestId && binding.Model != "" && binding.Model == task.Properties.OriginModelName && binding.UpstreamModel == upstream && binding.SourceID == plan.UsageSourceID && binding.SchemaVersion == plan.UsageSchemaVersion && binding.ContractDigest == plan.UsageContractDigest
 }
 
 // ResolveTaskPluginSession validates persisted ownership and frozen billing
 // identity. Restoring a binding never falls back to the latest plugin version.
 func ResolveTaskPluginSession(host *taskplugin.Host, task *model.Task) (*taskplugin.Session, error) {
-	if task == nil || task.ID <= 0 || task.PrivateData.PluginBinding == nil || !taskPluginBindingMatches(task, *task.PrivateData.PluginBinding) {
+	if task == nil || task.ID <= 0 || task.PrivateData.PluginBinding == nil || task.PrivateData.PluginBinding.Profile != "" || !taskPluginBindingMatches(task, *task.PrivateData.PluginBinding) {
 		return nil, taskplugin.ErrBindingRejected
 	}
 	return host.Resolve(*task.PrivateData.PluginBinding, taskplugin.Actor{UserID: task.UserId, TokenID: task.PrivateData.TokenId, ChannelID: task.ChannelId, RequestID: task.PrivateData.BillingRequestId})

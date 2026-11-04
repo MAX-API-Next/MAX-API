@@ -27,6 +27,14 @@ type TaskExpressionPlan struct {
 	ReservationFloor  int              `json:"reservation_floor"`
 	Contract          TaskFactContract `json:"contract"`
 	SubmitFacts       TaskPricingFacts `json:"submit_facts"`
+	// Version 2 only. The bound is recomputed from the frozen contract and
+	// expression; it is not provider usage or a paid-admission certificate.
+	ChargeBound *TaskChargeBound `json:"charge_bound,omitempty"`
+}
+
+type TaskChargeBound struct {
+	Method       string `json:"method"`
+	MaximumQuota int    `json:"maximum_quota"`
 }
 
 // TaskPricingUsageEnvelope preserves the plugin's typed dimensions, including
@@ -63,6 +71,10 @@ func CloneTaskExpressionPlan(plan *TaskExpressionPlan) *TaskExpressionPlan {
 		return nil
 	}
 	cloned := *plan
+	if plan.ChargeBound != nil {
+		bound := *plan.ChargeBound
+		cloned.ChargeBound = &bound
+	}
 	cloned.SubmitFacts = CloneTaskPricingFacts(plan.SubmitFacts)
 	cloned.Contract.UsageSchema = make(map[string]TaskUsageField, len(plan.Contract.UsageSchema))
 	for key, field := range plan.Contract.UsageSchema {

@@ -1,0 +1,793 @@
+{
+  "upstream": "https://github.com/QuantumNous/new-api",
+  "commit": "d0abbf6e0d33552a41c402d9b1fadbaff27cf40d",
+  "scope": "Public metadata and synthetic hook observations; QuantumNous AGPL-3.0 upstream. No JS implementation copied. Manifests are facts-only MAX transport wrappers with routing/capabilities deliberately omitted; NOT installable upstream runtime acceptance. Candidate host policies are test-only, not production approvals or provider cost caps.",
+  "packages": [
+    {
+      "key": "hailuo",
+      "source_sha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "source_file": "upstream-plugins_tasks_hailuo_plugin.js",
+      "manifest": {
+        "APIVersion": 1,
+        "Key": "hailuo",
+        "Name": "Hailuo Video",
+        "Version": "1.4.0",
+        "Models": [
+          "MiniMax-H3",
+          "MiniMax-Hailuo-2.3",
+          "MiniMax-Hailuo-2.3-Fast",
+          "MiniMax-Hailuo-02",
+          "T2V-01-Director",
+          "T2V-01",
+          "I2V-01-Director",
+          "I2V-01-live",
+          "I2V-01",
+          "S2V-01"
+        ],
+        "UsageSchema": {
+          "seconds": {
+            "Type": "number",
+            "Unit": "second"
+          },
+          "resolution": {
+            "Type": "enum",
+            "Enum": [
+              "512P",
+              "768P",
+              "720P",
+              "1080P",
+              "2K"
+            ]
+          },
+          "input_images": {
+            "Type": "number",
+            "Unit": "count"
+          },
+          "input_video_seconds": {
+            "Type": "number",
+            "Unit": "second"
+          }
+        },
+        "usageProfiles": [
+          {
+            "models": [
+              "MiniMax-H3"
+            ],
+            "schema": {
+              "seconds": {
+                "Type": "number",
+                "Unit": "second"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "768P",
+                  "2K"
+                ]
+              },
+              "input_images": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "input_video_seconds": {
+                "Type": "number",
+                "Unit": "second"
+              }
+            }
+          },
+          {
+            "models": [
+              "MiniMax-Hailuo-2.3",
+              "MiniMax-Hailuo-2.3-Fast"
+            ],
+            "schema": {
+              "seconds": {
+                "Type": "number",
+                "Unit": "second"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "768P",
+                  "1080P"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "MiniMax-Hailuo-02"
+            ],
+            "schema": {
+              "seconds": {
+                "Type": "number",
+                "Unit": "second"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "512P",
+                  "768P",
+                  "1080P"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "T2V-01-Director",
+              "T2V-01",
+              "I2V-01-Director",
+              "I2V-01-live",
+              "I2V-01",
+              "S2V-01"
+            ],
+            "schema": {
+              "seconds": {
+                "Type": "number",
+                "Unit": "second"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "key": "kling",
+      "source_sha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "source_file": "upstream-plugins_tasks_kling_plugin.js",
+      "manifest": {
+        "APIVersion": 1,
+        "Key": "kling",
+        "Name": "Kling",
+        "Version": "1.2.0",
+        "Models": [
+          "kling-v2-5-turbo",
+          "kling-v2-6",
+          "kling-v3",
+          "kling-4.0"
+        ],
+        "UsageSchema": {
+          "units": {
+            "Type": "number",
+            "Unit": "credit"
+          }
+        }
+      }
+    },
+    {
+      "key": "doubao",
+      "source_sha256": "58da524648f3b43e6944c34cc14de59b7162123fe046b033037680a0fa4d182b",
+      "source_file": "upstream-plugins_tasks_doubao_plugin.js",
+      "manifest": {
+        "APIVersion": 1,
+        "Key": "doubao",
+        "Name": "Doubao",
+        "Version": "1.4.0",
+        "Models": [
+          "doubao-seedance-1-0-pro-250528",
+          "doubao-seedance-1-0-lite-t2v",
+          "doubao-seedance-1-0-lite-i2v",
+          "doubao-seedance-1-5-pro-251215",
+          "doubao-seedance-2-0-260128",
+          "doubao-seedance-2-0-fast-260128",
+          "doubao-seedance-2-0-mini-260615",
+          "doubao-seedance-2-5-260628",
+          "doubao-seedream-5-0-pro-260628",
+          "doubao-seedream-5-0-flash-260915",
+          "doubao-seedream-5-0-lite-260128",
+          "doubao-seedream-5-0-260128",
+          "doubao-seedream-4-5-251128",
+          "doubao-seedream-4-0-250828"
+        ],
+        "UsageSchema": {
+          "tokens": {
+            "Type": "number",
+            "Unit": "token"
+          },
+          "resolution": {
+            "Type": "enum",
+            "Enum": [
+              "480p",
+              "720p",
+              "1080p",
+              "4k"
+            ]
+          },
+          "video_input": {
+            "Type": "enum",
+            "Enum": [
+              "none",
+              "video"
+            ]
+          }
+        },
+        "usageProfiles": [
+          {
+            "models": [
+              "doubao-seedance-1-0-pro-250528",
+              "doubao-seedance-1-0-lite-t2v",
+              "doubao-seedance-1-0-lite-i2v"
+            ],
+            "schema": {
+              "tokens": {
+                "Type": "number",
+                "Unit": "token"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedance-1-5-pro-251215"
+            ],
+            "schema": {
+              "tokens": {
+                "Type": "number",
+                "Unit": "token"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "generate_audio": {
+                "Type": "boolean"
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedance-2-0-260128"
+            ],
+            "schema": {
+              "tokens": {
+                "Type": "number",
+                "Unit": "token"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "480p",
+                  "720p",
+                  "1080p",
+                  "4k"
+                ]
+              },
+              "video_input": {
+                "Type": "enum",
+                "Enum": [
+                  "none",
+                  "video"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedance-2-0-fast-260128",
+              "doubao-seedance-2-0-mini-260615"
+            ],
+            "schema": {
+              "tokens": {
+                "Type": "number",
+                "Unit": "token"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "480p",
+                  "720p"
+                ]
+              },
+              "video_input": {
+                "Type": "enum",
+                "Enum": [
+                  "none",
+                  "video"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedance-2-5-260628"
+            ],
+            "schema": {
+              "tokens": {
+                "Type": "number",
+                "Unit": "token"
+              },
+              "resolution": {
+                "Type": "enum",
+                "Enum": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ]
+              },
+              "video_input": {
+                "Type": "enum",
+                "Enum": [
+                  "none",
+                  "video"
+                ]
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedream-5-0-pro-260628",
+              "doubao-seedream-5-0-flash-260915"
+            ],
+            "schema": {
+              "images_up_to_1_5k": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "images_above_1_5k": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "input_images": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "layer_decomposition": {
+                "Type": "boolean"
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedream-5-0-lite-260128",
+              "doubao-seedream-5-0-260128",
+              "doubao-seedream-4-5-251128"
+            ],
+            "schema": {
+              "images_above_1_5k": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "input_images": {
+                "Type": "number",
+                "Unit": "count"
+              }
+            }
+          },
+          {
+            "models": [
+              "doubao-seedream-4-0-250828"
+            ],
+            "schema": {
+              "images_up_to_1_5k": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "images_above_1_5k": {
+                "Type": "number",
+                "Unit": "count"
+              },
+              "input_images": {
+                "Type": "number",
+                "Unit": "count"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "h3-submit",
+      "key": "hailuo",
+      "model": "MiniMax-H3",
+      "stage": "submit",
+      "submit": {},
+      "hook_facts": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": null,
+      "expected": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      }
+    },
+    {
+      "id": "h3-final",
+      "key": "hailuo",
+      "model": "MiniMax-H3",
+      "stage": "final",
+      "submit": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "hook_facts": {
+        "resolution": "768P",
+        "seconds": 5,
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": {
+        "task": {
+          "status": "Success",
+          "resolution": "768P",
+          "usage": {
+            "output_seconds": 5,
+            "input_image_count": 0,
+            "input_seconds": 0
+          }
+        }
+      },
+      "expected": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      }
+    },
+    {
+      "id": "h3-final-bool",
+      "key": "hailuo",
+      "model": "MiniMax-H3",
+      "stage": "final",
+      "submit": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "hook_facts": {
+        "resolution": "768P",
+        "seconds": 5,
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": {
+        "task": {
+          "status": "Success",
+          "resolution": "768P",
+          "usage": {
+            "output_seconds": 5,
+            "input_image_count": false,
+            "input_seconds": 0
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "h3-final-over",
+      "key": "hailuo",
+      "model": "MiniMax-H3",
+      "stage": "final",
+      "submit": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "hook_facts": {
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": {
+        "task": {
+          "status": "Success",
+          "resolution": "768P",
+          "usage": {
+            "output_seconds": 16,
+            "input_image_count": 0,
+            "input_seconds": 0
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "h3-pending",
+      "key": "hailuo",
+      "model": "MiniMax-H3",
+      "stage": "final",
+      "submit": {
+        "seconds": 5,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "hook_facts": {
+        "resolution": "768P",
+        "seconds": 5,
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": {
+        "task": {
+          "status": "Processing",
+          "resolution": "768P",
+          "usage": {
+            "output_seconds": 5,
+            "input_image_count": 0,
+            "input_seconds": 0
+          }
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "hailuo23-submit",
+      "key": "hailuo",
+      "model": "MiniMax-Hailuo-2.3",
+      "stage": "submit",
+      "submit": {},
+      "hook_facts": {
+        "seconds": 6,
+        "resolution": "768P",
+        "input_images": 0,
+        "input_video_seconds": 0
+      },
+      "raw": null,
+      "expected": {
+        "seconds": 6,
+        "resolution": "768P"
+      }
+    },
+    {
+      "id": "kling-submit",
+      "key": "kling",
+      "model": "kling-v3",
+      "stage": "submit",
+      "submit": {},
+      "hook_facts": {
+        "units": 3
+      },
+      "raw": null,
+      "expected": {
+        "units": 3
+      }
+    },
+    {
+      "id": "kling-final",
+      "key": "kling",
+      "model": "kling-v3",
+      "stage": "final",
+      "submit": {
+        "units": 3
+      },
+      "hook_facts": {
+        "units": 2.5
+      },
+      "raw": {
+        "data": {
+          "task_status": "succeed",
+          "final_unit_deduction": "2.5"
+        }
+      },
+      "expected": {
+        "units": 2.5
+      }
+    },
+    {
+      "id": "kling-zero",
+      "key": "kling",
+      "model": "kling-v3",
+      "stage": "final",
+      "submit": {
+        "units": 3
+      },
+      "hook_facts": {
+        "units": 0
+      },
+      "raw": {
+        "data": {
+          "task_status": "succeed",
+          "final_unit_deduction": 0
+        }
+      },
+      "expected": {
+        "units": 0
+      }
+    },
+    {
+      "id": "kling-prefix",
+      "key": "kling",
+      "model": "kling-v3",
+      "stage": "final",
+      "submit": {
+        "units": 3
+      },
+      "hook_facts": {
+        "units": 2.5
+      },
+      "raw": {
+        "data": {
+          "task_status": "succeed",
+          "final_unit_deduction": "2.5junk"
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "kling-null",
+      "key": "kling",
+      "model": "kling-v3",
+      "stage": "final",
+      "submit": {
+        "units": 3
+      },
+      "hook_facts": null,
+      "raw": {
+        "data": {
+          "task_status": "succeed",
+          "final_unit_deduction": null
+        }
+      },
+      "expected": null
+    },
+    {
+      "id": "seedance-submit",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "submit",
+      "submit": {},
+      "hook_facts": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "video_input": "none",
+        "generate_audio": false
+      },
+      "raw": null,
+      "expected": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      }
+    },
+    {
+      "id": "seedance-final",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "final",
+      "submit": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      },
+      "hook_facts": {
+        "tokens": 200000,
+        "resolution": "720p"
+      },
+      "raw": {
+        "status": "succeeded",
+        "usage": {
+          "completion_tokens": 200000,
+          "total_tokens": 200000
+        },
+        "resolution": "720p"
+      },
+      "expected": {
+        "tokens": 200000,
+        "resolution": "720p",
+        "generate_audio": false
+      }
+    },
+    {
+      "id": "seedance-missing",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "final",
+      "submit": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      },
+      "hook_facts": {
+        "tokens": 900,
+        "resolution": "720p"
+      },
+      "raw": {
+        "status": "succeeded",
+        "usage": {
+          "total_tokens": 900
+        },
+        "resolution": "720p"
+      },
+      "expected": {
+        "tokens": 900,
+        "resolution": "720p",
+        "generate_audio": false
+      }
+    },
+    {
+      "id": "seedance-zero",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "final",
+      "submit": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      },
+      "hook_facts": {
+        "tokens": 900,
+        "resolution": "720p"
+      },
+      "raw": {
+        "status": "succeeded",
+        "usage": {
+          "completion_tokens": 0,
+          "total_tokens": 900
+        },
+        "resolution": "720p"
+      },
+      "expected": null
+    },
+    {
+      "id": "seedance-null",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "final",
+      "submit": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      },
+      "hook_facts": {
+        "tokens": 900,
+        "resolution": "720p"
+      },
+      "raw": {
+        "status": "succeeded",
+        "usage": {
+          "completion_tokens": null,
+          "total_tokens": 900
+        },
+        "resolution": "720p"
+      },
+      "expected": null
+    },
+    {
+      "id": "seedance-bool",
+      "key": "doubao",
+      "model": "doubao-seedance-1-5-pro-251215",
+      "stage": "final",
+      "submit": {
+        "tokens": 108000,
+        "resolution": "720p",
+        "generate_audio": false
+      },
+      "hook_facts": {
+        "tokens": 900,
+        "resolution": "720p"
+      },
+      "raw": {
+        "status": "succeeded",
+        "usage": {
+          "completion_tokens": false,
+          "total_tokens": 900
+        },
+        "resolution": "720p"
+      },
+      "expected": null
+    }
+  ]
+}
