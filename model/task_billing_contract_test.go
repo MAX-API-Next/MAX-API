@@ -378,6 +378,9 @@ func runTaskBillingSettlementContracts(t *testing.T, db *gorm.DB) {
 		f.assertBalances(t, db, -100)
 		f.assertProjection(t, db, 0, 1)
 	})
+	t.Run("pricing_receipt_compatibility", func(t *testing.T) {
+		runTaskPricingReceiptContracts(t, db)
+	})
 }
 
 func TestMockTaskPluginUsageFlowsThroughSQLiteSettlementReplay(t *testing.T) {

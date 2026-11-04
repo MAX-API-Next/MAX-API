@@ -253,7 +253,7 @@ func prepareTaskBillingContractDB(t *testing.T, db *gorm.DB, dialect string) {
 	// Create only the real models required by this seam. Do not call shared
 	// truncateTables or application startup migrations against an external DB.
 	for _, model := range []any{&User{}, &Token{}, &Channel{}, &Task{}, &BillingSettlement{},
-		&Log{}, &BillingLogReceipt{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}} {
+		&Log{}, &BillingLogReceipt{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &BillingPreConsumeSelection{}} {
 		taskBillingTestCheck(t, db.Migrator().CreateTable(model), "create contract schema")
 	}
 

@@ -364,6 +364,73 @@ an immutable plan/identity receipt with its funding intent at a defined commit
 boundary and validate the database/recovery gates before production use. A
 request-only pre-consume receipt cannot reconstruct a missing task or plan.
 
+`taskpricing.TaskPricingReceipt` now defines the **pure wallet receipt contract**,
+not its database implementation. Version 1 is SHA-256 over the UTF-8 domain
+`max-api/task-pricing-wallet-receipt@1\n` followed by compact JSON, in this field
+order: `version`, `task_id`, `operation_key`, `source` (`wallet`), `group`, `plan`,
+`binding`. The entire existing frozen plan and exact private plugin binding are
+included. Pricing time is normalized to UTC, numeric submit facts through the
+existing scalar validator, and the cloned plan's existing semantic contract
+representation is retained. Explicit zero/false facts remain present. Equality
+does not imply authenticity, authority, chronology, or applied funds.
+Changes to this preimage order, normalization or nested snapshot serialization
+must retain a v1 reader or introduce a new receipt version.
+
+`PrepareTaskPricingWalletReceipt` checks the undispatched task and existing
+pre-consume input without any I/O. It requires the task-linked operation,
+wallet/user/token identity, all funding/token/target amounts and source-selection
+parameters to agree with the bounded v2 plan. Validation requires a separately
+retained original receipt; recalculating both sides from a replacement task is
+not historical evidence. Missing, malformed and unknown-version receipts, legacy
+profiles and subscriptions are refused by this new contract; existing legacy
+funding consumers are unchanged. Mutable status, retry scheduling and token
+credentials do not participate in this equality digest.
+
+There is **no BillingSettlement receipt column, startup migration, production
+writer or worker/replay/manual-review integration** in this slice. Test-only
+SQLite sidecar transactions and subprocess crashes explore the proposed commit
+boundary; original workers have no receipt enforcement and must not be described
+as protected by those fixtures. Production integration still requires all
+consumer upgrades, SQLite/MySQL/PostgreSQL proof and the separate execution and
+admission gates. `PlanReceiptBound` and `AdmissionReady` remain false.
+
+`ValidateReceiptCompatibility` adds a pure consumer policy. The host must
+explicitly supply `ReceiptLegacy` or `ReceiptWalletV1` from trusted operation
+provenance; the empty/unknown requirement is rejected. Receipt absence, a zero
+amount, a failed task read or a failed decode cannot select legacy behavior.
+Explicit legacy accepts no receipt and no new expression/profile/binding
+markers, then leaves all existing ownership and financial checks mandatory.
+Wallet v1 always requires its original matching receipt. Neither result proves
+applied funds, and manual reconciliation cannot regenerate the original or
+approve an unknown version by changing this policy.
+
+The creation, worker, replay and reconciliation paths must use this same rule
+inside their eventual transaction boundaries. Current `BillingSettlement`
+writers and worker reconstruction still omit the receipt; current manual
+completion APIs address task-finalize operations, not this pre-consume receipt.
+Finalize/refund/manual-completion children have separate operation identities:
+they must retain their own accounting checks and validate the original
+reservation binding, never relabel the pre-consume receipt as a child receipt.
+No production consumer has been wired by adding this pure function.
+The already-applied replay fast return also needs the compatibility check;
+placing it only on a funding SQL update cannot cover that branch. The fixture
+includes an explicit negative control showing that the original ungated replay
+still ignores the candidate receipt column.
+
+The existing isolated task-billing database contracts now include
+`pricing_receipt_compatibility`. They add a **test-only** nullable TEXT column
+to a disposable `billing_settlements`, preserving legacy rows, and exercise
+candidate atomic persistence/CAS, a real committed transaction with its reply
+lost, and a test-installed guard inside the existing funding transaction.
+Missing, unknown, substituted and unreadable evidence rolls back funding;
+the original bytes remain available for reconciliation. The guard and column
+do not exist in production. The test guard also covers the applied transition
+of a zero-delta intent. A transient read failure retains the original retry
+policy/deadline and can recover after evidence becomes available; it is not
+reclassified as corrupted data merely to force manual handling.
+A missing MySQL/PostgreSQL stage is BLOCKED, not
+proof supplied by SQLite or by an overall successful test-process exit code.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding
