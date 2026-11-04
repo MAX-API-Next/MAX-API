@@ -120,6 +120,9 @@ func stageTaskPricingReceiptCandidate(db *gorm.DB, f taskPricingReceiptFixture, 
 		if updated.RowsAffected != 1 {
 			return taskpricing.ErrTaskPricingReceiptConflict
 		}
+		if err := validateTaskPricingReceiptCandidate(tx, f.input); err != nil {
+			return err
+		}
 		if fault == "receipt" {
 			return errors.New("isolated after receipt")
 		}
@@ -139,6 +142,9 @@ func validateTaskPricingReceiptCandidate(db *gorm.DB, expected BillingSettlement
 	if err := db.First(&task, row.TaskID).Error; err != nil {
 		return err
 	}
+	if row.UserID != task.UserId || row.TokenID != task.PrivateData.TokenId {
+		return taskpricing.ErrTaskPricingReceiptConflict
+	}
 	b := task.PrivateData.PluginBinding
 	if b == nil || task.UserId != b.UserID || task.PrivateData.TokenId != b.TokenID || task.ChannelId != b.ChannelID ||
 		task.PrivateData.BillingRequestId != b.RequestID || task.Action != b.Action || task.Properties.OriginModelName != b.Model ||
@@ -153,7 +159,20 @@ func validateTaskPricingReceiptCandidate(db *gorm.DB, expected BillingSettlement
 	}
 	// Fixture provenance requires v1 even if the column or plan is missing.
 	// A production consumer still needs its own durable authoritative source.
-	return taskpricing.ValidateReceiptCompatibility(taskpricing.ReceiptWalletV1, receipt, receiptWalletInput(&task, row.OperationKey))
+	frozen := receiptWalletInput(&task, row.OperationKey)
+	if err := taskpricing.ValidateReceiptCompatibility(taskpricing.ReceiptWalletV1, receipt, frozen); err != nil {
+		return err
+	}
+	quota := int64(frozen.Plan.ReserveQuota)
+	if row.Source != BillingSettlementSourceWallet || task.PrivateData.BillingSource != BillingSettlementSourceWallet ||
+		row.SubscriptionID != 0 || task.PrivateData.SubscriptionId != 0 || row.SubscriptionPreConsumeRequestID != "" ||
+		row.FinalizeSubscriptionPreConsume || row.AllowMissingToken || row.EffectPayload != "" ||
+		row.TaskQuota != 0 || row.TaskQuotaTarget != quota || row.FundingDelta != quota || row.TokenDelta != quota ||
+		row.PreConsumeRequestID != task.PrivateData.BillingRequestId || row.PreConsumeModelName != frozen.Plan.ExpressionPlan.OriginalModel ||
+		row.PreConsumeRequestedQuota != quota || row.PreConsumeEffectiveQuota != quota {
+		return taskpricing.ErrTaskPricingReceiptConflict
+	}
+	return nil
 }
 
 // TEST ONLY: check even an already-applied replay. The in-transaction guard
@@ -212,7 +231,11 @@ type receiptCandidateLostPool struct {
 }
 
 func (p *receiptCandidateLostPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (gorm.ConnPool, error) {
-	tx, err := p.ConnPool.(gorm.TxBeginner).BeginTx(ctx, opts)
+	beginner, ok := p.ConnPool.(gorm.TxBeginner)
+	if !ok {
+		return nil, errors.New("receipt fixture connection cannot begin a transaction")
+	}
+	tx, err := beginner.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +248,13 @@ type receiptCandidateLostTx struct {
 }
 
 var errReceiptCandidateLost = errors.New("isolated lost receipt after real commit")
+
+func TestReceiptCandidateLostPoolRejectsUnsupportedTransactionPool(t *testing.T) {
+	pool := &receiptCandidateLostPool{}
+	tx, err := pool.BeginTx(context.Background(), nil)
+	require.Error(t, err)
+	require.Nil(t, tx)
+}
 
 func (tx *receiptCandidateLostTx) Commit() error {
 	if err := tx.Tx.Commit(); err != nil {
@@ -253,6 +283,84 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 	fixture := func(t *testing.T, ratio float64) taskPricingReceiptFixture {
 		sequence++
 		return newTaskPricingReceiptCandidate(t, db, sequence, ratio)
+	}
+	for _, ratio := range []float64{1, 0} {
+		for _, layer := range []string{"writer", "reader"} {
+			t.Run(fmt.Sprintf("%s_rejects_reservation_drift_ratio_%g", layer, ratio), func(t *testing.T) {
+				f := fixture(t, ratio)
+				if layer == "reader" {
+					taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage fixed reservation")
+				}
+				q := int64(f.task.PrivateData.BillingContext.TaskBillingPlan.ReserveQuota) + 1
+				f.input.FundingDelta, f.input.TokenDelta, f.input.TaskQuotaTarget = q, q, q
+				f.input.PreConsumeRequestedQuota, f.input.PreConsumeEffectiveQuota = q, q
+				if layer == "writer" {
+					require.ErrorIs(t, stageTaskPricingReceiptCandidate(db, f, ""), taskpricing.ErrTaskPricingReceiptConflict)
+					return
+				}
+				taskBillingTestCheck(t, db.Model(&BillingSettlement{}).Where("operation_key = ?", f.input.OperationKey).
+					Select("FundingDelta", "TokenDelta", "TaskQuotaTarget", "PreConsumeRequestedQuota", "PreConsumeEffectiveQuota").
+					Updates(&BillingSettlement{FundingDelta: q, TokenDelta: q, TaskQuotaTarget: q, PreConsumeRequestedQuota: q, PreConsumeEffectiveQuota: q}).Error, "seed coherent input/row amount drift")
+				require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict)
+			})
+		}
+	}
+	// The input/record pair must belong to the same account as Task/binding;
+	// two independently self-consistent identity pairs are not sufficient.
+	for _, mismatch := range []string{"user", "token", "user-and-token"} {
+		t.Run("writer_rejects_settlement_owner_"+mismatch, func(t *testing.T) {
+			f, other := fixture(t, 1), fixture(t, 1)
+			if mismatch != "token" {
+				f.input.UserID = other.input.UserID
+			}
+			if mismatch != "user" {
+				f.input.TokenID = other.input.TokenID
+			}
+			require.ErrorIs(t, stageTaskPricingReceiptCandidate(db, f, ""), taskpricing.ErrTaskPricingReceiptConflict)
+			var tasks, intents int64
+			taskBillingTestCheck(t, db.Model(&Task{}).Where("id = ?", f.task.ID).Count(&tasks).Error, "count rejected owner task")
+			taskBillingTestCheck(t, db.Model(&BillingSettlement{}).Where("operation_key = ?", f.input.OperationKey).Count(&intents).Error, "count rejected owner intent")
+			require.Zero(t, tasks)
+			require.Zero(t, intents)
+		})
+		t.Run("reader_rejects_settlement_owner_"+mismatch, func(t *testing.T) {
+			f, other := fixture(t, 1), fixture(t, 1)
+			taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage original owner candidate")
+			if mismatch != "token" {
+				f.input.UserID = other.input.UserID
+			}
+			if mismatch != "user" {
+				f.input.TokenID = other.input.TokenID
+			}
+			taskBillingTestCheck(t, db.Model(&BillingSettlement{}).Where("operation_key = ?", f.input.OperationKey).
+				Select("UserID", "TokenID").Updates(&BillingSettlement{UserID: f.input.UserID, TokenID: f.input.TokenID}).Error, "seed cross-account record and matching input")
+			require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict)
+			if mismatch != "user-and-token" {
+				return
+			}
+			// The second account's token really belongs to it. Only the missing
+			// row-to-task edge rejects this case before a valid pair is debited.
+			guard := installTaskPricingReceiptTransactionGuard(t, db, f.input)
+			ProcessPendingBillingSettlementsOnce()
+			require.Positive(t, guard.Load())
+			record := taskBillingContractRecord(t, db, f.input.OperationKey)
+			require.Equal(t, BillingSettlementStatusManual, record.Status)
+			var users []User
+			var tokens []Token
+			var logs int64
+			taskBillingTestCheck(t, db.Where("id IN ?", []int{f.task.UserId, other.input.UserID}).Find(&users).Error, "read both untouched wallets")
+			taskBillingTestCheck(t, db.Where("id IN ?", []int{f.task.PrivateData.TokenId, other.input.TokenID}).Find(&tokens).Error, "read both untouched tokens")
+			taskBillingTestCheck(t, db.Model(&Log{}).Where("user_id IN ?", []int{f.task.UserId, other.input.UserID}).Count(&logs).Error, "count cross-account logs")
+			require.Len(t, users, 2)
+			require.Len(t, tokens, 2)
+			for _, user := range users {
+				require.EqualValues(t, 3000, user.Quota)
+			}
+			for _, token := range tokens {
+				require.Equal(t, int64(3000), token.RemainQuota)
+			}
+			require.Zero(t, logs)
+		})
 	}
 	t.Run("all_artifacts_rollback", func(t *testing.T) {
 		for _, phase := range []string{"task", "intent", "receipt"} {
