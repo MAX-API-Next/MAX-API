@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 type isolatedTaskPricingReceipt struct {
 	OperationKey string `gorm:"primaryKey;type:varchar(191)"`
 	Payload      string `gorm:"type:text;not null"`
+	Provenance   string `gorm:"type:text;not null"`
 }
 
 func (isolatedTaskPricingReceipt) TableName() string { return "isolated_task_pricing_receipts" }
@@ -44,11 +46,23 @@ func stageTaskPricingReceiptFixture(db *gorm.DB, task *model.Task, input model.B
 		if err != nil {
 			return err
 		}
+		frozen, err := taskPricingWalletReceiptInput(task, input)
+		if err != nil {
+			return err
+		}
+		provenance, err := taskpricing.PrepareReceiptProvenance(taskpricing.ReceiptWalletV1, frozen)
+		if err != nil {
+			return err
+		}
 		wire, err := common.Marshal(receipt)
 		if err != nil {
 			return err
 		}
-		if err := tx.Create(&isolatedTaskPricingReceipt{OperationKey: input.OperationKey, Payload: string(wire)}).Error; err != nil {
+		origin, err := common.Marshal(provenance)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&isolatedTaskPricingReceipt{OperationKey: input.OperationKey, Payload: string(wire), Provenance: string(origin)}).Error; err != nil {
 			return err
 		}
 		if beforeCommit != nil {
@@ -72,6 +86,10 @@ func readTaskPricingReceiptFixture(db *gorm.DB, id int64) error {
 	if err := common.UnmarshalJsonStr(stored.Payload, &receipt); err != nil {
 		return err
 	}
+	var provenance *taskpricing.ReceiptProvenance
+	if err := common.UnmarshalJsonStr(stored.Provenance, &provenance); err != nil {
+		return err
+	}
 	var record model.BillingSettlement
 	if err := db.Where("operation_key = ?", op).First(&record).Error; err != nil {
 		return err
@@ -86,7 +104,11 @@ func readTaskPricingReceiptFixture(db *gorm.DB, id int64) error {
 	if record.EffectPayload != "" {
 		return taskpricing.ErrTaskPricingReceiptConflict
 	}
-	return ValidateTaskPricingWalletReceipt(&receipt, &task, input)
+	frozen, err := taskPricingWalletReceiptInput(&task, input)
+	if err != nil {
+		return err
+	}
+	return taskpricing.ValidateReceiptProvenance(provenance, &receipt, frozen)
 }
 
 type receiptProcessConfig struct {
@@ -249,6 +271,10 @@ func TestTaskPricingReceiptFixtureCrashAndRecovery(t *testing.T) {
 			// The writer died after commit without returning success. Read the
 			// committed original; do not submit another request or invent a plan.
 			require.NoError(t, readTaskPricingReceiptFixture(f.db, task.ID))
+			var original isolatedTaskPricingReceipt
+			require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&original).Error)
+			wantProvenance := fmt.Sprintf(`{"version":1,"requirement":"wallet_receipt_v1","task_id":%d,"operation_key":%q}`, task.ID, input.OperationKey)
+			require.JSONEq(t, wantProvenance, original.Provenance, "the killed writer must have durably retained its original source")
 			// Two independently restarted workers use the original financial
 			// engine. SQLite contention is reported, not retried until green.
 			a := startReceiptProcess(t, dir, "recover", task, input)
@@ -265,7 +291,21 @@ func TestTaskPricingReceiptFixtureCrashAndRecovery(t *testing.T) {
 			require.EqualValues(t, 1500, getUserQuota(t, 901))
 			require.Equal(t, 1500, getTokenRemainQuota(t, 903))
 			require.NoError(t, readTaskPricingReceiptFixture(f.db, task.ID))
+			var after isolatedTaskPricingReceipt
+			require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&after).Error)
+			require.Equal(t, original, after, "restart recovery must not regenerate either original field")
 			settleTaskPricingHandoffFixture(t, f, task.ID)
 		})
 	}
+}
+
+func TestTaskPricingReceiptFixtureRejectsMissingProvenance(t *testing.T) {
+	_, f, task, input := newTaskPricingReceiptFixture(t)
+	require.NoError(t, stageTaskPricingReceiptFixture(f.db, task, input, nil))
+	require.NoError(t, f.db.Model(&isolatedTaskPricingReceipt{}).Where("operation_key = ?", input.OperationKey).Update("provenance", "null").Error)
+	require.ErrorIs(t, readTaskPricingReceiptFixture(f.db, task.ID), taskpricing.ErrTaskPricingReceiptConflict)
+	require.EqualValues(t, 3000, getUserQuota(t, 901))
+	var after isolatedTaskPricingReceipt
+	require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&after).Error)
+	require.Equal(t, "null", after.Provenance)
 }

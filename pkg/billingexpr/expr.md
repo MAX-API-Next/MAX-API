@@ -453,6 +453,10 @@ and explicitly classify historical operations without inferring from NULL,
 then enable the atomic new writer. Read/decode failures, new markers or missing
 tasks cannot be backfilled as legacy. The test transaction guard and applied
 replay wrapper now read this original provenance instead of hardcoding v1.
+The SQLite subprocess fixture also retains both fields in its sidecar: killing
+the writer before commit leaves neither, while killing after commit permits
+readback and two restarted contenders without regenerating either field. That
+fixture's pre-worker check is not a transaction lease or a production guard.
 Production columns, migration, funding consumers and paid admission are still
 not enabled; the ungated production replay remains an explicit negative control.
 
