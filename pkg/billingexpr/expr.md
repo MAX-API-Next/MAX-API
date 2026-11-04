@@ -394,6 +394,43 @@ as protected by those fixtures. Production integration still requires all
 consumer upgrades, SQLite/MySQL/PostgreSQL proof and the separate execution and
 admission gates. `PlanReceiptBound` and `AdmissionReady` remain false.
 
+`ValidateReceiptCompatibility` adds a pure consumer policy. The host must
+explicitly supply `ReceiptLegacy` or `ReceiptWalletV1` from trusted operation
+provenance; the empty/unknown requirement is rejected. Receipt absence, a zero
+amount, a failed task read or a failed decode cannot select legacy behavior.
+Explicit legacy accepts no receipt and no new expression/profile/binding
+markers, then leaves all existing ownership and financial checks mandatory.
+Wallet v1 always requires its original matching receipt. Neither result proves
+applied funds, and manual reconciliation cannot regenerate the original or
+approve an unknown version by changing this policy.
+
+The creation, worker, replay and reconciliation paths must use this same rule
+inside their eventual transaction boundaries. Current `BillingSettlement`
+writers and worker reconstruction still omit the receipt; current manual
+completion APIs address task-finalize operations, not this pre-consume receipt.
+Finalize/refund/manual-completion children have separate operation identities:
+they must retain their own accounting checks and validate the original
+reservation binding, never relabel the pre-consume receipt as a child receipt.
+No production consumer has been wired by adding this pure function.
+The already-applied replay fast return also needs the compatibility check;
+placing it only on a funding SQL update cannot cover that branch. The fixture
+includes an explicit negative control showing that the original ungated replay
+still ignores the candidate receipt column.
+
+The existing isolated task-billing database contracts now include
+`pricing_receipt_compatibility`. They add a **test-only** nullable TEXT column
+to a disposable `billing_settlements`, preserving legacy rows, and exercise
+candidate atomic persistence/CAS, a real committed transaction with its reply
+lost, and a test-installed guard inside the existing funding transaction.
+Missing, unknown, substituted and unreadable evidence rolls back funding;
+the original bytes remain available for reconciliation. The guard and column
+do not exist in production. The test guard also covers the applied transition
+of a zero-delta intent. A transient read failure retains the original retry
+policy/deadline and can recover after evidence becomes available; it is not
+reclassified as corrupted data merely to force manual handling.
+A missing MySQL/PostgreSQL stage is BLOCKED, not
+proof supplied by SQLite or by an overall successful test-process exit code.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding
