@@ -284,9 +284,11 @@ func (tx *receiptCandidateLostTx) Commit() error {
 }
 
 func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
-	// Existing legacy records must survive this candidate additive migration.
-	var legacy BillingSettlement
-	taskBillingTestCheck(t, db.Order("id").First(&legacy).Error, "read pre-migration legacy receipt")
+	// Seed the migration witness here: filtering to this subtest must not
+	// depend on an earlier funding subtest leaving a settlement behind.
+	legacy := BillingSettlement{OperationKey: "receipt-contract-legacy-before-migration",
+		Source: BillingSettlementSourceWallet, Status: BillingSettlementStatusApplied}
+	taskBillingTestCheck(t, db.Create(&legacy).Error, "seed isolated pre-migration legacy record")
 	taskBillingTestCheck(t, db.Migrator().AddColumn(&taskPricingReceiptCandidate{}, "TaskPricingReceipt"), "add test-only nullable TEXT receipt")
 	taskBillingTestCheck(t, db.Migrator().AddColumn(&taskPricingReceiptCandidate{}, "TaskPricingProvenance"), "add test-only nullable TEXT provenance")
 	require.True(t, db.Migrator().HasColumn(&taskPricingReceiptCandidate{}, "TaskPricingReceipt"))
