@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/i18n"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_reconciliation_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -1305,6 +1306,7 @@ func TestPreWssConsumeQuotaUsesCumulativeReservationInsteadOfIndependentCharge(t
 	info := &relaycommon.RelayInfo{
 		UserId: 811, TokenId: 812, TokenKey: "realtime-reserve-token",
 		OriginModelName: "gpt-4o-realtime-preview", UsingGroup: "default", Billing: billing,
+		PriceData: types.PriceData{ModelRatio: 1, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
 	}
 	usage := &dto.RealtimeUsage{
 		TotalTokens: 4, InputTokens: 4,
@@ -1324,6 +1326,73 @@ func TestPreWssConsumeQuotaUsesCumulativeReservationInsteadOfIndependentCharge(t
 	require.Len(t, billing.reserves, 2)
 	assert.Greater(t, billing.reserves[1], firstTarget)
 	assert.LessOrEqual(t, billing.reserves[1]-firstTarget, firstTarget)
+}
+
+func TestPreWssTieredCumulativeReservation(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 941, 942
+	seedUser(t, userID, 400)
+	seedToken(t, tokenID, userID, "tiered-realtime-token", 400)
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{
+		RequestId: "tiered-realtime-reserve", UserId: userID, TokenId: tokenID, TokenKey: "tiered-realtime-token",
+		OriginModelName: "tiered-realtime", PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: `p * 2 + c * 4`, GroupRatio: 1, QuotaPerUnit: 500000},
+	}
+	session := &BillingSession{relayInfo: info, funding: &WalletFunding{userId: userID}}
+	info.Billing = session
+	require.Nil(t, session.preConsume(ctx, 100))
+	usage := &dto.RealtimeUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120,
+		InputTokenDetails: dto.InputTokenDetails{TextTokens: 100}, OutputTokenDetails: dto.OutputTokenDetails{TextTokens: 20}}
+	// Independent oracle: (100*2+20*4)/1e6*500000 = 140.
+	require.NoError(t, PreWssConsumeQuota(ctx, info, usage))
+	require.Equal(t, 140, session.GetPreConsumedQuota())
+	require.NoError(t, PreWssConsumeQuota(ctx, info, usage))
+	require.EqualValues(t, 260, getUserQuota(t, userID))
+	require.EqualValues(t, 260, getTokenRemainQuota(t, tokenID))
+	usage.InputTokens, usage.OutputTokens, usage.TotalTokens = 200, 40, 240
+	usage.InputTokenDetails.TextTokens, usage.OutputTokenDetails.TextTokens = 200, 40
+	require.NoError(t, PreWssConsumeQuota(ctx, info, usage))
+	require.Equal(t, 280, session.GetPreConsumedQuota())
+	require.EqualValues(t, 120, getUserQuota(t, userID))
+	require.EqualValues(t, 120, getTokenRemainQuota(t, tokenID))
+	usage.InputTokens, usage.OutputTokens, usage.TotalTokens = 300, 60, 360
+	usage.InputTokenDetails.TextTokens, usage.OutputTokenDetails.TextTokens = 300, 60
+	require.Error(t, PreWssConsumeQuota(ctx, info, usage), "420 total requires another 140, but only 120 remain")
+	require.Equal(t, 280, session.GetPreConsumedQuota())
+	info.TieredBillingSnapshot.ExprString = "invalid expression!!!"
+	require.Error(t, PreWssConsumeQuota(ctx, info, usage), "a failed quote cannot authorize more usage")
+	require.EqualValues(t, 120, getUserQuota(t, userID))
+	require.EqualValues(t, 120, getTokenRemainQuota(t, tokenID))
+	var reservations int64
+	require.NoError(t, model.DB.Model(&model.BillingSettlement{}).Where("operation_key LIKE ?", "request:tiered-realtime-reserve:reserve:%").Count(&reservations).Error)
+	require.EqualValues(t, 2, reservations)
+}
+
+func TestPreWssTieredSubscriptionReservation(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subscriptionID = 943, 944, 945, 946
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "tiered-realtime-sub-token", 400)
+	seedBillingSubscription(t, planID, subscriptionID, userID, 400)
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{RequestId: "tiered-realtime-sub", UserId: userID, TokenId: tokenID,
+		TokenKey: "tiered-realtime-sub-token", OriginModelName: "tiered-realtime",
+		UserSetting:           dto.UserSetting{BillingPreference: "subscription_only"},
+		PriceData:             types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: `p * 2 + c * 4`, GroupRatio: 1, QuotaPerUnit: 500000}}
+	session, apiErr := NewBillingSession(ctx, info, 100)
+	require.Nil(t, apiErr)
+	info.Billing = session
+	require.Equal(t, BillingSourceSubscription, info.BillingSource)
+	usage := &dto.RealtimeUsage{InputTokens: 100, OutputTokens: 20, TotalTokens: 120,
+		InputTokenDetails: dto.InputTokenDetails{TextTokens: 100}, OutputTokenDetails: dto.OutputTokenDetails{TextTokens: 20}}
+	require.NoError(t, PreWssConsumeQuota(ctx, info, usage))
+	require.NoError(t, PreWssConsumeQuota(ctx, info, usage))
+	require.Equal(t, 140, session.GetPreConsumedQuota())
+	require.EqualValues(t, 0, getUserQuota(t, userID))
+	require.EqualValues(t, 140, getSubscriptionAmountUsed(t, subscriptionID))
+	require.EqualValues(t, 260, getTokenRemainQuota(t, tokenID))
 }
 
 func TestPostConsumeQuotaRejectsAmountChangedReplay(t *testing.T) {

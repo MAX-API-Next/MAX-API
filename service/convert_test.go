@@ -11,6 +11,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestClaudeStreamFinishUsesCachedUsage(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(map[bool]string{false: "wait_for_usage", true: "cached_usage"}[cached], func(t *testing.T) {
+			info := &relaycommon.RelayInfo{ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{}}
+			var start dto.ChatCompletionsStreamResponse
+			require.NoError(t, common.UnmarshalJsonStr(`{"choices":[{"delta":{"content":"hello"}}]}`, &start))
+			StreamResponseOpenAI2Claude(&start, info)
+			if cached {
+				info.ClaudeConvertInfo.Usage = &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}
+			}
+			var finish dto.ChatCompletionsStreamResponse
+			require.NoError(t, common.UnmarshalJsonStr(`{"choices":[{"delta":{},"finish_reason":"stop"}]}`, &finish))
+			got := StreamResponseOpenAI2Claude(&finish, info)
+			if !cached {
+				require.Empty(t, got)
+				require.False(t, info.ClaudeConvertInfo.Done)
+				finish.Choices = nil
+				finish.Usage = &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}
+				got = StreamResponseOpenAI2Claude(&finish, info)
+			}
+			require.Len(t, got, 3)
+			require.Equal(t, "content_block_stop", got[0].Type)
+			require.Equal(t, "message_delta", got[1].Type)
+			require.Equal(t, 100, got[1].Usage.InputTokens)
+			require.Equal(t, 20, got[1].Usage.OutputTokens)
+			require.Equal(t, "message_stop", got[2].Type)
+			require.True(t, info.ClaudeConvertInfo.Done)
+			require.Empty(t, StreamResponseOpenAI2Claude(&finish, info))
+		})
+	}
+}
+
 func TestResponseOpenAI2ClaudePreservesTextWithToolCalls(t *testing.T) {
 	resp := openAIResponseWithTextAndToolCall(t)
 	got := ResponseOpenAI2Claude(resp, &relaycommon.RelayInfo{})

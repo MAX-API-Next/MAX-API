@@ -180,6 +180,9 @@ func validateTaskPricingReceiptCandidate(db *gorm.DB, expected BillingSettlement
 	if err := taskpricing.ValidateReceiptProvenance(provenance, receipt, frozen); err != nil {
 		return err
 	}
+	if provenance.Requirement != taskpricing.ReceiptWalletV1 || frozen.Plan == nil || frozen.Plan.ExpressionPlan == nil {
+		return taskpricing.ErrTaskPricingReceiptConflict
+	}
 	quota := int64(frozen.Plan.ReserveQuota)
 	if row.Source != BillingSettlementSourceWallet || task.PrivateData.BillingSource != BillingSettlementSourceWallet ||
 		row.SubscriptionID != 0 || task.PrivateData.SubscriptionId != 0 || row.SubscriptionPreConsumeRequestID != "" ||
@@ -308,6 +311,39 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 	fixture := func(t *testing.T, ratio float64) taskPricingReceiptFixture {
 		sequence++
 		return newTaskPricingReceiptCandidate(t, db, sequence, ratio)
+	}
+	t.Run("wallet_reader_rejects_legacy_without_plan", func(t *testing.T) {
+		f := fixture(t, 1)
+		taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage wallet candidate")
+		f.task.PrivateData.BillingContext.TaskBillingPlan = nil
+		f.task.PrivateData.PluginBinding.Profile = ""
+		f.task.PrivateData.PluginBinding.Action = ""
+		f.task.PrivateData.PluginBinding.PhaseApprovalID = ""
+		f.task.Action = ""
+		taskBillingTestCheck(t, db.Save(&f.task).Error, "remove plan from retained task")
+		legacy := fmt.Sprintf(`{"version":1,"requirement":"legacy","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+		taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("operation_key = ?", f.input.OperationKey).
+			Updates(map[string]interface{}{"task_pricing_receipt": nil, "task_pricing_provenance": legacy}).Error, "seed explicit legacy evidence")
+		require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict)
+	})
+	for _, column := range []string{"task_pricing_receipt", "task_pricing_provenance"} {
+		t.Run("writer_preserves_partial_"+column, func(t *testing.T) {
+			f := fixture(t, 1)
+			row, _, err := ensureBillingSettlementRecordDB(db, f.input)
+			taskBillingTestCheck(t, err, "seed matching intent without task")
+			taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("id = ?", row.ID).
+				Update(column, "retained-original").Error, "seed partial evidence")
+			require.ErrorIs(t, stageTaskPricingReceiptCandidate(db, f, ""), taskpricing.ErrTaskPricingReceiptConflict)
+			var after taskPricingReceiptCandidate
+			taskBillingTestCheck(t, db.First(&after, row.ID).Error, "read retained partial evidence")
+			if column == "task_pricing_receipt" {
+				require.Equal(t, "retained-original", *after.TaskPricingReceipt)
+				require.Nil(t, after.TaskPricingProvenance)
+			} else {
+				require.Equal(t, "retained-original", *after.TaskPricingProvenance)
+				require.Nil(t, after.TaskPricingReceipt)
+			}
+		})
 	}
 	t.Run("writer_stamps_original_provenance", func(t *testing.T) {
 		f := fixture(t, 1)

@@ -88,6 +88,9 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 	return common.QuotaFromDecimalChecked(quota)
 }
 
+// PreWssConsumeQuota reserves the cumulative session quote, using the same
+// frozen expression and normalization as final settlement when applicable.
+// Unlike settlement, an invalid quote must fail closed instead of estimating.
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
 	if relayInfo.UsePrice {
 		return nil
@@ -126,6 +129,18 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
+	if snap := relayInfo.TieredBillingSnapshot; snap != nil && snap.BillingMode == "tiered_expr" {
+		requestInput := billingexpr.RequestInput{}
+		if relayInfo.BillingRequestInput != nil {
+			requestInput = *relayInfo.BillingRequestInput
+		}
+		params := BuildRealtimeTieredTokenParams(usage, billingexpr.UsedVars(snap.ExprString))
+		quote, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
+		if err != nil {
+			return fmt.Errorf("realtime cumulative quote failed: %w", err)
+		}
+		quota, clamp = quote.ActualQuotaAfterGroup, quote.Clamp
+	}
 	noteQuotaClamp(relayInfo, clamp)
 
 	if quota == 0 {
@@ -138,7 +153,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if neededQuota <= 0 {
 		return nil
 	}
-	if userQuota < int64(neededQuota) {
+	if relayInfo.BillingSource != BillingSourceSubscription && userQuota < int64(neededQuota) {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(neededQuota))
 	}
 	if !token.UnlimitedQuota && token.RemainQuota < int64(neededQuota) {
