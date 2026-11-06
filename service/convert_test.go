@@ -43,6 +43,48 @@ func TestClaudeStreamFinishUsesCachedUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeStreamRetainsFinishDeltaBeforeLateUsage(t *testing.T) {
+	for _, tc := range []struct{ name, delta, kind, field, value string }{
+		{"text", `{"content":"x"}`, "text_delta", "text", "x"},
+		{"thinking", `{"reasoning_content":"x"}`, "thinking_delta", "thinking", "x"},
+		{"tool", `{"tool_calls":[{"index":0,"id":"call_finish","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]}`, "input_json_delta", "partial_json", `{"q":"x"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{}}
+			var start, finish dto.ChatCompletionsStreamResponse
+			require.NoError(t, common.UnmarshalJsonStr(`{"choices":[{"delta":{"content":"hello"}}]}`, &start))
+			StreamResponseOpenAI2Claude(&start, info)
+			require.NoError(t, common.UnmarshalJsonStr(`{"choices":[{"delta":`+tc.delta+`,"finish_reason":"stop"}]}`, &finish))
+			pending := StreamResponseOpenAI2Claude(&finish, info)
+			var delivered []string
+			for _, event := range pending {
+				require.NotEqual(t, "message_delta", event.Type)
+				require.NotEqual(t, "message_stop", event.Type)
+				if event.Delta != nil && event.Delta.Type == tc.kind {
+					wire, err := common.Marshal(event.Delta)
+					require.NoError(t, err)
+					var fields map[string]string
+					require.NoError(t, common.Unmarshal(wire, &fields))
+					delivered = append(delivered, fields[tc.field])
+				}
+			}
+			require.Equal(t, []string{tc.value}, delivered)
+			require.False(t, info.ClaudeConvertInfo.Done)
+			terminal := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+				Usage: &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+			}, info)
+			require.Len(t, terminal, 3)
+			require.Equal(t, "content_block_stop", terminal[0].Type)
+			require.Equal(t, "message_delta", terminal[1].Type)
+			require.Equal(t, 100, terminal[1].Usage.InputTokens)
+			require.Equal(t, 20, terminal[1].Usage.OutputTokens)
+			require.Equal(t, "message_stop", terminal[2].Type)
+			require.True(t, info.ClaudeConvertInfo.Done)
+			require.Empty(t, StreamResponseOpenAI2Claude(&finish, info))
+		})
+	}
+}
+
 func TestResponseOpenAI2ClaudePreservesTextWithToolCalls(t *testing.T) {
 	resp := openAIResponseWithTextAndToolCall(t)
 	got := ResponseOpenAI2Claude(resp, &relaycommon.RelayInfo{})

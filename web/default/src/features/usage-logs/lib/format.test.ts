@@ -19,7 +19,40 @@ For commercial licensing, please contact https://github.com/MAX-API-Next/MAX-API
 import ru from '@/i18n/locales/ru.json'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { getTieredBillingSummary, renderAuditContent } from './format'
+import {
+  getCacheWriteTokenCounts,
+  getTieredBillingSummary,
+  renderAuditContent,
+} from './format'
+
+describe('cache write count display contract', () => {
+  const cases = [
+    {
+      name: 'aggregate-only retains the legacy unsplit display',
+      input: { cache_creation_tokens: 100 },
+      expected: { total: 100, fiveMinutes: 0, oneHour: 0, hasSplit: false },
+    },
+    {
+      name: 'split-only derives the total from both TTL counts',
+      input: { cache_creation_tokens_5m: 40, cache_creation_tokens_1h: 60 },
+      expected: { total: 100, fiveMinutes: 40, oneHour: 60, hasSplit: true },
+    },
+    {
+      name: 'smaller aggregate does not subtract reported split counts',
+      input: {
+        cache_creation_tokens: 80,
+        cache_creation_tokens_5m: 40,
+        cache_creation_tokens_1h: 60,
+      },
+      expected: { total: 100, fiveMinutes: 40, oneHour: 60, hasSplit: true },
+    },
+  ]
+  for (const item of cases) {
+    test(item.name, () => {
+      assert.deepEqual(getCacheWriteTokenCounts(item.input), item.expected)
+    })
+  }
+})
 
 describe('tiered billing price summaries', () => {
   test('preserves configured zero prices and the cache-usage visibility policy', () => {
