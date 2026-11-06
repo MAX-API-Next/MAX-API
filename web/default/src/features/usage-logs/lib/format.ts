@@ -248,6 +248,25 @@ export function hasAnyCacheTokens(
   )
 }
 
+export function getCacheWriteTokenCounts(
+  other: LogOtherData | null | undefined
+) {
+  const reported5m = other?.cache_creation_tokens_5m || 0
+  const oneHour = other?.cache_creation_tokens_1h || 0
+  const aggregate = other?.cache_creation_tokens || 0
+  const hasSplit = reported5m > 0 || oneHour > 0
+  // Match the existing billing contract: unspecified TTL remainder is 5m.
+  const fiveMinutes = hasSplit
+    ? reported5m + Math.max(0, aggregate - reported5m - oneHour)
+    : 0
+  return {
+    total: Math.max(aggregate, reported5m + oneHour),
+    fiveMinutes,
+    oneHour,
+    hasSplit,
+  }
+}
+
 export function getTieredBillingSummary(
   other: LogOtherData | null
 ): TieredBillingSummary | null {

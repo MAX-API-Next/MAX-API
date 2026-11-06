@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,7 +64,9 @@ func TestResponsesAdaptersWaitForGenerationOutput(t *testing.T) {
 				}
 				r, w := io.Pipe()
 				finished := make(chan struct{})
-				t.Cleanup(func() { _ = r.Close(); _ = w.Close(); <-finished })
+				release := make(chan struct{})
+				releaseWriter := sync.OnceFunc(func() { close(release) })
+				t.Cleanup(func() { releaseWriter(); _ = r.Close(); _ = w.Close(); <-finished })
 				go func() {
 					defer close(finished)
 					defer w.Close()
@@ -75,9 +78,17 @@ func TestResponsesAdaptersWaitForGenerationOutput(t *testing.T) {
 							return
 						}
 					}
-					time.Sleep(1500 * time.Millisecond)
+					if hasOutput {
+						time.Sleep(1500 * time.Millisecond)
+					} else {
+						// Do not race a fixed producer EOF against the watchdog on a
+						// loaded host. A metadata-only stream remains open until the
+						// handler terminates; a missing watchdog still times out the test.
+						<-release
+					}
 				}()
 				_, apiErr := provider.handler(c, info, &http.Response{StatusCode: 200, Body: r})
+				releaseWriter()
 				require.Equal(t, hasOutput, info.HasRecordedChannelFirstResult())
 				if hasOutput {
 					require.NotEqual(t, relaycommon.StreamEndReasonTimeout, info.StreamStatus.EndReason, "real output disables the first-result watchdog")

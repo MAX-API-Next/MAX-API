@@ -50,7 +50,8 @@ func TestPatchClaudeMessageDeltaUsageDataZeroValueChecks(t *testing.T) {
 	patchedData := patchClaudeMessageDeltaUsageData(originalData, usage)
 
 	require.EqualValues(t, 9, gjson.Get(patchedData, "usage.input_tokens").Int())
-	require.EqualValues(t, 30, gjson.Get(patchedData, "usage.cache_read_input_tokens").Int())
+	// Explicit upstream zero must not be replaced with a stale local snapshot.
+	require.EqualValues(t, 0, gjson.Get(patchedData, "usage.cache_read_input_tokens").Int())
 	assert.False(t, gjson.Get(patchedData, "usage.cache_creation_input_tokens").Exists())
 }
 

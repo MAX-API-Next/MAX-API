@@ -756,7 +756,7 @@ func setMessageDeltaUsageInt(data string, path string, localValue int) string {
 	}
 
 	upstreamValue := gjson.Get(data, path)
-	if upstreamValue.Exists() && upstreamValue.Int() > 0 {
+	if upstreamValue.Type == gjson.Number {
 		return data
 	}
 
@@ -856,6 +856,39 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
 	observeClaudeStreamToolUses(info, claudeInfo, &claudeResponse)
+	if claudeResponse.Type == "message_start" && gjson.Get(data, "message.usage.input_tokens").Type == gjson.Number {
+		claudeInfo.responsesInputUsageReported = true
+	}
+	if claudeResponse.Type == "message_delta" && claudeResponse.Usage != nil {
+		if claudeInfo.Usage == nil {
+			claudeInfo.Usage = &dto.Usage{}
+		}
+		if total := gjson.Get(data, "usage.cache_creation_input_tokens"); total.Type == gjson.Number && total.Int() == 0 {
+			claudeInfo.Usage.ClaudeCacheCreation5mTokens = 0
+			claudeInfo.Usage.ClaudeCacheCreation1hTokens = 0
+		}
+		// FormatClaudeResponseInfo retains omitted fields; clear only explicit
+		// numeric zeros before it merges the nonzero fields.
+		for path, target := range map[string]*int{
+			"input_tokens":                             &claudeInfo.Usage.PromptTokens,
+			"output_tokens":                            &claudeInfo.Usage.CompletionTokens,
+			"cache_read_input_tokens":                  &claudeInfo.Usage.PromptTokensDetails.CachedTokens,
+			"cache_creation_input_tokens":              &claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens,
+			"cache_creation.ephemeral_5m_input_tokens": &claudeInfo.Usage.ClaudeCacheCreation5mTokens,
+			"cache_creation.ephemeral_1h_input_tokens": &claudeInfo.Usage.ClaudeCacheCreation1hTokens,
+		} {
+			value := gjson.Get(data, "usage."+path)
+			if value.Type == gjson.Number && value.Int() == 0 {
+				*target = 0
+			}
+		}
+		if gjson.Get(data, "usage.input_tokens").Type == gjson.Number {
+			claudeInfo.responsesInputUsageReported = true
+		}
+		if gjson.Get(data, "usage.output_tokens").Type == gjson.Number {
+			claudeInfo.responsesFinalOutputUsageReported = true
+		}
+	}
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
 
@@ -958,7 +991,7 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		complete = claudeInfo.ResponsesTerminalSeen
 	}
-	explicitZero := info.RelayFormat == types.RelayFormatOpenAIResponses && complete && claudeInfo.responsesFinalOutputUsageReported
+	explicitZero := complete && claudeInfo.responsesFinalOutputUsageReported
 	estimated := false
 	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
 		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
@@ -991,10 +1024,10 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if claudeInfo.Usage != nil && claudeInfo.Usage.BillingUsage == nil {
 		providerUsage := buildMessageDeltaPatchUsage(nil, claudeInfo)
 		claudeInfo.Usage.BillingUsage = dto.NewClaudeMessagesBillingUsage(providerUsage)
-		if claudeInfo.Usage.BillingUsage == nil && info.RelayFormat == types.RelayFormatOpenAIResponses && (claudeInfo.responsesInputUsageReported || claudeInfo.responsesFinalOutputUsageReported) {
+		if claudeInfo.Usage.BillingUsage == nil && (claudeInfo.responsesInputUsageReported || claudeInfo.responsesFinalOutputUsageReported) {
 			claudeInfo.Usage.BillingUsage = &dto.BillingUsage{Source: dto.BillingUsageSourceClaudeMessages, Semantic: dto.BillingUsageSemanticAnthropic, ClaudeUsage: providerUsage}
 		}
-		if claudeInfo.Usage.BillingUsage != nil && info.RelayFormat == types.RelayFormatOpenAIResponses {
+		if claudeInfo.Usage.BillingUsage != nil {
 			claudeInfo.Usage.BillingUsage.Estimated = estimated
 			claudeInfo.Usage.BillingUsage.TokenCountsReported = claudeInfo.responsesInputUsageReported && claudeInfo.responsesFinalOutputUsageReported
 		}

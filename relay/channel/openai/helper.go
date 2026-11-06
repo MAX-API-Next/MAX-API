@@ -130,9 +130,8 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 	*systemFingerprint = lastStreamResponse.GetSystemFingerprint()
 	*model = lastStreamResponse.Model
 
-	if service.ValidUsage(lastStreamResponse.Usage) {
+	if dto.MergeOpenAIUsage(*usage, common.StringToByteSlice(lastStreamData)) {
 		*containStreamUsage = true
-		*usage = lastStreamResponse.Usage
 		if !info.ShouldIncludeUsage {
 			*shouldSendLastResp = lo.SomeBy(lastStreamResponse.Choices, func(choice dto.ChatCompletionsStreamResponseChoice) bool {
 				return choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != ""
@@ -164,6 +163,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		}
 
 		info.ClaudeConvertInfo.Usage = usage
+		streamResponse.Usage = usage
 
 		claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
 		for _, resp := range claudeResponses {
@@ -183,6 +183,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
 		// 暂不知是否有程序会不兼容。
 
+		streamResponse.Usage = usage
 		geminiResponse := service.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
 		// openai 流响应开头的空数据

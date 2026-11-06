@@ -927,7 +927,8 @@ func getResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 
 func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackPromptTokens int) dto.Usage {
 	promptTokens := metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount
-	if promptTokens <= 0 && fallbackPromptTokens > 0 {
+	promptEstimated := promptTokens <= 0 && !metadata.HasPromptTokenCount && fallbackPromptTokens > 0
+	if promptEstimated {
 		promptTokens = fallbackPromptTokens
 	}
 
@@ -973,6 +974,9 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	}
 
 	usage.BillingUsage = dto.NewGeminiChatBillingUsage(&metadata)
+	if promptEstimated {
+		usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&usage)
+	}
 	return usage
 }
 

@@ -237,8 +237,8 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	recordUsage := func(frame *chatStreamFrame, data string) {
 		lastData = data
-		if frame.Usage != nil {
-			usage, containUsage = frame.Usage, true
+		if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
+			containUsage = true
 		}
 	}
 	flushPending := func() bool {

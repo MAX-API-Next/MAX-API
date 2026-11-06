@@ -237,15 +237,25 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	if oaiUsage == nil {
 		return nil
 	}
+	if original := dto.CloneBillingUsage(oaiUsage.BillingUsage); original != nil && original.ClaudeUsage != nil &&
+		(original.Source == dto.BillingUsageSourceClaudeMessages || original.Semantic == dto.BillingUsageSemanticAnthropic) {
+		return original.ClaudeUsage
+	}
+	cacheCreation := oaiUsage.PromptTokensDetails.CacheCreationTokensTotal()
 	cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(
-		oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		cacheCreation,
 		oaiUsage.ClaudeCacheCreation5mTokens,
 		oaiUsage.ClaudeCacheCreation1hTokens,
 	)
+	inputTokens := oaiUsage.PromptTokens
+	if oaiUsage.UsageSemantic != dto.BillingUsageSemanticAnthropic {
+		// OpenAI totals include cache; Claude reports it outside input_tokens.
+		inputTokens = max(0, inputTokens-oaiUsage.PromptTokensDetails.CachedTokens-cacheCreation)
+	}
 	usage := &dto.ClaudeUsage{
-		InputTokens:              oaiUsage.PromptTokens,
+		InputTokens:              inputTokens,
 		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheCreation,
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {
@@ -420,15 +430,16 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 		}
 
-		// 如果首块就带 finish_reason，需要立即发送停止块
+		// A finish reason may precede the final usage-only chunk, including
+		// when it appears in the first content chunk.
 		if len(openAIResponse.Choices) > 0 && openAIResponse.Choices[0].FinishReason != nil && *openAIResponse.Choices[0].FinishReason != "" {
 			info.FinishReason = *openAIResponse.Choices[0].FinishReason
-			stopOpenBlocks()
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
 				oaiUsage = info.ClaudeConvertInfo.Usage
 			}
 			if oaiUsage != nil {
+				stopOpenBlocks()
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 					Type:  "message_delta",
 					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
@@ -436,11 +447,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
 				})
+				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+					Type: "message_stop",
+				})
+				info.ClaudeConvertInfo.Done = true
 			}
-			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-				Type: "message_stop",
-			})
-			info.ClaudeConvertInfo.Done = true
 		}
 		return claudeResponses
 	}
@@ -933,7 +944,7 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 	}
 
 	// 如果没有实际内容且没有结束标志，跳过。主要针对 openai 流响应开头的空数据
-	if !hasContent && !hasFinishReason {
+	if !hasContent && !hasFinishReason && openAIResponse.Usage == nil {
 		return nil
 	}
 
@@ -1018,29 +1029,49 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 }
 
 func geminiBillingMetadataFromOpenAIUsage(usage *dto.Usage) (dto.GeminiUsageMetadata, bool) {
-	if usage == nil || usage.BillingUsage == nil || usage.BillingUsage.GeminiUsageMetadata == nil {
-		return dto.GeminiUsageMetadata{}, false
-	}
-	if usage.BillingUsage.Source != dto.BillingUsageSourceGeminiChat && usage.BillingUsage.Semantic != dto.BillingUsageSemanticGemini {
+	if usage == nil {
 		return dto.GeminiUsageMetadata{}, false
 	}
 	billingUsage := dto.CloneBillingUsage(usage.BillingUsage)
-	if billingUsage == nil || billingUsage.GeminiUsageMetadata == nil {
-		return dto.GeminiUsageMetadata{}, false
+	if billingUsage != nil && billingUsage.GeminiUsageMetadata != nil &&
+		(billingUsage.Source == dto.BillingUsageSourceGeminiChat || billingUsage.Semantic == dto.BillingUsageSemanticGemini) {
+		return *billingUsage.GeminiUsageMetadata, true
 	}
-	return *billingUsage.GeminiUsageMetadata, true
+	canonical := effectiveBillingUsage(usage)
+	prompt := canonical.PromptTokens
+	if canonical.UsageSemantic == dto.BillingUsageSemanticAnthropic {
+		prompt += canonical.PromptTokensDetails.CachedTokens + canonical.PromptTokensDetails.CacheCreationTokensTotal()
+	}
+	thoughts := canonical.CompletionTokenDetails.ReasoningTokens
+	metadata := dto.GeminiUsageMetadata{
+		PromptTokenCount: prompt, CachedContentTokenCount: canonical.PromptTokensDetails.CachedTokens,
+		CandidatesTokenCount: max(0, canonical.CompletionTokens-thoughts), ThoughtsTokenCount: thoughts,
+		TotalTokenCount: prompt + canonical.CompletionTokens, BillingUsage: openAIBillingUsageFromUsage(usage),
+	}
+	for _, detail := range []struct {
+		modality      string
+		input, output int
+	}{
+		{"TEXT", canonical.PromptTokensDetails.TextTokens, canonical.CompletionTokenDetails.TextTokens},
+		{"IMAGE", canonical.PromptTokensDetails.ImageTokens, canonical.CompletionTokenDetails.ImageTokens},
+		{"AUDIO", canonical.PromptTokensDetails.AudioTokens, canonical.CompletionTokenDetails.AudioTokens},
+	} {
+		if detail.input > 0 {
+			metadata.PromptTokensDetails = append(metadata.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: detail.modality, TokenCount: detail.input})
+		}
+		if detail.output > 0 {
+			metadata.CandidatesTokensDetails = append(metadata.CandidatesTokensDetails, dto.GeminiPromptTokensDetails{Modality: detail.modality, TokenCount: detail.output})
+		}
+	}
+	return metadata, true
 }
 
 func openAIBillingUsageFromUsage(usage *dto.Usage) *dto.BillingUsage {
 	if usage == nil {
 		return nil
 	}
-	if existingBillingUsage := dto.CloneBillingUsage(usage.BillingUsage); existingBillingUsage != nil && existingBillingUsage.OpenAIUsage != nil {
-		if existingBillingUsage.Source == dto.BillingUsageSourceOAIChat ||
-			existingBillingUsage.Source == dto.BillingUsageSourceOAIResponses ||
-			existingBillingUsage.Semantic == dto.BillingUsageSemanticOpenAI {
-			return existingBillingUsage
-		}
+	if existingBillingUsage := dto.CloneBillingUsage(usage.BillingUsage); existingBillingUsage != nil {
+		return existingBillingUsage
 	}
 	return dto.NewOpenAIChatBillingUsage(usage)
 }

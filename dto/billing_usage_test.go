@@ -20,6 +20,20 @@ func TestNewGeminiChatBillingUsageRequiresTokenContent(t *testing.T) {
 	assert.False(t, billingUsage.Estimated)
 }
 
+func TestGeminiUsageDistinguishesReportedZeroFromMissing(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"promptTokenCount":null,"candidatesTokenCount":null}`} {
+		var metadata GeminiUsageMetadata
+		require.NoError(t, common.UnmarshalJsonStr(raw, &metadata))
+		require.Nil(t, NewGeminiChatBillingUsage(&metadata))
+	}
+	var zero GeminiUsageMetadata
+	require.NoError(t, common.UnmarshalJsonStr(`{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}`, &zero))
+	usage := NewGeminiChatBillingUsage(&zero)
+	require.NotNil(t, usage)
+	require.True(t, usage.TokenCountsReported)
+	require.False(t, usage.Estimated)
+}
+
 func TestNewClaudeMessagesBillingUsageRequiresTokenContent(t *testing.T) {
 	require.Nil(t, NewClaudeMessagesBillingUsage(nil))
 	require.Nil(t, NewClaudeMessagesBillingUsage(&ClaudeUsage{}))

@@ -132,11 +132,11 @@ func fillPromptTokenDetailsFromInputDetails(promptDetails *dto.InputTokenDetails
 func usageFromClaudeBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {
 	claudeUsage := billingUsage.ClaudeUsage
 	cacheCreation5m := claudeUsage.GetCacheCreation5mTokens()
-	if cacheCreation5m == 0 {
+	if claudeUsage.CacheCreation == nil {
 		cacheCreation5m = claudeUsage.ClaudeCacheCreation5mTokens
 	}
 	cacheCreation1h := claudeUsage.GetCacheCreation1hTokens()
-	if cacheCreation1h == 0 {
+	if claudeUsage.CacheCreation == nil {
 		cacheCreation1h = claudeUsage.ClaudeCacheCreation1hTokens
 	}
 

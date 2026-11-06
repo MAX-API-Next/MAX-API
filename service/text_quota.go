@@ -67,7 +67,8 @@ type webSearchToolUsage struct {
 }
 
 func (s *textQuotaSummary) hasBillableUsage(relayInfo *relaycommon.RelayInfo) bool {
-	if s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() {
+	if s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero() ||
+		(s.IsClaudeUsageSemantic && (s.CacheTokens > 0 || s.CacheCreationTokens > 0)) {
 		return true
 	}
 	return relayInfo != nil &&

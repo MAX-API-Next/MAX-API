@@ -52,10 +52,8 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 
 		// 把 xAI 的usage转换为 OpenAI 的usage
-		if xAIResp.Usage != nil {
+		if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
 			containStreamUsage = true
-			usage.PromptTokens = xAIResp.Usage.PromptTokens
-			usage.TotalTokens = xAIResp.Usage.TotalTokens
 			usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 		}
 
