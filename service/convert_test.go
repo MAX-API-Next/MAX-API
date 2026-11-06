@@ -85,6 +85,42 @@ func TestClaudeStreamRetainsFinishDeltaBeforeLateUsage(t *testing.T) {
 	}
 }
 
+func TestClaudeFirstChunkFinishPresence(t *testing.T) {
+	for _, reported := range []bool{false, true} {
+		t.Run(map[bool]string{false: "delayed_usage", true: "reported_usage"}[reported], func(t *testing.T) {
+			info := &relaycommon.RelayInfo{SendResponseCount: 1, ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{}}
+			var first dto.ChatCompletionsStreamResponse
+			require.NoError(t, common.UnmarshalJsonStr(`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}]}`, &first))
+			if reported {
+				first.Usage = &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}
+			}
+			events := StreamResponseOpenAI2Claude(&first, info)
+			if !reported {
+				require.False(t, info.ClaudeConvertInfo.Done)
+				for _, event := range events {
+					require.NotEqual(t, "message_stop", event.Type)
+				}
+				info.SendResponseCount++ // the real stream caller increments per conversion
+				events = append(events, StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+					Usage: &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+				}, info)...)
+			}
+			counts := map[string]int{}
+			for _, event := range events {
+				counts[event.Type]++
+				if event.Type == "message_delta" {
+					require.Equal(t, 100, event.Usage.InputTokens)
+					require.Equal(t, 20, event.Usage.OutputTokens)
+				}
+			}
+			require.Equal(t, 1, counts["message_start"])
+			require.Equal(t, 1, counts["message_delta"])
+			require.Equal(t, 1, counts["message_stop"])
+			require.True(t, info.ClaudeConvertInfo.Done)
+		})
+	}
+}
+
 func TestResponseOpenAI2ClaudePreservesTextWithToolCalls(t *testing.T) {
 	resp := openAIResponseWithTextAndToolCall(t)
 	got := ResponseOpenAI2Claude(resp, &relaycommon.RelayInfo{})

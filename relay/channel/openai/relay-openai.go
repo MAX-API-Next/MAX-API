@@ -131,21 +131,24 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
 			pending := lastStreamData
+			var formatErr error
 			if info.RelayFormat == types.RelayFormatClaude {
 				// Usage updates are cumulative facts, not Claude terminal events.
 				// Only the final merged snapshot may close the converted message.
 				var frame dto.ChatCompletionsStreamResponse
-				if common.UnmarshalJsonStr(pending, &frame) == nil {
+				info.SendResponseCount++
+				formatErr = common.UnmarshalJsonStr(pending, &frame)
+				if formatErr == nil {
 					frame.Usage = nil
 					info.ClaudeConvertInfo.Usage = nil
-					if encoded, err := common.Marshal(frame); err == nil {
-						pending = string(encoded)
-					}
+					formatErr = handleClaudeStreamFrame(c, &frame, info)
 				}
+			} else {
+				formatErr = HandleStreamFormat(c, info, pending, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 			}
-			if err := HandleStreamFormat(c, info, pending, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+			if formatErr != nil {
+				common.SysLog("error handling stream format: " + formatErr.Error())
+				sr.Error(formatErr)
 			}
 		}
 		if len(data) > 0 {

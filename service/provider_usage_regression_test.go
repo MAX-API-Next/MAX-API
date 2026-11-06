@@ -100,7 +100,7 @@ func assertUsageReplayBalance(t *testing.T, info *relaycommon.RelayInfo, want in
 	if want > 0 {
 		require.Equal(t, 1, user.RequestCount)
 	}
-	if int64(user.Quota) != int64(10000-want) || int64(token.RemainQuota) != int64(10000-want) || int64(user.UsedQuota) != int64(want) || len(logs) != 1 || logs[0].Quota != want {
+	if user.Quota != int64(10000-want) || token.RemainQuota != int64(10000-want) || user.UsedQuota != int64(want) || len(logs) != 1 || logs[0].Quota != want {
 		t.Errorf("wire-to-ledger differs from independent oracle %d", want)
 	}
 }
@@ -791,4 +791,89 @@ func TestUsageRegressionClaudeCacheCreationCleared(t *testing.T) {
 	require.Nil(t, apiErr)
 	service.PostTextConsumeQuota(c, info, usage, nil)
 	assertUsageReplayBalance(t, info, 120) // latest facts: 100 input + 10 output*2; obsolete cache creation is zero.
+}
+
+func TestUsageRegressionInputOutputAliases(t *testing.T) {
+	for i, tc := range []struct {
+		name, first, final        string
+		format                    types.RelayFormat
+		quota, prompt, completion int
+	}{
+		{"native", "", `{"input_tokens":100,"output_tokens":20}`, types.RelayFormatOpenAI, 140, 100, 20},
+		{"claude_cache", "", `{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":60},"output_tokens_details":{"reasoning_tokens":5}}`, types.RelayFormatClaude, 86, 100, 20},
+		{"explicit_zero", `,"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60}}`, `{"input_tokens":0,"output_tokens":0}`, types.RelayFormatOpenAI, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 1950+i, "")
+			info.RelayFormat, info.IsStream = tc.format, true
+			info.FinalRequestRelayFormat = types.RelayFormatOpenAI
+			info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{}
+			frames := []string{`{"choices":[{"delta":{"content":"hello"}}]` + tc.first + `}`, `{"choices":[],"usage":` + tc.final + `}`, `[DONE]`}
+			u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse("data: "+strings.Join(frames, "\n\ndata: ")+"\n\n"))
+			require.Nil(t, apiErr)
+			require.NotNil(t, u)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			// Independent prices: p + 2*c; cached60 replaces input60 at0.1.
+			assertUsageReplayBalance(t, info, tc.quota)
+			require.Equal(t, tc.prompt, u.PromptTokens)
+			require.Equal(t, tc.completion, u.CompletionTokens)
+			require.Equal(t, tc.prompt+tc.completion, u.TotalTokens)
+		})
+	}
+}
+
+func TestUsageRegressionClaudeFinalFrameLifecycle(t *testing.T) {
+	for i, tc := range []struct {
+		name   string
+		frames []string
+		text   string
+	}{
+		{"tail_choices", []string{
+			`{"choices":[{"delta":{"content":"begin"}}]}`,
+			`{"choices":[{"delta":{"content":"end"},"finish_reason":"stop"}]}`,
+			`{"choices":[{"delta":{"content":"tail"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+		}, "beginendtail"},
+		{"first_finish_then_usage", []string{
+			`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+		}, "only"},
+		{"one_frame", []string{
+			`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+		}, "only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 1960+i, "")
+			info.RelayFormat, info.IsStream = types.RelayFormatClaude, true
+			info.FinalRequestRelayFormat = types.RelayFormatOpenAI
+			info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{}
+			recorder := usageReplayRecorder(c)
+			frames := append(append([]string{}, tc.frames...), "[DONE]")
+			u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse("data: "+strings.Join(frames, "\n\ndata: ")+"\n\n"))
+			require.Nil(t, apiErr)
+			require.NotNil(t, u)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, 140)
+			counts := map[string]int{}
+			var text strings.Builder
+			for _, line := range strings.Split(recorder.Body.String(), "\n") {
+				if !strings.HasPrefix(line, "data:") {
+					continue
+				}
+				var event dto.ClaudeResponse
+				require.NoError(t, common.UnmarshalJsonStr(strings.TrimSpace(strings.TrimPrefix(line, "data:")), &event))
+				counts[event.Type]++
+				if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Text != nil {
+					text.WriteString(*event.Delta.Text)
+				}
+				if event.Type == "message_delta" {
+					require.Equal(t, 100, event.Usage.InputTokens)
+					require.Equal(t, 20, event.Usage.OutputTokens)
+				}
+			}
+			require.Equal(t, tc.text, text.String())
+			require.Equal(t, 1, counts["message_start"])
+			require.Equal(t, 1, counts["message_delta"])
+			require.Equal(t, 1, counts["message_stop"])
+		})
+	}
 }

@@ -34,3 +34,30 @@ func TestMergeOpenAIUsageRetainsOmittedNestedDetails(t *testing.T) {
 	require.Equal(t, 30, usage.PromptTokensDetails.AudioTokens)
 	require.Equal(t, 100, usage.PromptTokens)
 }
+
+func TestMergeOpenAIUsageCanonicalizesNumericAliases(t *testing.T) {
+	var usage Usage
+	require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"input_tokens":100,"output_tokens":20}}`)))
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 20, usage.CompletionTokens)
+	require.Equal(t, 120, usage.TotalTokens)
+	require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"input_tokens_details":{"cached_tokens":60},"output_tokens_details":{"reasoning_tokens":5}}}`)))
+	require.Equal(t, 60, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 5, usage.CompletionTokenDetails.ReasoningTokens)
+	require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"output_tokens":25}}`)))
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 25, usage.CompletionTokens)
+	require.Equal(t, 125, usage.TotalTokens)
+	// Canonical numeric fields, including zero, win over conflicting aliases.
+	require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"prompt_tokens":7,"input_tokens":9,"completion_tokens":0,"output_tokens":20,"prompt_tokens_details":{"cached_tokens":0},"input_tokens_details":{"cached_tokens":60}}}`)))
+	require.Equal(t, 7, usage.PromptTokens)
+	require.Equal(t, 7, usage.InputTokens)
+	require.Zero(t, usage.CompletionTokens)
+	require.Zero(t, usage.OutputTokens)
+	require.Equal(t, 7, usage.TotalTokens)
+	require.Zero(t, usage.PromptTokensDetails.CachedTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	require.Zero(t, usage.InputTokensDetails.CachedTokens)
+	require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"input_tokens":0,"output_tokens":0}}`)))
+	require.Equal(t, Usage{}, usage)
+}

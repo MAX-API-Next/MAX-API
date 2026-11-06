@@ -1395,6 +1395,16 @@ func TestPreWssTieredSubscriptionReservation(t *testing.T) {
 	require.EqualValues(t, 260, getTokenRemainQuota(t, tokenID))
 }
 
+func TestPreWssFixedPriceUsesFrozenQuote(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{PriceData: types.PriceData{UsePrice: true}}
+	// Fixed-price admission needs no per-token lookups, even without token IDs.
+	require.NoError(t, PreWssConsumeQuota(ctx, info, &dto.RealtimeUsage{}))
+	info.UsePrice = true
+	info.PriceData.UsePrice = false
+	require.Error(t, PreWssConsumeQuota(ctx, info, &dto.RealtimeUsage{}), "legacy flag cannot override the frozen quote")
+}
+
 func TestPostConsumeQuotaRejectsAmountChangedReplay(t *testing.T) {
 	truncate(t)
 	const userID, tokenID = 821, 822

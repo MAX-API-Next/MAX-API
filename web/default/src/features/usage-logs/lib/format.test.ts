@@ -46,6 +46,11 @@ describe('cache write count display contract', () => {
       },
       expected: { total: 100, fiveMinutes: 40, oneHour: 60, hasSplit: true },
     },
+    {
+      name: 'one-hour-only split assigns the aggregate remainder to five minutes',
+      input: { cache_creation_tokens: 100, cache_creation_tokens_1h: 60 },
+      expected: { total: 100, fiveMinutes: 40, oneHour: 60, hasSplit: true },
+    },
   ]
   for (const item of cases) {
     test(item.name, () => {

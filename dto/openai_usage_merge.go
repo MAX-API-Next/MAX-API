@@ -21,6 +21,12 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 	}
 	prompt := raw.Get("prompt_tokens")
 	completion := raw.Get("completion_tokens")
+	if prompt.Type != gjson.Number {
+		prompt = raw.Get("input_tokens")
+	}
+	if completion.Type != gjson.Number {
+		completion = raw.Get("output_tokens")
+	}
 	if !hasOpenAIUsageUpdate(raw) {
 		return false
 	}
@@ -40,8 +46,42 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 		next.CompletionTokenDetails = OutputTokenDetails{}
 		next.OutputTokensDetails = nil
 	}
+	// Decode aliases first; canonical detail fields below win per field,
+	// including explicit zeros. Omitted nested fields retain their prior value.
+	if details := raw.Get("input_tokens_details"); details.IsObject() {
+		if common.Unmarshal([]byte(details.Raw), &next.PromptTokensDetails) != nil {
+			return false
+		}
+	}
+	if details := raw.Get("output_tokens_details"); details.IsObject() {
+		if common.Unmarshal([]byte(details.Raw), &next.CompletionTokenDetails) != nil {
+			return false
+		}
+	}
 	if common.Unmarshal([]byte(raw.Raw), &next) != nil {
 		return false
+	}
+	if prompt.Type == gjson.Number {
+		next.PromptTokens = int(prompt.Int())
+		if raw.Get("input_tokens").Type == gjson.Number {
+			next.InputTokens = next.PromptTokens
+		}
+	}
+	if completion.Type == gjson.Number {
+		next.CompletionTokens = int(completion.Int())
+		if raw.Get("output_tokens").Type == gjson.Number {
+			next.OutputTokens = next.CompletionTokens
+		}
+	}
+	// Keep retained aliases coherent so later normalization cannot resurrect
+	// values that an explicit canonical zero just cleared.
+	if next.InputTokensDetails != nil {
+		details := next.PromptTokensDetails
+		next.InputTokensDetails = &details
+	}
+	if next.OutputTokensDetails != nil {
+		details := next.CompletionTokenDetails
+		next.OutputTokensDetails = &details
 	}
 	if raw.Get("total_tokens").Type != gjson.Number && (prompt.Type == gjson.Number || completion.Type == gjson.Number) {
 		next.TotalTokens = next.PromptTokens + next.CompletionTokens

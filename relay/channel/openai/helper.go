@@ -37,11 +37,14 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
 		return err
 	}
+	return handleClaudeStreamFrame(c, &streamResponse, info)
+}
 
+func handleClaudeStreamFrame(c *gin.Context, streamResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) error {
 	if streamResponse.Usage != nil {
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
 	}
-	claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
+	claudeResponses := service.StreamResponseOpenAI2Claude(streamResponse, info)
 	for _, resp := range claudeResponses {
 		helper.ClaudeData(c, *resp)
 	}
@@ -165,11 +168,14 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		info.ClaudeConvertInfo.Usage = usage
 		streamResponse.Usage = usage
 
-		claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
-		for _, resp := range claudeResponses {
-			_ = helper.ClaudeData(c, *resp)
+		info.SendResponseCount++
+		_ = handleClaudeStreamFrame(c, &streamResponse, info)
+		if !info.ClaudeConvertInfo.Done {
+			// A last frame may still carry choices without a finish reason.
+			// Its delta was delivered above; now finalize with the merged usage.
+			info.SendResponseCount++
+			_ = handleClaudeStreamFrame(c, &dto.ChatCompletionsStreamResponse{Usage: usage}, info)
 		}
-		info.ClaudeConvertInfo.Done = true
 
 	case types.RelayFormatGemini:
 		var streamResponse dto.ChatCompletionsStreamResponse

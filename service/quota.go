@@ -92,7 +92,7 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 // frozen expression and normalization as final settlement when applicable.
 // Unlike settlement, an invalid quote must fail closed instead of estimating.
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
-	if relayInfo.UsePrice {
+	if relayInfo.PriceData.UsePrice {
 		return nil
 	}
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
@@ -120,7 +120,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			AudioTokens: audioOutTokens,
 		},
 		ModelName:            relayInfo.OriginModelName,
-		UsePrice:             relayInfo.UsePrice,
+		UsePrice:             relayInfo.PriceData.UsePrice,
 		ModelRatio:           relayInfo.PriceData.ModelRatio,
 		GroupRatio:           relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		CompletionRatio:      relayInfo.PriceData.CompletionRatio,
@@ -166,11 +166,13 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	return nil
 }
 
-func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
+// PostWssConsumeQuota bills and logs the original pricing identity. The legacy
+// positional model-name argument is retained for existing callers.
+func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, _ string,
 	usage *dto.RealtimeUsage, extraContent string) {
 	// The upstream/returned name is not a new pricing identity. Reuse the
 	// request's quote, including for the lifetime of a Realtime connection.
-	modelName = relayInfo.OriginModelName
+	modelName := relayInfo.OriginModelName
 
 	var tieredUsedVars map[string]bool
 	if snap := relayInfo.TieredBillingSnapshot; snap != nil {

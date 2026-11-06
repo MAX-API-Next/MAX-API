@@ -153,25 +153,29 @@ async function show(other: LogOtherData) {
   return within(window.document.body)
 }
 
-test('audio output unit price uses input audio and output multipliers', async () => {
-  for (const [outputRatio, price] of [
-    [3, 24],
-    [1, 8],
-    [0, 0],
-  ] as const) {
-    const screen = await show({
-      model_price: -1,
-      model_ratio: 1,
-      audio_ratio: 4,
-      audio_completion_ratio: outputRatio,
-    })
-    const row = screen.getByText('Audio output').parentElement
-    assert.ok(
-      row?.textContent?.includes(`$${price}/M`),
-      `expected USD ${price}/M from 2 * 4 * ${outputRatio}, got ${row?.textContent}`
-    )
-  }
-})
+for (const [outputRatio, price] of [
+  [3, 24],
+  [1, 8],
+  [0, 0],
+] as const) {
+  test(
+    `audio output unit price at completion ratio ${outputRatio}`,
+    { timeout: 20_000 },
+    async () => {
+      const screen = await show({
+        model_price: -1,
+        model_ratio: 1,
+        audio_ratio: 4,
+        audio_completion_ratio: outputRatio,
+      })
+      const row = screen.getByText('Audio output').parentElement
+      assert.ok(
+        row?.textContent?.includes(`$${price}/M`),
+        `expected USD ${price}/M from 2 * 4 * ${outputRatio}, got ${row?.textContent}`
+      )
+    }
+  )
+}
 
 test('cache-only logs keep token breakdown and the full aggregate cache write', async () => {
   const screen = await show({
