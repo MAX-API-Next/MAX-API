@@ -684,7 +684,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         }
 
         const cacheReadTokens = other?.cache_tokens || 0
-        const { total: cacheWriteTokens } = getCacheWriteTokenCounts(other)
+        const cacheWriteTokens = getCacheWriteTokenCounts(other).total
 
         return (
           <div className='flex flex-col gap-0.5'>

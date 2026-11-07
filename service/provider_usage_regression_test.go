@@ -822,6 +822,47 @@ func TestUsageRegressionInputOutputAliases(t *testing.T) {
 	}
 }
 
+func TestUsageRegressionJSONInputOutputAliases(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for j, tc := range []struct {
+			name, wire  string
+			p, c, quota int
+		}{
+			{"reported", `{"input_tokens":7,"output_tokens":3}`, 7, 3, 13},
+			{"zero", `{"input_tokens":0,"output_tokens":0}`, 0, 0, 0},
+			{"canonical_zero", `{"prompt_tokens":0,"completion_tokens":0,"input_tokens":100,"output_tokens":20}`, 0, 0, 0},
+			{"mixed", `{"prompt_tokens":7,"output_tokens":3}`, 7, 3, 13},
+			{"details", `{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cached_tokens":60}}`, 100, 20, 86},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", format, tc.name), func(t *testing.T) {
+				c, info := usageReplayInfo(t, 2010+i*10+j, "")
+				info.RelayFormat, info.FinalRequestRelayFormat = format, types.RelayFormatOpenAI
+				info.SetEstimatePromptTokens(100)
+				recorder := usageReplayRecorder(c)
+				raw := `{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":` + tc.wire + `}`
+				u, apiErr := openai.OpenaiHandler(c, info, usageReplayResponse(raw))
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, tc.quota)
+				require.Equal(t, tc.p, u.PromptTokens)
+				require.Equal(t, tc.c, u.CompletionTokens)
+				require.Equal(t, tc.p+tc.c, u.TotalTokens)
+				if format == types.RelayFormatOpenAI {
+					var out dto.OpenAITextResponse
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &out))
+					require.Equal(t, tc.p, out.Usage.PromptTokens)
+					require.Equal(t, tc.c, out.Usage.CompletionTokens)
+				} else {
+					var out dto.ClaudeResponse
+					require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &out))
+					require.NotNil(t, out.Usage)
+					require.Equal(t, tc.c, out.Usage.OutputTokens)
+				}
+			})
+		}
+	}
+}
+
 func TestUsageRegressionClaudeFinalFrameLifecycle(t *testing.T) {
 	for i, tc := range []struct {
 		name   string

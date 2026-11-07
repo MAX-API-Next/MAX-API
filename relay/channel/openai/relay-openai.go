@@ -254,9 +254,12 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		forceFormat = true
 	}
 
-	usageModified := false
-	promptReported := gjson.GetBytes(responseBody, "usage.prompt_tokens").Type == gjson.Number
-	completionReported := gjson.GetBytes(responseBody, "usage.completion_tokens").Type == gjson.Number
+	// Share the stream's canonical/alias precedence, details and zero rules.
+	var reported dto.OpenAIUsagePresence
+	dto.MergeOpenAIUsageWithPresence(&simpleResponse.Usage, responseBody, &reported)
+	usageModified := gjson.GetBytes(responseBody, "usage.input_tokens").Type == gjson.Number ||
+		gjson.GetBytes(responseBody, "usage.output_tokens").Type == gjson.Number
+	promptReported, completionReported := reported.Prompt, reported.Completion
 	if !promptReported || !completionReported {
 		completionTokens := simpleResponse.Usage.CompletionTokens
 		if !completionReported {
