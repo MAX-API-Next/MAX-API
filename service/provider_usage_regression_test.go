@@ -1166,6 +1166,8 @@ func TestUsageRegressionPartialOpenAIStreamCounters(t *testing.T) {
 			{"completion_zero", `{"output_tokens":0}`, 100, 0, 100, 100},
 			{"details_only", `{"prompt_tokens_details":{"cached_tokens":60},"completion_tokens_details":{"reasoning_tokens":5}}`, 100, 5, 105, 56},
 			{"reported_total", `{"completion_tokens":20,"total_tokens":120}`, 100, 20, 120, 140},
+			{"inconsistent_total", `{"completion_tokens":20,"total_tokens":0}`, 100, 20, 120, 140},
+			{"positive_total_with_estimate", `{"total_tokens":1}`, 100, 0, 1, 100},
 			{"infer_output", `{"prompt_tokens":0,"total_tokens":120}`, 0, 120, 120, 240},
 			{"infer_output_with_input", `{"prompt_tokens":100,"total_tokens":120}`, 100, 20, 120, 140},
 			{"stale_total", `{"completion_tokens":25}`, 100, 25, 125, 150},
@@ -1208,6 +1210,7 @@ func TestUsageRegressionPartialOpenAIStreamCounters(t *testing.T) {
 					require.NotNil(t, last)
 					require.Equal(t, tc.p, last.PromptTokens)
 					require.Equal(t, tc.c, last.CompletionTokens)
+					require.Equal(t, tc.total, last.TotalTokens)
 				}
 			})
 		}

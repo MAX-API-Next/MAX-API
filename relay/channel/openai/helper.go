@@ -128,7 +128,9 @@ func fillMissingStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *
 		}
 	}
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	if presence.Total {
+	// Preserve positive provider totals when estimates differ. A genuine zero
+	// returned above; a contradictory zero cannot replace positive counters.
+	if presence.Total && presence.ReportedTotal != 0 {
 		usage.TotalTokens = presence.ReportedTotal
 	}
 	usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
