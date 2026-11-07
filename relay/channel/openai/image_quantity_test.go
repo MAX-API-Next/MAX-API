@@ -1,13 +1,27 @@
 package openai
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestImageWriteFailureCannotReduceQuantity(t *testing.T) {
+	c, _, resp, info := newImageTestContext(t,
+		"data: {\"type\":\"image_generation.completed\",\"b64_json\":\"synthetic\"}\n\ndata: [DONE]\n\n", "text/event-stream", true)
+	failed, _ := gin.CreateTestContext(&rejectedChatResponseWriter{header: make(http.Header)})
+	c.Writer = failed.Writer
+	info.PriceData = types.PriceData{UsePrice: true, OtherRatios: map[string]float64{"n": 3}}
+	_, apiErr := OpenaiImageStreamHandler(c, info, resp)
+	require.Nil(t, apiErr, "a committed image stream must not trigger an external retry")
+	require.Equal(t, float64(3), info.PriceData.OtherRatios["n"])
+	require.True(t, info.StreamStatus.HasErrors(), "a concurrently scanned DONE cannot hide the write error")
+}
 
 func TestOpenAIImageQuantityContract(t *testing.T) {
 	for _, tc := range []struct {

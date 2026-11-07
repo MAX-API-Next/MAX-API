@@ -381,13 +381,13 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 					raw = fmt.Sprintf(`{"version":1,"requirement":"legacy","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
 				}
 				taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("operation_key = ?", f.input.OperationKey).Update("task_pricing_provenance", raw).Error, "seed invalid provenance")
-				require.Error(t, validateTaskPricingReceiptCandidate(db, f.input), "cannot infer provenance from a valid receipt or zero")
+				require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict, "cannot infer provenance from a valid receipt or zero")
 				guard := installTaskPricingReceiptTransactionGuard(t, db, f.input)
 				ProcessPendingBillingSettlementsOnce()
 				require.Positive(t, guard.Load())
 				require.Equal(t, BillingSettlementStatusManual, taskBillingContractRecord(t, db, f.input.OperationKey).Status)
 				_, _, err := replayTaskPricingReceiptCandidate(db, f.input)
-				require.Error(t, err)
+				require.ErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
 				var user User
 				var token Token
 				var after taskPricingReceiptCandidate

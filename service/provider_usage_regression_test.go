@@ -159,6 +159,99 @@ func TestUsageRegressionMediaImageModalDetails(t *testing.T) {
 	assertUsageReplayBalance(t, info, 285) // (20+80*2+10*3+90*4)/2
 }
 
+func TestUsageRegressionImageDetailPresence(t *testing.T) {
+	for i, mode := range []string{"json", "json_as_stream", "sse"} {
+		for j, tc := range []struct {
+			name, canonical, alias string
+			image, text, quota     int
+		}{
+			{"omitted_alias", `{"image_tokens":90}`, `{"text_tokens":10}`, 90, 10, 285},
+			{"canonical_zero", `{"image_tokens":0}`, `{"image_tokens":90,"text_tokens":10}`, 0, 10, 240},
+			{"alias_zero", `{"image_tokens":90,"text_tokens":0}`, `{"image_tokens":0,"text_tokens":10}`, 90, 0, 285},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				c, info := usageReplayInfo(t, 2040+i*10+j, `tier("media",p*1+img*2+c*3+img_o*4)`)
+				wire := `{"input_tokens":100,"output_tokens":100,"input_tokens_details":{"text_tokens":20,"image_tokens":80},"completion_tokens_details":` + tc.canonical + `,"output_tokens_details":` + tc.alias + `}`
+				raw := `{"data":[{"b64_json":"synthetic"}],"usage":` + wire + `}`
+				var u *dto.Usage
+				var apiErr *types.MaxAPIError
+				if mode == "json" {
+					u, apiErr = openai.OpenaiImageHandler(c, info, usageReplayResponse(raw))
+				} else {
+					info.IsStream = true
+					resp := usageReplayResponse(raw)
+					if mode == "sse" {
+						resp = usageReplayResponse("data: {\"type\":\"image_generation.completed\",\"usage\":" + wire + "}\n\ndata: [DONE]\n\n")
+						resp.Header.Set("Content-Type", "text/event-stream")
+					}
+					u, apiErr = openai.OpenaiImageStreamHandler(c, info, resp)
+				}
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, tc.quota)
+				require.Equal(t, tc.image, u.CompletionTokenDetails.ImageTokens)
+				require.Equal(t, tc.text, u.CompletionTokenDetails.TextTokens)
+			})
+		}
+	}
+}
+
+func TestUsageRegressionImageStreamUsageUpdates(t *testing.T) {
+	for i, tc := range []struct {
+		name, update string
+		quota        int
+	}{
+		{"zero", `{"input_tokens":0,"output_tokens":0,"total_tokens":0}`, 0},
+		{"partial", `{"completion_tokens_details":{"text_tokens":10}}`, 285},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 2070+i, `tier("media",p*1+img*2+c*3+img_o*4)`)
+			info.IsStream = true
+			raw := "data: {\"type\":\"image_generation.completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":100,\"input_tokens_details\":{\"text_tokens\":20,\"image_tokens\":80},\"completion_tokens_details\":{\"image_tokens\":90}}}\n\ndata: {\"usage\":" + tc.update + "}\n\ndata: [DONE]\n\n"
+			resp := usageReplayResponse(raw)
+			resp.Header.Set("Content-Type", "text/event-stream")
+			u, apiErr := openai.OpenaiImageStreamHandler(c, info, resp)
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, tc.quota)
+			if tc.name == "partial" {
+				require.Equal(t, 90, u.CompletionTokenDetails.ImageTokens)
+				require.Equal(t, 10, u.CompletionTokenDetails.TextTokens)
+			}
+		})
+	}
+}
+
+func TestUsageRegressionImageTerminalEvidence(t *testing.T) {
+	for i, tc := range []struct {
+		name, frames string
+		quota        int
+	}{
+		{"completed_eof", `{"type":"image_generation.completed","b64_json":"synthetic"}`, 500},
+		{"edit_completed_eof", `{"type":"image_edit.completed","b64_json":"synthetic"}`, 500},
+		{"partial_eof", `{"type":"image_generation.partial_image","b64_json":"synthetic"}`, 1500},
+		{"completed_done", "{\"type\":\"image_generation.completed\",\"b64_json\":\"synthetic\"}\n\ndata: [DONE]", 500},
+		{"completed_then_error", "{\"type\":\"image_generation.completed\",\"b64_json\":\"synthetic\"}\n\ndata: {\"type\":\"upstream_error\",\"error\":{\"message\":\"interrupted batch\"}}", 1500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 2080+i, "")
+			info.IsStream, info.PriceData.UsePrice, info.PriceData.ModelPrice = true, true, 0.001
+			info.PriceData.AddOtherRatio("n", 3)
+			resp := usageReplayResponse("data: " + tc.frames + "\n\n")
+			resp.Header.Set("Content-Type", "text/event-stream")
+			u, apiErr := openai.OpenaiImageStreamHandler(c, info, resp)
+			require.Nil(t, apiErr)
+			// ImageHelper's existing placeholder permits per-image settlement.
+			u.PromptTokens, u.TotalTokens = 1, 1
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, tc.quota) // .001 USD/image * 500000; normal completed count1, otherwise requested3.
+			if tc.name == "completed_then_error" {
+				require.True(t, info.StreamStatus.HasErrors())
+			}
+		})
+	}
+}
+
 func TestUsageRegressionImageActualCount(t *testing.T) {
 	for i, mode := range []string{"json", "json_as_stream", "sse", "xai"} {
 		t.Run(mode, func(t *testing.T) {
