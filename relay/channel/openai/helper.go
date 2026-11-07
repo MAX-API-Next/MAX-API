@@ -207,7 +207,12 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			return
+			if info.ClaudeConvertInfo == nil || info.ClaudeConvertInfo.Done || info.FinishReason == "" {
+				return
+			}
+			// A previously accepted finish can close with merged usage; never
+			// forward any fields partially decoded from the malformed tail.
+			streamResponse = dto.ChatCompletionsStreamResponse{}
 		}
 
 		info.ClaudeConvertInfo.Usage = usage

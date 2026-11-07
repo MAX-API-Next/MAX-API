@@ -345,6 +345,50 @@ func TestUsageRegressionMediaSTTOfficialDetails(t *testing.T) {
 	}
 }
 
+func TestUsageRegressionGeminiStreamReportedZero(t *testing.T) {
+	for i, mode := range []string{"openai", "claude", "json"} {
+		for j, tc := range []struct {
+			name, metadata, text string
+			p, quota             int
+		}{
+			{"missing", "", "", 100, 100},
+			{"reported_zero", `,"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}`, "", 7, 7},
+			{"all_zero", `,"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}`, "", 0, 0},
+			{"inconsistent_total", `,"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":99}`, "", 7, 7},
+			{"zero_with_text", `,"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}`, "hello", 7, 7},
+		} {
+			if mode == "json" && tc.name != "zero_with_text" {
+				continue // shared repair is also used by the non-streaming path
+			}
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				c, info := usageReplayInfo(t, 2130+i*10+j, "")
+				info.SetEstimatePromptTokens(100)
+				info.FinalRequestRelayFormat = types.RelayFormatGemini
+				info.IsStream = mode != "json"
+				if mode == "claude" {
+					info.RelayFormat = types.RelayFormatClaude
+					info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{}
+				}
+				raw := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"` + tc.text + `"}]},"finishReason":"STOP"}]` + tc.metadata + `}`
+				var u *dto.Usage
+				var apiErr *types.MaxAPIError
+				if info.IsStream {
+					u, apiErr = gemini.GeminiChatStreamHandler(c, info, usageReplayResponse("data: "+raw+"\n\ndata: [DONE]\n\n"))
+				} else {
+					u, apiErr = gemini.GeminiChatHandler(c, info, usageReplayResponse(raw))
+				}
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, tc.quota)
+				require.Equal(t, tc.p, u.PromptTokens)
+				require.Zero(t, u.CompletionTokens)
+				require.NotNil(t, u.BillingUsage)
+				require.Equal(t, tc.name == "missing", u.BillingUsage.Estimated)
+			})
+		}
+	}
+}
+
 func TestUsageRegressionMediaGeminiZero(t *testing.T) {
 	for i, format := range []types.RelayFormat{types.RelayFormatGemini, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
 		t.Run(fmt.Sprint(format), func(t *testing.T) {
@@ -1008,22 +1052,31 @@ func TestUsageRegressionJSONInputOutputAliases(t *testing.T) {
 
 func TestUsageRegressionClaudeFinalFrameLifecycle(t *testing.T) {
 	for i, tc := range []struct {
-		name   string
-		frames []string
-		text   string
+		name     string
+		frames   []string
+		text     string
+		terminal int
 	}{
 		{"tail_choices", []string{
 			`{"choices":[{"delta":{"content":"begin"}}]}`,
 			`{"choices":[{"delta":{"content":"end"},"finish_reason":"stop"}]}`,
 			`{"choices":[{"delta":{"content":"tail"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
-		}, "beginendtail"},
+		}, "beginendtail", 1},
 		{"first_finish_then_usage", []string{
 			`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}]}`,
 			`{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
-		}, "only"},
+		}, "only", 1},
 		{"one_frame", []string{
 			`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
-		}, "only"},
+		}, "only", 1},
+		{"finish_then_malformed", []string{
+			`{"choices":[{"delta":{"content":"only"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+			`{`,
+		}, "only", 1},
+		{"unaccepted_malformed", []string{
+			`{"choices":[{"delta":{"content":"only"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`,
+			`{`,
+		}, "only", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, info := usageReplayInfo(t, 1960+i, "")
@@ -1056,8 +1109,8 @@ func TestUsageRegressionClaudeFinalFrameLifecycle(t *testing.T) {
 			}
 			require.Equal(t, tc.text, text.String())
 			require.Equal(t, 1, counts["message_start"])
-			require.Equal(t, 1, counts["message_delta"])
-			require.Equal(t, 1, counts["message_stop"])
+			require.Equal(t, tc.terminal, counts["message_delta"])
+			require.Equal(t, tc.terminal, counts["message_stop"])
 		})
 	}
 }
