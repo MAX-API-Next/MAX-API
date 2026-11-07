@@ -16,6 +16,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func normalizeOpenAIAudioUsage(usage *dto.Usage) {
@@ -58,6 +59,9 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					sr.Error(err)
 				} else if dto.HasOpenAIUsageTokens(&simpleResponse.Usage) {
 					*usage = simpleResponse.Usage
+					// Accounting evidence and semantics belong to the host.
+					usage.BillingUsage = nil
+					usage.UsageSemantic, usage.UsageSource = "", ""
 					normalizeOpenAIAudioUsage(usage)
 				}
 			}
@@ -136,11 +140,23 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	var responseData struct {
-		Usage *dto.Usage `json:"usage"`
+		Usage *struct {
+			dto.Usage
+			InputTokenDetails *dto.InputTokenDetails `json:"input_token_details"`
+		} `json:"usage"`
 	}
-	if err := common.Unmarshal(responseBody, &responseData); err == nil && dto.HasOpenAIUsageTokens(responseData.Usage) {
-		usage := responseData.Usage
+	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil &&
+		(dto.HasOpenAIUsageTokens(&responseData.Usage.Usage) || gjson.GetBytes(responseBody, "usage.input_tokens").Type == gjson.Number) {
+		usage := &responseData.Usage.Usage
+		usage.BillingUsage = nil
+		usage.UsageSemantic, usage.UsageSource = "", ""
+		dto.CopyInputTokenDetails(&usage.PromptTokensDetails, responseData.Usage.InputTokenDetails, true)
 		normalizeOpenAIAudioUsage(usage)
+		// Transcription/translation output is text even when the API only
+		// reports its aggregate output_tokens, without output details.
+		if usage.CompletionTokenDetails.TextTokens == 0 && usage.CompletionTokenDetails.AudioTokens == 0 {
+			usage.CompletionTokenDetails.TextTokens = usage.CompletionTokens
+		}
 		return nil, usage
 	}
 

@@ -189,6 +189,7 @@ func newGeminiChatBillingUsage(metadata *GeminiUsageMetadata, estimated bool) *B
 		Source:              BillingUsageSourceGeminiChat,
 		Semantic:            BillingUsageSemanticGemini,
 		Estimated:           estimated,
+		TokenCountsReported: metadata.HasPromptTokenCount && metadata.HasCandidatesTokenCount,
 		GeminiUsageMetadata: &usageMetadata,
 	}
 }
@@ -252,6 +253,9 @@ func cloneGeminiUsageMetadata(metadata GeminiUsageMetadata) GeminiUsageMetadata 
 func HasGeminiUsageMetadataTokens(metadata *GeminiUsageMetadata) bool {
 	if metadata == nil {
 		return false
+	}
+	if metadata.HasPromptTokenCount && metadata.HasCandidatesTokenCount {
+		return true
 	}
 	if metadata.PromptTokenCount != 0 ||
 		metadata.ToolUsePromptTokenCount != 0 ||

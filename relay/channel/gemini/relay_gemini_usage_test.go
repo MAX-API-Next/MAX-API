@@ -382,6 +382,12 @@ func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *tes
 
 	body, err := common.Marshal(payload)
 	require.NoError(t, err)
+	// Omit the wire field: an explicit numeric zero has a different contract.
+	var wire map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &wire))
+	delete(wire["usageMetadata"].(map[string]interface{}), "promptTokenCount")
+	body, err = common.Marshal(wire)
+	require.NoError(t, err)
 
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewReader(body)),
@@ -391,6 +397,8 @@ func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *tes
 	require.Nil(t, maxAPIError)
 	require.NotNil(t, usage)
 	require.Equal(t, 20, usage.PromptTokens)
+	require.True(t, usage.BillingUsage.Estimated)
+	require.Equal(t, 20, usage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }
@@ -430,6 +438,12 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 
 	chunkData, err := common.Marshal(chunk)
 	require.NoError(t, err)
+	// Omit the wire field: an explicit numeric zero has a different contract.
+	var wire map[string]interface{}
+	require.NoError(t, common.Unmarshal(chunkData, &wire))
+	delete(wire["usageMetadata"].(map[string]interface{}), "promptTokenCount")
+	chunkData, err = common.Marshal(wire)
+	require.NoError(t, err)
 
 	streamBody := []byte("data: " + string(chunkData) + "\n" + "data: [DONE]\n")
 	resp := &http.Response{
@@ -442,6 +456,8 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	require.Nil(t, maxAPIError)
 	require.NotNil(t, usage)
 	require.Equal(t, 20, usage.PromptTokens)
+	require.True(t, usage.BillingUsage.Estimated)
+	require.Equal(t, 20, usage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }
@@ -677,6 +693,12 @@ func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMiss
 
 	body, err := common.Marshal(payload)
 	require.NoError(t, err)
+	// Omit the wire field: an explicit numeric zero has a different contract.
+	var wire map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &wire))
+	delete(wire["usageMetadata"].(map[string]interface{}), "promptTokenCount")
+	body, err = common.Marshal(wire)
+	require.NoError(t, err)
 
 	resp := &http.Response{
 		Body: io.NopCloser(bytes.NewReader(body)),
@@ -686,6 +708,8 @@ func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMiss
 	require.Nil(t, maxAPIError)
 	require.NotNil(t, usage)
 	require.Equal(t, 20, usage.PromptTokens)
+	require.True(t, usage.BillingUsage.Estimated)
+	require.Equal(t, 20, usage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }

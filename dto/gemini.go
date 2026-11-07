@@ -504,6 +504,27 @@ type GeminiUsageMetadata struct {
 	ToolUsePromptTokensDetails []GeminiPromptTokensDetails `json:"toolUsePromptTokensDetails"`
 	CandidatesTokensDetails    []GeminiPromptTokensDetails `json:"candidatesTokensDetails"`
 	BillingUsage               *BillingUsage               `json:"billing_usage,omitempty"`
+	HasPromptTokenCount        bool                        `json:"-"`
+	HasCandidatesTokenCount    bool                        `json:"-"`
+}
+
+func (m *GeminiUsageMetadata) UnmarshalJSON(data []byte) error {
+	type plain GeminiUsageMetadata
+	var value plain
+	if err := common.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	var presence struct {
+		Prompt     *int `json:"promptTokenCount"`
+		Candidates *int `json:"candidatesTokenCount"`
+	}
+	if err := common.Unmarshal(data, &presence); err != nil {
+		return err
+	}
+	*m = GeminiUsageMetadata(value)
+	m.HasPromptTokenCount = presence.Prompt != nil
+	m.HasCandidatesTokenCount = presence.Candidates != nil
+	return nil
 }
 
 type GeminiPromptTokensDetails struct {

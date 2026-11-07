@@ -927,7 +927,8 @@ func getResponseToolCall(item *dto.GeminiPart) *dto.ToolCallResponse {
 
 func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackPromptTokens int) dto.Usage {
 	promptTokens := metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount
-	if promptTokens <= 0 && fallbackPromptTokens > 0 {
+	promptEstimated := promptTokens <= 0 && !metadata.HasPromptTokenCount && fallbackPromptTokens > 0
+	if promptEstimated {
 		promptTokens = fallbackPromptTokens
 	}
 
@@ -964,7 +965,7 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 		}
 	}
 
-	if usage.TotalTokens > 0 && usage.CompletionTokens <= 0 {
+	if usage.TotalTokens > 0 && usage.CompletionTokens <= 0 && !metadata.HasCandidatesTokenCount {
 		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 	}
 
@@ -973,6 +974,9 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	}
 
 	usage.BillingUsage = dto.NewGeminiChatBillingUsage(&metadata)
+	if promptEstimated {
+		usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&usage)
+	}
 	return usage
 }
 
@@ -1001,7 +1005,7 @@ func geminiCandidateDetailTokens(details dto.OutputTokenDetails) int {
 // output and any modality details already reported by upstream. Reasoning tokens
 // and the original detailed metadata are retained.
 func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, responseText string, imageCount int) {
-	if usage == nil || geminiCandidateTokenCount(usage) > 0 {
+	if usage == nil || geminiCandidateTokenCountReported(usage) || geminiCandidateTokenCount(usage) > 0 {
 		return
 	}
 	if responseText == "" && imageCount == 0 && geminiCandidateDetailTokens(usage.CompletionTokenDetails) == 0 {
@@ -1028,6 +1032,11 @@ func patchGeminiZeroCompletionUsage(c *gin.Context, info *relaycommon.RelayInfo,
 	usage.CompletionTokens = usage.CompletionTokenDetails.ReasoningTokens + candidateTokens
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	usage.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(usage)
+}
+
+func geminiCandidateTokenCountReported(usage *dto.Usage) bool {
+	return usage != nil && usage.BillingUsage != nil && usage.BillingUsage.GeminiUsageMetadata != nil &&
+		usage.BillingUsage.GeminiUsageMetadata.HasCandidatesTokenCount
 }
 
 func geminiCandidateTokenCount(usage *dto.Usage) int {
@@ -1547,7 +1556,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 	patchGeminiZeroCompletionUsage(c, info, usage, responseText.String(), imageCount)
 
-	if usage.CompletionTokens <= 0 {
+	if usage.CompletionTokens <= 0 && !geminiCandidateTokenCountReported(usage) {
 		if info.ReceivedResponseCount > 0 {
 			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 			attachEstimatedGeminiBillingUsage(usage)

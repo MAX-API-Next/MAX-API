@@ -41,6 +41,6 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types.
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError
 	}
-	service.PostWssConsumeQuota(c, info, info.UpstreamModelName, usage.(*dto.RealtimeUsage), "")
+	service.PostWssConsumeQuota(c, info, info.OriginModelName, usage.(*dto.RealtimeUsage), "")
 	return nil
 }

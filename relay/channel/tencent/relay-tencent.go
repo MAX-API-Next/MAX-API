@@ -92,6 +92,7 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 
 func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	var responseText string
+	var reportedUsage *dto.Usage
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 
@@ -109,6 +110,27 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		if err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			continue
+		}
+		// TC3 stream Usage is cumulative, not a delta. Missing/null/empty
+		// trailing metadata must not replace the last numeric snapshot.
+		var presence struct {
+			Usage *struct {
+				Prompt     *int `json:"PromptTokens"`
+				Completion *int `json:"CompletionTokens"`
+			} `json:"Usage"`
+		}
+		if common.Unmarshal([]byte(data), &presence) == nil && presence.Usage != nil &&
+			(presence.Usage.Prompt != nil || presence.Usage.Completion != nil) {
+			if reportedUsage == nil {
+				reportedUsage = &dto.Usage{}
+			}
+			if presence.Usage.Prompt != nil {
+				reportedUsage.PromptTokens = *presence.Usage.Prompt
+			}
+			if presence.Usage.Completion != nil {
+				reportedUsage.CompletionTokens = *presence.Usage.Completion
+			}
+			reportedUsage.TotalTokens = reportedUsage.PromptTokens + reportedUsage.CompletionTokens
 		}
 
 		response := streamResponseTencent2OpenAI(&tencentResponse)
@@ -130,6 +152,9 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 
 	service.CloseResponseBodyGracefully(resp)
 
+	if reportedUsage != nil {
+		return reportedUsage, nil
+	}
 	return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
 }
 

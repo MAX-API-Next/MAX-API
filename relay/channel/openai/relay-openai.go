@@ -22,6 +22,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/tidwall/gjson"
 )
 
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
@@ -121,27 +122,39 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var createAt int64 = 0
 	var systemFingerprint string
 	var containStreamUsage bool
+	var usagePresence dto.OpenAIUsagePresence
 	var responseTextBuilder strings.Builder
 	var toolCount int
 	var usage = &dto.Usage{}
 	var lastStreamData string
-	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	toolCallObserver := newOpenAIStreamToolCallObserver(info)
-
-	// 检查是否为音频模型
-	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if lastStreamData != "" {
-			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+			pending := lastStreamData
+			var formatErr error
+			if info.RelayFormat == types.RelayFormatClaude {
+				// Usage updates are cumulative facts, not Claude terminal events.
+				// Only the final merged snapshot may close the converted message.
+				var frame dto.ChatCompletionsStreamResponse
+				info.SendResponseCount++
+				formatErr = common.UnmarshalJsonStr(pending, &frame)
+				if formatErr == nil {
+					frame.Usage = nil
+					info.ClaudeConvertInfo.Usage = nil
+					formatErr = handleClaudeStreamFrame(c, &frame, info)
+				}
+			} else {
+				formatErr = HandleStreamFormat(c, info, pending, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+			}
+			if formatErr != nil {
+				common.SysLog("error handling stream format: " + formatErr.Error())
+				sr.Error(formatErr)
 			}
 		}
 		if len(data) > 0 {
-			// 对音频模型，保存倒数第二个stream data
-			if isAudioModel && lastStreamData != "" {
-				secondLastStreamData = lastStreamData
+			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+				containStreamUsage = true
 			}
 
 			lastStreamData = data
@@ -158,26 +171,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	})
 
-	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
-	}
-
-	if isAudioModel && secondLastStreamData != "" {
-		var streamResp struct {
-			Usage *dto.Usage `json:"usage"`
-		}
-		err := common.Unmarshal([]byte(secondLastStreamData), &streamResp)
-		if err == nil && streamResp.Usage != nil && service.ValidUsage(streamResp.Usage) {
-			usage = streamResp.Usage
-			containStreamUsage = true
-
-			if common.DebugEnabled {
-				logger.LogDebug(c, "Audio model usage extracted from second last SSE: PromptTokens=%d, CompletionTokens=%d, TotalTokens=%d, InputTokens=%d, OutputTokens=%d",
-					usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens,
-					usage.InputTokens, usage.OutputTokens)
-			}
-		}
 	}
 
 	// 处理最后的响应
@@ -193,9 +188,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	if !containStreamUsage {
-		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
+	if fillMissingStreamUsage(c, info, usage, usagePresence, responseTextBuilder.String(), toolCount) {
+		containStreamUsage = false // emit the completed usage when requested
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
@@ -237,6 +231,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	// Billing evidence is attached by the host, never accepted from the wire.
+	simpleResponse.Usage.BillingUsage = nil
+	simpleResponse.Usage.UsageSemantic, simpleResponse.Usage.UsageSource = "", ""
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -257,20 +254,25 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		forceFormat = true
 	}
 
-	usageModified := false
-	if simpleResponse.Usage.PromptTokens == 0 {
+	// Share the stream's canonical/alias precedence, details and zero rules.
+	var reported dto.OpenAIUsagePresence
+	dto.MergeOpenAIUsageWithPresence(&simpleResponse.Usage, responseBody, &reported)
+	usageModified := gjson.GetBytes(responseBody, "usage.input_tokens").Type == gjson.Number ||
+		gjson.GetBytes(responseBody, "usage.output_tokens").Type == gjson.Number
+	promptReported, completionReported := reported.Prompt, reported.Completion
+	if !promptReported || !completionReported {
 		completionTokens := simpleResponse.Usage.CompletionTokens
-		if completionTokens == 0 {
+		if !completionReported {
 			for _, choice := range simpleResponse.Choices {
 				ctkm := service.CountTextToken(choice.Message.StringContent()+choice.Message.GetReasoningContent(), info.UpstreamModelName)
 				completionTokens += ctkm
 			}
 		}
-		simpleResponse.Usage = dto.Usage{
-			PromptTokens:     info.GetEstimatePromptTokens(),
-			CompletionTokens: completionTokens,
-			TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
+		if !promptReported {
+			simpleResponse.Usage.PromptTokens = info.GetEstimatePromptTokens()
 		}
+		simpleResponse.Usage.CompletionTokens = completionTokens
+		simpleResponse.Usage.TotalTokens = simpleResponse.Usage.PromptTokens + completionTokens
 		usageModified = true
 	}
 
@@ -532,6 +534,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	usage := &dto.RealtimeUsage{}
 	localUsage := &dto.RealtimeUsage{}
 	sumUsage := &dto.RealtimeUsage{}
+	processedResponses := make(map[string]struct{})
 
 	workers.Add(4)
 	gopool.Go(func() {
@@ -623,6 +626,27 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 				stateMu.Lock()
 				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
+					if realtimeEvent.Response == nil {
+						stateMu.Unlock()
+						errChan <- fmt.Errorf("response.done is missing response")
+						return
+					}
+					responseKey := ""
+					if realtimeEvent.Response.Id != "" {
+						responseKey = "response:" + realtimeEvent.Response.Id
+					} else if realtimeEvent.EventId != "" {
+						responseKey = "event:" + realtimeEvent.EventId
+					}
+					_, duplicate := processedResponses[responseKey]
+					if duplicate {
+						stateMu.Unlock()
+						// Preserve the provider stream while keeping one usage charge.
+						if err := helper.WssString(c, clientConn, string(message)); err != nil {
+							errChan <- fmt.Errorf("error writing to client: %v", err)
+							return
+						}
+						continue
+					}
 					realtimeUsage := realtimeEvent.Response.Usage
 					if realtimeUsage != nil {
 						usage.TotalTokens += realtimeUsage.TotalTokens
@@ -668,6 +692,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						// 本次计费完成，清除
 						localUsage = &dto.RealtimeUsage{}
 						// print now usage
+					}
+					if responseKey != "" {
+						processedResponses[responseKey] = struct{}{}
 					}
 					logger.LogInfo(c, fmt.Sprintf("realtime streaming sumUsage: %v", sumUsage))
 					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))

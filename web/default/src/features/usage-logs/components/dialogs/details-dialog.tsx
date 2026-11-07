@@ -56,6 +56,7 @@ import {
   decodeBillingExprB64,
   getTieredBillingSummary,
   hasAnyCacheTokens,
+  getCacheWriteTokenCounts,
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
@@ -301,11 +302,11 @@ function BillingBreakdown(props: {
 
     if (
       other.audio_completion_ratio != null &&
-      other.audio_completion_ratio !== 1
+      (other.audio_completion_ratio !== 1 || (other.audio_ratio ?? 1) !== 1)
     ) {
       rows.push({
         label: t('Audio output'),
-        value: `${fmtPrice(baseInputUSD * other.audio_completion_ratio)}/M`,
+        value: `${fmtPrice(baseInputUSD * (other.audio_ratio ?? 1) * other.audio_completion_ratio)}/M`,
       })
     }
 
@@ -377,10 +378,12 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   const promptTokens = log.prompt_tokens || 0
   const completionTokens = log.completion_tokens || 0
   const cacheRead = other.cache_tokens || 0
-  const cacheWrite = other.cache_creation_tokens || 0
-  const cacheWrite5m = other.cache_creation_tokens_5m || 0
-  const cacheWrite1h = other.cache_creation_tokens_1h || 0
-  const hasTokens = promptTokens > 0 || completionTokens > 0
+  const cacheWriteCounts = getCacheWriteTokenCounts(other)
+  const cacheWrite = cacheWriteCounts.total
+  const cacheWrite5m = cacheWriteCounts.fiveMinutes
+  const cacheWrite1h = cacheWriteCounts.oneHour
+  const hasTokens =
+    promptTokens > 0 || completionTokens > 0 || hasAnyCacheTokens(other)
 
   if (!hasTokens) return null
 
