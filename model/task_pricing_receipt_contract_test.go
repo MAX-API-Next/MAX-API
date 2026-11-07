@@ -627,10 +627,11 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 				}
 				var before taskPricingReceiptCandidate
 				taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&before).Error, "read receipt before guarded consumers")
+				readUnavailable := errors.New("isolated receipt read unavailable")
 				if change == "query-failure" {
 					taskBillingTestCheck(t, db.Callback().Query().Before("gorm:query").Register("test:receipt-read-fault", func(tx *gorm.DB) {
 						if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "taskPricingReceiptCandidate" {
-							tx.AddError(errors.New("isolated receipt read unavailable"))
+							tx.AddError(readUnavailable)
 						}
 					}), "install receipt query failure")
 				}
@@ -638,8 +639,16 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 				ProcessPendingBillingSettlementsOnce()
 				require.Positive(t, guard.Load())
 				_, _, err := replayTaskPricingReceiptCandidate(db, f.input)
-				require.Error(t, err, "unverified reservation cannot apply while evidence is unavailable")
-				require.Error(t, validateTaskPricingReceiptCandidate(db, f.input), "read-only reconciliation cannot approve or regenerate receipt")
+				validationErr := validateTaskPricingReceiptCandidate(db, f.input)
+				if change == "query-failure" {
+					require.ErrorIs(t, err, readUnavailable)
+					require.ErrorIs(t, validationErr, readUnavailable)
+					require.NotErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+					require.NotErrorIs(t, validationErr, taskpricing.ErrTaskPricingReceiptConflict)
+				} else {
+					require.ErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+					require.ErrorIs(t, validationErr, taskpricing.ErrTaskPricingReceiptConflict)
+				}
 				if change == "query-failure" {
 					taskBillingTestCheck(t, db.Callback().Query().Remove("test:receipt-read-fault"), "remove receipt query failure")
 				}
