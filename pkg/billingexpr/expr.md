@@ -431,6 +431,35 @@ reclassified as corrupted data merely to force manual handling.
 A missing MySQL/PostgreSQL stage is BLOCKED, not
 proof supplied by SQLite or by an overall successful test-process exit code.
 
+`taskpricing.ReceiptProvenance` defines the separate host policy record for one
+task reservation: version 1, explicit requirement, Task ID and pre-consume
+operation key. Its version is independent of the receipt digest version.
+`PrepareReceiptProvenance` is only for host creation or an explicitly audited
+legacy migration. Recovery must load the retained original and use
+`ValidateReceiptProvenance` against the independently read intent identity;
+regenerating the policy from today's task is not historical evidence. Missing,
+unknown or unreadable provenance is unproved, even when a valid receipt exists
+or the reserved amount is zero. A missing task snapshot cannot erase a retained
+wallet-v1 requirement. Legacy compatibility still requires its original
+ownership and financial validators. This record is not a signature and cannot
+defend against a database writer replacing all retained evidence.
+
+The isolated candidate schema uses two nullable TEXT columns, receipt and
+provenance, with no default legacy policy. Both are conditionally written from
+NULL in the same Task/intent transaction; a partial pair cannot authorize a
+repair/overwrite. Original legacy rows retain NULL and are not automatically
+certified as legacy. A future rollout must upgrade all consumers first, audit
+and explicitly classify historical operations without inferring from NULL,
+then enable the atomic new writer. Read/decode failures, new markers or missing
+tasks cannot be backfilled as legacy. The test transaction guard and applied
+replay wrapper now read this original provenance instead of hardcoding v1.
+The SQLite subprocess fixture also retains both fields in its sidecar: killing
+the writer before commit leaves neither, while killing after commit permits
+readback and two restarted contenders without regenerating either field. That
+fixture's pre-worker check is not a transaction lease or a production guard.
+Production columns, migration, funding consumers and paid admission are still
+not enabled; the ungated production replay remains an explicit negative control.
+
 `taskpricing.Freeze` now produces a serializable expression branch of the existing
 `TaskBillingPlan`. It freezes the selected expression/hash, original/mapped model,
 actual producer/package/channel/request/action identity, price/contract/binding

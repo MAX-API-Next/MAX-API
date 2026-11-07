@@ -58,3 +58,37 @@ func TestClaudeResponsesUsageDistinguishesNullAndNumericZero(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeNonResponsesOutputPresence(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, reported := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reported_%v", format, reported), func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, RelayFormat: format,
+					OriginModelName: "claude-test", ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+				info.SetEstimatePromptTokens(10)
+				output := ""
+				if reported {
+					output = `"output_tokens":0`
+				}
+				frames := []string{
+					`{"type":"message_start","message":{"id":"msg_test","model":"claude-test","usage":{"input_tokens":4}}}`,
+					`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial output"}}`,
+					`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{` + output + `}}`,
+				}
+				usage, err := ClaudeStreamHandler(c, &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("data: " + strings.Join(frames, "\n\ndata: ") + "\n\n"))}, info)
+				require.Nil(t, err)
+				require.Equal(t, 4, usage.PromptTokens)
+				if reported {
+					require.Zero(t, usage.CompletionTokens)
+				} else {
+					require.Positive(t, usage.CompletionTokens)
+				}
+				require.NotNil(t, usage.BillingUsage)
+				require.Equal(t, !reported, usage.BillingUsage.Estimated)
+				require.Equal(t, reported, usage.BillingUsage.TokenCountsReported)
+			})
+		}
+	}
+}

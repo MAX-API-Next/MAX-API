@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/logger"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
@@ -81,6 +82,11 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["cache_tokens"] = cacheTokens
 	other["cache_ratio"] = cacheRatio
 	other["model_price"] = modelPrice
+	if relayInfo.PriceData.UsePrice && (relayInfo.RelayMode == relayconstant.RelayModeImagesGenerations || relayInfo.RelayMode == relayconstant.RelayModeImagesEdits) {
+		if count, ok := relayInfo.PriceData.OtherRatios["n"]; ok {
+			other["image_count"] = count
+		}
+	}
 	other["user_group_ratio"] = userGroupRatio
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if !relayInfo.FirstResultTime.IsZero() && !relayInfo.StartTime.IsZero() {
@@ -310,6 +316,12 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["ws"] = true
+	// Keep observed cache facts separate from the legacy price fields: the
+	// Realtime multiplier contract currently charges the full modality rate.
+	info["realtime_usage"] = *usage
+	if relayInfo.TieredBillingSnapshot == nil && !relayInfo.PriceData.UsePrice {
+		info["realtime_cache_discount_applied"] = false
+	}
 	info["audio_input"] = usage.InputTokenDetails.AudioTokens
 	info["audio_output"] = usage.OutputTokenDetails.AudioTokens
 	info["text_input"] = usage.InputTokenDetails.TextTokens

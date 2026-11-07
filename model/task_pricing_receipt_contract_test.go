@@ -23,7 +23,8 @@ import (
 // Neither BillingSettlement nor startup migration/worker is changed by this.
 type taskPricingReceiptCandidate struct {
 	BillingSettlement
-	TaskPricingReceipt *string `gorm:"type:text"`
+	TaskPricingReceipt    *string `gorm:"type:text"`
+	TaskPricingProvenance *string `gorm:"type:text"`
 }
 
 func (taskPricingReceiptCandidate) TableName() string { return "billing_settlements" }
@@ -99,7 +100,11 @@ func stageTaskPricingReceiptCandidate(db *gorm.DB, f taskPricingReceiptFixture, 
 		if err != nil {
 			return err
 		}
-		if err := taskpricing.ValidateReceiptCompatibility(taskpricing.ReceiptWalletV1, receipt, receiptWalletInput(&f.task, f.input.OperationKey)); err != nil {
+		provenance, err := taskpricing.PrepareReceiptProvenance(taskpricing.ReceiptWalletV1, receiptWalletInput(&f.task, f.input.OperationKey))
+		if err != nil {
+			return err
+		}
+		if err := taskpricing.ValidateReceiptProvenance(provenance, receipt, receiptWalletInput(&f.task, f.input.OperationKey)); err != nil {
 			return err
 		}
 		row, _, err := ensureBillingSettlementRecordDB(tx, f.input)
@@ -113,7 +118,13 @@ func stageTaskPricingReceiptCandidate(db *gorm.DB, f taskPricingReceiptFixture, 
 		if err != nil {
 			return err
 		}
-		updated := tx.Model(&taskPricingReceiptCandidate{}).Where("id = ? AND task_pricing_receipt IS NULL", row.ID).Update("task_pricing_receipt", string(wire))
+		origin, err := common.Marshal(provenance)
+		if err != nil {
+			return err
+		}
+		updated := tx.Model(&taskPricingReceiptCandidate{}).
+			Where("id = ? AND task_pricing_receipt IS NULL AND task_pricing_provenance IS NULL", row.ID).
+			Updates(map[string]interface{}{"task_pricing_receipt": string(wire), "task_pricing_provenance": string(origin)})
 		if updated.Error != nil {
 			return updated.Error
 		}
@@ -138,6 +149,12 @@ func validateTaskPricingReceiptCandidate(db *gorm.DB, expected BillingSettlement
 	if err := validateBillingSettlement(row.BillingSettlement, expected); err != nil {
 		return err
 	}
+	var provenance *taskpricing.ReceiptProvenance
+	if row.TaskPricingProvenance != nil {
+		if err := common.UnmarshalJsonStr(*row.TaskPricingProvenance, &provenance); err != nil {
+			return taskpricing.ErrTaskPricingReceiptConflict
+		}
+	}
 	var task Task
 	if err := db.First(&task, row.TaskID).Error; err != nil {
 		return err
@@ -157,11 +174,14 @@ func validateTaskPricingReceiptCandidate(db *gorm.DB, expected BillingSettlement
 			return taskpricing.ErrTaskPricingReceiptConflict
 		}
 	}
-	// Fixture provenance requires v1 even if the column or plan is missing.
-	// A production consumer still needs its own durable authoritative source.
+	// Read the original host decision; never synthesize it from the current
+	// plan/receipt. Only this isolated fixture persists the candidate column.
 	frozen := receiptWalletInput(&task, row.OperationKey)
-	if err := taskpricing.ValidateReceiptCompatibility(taskpricing.ReceiptWalletV1, receipt, frozen); err != nil {
+	if err := taskpricing.ValidateReceiptProvenance(provenance, receipt, frozen); err != nil {
 		return err
+	}
+	if provenance.Requirement != taskpricing.ReceiptWalletV1 || frozen.Plan == nil || frozen.Plan.ExpressionPlan == nil {
+		return taskpricing.ErrTaskPricingReceiptConflict
 	}
 	quota := int64(frozen.Plan.ReserveQuota)
 	if row.Source != BillingSettlementSourceWallet || task.PrivateData.BillingSource != BillingSettlementSourceWallet ||
@@ -267,23 +287,123 @@ func (tx *receiptCandidateLostTx) Commit() error {
 }
 
 func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
-	// Existing legacy records must survive this candidate additive migration.
-	var legacy BillingSettlement
-	taskBillingTestCheck(t, db.Order("id").First(&legacy).Error, "read pre-migration legacy receipt")
+	// Seed the migration witness here: filtering to this subtest must not
+	// depend on an earlier funding subtest leaving a settlement behind.
+	legacy := BillingSettlement{OperationKey: "receipt-contract-legacy-before-migration",
+		Source: BillingSettlementSourceWallet, Status: BillingSettlementStatusApplied}
+	taskBillingTestCheck(t, db.Create(&legacy).Error, "seed isolated pre-migration legacy record")
 	taskBillingTestCheck(t, db.Migrator().AddColumn(&taskPricingReceiptCandidate{}, "TaskPricingReceipt"), "add test-only nullable TEXT receipt")
+	taskBillingTestCheck(t, db.Migrator().AddColumn(&taskPricingReceiptCandidate{}, "TaskPricingProvenance"), "add test-only nullable TEXT provenance")
 	require.True(t, db.Migrator().HasColumn(&taskPricingReceiptCandidate{}, "TaskPricingReceipt"))
+	require.True(t, db.Migrator().HasColumn(&taskPricingReceiptCandidate{}, "TaskPricingProvenance"))
+	for _, column := range []string{"task_pricing_receipt", "task_pricing_provenance"} {
+		require.True(t, db.Migrator().HasColumn(&taskPricingReceiptCandidate{}, column), "candidate update map keys must name real columns")
+	}
 	for _, column := range []string{"remain_quota", "used_quota"} {
 		require.True(t, db.Migrator().HasColumn(&Token{}, column), "receipt fixture update must name a real column")
 	}
 	var migrated taskPricingReceiptCandidate
 	taskBillingTestCheck(t, db.First(&migrated, legacy.ID).Error, "read legacy after candidate migration")
 	require.Nil(t, migrated.TaskPricingReceipt)
+	require.Nil(t, migrated.TaskPricingProvenance)
 	require.Equal(t, legacy, migrated.BillingSettlement)
 	sequence := 8800
 	fixture := func(t *testing.T, ratio float64) taskPricingReceiptFixture {
 		sequence++
 		return newTaskPricingReceiptCandidate(t, db, sequence, ratio)
 	}
+	t.Run("wallet_reader_rejects_legacy_without_plan", func(t *testing.T) {
+		f := fixture(t, 1)
+		taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage wallet candidate")
+		f.task.PrivateData.BillingContext.TaskBillingPlan = nil
+		f.task.PrivateData.PluginBinding.Profile = ""
+		f.task.PrivateData.PluginBinding.Action = ""
+		f.task.PrivateData.PluginBinding.PhaseApprovalID = ""
+		f.task.Action = ""
+		taskBillingTestCheck(t, db.Save(&f.task).Error, "remove plan from retained task")
+		legacy := fmt.Sprintf(`{"version":1,"requirement":"legacy","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+		taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("operation_key = ?", f.input.OperationKey).
+			Updates(map[string]interface{}{"task_pricing_receipt": nil, "task_pricing_provenance": legacy}).Error, "seed explicit legacy evidence")
+		require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict)
+	})
+	for _, column := range []string{"task_pricing_receipt", "task_pricing_provenance"} {
+		t.Run("writer_preserves_partial_"+column, func(t *testing.T) {
+			f := fixture(t, 1)
+			row, _, err := ensureBillingSettlementRecordDB(db, f.input)
+			taskBillingTestCheck(t, err, "seed matching intent without task")
+			taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("id = ?", row.ID).
+				Update(column, "retained-original").Error, "seed partial evidence")
+			require.ErrorIs(t, stageTaskPricingReceiptCandidate(db, f, ""), taskpricing.ErrTaskPricingReceiptConflict)
+			var after taskPricingReceiptCandidate
+			taskBillingTestCheck(t, db.First(&after, row.ID).Error, "read retained partial evidence")
+			if column == "task_pricing_receipt" {
+				require.Equal(t, "retained-original", *after.TaskPricingReceipt)
+				require.Nil(t, after.TaskPricingProvenance)
+			} else {
+				require.Equal(t, "retained-original", *after.TaskPricingProvenance)
+				require.Nil(t, after.TaskPricingReceipt)
+			}
+		})
+	}
+	t.Run("writer_stamps_original_provenance", func(t *testing.T) {
+		f := fixture(t, 1)
+		taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage provenance candidate")
+		var row taskPricingReceiptCandidate
+		taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&row).Error, "read writer provenance")
+		require.NotNil(t, row.TaskPricingProvenance)
+		want := fmt.Sprintf(`{"version":1,"requirement":"wallet_receipt_v1","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+		require.JSONEq(t, want, *row.TaskPricingProvenance)
+	})
+	t.Run("provenance_required_by_guard_and_replay", func(t *testing.T) {
+		for _, change := range []string{"missing", "json-null", "malformed", "unknown-version", "unknown-policy", "another-task", "another-operation", "legacy-downgrade", "missing-zero"} {
+			t.Run(change, func(t *testing.T) {
+				ratio := 1.0
+				if change == "missing-zero" {
+					ratio = 0
+				}
+				f := fixture(t, ratio)
+				taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage original provenance")
+				var raw any
+				switch change {
+				case "json-null":
+					raw = "null"
+				case "malformed":
+					raw = "{retained-malformed"
+				case "unknown-version":
+					raw = fmt.Sprintf(`{"version":999,"requirement":"wallet_receipt_v1","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+				case "unknown-policy":
+					raw = fmt.Sprintf(`{"version":1,"requirement":"future","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+				case "another-task":
+					raw = fmt.Sprintf(`{"version":1,"requirement":"wallet_receipt_v1","task_id":%d,"operation_key":%q}`, f.task.ID+1, f.input.OperationKey)
+				case "another-operation":
+					raw = fmt.Sprintf(`{"version":1,"requirement":"wallet_receipt_v1","task_id":%d,"operation_key":"task:77:finalize"}`, f.task.ID)
+				case "legacy-downgrade":
+					raw = fmt.Sprintf(`{"version":1,"requirement":"legacy","task_id":%d,"operation_key":%q}`, f.task.ID, f.input.OperationKey)
+				}
+				taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("operation_key = ?", f.input.OperationKey).Update("task_pricing_provenance", raw).Error, "seed invalid provenance")
+				require.ErrorIs(t, validateTaskPricingReceiptCandidate(db, f.input), taskpricing.ErrTaskPricingReceiptConflict, "cannot infer provenance from a valid receipt or zero")
+				guard := installTaskPricingReceiptTransactionGuard(t, db, f.input)
+				ProcessPendingBillingSettlementsOnce()
+				require.Positive(t, guard.Load())
+				require.Equal(t, BillingSettlementStatusManual, taskBillingContractRecord(t, db, f.input.OperationKey).Status)
+				_, _, err := replayTaskPricingReceiptCandidate(db, f.input)
+				require.ErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+				var user User
+				var token Token
+				var after taskPricingReceiptCandidate
+				taskBillingTestCheck(t, db.First(&user, f.input.UserID).Error, "read rejected provenance wallet")
+				taskBillingTestCheck(t, db.First(&token, f.input.TokenID).Error, "read rejected provenance token")
+				taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&after).Error, "read preserved provenance")
+				require.EqualValues(t, 3000, user.Quota)
+				require.EqualValues(t, 3000, token.RemainQuota)
+				if raw == nil {
+					require.Nil(t, after.TaskPricingProvenance)
+				} else {
+					require.Equal(t, raw, *after.TaskPricingProvenance)
+				}
+			})
+		}
+	})
 	for _, ratio := range []float64{1, 0} {
 		for _, layer := range []string{"writer", "reader"} {
 			t.Run(fmt.Sprintf("%s_rejects_reservation_drift_ratio_%g", layer, ratio), func(t *testing.T) {
@@ -383,9 +503,15 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 		taskBillingTestCheck(t, validateTaskPricingReceiptCandidate(db, f.input), "read committed original after lost reply")
 		var row taskPricingReceiptCandidate
 		taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&row).Error, "read original receipt bytes")
-		cas := db.Model(&taskPricingReceiptCandidate{}).Where("id = ? AND task_pricing_receipt IS NULL", row.ID).Update("task_pricing_receipt", "replacement")
+		cas := db.Model(&taskPricingReceiptCandidate{}).
+			Where("id = ? AND task_pricing_receipt IS NULL AND task_pricing_provenance IS NULL", row.ID).
+			Updates(map[string]interface{}{"task_pricing_receipt": "replacement", "task_pricing_provenance": "replacement"})
 		taskBillingTestCheck(t, cas.Error, "attempt conflicting receipt CAS")
 		require.Zero(t, cas.RowsAffected)
+		var preserved taskPricingReceiptCandidate
+		taskBillingTestCheck(t, db.First(&preserved, row.ID).Error, "read both original evidence columns after conflicting CAS")
+		require.Equal(t, row.TaskPricingReceipt, preserved.TaskPricingReceipt)
+		require.Equal(t, row.TaskPricingProvenance, preserved.TaskPricingProvenance)
 		other := f
 		other.task.ID = 0
 		other.task.TaskID += "-other"
@@ -452,6 +578,29 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 		require.EqualValues(t, 1500, user.Quota)
 		require.Equal(t, `{"version":999,"digest":"retain-after-applied"}`, *row.TaskPricingReceipt)
 	})
+	t.Run("applied_replay_requires_its_original_provenance", func(t *testing.T) {
+		f := fixture(t, 1)
+		taskBillingTestCheck(t, stageTaskPricingReceiptCandidate(db, f, ""), "stage provenance replay candidate")
+		installTaskPricingReceiptTransactionGuard(t, db, f.input)
+		ProcessPendingBillingSettlementsOnce()
+		require.Equal(t, BillingSettlementStatusApplied, taskBillingContractRecord(t, db, f.input.OperationKey).Status)
+		taskBillingTestCheck(t, db.Model(&taskPricingReceiptCandidate{}).Where("operation_key = ?", f.input.OperationKey).
+			Update("task_pricing_provenance", nil).Error, "remove already-applied provenance")
+		_, _, err := replayTaskPricingReceiptCandidate(db, f.input)
+		require.ErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+		// The actual production fast return is deliberately unchanged. Its
+		// successful negative control does not prove any receipt protection.
+		amount, replay, err := ApplyBillingSettlementOnce(f.input)
+		taskBillingTestCheck(t, err, "observe ungated production provenance replay")
+		require.True(t, replay)
+		require.EqualValues(t, 1500, amount)
+		var row taskPricingReceiptCandidate
+		var user User
+		taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&row).Error, "read unrepaired applied evidence")
+		taskBillingTestCheck(t, db.First(&user, f.input.UserID).Error, "read once-debited wallet after provenance replay")
+		require.Nil(t, row.TaskPricingProvenance)
+		require.EqualValues(t, 1500, user.Quota)
+	})
 	t.Run("worker_replay_reconciliation_reject_and_retain", func(t *testing.T) {
 		for _, change := range []string{"missing", "missing-zero", "unknown-version", "same-amount-plan", "query-failure"} {
 			t.Run(change, func(t *testing.T) {
@@ -478,10 +627,11 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 				}
 				var before taskPricingReceiptCandidate
 				taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&before).Error, "read receipt before guarded consumers")
+				readUnavailable := errors.New("isolated receipt read unavailable")
 				if change == "query-failure" {
 					taskBillingTestCheck(t, db.Callback().Query().Before("gorm:query").Register("test:receipt-read-fault", func(tx *gorm.DB) {
 						if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "taskPricingReceiptCandidate" {
-							tx.AddError(errors.New("isolated receipt read unavailable"))
+							tx.AddError(readUnavailable)
 						}
 					}), "install receipt query failure")
 				}
@@ -489,8 +639,16 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 				ProcessPendingBillingSettlementsOnce()
 				require.Positive(t, guard.Load())
 				_, _, err := replayTaskPricingReceiptCandidate(db, f.input)
-				require.Error(t, err, "unverified reservation cannot apply while evidence is unavailable")
-				require.Error(t, validateTaskPricingReceiptCandidate(db, f.input), "read-only reconciliation cannot approve or regenerate receipt")
+				validationErr := validateTaskPricingReceiptCandidate(db, f.input)
+				if change == "query-failure" {
+					require.ErrorIs(t, err, readUnavailable)
+					require.ErrorIs(t, validationErr, readUnavailable)
+					require.NotErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+					require.NotErrorIs(t, validationErr, taskpricing.ErrTaskPricingReceiptConflict)
+				} else {
+					require.ErrorIs(t, err, taskpricing.ErrTaskPricingReceiptConflict)
+					require.ErrorIs(t, validationErr, taskpricing.ErrTaskPricingReceiptConflict)
+				}
 				if change == "query-failure" {
 					taskBillingTestCheck(t, db.Callback().Query().Remove("test:receipt-read-fault"), "remove receipt query failure")
 				}
@@ -500,6 +658,7 @@ func runTaskPricingReceiptContracts(t *testing.T, db *gorm.DB) {
 				var logs int64
 				taskBillingTestCheck(t, db.Where("operation_key = ?", f.input.OperationKey).First(&after).Error, "read preserved candidate")
 				require.Equal(t, before.TaskPricingReceipt, after.TaskPricingReceipt)
+				require.Equal(t, before.TaskPricingProvenance, after.TaskPricingProvenance)
 				wantStatus := BillingSettlementStatusManual
 				if change == "query-failure" {
 					wantStatus = BillingSettlementStatusPending

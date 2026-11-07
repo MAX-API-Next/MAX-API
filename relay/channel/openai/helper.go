@@ -37,11 +37,14 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
 		return err
 	}
+	return handleClaudeStreamFrame(c, &streamResponse, info)
+}
 
+func handleClaudeStreamFrame(c *gin.Context, streamResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) error {
 	if streamResponse.Usage != nil {
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
 	}
-	claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
+	claudeResponses := service.StreamResponseOpenAI2Claude(streamResponse, info)
 	for _, resp := range claudeResponses {
 		helper.ClaudeData(c, *resp)
 	}
@@ -91,6 +94,53 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
+// fillMissingStreamUsage retains provider counters and details. Only absent
+// parents use a coherent reported total or the existing estimator, bounded by
+// known sub-counts. Later parent updates invalidate an older reported total.
+func fillMissingStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, presence dto.OpenAIUsagePresence, text string, toolCount int) bool {
+	if !presence.Any {
+		*usage = *service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		usage.CompletionTokens += toolCount * 7
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		return true
+	}
+	if presence.Prompt && presence.Completion {
+		return false
+	}
+	inputFloor := max(usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedCreationTokens,
+		usage.PromptTokensDetails.TextTokens, usage.PromptTokensDetails.AudioTokens, usage.PromptTokensDetails.ImageTokens,
+		usage.ClaudeCacheCreation5mTokens+usage.ClaudeCacheCreation1hTokens)
+	outputFloor := max(usage.CompletionTokenDetails.TextTokens, usage.CompletionTokenDetails.AudioTokens,
+		usage.CompletionTokenDetails.ImageTokens, usage.CompletionTokenDetails.ReasoningTokens)
+	if presence.Total && presence.ReportedTotal == 0 && usage.PromptTokens == 0 && usage.CompletionTokens == 0 && inputFloor == 0 && outputFloor == 0 {
+		return true // provide complete zero counters when downstream requests usage
+	}
+	if !presence.Prompt {
+		usage.PromptTokens = max(info.GetEstimatePromptTokens(), inputFloor)
+		if presence.Total && presence.Completion && presence.ReportedTotal-usage.CompletionTokens >= inputFloor {
+			usage.PromptTokens = presence.ReportedTotal - usage.CompletionTokens
+		}
+	}
+	if !presence.Completion {
+		usage.CompletionTokens = max(service.EstimateTokenByModel(info.UpstreamModelName, text)+toolCount*7, outputFloor)
+		if presence.Total && presence.Prompt && presence.ReportedTotal-usage.PromptTokens >= outputFloor {
+			usage.CompletionTokens = presence.ReportedTotal - usage.PromptTokens
+		}
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	// Preserve positive provider totals when estimates differ. A genuine zero
+	// returned above; a contradictory zero cannot replace positive counters.
+	if presence.Total && presence.ReportedTotal != 0 {
+		usage.TotalTokens = presence.ReportedTotal
+	}
+	usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+	if usage.BillingUsage != nil {
+		usage.BillingUsage.Estimated = true
+		usage.BillingUsage.TokenCountsReported = presence.Prompt && presence.Completion
+	}
+	return true
+}
+
 func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
@@ -130,9 +180,8 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 	*systemFingerprint = lastStreamResponse.GetSystemFingerprint()
 	*model = lastStreamResponse.Model
 
-	if service.ValidUsage(lastStreamResponse.Usage) {
+	if dto.MergeOpenAIUsage(*usage, common.StringToByteSlice(lastStreamData)) {
 		*containStreamUsage = true
-		*usage = lastStreamResponse.Usage
 		if !info.ShouldIncludeUsage {
 			*shouldSendLastResp = lo.SomeBy(lastStreamResponse.Choices, func(choice dto.ChatCompletionsStreamResponseChoice) bool {
 				return choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != ""
@@ -160,16 +209,25 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.Unmarshal(common.StringToByteSlice(lastStreamData), &streamResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			return
+			if info.ClaudeConvertInfo == nil || info.ClaudeConvertInfo.Done || info.FinishReason == "" {
+				return
+			}
+			// A previously accepted finish can close with merged usage; never
+			// forward any fields partially decoded from the malformed tail.
+			streamResponse = dto.ChatCompletionsStreamResponse{}
 		}
 
 		info.ClaudeConvertInfo.Usage = usage
+		streamResponse.Usage = usage
 
-		claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
-		for _, resp := range claudeResponses {
-			_ = helper.ClaudeData(c, *resp)
+		info.SendResponseCount++
+		_ = handleClaudeStreamFrame(c, &streamResponse, info)
+		if !info.ClaudeConvertInfo.Done {
+			// A last frame may still carry choices without a finish reason.
+			// Its delta was delivered above; now finalize with the merged usage.
+			info.SendResponseCount++
+			_ = handleClaudeStreamFrame(c, &dto.ChatCompletionsStreamResponse{Usage: usage}, info)
 		}
-		info.ClaudeConvertInfo.Done = true
 
 	case types.RelayFormatGemini:
 		var streamResponse dto.ChatCompletionsStreamResponse
@@ -183,6 +241,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		// 而包含最后一段文本输出的响应（倒数第二个）的 finishReason 为 null
 		// 暂不知是否有程序会不兼容。
 
+		streamResponse.Usage = usage
 		geminiResponse := service.StreamResponseOpenAI2Gemini(&streamResponse, info)
 
 		// openai 流响应开头的空数据

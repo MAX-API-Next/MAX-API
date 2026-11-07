@@ -618,6 +618,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sr.Stop(streamErr)
 				return
 			}
+			// Converted terminal usage must be the same snapshot returned for
+			// settlement. A reported numeric zero must never become an estimate.
+			if !usageReported && usage.TotalTokens == 0 {
+				usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+			}
 			if !sentStop {
 				if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil {
 					info.ClaudeConvertInfo.Usage = usage
@@ -687,10 +692,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return usage, apiErr
 		}
 		return nil, apiErr
-	}
-
-	if !usageReported && usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	}
 
 	if !sentStart {
