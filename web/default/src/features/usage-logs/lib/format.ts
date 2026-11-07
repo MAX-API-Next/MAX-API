@@ -248,9 +248,16 @@ export function hasAnyCacheTokens(
   )
 }
 
+export interface CacheWriteTokenCounts {
+  total: number
+  fiveMinutes: number
+  oneHour: number
+  hasSplit: boolean
+}
+
 export function getCacheWriteTokenCounts(
   other: LogOtherData | null | undefined
-) {
+): CacheWriteTokenCounts {
   const reported5m = other?.cache_creation_tokens_5m || 0
   const oneHour = other?.cache_creation_tokens_1h || 0
   const aggregate = other?.cache_creation_tokens || 0
