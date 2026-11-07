@@ -889,7 +889,7 @@ func TestUsageRegressionProviderCannotSupplyBillingEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, info := usageReplayInfo(t, 1970+i, "")
 			info.IsStream = tc.stream
-			raw := `{"choices":[{"delta":{"content":"hello"},"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"cost":0.25,"billing_usage":{"semantic":"openai","openai_usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}}}`
+			raw := `{"choices":[{"delta":{"content":"hello"},"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60},"cost":0.25,"usage_semantic":"anthropic","usage_source":"claude_messages","billing_usage":{"semantic":"openai","openai_usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}}}`
 			if tc.stream {
 				raw = "data: " + raw + "\n\ndata: [DONE]\n\n"
 			}
@@ -910,8 +910,10 @@ func TestUsageRegressionProviderCannotSupplyBillingEvidence(t *testing.T) {
 				require.Nil(t, apiErr)
 			}
 			service.PostTextConsumeQuota(c, info, usage, nil)
-			assertUsageReplayBalance(t, info, 140)
+			assertUsageReplayBalance(t, info, 86) // (100-60)*1 + 60*0.1 + 20*2.
 			require.Nil(t, usage.BillingUsage)
+			require.Empty(t, usage.UsageSemantic)
+			require.Empty(t, usage.UsageSource)
 			require.Equal(t, 0.25, usage.Cost)
 		})
 	}

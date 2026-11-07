@@ -233,6 +233,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 	// Billing evidence is attached by the host, never accepted from the wire.
 	simpleResponse.Usage.BillingUsage = nil
+	simpleResponse.Usage.UsageSemantic, simpleResponse.Usage.UsageSource = "", ""
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}

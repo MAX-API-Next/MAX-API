@@ -92,6 +92,7 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	}
 	if xaiResponse.Usage != nil {
 		xaiResponse.Usage.BillingUsage = nil
+		xaiResponse.Usage.UsageSemantic, xaiResponse.Usage.UsageSource = "", ""
 		xaiResponse.Usage.CompletionTokens = xaiResponse.Usage.TotalTokens - xaiResponse.Usage.PromptTokens
 		xaiResponse.Usage.CompletionTokenDetails.TextTokens = xaiResponse.Usage.CompletionTokens - xaiResponse.Usage.CompletionTokenDetails.ReasoningTokens
 	}

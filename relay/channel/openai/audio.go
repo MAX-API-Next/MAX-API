@@ -59,6 +59,9 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					sr.Error(err)
 				} else if dto.HasOpenAIUsageTokens(&simpleResponse.Usage) {
 					*usage = simpleResponse.Usage
+					// Accounting evidence and semantics belong to the host.
+					usage.BillingUsage = nil
+					usage.UsageSemantic, usage.UsageSource = "", ""
 					normalizeOpenAIAudioUsage(usage)
 				}
 			}
@@ -145,6 +148,8 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil &&
 		(dto.HasOpenAIUsageTokens(&responseData.Usage.Usage) || gjson.GetBytes(responseBody, "usage.input_tokens").Type == gjson.Number) {
 		usage := &responseData.Usage.Usage
+		usage.BillingUsage = nil
+		usage.UsageSemantic, usage.UsageSource = "", ""
 		dto.CopyInputTokenDetails(&usage.PromptTokensDetails, responseData.Usage.InputTokenDetails, true)
 		normalizeOpenAIAudioUsage(usage)
 		// Transcription/translation output is text even when the API only

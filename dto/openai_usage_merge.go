@@ -17,7 +17,9 @@ type OpenAIUsagePresence struct {
 // the embedded field and ignores even differently typed private metadata.
 type providerOpenAIUsage struct {
 	*Usage
-	BillingUsage json.RawMessage `json:"billing_usage"`
+	BillingUsage  json.RawMessage `json:"billing_usage"`
+	UsageSemantic json.RawMessage `json:"usage_semantic"`
+	UsageSource   json.RawMessage `json:"usage_source"`
 }
 
 // MergeOpenAIUsage retains omitted counters/details in cumulative usage updates.

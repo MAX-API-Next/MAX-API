@@ -64,9 +64,11 @@ func TestMergeOpenAIUsageCanonicalizesNumericAliases(t *testing.T) {
 
 func TestMergeOpenAIUsageRejectsProviderBillingEvidence(t *testing.T) {
 	for _, evidence := range []string{`{"semantic":"openai","openai_usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}`, `42`, `"private"`} {
-		var usage Usage
-		require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"cost":0.25,"prompt_tokens_details":{"cached_tokens":60},"billing_usage":`+evidence+`}}`)))
+		usage := Usage{UsageSemantic: BillingUsageSemanticOpenAI, UsageSource: BillingUsageSourceOAIChat}
+		require.True(t, MergeOpenAIUsage(&usage, []byte(`{"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"cost":0.25,"prompt_tokens_details":{"cached_tokens":60},"usage_semantic":"anthropic","usage_source":"claude_messages","billing_usage":`+evidence+`}}`)))
 		require.Nil(t, usage.BillingUsage)
+		require.Equal(t, BillingUsageSemanticOpenAI, usage.UsageSemantic)
+		require.Equal(t, BillingUsageSourceOAIChat, usage.UsageSource)
 		require.Equal(t, 100, usage.PromptTokens)
 		require.Equal(t, 20, usage.CompletionTokens)
 		require.Equal(t, 60, usage.PromptTokensDetails.CachedTokens)

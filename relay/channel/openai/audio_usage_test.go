@@ -26,7 +26,7 @@ func TestOpenaiTTSStreamPreservesAudioUsageDetails(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body: io.NopCloser(strings.NewReader(
-			`data: {"usage":{"input_tokens":100,"output_tokens":25,"total_tokens":125,"input_tokens_details":{"text_tokens":80,"audio_tokens":20},"output_tokens_details":{"audio_tokens":25}}}` + "\n" +
+			`data: {"usage":{"input_tokens":100,"output_tokens":25,"total_tokens":125,"input_tokens_details":{"text_tokens":80,"audio_tokens":20},"output_tokens_details":{"audio_tokens":25},"billing_usage":{"semantic":"anthropic"},"usage_semantic":"anthropic","usage_source":"claude_messages"}}` + "\n" +
 				"data: [DONE]\n",
 		)),
 	}
@@ -38,6 +38,9 @@ func TestOpenaiTTSStreamPreservesAudioUsageDetails(t *testing.T) {
 	require.Equal(t, 20, usage.PromptTokensDetails.AudioTokens)
 	require.Equal(t, 80, usage.PromptTokensDetails.TextTokens)
 	require.Equal(t, 25, usage.CompletionTokenDetails.AudioTokens)
+	require.Nil(t, usage.BillingUsage)
+	require.Empty(t, usage.UsageSemantic)
+	require.Empty(t, usage.UsageSource)
 }
 
 func TestOpenaiSTTPreservesInputTokenDetails(t *testing.T) {
@@ -49,7 +52,7 @@ func TestOpenaiSTTPreservesInputTokenDetails(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body: io.NopCloser(strings.NewReader(
-			`{"text":"hello","usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"text_tokens":10,"audio_tokens":90}}}`,
+			`{"text":"hello","usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"text_tokens":10,"audio_tokens":90},"billing_usage":{"semantic":"anthropic"},"usage_semantic":"anthropic","usage_source":"claude_messages"}}`,
 		)),
 	}
 
@@ -60,4 +63,7 @@ func TestOpenaiSTTPreservesInputTokenDetails(t *testing.T) {
 	require.Equal(t, 100, usage.PromptTokens)
 	require.Equal(t, 5, usage.CompletionTokens)
 	require.Equal(t, dto.InputTokenDetails{TextTokens: 10, AudioTokens: 90}, usage.PromptTokensDetails)
+	require.Nil(t, usage.BillingUsage)
+	require.Empty(t, usage.UsageSemantic)
+	require.Empty(t, usage.UsageSource)
 }
