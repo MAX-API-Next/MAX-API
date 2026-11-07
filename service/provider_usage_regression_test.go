@@ -877,3 +877,100 @@ func TestUsageRegressionClaudeFinalFrameLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageRegressionProviderCannotSupplyBillingEvidence(t *testing.T) {
+	for i, tc := range []struct {
+		name        string
+		xai, stream bool
+	}{
+		{"openai_stream", false, true}, {"xai_stream", true, true},
+		{"openai_json", false, false}, {"xai_json", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 1970+i, "")
+			info.IsStream = tc.stream
+			raw := `{"choices":[{"delta":{"content":"hello"},"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"cost":0.25,"billing_usage":{"semantic":"openai","openai_usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}}}`
+			if tc.stream {
+				raw = "data: " + raw + "\n\ndata: [DONE]\n\n"
+			}
+			var usage *dto.Usage
+			if tc.xai {
+				ad := relay.GetAdaptor(constant.APITypeXai)
+				ad.Init(info)
+				got, apiErr := ad.DoResponse(c, usageReplayResponse(raw), info)
+				require.Nil(t, apiErr)
+				usage = got.(*dto.Usage)
+			} else {
+				var apiErr *types.MaxAPIError
+				if tc.stream {
+					usage, apiErr = openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+				} else {
+					usage, apiErr = openai.OpenaiHandler(c, info, usageReplayResponse(raw))
+				}
+				require.Nil(t, apiErr)
+			}
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			assertUsageReplayBalance(t, info, 140)
+			require.Nil(t, usage.BillingUsage)
+			require.Equal(t, 0.25, usage.Cost)
+		})
+	}
+}
+
+func TestUsageRegressionPartialOpenAIStreamCounters(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for j, tc := range []struct {
+			name, wire         string
+			p, c, total, quota int
+		}{
+			{"completion_only", `{"completion_tokens":20}`, 100, 20, 120, 140},
+			{"completion_zero", `{"output_tokens":0}`, 100, 0, 100, 100},
+			{"details_only", `{"prompt_tokens_details":{"cached_tokens":60},"completion_tokens_details":{"reasoning_tokens":5}}`, 100, 5, 105, 56},
+			{"reported_total", `{"completion_tokens":20,"total_tokens":120}`, 100, 20, 120, 140},
+			{"infer_output", `{"prompt_tokens":0,"total_tokens":120}`, 0, 120, 120, 240},
+			{"infer_output_with_input", `{"prompt_tokens":100,"total_tokens":120}`, 100, 20, 120, 140},
+			{"stale_total", `{"completion_tokens":25}`, 100, 25, 125, 150},
+			{"total_zero", `{"total_tokens":0}`, 0, 0, 0, 0},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", format, tc.name), func(t *testing.T) {
+				c, info := usageReplayInfo(t, 1980+i*10+j, "")
+				info.RelayFormat, info.FinalRequestRelayFormat, info.IsStream = format, types.RelayFormatOpenAI, true
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{}
+				info.SetEstimatePromptTokens(100)
+				info.ShouldIncludeUsage = true
+				recorder := usageReplayRecorder(c)
+				raw := `data: {"choices":[{"delta":{}}],"usage":` + tc.wire + "}\n\ndata: [DONE]\n\n"
+				if tc.name == "stale_total" {
+					raw = "data: {\"choices\":[],\"usage\":{\"completion_tokens\":20,\"total_tokens\":120}}\n\n" + raw
+				}
+				u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, tc.quota)
+				require.Equal(t, tc.p, u.PromptTokens)
+				require.Equal(t, tc.c, u.CompletionTokens)
+				require.Equal(t, tc.total, u.TotalTokens)
+				if tc.name != "total_zero" {
+					require.NotNil(t, u.BillingUsage)
+					require.True(t, u.BillingUsage.Estimated)
+				}
+				if format == types.RelayFormatOpenAI {
+					var last *dto.Usage
+					for _, line := range strings.Split(recorder.Body.String(), "\n") {
+						if !strings.HasPrefix(line, "data:") || strings.TrimSpace(strings.TrimPrefix(line, "data:")) == "[DONE]" {
+							continue
+						}
+						var event dto.ChatCompletionsStreamResponse
+						require.NoError(t, common.UnmarshalJsonStr(strings.TrimSpace(strings.TrimPrefix(line, "data:")), &event))
+						if event.Usage != nil {
+							last = event.Usage
+						}
+					}
+					require.NotNil(t, last)
+					require.Equal(t, tc.p, last.PromptTokens)
+					require.Equal(t, tc.c, last.CompletionTokens)
+				}
+			})
+		}
+	}
+}

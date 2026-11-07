@@ -94,6 +94,51 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
+// fillMissingStreamUsage retains provider counters and details. Only absent
+// parents use a coherent reported total or the existing estimator, bounded by
+// known sub-counts. Later parent updates invalidate an older reported total.
+func fillMissingStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *dto.Usage, presence dto.OpenAIUsagePresence, text string, toolCount int) bool {
+	if !presence.Any {
+		*usage = *service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		usage.CompletionTokens += toolCount * 7
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		return true
+	}
+	if presence.Prompt && presence.Completion {
+		return false
+	}
+	inputFloor := max(usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedCreationTokens,
+		usage.PromptTokensDetails.TextTokens, usage.PromptTokensDetails.AudioTokens, usage.PromptTokensDetails.ImageTokens,
+		usage.ClaudeCacheCreation5mTokens+usage.ClaudeCacheCreation1hTokens)
+	outputFloor := max(usage.CompletionTokenDetails.TextTokens, usage.CompletionTokenDetails.AudioTokens,
+		usage.CompletionTokenDetails.ImageTokens, usage.CompletionTokenDetails.ReasoningTokens)
+	if presence.Total && presence.ReportedTotal == 0 && usage.PromptTokens == 0 && usage.CompletionTokens == 0 && inputFloor == 0 && outputFloor == 0 {
+		return true // provide complete zero counters when downstream requests usage
+	}
+	if !presence.Prompt {
+		usage.PromptTokens = max(info.GetEstimatePromptTokens(), inputFloor)
+		if presence.Total && presence.Completion && presence.ReportedTotal-usage.CompletionTokens >= inputFloor {
+			usage.PromptTokens = presence.ReportedTotal - usage.CompletionTokens
+		}
+	}
+	if !presence.Completion {
+		usage.CompletionTokens = max(service.EstimateTokenByModel(info.UpstreamModelName, text)+toolCount*7, outputFloor)
+		if presence.Total && presence.Prompt && presence.ReportedTotal-usage.PromptTokens >= outputFloor {
+			usage.CompletionTokens = presence.ReportedTotal - usage.PromptTokens
+		}
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if presence.Total {
+		usage.TotalTokens = presence.ReportedTotal
+	}
+	usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+	if usage.BillingUsage != nil {
+		usage.BillingUsage.Estimated = true
+		usage.BillingUsage.TokenCountsReported = presence.Prompt && presence.Completion
+	}
+	return true
+}
+
 func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:

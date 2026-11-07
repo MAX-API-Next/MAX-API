@@ -122,6 +122,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var createAt int64 = 0
 	var systemFingerprint string
 	var containStreamUsage bool
+	var usagePresence dto.OpenAIUsagePresence
 	var responseTextBuilder strings.Builder
 	var toolCount int
 	var usage = &dto.Usage{}
@@ -152,7 +153,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 		if len(data) > 0 {
-			if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
+			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 				containStreamUsage = true
 			}
 
@@ -187,9 +188,8 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	if !containStreamUsage {
-		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
+	if fillMissingStreamUsage(c, info, usage, usagePresence, responseTextBuilder.String(), toolCount) {
+		containStreamUsage = false // emit the completed usage when requested
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
@@ -231,6 +231,8 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	// Billing evidence is attached by the host, never accepted from the wire.
+	simpleResponse.Usage.BillingUsage = nil
 	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}

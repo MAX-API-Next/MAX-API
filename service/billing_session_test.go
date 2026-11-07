@@ -1400,9 +1400,19 @@ func TestPreWssFixedPriceUsesFrozenQuote(t *testing.T) {
 	info := &relaycommon.RelayInfo{PriceData: types.PriceData{UsePrice: true}}
 	// Fixed-price admission needs no per-token lookups, even without token IDs.
 	require.NoError(t, PreWssConsumeQuota(ctx, info, &dto.RealtimeUsage{}))
+	truncate(t)
+	const userID, tokenID = 947, 948
+	seedUser(t, userID, 100)
+	seedToken(t, tokenID, userID, "frozen-quote-realtime-token", 100)
+	billing := &recordingBillingSettler{}
+	info.UserId, info.TokenId, info.TokenKey = userID, tokenID, "frozen-quote-realtime-token"
+	info.Billing = billing
+	info.PriceData.ModelRatio = 1
+	info.PriceData.GroupRatioInfo.GroupRatio = 1
 	info.UsePrice = true
 	info.PriceData.UsePrice = false
-	require.Error(t, PreWssConsumeQuota(ctx, info, &dto.RealtimeUsage{}), "legacy flag cannot override the frozen quote")
+	require.NoError(t, PreWssConsumeQuota(ctx, info, &dto.RealtimeUsage{InputTokenDetails: dto.InputTokenDetails{TextTokens: 4}}))
+	require.Equal(t, []int{4}, billing.reserves, "legacy flag cannot override the frozen quote")
 }
 
 func TestPostConsumeQuotaRejectsAmountChangedReplay(t *testing.T) {

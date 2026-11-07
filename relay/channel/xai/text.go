@@ -91,6 +91,7 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
 	if xaiResponse.Usage != nil {
+		xaiResponse.Usage.BillingUsage = nil
 		xaiResponse.Usage.CompletionTokens = xaiResponse.Usage.TotalTokens - xaiResponse.Usage.PromptTokens
 		xaiResponse.Usage.CompletionTokenDetails.TextTokens = xaiResponse.Usage.CompletionTokens - xaiResponse.Usage.CompletionTokenDetails.ReasoningTokens
 	}

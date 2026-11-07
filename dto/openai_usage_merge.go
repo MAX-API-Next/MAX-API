@@ -1,13 +1,32 @@
 package dto
 
 import (
+	"encoding/json"
+
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/tidwall/gjson"
 )
 
+// OpenAIUsagePresence belongs to one stream, never to provider JSON.
+type OpenAIUsagePresence struct {
+	Any, Prompt, Completion, Total bool
+	ReportedTotal                  int
+}
+
+// A provider cannot attach host-owned accounting evidence. RawMessage shadows
+// the embedded field and ignores even differently typed private metadata.
+type providerOpenAIUsage struct {
+	*Usage
+	BillingUsage json.RawMessage `json:"billing_usage"`
+}
+
 // MergeOpenAIUsage retains omitted counters/details in cumulative usage updates.
 // An empty/null object is not a zero snapshot; numeric zeros are authoritative.
 func MergeOpenAIUsage(dst *Usage, response []byte) bool {
+	return MergeOpenAIUsageWithPresence(dst, response, nil)
+}
+
+func MergeOpenAIUsageWithPresence(dst *Usage, response []byte, presence *OpenAIUsagePresence) bool {
 	if dst == nil {
 		return false
 	}
@@ -16,7 +35,7 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 		return false
 	}
 	var incoming Usage
-	if common.Unmarshal([]byte(raw.Raw), &incoming) != nil {
+	if common.Unmarshal([]byte(raw.Raw), &providerOpenAIUsage{Usage: &incoming}) != nil {
 		return false
 	}
 	prompt := raw.Get("prompt_tokens")
@@ -58,9 +77,10 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 			return false
 		}
 	}
-	if common.Unmarshal([]byte(raw.Raw), &next) != nil {
+	if common.Unmarshal([]byte(raw.Raw), &providerOpenAIUsage{Usage: &next}) != nil {
 		return false
 	}
+	next.BillingUsage = nil
 	if prompt.Type == gjson.Number {
 		next.PromptTokens = int(prompt.Int())
 		if raw.Get("input_tokens").Type == gjson.Number {
@@ -87,6 +107,17 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 		next.TotalTokens = next.PromptTokens + next.CompletionTokens
 	}
 	*dst = next
+	if presence != nil {
+		presence.Any = true
+		presence.Prompt = presence.Prompt || prompt.Type == gjson.Number
+		presence.Completion = presence.Completion || completion.Type == gjson.Number
+		if raw.Get("total_tokens").Type == gjson.Number {
+			presence.Total, presence.ReportedTotal = true, next.TotalTokens
+		} else if prompt.Type == gjson.Number || completion.Type == gjson.Number {
+			// A later parent update supersedes the earlier cumulative total.
+			presence.Total = false
+		}
+	}
 	return true
 }
 

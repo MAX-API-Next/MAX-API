@@ -203,6 +203,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	usage := &dto.Usage{}
 	containUsage, hasPayload := false, false
+	var usagePresence dto.OpenAIUsagePresence
 	var text strings.Builder
 	var toolCount int
 	var lastData string
@@ -237,7 +238,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	recordUsage := func(frame *chatStreamFrame, data string) {
 		lastData = data
-		if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
+		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 			containUsage = true
 		}
 	}
@@ -323,10 +324,8 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 	}
 
-	if !containUsage {
-		usage = service.ResponseText2Usage(c, text.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage.CompletionTokens += toolCount * 7
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if fillMissingStreamUsage(c, info, usage, usagePresence, text.String(), toolCount) {
+		containUsage = false
 	}
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastData))
 	if service.ResponseAuditEnabled() {
