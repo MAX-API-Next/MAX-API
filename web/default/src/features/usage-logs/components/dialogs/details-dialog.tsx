@@ -378,11 +378,10 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   const promptTokens = log.prompt_tokens || 0
   const completionTokens = log.completion_tokens || 0
   const cacheRead = other.cache_tokens || 0
-  const {
-    total: cacheWrite,
-    fiveMinutes: cacheWrite5m,
-    oneHour: cacheWrite1h,
-  } = getCacheWriteTokenCounts(other)
+  const cacheWriteCounts = getCacheWriteTokenCounts(other)
+  const cacheWrite = cacheWriteCounts.total
+  const cacheWrite5m = cacheWriteCounts.fiveMinutes
+  const cacheWrite1h = cacheWriteCounts.oneHour
   const hasTokens =
     promptTokens > 0 || completionTokens > 0 || hasAnyCacheTokens(other)
 

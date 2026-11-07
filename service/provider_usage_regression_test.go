@@ -575,6 +575,56 @@ func TestUsageRegressionProtocolGeminiToClaude(t *testing.T) {
 	}
 }
 
+func TestUsageRegressionResponsesFinalUsageBeforeClaudeStop(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for j, tc := range []struct {
+			name, field string
+			p, c, quota int
+		}{
+			// Existing fallback: one Latin word *1.02 rounded up =2; 100+2*2=104.
+			{"missing", "", 100, 2, 104},
+			{"empty", `,"usage":{}`, 100, 2, 104},
+			{"explicit_zero", `,"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}`, 0, 0, 0},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", format, tc.name), func(t *testing.T) {
+				c, info := usageReplayInfo(t, 2100+i*10+j, "")
+				info.RelayFormat, info.FinalRequestRelayFormat, info.IsStream = format, types.RelayFormatOpenAIResponses, true
+				info.ShouldIncludeUsage = true
+				info.SetEstimatePromptTokens(100)
+				recorder := usageReplayRecorder(c)
+				raw := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"" + tc.field + "}}\n\ndata: [DONE]\n\n"
+				u, apiErr := openai.OaiResponsesToChatStreamHandler(c, info, usageReplayResponse(raw))
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, tc.quota)
+				require.Equal(t, tc.p, u.PromptTokens)
+				require.Equal(t, tc.c, u.CompletionTokens)
+				if format == types.RelayFormatClaude {
+					var final *dto.ClaudeUsage
+					stops := 0
+					for _, line := range strings.Split(recorder.Body.String(), "\n") {
+						if !strings.HasPrefix(line, "data:") {
+							continue
+						}
+						var event dto.ClaudeResponse
+						require.NoError(t, common.UnmarshalJsonStr(strings.TrimSpace(strings.TrimPrefix(line, "data:")), &event))
+						if event.Type == "message_delta" {
+							final = event.Usage
+						}
+						if event.Type == "message_stop" {
+							stops++
+						}
+					}
+					require.NotNil(t, final)
+					require.Equal(t, tc.p, final.InputTokens)
+					require.Equal(t, tc.c, final.OutputTokens)
+					require.Equal(t, 1, stops)
+				}
+			})
+		}
+	}
+}
+
 func TestUsageRegressionProtocolStream(t *testing.T) {
 	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
 		t.Run(fmt.Sprint(format), func(t *testing.T) {
