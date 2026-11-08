@@ -223,6 +223,7 @@ func TestRealtimeRouteUsesMappedModelQuery(t *testing.T) {
 	info.RelayFormat = types.RelayFormatOpenAIRealtime
 	info.RequestURLPath = "/v1/realtime?model=client-alias"
 	info.UpstreamModelName = "gpt-4"
+	info.IsModelMapped = true
 
 	requestURL, err := adaptor.GetRequestURL(info)
 	require.NoError(t, err)
@@ -230,6 +231,30 @@ func TestRealtimeRouteUsesMappedModelQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wss", parsedURL.Scheme)
 	assert.Equal(t, "gpt-4", parsedURL.Query().Get("model"))
+	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+}
+
+func TestRealtimeRoutePreservesPinnedModelWithoutMapping(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/realtime",
+				UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model&existing=1",
+				Converter:    dto.AdvancedCustomConverterNone,
+			},
+		},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime?model=client-alias"
+	info.UpstreamModelName = "client-alias"
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "fixed-model", parsedURL.Query().Get("model"))
 	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
 }
 

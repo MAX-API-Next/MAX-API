@@ -220,6 +220,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 							select {
 							case <-streamAnswerSeen:
 							case <-time.After(2 * time.Second):
+								t.Errorf("stream answer was not delivered before upstream released remaining frames")
 								return
 							}
 						}
@@ -230,7 +231,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				_, _ = io.WriteString(w, tc.response)
 			}))
 			t.Cleanup(upstream.Close)
-			gatewayUsageSeed(t, db, id, upstream.URL, tc.channel)
+			fixture := gatewayUsageSeed(t, db, id, upstream.URL, tc.channel)
 			body := tc.body
 			if body == "" {
 				body = fmt.Sprintf(`{"model":"gateway-audit","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"stream":%t,"stream_options":{"include_usage":true}}`, tc.stream)
@@ -339,13 +340,13 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if tc.unauthorized || tc.failure {
 				wantLogs = 0
 			}
-			gatewayUsageAssertLedger(t, db, id, tc.quota, wantLogs, tc.prompt, tc.completion)
+			gatewayUsageAssertLedger(t, db, fixture, tc.quota, wantLogs, tc.prompt, tc.completion)
 			if wantLogs == 1 {
 				var log model.Log
-				require.NoError(t, db.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).First(&log).Error)
+				require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
 				require.Equal(t, resp.Header.Get(common.RequestIdKey), log.RequestId)
 				require.NotEmpty(t, log.RequestId)
-				require.Equal(t, id, log.TokenId)
+				require.Equal(t, fixture.TokenID, log.TokenId)
 				require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
 				require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 				if tc.path == "/v1/images/generations" {
@@ -403,9 +404,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
 		}))
 		t.Cleanup(upstream.Close)
-		gatewayUsageSeed(t, db, 8300, upstream.URL, constant.ChannelTypeOpenAI)
+		fixture := gatewayUsageSeed(t, db, 8300, upstream.URL, constant.ChannelTypeOpenAI)
 		var seededChannel model.Channel
-		require.NoError(t, db.First(&seededChannel, 8300).Error)
+		require.NoError(t, db.First(&seededChannel, fixture.ChannelID).Error)
 		require.Equal(t, `{"gateway-audit":"gpt-4"}`, seededChannel.GetModelMapping())
 		headers := http.Header{"Authorization": []string{"Bearer gatewayfixture8300"}}
 		ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/realtime?model=gateway-audit", headers)
@@ -442,10 +443,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}, identities)
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
-		gatewayUsageAssertLedger(t, db, 8300, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
+		gatewayUsageAssertLedger(t, db, fixture, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
 		var log model.Log
-		require.NoError(t, db.Where("user_id = ? AND type = ?", 8300, model.LogTypeConsume).First(&log).Error)
-		require.Equal(t, 8300, log.TokenId)
+		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
+		require.Equal(t, fixture.TokenID, log.TokenId)
 		require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
 		require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 		require.EqualValues(t, 1, hits.Load())
@@ -529,21 +530,29 @@ func gatewayUsagePrices(t *testing.T, image bool) {
 	}
 }
 
-func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) {
+type gatewayUsageFixture struct {
+	UserID    int
+	TokenID   int
+	ChannelID int
+}
+
+func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) gatewayUsageFixture {
 	t.Helper()
-	require.NoError(t, db.Create(&model.User{Id: id, Username: fmt.Sprintf("gateway%d", id), Quota: 10000, Group: "default", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AffCode: fmt.Sprintf("gw%d", id)}).Error)
-	require.NoError(t, db.Create(&model.Token{Id: id, UserId: id, Key: fmt.Sprintf("gatewayfixture%d", id), Status: common.TokenStatusEnabled, RemainQuota: 10000, ExpiredTime: -1}).Error)
+	fixture := gatewayUsageFixture{UserID: id, TokenID: id + 100000, ChannelID: id + 200000}
+	require.NoError(t, db.Create(&model.User{Id: fixture.UserID, Username: fmt.Sprintf("gateway%d", id), Quota: 10000, Group: "default", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AffCode: fmt.Sprintf("gw%d", id)}).Error)
+	require.NoError(t, db.Create(&model.Token{Id: fixture.TokenID, UserId: fixture.UserID, Key: fmt.Sprintf("gatewayfixture%d", id), Status: common.TokenStatusEnabled, RemainQuota: 10000, ExpiredTime: -1}).Error)
 	mapping := `{"gateway-audit":"gpt-4"}`
-	require.NoError(t, db.Create(&model.Channel{Id: id, Type: channelType, Key: "synthetic", Name: fmt.Sprintf("gateway%d", id), Status: common.ChannelStatusEnabled, Models: "gateway-audit", Group: "default", BaseURL: &base, ModelMapping: &mapping, AutoBan: common.GetPointer(0)}).Error)
-	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gateway-audit", ChannelId: id, Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: fixture.ChannelID, Type: channelType, Key: "synthetic", Name: fmt.Sprintf("gateway%d", id), Status: common.ChannelStatusEnabled, Models: "gateway-audit", Group: "default", BaseURL: &base, ModelMapping: &mapping, AutoBan: common.GetPointer(0)}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gateway-audit", ChannelId: fixture.ChannelID, Enabled: true}).Error)
 	t.Cleanup(func() {
 		// Retain audit rows but remove each finished fixture from routing before
 		// the next case, whose upstream server and channel type are different.
-		require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", id).Update("enabled", false).Error)
+		require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", fixture.ChannelID).Update("enabled", false).Error)
 	})
+	return fixture
 }
 
-func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, prompt, completion int) {
+func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFixture, quota, logCount, prompt, completion int) {
 	t.Helper()
 	var user model.User
 	var token model.Token
@@ -554,11 +563,11 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, pr
 	}
 	defer func() {
 		if t.Failed() {
-			t.Logf("last projection wallet=%d used=%d token=%d requests=%d logs=%d", user.Quota, user.UsedQuota, token.RemainQuota, user.RequestCount, len(logs))
+			t.Logf("last projection user=%d token=%d channel=%d wallet=%d used=%d tokenRemain=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, user.Quota, user.UsedQuota, token.RemainQuota, user.RequestCount, len(logs))
 		}
 	}()
 	require.Eventually(t, func() bool {
-		if db.First(&user, id).Error != nil || db.First(&token, id).Error != nil || db.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).Find(&logs).Error != nil {
+		if db.First(&user, fixture.UserID).Error != nil || db.First(&token, fixture.TokenID).Error != nil || db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).Find(&logs).Error != nil {
 			return false
 		}
 		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && token.UsedQuota == int64(quota) && user.UsedQuota == int64(quota) && len(logs) == logCount
@@ -575,9 +584,9 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, pr
 		require.Equal(t, prompt, logs[0].PromptTokens)
 		require.Equal(t, completion, logs[0].CompletionTokens)
 		require.Equal(t, "gateway-audit", logs[0].ModelName)
-		require.Equal(t, id, logs[0].ChannelId)
+		require.Equal(t, fixture.ChannelID, logs[0].ChannelId)
 	}
-	t.Logf("independent ledger id=%d quota=%d wallet=%d token=%d requests=%d logs=%d", id, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
+	t.Logf("independent ledger user=%d token=%d channel=%d quota=%d wallet=%d tokenRemain=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
 }
 
 // gatewayUsageAssertWire checks the answer independently of usage, including

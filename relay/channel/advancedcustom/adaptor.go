@@ -333,7 +333,7 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		case "http":
 			parsedURL.Scheme = "ws"
 		}
-		if info.UpstreamModelName != "" {
+		if info.IsModelMapped && info.UpstreamModelName != "" {
 			query := parsedURL.Query()
 			query.Set("model", info.UpstreamModelName)
 			parsedURL.RawQuery = query.Encode()
