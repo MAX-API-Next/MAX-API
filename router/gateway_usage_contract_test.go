@@ -181,6 +181,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
 			id := 8200 + index
 			var hits atomic.Int32
+			streamAnswerSeen := make(chan struct{})
 			upstreamModels := make(chan string, 1)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits.Add(1)
@@ -205,9 +206,27 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}
 				if tc.stream {
 					w.Header().Set("Content-Type", "text/event-stream")
-				} else {
-					w.Header().Set("Content-Type", "application/json")
+					flusher, ok := w.(http.Flusher)
+					if !ok {
+						return
+					}
+					for frameIndex, frame := range strings.Split(tc.response, "\n\n") {
+						if frame == "" {
+							continue
+						}
+						_, _ = io.WriteString(w, frame+"\n\n")
+						flusher.Flush()
+						if frameIndex == 1 {
+							select {
+							case <-streamAnswerSeen:
+							case <-time.After(2 * time.Second):
+								return
+							}
+						}
+					}
+					return
 				}
+				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, tc.response)
 			}))
 			t.Cleanup(upstream.Close)
@@ -252,7 +271,44 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 			resp, err := client.Do(req)
 			require.NoError(t, err)
-			wire, err := io.ReadAll(resp.Body)
+			var wire []byte
+			if tc.stream {
+				readDone := make(chan struct{})
+				var answerSeen atomic.Bool
+				answerMarker := []byte("ok")
+				if tc.name == "stream_final_zero" {
+					answerMarker = []byte("visible")
+				}
+				go func() {
+					defer close(readDone)
+					var buffer bytes.Buffer
+					chunk := make([]byte, 1024)
+					for {
+						n, readErr := resp.Body.Read(chunk)
+						if n > 0 {
+							_, _ = buffer.Write(chunk[:n])
+							if !answerSeen.Load() && bytes.Contains(buffer.Bytes(), answerMarker) {
+								answerSeen.Store(true)
+								close(streamAnswerSeen)
+							}
+						}
+						if readErr != nil {
+							if readErr != io.EOF {
+								err = readErr
+							}
+							break
+						}
+					}
+					wire = buffer.Bytes()
+				}()
+				select {
+				case <-readDone:
+				case <-time.After(5 * time.Second):
+					t.Fatal("stream response did not finish")
+				}
+			} else {
+				wire, err = io.ReadAll(resp.Body)
+			}
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Name() == "mysql")

@@ -333,6 +333,11 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		case "http":
 			parsedURL.Scheme = "ws"
 		}
+		if info.UpstreamModelName != "" {
+			query := parsedURL.Query()
+			query.Set("model", info.UpstreamModelName)
+			parsedURL.RawQuery = query.Encode()
+		}
 	}
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
 		query := parsedURL.Query()
