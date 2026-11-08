@@ -32,6 +32,11 @@ func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	require.Equal(t, constant.TaskActionGenerate, info.Action)
 }
 
+func TestSetRawQueryParamReplacesMalformedKeyWithoutDroppingOthers(t *testing.T) {
+	got := SetRawQueryParam("api%zzkey=old&session=a;b", "api%zzkey", "new")
+	require.Equal(t, "api%zzkey=new&session=a;b", got)
+}
+
 func TestValidateMultipartDirectNormalizesInputReferenceField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := strings.NewReader(`{"model":"wan2.7-i2v","prompt":"animate","input_reference":" https://example.com/first.png "}`)

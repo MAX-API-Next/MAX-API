@@ -384,6 +384,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				return
 			}
 			defer func() { _ = ws.Close() }()
+			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 			_, _, err = ws.ReadMessage()
 			if err != nil {
 				return
@@ -414,6 +415,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}
 		require.NoError(t, err)
 		defer func() { _ = ws.Close() }()
+		require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
 		select {
 		case upstreamModel := <-upstreamModels:
 			require.Equal(t, "gpt-4", upstreamModel)
@@ -421,10 +423,20 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			t.Fatal("custom realtime upstream did not receive a model")
 		}
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
+		sawCompletion := false
 		for {
 			_, message, readErr := ws.ReadMessage()
 			require.NoError(t, readErr)
-			if gjson.GetBytes(message, "type").String() == "audit.barrier" {
+			eventType := gjson.GetBytes(message, "type").String()
+			if eventType == "response.done" {
+				require.Equal(t, "custom-one", gjson.GetBytes(message, "event_id").String())
+				require.Equal(t, "custom-response", gjson.GetBytes(message, "response.id").String())
+				require.EqualValues(t, 100, gjson.GetBytes(message, "response.usage.input_tokens").Int())
+				require.EqualValues(t, 20, gjson.GetBytes(message, "response.usage.output_tokens").Int())
+				sawCompletion = true
+			}
+			if eventType == "audit.barrier" {
+				require.True(t, sawCompletion, "Realtime completion event must be delivered before the barrier")
 				break
 			}
 		}

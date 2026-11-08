@@ -52,7 +52,11 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 			key = part[:separator]
 		}
 		decodedKey, err := url.QueryUnescape(key)
-		if err != nil || decodedKey != name {
+		if err != nil {
+			if key != name && key != encodedName {
+				continue
+			}
+		} else if decodedKey != name {
 			continue
 		}
 		parts[i] = key + "=" + encodedValue
