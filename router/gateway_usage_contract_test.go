@@ -305,6 +305,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 			if wantLogs == 1 && tc.audio {
 				require.JSONEq(t, gjson.Get(tc.response, "usage").Raw, gjson.GetBytes(wire, "usage").Raw)
+				require.Equal(t, gjson.Get(tc.response, "text").String(), gjson.GetBytes(wire, "text").String())
+			}
+			if wantLogs == 1 && tc.path == "/v1/images/generations" {
+				require.JSONEq(t, gjson.Get(tc.response, "data").Raw, gjson.GetBytes(wire, "data").Raw)
 			}
 		})
 	}
@@ -355,11 +359,13 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		require.NoError(t, ws.SetReadDeadline(time.Now().Add(10*time.Second)))
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
 		var doneEvents int
+		var identities [][2]string
 		for {
 			_, wire, err := ws.ReadMessage()
 			require.NoError(t, err)
 			if gjson.GetBytes(wire, "type").String() == "response.done" {
 				doneEvents++
+				identities = append(identities, [2]string{gjson.GetBytes(wire, "event_id").String(), gjson.GetBytes(wire, "response.id").String()})
 				require.EqualValues(t, 100, gjson.GetBytes(wire, "response.usage.input_tokens").Int())
 				require.EqualValues(t, 20, gjson.GetBytes(wire, "response.usage.output_tokens").Int())
 			}
@@ -368,6 +374,12 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 		}
 		require.Equal(t, 4, doneEvents, "all provider frames are forwarded; billing deduplicates only the repeated response identity")
+		require.Equal(t, [][2]string{
+			{"one", "same-response"},
+			{"replayed", "same-response"},
+			{"two", "second-response"},
+			{"replayed-again", "same-response"},
+		}, identities)
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
 		gatewayUsageAssertLedger(t, db, 8300, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
