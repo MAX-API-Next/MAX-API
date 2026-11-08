@@ -297,20 +297,14 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}
 			}
 			if wantLogs == 1 && !tc.audio && tc.path != "/v1/images/generations" {
-				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion)
+				answer := "ok"
+				if tc.channel == constant.ChannelTypeGemini || tc.name == "stream_final_zero" {
+					answer = "visible"
+				}
+				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion, answer)
 			}
 			if wantLogs == 1 && tc.audio {
 				require.JSONEq(t, gjson.Get(tc.response, "usage").Raw, gjson.GetBytes(wire, "usage").Raw)
-			}
-			if tc.name == "stream_final_zero" {
-				var contents []string
-				for _, line := range strings.Split(string(wire), "\n") {
-					if strings.HasPrefix(line, "data: ") {
-						contents = append(contents, gjson.Get(strings.TrimPrefix(line, "data: "), "choices.0.delta.content").String())
-					}
-				}
-				require.Contains(t, contents, "visible")
-				require.True(t, strings.HasSuffix(strings.TrimSpace(string(wire)), "data: [DONE]"))
 			}
 		})
 	}
@@ -330,15 +324,19 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if err != nil {
 				return
 			}
-			for _, eventID := range []string{"one", "replayed"} {
-				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"same-response","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`, eventID)
+			for _, event := range []struct{ eventID, responseID string }{
+				{"one", "same-response"},
+				{"replayed", "same-response"},
+				{"two", "second-response"},
+			} {
+				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"%s","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`, event.eventID, event.responseID)
 				if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
 					return
 				}
 			}
 			_ = ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.barrier"}`))
 			// Wait for receipt before normal upstream close, allowing the real
-			// gateway to collect both cumulative events and settle the session.
+			// gateway to collect all completed events and settle the session.
 			_, _, _ = ws.ReadMessage()
 			_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
 		}))
@@ -368,10 +366,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				break
 			}
 		}
-		require.Equal(t, 2, doneEvents, "both provider frames are forwarded; billing deduplicates their response identity")
+		require.Equal(t, 3, doneEvents, "all provider frames are forwarded; billing deduplicates only the repeated response identity")
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
-		gatewayUsageAssertLedger(t, db, 8300, 140, 1, 100, 20)
+		gatewayUsageAssertLedger(t, db, 8300, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
 		require.EqualValues(t, 1, hits.Load())
 	})
 }
@@ -499,24 +497,48 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, pr
 	t.Logf("independent ledger id=%d quota=%d wallet=%d token=%d requests=%d logs=%d", id, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
 }
 
-func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool, prompt, completion int) {
+// gatewayUsageAssertWire checks the answer independently of usage, including
+// payloads emitted before a final zero-usage event.
+func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool, prompt, completion int, answer string) {
 	t.Helper()
 	var usage gjson.Result
+	var text strings.Builder
 	if stream {
 		for _, line := range strings.Split(string(wire), "\n") {
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
 			candidate := gjson.Parse(strings.TrimPrefix(line, "data: "))
+			if path == "/v1/messages" {
+				text.WriteString(candidate.Get("content_block.text").String())
+				text.WriteString(candidate.Get("delta.text").String())
+			} else {
+				text.WriteString(candidate.Get("choices.0.delta.content").String())
+			}
 			if candidate.Get("usage").Exists() {
 				usage = candidate.Get("usage")
 			}
 		}
 	} else {
 		usage = gjson.GetBytes(wire, "usage")
+		switch path {
+		case "/v1/messages":
+			for _, block := range gjson.GetBytes(wire, "content").Array() {
+				text.WriteString(block.Get("text").String())
+			}
+		case "/v1/responses":
+			text.WriteString(gjson.GetBytes(wire, "output.0.content.0.text").String())
+		default:
+			text.WriteString(gjson.GetBytes(wire, "choices.0.message.content").String())
+		}
+	}
+	require.Equal(t, answer, text.String(), "client answer must survive independently of final usage")
+	if stream && path != "/v1/messages" {
+		require.True(t, strings.HasSuffix(strings.TrimSpace(string(wire)), "data: [DONE]"))
 	}
 	require.True(t, usage.Exists(), "client must receive final usage")
-	if path == "/v1/messages" {
+	switch path {
+	case "/v1/messages":
 		// This fixture has 60 cached tokens, included by OpenAI and excluded
 		// from Claude input_tokens. Its billed aggregate remains 100.
 		require.EqualValues(t, prompt-60, usage.Get("input_tokens").Int())
@@ -527,13 +549,13 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 		if stream {
 			require.Equal(t, 1, strings.Count(string(wire), "event: message_stop"))
 		}
-	} else if path == "/v1/responses" {
+	case "/v1/responses":
 		require.Equal(t, gjson.Number, usage.Get("input_tokens").Type)
 		require.Equal(t, gjson.Number, usage.Get("output_tokens").Type)
 		require.EqualValues(t, prompt, usage.Get("input_tokens").Int())
 		require.EqualValues(t, completion, usage.Get("output_tokens").Int())
 		require.EqualValues(t, prompt+completion, usage.Get("total_tokens").Int())
-	} else {
+	default:
 		require.Equal(t, gjson.Number, usage.Get("prompt_tokens").Type)
 		require.Equal(t, gjson.Number, usage.Get("completion_tokens").Type)
 		require.Equal(t, gjson.Number, usage.Get("total_tokens").Type)
