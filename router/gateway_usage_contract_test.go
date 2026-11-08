@@ -122,7 +122,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	if db.Dialector.Name() == "mysql" {
+	if db.Name() == "mysql" {
 		// The remote database has real network latency. Polling must not hold
 		// the only connection while the asynchronous projections need it.
 		sqlDB.SetMaxOpenConns(4)
@@ -136,7 +136,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	oldRedis, oldMemory, oldBatch, oldConsume := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
 	oldFloor, oldRetry := common.PreConsumedQuota, common.RetryTimes
 	model.DB, model.LOG_DB = db, db
-	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = db.Dialector.Name() == "sqlite", db.Dialector.Name() == "mysql", false
+	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = db.Name() == "sqlite", db.Name() == "mysql", false
 	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, false, true
 	common.PreConsumedQuota, common.RetryTimes = 500, 0
 	t.Cleanup(func() {
@@ -185,14 +185,15 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits.Add(1)
 				if tc.audio {
+					r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 					if r.ParseMultipartForm(1<<20) == nil {
-						upstreamModels <- r.FormValue("model")
+						gatewayUsageCaptureModel(upstreamModels, r.FormValue("model"))
 					}
 				} else if tc.channel == constant.ChannelTypeGemini {
-					upstreamModels <- r.URL.Path
+					gatewayUsageCaptureModel(upstreamModels, r.URL.Path)
 				} else {
 					body, _ := io.ReadAll(r.Body)
-					upstreamModels <- gjson.GetBytes(body, "model").String()
+					gatewayUsageCaptureModel(upstreamModels, gjson.GetBytes(body, "model").String())
 				}
 				if tc.changePrice {
 					if err := ratio_setting.UpdateModelRatioByJSONString(`{"gateway-audit":9}`); err != nil {
@@ -227,7 +228,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				// must parse the duration before reaching the simulated provider.
 				wav := make([]byte, 44+32000)
 				copy(wav, "RIFF")
-				binary.LittleEndian.PutUint32(wav[4:], uint32(len(wav)-8))
+				binary.LittleEndian.PutUint32(wav[4:], 36+32000)
 				copy(wav[8:], "WAVEfmt ")
 				binary.LittleEndian.PutUint32(wav[16:], 16)
 				binary.LittleEndian.PutUint16(wav[20:], 1)
@@ -243,7 +244,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				require.NoError(t, m.Close())
 				body, contentType = b.String(), m.FormDataContentType()
 			}
-			req, err := http.NewRequest(http.MethodPost, gateway.URL+tc.path, strings.NewReader(body))
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, gateway.URL+tc.path, strings.NewReader(body))
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", contentType)
 			if !tc.unauthorized {
@@ -254,7 +255,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			wire, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
-			gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Dialector.Name() == "mysql")
+			gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Name() == "mysql")
 			t.Logf("gateway status=%d request=%s wire=%s", resp.StatusCode, resp.Header.Get(common.RequestIdKey), wire)
 			if tc.unauthorized {
 				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -298,6 +299,19 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if wantLogs == 1 && !tc.audio && tc.path != "/v1/images/generations" {
 				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion)
 			}
+			if wantLogs == 1 && tc.audio {
+				require.JSONEq(t, gjson.Get(tc.response, "usage").Raw, gjson.GetBytes(wire, "usage").Raw)
+			}
+			if tc.name == "stream_final_zero" {
+				var contents []string
+				for _, line := range strings.Split(string(wire), "\n") {
+					if strings.HasPrefix(line, "data: ") {
+						contents = append(contents, gjson.Get(strings.TrimPrefix(line, "data: "), "choices.0.delta.content").String())
+					}
+				}
+				require.Contains(t, contents, "visible")
+				require.True(t, strings.HasSuffix(strings.TrimSpace(string(wire)), "data: [DONE]"))
+			}
 		})
 	}
 	t.Run("realtime_duplicate_response", func(t *testing.T) {
@@ -310,7 +324,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if err != nil {
 				return
 			}
-			defer ws.Close()
+			defer func() { _ = ws.Close() }()
 			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 			_, _, err = ws.ReadMessage() // client ready; no timing sleep
 			if err != nil {
@@ -335,10 +349,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		if err != nil && resp != nil {
 			wire, _ := io.ReadAll(resp.Body)
 			t.Logf("upgrade status=%d body=%s", resp.StatusCode, wire)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		require.NoError(t, err)
-		t.Cleanup(func() { ws.Close() })
+		t.Cleanup(func() { _ = ws.Close() })
 		require.NoError(t, ws.SetReadDeadline(time.Now().Add(10*time.Second)))
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
 		var doneEvents int
@@ -356,10 +370,40 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}
 		require.Equal(t, 2, doneEvents, "both provider frames are forwarded; billing deduplicates their response identity")
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
-		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Dialector.Name() == "mysql")
+		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
 		gatewayUsageAssertLedger(t, db, 8300, 140, 1, 100, 20)
 		require.EqualValues(t, 1, hits.Load())
 	})
+}
+
+// gatewayUsageCaptureModel records the first model without delaying forwarding.
+func gatewayUsageCaptureModel(models chan<- string, model string) {
+	select {
+	case models <- model:
+	default:
+	}
+}
+
+// An unexpected second forward must reach the hit-count assertion, not leave
+// httptest.Server.Close waiting on an abandoned model-capture send.
+func TestGatewayUsageModelCaptureDoesNotBlock(t *testing.T) {
+	models := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		gatewayUsageCaptureModel(models, "first")
+		gatewayUsageCaptureModel(models, "duplicate")
+		close(done)
+	}()
+	select {
+	case <-done:
+		require.Equal(t, "first", <-models)
+	case <-time.After(time.Second):
+		// Release an old blocking implementation even on the red run so the
+		// counterexample cannot strand a goroutine during test cleanup.
+		<-models
+		<-done
+		t.Fatal("model capture blocked on an unexpected duplicate")
+	}
 }
 
 func gatewayUsageWaitHandler(t *testing.T, completed <-chan string, auth string, external bool) {
@@ -424,7 +468,7 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, pr
 	var token model.Token
 	var logs []model.Log
 	wait, poll := 10*time.Second, 20*time.Millisecond
-	if db.Dialector.Name() == "mysql" {
+	if db.Name() == "mysql" {
 		wait, poll = 45*time.Second, 200*time.Millisecond
 	}
 	defer func() {
@@ -436,7 +480,7 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, pr
 		if db.First(&user, id).Error != nil || db.First(&token, id).Error != nil || db.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).Find(&logs).Error != nil {
 			return false
 		}
-		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && user.UsedQuota == int64(quota) && len(logs) == logCount
+		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && token.UsedQuota == int64(quota) && user.UsedQuota == int64(quota) && len(logs) == logCount
 	}, wait, poll, "wallet/token/logs must match independent quota %d", quota)
 	wantRequests := logCount
 	if quota == 0 {
