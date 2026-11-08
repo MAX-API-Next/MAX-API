@@ -1,0 +1,500 @@
+package router
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
+	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/middleware"
+	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting/ratio_setting"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
+	gormmysql "gorm.io/driver/mysql"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+)
+
+// These contracts enter the real router over loopback. They do not call an
+// adapter, price helper or settlement function to produce the observed result.
+// All quota expectations below are independent constants in quota units.
+func TestGatewayUsageContractSQLite(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), gatewayUsageGORMConfig())
+	require.NoError(t, err)
+	runGatewayUsageContract(t, db)
+}
+
+// External runs explicitly opt in, require an empty authorized disposable DB,
+// validate TLS and retain all synthetic rows for independent inspection.
+func TestGatewayUsageContractMySQL(t *testing.T) {
+	if os.Getenv("MAXAPI_GATEWAY_MYSQL") != "1" {
+		t.Skip("requires MAXAPI_GATEWAY_MYSQL=1 and dedicated test credentials")
+	}
+	cfg, err := mysqldriver.ParseDSN(os.Getenv("TEST_TASK_BILLING_MYSQL_DSN"))
+	if err != nil || cfg.DBName != "maxapi_task_billing_test_1" || cfg.AllowFallbackToPlaintext {
+		t.Fatal("invalid dedicated MySQL configuration (details withheld)")
+	}
+	pin, err := hex.DecodeString(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256"))
+	if err != nil || len(pin) != sha256.Size {
+		t.Fatal("requires a verified MySQL certificate pin")
+	}
+	cfg.TLS = &tls.Config{MinVersion: tls.VersionTLS12,
+		//nolint:gosec // The exact configured certificate is verified below.
+		InsecureSkipVerify: true,
+		VerifyConnection: func(s tls.ConnectionState) error {
+			if len(s.PeerCertificates) == 0 {
+				return fmt.Errorf("missing MySQL certificate")
+			}
+			actual := sha256.Sum256(s.PeerCertificates[0].Raw)
+			if !hmac.Equal(actual[:], pin) {
+				return fmt.Errorf("MySQL certificate mismatch")
+			}
+			return nil
+		},
+	}
+	cfg.ParseTime = true
+	cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = 5*time.Second, 15*time.Second, 15*time.Second
+	connector, err := mysqldriver.NewConnector(cfg)
+	if err != nil {
+		t.Fatal("MySQL connector unavailable (details withheld)")
+	}
+	conn := sql.OpenDB(connector)
+	t.Cleanup(func() { _ = conn.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var name string
+	var relations int
+	if err := conn.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&name); err != nil || name != cfg.DBName {
+		t.Fatal("MySQL identity check failed (details withheld)")
+	}
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()").Scan(&relations); err != nil || relations != 0 {
+		t.Fatal("MySQL must be a fresh empty dedicated database")
+	}
+	db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: conn}), gatewayUsageGORMConfig())
+	if err != nil {
+		t.Fatal("MySQL GORM initialization failed (details withheld)")
+	}
+	// The unique claim also rejects two harnesses which both observed an
+	// empty catalog before either created the test schema.
+	if err := db.AutoMigrate(&gatewayUsageTestOwnership{}); err != nil {
+		t.Fatal("MySQL fixture ownership migration failed")
+	}
+	if db.Create(&gatewayUsageTestOwnership{ID: 1}).Error != nil {
+		t.Fatal("MySQL fixture ownership could not be claimed")
+	}
+	runGatewayUsageContract(t, db)
+}
+
+type gatewayUsageTestOwnership struct {
+	ID int `gorm:"primaryKey;autoIncrement:false"`
+}
+
+func (gatewayUsageTestOwnership) TableName() string { return "gateway_usage_test_ownership" }
+
+func gatewayUsageGORMConfig() *gorm.Config {
+	return &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), DisableAutomaticPing: true}
+}
+
+func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	if db.Dialector.Name() == "mysql" {
+		// The remote database has real network latency. Polling must not hold
+		// the only connection while the asynchronous projections need it.
+		sqlDB.SetMaxOpenConns(4)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{},
+		&model.Log{}, &model.BillingLogReceipt{}, &model.BillingSettlement{}, &model.BillingPreConsumeSelection{},
+		&model.CacheInvalidationTask{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.SubscriptionPlan{}))
+	oldDB, oldLog := model.DB, model.LOG_DB
+	oldSQLite, oldMySQL, oldPG := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
+	oldRedis, oldMemory, oldBatch, oldConsume := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
+	oldFloor, oldRetry := common.PreConsumedQuota, common.RetryTimes
+	model.DB, model.LOG_DB = db, db
+	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = db.Dialector.Name() == "sqlite", db.Dialector.Name() == "mysql", false
+	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false, false, true
+	common.PreConsumedQuota, common.RetryTimes = 500, 0
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLog
+		common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = oldSQLite, oldMySQL, oldPG
+		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = oldRedis, oldMemory, oldBatch, oldConsume
+		common.PreConsumedQuota, common.RetryTimes = oldFloor, oldRetry
+	})
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(middleware.RequestId())
+	SetRelayRouter(engine)
+	completed := make(chan string, 32)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		engine.ServeHTTP(w, r)
+		completed <- r.Header.Get("Authorization")
+	}))
+	t.Cleanup(gateway.Close)
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	for index, tc := range []struct {
+		name, path, body, response                        string
+		channel, quota, prompt, completion                int
+		stream, unauthorized, failure, changePrice, audio bool
+	}{
+		{"native_json", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
+		{"claude_json", "/v1/messages", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
+		{"claude_stream_late_usage", "/v1/messages", "", gatewayChatStream, constant.ChannelTypeOpenAI, 86, 100, 20, true, false, false, false, false},
+		{"stream_final_zero", "/v1/chat/completions", "", gatewayZeroStream, constant.ChannelTypeOpenAI, 0, 0, 0, true, false, false, false, false},
+		{"private_evidence_rejected", "/v1/chat/completions", "", strings.Replace(gatewayChatJSON, `"usage":{`, `"usage":{"billing_usage":{"input_tokens":0,"output_tokens":0},"usage_semantic":"claude","usage_source":"injected",`, 1), constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
+		{"frozen_price", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, true, false},
+		{"gemini_reported_zero", "/v1/chat/completions", "", `{"candidates":[{"content":{"role":"model","parts":[{"text":"visible"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}`, constant.ChannelTypeGemini, 7, 7, 0, false, false, false, false, false},
+		{"responses_native", "/v1/responses", `{"model":"gateway-audit","input":"hi","max_output_tokens":20}`, `{"id":"resp_gateway","object":"response","status":"completed","model":"gpt-4","output":[{"type":"message","id":"msg_gateway","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}}`, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
+		{"image_partial_success", "/v1/images/generations", `{"model":"gateway-audit","prompt":"synthetic","n":3}`, `{"data":[{"b64_json":"YQ=="},{"b64_json":"Yg=="}]}`, constant.ChannelTypeOpenAI, 1000, 1, 0, false, false, false, false, false},
+		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, 340, 100, 0, false, false, false, false, true},
+		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 0, 0, 0, false, true, false, false, false},
+		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, 0, 0, 0, false, false, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
+			id := 8200 + index
+			var hits atomic.Int32
+			upstreamModels := make(chan string, 1)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				if tc.audio {
+					if r.ParseMultipartForm(1<<20) == nil {
+						upstreamModels <- r.FormValue("model")
+					}
+				} else if tc.channel == constant.ChannelTypeGemini {
+					upstreamModels <- r.URL.Path
+				} else {
+					body, _ := io.ReadAll(r.Body)
+					upstreamModels <- gjson.GetBytes(body, "model").String()
+				}
+				if tc.changePrice {
+					if err := ratio_setting.UpdateModelRatioByJSONString(`{"gateway-audit":9}`); err != nil {
+						panic(err)
+					}
+				}
+				if tc.failure {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}
+				if tc.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			t.Cleanup(upstream.Close)
+			gatewayUsageSeed(t, db, id, upstream.URL, tc.channel)
+			body := tc.body
+			if body == "" {
+				body = fmt.Sprintf(`{"model":"gateway-audit","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"stream":%t,"stream_options":{"include_usage":true}}`, tc.stream)
+			}
+			contentType := "application/json"
+			if tc.audio {
+				var b bytes.Buffer
+				m := multipart.NewWriter(&b)
+				require.NoError(t, m.WriteField("model", "gateway-audit"))
+				require.NoError(t, m.WriteField("response_format", "json"))
+				part, err := m.CreateFormFile("file", "synthetic.wav")
+				require.NoError(t, err)
+				// One second of 16 kHz mono PCM silence; real request validation
+				// must parse the duration before reaching the simulated provider.
+				wav := make([]byte, 44+32000)
+				copy(wav, "RIFF")
+				binary.LittleEndian.PutUint32(wav[4:], uint32(len(wav)-8))
+				copy(wav[8:], "WAVEfmt ")
+				binary.LittleEndian.PutUint32(wav[16:], 16)
+				binary.LittleEndian.PutUint16(wav[20:], 1)
+				binary.LittleEndian.PutUint16(wav[22:], 1)
+				binary.LittleEndian.PutUint32(wav[24:], 16000)
+				binary.LittleEndian.PutUint32(wav[28:], 32000)
+				binary.LittleEndian.PutUint16(wav[32:], 2)
+				binary.LittleEndian.PutUint16(wav[34:], 16)
+				copy(wav[36:], "data")
+				binary.LittleEndian.PutUint32(wav[40:], 32000)
+				_, err = part.Write(wav)
+				require.NoError(t, err)
+				require.NoError(t, m.Close())
+				body, contentType = b.String(), m.FormDataContentType()
+			}
+			req, err := http.NewRequest(http.MethodPost, gateway.URL+tc.path, strings.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", contentType)
+			if !tc.unauthorized {
+				req.Header.Set("Authorization", fmt.Sprintf("Bearer gatewayfixture%d", id))
+			}
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			wire, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Dialector.Name() == "mysql")
+			t.Logf("gateway status=%d request=%s wire=%s", resp.StatusCode, resp.Header.Get(common.RequestIdKey), wire)
+			if tc.unauthorized {
+				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+				require.Zero(t, hits.Load())
+			} else if tc.failure {
+				require.GreaterOrEqual(t, resp.StatusCode, 400)
+				require.EqualValues(t, 1, hits.Load())
+			} else {
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				require.EqualValues(t, 1, hits.Load())
+			}
+			if !tc.unauthorized {
+				select {
+				case upstreamModel := <-upstreamModels:
+					if tc.channel == constant.ChannelTypeGemini {
+						require.Contains(t, upstreamModel, "/models/gpt-4:")
+					} else {
+						require.Equal(t, "gpt-4", upstreamModel, "upstream receives mapped model; ledger retains origin")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("simulated upstream did not capture a model")
+				}
+			}
+			wantLogs := 1
+			if tc.unauthorized || tc.failure {
+				wantLogs = 0
+			}
+			gatewayUsageAssertLedger(t, db, id, tc.quota, wantLogs, tc.prompt, tc.completion)
+			if wantLogs == 1 {
+				var log model.Log
+				require.NoError(t, db.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).First(&log).Error)
+				require.Equal(t, resp.Header.Get(common.RequestIdKey), log.RequestId)
+				require.NotEmpty(t, log.RequestId)
+				require.Equal(t, id, log.TokenId)
+				require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
+				require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
+				if tc.path == "/v1/images/generations" {
+					require.EqualValues(t, 2, gjson.Get(log.Other, "image_count").Int())
+				}
+			}
+			if wantLogs == 1 && !tc.audio && tc.path != "/v1/images/generations" {
+				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion)
+			}
+		})
+	}
+	t.Run("realtime_duplicate_response", func(t *testing.T) {
+		gatewayUsagePrices(t, false)
+		var hits atomic.Int32
+		upgrader := websocket.Upgrader{}
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.Close()
+			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, _, err = ws.ReadMessage() // client ready; no timing sleep
+			if err != nil {
+				return
+			}
+			for _, eventID := range []string{"one", "replayed"} {
+				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"same-response","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`, eventID)
+				if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
+					return
+				}
+			}
+			_ = ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.barrier"}`))
+			// Wait for receipt before normal upstream close, allowing the real
+			// gateway to collect both cumulative events and settle the session.
+			_, _, _ = ws.ReadMessage()
+			_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"), time.Now().Add(time.Second))
+		}))
+		t.Cleanup(upstream.Close)
+		gatewayUsageSeed(t, db, 8300, upstream.URL, constant.ChannelTypeOpenAI)
+		headers := http.Header{"Authorization": []string{"Bearer gatewayfixture8300"}}
+		ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/realtime?model=gateway-audit", headers)
+		if err != nil && resp != nil {
+			wire, _ := io.ReadAll(resp.Body)
+			t.Logf("upgrade status=%d body=%s", resp.StatusCode, wire)
+			resp.Body.Close()
+		}
+		require.NoError(t, err)
+		t.Cleanup(func() { ws.Close() })
+		require.NoError(t, ws.SetReadDeadline(time.Now().Add(10*time.Second)))
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
+		var doneEvents int
+		for {
+			_, wire, err := ws.ReadMessage()
+			require.NoError(t, err)
+			if gjson.GetBytes(wire, "type").String() == "response.done" {
+				doneEvents++
+				require.EqualValues(t, 100, gjson.GetBytes(wire, "response.usage.input_tokens").Int())
+				require.EqualValues(t, 20, gjson.GetBytes(wire, "response.usage.output_tokens").Int())
+			}
+			if gjson.GetBytes(wire, "type").String() == "audit.barrier" {
+				break
+			}
+		}
+		require.Equal(t, 2, doneEvents, "both provider frames are forwarded; billing deduplicates their response identity")
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
+		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Dialector.Name() == "mysql")
+		gatewayUsageAssertLedger(t, db, 8300, 140, 1, 100, 20)
+		require.EqualValues(t, 1, hits.Load())
+	})
+}
+
+func gatewayUsageWaitHandler(t *testing.T, completed <-chan string, auth string, external bool) {
+	t.Helper()
+	wait := 10 * time.Second
+	if external {
+		wait = 45 * time.Second
+	}
+	select {
+	case actual := <-completed:
+		require.Equal(t, auth, actual, "wait for this request, not only the flushed response")
+	case <-time.After(wait):
+		t.Fatal("gateway handler has not completed settlement")
+	}
+}
+
+const gatewayChatJSON = `{"id":"chatcmpl-gateway","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60}}}`
+const gatewayChatStream = "data: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\ndata: [DONE]\n\n"
+const gatewayZeroStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"visible\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\ndata: [DONE]\n\n"
+
+func gatewayUsagePrices(t *testing.T, image bool) {
+	t.Helper()
+	for _, pair := range []struct {
+		get   func() string
+		set   func(string) error
+		value string
+	}{
+		{ratio_setting.ModelRatio2JSONString, ratio_setting.UpdateModelRatioByJSONString, `{"gateway-audit":1}`},
+		{ratio_setting.CompletionRatio2JSONString, ratio_setting.UpdateCompletionRatioByJSONString, `{"gateway-audit":2}`},
+		{ratio_setting.CacheRatio2JSONString, ratio_setting.UpdateCacheRatioByJSONString, `{"gateway-audit":0.1}`},
+		{ratio_setting.AudioRatio2JSONString, ratio_setting.UpdateAudioRatioByJSONString, `{"gateway-audit":4}`},
+		{ratio_setting.AudioCompletionRatio2JSONString, ratio_setting.UpdateAudioCompletionRatioByJSONString, `{"gateway-audit":3}`},
+		{ratio_setting.ModelPrice2JSONString, ratio_setting.UpdateModelPriceByJSONString, `{}`},
+		{ratio_setting.GroupRatio2JSONString, ratio_setting.UpdateGroupRatioByJSONString, `{"default":1}`},
+	} {
+		old, set := pair.get(), pair.set
+		t.Cleanup(func() { require.NoError(t, set(old)) })
+		require.NoError(t, set(pair.value))
+	}
+	if image {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"gateway-audit":0.001}`))
+	}
+}
+
+func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.User{Id: id, Username: fmt.Sprintf("gateway%d", id), Quota: 10000, Group: "default", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AffCode: fmt.Sprintf("gw%d", id)}).Error)
+	require.NoError(t, db.Create(&model.Token{Id: id, UserId: id, Key: fmt.Sprintf("gatewayfixture%d", id), Status: common.TokenStatusEnabled, RemainQuota: 10000, ExpiredTime: -1}).Error)
+	mapping := `{"gateway-audit":"gpt-4"}`
+	require.NoError(t, db.Create(&model.Channel{Id: id, Type: channelType, Key: "synthetic", Name: fmt.Sprintf("gateway%d", id), Status: common.ChannelStatusEnabled, Models: "gateway-audit", Group: "default", BaseURL: &base, ModelMapping: &mapping, AutoBan: common.GetPointer(0)}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gateway-audit", ChannelId: id, Enabled: true}).Error)
+	t.Cleanup(func() {
+		// Retain audit rows but remove each finished fixture from routing before
+		// the next case, whose upstream server and channel type are different.
+		require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", id).Update("enabled", false).Error)
+	})
+}
+
+func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, id, quota, logCount, prompt, completion int) {
+	t.Helper()
+	var user model.User
+	var token model.Token
+	var logs []model.Log
+	wait, poll := 10*time.Second, 20*time.Millisecond
+	if db.Dialector.Name() == "mysql" {
+		wait, poll = 45*time.Second, 200*time.Millisecond
+	}
+	defer func() {
+		if t.Failed() {
+			t.Logf("last projection wallet=%d used=%d token=%d requests=%d logs=%d", user.Quota, user.UsedQuota, token.RemainQuota, user.RequestCount, len(logs))
+		}
+	}()
+	require.Eventually(t, func() bool {
+		if db.First(&user, id).Error != nil || db.First(&token, id).Error != nil || db.Where("user_id = ? AND type = ?", id, model.LogTypeConsume).Find(&logs).Error != nil {
+			return false
+		}
+		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && user.UsedQuota == int64(quota) && len(logs) == logCount
+	}, wait, poll, "wallet/token/logs must match independent quota %d", quota)
+	wantRequests := logCount
+	if quota == 0 {
+		// Existing text settlement records a zero consume log but does not
+		// increment the billable request counter. This is not a paid request.
+		wantRequests = 0
+	}
+	require.Equal(t, wantRequests, user.RequestCount)
+	if logCount == 1 {
+		require.Equal(t, quota, logs[0].Quota)
+		require.Equal(t, prompt, logs[0].PromptTokens)
+		require.Equal(t, completion, logs[0].CompletionTokens)
+		require.Equal(t, "gateway-audit", logs[0].ModelName)
+		require.Equal(t, id, logs[0].ChannelId)
+	}
+	t.Logf("independent ledger id=%d quota=%d wallet=%d token=%d requests=%d logs=%d", id, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
+}
+
+func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool, prompt, completion int) {
+	t.Helper()
+	var usage gjson.Result
+	if stream {
+		for _, line := range strings.Split(string(wire), "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			candidate := gjson.Parse(strings.TrimPrefix(line, "data: "))
+			if candidate.Get("usage").Exists() {
+				usage = candidate.Get("usage")
+			}
+		}
+	} else {
+		usage = gjson.GetBytes(wire, "usage")
+	}
+	require.True(t, usage.Exists(), "client must receive final usage")
+	if path == "/v1/messages" {
+		// This fixture has 60 cached tokens, included by OpenAI and excluded
+		// from Claude input_tokens. Its billed aggregate remains 100.
+		require.EqualValues(t, prompt-60, usage.Get("input_tokens").Int())
+		require.EqualValues(t, 60, usage.Get("cache_read_input_tokens").Int())
+		require.EqualValues(t, completion, usage.Get("output_tokens").Int())
+		require.Equal(t, gjson.Number, usage.Get("input_tokens").Type)
+		require.Equal(t, gjson.Number, usage.Get("output_tokens").Type)
+		if stream {
+			require.Equal(t, 1, strings.Count(string(wire), "event: message_stop"))
+		}
+	} else if path == "/v1/responses" {
+		require.Equal(t, gjson.Number, usage.Get("input_tokens").Type)
+		require.Equal(t, gjson.Number, usage.Get("output_tokens").Type)
+		require.EqualValues(t, prompt, usage.Get("input_tokens").Int())
+		require.EqualValues(t, completion, usage.Get("output_tokens").Int())
+		require.EqualValues(t, prompt+completion, usage.Get("total_tokens").Int())
+	} else {
+		require.Equal(t, gjson.Number, usage.Get("prompt_tokens").Type)
+		require.Equal(t, gjson.Number, usage.Get("completion_tokens").Type)
+		require.Equal(t, gjson.Number, usage.Get("total_tokens").Type)
+		require.EqualValues(t, prompt, usage.Get("prompt_tokens").Int())
+		require.EqualValues(t, completion, usage.Get("completion_tokens").Int())
+		require.EqualValues(t, prompt+completion, usage.Get("total_tokens").Int())
+	}
+}
