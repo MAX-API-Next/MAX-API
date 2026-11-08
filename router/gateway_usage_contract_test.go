@@ -387,6 +387,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
 		gatewayUsageAssertLedger(t, db, 8300, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
+		var log model.Log
+		require.NoError(t, db.Where("user_id = ? AND type = ?", 8300, model.LogTypeConsume).First(&log).Error)
+		require.Equal(t, 8300, log.TokenId)
+		require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
+		require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 		require.EqualValues(t, 1, hits.Load())
 	})
 }
@@ -411,7 +416,12 @@ func TestGatewayUsageModelCaptureDoesNotBlock(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		require.Equal(t, "first", <-models)
+		select {
+		case model := <-models:
+			require.Equal(t, "first", model)
+		default:
+			t.Fatal("model capture did not record a model")
+		}
 	case <-time.After(time.Second):
 		// Release an old blocking implementation even on the red run so the
 		// counterexample cannot strand a goroutine during test cleanup.

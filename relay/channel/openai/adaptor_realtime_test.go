@@ -54,3 +54,30 @@ func TestRealtimeBetaHeaderOnlyForPreviewModels(t *testing.T) {
 		})
 	}
 }
+
+func TestRealtimeRequestURLAlwaysUsesMappedModel(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "supplied client model", path: "/v1/realtime?model=client-alias&foo=bar", want: "ws://upstream.example/v1/realtime?foo=bar&model=gpt-4"},
+		{name: "model omitted", path: "/v1/realtime", want: "ws://upstream.example/v1/realtime?model=gpt-4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				RelayMode:      relayconstant.RelayModeRealtime,
+				RequestURLPath: tt.path,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelType:       constant.ChannelTypeOpenAI,
+					ChannelBaseUrl:    "http://upstream.example",
+					UpstreamModelName: "gpt-4",
+				},
+			}
+			got, err := (&Adaptor{}).GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
