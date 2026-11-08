@@ -328,6 +328,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				{"one", "same-response"},
 				{"replayed", "same-response"},
 				{"two", "second-response"},
+				{"replayed-again", "same-response"},
 			} {
 				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"%s","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`, event.eventID, event.responseID)
 				if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
@@ -366,7 +367,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				break
 			}
 		}
-		require.Equal(t, 3, doneEvents, "all provider frames are forwarded; billing deduplicates only the repeated response identity")
+		require.Equal(t, 4, doneEvents, "all provider frames are forwarded; billing deduplicates only the repeated response identity")
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
 		gatewayUsageAssertLedger(t, db, 8300, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
