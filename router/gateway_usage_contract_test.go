@@ -22,6 +22,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/middleware"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -288,7 +289,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 						n, readErr := resp.Body.Read(chunk)
 						if n > 0 {
 							_, _ = buffer.Write(chunk[:n])
-							if !answerSeen.Load() && bytes.Contains(buffer.Bytes(), answerMarker) {
+							if !answerSeen.Load() && gatewayUsageStreamAnswerDelivered(buffer.Bytes(), tc.path, answerMarker) {
 								answerSeen.Store(true)
 								close(streamAnswerSeen)
 							}
@@ -358,6 +359,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				if tc.channel == constant.ChannelTypeGemini || tc.name == "stream_final_zero" {
 					answer = "visible"
 				}
+				if tc.name == "claude_stream_late_usage" || tc.name == "stream_final_zero" {
+					answer += "!"
+				}
 				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion, answer)
 			}
 			if wantLogs == 1 && tc.audio {
@@ -369,6 +373,72 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 		})
 	}
+	t.Run("realtime_advanced_custom_mapping", func(t *testing.T) {
+		gatewayUsagePrices(t, false)
+		upstreamModels := make(chan string, 1)
+		upgrader := websocket.Upgrader{}
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gatewayUsageCaptureModel(upstreamModels, r.URL.Query().Get("model"))
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer func() { _ = ws.Close() }()
+			_, _, err = ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			frame := `{"type":"response.done","event_id":"custom-one","response":{"id":"custom-response","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`
+			if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
+				return
+			}
+			if ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.barrier"}`)) != nil {
+				return
+			}
+			_, _, _ = ws.ReadMessage()
+		}))
+		t.Cleanup(upstream.Close)
+		fixture := gatewayUsageSeed(t, db, 8400, upstream.URL, constant.ChannelTypeAdvancedCustom)
+		settings := dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: upstream.URL + "/v1/realtime?model=fixed-model",
+			Converter:    dto.AdvancedCustomConverterNone,
+		}}}}
+		settingsBytes, err := common.Marshal(settings)
+		require.NoError(t, err)
+		require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", fixture.ChannelID).Update("settings", string(settingsBytes)).Error)
+		headers := http.Header{"Authorization": []string{"Bearer gatewayfixture8400"}}
+		ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/realtime?model=gateway-audit", headers)
+		if err != nil && resp != nil {
+			_ = resp.Body.Close()
+		}
+		require.NoError(t, err)
+		defer func() { _ = ws.Close() }()
+		select {
+		case upstreamModel := <-upstreamModels:
+			require.Equal(t, "gpt-4", upstreamModel)
+		case <-time.After(time.Second):
+			t.Fatal("custom realtime upstream did not receive a model")
+		}
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
+		for {
+			_, message, readErr := ws.ReadMessage()
+			require.NoError(t, readErr)
+			if gjson.GetBytes(message, "type").String() == "audit.barrier" {
+				break
+			}
+		}
+		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
+		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8400", db.Name() == "mysql")
+		gatewayUsageAssertLedger(t, db, fixture, 140, 1, 100, 20)
+		var log model.Log
+		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
+		require.Equal(t, fixture.TokenID, log.TokenId)
+		require.Equal(t, fixture.ChannelID, log.ChannelId)
+		require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
+		require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
+	})
+
 	t.Run("realtime_duplicate_response", func(t *testing.T) {
 		gatewayUsagePrices(t, false)
 		var hits atomic.Int32
@@ -503,8 +573,8 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan string, auth string,
 }
 
 const gatewayChatJSON = `{"id":"chatcmpl-gateway","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60}}}`
-const gatewayChatStream = "data: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\ndata: [DONE]\n\n"
-const gatewayZeroStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"visible\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\ndata: [DONE]\n\n"
+const gatewayChatStream = "data: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\ndata: [DONE]\n\n"
+const gatewayZeroStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"visible\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\ndata: [DONE]\n\n"
 
 func gatewayUsagePrices(t *testing.T, image bool) {
 	t.Helper()
@@ -587,6 +657,22 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 		require.Equal(t, fixture.ChannelID, logs[0].ChannelId)
 	}
 	t.Logf("independent ledger user=%d token=%d channel=%d quota=%d wallet=%d tokenRemain=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
+}
+
+func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) bool {
+	if path != "/v1/messages" {
+		return bytes.Contains(wire, marker)
+	}
+	var text strings.Builder
+	for _, line := range strings.Split(string(wire), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		candidate := gjson.Parse(strings.TrimPrefix(line, "data: "))
+		text.WriteString(candidate.Get("content_block.text").String())
+		text.WriteString(candidate.Get("delta.text").String())
+	}
+	return strings.Contains(text.String(), string(marker))
 }
 
 // gatewayUsageAssertWire checks the answer independently of usage, including

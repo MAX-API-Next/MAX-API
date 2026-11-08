@@ -23,7 +23,7 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 		Routes: []dto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
-				UpstreamPath: "https://upstream.example/v1/chat/completions?existing=1",
+				UpstreamPath: "https://upstream.example/v1/chat/completions?existing=a;b",
 				Converter:    dto.AdvancedCustomConverterAnthropicMessagesToOpenAIChatCompletions,
 				Auth: &dto.AdvancedCustomRouteAuth{
 					Type:  dto.AdvancedCustomAuthTypeQuery,
@@ -43,7 +43,7 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 	assert.Equal(t, "https", parsedURL.Scheme)
 	assert.Equal(t, "upstream.example", parsedURL.Host)
 	assert.Equal(t, "/v1/chat/completions", parsedURL.Path)
-	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+	assert.Contains(t, parsedURL.RawQuery, "existing=a;b")
 	assert.Equal(t, "sk-test", parsedURL.Query().Get("api_key"))
 }
 
@@ -256,6 +256,8 @@ func TestRealtimeRoutePreservesPinnedModelWithoutMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fixed-model", parsedURL.Query().Get("model"))
 	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+	assert.True(t, info.IsModelMapped)
+	assert.Equal(t, "fixed-model", info.UpstreamModelName)
 }
 
 func TestAdaptorSwitchesGeminiGenerateContentURLForStream(t *testing.T) {

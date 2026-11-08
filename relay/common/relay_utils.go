@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,36 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 		}
 	}
 	return fullRequestURL
+}
+
+// SetRawQueryParam replaces all occurrences of a query parameter while
+// preserving unrelated raw query components verbatim. url.Values parsing
+// rejects some provider-valid values (for example unescaped semicolons), so
+// model and auth rewrites must not round-trip the whole query through it.
+func SetRawQueryParam(rawQuery, name, value string) string {
+	encodedName := url.QueryEscape(name)
+	encodedValue := url.QueryEscape(value)
+	parts := strings.Split(rawQuery, "&")
+	found := false
+	for i, part := range parts {
+		key := part
+		if separator := strings.IndexByte(part, '='); separator >= 0 {
+			key = part[:separator]
+		}
+		decodedKey, err := url.QueryUnescape(key)
+		if err != nil || decodedKey != name {
+			continue
+		}
+		parts[i] = key + "=" + encodedValue
+		found = true
+	}
+	if !found {
+		if rawQuery == "" {
+			return encodedName + "=" + encodedValue
+		}
+		return rawQuery + "&" + encodedName + "=" + encodedValue
+	}
+	return strings.Join(parts, "&")
 }
 
 func GetAPIVersion(c *gin.Context) string {

@@ -61,7 +61,7 @@ func TestRealtimeRequestURLAlwaysUsesMappedModel(t *testing.T) {
 		path string
 		want string
 	}{
-		{name: "supplied client model", path: "/v1/realtime?model=client-alias&foo=bar", want: "ws://upstream.example/v1/realtime?foo=bar&model=gpt-4"},
+		{name: "supplied client model", path: "/v1/realtime?model=client-alias&foo=bar", want: "ws://upstream.example/v1/realtime?model=gpt-4&foo=bar"},
 		{name: "model omitted", path: "/v1/realtime", want: "ws://upstream.example/v1/realtime?model=gpt-4"},
 	}
 	for _, tt := range tests {
@@ -80,4 +80,21 @@ func TestRealtimeRequestURLAlwaysUsesMappedModel(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRealtimeRequestURLPreservesRawQueryComponents(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:      relayconstant.RelayModeRealtime,
+		RequestURLPath: "/v1/realtime?model=client-alias&session=a;b&opaque=x%2Fy",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "http://upstream.example",
+			UpstreamModelName: "gpt-4",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Contains(t, requestURL, "model=gpt-4")
+	assert.Contains(t, requestURL, "session=a;b")
+	assert.Contains(t, requestURL, "opaque=x%2Fy")
 }
