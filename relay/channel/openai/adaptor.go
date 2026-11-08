@@ -168,7 +168,20 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			info.RelayMode != relayconstant.RelayModeResponsesCompact {
 			return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 		}
-		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, info.RequestURLPath, info.ChannelType), nil
+		requestPath := info.RequestURLPath
+		if info.RelayMode == relayconstant.RelayModeRealtime && info.UpstreamModelName != "" {
+			parsed, err := url.Parse(requestPath)
+			if err != nil {
+				return "", fmt.Errorf("parse realtime request URL: %w", err)
+			}
+			query := parsed.Query()
+			if query.Get("model") != "" {
+				query.Set("model", info.UpstreamModelName)
+				parsed.RawQuery = query.Encode()
+				requestPath = parsed.String()
+			}
+		}
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestPath, info.ChannelType), nil
 	}
 }
 

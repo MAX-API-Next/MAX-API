@@ -318,6 +318,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
+			require.Equal(t, "gpt-4", r.URL.Query().Get("model"), "Realtime upstream must receive mapped model")
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -347,6 +348,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}))
 		t.Cleanup(upstream.Close)
 		gatewayUsageSeed(t, db, 8300, upstream.URL, constant.ChannelTypeOpenAI)
+		var seededChannel model.Channel
+		require.NoError(t, db.First(&seededChannel, 8300).Error)
+		require.Equal(t, `{"gateway-audit":"gpt-4"}`, seededChannel.GetModelMapping())
 		headers := http.Header{"Authorization": []string{"Bearer gatewayfixture8300"}}
 		ws, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(gateway.URL, "http")+"/v1/realtime?model=gateway-audit", headers)
 		if err != nil && resp != nil {
