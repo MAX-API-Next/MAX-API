@@ -348,7 +348,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
-			gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Name() == "mysql")
+			requestID := gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Name() == "mysql")
 			t.Logf("gateway status=%d request=%s wire=%s", resp.StatusCode, resp.Header.Get(common.RequestIdKey), wire)
 			if tc.unauthorized {
 				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -398,6 +398,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}
 			}
 			if tc.name == "upstream_failure_refund" {
+				gatewayUsageAssertRefundEffectComplete(t, db, requestID)
 				finalizeKey := model.BillingRequestFinalizeOperationKey(resp.Header.Get(common.RequestIdKey))
 				var settlement model.BillingSettlement
 				require.NoError(t, db.Where("operation_key = ? AND user_id = ? AND token_id = ? AND status = ?", finalizeKey, fixture.UserID, fixture.TokenID, model.BillingSettlementStatusApplied).First(&settlement).Error)
@@ -429,6 +430,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
 			require.Equal(t, "/v1/realtime", r.URL.Path)
+			require.Equal(t, "custom", r.URL.Query().Get("route"))
 			models := r.URL.Query()["model"]
 			require.NotEmpty(t, models)
 			for _, modelName := range models {
@@ -463,7 +465,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		fixture := gatewayUsageSeed(t, db, 8400, upstream.URL, constant.ChannelTypeAdvancedCustom)
 		settings := dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
 			IncomingPath: "/v1/realtime",
-			UpstreamPath: upstream.URL + "/v1/realtime?model=fixed-model",
+			UpstreamPath: upstream.URL + "/v1/realtime?model=fixed-model&route=custom",
 			Converter:    dto.AdvancedCustomConverterNone,
 		}}}}
 		settingsBytes, err := common.Marshal(settings)
@@ -665,6 +667,19 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, a
 	}
 }
 
+func gatewayUsageAssertRefundEffectComplete(t *testing.T, db *gorm.DB, requestID string) {
+	t.Helper()
+	finalizeKey := model.BillingRequestFinalizeOperationKey(requestID)
+	require.Eventually(t, func() bool {
+		var settlement model.BillingSettlement
+		if db.Where("operation_key = ?", finalizeKey).First(&settlement).Error != nil {
+			return false
+		}
+		return settlement.Status == model.BillingSettlementStatusApplied &&
+			(settlement.EffectPayload == "" || settlement.EffectStatus == model.BillingSettlementEffectApplied)
+	}, 10*time.Second, 20*time.Millisecond, "refund settlement effect must be complete before asserting zero consume logs")
+}
+
 const gatewayChatJSON = `{"id":"chatcmpl-gateway","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60}}}`
 const gatewayChatStream = "data: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\ndata: [DONE]\n\n"
 const gatewayZeroStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"visible\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\ndata: [DONE]\n\n"
@@ -759,7 +774,7 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 }
 
 func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) bool {
-	events := gatewayUsageCompleteSSEData(wire)
+	events := gatewayUsageCompleteSSEPrefixData(wire)
 	var text strings.Builder
 	for _, data := range events {
 		if data == "[DONE]" {
@@ -782,13 +797,33 @@ type gatewaySSEEvent struct {
 }
 
 func gatewayUsageCompleteSSEEvents(wire []byte) []gatewaySSEEvent {
-	normalized := strings.ReplaceAll(string(wire), "\r\n", "\n")
-	if !strings.HasSuffix(normalized, "\n\n") {
+	if !strings.HasSuffix(strings.ReplaceAll(string(wire), "\r\n", "\n"), "\n\n") {
 		return nil
 	}
+	return gatewayUsageParseSSEEvents(wire)
+}
+
+func gatewayUsageCompleteSSEPrefixData(wire []byte) []string {
+	events := gatewayUsageParseSSEEvents(wire)
+	data := make([]string, 0, len(events))
+	for _, event := range events {
+		data = append(data, event.data)
+	}
+	return data
+}
+
+func gatewayUsageParseSSEEvents(wire []byte) []gatewaySSEEvent {
+	normalized := strings.ReplaceAll(string(wire), "\r\n", "\n")
 	blocks := strings.Split(normalized, "\n\n")
+	limit := len(blocks)
+	if !strings.HasSuffix(normalized, "\n\n") {
+		limit--
+	}
+	if limit <= 0 {
+		return nil
+	}
 	events := make([]gatewaySSEEvent, 0, len(blocks))
-	for _, block := range blocks[:len(blocks)-1] {
+	for _, block := range blocks[:limit] {
 		var event gatewaySSEEvent
 		for _, line := range strings.Split(block, "\n") {
 			switch {
@@ -854,6 +889,7 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			}
 		}
 	} else {
+		require.True(t, gjson.ValidBytes(wire), "client response must be valid JSON")
 		usage = gjson.GetBytes(wire, "usage")
 		switch path {
 		case "/v1/messages":
