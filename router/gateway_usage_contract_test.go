@@ -376,6 +376,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if tc.unauthorized || tc.failure {
 				wantLogs = 0
 			}
+			if tc.name == "upstream_failure_refund" {
+				gatewayUsageAssertRefundEffectComplete(t, db, requestID)
+			}
 			gatewayUsageAssertLedger(t, db, fixture, tc.quota, wantLogs, tc.prompt, tc.completion)
 			if wantLogs == 1 {
 				var log model.Log
@@ -398,7 +401,6 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}
 			}
 			if tc.name == "upstream_failure_refund" {
-				gatewayUsageAssertRefundEffectComplete(t, db, requestID)
 				finalizeKey := model.BillingRequestFinalizeOperationKey(resp.Header.Get(common.RequestIdKey))
 				var settlement model.BillingSettlement
 				require.NoError(t, db.Where("operation_key = ? AND user_id = ? AND token_id = ? AND status = ?", finalizeKey, fixture.UserID, fixture.TokenID, model.BillingSettlementStatusApplied).First(&settlement).Error)
@@ -414,10 +416,12 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				gatewayUsageAssertWire(t, wire, tc.path, tc.stream, tc.prompt, tc.completion, answer)
 			}
 			if wantLogs == 1 && tc.audio {
+				require.True(t, gjson.ValidBytes(wire), "audio response must be valid JSON")
 				require.JSONEq(t, gjson.Get(tc.response, "usage").Raw, gjson.GetBytes(wire, "usage").Raw)
 				require.Equal(t, gjson.Get(tc.response, "text").String(), gjson.GetBytes(wire, "text").String())
 			}
 			if wantLogs == 1 && tc.path == "/v1/images/generations" {
+				require.True(t, gjson.ValidBytes(wire), "image response must be valid JSON")
 				require.JSONEq(t, gjson.Get(tc.response, "data").Raw, gjson.GetBytes(wire, "data").Raw)
 			}
 		})
@@ -865,6 +869,7 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 				}
 				continue
 			}
+			require.True(t, gjson.Valid(event.data), "client SSE data must be valid JSON")
 			candidate := gjson.Parse(event.data)
 			if path == "/v1/messages" && event.event != "" {
 				require.Equal(t, candidate.Get("type").String(), event.event, "Claude SSE event name must match payload type")
