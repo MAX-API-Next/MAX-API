@@ -309,6 +309,28 @@ func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T
 	}
 }
 
+func TestRealtimeMappedRouteReplacesEmptyModelQuery(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=",
+			Converter:    dto.AdvancedCustomConverterNone,
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+	info.UpstreamModelName = "gpt-4"
+	info.IsModelMapped = true
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gpt-4"}, parsedURL.Query()["model"])
+}
+
 func TestRealtimeRouteRejectsModelQueryAuthConflict(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

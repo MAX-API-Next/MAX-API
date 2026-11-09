@@ -161,7 +161,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	case constant.ChannelTypeCustom:
 		url := info.ChannelBaseUrl
 		url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
-		if info.RelayMode == relayconstant.RelayModeRealtime && info.UpstreamModelName != "" {
+		if info.RelayMode == relayconstant.RelayModeRealtime && info.IsModelMapped && info.UpstreamModelName != "" {
 			path, rawQuery, hasQuery := strings.Cut(url, "?")
 			if hasQuery {
 				rawQuery = relaycommon.SetRawQueryParam(rawQuery, "model", info.UpstreamModelName)

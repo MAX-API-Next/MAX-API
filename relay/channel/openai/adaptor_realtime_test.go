@@ -125,6 +125,7 @@ func TestCustomRealtimeRequestURLUsesMappedModelQuery(t *testing.T) {
 			ChannelType:       constant.ChannelTypeCustom,
 			ChannelBaseUrl:    "ws://upstream.example/v1/realtime?model=fixed-model&opaque=#%zz",
 			UpstreamModelName: "gpt-4",
+			IsModelMapped:     true,
 		},
 	}
 	requestURL, err := (&Adaptor{}).GetRequestURL(info)
@@ -133,4 +134,20 @@ func TestCustomRealtimeRequestURLUsesMappedModelQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"gpt-4"}, parsed.Query()["model"])
 	assert.Equal(t, "#%zz", parsed.Query().Get("opaque"))
+}
+
+func TestCustomRealtimeRequestURLPreservesPinnedModelWithoutMapping(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeRealtime,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeCustom,
+			ChannelBaseUrl:    "ws://upstream.example/v1/realtime?model=fixed-model",
+			UpstreamModelName: "client-alias",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fixed-model"}, parsed.Query()["model"])
 }

@@ -333,12 +333,15 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		case "http":
 			parsedURL.Scheme = "ws"
 		}
-		configuredModel := firstNonEmptyQueryValue(parsedURL.Query()["model"])
-		if configuredModel == "" && relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") {
+		modelValues, malformedModelQuery := rawQueryParamValues(parsedURL.RawQuery, "model")
+		configuredModel := firstNonEmptyQueryValue(modelValues)
+		if malformedModelQuery {
 			return "", errors.New("advanced custom realtime model query is invalid")
 		}
 		if info.IsModelMapped && info.UpstreamModelName != "" {
 			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
+		} else if configuredModel == "" && relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") {
+			return "", errors.New("advanced custom realtime model query is invalid")
 		} else if configuredModel != "" {
 			if configuredModel != info.UpstreamModelName {
 				// A fixed custom-route model is an upstream override even without a
@@ -356,8 +359,9 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
 		authName := strings.TrimSpace(a.route.Auth.Name)
 		authValue := applyAuthTemplate(a.route.Auth.Value, info.ApiKey)
+		authModelValues, _ := rawQueryParamValues(parsedURL.RawQuery, "model")
 		if info != nil && info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
-			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && firstNonEmptyQueryValue(parsedURL.Query()["model"]) != authValue {
+			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && firstNonEmptyQueryValue(authModelValues) != authValue {
 			return "", errors.New("advanced custom realtime model conflicts with query authentication")
 		}
 		parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, authName, authValue)
@@ -372,6 +376,28 @@ func firstNonEmptyQueryValue(values []string) string {
 		}
 	}
 	return ""
+}
+
+func rawQueryParamValues(rawQuery, name string) (values []string, malformed bool) {
+	for _, part := range strings.Split(rawQuery, "&") {
+		key, value := part, ""
+		if separator := strings.IndexByte(part, '='); separator >= 0 {
+			key, value = part[:separator], part[separator+1:]
+		}
+		if relaycommon.HasRawQueryParam(key, name) {
+			if strings.Contains(value, ";") {
+				malformed = true
+				continue
+			}
+			decoded, err := url.QueryUnescape(value)
+			if err != nil {
+				malformed = true
+				continue
+			}
+			values = append(values, decoded)
+		}
+	}
+	return values, malformed
 }
 
 func resolveUpstreamTargetURL(upstreamPath string, info *relaycommon.RelayInfo) (*url.URL, error) {

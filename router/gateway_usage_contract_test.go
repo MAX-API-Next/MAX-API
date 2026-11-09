@@ -561,13 +561,16 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 			require.Equal(t, websocket.TextMessage, messageType)
 			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(message))
-			for _, event := range []struct{ eventID, responseID string }{
-				{"one", "same-response"},
-				{"replayed", "same-response"},
-				{"two", "second-response"},
-				{"replayed-again", "same-response"},
+			for _, event := range []struct {
+				eventID, responseID       string
+				inputTokens, outputTokens int
+			}{
+				{"one", "same-response", 100, 20},
+				{"replayed", "same-response", 100, 20},
+				{"two", "second-response", 50, 10},
+				{"replayed-again", "same-response", 100, 20},
 			} {
-				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"%s","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`, event.eventID, event.responseID)
+				frame := fmt.Sprintf(`{"type":"response.done","event_id":"%s","response":{"id":"%s","status":"completed","usage":{"total_tokens":%d,"input_tokens":%d,"output_tokens":%d,"input_token_details":{"text_tokens":%d},"output_token_details":{"text_tokens":%d}}}}`, event.eventID, event.responseID, event.inputTokens+event.outputTokens, event.inputTokens, event.outputTokens, event.inputTokens, event.outputTokens)
 				if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
 					return
 				}
@@ -603,9 +606,15 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if gjson.GetBytes(wire, "type").String() == "response.done" {
 				doneEvents++
 				identities = append(identities, [2]string{gjson.GetBytes(wire, "event_id").String(), gjson.GetBytes(wire, "response.id").String()})
-				require.EqualValues(t, 100, gjson.GetBytes(wire, "response.usage.input_tokens").Int())
-				require.EqualValues(t, 20, gjson.GetBytes(wire, "response.usage.output_tokens").Int())
-				require.EqualValues(t, 120, gjson.GetBytes(wire, "response.usage.total_tokens").Int())
+				wantInput, wantOutput := int64(100), int64(20)
+				if gjson.GetBytes(wire, "response.id").String() == "second-response" {
+					wantInput, wantOutput = 50, 10
+				}
+				require.EqualValues(t, wantInput, gjson.GetBytes(wire, "response.usage.input_tokens").Int())
+				require.EqualValues(t, wantOutput, gjson.GetBytes(wire, "response.usage.output_tokens").Int())
+				require.EqualValues(t, wantInput+wantOutput, gjson.GetBytes(wire, "response.usage.total_tokens").Int())
+				require.EqualValues(t, wantInput, gjson.GetBytes(wire, "response.usage.input_token_details.text_tokens").Int())
+				require.EqualValues(t, wantOutput, gjson.GetBytes(wire, "response.usage.output_token_details.text_tokens").Int())
 			}
 			if gjson.GetBytes(wire, "type").String() == "audit.barrier" {
 				break
@@ -620,7 +629,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}, identities)
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		requestID := gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
-		gatewayUsageAssertLedger(t, db, fixture, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
+		gatewayUsageAssertLedger(t, db, fixture, 210, 1, 150, 30) // Two distinct responses: 150 + 30*2.
 		var log model.Log
 		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
 		require.Equal(t, fixture.TokenID, log.TokenId)
@@ -854,15 +863,17 @@ func gatewayUsageParseSSEEvents(wire []byte) []gatewaySSEEvent {
 	events := make([]gatewaySSEEvent, 0, len(blocks))
 	for _, block := range blocks[:limit] {
 		var event gatewaySSEEvent
+		var dataLines []string
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "event: "):
 				event.event = strings.TrimPrefix(line, "event: ")
 			case strings.HasPrefix(line, "data: "):
-				event.data = strings.TrimPrefix(line, "data: ")
+				dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
 			}
 		}
-		if event.data != "" {
+		if len(dataLines) > 0 {
+			event.data = strings.Join(dataLines, "\n")
 			events = append(events, event)
 		}
 	}
@@ -878,6 +889,13 @@ func gatewayUsageCompleteSSEData(wire []byte) []string {
 	return data
 }
 
+func TestGatewayUsageSSEParserJoinsDataLines(t *testing.T) {
+	events := gatewayUsageCompleteSSEEvents([]byte("data: {broken\ndata: }\n\n"))
+	require.Len(t, events, 1)
+	require.Equal(t, "{broken\n}", events[0].data)
+	require.False(t, gjson.Valid(events[0].data))
+}
+
 // gatewayUsageAssertWire checks the answer independently of usage, including
 // payloads emitted before a final zero-usage event.
 func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool, prompt, completion int, answer string) {
@@ -885,6 +903,8 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 	var usage gjson.Result
 	var text strings.Builder
 	streamContentAt, streamUsageAt, streamStopAt := -1, -1, -1
+	streamMessageStartAt, streamBlockStartAt, streamBlockStopAt := -1, -1, -1
+	streamBlockStartIndex, streamBlockStopIndex := int64(-1), int64(-1)
 	if stream {
 		events := gatewayUsageCompleteSSEEvents(wire)
 		for eventIndex, event := range events {
@@ -900,6 +920,16 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 				require.Equal(t, candidate.Get("type").String(), event.event, "Claude SSE event name must match payload type")
 			}
 			if path == "/v1/messages" {
+				switch candidate.Get("type").String() {
+				case "message_start":
+					streamMessageStartAt = eventIndex
+				case "content_block_start":
+					streamBlockStartAt = eventIndex
+					streamBlockStartIndex = candidate.Get("index").Int()
+				case "content_block_stop":
+					streamBlockStopAt = eventIndex
+					streamBlockStopIndex = candidate.Get("index").Int()
+				}
 				text.WriteString(candidate.Get("content_block.text").String())
 				text.WriteString(candidate.Get("delta.text").String())
 				if candidate.Get("content_block.text").String() != "" || candidate.Get("delta.text").String() != "" {
@@ -953,8 +983,15 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			require.GreaterOrEqual(t, streamContentAt, 0)
 			require.GreaterOrEqual(t, streamUsageAt, 0)
 			require.GreaterOrEqual(t, streamStopAt, 0)
+			require.GreaterOrEqual(t, streamMessageStartAt, 0)
+			require.GreaterOrEqual(t, streamBlockStartAt, 0)
+			require.GreaterOrEqual(t, streamBlockStopAt, 0)
+			require.Less(t, streamMessageStartAt, streamBlockStartAt)
+			require.Less(t, streamBlockStartAt, streamContentAt)
+			require.Less(t, streamContentAt, streamBlockStopAt)
 			require.Less(t, streamContentAt, streamStopAt)
 			require.Less(t, streamUsageAt, streamStopAt)
+			require.Equal(t, streamBlockStartIndex, streamBlockStopIndex)
 			require.Equal(t, len(gatewayUsageCompleteSSEEvents(wire))-1, streamStopAt)
 		}
 	case "/v1/responses":

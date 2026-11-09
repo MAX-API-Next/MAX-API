@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -52,11 +53,11 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 			key = part[:separator]
 		}
 		decodedKey := decodeRawQueryKeyBytes(key)
-		if strings.ToValidUTF8(decodedKey, "\uFFFD") != name {
+		if !rawQueryKeyMatches(decodedKey, name) {
 			continue
 		}
 		_, unescapeErr := url.QueryUnescape(key)
-		if decodedKey != name || unescapeErr != nil {
+		if decodedKey != name || unescapeErr != nil || strings.Contains(key, ";") {
 			key = encodedName
 		}
 		parts[i] = key + "=" + encodedValue
@@ -77,7 +78,7 @@ func HasRawQueryParam(rawQuery, name string) bool {
 		if separator := strings.IndexByte(part, '='); separator >= 0 {
 			key = part[:separator]
 		}
-		if decodeRawQueryKey(key) == name {
+		if rawQueryKeyMatches(decodeRawQueryKeyBytes(key), name) {
 			return true
 		}
 	}
@@ -86,6 +87,24 @@ func HasRawQueryParam(rawQuery, name string) bool {
 
 func decodeRawQueryKey(raw string) string {
 	return strings.ToValidUTF8(decodeRawQueryKeyBytes(raw), "\uFFFD")
+}
+
+func rawQueryKeyMatches(decodedKey, name string) bool {
+	if strings.ToValidUTF8(decodedKey, "\uFFFD") == name {
+		return true
+	}
+	var perByte strings.Builder
+	for len(decodedKey) > 0 {
+		r, size := utf8.DecodeRuneInString(decodedKey)
+		if r == utf8.RuneError && size == 1 {
+			perByte.WriteRune(utf8.RuneError)
+			decodedKey = decodedKey[1:]
+			continue
+		}
+		perByte.WriteRune(r)
+		decodedKey = decodedKey[size:]
+	}
+	return perByte.String() == name
 }
 
 func decodeRawQueryKeyBytes(raw string) string {
