@@ -352,7 +352,13 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 	}
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
-		parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, strings.TrimSpace(a.route.Auth.Name), applyAuthTemplate(a.route.Auth.Value, info.ApiKey))
+		authName := strings.TrimSpace(a.route.Auth.Name)
+		authValue := applyAuthTemplate(a.route.Auth.Value, info.ApiKey)
+		if info != nil && info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
+			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && parsedURL.Query().Get("model") != authValue {
+			return "", errors.New("advanced custom realtime model conflicts with query authentication")
+		}
+		parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, authName, authValue)
 	}
 	return parsedURL.String(), nil
 }

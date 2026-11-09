@@ -182,6 +182,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
 			id := 8200 + index
 			var hits atomic.Int32
+			var failureFixture gatewayUsageFixture
 			streamAnswerSeen := make(chan struct{})
 			upstreamModels := make(chan string, 1)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +204,14 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 					}
 				}
 				if tc.failure {
+					require.Eventually(t, func() bool {
+						var user model.User
+						var token model.Token
+						if db.First(&user, failureFixture.UserID).Error != nil || db.First(&token, failureFixture.TokenID).Error != nil {
+							return false
+						}
+						return user.Quota < 10000 && token.RemainQuota < 10000
+					}, 5*time.Second, 20*time.Millisecond, "reservation must be visible before upstream failure")
 					w.WriteHeader(http.StatusServiceUnavailable)
 				}
 				if tc.stream {
@@ -233,6 +242,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}))
 			t.Cleanup(upstream.Close)
 			fixture := gatewayUsageSeed(t, db, id, upstream.URL, tc.channel)
+			failureFixture = fixture
 			body := tc.body
 			if body == "" {
 				body = fmt.Sprintf(`{"model":"gateway-audit","messages":[{"role":"user","content":"hi"}],"max_tokens":20,"stream":%t,"stream_options":{"include_usage":true}}`, tc.stream)
@@ -352,6 +362,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 				if tc.name == "native_json" {
 					require.EqualValues(t, 60, gjson.GetBytes(wire, "usage.prompt_tokens_details.cached_tokens").Int())
+					finalizeKey := model.BillingRequestFinalizeOperationKey(resp.Header.Get(common.RequestIdKey))
+					var settlement model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ? AND user_id = ? AND token_id = ? AND status = ?", finalizeKey, fixture.UserID, fixture.TokenID, model.BillingSettlementStatusApplied).First(&settlement).Error)
+					var receipt model.BillingLogReceipt
+					require.NoError(t, db.Where("operation_key = ?", finalizeKey).First(&receipt).Error)
 				}
 				if tc.path == "/v1/images/generations" {
 					require.EqualValues(t, 2, gjson.Get(log.Other, "image_count").Int())
@@ -697,8 +712,12 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 	t.Helper()
 	var usage gjson.Result
 	var text strings.Builder
+	streamContentAt, streamUsageAt, streamStopAt := -1, -1, -1
 	if stream {
-		for _, line := range strings.Split(string(wire), "\n") {
+		for lineIndex, line := range strings.Split(string(wire), "\n") {
+			if path == "/v1/messages" && strings.HasPrefix(line, "event: message_stop") {
+				streamStopAt = lineIndex
+			}
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
@@ -706,11 +725,17 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			if path == "/v1/messages" {
 				text.WriteString(candidate.Get("content_block.text").String())
 				text.WriteString(candidate.Get("delta.text").String())
+				if candidate.Get("content_block.text").String() != "" || candidate.Get("delta.text").String() != "" {
+					streamContentAt = lineIndex
+				}
 			} else {
 				text.WriteString(candidate.Get("choices.0.delta.content").String())
 			}
 			if candidate.Get("usage").Exists() {
 				usage = candidate.Get("usage")
+				if path == "/v1/messages" {
+					streamUsageAt = lineIndex
+				}
 			}
 		}
 	} else {
@@ -742,6 +767,11 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 		require.Equal(t, gjson.Number, usage.Get("output_tokens").Type)
 		if stream {
 			require.Equal(t, 1, strings.Count(string(wire), "event: message_stop"))
+			require.GreaterOrEqual(t, streamContentAt, 0)
+			require.GreaterOrEqual(t, streamUsageAt, 0)
+			require.GreaterOrEqual(t, streamStopAt, 0)
+			require.Less(t, streamContentAt, streamStopAt)
+			require.Less(t, streamUsageAt, streamStopAt)
 		}
 	case "/v1/responses":
 		require.Equal(t, gjson.Number, usage.Get("input_tokens").Type)

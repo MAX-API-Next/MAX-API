@@ -279,6 +279,25 @@ func TestRealtimeRouteRejectsInvalidModelQuery(t *testing.T) {
 	assert.Contains(t, err.Error(), "model query is invalid")
 }
 
+func TestRealtimeRouteRejectsModelQueryAuthConflict(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model",
+			Converter:    dto.AdvancedCustomConverterNone,
+			Auth:         &dto.AdvancedCustomRouteAuth{Type: dto.AdvancedCustomAuthTypeQuery, Name: "model", Value: "auth-model"},
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+
+	_, err := adaptor.GetRequestURL(info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model conflicts with query authentication")
+}
+
 func TestAdaptorSwitchesGeminiGenerateContentURLForStream(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
