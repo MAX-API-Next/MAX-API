@@ -172,6 +172,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			select {
 			case <-realtimeDone:
 			case <-time.After(5 * time.Second):
+				t.Errorf("realtime handler did not finish before cleanup")
 				return
 			}
 		}
