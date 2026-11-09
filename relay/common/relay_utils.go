@@ -85,10 +85,6 @@ func HasRawQueryParam(rawQuery, name string) bool {
 	return false
 }
 
-func decodeRawQueryKey(raw string) string {
-	return strings.ToValidUTF8(decodeRawQueryKeyBytes(raw), "\uFFFD")
-}
-
 func rawQueryKeyMatches(decodedKey, name string) bool {
 	if strings.ToValidUTF8(decodedKey, "\uFFFD") == name {
 		return true
