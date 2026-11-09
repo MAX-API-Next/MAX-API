@@ -360,7 +360,7 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		authName := strings.TrimSpace(a.route.Auth.Name)
 		authValue := applyAuthTemplate(a.route.Auth.Value, info.ApiKey)
 		authModelValues, _ := rawQueryParamValues(parsedURL.RawQuery, "model")
-		if info != nil && info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
+		if info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
 			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && firstNonEmptyQueryValue(authModelValues) != authValue {
 			return "", errors.New("advanced custom realtime model conflicts with query authentication")
 		}

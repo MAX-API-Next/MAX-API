@@ -179,6 +179,19 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		realtimeConnections = append(realtimeConnections, ws)
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
+	const (
+		// 40 uncached input + 60 cached input * 0.1 + 20 output * 2.
+		gatewayTextQuota = 86
+		// Gemini reports 7 prompt tokens and zero completion tokens.
+		gatewayGeminiQuota = 7
+		// Two successfully returned images, at 500 quota units each.
+		gatewayImageQuota = 1000
+		// 20 text seconds * 1 + 80 audio seconds * 4.
+		gatewayAudioQuota = 340
+		// 100 input tokens + 20 output tokens * 2.
+		gatewayRealtimeQuota = 140
+		gatewayZeroQuota     = 0
+	)
 
 	for index, tc := range []struct {
 		name, path, body, response                        string
@@ -186,18 +199,18 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		stream, unauthorized, failure, changePrice, audio bool
 		upstreamPath                                      string
 	}{
-		{"native_json", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
-		{"claude_json", "/v1/messages", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
-		{"claude_stream_late_usage", "/v1/messages", "", gatewayChatStream, constant.ChannelTypeOpenAI, 86, 100, 20, true, false, false, false, false, "/v1/chat/completions"},
-		{"stream_final_zero", "/v1/chat/completions", "", gatewayZeroStream, constant.ChannelTypeOpenAI, 0, 0, 0, true, false, false, false, false, "/v1/chat/completions"},
-		{"private_evidence_rejected", "/v1/chat/completions", "", strings.Replace(gatewayChatJSON, `"usage":{`, `"usage":{"billing_usage":{"input_tokens":0,"output_tokens":0},"usage_semantic":"claude","usage_source":"injected",`, 1), constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
-		{"frozen_price", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, true, false, "/v1/chat/completions"},
-		{"gemini_reported_zero", "/v1/chat/completions", "", `{"candidates":[{"content":{"role":"model","parts":[{"text":"visible"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}`, constant.ChannelTypeGemini, 7, 7, 0, false, false, false, false, false, "/v1beta/models/gpt-4:generateContent"},
-		{"responses_native", "/v1/responses", `{"model":"gateway-audit","input":"hi","max_output_tokens":20}`, `{"id":"resp_gateway","object":"response","status":"completed","model":"gpt-4","output":[{"type":"message","id":"msg_gateway","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}}`, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/responses"},
-		{"image_partial_success", "/v1/images/generations", `{"model":"gateway-audit","prompt":"synthetic","n":3}`, `{"data":[{"b64_json":"YQ=="},{"b64_json":"Yg=="}]}`, constant.ChannelTypeOpenAI, 1000, 1, 0, false, false, false, false, false, "/v1/images/generations"},
-		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, 340, 100, 0, false, false, false, false, true, "/v1/audio/transcriptions"},
-		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 0, 0, 0, false, true, false, false, false, "/v1/chat/completions"},
-		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, 0, 0, 0, false, false, true, false, false, "/v1/chat/completions"},
+		{"native_json", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"claude_json", "/v1/messages", "", gatewayChatJSON, constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"claude_stream_late_usage", "/v1/messages", "", gatewayChatStream, constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, true, false, false, false, false, "/v1/chat/completions"},
+		{"stream_final_zero", "/v1/chat/completions", "", gatewayZeroStream, constant.ChannelTypeOpenAI, gatewayZeroQuota, 0, 0, true, false, false, false, false, "/v1/chat/completions"},
+		{"private_evidence_rejected", "/v1/chat/completions", "", strings.Replace(gatewayChatJSON, `"usage":{`, `"usage":{"billing_usage":{"input_tokens":0,"output_tokens":0},"usage_semantic":"claude","usage_source":"injected",`, 1), constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"frozen_price", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, false, false, false, true, false, "/v1/chat/completions"},
+		{"gemini_reported_zero", "/v1/chat/completions", "", `{"candidates":[{"content":{"role":"model","parts":[{"text":"visible"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}`, constant.ChannelTypeGemini, gatewayGeminiQuota, 7, 0, false, false, false, false, false, "/v1beta/models/gpt-4:generateContent"},
+		{"responses_native", "/v1/responses", `{"model":"gateway-audit","input":"hi","max_output_tokens":20}`, `{"id":"resp_gateway","object":"response","status":"completed","model":"gpt-4","output":[{"type":"message","id":"msg_gateway","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}}`, constant.ChannelTypeOpenAI, gatewayTextQuota, 100, 20, false, false, false, false, false, "/v1/responses"},
+		{"image_partial_success", "/v1/images/generations", `{"model":"gateway-audit","prompt":"synthetic","n":3}`, `{"data":[{"b64_json":"YQ=="},{"b64_json":"Yg=="}]}`, constant.ChannelTypeOpenAI, gatewayImageQuota, 1, 0, false, false, false, false, false, "/v1/images/generations"},
+		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, gatewayAudioQuota, 100, 0, false, false, false, false, true, "/v1/audio/transcriptions"},
+		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, gatewayZeroQuota, 0, 0, false, true, false, false, false, "/v1/chat/completions"},
+		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, gatewayZeroQuota, 0, 0, false, false, true, false, false, "/v1/chat/completions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
@@ -524,7 +537,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
 		requestID := gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8400", db.Name() == "mysql")
 		require.EqualValues(t, 1, hits.Load())
-		gatewayUsageAssertLedger(t, db, fixture, 140, 1, 100, 20)
+		gatewayUsageAssertLedger(t, db, fixture, gatewayRealtimeQuota, 1, 100, 20)
 		var log model.Log
 		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
 		require.Equal(t, fixture.TokenID, log.TokenId)
