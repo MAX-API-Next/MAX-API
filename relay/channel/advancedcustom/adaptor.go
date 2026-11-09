@@ -349,6 +349,8 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 			// Normalize duplicate model parameters to the same value used for
 			// logging, so an upstream cannot select a different occurrence.
 			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
+		} else if info.UpstreamModelName != "" {
+			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
 		}
 	}
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {

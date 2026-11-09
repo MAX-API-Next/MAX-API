@@ -152,10 +152,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	engine := gin.New()
 	engine.Use(middleware.RequestId())
 	SetRelayRouter(engine)
-	completed := make(chan string, 32)
+	completed := make(chan gatewayCompletion, 32)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		engine.ServeHTTP(w, r)
-		completed <- r.Header.Get("Authorization")
+		completed <- gatewayCompletion{auth: r.Header.Get("Authorization"), requestID: w.Header().Get(common.RequestIdKey)}
 	}))
 	t.Cleanup(gateway.Close)
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -372,6 +372,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 					require.EqualValues(t, 2, gjson.Get(log.Other, "image_count").Int())
 				}
 			}
+			if tc.name == "upstream_failure_refund" {
+				finalizeKey := model.BillingRequestFinalizeOperationKey(resp.Header.Get(common.RequestIdKey))
+				var settlement model.BillingSettlement
+				require.NoError(t, db.Where("operation_key = ? AND user_id = ? AND token_id = ? AND status = ?", finalizeKey, fixture.UserID, fixture.TokenID, model.BillingSettlementStatusApplied).First(&settlement).Error)
+			}
 			if wantLogs == 1 && !tc.audio && tc.path != "/v1/images/generations" {
 				answer := "ok"
 				if tc.channel == constant.ChannelTypeGemini || tc.name == "stream_final_zero" {
@@ -393,9 +398,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	}
 	t.Run("realtime_advanced_custom_mapping", func(t *testing.T) {
 		gatewayUsagePrices(t, false)
+		var hits atomic.Int32
 		upstreamModels := make(chan string, 1)
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
 			gatewayUsageCaptureModel(upstreamModels, r.URL.Query().Get("model"))
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
@@ -459,12 +466,14 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}
 		}
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
-		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8400", db.Name() == "mysql")
+		requestID := gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8400", db.Name() == "mysql")
+		require.EqualValues(t, 1, hits.Load())
 		gatewayUsageAssertLedger(t, db, fixture, 140, 1, 100, 20)
 		var log model.Log
 		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
 		require.Equal(t, fixture.TokenID, log.TokenId)
 		require.Equal(t, fixture.ChannelID, log.ChannelId)
+		require.Equal(t, requestID, log.RequestId)
 		require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
 		require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 	})
@@ -542,11 +551,12 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			{"replayed-again", "same-response"},
 		}, identities)
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"audit.received"}`)))
-		gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
+		requestID := gatewayUsageWaitHandler(t, completed, "Bearer gatewayfixture8300", db.Name() == "mysql")
 		gatewayUsageAssertLedger(t, db, fixture, 280, 1, 200, 40) // Two distinct responses: 2 * (100 + 20*2).
 		var log model.Log
 		require.NoError(t, db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).First(&log).Error)
 		require.Equal(t, fixture.TokenID, log.TokenId)
+		require.Equal(t, requestID, log.RequestId)
 		require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
 		require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
 		require.EqualValues(t, 1, hits.Load())
@@ -588,7 +598,7 @@ func TestGatewayUsageModelCaptureDoesNotBlock(t *testing.T) {
 	}
 }
 
-func gatewayUsageWaitHandler(t *testing.T, completed <-chan string, auth string, external bool) {
+func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, auth string, external bool) string {
 	t.Helper()
 	wait := 10 * time.Second
 	if external {
@@ -596,9 +606,12 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan string, auth string,
 	}
 	select {
 	case actual := <-completed:
-		require.Equal(t, auth, actual, "wait for this request, not only the flushed response")
+		require.Equal(t, auth, actual.auth, "wait for this request, not only the flushed response")
+		require.NotEmpty(t, actual.requestID)
+		return actual.requestID
 	case <-time.After(wait):
 		t.Fatal("gateway handler has not completed settlement")
+		return ""
 	}
 }
 
@@ -634,6 +647,11 @@ type gatewayUsageFixture struct {
 	UserID    int
 	TokenID   int
 	ChannelID int
+}
+
+type gatewayCompletion struct {
+	auth      string
+	requestID string
 }
 
 func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) gatewayUsageFixture {
@@ -691,19 +709,39 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 }
 
 func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) bool {
-	if path != "/v1/messages" {
-		return bytes.Contains(wire, marker)
-	}
+	events := gatewayUsageCompleteSSEData(wire)
 	var text strings.Builder
-	for _, line := range strings.Split(string(wire), "\n") {
-		if !strings.HasPrefix(line, "data: ") {
+	for _, data := range events {
+		if data == "[DONE]" {
 			continue
 		}
-		candidate := gjson.Parse(strings.TrimPrefix(line, "data: "))
-		text.WriteString(candidate.Get("content_block.text").String())
-		text.WriteString(candidate.Get("delta.text").String())
+		candidate := gjson.Parse(data)
+		if path == "/v1/messages" {
+			text.WriteString(candidate.Get("content_block.text").String())
+			text.WriteString(candidate.Get("delta.text").String())
+		} else {
+			text.WriteString(candidate.Get("choices.0.delta.content").String())
+		}
 	}
 	return strings.Contains(text.String(), string(marker))
+}
+
+func gatewayUsageCompleteSSEData(wire []byte) []string {
+	normalized := strings.ReplaceAll(string(wire), "\r\n", "\n")
+	if !strings.HasSuffix(normalized, "\n\n") {
+		return nil
+	}
+	blocks := strings.Split(normalized, "\n\n")
+	data := make([]string, 0, len(blocks))
+	for _, block := range blocks[:len(blocks)-1] {
+		for _, line := range strings.Split(block, "\n") {
+			if strings.HasPrefix(line, "data: ") {
+				data = append(data, strings.TrimPrefix(line, "data: "))
+				break
+			}
+		}
+	}
+	return data
 }
 
 // gatewayUsageAssertWire checks the answer independently of usage, including
@@ -714,19 +752,17 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 	var text strings.Builder
 	streamContentAt, streamUsageAt, streamStopAt := -1, -1, -1
 	if stream {
-		for lineIndex, line := range strings.Split(string(wire), "\n") {
-			if path == "/v1/messages" && strings.HasPrefix(line, "event: message_stop") {
-				streamStopAt = lineIndex
-			}
-			if !strings.HasPrefix(line, "data: ") {
+		events := gatewayUsageCompleteSSEData(wire)
+		for eventIndex, data := range events {
+			if data == "[DONE]" {
 				continue
 			}
-			candidate := gjson.Parse(strings.TrimPrefix(line, "data: "))
+			candidate := gjson.Parse(data)
 			if path == "/v1/messages" {
 				text.WriteString(candidate.Get("content_block.text").String())
 				text.WriteString(candidate.Get("delta.text").String())
 				if candidate.Get("content_block.text").String() != "" || candidate.Get("delta.text").String() != "" {
-					streamContentAt = lineIndex
+					streamContentAt = eventIndex
 				}
 			} else {
 				text.WriteString(candidate.Get("choices.0.delta.content").String())
@@ -734,8 +770,11 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			if candidate.Get("usage").Exists() {
 				usage = candidate.Get("usage")
 				if path == "/v1/messages" {
-					streamUsageAt = lineIndex
+					streamUsageAt = eventIndex
 				}
+			}
+			if path == "/v1/messages" && candidate.Get("type").String() == "message_stop" {
+				streamStopAt = eventIndex
 			}
 		}
 	} else {
@@ -753,7 +792,9 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 	}
 	require.Equal(t, answer, text.String(), "client answer must survive independently of final usage")
 	if stream && path != "/v1/messages" {
-		require.True(t, strings.HasSuffix(strings.TrimSpace(string(wire)), "data: [DONE]"))
+		events := gatewayUsageCompleteSSEData(wire)
+		require.NotEmpty(t, events)
+		require.Equal(t, "[DONE]", events[len(events)-1])
 	}
 	require.True(t, usage.Exists(), "client must receive final usage")
 	switch path {
