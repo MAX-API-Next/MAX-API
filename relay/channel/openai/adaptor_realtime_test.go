@@ -98,3 +98,18 @@ func TestRealtimeRequestURLPreservesRawQueryComponents(t *testing.T) {
 	assert.Contains(t, requestURL, "session=a;b")
 	assert.Contains(t, requestURL, "opaque=x%2Fy")
 }
+
+func TestRealtimeRequestURLPreservesLiteralHashAndInvalidEscapes(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:      relayconstant.RelayModeRealtime,
+		RequestURLPath: "/v1/realtime?model=client-alias&opaque=#%zz",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "http://upstream.example",
+			UpstreamModelName: "gpt-4",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "ws://upstream.example/v1/realtime?model=gpt-4&opaque=#%zz", requestURL)
+}

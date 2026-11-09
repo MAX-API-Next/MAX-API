@@ -333,7 +333,7 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		case "http":
 			parsedURL.Scheme = "ws"
 		}
-		configuredModel := parsedURL.Query().Get("model")
+		configuredModel := firstNonEmptyQueryValue(parsedURL.Query()["model"])
 		if configuredModel == "" && relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") {
 			return "", errors.New("advanced custom realtime model query is invalid")
 		}
@@ -357,12 +357,21 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		authName := strings.TrimSpace(a.route.Auth.Name)
 		authValue := applyAuthTemplate(a.route.Auth.Value, info.ApiKey)
 		if info != nil && info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
-			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && parsedURL.Query().Get("model") != authValue {
+			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && firstNonEmptyQueryValue(parsedURL.Query()["model"]) != authValue {
 			return "", errors.New("advanced custom realtime model conflicts with query authentication")
 		}
 		parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, authName, authValue)
 	}
 	return parsedURL.String(), nil
+}
+
+func firstNonEmptyQueryValue(values []string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolveUpstreamTargetURL(upstreamPath string, info *relaycommon.RelayInfo) (*url.URL, error) {

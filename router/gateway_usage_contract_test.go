@@ -153,30 +153,51 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	engine.Use(middleware.RequestId())
 	SetRelayRouter(engine)
 	completed := make(chan gatewayCompletion, 32)
+	realtimeDone := make(chan struct{}, 8)
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		engine.ServeHTTP(w, r)
 		completed <- gatewayCompletion{auth: r.Header.Get("Authorization"), requestID: w.Header().Get(common.RequestIdKey)}
+		if r.URL.Path == "/v1/realtime" {
+			realtimeDone <- struct{}{}
+		}
 	}))
 	t.Cleanup(gateway.Close)
+	var realtimeConnections []*websocket.Conn
+	t.Cleanup(func() {
+		for _, ws := range realtimeConnections {
+			_ = ws.Close()
+		}
+		for range realtimeConnections {
+			select {
+			case <-realtimeDone:
+			case <-time.After(5 * time.Second):
+				return
+			}
+		}
+	})
+	registerRealtime := func(ws *websocket.Conn) {
+		realtimeConnections = append(realtimeConnections, ws)
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	for index, tc := range []struct {
 		name, path, body, response                        string
 		channel, quota, prompt, completion                int
 		stream, unauthorized, failure, changePrice, audio bool
+		upstreamPath                                      string
 	}{
-		{"native_json", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
-		{"claude_json", "/v1/messages", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
-		{"claude_stream_late_usage", "/v1/messages", "", gatewayChatStream, constant.ChannelTypeOpenAI, 86, 100, 20, true, false, false, false, false},
-		{"stream_final_zero", "/v1/chat/completions", "", gatewayZeroStream, constant.ChannelTypeOpenAI, 0, 0, 0, true, false, false, false, false},
-		{"private_evidence_rejected", "/v1/chat/completions", "", strings.Replace(gatewayChatJSON, `"usage":{`, `"usage":{"billing_usage":{"input_tokens":0,"output_tokens":0},"usage_semantic":"claude","usage_source":"injected",`, 1), constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
-		{"frozen_price", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, true, false},
-		{"gemini_reported_zero", "/v1/chat/completions", "", `{"candidates":[{"content":{"role":"model","parts":[{"text":"visible"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}`, constant.ChannelTypeGemini, 7, 7, 0, false, false, false, false, false},
-		{"responses_native", "/v1/responses", `{"model":"gateway-audit","input":"hi","max_output_tokens":20}`, `{"id":"resp_gateway","object":"response","status":"completed","model":"gpt-4","output":[{"type":"message","id":"msg_gateway","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}}`, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false},
-		{"image_partial_success", "/v1/images/generations", `{"model":"gateway-audit","prompt":"synthetic","n":3}`, `{"data":[{"b64_json":"YQ=="},{"b64_json":"Yg=="}]}`, constant.ChannelTypeOpenAI, 1000, 1, 0, false, false, false, false, false},
-		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, 340, 100, 0, false, false, false, false, true},
-		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 0, 0, 0, false, true, false, false, false},
-		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, 0, 0, 0, false, false, true, false, false},
+		{"native_json", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"claude_json", "/v1/messages", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"claude_stream_late_usage", "/v1/messages", "", gatewayChatStream, constant.ChannelTypeOpenAI, 86, 100, 20, true, false, false, false, false, "/v1/chat/completions"},
+		{"stream_final_zero", "/v1/chat/completions", "", gatewayZeroStream, constant.ChannelTypeOpenAI, 0, 0, 0, true, false, false, false, false, "/v1/chat/completions"},
+		{"private_evidence_rejected", "/v1/chat/completions", "", strings.Replace(gatewayChatJSON, `"usage":{`, `"usage":{"billing_usage":{"input_tokens":0,"output_tokens":0},"usage_semantic":"claude","usage_source":"injected",`, 1), constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/chat/completions"},
+		{"frozen_price", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, true, false, "/v1/chat/completions"},
+		{"gemini_reported_zero", "/v1/chat/completions", "", `{"candidates":[{"content":{"role":"model","parts":[{"text":"visible"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":0,"totalTokenCount":7}}`, constant.ChannelTypeGemini, 7, 7, 0, false, false, false, false, false, "/v1beta/models/gpt-4:generateContent"},
+		{"responses_native", "/v1/responses", `{"model":"gateway-audit","input":"hi","max_output_tokens":20}`, `{"id":"resp_gateway","object":"response","status":"completed","model":"gpt-4","output":[{"type":"message","id":"msg_gateway","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120,"input_tokens_details":{"cached_tokens":60}}}`, constant.ChannelTypeOpenAI, 86, 100, 20, false, false, false, false, false, "/v1/responses"},
+		{"image_partial_success", "/v1/images/generations", `{"model":"gateway-audit","prompt":"synthetic","n":3}`, `{"data":[{"b64_json":"YQ=="},{"b64_json":"Yg=="}]}`, constant.ChannelTypeOpenAI, 1000, 1, 0, false, false, false, false, false, "/v1/images/generations"},
+		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, 340, 100, 0, false, false, false, false, true, "/v1/audio/transcriptions"},
+		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, 0, 0, 0, false, true, false, false, false, "/v1/chat/completions"},
+		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, 0, 0, 0, false, false, true, false, false, "/v1/chat/completions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
@@ -187,6 +208,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			upstreamModels := make(chan string, 1)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits.Add(1)
+				require.Equal(t, tc.upstreamPath, r.URL.Path)
+				if tc.channel == constant.ChannelTypeOpenAI && r.Header.Get("Authorization") != "Bearer synthetic" {
+					t.Errorf("upstream must receive the channel credential")
+				}
 				if tc.audio {
 					r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 					if r.ParseMultipartForm(1<<20) == nil {
@@ -440,6 +465,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}
 		require.NoError(t, err)
 		defer func() { _ = ws.Close() }()
+		registerRealtime(ws)
 		require.NoError(t, ws.SetReadDeadline(time.Now().Add(5*time.Second)))
 		select {
 		case upstreamModel := <-upstreamModels:
@@ -526,6 +552,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		}
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = ws.Close() })
+		registerRealtime(ws)
 		require.NoError(t, ws.SetReadDeadline(time.Now().Add(10*time.Second)))
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
 		var doneEvents int
@@ -726,20 +753,40 @@ func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) 
 	return strings.Contains(text.String(), string(marker))
 }
 
-func gatewayUsageCompleteSSEData(wire []byte) []string {
+type gatewaySSEEvent struct {
+	event string
+	data  string
+}
+
+func gatewayUsageCompleteSSEEvents(wire []byte) []gatewaySSEEvent {
 	normalized := strings.ReplaceAll(string(wire), "\r\n", "\n")
 	if !strings.HasSuffix(normalized, "\n\n") {
 		return nil
 	}
 	blocks := strings.Split(normalized, "\n\n")
-	data := make([]string, 0, len(blocks))
+	events := make([]gatewaySSEEvent, 0, len(blocks))
 	for _, block := range blocks[:len(blocks)-1] {
+		var event gatewaySSEEvent
 		for _, line := range strings.Split(block, "\n") {
-			if strings.HasPrefix(line, "data: ") {
-				data = append(data, strings.TrimPrefix(line, "data: "))
-				break
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				event.event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				event.data = strings.TrimPrefix(line, "data: ")
 			}
 		}
+		if event.data != "" {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
+func gatewayUsageCompleteSSEData(wire []byte) []string {
+	events := gatewayUsageCompleteSSEEvents(wire)
+	data := make([]string, 0, len(events))
+	for _, event := range events {
+		data = append(data, event.data)
 	}
 	return data
 }
@@ -752,12 +799,18 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 	var text strings.Builder
 	streamContentAt, streamUsageAt, streamStopAt := -1, -1, -1
 	if stream {
-		events := gatewayUsageCompleteSSEData(wire)
-		for eventIndex, data := range events {
-			if data == "[DONE]" {
+		events := gatewayUsageCompleteSSEEvents(wire)
+		for eventIndex, event := range events {
+			if event.data == "[DONE]" {
+				if path != "/v1/messages" {
+					require.Equal(t, len(events)-1, eventIndex, "[DONE] must be the final event")
+				}
 				continue
 			}
-			candidate := gjson.Parse(data)
+			candidate := gjson.Parse(event.data)
+			if path == "/v1/messages" && event.event != "" {
+				require.Equal(t, candidate.Get("type").String(), event.event, "Claude SSE event name must match payload type")
+			}
 			if path == "/v1/messages" {
 				text.WriteString(candidate.Get("content_block.text").String())
 				text.WriteString(candidate.Get("delta.text").String())

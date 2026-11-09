@@ -279,6 +279,36 @@ func TestRealtimeRouteRejectsInvalidModelQuery(t *testing.T) {
 	assert.Contains(t, err.Error(), "model query is invalid")
 }
 
+func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T) {
+	for _, path := range []string{
+		"/v1/realtime?model=&model=client-alias",
+		"/v1/realtime?model=client-alias&model=",
+	} {
+		t.Run(path, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+				Routes: []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/realtime",
+					UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model",
+					Converter:    dto.AdvancedCustomConverterNone,
+				}},
+			})
+			info.RelayMode = relayconstant.RelayModeRealtime
+			info.RelayFormat = types.RelayFormatOpenAIRealtime
+			info.RequestURLPath = path
+			info.UpstreamModelName = "gpt-4"
+			info.IsModelMapped = true
+
+			requestURL, err := adaptor.GetRequestURL(info)
+			require.NoError(t, err)
+			parsedURL, err := url.Parse(requestURL)
+			require.NoError(t, err)
+			assert.Equal(t, "gpt-4", parsedURL.Query().Get("model"))
+			assert.Equal(t, "model=gpt-4", parsedURL.RawQuery)
+		})
+	}
+}
+
 func TestRealtimeRouteRejectsModelQueryAuthConflict(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
