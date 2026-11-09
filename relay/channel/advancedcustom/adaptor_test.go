@@ -261,6 +261,24 @@ func TestRealtimeRoutePreservesPinnedModelWithoutMapping(t *testing.T) {
 	assert.Equal(t, "fixed-model", info.UpstreamModelName)
 }
 
+func TestRealtimeRouteRejectsInvalidModelQuery(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=a;b",
+			Converter:    dto.AdvancedCustomConverterNone,
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+
+	_, err := adaptor.GetRequestURL(info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model query is invalid")
+}
+
 func TestAdaptorSwitchesGeminiGenerateContentURLForStream(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

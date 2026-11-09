@@ -334,6 +334,9 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 			parsedURL.Scheme = "ws"
 		}
 		configuredModel := parsedURL.Query().Get("model")
+		if configuredModel == "" && relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") {
+			return "", errors.New("advanced custom realtime model query is invalid")
+		}
 		if info.IsModelMapped && info.UpstreamModelName != "" {
 			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
 		} else if configuredModel != "" {

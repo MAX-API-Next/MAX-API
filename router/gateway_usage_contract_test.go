@@ -350,6 +350,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				require.Equal(t, fixture.TokenID, log.TokenId)
 				require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
 				require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
+				if tc.name == "native_json" {
+					require.EqualValues(t, 60, gjson.GetBytes(wire, "usage.prompt_tokens_details.cached_tokens").Int())
+				}
 				if tc.path == "/v1/images/generations" {
 					require.EqualValues(t, 2, gjson.Get(log.Other, "image_count").Int())
 				}
