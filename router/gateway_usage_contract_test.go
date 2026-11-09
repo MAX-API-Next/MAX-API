@@ -31,6 +31,7 @@ import (
 	"github.com/glebarez/sqlite"
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	gormmysql "gorm.io/driver/mysql"
@@ -239,18 +240,24 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}
 				if tc.changePrice {
 					if err := ratio_setting.UpdateModelRatioByJSONString(`{"gateway-audit":9}`); err != nil {
-						panic(err)
+						t.Errorf("update model ratio: %v", err)
+						http.Error(w, "synthetic price update failed", http.StatusInternalServerError)
+						return
 					}
 				}
 				if tc.failure {
-					require.Eventually(t, func() bool {
+					reservationVisible := assert.Eventually(t, func() bool {
 						var user model.User
 						var token model.Token
 						if db.First(&user, failureFixture.UserID).Error != nil || db.First(&token, failureFixture.TokenID).Error != nil {
 							return false
 						}
 						return user.Quota < 10000 && token.RemainQuota < 10000
-					}, 5*time.Second, 20*time.Millisecond, "reservation must be visible before upstream failure")
+					}, 5*time.Second, 20*time.Millisecond)
+					if !reservationVisible {
+						http.Error(w, "reservation was not visible", http.StatusInternalServerError)
+						return
+					}
 					w.WriteHeader(http.StatusServiceUnavailable)
 				}
 				if tc.stream {
