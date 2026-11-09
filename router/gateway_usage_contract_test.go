@@ -638,6 +638,7 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 	t.Helper()
 	var user model.User
 	var token model.Token
+	var channel model.Channel
 	var logs []model.Log
 	wait, poll := 10*time.Second, 20*time.Millisecond
 	if db.Name() == "mysql" {
@@ -645,15 +646,15 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 	}
 	defer func() {
 		if t.Failed() {
-			t.Logf("last projection user=%d token=%d channel=%d wallet=%d used=%d tokenRemain=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, user.Quota, user.UsedQuota, token.RemainQuota, user.RequestCount, len(logs))
+			t.Logf("last projection user=%d token=%d channel=%d wallet=%d used=%d tokenRemain=%d channelUsed=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, user.Quota, user.UsedQuota, token.RemainQuota, channel.UsedQuota, user.RequestCount, len(logs))
 		}
 	}()
 	require.Eventually(t, func() bool {
-		if db.First(&user, fixture.UserID).Error != nil || db.First(&token, fixture.TokenID).Error != nil || db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).Find(&logs).Error != nil {
+		if db.First(&user, fixture.UserID).Error != nil || db.First(&token, fixture.TokenID).Error != nil || db.First(&channel, fixture.ChannelID).Error != nil || db.Where("user_id = ? AND type = ?", fixture.UserID, model.LogTypeConsume).Find(&logs).Error != nil {
 			return false
 		}
-		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && token.UsedQuota == int64(quota) && user.UsedQuota == int64(quota) && len(logs) == logCount
-	}, wait, poll, "wallet/token/logs must match independent quota %d", quota)
+		return user.Quota == int64(10000-quota) && token.RemainQuota == int64(10000-quota) && token.UsedQuota == int64(quota) && user.UsedQuota == int64(quota) && channel.UsedQuota == int64(quota) && len(logs) == logCount
+	}, wait, poll, "wallet/token/channel/logs must match independent quota %d", quota)
 	wantRequests := logCount
 	if quota == 0 {
 		// Existing text settlement records a zero consume log but does not
@@ -668,7 +669,7 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 		require.Equal(t, "gateway-audit", logs[0].ModelName)
 		require.Equal(t, fixture.ChannelID, logs[0].ChannelId)
 	}
-	t.Logf("independent ledger user=%d token=%d channel=%d quota=%d wallet=%d tokenRemain=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, quota, user.Quota, token.RemainQuota, user.RequestCount, len(logs))
+	t.Logf("independent ledger user=%d token=%d channel=%d quota=%d wallet=%d tokenRemain=%d channelUsed=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, quota, user.Quota, token.RemainQuota, channel.UsedQuota, user.RequestCount, len(logs))
 }
 
 func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) bool {

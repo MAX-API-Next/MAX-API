@@ -35,6 +35,8 @@ func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 func TestSetRawQueryParamReplacesMalformedKeyWithoutDroppingOthers(t *testing.T) {
 	got := SetRawQueryParam("api%zzkey=old&session=a;b", "api%zzkey", "new")
 	require.Equal(t, "api%zzkey=new&session=a;b", got)
+	got = SetRawQueryParam("api%zz%6bey=old&session=a;b", "api%zzkey", "new")
+	require.Equal(t, "api%zz%6bey=new&session=a;b", got)
 }
 
 func TestValidateMultipartDirectNormalizesInputReferenceField(t *testing.T) {

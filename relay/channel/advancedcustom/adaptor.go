@@ -336,11 +336,16 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		configuredModel := parsedURL.Query().Get("model")
 		if info.IsModelMapped && info.UpstreamModelName != "" {
 			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
-		} else if configuredModel != "" && configuredModel != info.UpstreamModelName {
-			// A fixed custom-route model is an upstream override even without a
-			// channel model_mapping entry; retain it for usage-log attribution.
-			info.UpstreamModelName = configuredModel
-			info.IsModelMapped = true
+		} else if configuredModel != "" {
+			if configuredModel != info.UpstreamModelName {
+				// A fixed custom-route model is an upstream override even without a
+				// channel model_mapping entry; retain it for usage-log attribution.
+				info.UpstreamModelName = configuredModel
+				info.IsModelMapped = true
+			}
+			// Normalize duplicate model parameters to the same value used for
+			// logging, so an upstream cannot select a different occurrence.
+			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
 		}
 	}
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {

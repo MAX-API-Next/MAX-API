@@ -214,7 +214,7 @@ func TestRealtimeRouteUsesMappedModelQuery(t *testing.T) {
 		Routes: []dto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/realtime",
-				UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model&existing=1",
+				UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model&model=other-model&existing=1",
 				Converter:    dto.AdvancedCustomConverterNone,
 			},
 		},
@@ -231,6 +231,7 @@ func TestRealtimeRouteUsesMappedModelQuery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wss", parsedURL.Scheme)
 	assert.Equal(t, "gpt-4", parsedURL.Query().Get("model"))
+	assert.NotContains(t, parsedURL.RawQuery, "other-model")
 	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
 }
 

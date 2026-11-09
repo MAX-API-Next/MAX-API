@@ -51,12 +51,7 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 		if separator := strings.IndexByte(part, '='); separator >= 0 {
 			key = part[:separator]
 		}
-		decodedKey, err := url.QueryUnescape(key)
-		if err != nil {
-			if key != name && key != encodedName {
-				continue
-			}
-		} else if decodedKey != name {
+		if decodeRawQueryKey(key) != name {
 			continue
 		}
 		parts[i] = key + "=" + encodedValue
@@ -69,6 +64,44 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 		return rawQuery + "&" + encodedName + "=" + encodedValue
 	}
 	return strings.Join(parts, "&")
+}
+
+func decodeRawQueryKey(raw string) string {
+	var decoded strings.Builder
+	decoded.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '+':
+			decoded.WriteByte(' ')
+		case '%':
+			if i+2 < len(raw) {
+				high, highOK := fromHex(raw[i+1])
+				low, lowOK := fromHex(raw[i+2])
+				if highOK && lowOK {
+					decoded.WriteByte(high<<4 | low)
+					i += 2
+					continue
+				}
+			}
+			decoded.WriteByte('%')
+		default:
+			decoded.WriteByte(raw[i])
+		}
+	}
+	return decoded.String()
+}
+
+func fromHex(value byte) (byte, bool) {
+	switch {
+	case '0' <= value && value <= '9':
+		return value - '0', true
+	case 'a' <= value && value <= 'f':
+		return value - 'a' + 10, true
+	case 'A' <= value && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func GetAPIVersion(c *gin.Context) string {
