@@ -455,20 +455,14 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		gatewayUsagePrices(t, false)
 		var hits atomic.Int32
 		upstreamModels := make(chan string, 1)
+		upstreamObserved := make(chan gatewayRealtimeObservation, 1)
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
-			require.Equal(t, "/v1/realtime", r.URL.Path)
-			require.Equal(t, "custom", r.URL.Query().Get("route"))
-			models := r.URL.Query()["model"]
-			require.NotEmpty(t, models)
-			for _, modelName := range models {
-				require.Equal(t, "gpt-4", modelName)
+			models := append([]string(nil), r.URL.Query()["model"]...)
+			if len(models) > 0 {
+				gatewayUsageCaptureModel(upstreamModels, models[0])
 			}
-			if r.Header.Get("Authorization") != "Bearer synthetic" {
-				t.Errorf("Realtime upstream must receive the channel credential")
-			}
-			gatewayUsageCaptureModel(upstreamModels, models[0])
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -479,8 +473,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if err != nil {
 				return
 			}
-			require.Equal(t, websocket.TextMessage, messageType)
-			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(message))
+			select {
+			case upstreamObserved <- gatewayRealtimeObservation{path: r.URL.Path, route: r.URL.Query().Get("route"), models: models, authorization: r.Header.Get("Authorization"), messageType: messageType, message: append([]byte(nil), message...)}:
+			default:
+			}
 			frame := `{"type":"response.done","event_id":"custom-one","response":{"id":"custom-response","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`
 			if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
 				return
@@ -516,6 +512,17 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			t.Fatal("custom realtime upstream did not receive a model")
 		}
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
+		select {
+		case observed := <-upstreamObserved:
+			require.Equal(t, "/v1/realtime", observed.path)
+			require.Equal(t, "custom", observed.route)
+			require.Equal(t, []string{"gpt-4"}, observed.models)
+			require.Equal(t, "Bearer synthetic", observed.authorization)
+			require.Equal(t, websocket.TextMessage, observed.messageType)
+			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(observed.message))
+		case <-time.After(time.Second):
+			t.Fatal("custom realtime upstream did not observe the session update")
+		}
 		sawCompletion := false
 		for {
 			_, message, readErr := ws.ReadMessage()
@@ -550,18 +557,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	t.Run("realtime_duplicate_response", func(t *testing.T) {
 		gatewayUsagePrices(t, false)
 		var hits atomic.Int32
+		upstreamObserved := make(chan gatewayRealtimeObservation, 1)
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
-			require.Equal(t, "/v1/realtime", r.URL.Path)
-			models := r.URL.Query()["model"]
-			require.NotEmpty(t, models)
-			for _, modelName := range models {
-				require.Equal(t, "gpt-4", modelName, "Realtime upstream must receive mapped model")
-			}
-			if r.Header.Get("Authorization") != "Bearer synthetic" {
-				t.Errorf("Realtime upstream must receive the channel credential")
-			}
+			models := append([]string(nil), r.URL.Query()["model"]...)
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
@@ -572,8 +572,10 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			if err != nil {
 				return
 			}
-			require.Equal(t, websocket.TextMessage, messageType)
-			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(message))
+			select {
+			case upstreamObserved <- gatewayRealtimeObservation{path: r.URL.Path, models: models, authorization: r.Header.Get("Authorization"), messageType: messageType, message: append([]byte(nil), message...)}:
+			default:
+			}
 			for _, event := range []struct {
 				eventID, responseID       string
 				inputTokens, outputTokens int
@@ -611,6 +613,16 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		registerRealtime(ws)
 		require.NoError(t, ws.SetReadDeadline(time.Now().Add(10*time.Second)))
 		require.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.update","session":{}}`)))
+		select {
+		case observed := <-upstreamObserved:
+			require.Equal(t, "/v1/realtime", observed.path)
+			require.Equal(t, []string{"gpt-4"}, observed.models, "Realtime upstream must receive mapped model")
+			require.Equal(t, "Bearer synthetic", observed.authorization)
+			require.Equal(t, websocket.TextMessage, observed.messageType)
+			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(observed.message))
+		case <-time.After(time.Second):
+			t.Fatal("realtime upstream did not observe the session update")
+		}
 		var doneEvents int
 		var identities [][2]string
 		for {
@@ -768,6 +780,15 @@ type gatewayCompletion struct {
 type gatewayUpstreamObservation struct {
 	path          string
 	authorization string
+}
+
+type gatewayRealtimeObservation struct {
+	path          string
+	route         string
+	models        []string
+	authorization string
+	messageType   int
+	message       []byte
 }
 
 func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) gatewayUsageFixture {
