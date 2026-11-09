@@ -289,13 +289,13 @@ func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T
 			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
 				Routes: []dto.AdvancedCustomRoute{{
 					IncomingPath: "/v1/realtime",
-					UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model",
+					UpstreamPath: "https://upstream.example" + path,
 					Converter:    dto.AdvancedCustomConverterNone,
 				}},
 			})
 			info.RelayMode = relayconstant.RelayModeRealtime
 			info.RelayFormat = types.RelayFormatOpenAIRealtime
-			info.RequestURLPath = path
+			info.RequestURLPath = "/v1/realtime"
 			info.UpstreamModelName = "gpt-4"
 			info.IsModelMapped = true
 
@@ -303,8 +303,8 @@ func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T
 			require.NoError(t, err)
 			parsedURL, err := url.Parse(requestURL)
 			require.NoError(t, err)
-			assert.Equal(t, "gpt-4", parsedURL.Query().Get("model"))
-			assert.Equal(t, "model=gpt-4", parsedURL.RawQuery)
+			assert.Equal(t, []string{"gpt-4", "gpt-4"}, parsedURL.Query()["model"])
+			assert.Equal(t, "model=gpt-4&model=gpt-4", parsedURL.RawQuery)
 		})
 	}
 }

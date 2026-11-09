@@ -206,11 +206,12 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			var failureFixture gatewayUsageFixture
 			streamAnswerSeen := make(chan struct{})
 			upstreamModels := make(chan string, 1)
+			upstreamObserved := make(chan gatewayUpstreamObservation, 1)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits.Add(1)
-				require.Equal(t, tc.upstreamPath, r.URL.Path)
-				if tc.channel == constant.ChannelTypeOpenAI && r.Header.Get("Authorization") != "Bearer synthetic" {
-					t.Errorf("upstream must receive the channel credential")
+				select {
+				case upstreamObserved <- gatewayUpstreamObservation{path: r.URL.Path, authorization: r.Header.Get("Authorization")}:
+				default:
 				}
 				if tc.audio {
 					r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -349,6 +350,17 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			requestID := gatewayUsageWaitHandler(t, completed, req.Header.Get("Authorization"), db.Name() == "mysql")
+			if !tc.unauthorized {
+				select {
+				case observed := <-upstreamObserved:
+					require.Equal(t, tc.upstreamPath, observed.path)
+					if tc.channel == constant.ChannelTypeOpenAI {
+						require.Equal(t, "Bearer synthetic", observed.authorization)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("simulated upstream request was not observed")
+				}
+			}
 			t.Logf("gateway status=%d request=%s wire=%s", resp.StatusCode, resp.Header.Get(common.RequestIdKey), wire)
 			if tc.unauthorized {
 				require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -660,14 +672,22 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, a
 	if external {
 		wait = 45 * time.Second
 	}
-	select {
-	case actual := <-completed:
-		require.Equal(t, auth, actual.auth, "wait for this request, not only the flushed response")
-		require.NotEmpty(t, actual.requestID)
-		return actual.requestID
-	case <-time.After(wait):
-		t.Fatal("gateway handler has not completed settlement")
-		return ""
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case actual := <-completed:
+			if actual.auth != auth {
+				// A failed earlier subtest may leave its handler completion queued;
+				// discard it instead of attributing it to this request.
+				continue
+			}
+			require.NotEmpty(t, actual.requestID)
+			return actual.requestID
+		case <-timer.C:
+			t.Fatal("gateway handler has not completed settlement")
+			return ""
+		}
 	}
 }
 
@@ -721,6 +741,11 @@ type gatewayUsageFixture struct {
 type gatewayCompletion struct {
 	auth      string
 	requestID string
+}
+
+type gatewayUpstreamObservation struct {
+	path          string
+	authorization string
 }
 
 func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelType int) gatewayUsageFixture {

@@ -3,6 +3,7 @@ package openai
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -111,5 +112,25 @@ func TestRealtimeRequestURLPreservesLiteralHashAndInvalidEscapes(t *testing.T) {
 	}
 	requestURL, err := (&Adaptor{}).GetRequestURL(info)
 	require.NoError(t, err)
-	assert.Equal(t, "ws://upstream.example/v1/realtime?model=gpt-4&opaque=#%zz", requestURL)
+	assert.Equal(t, "ws://upstream.example/v1/realtime?model=gpt-4&opaque=%23%25zz", requestURL)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "#%zz", parsed.Query().Get("opaque"))
+}
+
+func TestCustomRealtimeRequestURLUsesMappedModelQuery(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeRealtime,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeCustom,
+			ChannelBaseUrl:    "ws://upstream.example/v1/realtime?model=fixed-model&opaque=#%zz",
+			UpstreamModelName: "gpt-4",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gpt-4"}, parsed.Query()["model"])
+	assert.Equal(t, "#%zz", parsed.Query().Get("opaque"))
 }

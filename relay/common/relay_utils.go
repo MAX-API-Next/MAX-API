@@ -55,7 +55,8 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 		if strings.ToValidUTF8(decodedKey, "\uFFFD") != name {
 			continue
 		}
-		if decodedKey != name {
+		_, unescapeErr := url.QueryUnescape(key)
+		if decodedKey != name || unescapeErr != nil {
 			key = encodedName
 		}
 		parts[i] = key + "=" + encodedValue
