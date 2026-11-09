@@ -51,8 +51,12 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 		if separator := strings.IndexByte(part, '='); separator >= 0 {
 			key = part[:separator]
 		}
-		if decodeRawQueryKey(key) != name {
+		decodedKey := decodeRawQueryKeyBytes(key)
+		if strings.ToValidUTF8(decodedKey, "\uFFFD") != name {
 			continue
+		}
+		if decodedKey != name {
+			key = encodedName
 		}
 		parts[i] = key + "=" + encodedValue
 		found = true
@@ -80,6 +84,10 @@ func HasRawQueryParam(rawQuery, name string) bool {
 }
 
 func decodeRawQueryKey(raw string) string {
+	return strings.ToValidUTF8(decodeRawQueryKeyBytes(raw), "\uFFFD")
+}
+
+func decodeRawQueryKeyBytes(raw string) string {
 	var decoded strings.Builder
 	decoded.Grow(len(raw))
 	for i := 0; i < len(raw); i++ {
@@ -101,7 +109,7 @@ func decodeRawQueryKey(raw string) string {
 			decoded.WriteByte(raw[i])
 		}
 	}
-	return strings.ToValidUTF8(decoded.String(), "\uFFFD")
+	return decoded.String()
 }
 
 func fromHex(value byte) (byte, bool) {

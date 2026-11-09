@@ -428,17 +428,28 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
-			gatewayUsageCaptureModel(upstreamModels, r.URL.Query().Get("model"))
+			require.Equal(t, "/v1/realtime", r.URL.Path)
+			models := r.URL.Query()["model"]
+			require.NotEmpty(t, models)
+			for _, modelName := range models {
+				require.Equal(t, "gpt-4", modelName)
+			}
+			if r.Header.Get("Authorization") != "Bearer synthetic" {
+				t.Errorf("Realtime upstream must receive the channel credential")
+			}
+			gatewayUsageCaptureModel(upstreamModels, models[0])
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
 			}
 			defer func() { _ = ws.Close() }()
 			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-			_, _, err = ws.ReadMessage()
+			messageType, message, err := ws.ReadMessage()
 			if err != nil {
 				return
 			}
+			require.Equal(t, websocket.TextMessage, messageType)
+			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(message))
 			frame := `{"type":"response.done","event_id":"custom-one","response":{"id":"custom-response","status":"completed","usage":{"total_tokens":120,"input_tokens":100,"output_tokens":20,"input_token_details":{"text_tokens":100},"output_token_details":{"text_tokens":20}}}}`
 			if ws.WriteMessage(websocket.TextMessage, []byte(frame)) != nil {
 				return
@@ -484,6 +495,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				require.Equal(t, "custom-response", gjson.GetBytes(message, "response.id").String())
 				require.EqualValues(t, 100, gjson.GetBytes(message, "response.usage.input_tokens").Int())
 				require.EqualValues(t, 20, gjson.GetBytes(message, "response.usage.output_tokens").Int())
+				require.EqualValues(t, 120, gjson.GetBytes(message, "response.usage.total_tokens").Int())
 				sawCompletion = true
 			}
 			if eventType == "audit.barrier" {
@@ -510,17 +522,27 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		upgrader := websocket.Upgrader{}
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
-			require.Equal(t, "gpt-4", r.URL.Query().Get("model"), "Realtime upstream must receive mapped model")
+			require.Equal(t, "/v1/realtime", r.URL.Path)
+			models := r.URL.Query()["model"]
+			require.NotEmpty(t, models)
+			for _, modelName := range models {
+				require.Equal(t, "gpt-4", modelName, "Realtime upstream must receive mapped model")
+			}
+			if r.Header.Get("Authorization") != "Bearer synthetic" {
+				t.Errorf("Realtime upstream must receive the channel credential")
+			}
 			ws, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
 				return
 			}
 			defer func() { _ = ws.Close() }()
 			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
-			_, _, err = ws.ReadMessage() // client ready; no timing sleep
+			messageType, message, err := ws.ReadMessage() // client ready; no timing sleep
 			if err != nil {
 				return
 			}
+			require.Equal(t, websocket.TextMessage, messageType)
+			require.JSONEq(t, `{"type":"session.update","session":{}}`, string(message))
 			for _, event := range []struct{ eventID, responseID string }{
 				{"one", "same-response"},
 				{"replayed", "same-response"},
@@ -565,6 +587,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				identities = append(identities, [2]string{gjson.GetBytes(wire, "event_id").String(), gjson.GetBytes(wire, "response.id").String()})
 				require.EqualValues(t, 100, gjson.GetBytes(wire, "response.usage.input_tokens").Int())
 				require.EqualValues(t, 20, gjson.GetBytes(wire, "response.usage.output_tokens").Int())
+				require.EqualValues(t, 120, gjson.GetBytes(wire, "response.usage.total_tokens").Int())
 			}
 			if gjson.GetBytes(wire, "type").String() == "audit.barrier" {
 				break
@@ -866,6 +889,7 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			require.GreaterOrEqual(t, streamStopAt, 0)
 			require.Less(t, streamContentAt, streamStopAt)
 			require.Less(t, streamUsageAt, streamStopAt)
+			require.Equal(t, len(gatewayUsageCompleteSSEEvents(wire))-1, streamStopAt)
 		}
 	case "/v1/responses":
 		require.Equal(t, gjson.Number, usage.Get("input_tokens").Type)
