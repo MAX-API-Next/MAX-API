@@ -250,11 +250,18 @@ func cloneGeminiUsageMetadata(metadata GeminiUsageMetadata) GeminiUsageMetadata 
 	return metadata
 }
 
+// HasGeminiUsageMetadataTokens reports whether Gemini supplied any usage
+// counter, including an explicitly present zero in a partial stream frame.
 func HasGeminiUsageMetadataTokens(metadata *GeminiUsageMetadata) bool {
 	if metadata == nil {
 		return false
 	}
-	if metadata.HasPromptTokenCount && metadata.HasCandidatesTokenCount {
+	if metadata.HasPromptTokenCount ||
+		metadata.HasToolUsePromptTokenCount ||
+		metadata.HasCandidatesTokenCount ||
+		metadata.HasTotalTokenCount ||
+		metadata.HasThoughtsTokenCount ||
+		metadata.HasCachedContentTokenCount {
 		return true
 	}
 	if metadata.PromptTokenCount != 0 ||

@@ -951,6 +951,31 @@ func TestGeminiStreamHandlerMergesCumulativeModalityDetails(t *testing.T) {
 	require.NotContains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "TEXT", TokenCount: 10})
 }
 
+func TestGeminiStreamHandlerMergesExplicitZeroCachedContentCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-3-flash-preview"},
+	}
+	body := strings.Join([]string{
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"a"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"totalTokenCount":110,"cachedContentTokenCount":6}}`,
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"b"}]}}],"usageMetadata":{"cachedContentTokenCount":0}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	var last dto.GeminiUsageMetadata
+	usage, apiErr := geminiStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))}, func(_ string, response *dto.GeminiChatResponse) bool {
+		last = response.UsageMetadata
+		return true
+	})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.True(t, last.HasCachedContentTokenCount)
+	require.Zero(t, last.CachedContentTokenCount)
+}
+
 func sseDataForEvent(t *testing.T, body string, eventType string) string {
 	t.Helper()
 	for _, event := range strings.Split(body, "\n\n") {
