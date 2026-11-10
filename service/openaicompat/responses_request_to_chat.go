@@ -237,35 +237,38 @@ func responsesToolOutputSupportsStructuredConversion(value any) bool {
 	return true
 }
 
+// responsesToolOutputAllowedMime rejects a known unsupported type early while
+// allowing resolvable sources without metadata to be checked after loading.
 func responsesToolOutputAllowedMime(part map[string]any, allowed ...string) bool {
-	mimeType := strings.TrimSpace(common.Interface2String(part["mime_type"]))
-	if mimeType == "" {
-		mimeType = strings.TrimSpace(common.Interface2String(part["mimeType"]))
-	}
+	container := part
 	for _, key := range []string{"image_url", "file", "input_audio", "video_url"} {
 		if nested, ok := part[key].(map[string]any); ok {
-			if value := strings.TrimSpace(common.Interface2String(nested["mime_type"])); value != "" {
-				mimeType = value
-			} else if value := strings.TrimSpace(common.Interface2String(nested["mimeType"])); value != "" {
-				mimeType = value
+			container = nested
+			break
+		}
+	}
+	mimeType := strings.TrimSpace(common.Interface2String(container["mime_type"]))
+	if mimeType == "" {
+		mimeType = strings.TrimSpace(common.Interface2String(container["mimeType"]))
+	}
+	hasSource := false
+	for _, sourceKey := range []string{"url", "image_url", "file_data", "file_url", "data", "audio_url", "video_url"} {
+		source := strings.TrimSpace(common.Interface2String(container[sourceKey]))
+		if source == "" {
+			continue
+		}
+		hasSource = true
+		if mimeType == "" {
+			dataMime := responsesToolOutputDataMime(source)
+			if dataMime == "" {
+				continue
 			}
-			if mimeType == "" {
-				for _, sourceKey := range []string{"url", "image_url", "file_data", "file_url", "data", "audio_url", "video_url"} {
-					if source := strings.TrimSpace(common.Interface2String(nested[sourceKey])); strings.HasPrefix(strings.ToLower(source), "data:") {
-						mimeType = strings.TrimPrefix(source, "data:")
-						break
-					}
-				}
-			}
+			mimeType = dataMime
+			break
 		}
 	}
 	if mimeType == "" {
-		for _, sourceKey := range []string{"url", "image_url", "file_data", "file_url", "data"} {
-			if source := strings.TrimSpace(common.Interface2String(part[sourceKey])); strings.HasPrefix(strings.ToLower(source), "data:") {
-				mimeType = strings.TrimPrefix(source, "data:")
-				break
-			}
-		}
+		return hasSource
 	}
 	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
 		mimeType = mediaType
@@ -279,6 +282,22 @@ func responsesToolOutputAllowedMime(part map[string]any, allowed ...string) bool
 		}
 	}
 	return false
+}
+
+// responsesToolOutputDataMime extracts a media type from a data URL header.
+func responsesToolOutputDataMime(source string) string {
+	if !strings.HasPrefix(strings.ToLower(source), "data:") {
+		return ""
+	}
+	headerEnd := strings.IndexByte(source, ',')
+	if headerEnd <= len("data:") {
+		return ""
+	}
+	header := strings.TrimPrefix(source[:headerEnd], "data:")
+	if mediaType, _, err := mime.ParseMediaType(header); err == nil {
+		return mediaType
+	}
+	return strings.TrimSpace(strings.SplitN(header, ";", 2)[0])
 }
 
 func responsesInputItemHasChatMessageShape(itemType string, item map[string]any) bool {

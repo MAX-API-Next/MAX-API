@@ -520,10 +520,11 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				if err != nil {
 					return nil, fmt.Errorf("get file data from '%s' failed: %w", source.GetIdentifier(), err)
 				}
+				mimeType = normalizeGeminiMimeType(mimeType)
 
 				// 校验 MimeType 是否在 Gemini 支持的白名单中
 				if !isGeminiSupportedMimeType(mimeType) {
-					return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s', supported types are: %v", mimeType, source.GetIdentifier(), getSupportedMimeTypesList())
+					return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s', supported types are: %v (audio/* and video/* are also accepted)", mimeType, source.GetIdentifier(), getSupportedMimeTypesList())
 				}
 
 				parts = append(parts, dto.GeminiPart{
@@ -637,8 +638,7 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 			continue
 		}
 		mimeType = normalizeGeminiMimeType(mimeType)
-		topLevelType := strings.TrimSpace(strings.SplitN(strings.ToLower(mimeType), "/", 2)[0])
-		if !isGeminiSupportedMimeType(mimeType) || (mediaInFunctionResponse && (topLevelType == "audio" || topLevelType == "video")) {
+		if !isGeminiFunctionResponseMimeType(mimeType) {
 			mediaConversionFailed = true
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported media type %q", mimeType))
 			continue
@@ -745,6 +745,17 @@ func isGeminiSupportedMimeType(mimeType string) bool {
 		return true
 	}
 	return strings.HasPrefix(mimeType, "audio/") || strings.HasPrefix(mimeType, "video/")
+}
+
+// isGeminiFunctionResponseMimeType returns the narrower media set accepted by
+// Gemini function-response parts after the source has been loaded.
+func isGeminiFunctionResponseMimeType(mimeType string) bool {
+	switch normalizeGeminiMimeType(mimeType) {
+	case "image/png", "image/jpeg", "image/webp", "application/pdf", "text/plain":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeGeminiMimeType(mimeType string) string {
