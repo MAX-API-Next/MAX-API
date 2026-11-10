@@ -119,6 +119,8 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 			if c.effort {
 				outEffort = c.defaultEffort
 			}
+			// For effort-less models this return value is metadata only; the
+			// provider request deliberately omits output_config.effort.
 			return c.defaultEffort, notes, setClaudeEffort(req, outEffort)
 		}
 		return "", notes, nil
@@ -135,6 +137,8 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 			if c.effort {
 				outEffort = c.defaultEffort
 			}
+			// An effort-less model keeps the default in metadata without sending
+			// an unsupported provider field.
 			return c.defaultEffort, notes, setClaudeEffort(req, outEffort)
 		}
 		return "", notes, nil
@@ -181,6 +185,8 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 		}
 		req.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 		if !c.effort {
+			// Keep the normalized effort as metadata only; this model cannot
+			// accept output_config.effort upstream.
 			notes = append(notes, "output effort is not supported by this Claude model")
 			effort = "high"
 		}
@@ -336,4 +342,10 @@ func ClaudeDefaultEffort(model string) string {
 		return ""
 	}
 	return capabilities.defaultEffort
+}
+
+// ClaudeSupportsEffort reports whether the normalized Claude model accepts a
+// provider effort field rather than only a metadata default.
+func ClaudeSupportsEffort(model string) bool {
+	return claudeModelCapabilities(model).effort
 }

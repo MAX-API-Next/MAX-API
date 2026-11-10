@@ -939,6 +939,10 @@ func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
 	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-4-6", ChannelMeta: &relaycommon.ChannelMeta{}})
 	require.NoError(t, err)
 	assert.Equal(t, "high", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{Model: "claude-fable-5"}, &relaycommon.RelayInfo{OriginModelName: "claude-fable-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Empty(t, converted.ReasoningEffort)
 }
 
 func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {
