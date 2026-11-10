@@ -113,6 +113,7 @@ type gatewayUsageTestOwnership struct {
 	ID int `gorm:"primaryKey;autoIncrement:false"`
 }
 
+// TableName isolates the gateway contract ownership marker from application data.
 func (gatewayUsageTestOwnership) TableName() string { return "gateway_usage_test_ownership" }
 
 func gatewayUsageGORMConfig() *gorm.Config {
