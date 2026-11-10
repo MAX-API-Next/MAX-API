@@ -207,10 +207,10 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 						mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
 					}
 					if mapped.BillingUsage != nil {
-						mapped.BillingUsage.TokenCountsReported = inputReported && outputReported
+						mapped.BillingUsage.TokenCountsReported = metadata.HasPromptTokenCount && metadata.HasCandidatesTokenCount
 					}
 					reportedUsage = &mapped
-					reportedOutputUsage = outputReported
+					reportedOutputUsage = metadata.HasCandidatesTokenCount
 				}
 			}
 		}

@@ -171,6 +171,26 @@ func TestConvertOpenAIResponsesToolOutputMediaToGeminiLegacyInlineData(t *testin
 	assert.Equal(t, "JVBERi0xLjQK", parts[1].InlineData.Data)
 }
 
+func TestConvertOpenAIResponsesToolOutputUnknownModelUsesLegacyInlineData(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "nano-banana",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_media", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_media", "output": []map[string]any{
+				{"type": "output_text", "text": "see this"},
+				{"type": "input_file", "file": map[string]any{"file_data": "data:application/pdf;base64,JVBERi0xLjQK", "filename": "doc.pdf"}},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	parts := got.Contents[1].Parts
+	require.Len(t, parts, 2)
+	require.NotNil(t, parts[0].FunctionResponse)
+	require.NotNil(t, parts[1].InlineData)
+	assert.Equal(t, "application/pdf", parts[1].InlineData.MimeType)
+}
+
 func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.T) {
 	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
 		Model: "gemini-3-flash-preview",

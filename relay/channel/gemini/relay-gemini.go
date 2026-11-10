@@ -591,11 +591,8 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 	if !ok || len(rawParts) == 0 {
 		return &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": message.StringContent()}}, nil, nil
 	}
-	mediaInFunctionResponse := true
 	modelID := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
-	if strings.HasPrefix(modelID, "gemini-1.") || strings.HasPrefix(modelID, "gemini-2.") {
-		mediaInFunctionResponse = false
-	}
+	mediaInFunctionResponse := strings.HasPrefix(modelID, "gemini-3")
 	texts := make([]string, 0, len(rawParts))
 	labels := make([]string, 0, len(rawParts))
 	media := make([]dto.GeminiPart, 0, len(rawParts))
