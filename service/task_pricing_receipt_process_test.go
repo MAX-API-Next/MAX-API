@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -286,6 +287,24 @@ func TestTaskPricingReceiptFixtureCrashAndRecovery(t *testing.T) {
 			require.NoError(t, <-b.done, b.output.text())
 			var record model.BillingSettlement
 			require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+			if record.Status == model.BillingSettlementStatusPending {
+				// One contender may durably schedule a retry after SQLite reports
+				// writer contention. Only that transient state is acceptable; let
+				// one later worker consume the recorded backoff before asserting the
+				// final financial result.
+				require.Positive(t, record.Attempts)
+				require.True(t, strings.Contains(record.LastError, "SQLITE_BUSY") || strings.Contains(record.LastError, "database is locked"), record.LastError)
+				wait := time.Until(time.Unix(record.NextAttempt, 0))
+				require.LessOrEqual(t, wait, 64*time.Second)
+				if wait > 0 {
+					timer := time.NewTimer(wait)
+					<-timer.C
+				}
+				recovery := startReceiptProcess(t, dir, "recover", task, input)
+				awaitBillingProcessBarrier(t, recovery)
+				require.NoError(t, <-recovery.done, recovery.output.text())
+				require.NoError(t, f.db.Where("operation_key = ?", input.OperationKey).First(&record).Error)
+			}
 			require.Equal(t, model.BillingSettlementStatusApplied, record.Status)
 			require.EqualValues(t, 1500, record.AppliedFundingDelta)
 			require.EqualValues(t, 1500, getUserQuota(t, 901))
