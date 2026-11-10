@@ -574,9 +574,9 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 	if message.ResponsesToolOutput == nil {
 		contentMap := map[string]interface{}{}
 		contentStr := message.StringContent()
-		if err := json.Unmarshal([]byte(contentStr), &contentMap); err != nil {
+		if err := common.Unmarshal([]byte(contentStr), &contentMap); err != nil {
 			var contentSlice []interface{}
-			if err := json.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
+			if err := common.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
 				contentMap = map[string]interface{}{"result": contentSlice}
 			} else {
 				contentMap = map[string]interface{}{"content": contentStr}
