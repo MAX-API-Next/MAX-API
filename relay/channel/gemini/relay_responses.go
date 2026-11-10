@@ -17,7 +17,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
@@ -130,7 +129,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		return true
 	}
 
-	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+	usage, err := geminiStreamHandler(c, info, resp, func(_ string, geminiResponse *dto.GeminiChatResponse) bool {
 		if prepareErr := functionCalls.prepare(geminiResponse); prepareErr != nil {
 			streamErr = types.NewError(prepareErr, types.ErrorCodeBadResponseBody)
 			return false
@@ -173,10 +172,11 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		}
 
 		retainUsage := func() {
-			inputReported := gjson.Get(data, "usageMetadata.promptTokenCount").Type == gjson.Number
-			outputReported := gjson.Get(data, "usageMetadata.candidatesTokenCount").Type == gjson.Number
+			metadata := geminiResponse.GetUsageMetadata()
+			inputReported := metadata != nil && metadata.HasPromptTokenCount
+			outputReported := metadata != nil && metadata.HasCandidatesTokenCount
 			if inputReported || outputReported || dto.HasGeminiUsageMetadataTokens(geminiResponse.GetUsageMetadata()) {
-				if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
+				if metadata != nil {
 					fallbackPrompt := 0
 					if !inputReported {
 						fallbackPrompt = info.GetEstimatePromptTokens()

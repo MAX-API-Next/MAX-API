@@ -621,6 +621,37 @@ func TestGeminiResponsesStreamIncompletePreservesProviderUsage(t *testing.T) {
 	require.Equal(t, 6, incomplete.Response.Usage.TotalTokens)
 }
 
+func TestGeminiResponsesStreamPreservesMergedProviderTotalAcrossPromptOnlyFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+		DisablePing:     true,
+	}
+	first := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"a"}]}}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":10}}`
+	second := `{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"b"}]}}],"usageMetadata":{"promptTokenCount":4}}`
+	body := "data: " + first + "\n" + "data: " + second + "\n" + "data: [DONE]\n"
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 4, usage.PromptTokens)
+	require.Equal(t, 2, usage.CompletionTokens)
+	require.Equal(t, 10, usage.TotalTokens)
+	var completed dto.ResponsesStreamResponse
+	require.NoError(t, common.UnmarshalJsonStr(sseDataForEvent(t, recorder.Body.String(), "response.completed"), &completed))
+	require.NotNil(t, completed.Response)
+	require.NotNil(t, completed.Response.Usage)
+	require.Equal(t, 10, completed.Response.Usage.TotalTokens)
+}
+
 func TestGeminiResponsesStreamMalformedFrameIsAbnormal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

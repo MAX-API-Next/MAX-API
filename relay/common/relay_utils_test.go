@@ -48,6 +48,15 @@ func TestSetRawQueryParamReplacesMalformedKeyWithoutDroppingOthers(t *testing.T)
 
 }
 
+func TestRawQueryParamHelpersAppendAndMatch(t *testing.T) {
+	require.Equal(t, "model=gpt-4", SetRawQueryParam("", "model", "gpt-4"))
+	require.Equal(t, "a=1&model=gpt-4", SetRawQueryParam("a=1", "model", "gpt-4"))
+	require.Equal(t, "model=gpt-4&a=1", SetRawQueryParam("model&a=1", "model", "gpt-4"))
+	require.True(t, HasRawQueryParam("a=1&api%zzkey=x", "api%zzkey"))
+	require.True(t, HasRawQueryParam("key%FF=x", "key\uFFFD"))
+	require.False(t, HasRawQueryParam("a=1&b=2", "model"))
+}
+
 func TestValidateMultipartDirectNormalizesInputReferenceField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := strings.NewReader(`{"model":"wan2.7-i2v","prompt":"animate","input_reference":" https://example.com/first.png "}`)
