@@ -573,6 +573,10 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 }
 
 func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto.Message, name string) (*dto.GeminiFunctionResponse, []dto.GeminiPart, error) {
+	var logContext context.Context = context.Background()
+	if c != nil {
+		logContext = c
+	}
 	if message.ResponsesToolOutput == nil {
 		contentMap := map[string]interface{}{}
 		contentStr := message.StringContent()
@@ -612,7 +616,7 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 		case "input_image", "input_file", "input_audio", "input_video":
 			labels = appendUniqueGeminiToolLabel(labels, "["+strings.TrimPrefix(partType, "input_")+"]")
 		default:
-			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported content part type %q", partType))
+			logger.LogWarn(logContext, fmt.Sprintf("Gemini Responses tool output omitted unsupported content part type %q", partType))
 			continue
 		}
 
@@ -622,7 +626,7 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 				return geminiResponsesToolRawFallback(message, name), nil, nil
 			}
 			mediaConversionFailed = true
-			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted %s media: %v", partType, err))
+			logger.LogWarn(logContext, fmt.Sprintf("Gemini Responses tool output omitted %s media: %v", partType, err))
 			continue
 		}
 		base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting Responses tool output for Gemini")
@@ -631,13 +635,13 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 				return geminiResponsesToolRawFallback(message, name), nil, nil
 			}
 			mediaConversionFailed = true
-			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output media load failed for %s: %v", partType, err))
+			logger.LogWarn(logContext, fmt.Sprintf("Gemini Responses tool output media load failed for %s: %v", partType, err))
 			continue
 		}
 		mimeType = normalizeGeminiMimeType(mimeType)
 		if !isGeminiFunctionResponseMimeType(mimeType) {
 			mediaConversionFailed = true
-			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported media type %q", mimeType))
+			logger.LogWarn(logContext, fmt.Sprintf("Gemini Responses tool output omitted unsupported media type %q", mimeType))
 			continue
 		}
 		media = append(media, dto.GeminiPart{InlineData: &dto.GeminiInlineData{MimeType: mimeType, Data: base64Data}})
