@@ -154,7 +154,8 @@ func ThinkingAdaptor(c *gin.Context, req *dto.GeminiChatRequest, info *relaycomm
 	return nil
 }
 
-// Setting safety to the lowest possible values since Gemini is already powerless enough
+// CovertOpenAI2Gemini translates chat messages, tools, media and reasoning
+// controls into Gemini contents while retaining tool-response ordering.
 func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {
 	if textRequest.HasMessageTools() {
 		return nil, fmt.Errorf("message-scoped tools cannot be converted to Gemini")
@@ -572,6 +573,9 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 	return &geminiRequest, nil
 }
 
+// geminiFunctionResponseFromMessage converts tool output into a function response.
+// Supported media is embedded for Gemini 3 or returned as deferred legacy parts;
+// unresolved file references and failed media conversion preserve the raw output.
 func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto.Message, name string) (*dto.GeminiFunctionResponse, []dto.GeminiPart, error) {
 	var logContext context.Context = context.Background()
 	if c != nil {
@@ -673,6 +677,8 @@ func geminiResponsesToolRawFallback(message dto.Message, name string) *dto.Gemin
 	return &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": message.StringContent()}}
 }
 
+// geminiResponsesToolPartHasFileID detects opaque file references at either the
+// top level or inside a supported media container so raw fallback can retain them.
 func geminiResponsesToolPartHasFileID(part map[string]any) bool {
 	if value := strings.TrimSpace(common.Interface2String(part["file_id"])); value != "" {
 		return true
@@ -687,6 +693,7 @@ func geminiResponsesToolPartHasFileID(part map[string]any) bool {
 	return false
 }
 
+// appendUniqueGeminiToolLabel preserves label order without repeated media tags.
 func appendUniqueGeminiToolLabel(labels []string, label string) []string {
 	for _, existing := range labels {
 		if existing == label {
@@ -696,6 +703,8 @@ func appendUniqueGeminiToolLabel(labels []string, label string) []string {
 	return append(labels, label)
 }
 
+// geminiResponsesToolFileSource selects the first media container and the source
+// fields appropriate to its type, rejecting parts without a loadable source.
 func geminiResponsesToolFileSource(part map[string]any, partType string) (types.FileSource, error) {
 	value := func(v any) string { return strings.TrimSpace(common.Interface2String(v)) }
 	lookup := func(container map[string]any, keys ...string) string {
@@ -740,6 +749,8 @@ func geminiResponsesToolFileSource(part map[string]any, partType string) (types.
 	return types.NewFileSourceFromData(data, mimeType), nil
 }
 
+// isGeminiSupportedMimeType checks normalized general blob input types, including
+// audio and video families; function-response parts use a separate allowlist.
 func isGeminiSupportedMimeType(mimeType string) bool {
 	mimeType = normalizeGeminiMimeType(mimeType)
 	if geminiSupportedMimeTypes[mimeType] {
@@ -759,6 +770,8 @@ func isGeminiFunctionResponseMimeType(mimeType string) bool {
 	}
 }
 
+// normalizeGeminiMimeType lowercases the base media type and removes parameters,
+// falling back to the prefix before a semicolon for malformed MIME values.
 func normalizeGeminiMimeType(mimeType string) string {
 	mimeType = strings.TrimSpace(mimeType)
 	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
@@ -1713,6 +1726,8 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 	return nil
 }
 
+// geminiStreamHandler merges provider usage before invoking the response callback
+// and estimates missing output usage only when no candidate count was reported.
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.MaxAPIError) {
 	var usage = &dto.Usage{}
 	var imageCount int

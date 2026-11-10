@@ -13,6 +13,8 @@ import (
 	"github.com/samber/lo"
 )
 
+// ClaudeToOpenAIRequest translates Claude messages, tools and optional controls
+// into chat requests, applying model effort defaults only where supported.
 func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,

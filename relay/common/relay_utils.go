@@ -87,6 +87,8 @@ func HasRawQueryParam(rawQuery, name string) bool {
 	return false
 }
 
+// rawQueryKeyMatches compares decoded names using both grouped and per-byte
+// replacement of invalid UTF-8 to recognize existing malformed query keys.
 func rawQueryKeyMatches(decodedKey, name string) bool {
 	if strings.ToValidUTF8(decodedKey, "\uFFFD") == name {
 		return true
@@ -105,6 +107,8 @@ func rawQueryKeyMatches(decodedKey, name string) bool {
 	return perByte.String() == name
 }
 
+// decodeRawQueryKeyBytes decodes valid percent escapes and plus signs while
+// retaining malformed percent sequences for tolerant key matching.
 func decodeRawQueryKeyBytes(raw string) string {
 	var decoded strings.Builder
 	decoded.Grow(len(raw))
@@ -130,6 +134,7 @@ func decodeRawQueryKeyBytes(raw string) string {
 	return decoded.String()
 }
 
+// fromHex decodes an ASCII hexadecimal digit and reports invalid input.
 func fromHex(value byte) (byte, bool) {
 	switch {
 	case '0' <= value && value <= '9':

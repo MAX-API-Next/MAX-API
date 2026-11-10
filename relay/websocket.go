@@ -13,6 +13,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// WssHelper resolves model mapping before connecting the WebSocket adaptor and
+// submits successful returned usage using the original billing model identity.
 func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types.MaxAPIError) {
 	info.InitChannelMeta(c)
 	if err := helper.ModelMappedHelper(c, info, nil); err != nil {

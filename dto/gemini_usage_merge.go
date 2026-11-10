@@ -52,6 +52,8 @@ func MergeGeminiUsageMetadataNonZero(current, incoming *GeminiUsageMetadata) *Ge
 	return &merged
 }
 
+// copyGeminiUsagePresence retains every counter ever reported in this stream,
+// including counters whose latest explicitly reported value is zero.
 func copyGeminiUsagePresence(dst, src *GeminiUsageMetadata) {
 	dst.HasPromptTokenCount = dst.HasPromptTokenCount || src.HasPromptTokenCount
 	dst.HasToolUsePromptTokenCount = dst.HasToolUsePromptTokenCount || src.HasToolUsePromptTokenCount
@@ -61,6 +63,8 @@ func copyGeminiUsagePresence(dst, src *GeminiUsageMetadata) {
 	dst.HasCachedContentTokenCount = dst.HasCachedContentTokenCount || src.HasCachedContentTokenCount
 }
 
+// mergeGeminiTokenDetails replaces modalities with positive incoming counts and
+// retains previously observed modalities omitted from the incoming snapshot.
 func mergeGeminiTokenDetails(current, incoming []GeminiPromptTokensDetails) []GeminiPromptTokensDetails {
 	reported := make(map[string]bool, len(incoming))
 	for _, detail := range incoming {

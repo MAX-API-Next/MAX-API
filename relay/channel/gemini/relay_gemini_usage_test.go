@@ -931,6 +931,8 @@ func TestGeminiStreamHandlerDoesNotCountAudioInlineDataAsImage(t *testing.T) {
 	require.NotEqual(t, 1400, usage.CompletionTokens)
 }
 
+// TestGeminiStreamHandlerMergesCumulativeModalityDetails verifies that later text
+// counters replace earlier ones without discarding an omitted image modality.
 func TestGeminiStreamHandlerMergesCumulativeModalityDetails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

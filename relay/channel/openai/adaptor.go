@@ -94,6 +94,8 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	}
 }
 
+// GetRequestURL builds the provider-specific target. Realtime URLs use mapped
+// upstream models while preserving unrelated raw query components.
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.RelayMode == relayconstant.RelayModeRealtime {
 		if strings.HasPrefix(info.ChannelBaseUrl, "https://") {
@@ -187,6 +189,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	}
 }
 
+// escapeRealtimeRawQuery escapes fragment delimiters and malformed percent
+// sequences without re-encoding valid escapes or unrelated query components.
 func escapeRealtimeRawQuery(rawQuery string) string {
 	var escaped strings.Builder
 	escaped.Grow(len(rawQuery))
@@ -208,6 +212,7 @@ func escapeRealtimeRawQuery(rawQuery string) string {
 	return escaped.String()
 }
 
+// isHexDigit reports whether a byte is an ASCII hexadecimal digit.
 func isHexDigit(value byte) bool {
 	return ('0' <= value && value <= '9') || ('a' <= value && value <= 'f') || ('A' <= value && value <= 'F')
 }

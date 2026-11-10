@@ -247,6 +247,8 @@ func TestTaskPricingReceiptFixtureRollbackAndOperationConflict(t *testing.T) {
 	require.EqualValues(t, 3000, getUserQuota(t, 901))
 }
 
+// TestTaskPricingReceiptFixtureCrashAndRecovery kills writers on either side of
+// commit, then verifies recovery applies one debit using the original receipt.
 func TestTaskPricingReceiptFixtureCrashAndRecovery(t *testing.T) {
 	for _, phase := range []string{"before-commit", "after-commit"} {
 		t.Run(phase, func(t *testing.T) {

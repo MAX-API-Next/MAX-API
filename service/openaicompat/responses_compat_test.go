@@ -147,6 +147,8 @@ func TestResponsesRequestToChatCompletionsRequestFunctionCallConversation(t *tes
 	assert.JSONEq(t, `{"ok":true}`, got.Messages[1].StringContent())
 }
 
+// TestResponsesRequestToChatCompletionsRequestRestrictsStructuredToolMedia checks
+// which tool media may be structured and which must retain its raw representation.
 func TestResponsesRequestToChatCompletionsRequestRestrictsStructuredToolMedia(t *testing.T) {
 	tests := []struct {
 		name       string

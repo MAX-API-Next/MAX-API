@@ -74,6 +74,8 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	return &usage, nil
 }
 
+// GeminiResponsesStreamHandler renders Gemini events as a Responses stream,
+// tracking delivered output and merged provider usage across terminal events.
 func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	info.EnableFirstResultTracking()
 	responseID := helper.GetResponseID(c)

@@ -279,6 +279,8 @@ func TestRealtimeRouteRejectsInvalidModelQuery(t *testing.T) {
 	assert.Contains(t, err.Error(), "model query is invalid")
 }
 
+// TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder verifies that
+// mapped models replace duplicate query values regardless of their ordering.
 func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T) {
 	for _, path := range []string{
 		"/v1/realtime?model=&model=client-alias",

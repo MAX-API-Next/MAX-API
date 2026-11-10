@@ -903,6 +903,8 @@ func TestClaudeOpus55DefaultEffortFlowsToOpenAIBridge(t *testing.T) {
 	assert.Equal(t, "medium", converted.ReasoningEffort)
 }
 
+// TestClaudeReasoningCompatibilityDefaultBranches checks model-specific defaults
+// against explicit controls and models without effort support.
 func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -33,6 +33,8 @@ func ClaudeEffort(req *dto.ClaudeRequest) string {
 	return ""
 }
 
+// claudeModelCapabilities resolves reasoning support and defaults from the model
+// name; unlisted families retain manual-thinking and disable controls.
 func claudeModelCapabilities(model string) claudeCapabilities {
 	model = strings.ToLower(model)
 	c := claudeCapabilities{manual: true, disable: true, defaultEffort: "high"}
@@ -265,6 +267,8 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 	return effort, notes, nil
 }
 
+// ApplyClaudeSuffix applies enabled suffix translation and records its source;
+// without a recognized suffix it uses the model-specific native default.
 func ApplyClaudeSuffix(req *dto.ClaudeRequest, origin string) (string, []string, error) {
 	if model_setting.ShouldPreserveThinkingSuffix(origin) {
 		return "", nil, nil

@@ -230,6 +230,8 @@ func TestConvertOpenAIResponsesToolOutputAudioFileIDPreservesRawReference(t *tes
 	assert.NotContains(t, string(rawResponse), "[audio]")
 }
 
+// TestGeminiSupportedMimeTypesFollowBlobFamilies covers the general blob input
+// allowlist separately from the narrower function-response media allowlist.
 func TestGeminiSupportedMimeTypesFollowBlobFamilies(t *testing.T) {
 	for _, mimeType := range []string{"image/gif", "image/avif", "audio/ogg", "video/webm", "text/csv", "application/json"} {
 		assert.True(t, isGeminiSupportedMimeType(mimeType), mimeType)

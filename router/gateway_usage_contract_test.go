@@ -120,6 +120,8 @@ func gatewayUsageGORMConfig() *gorm.Config {
 	return &gorm.Config{Logger: logger.Default.LogMode(logger.Silent), DisableAutomaticPing: true}
 }
 
+// runGatewayUsageContract replays synthetic providers through the real router
+// and compares client output and persisted accounting with independent constants.
 func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	sqlDB, err := db.DB()
@@ -717,6 +719,8 @@ func TestGatewayUsageModelCaptureDoesNotBlock(t *testing.T) {
 	}
 }
 
+// gatewayUsageWaitHandler waits for this fixture's handler to finish settlement,
+// discarding completion signals from earlier failed cases within a bounded wait.
 func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, auth string, external bool) string {
 	t.Helper()
 	wait := 10 * time.Second
@@ -742,6 +746,8 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, a
 	}
 }
 
+// gatewayUsageAssertRefundEffectComplete waits for both the refund and its
+// deferred effects before the caller verifies the absence of consume logs.
 func gatewayUsageAssertRefundEffectComplete(t *testing.T, db *gorm.DB, requestID string) {
 	t.Helper()
 	finalizeKey := model.BillingRequestFinalizeOperationKey(requestID)
@@ -759,6 +765,8 @@ const gatewayChatJSON = `{"id":"chatcmpl-gateway","model":"gpt-4","choices":[{"i
 const gatewayChatStream = "data: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-gateway\",\"model\":\"gpt-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":60}}}\n\ndata: [DONE]\n\n"
 const gatewayZeroStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"visible\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0}}\n\ndata: [DONE]\n\n"
 
+// gatewayUsagePrices installs explicit fixture prices and restores each setting
+// after the test; only image cases use a fixed per-image price.
 func gatewayUsagePrices(t *testing.T, image bool) {
 	t.Helper()
 	for _, pair := range []struct {
@@ -824,6 +832,8 @@ func gatewayUsageSeed(t *testing.T, db *gorm.DB, id int, base string, channelTyp
 	return fixture
 }
 
+// gatewayUsageAssertLedger checks wallet, token, channel and log projections
+// against caller-supplied amounts rather than recomputing them with billing code.
 func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFixture, quota, logCount, prompt, completion int) {
 	t.Helper()
 	var user model.User
@@ -862,6 +872,8 @@ func gatewayUsageAssertLedger(t *testing.T, db *gorm.DB, fixture gatewayUsageFix
 	t.Logf("independent ledger user=%d token=%d channel=%d quota=%d wallet=%d tokenRemain=%d channelUsed=%d requests=%d logs=%d", fixture.UserID, fixture.TokenID, fixture.ChannelID, quota, user.Quota, token.RemainQuota, channel.UsedQuota, user.RequestCount, len(logs))
 }
 
+// gatewayUsageStreamAnswerDelivered looks for answer text in complete SSE events,
+// so metadata cannot accidentally release the fixture's streaming barrier.
 func gatewayUsageStreamAnswerDelivered(wire []byte, path string, marker []byte) bool {
 	events := gatewayUsageCompleteSSEPrefixData(wire)
 	var text strings.Builder
@@ -885,6 +897,8 @@ type gatewaySSEEvent struct {
 	data  string
 }
 
+// gatewayUsageCompleteSSEEvents requires the entire wire buffer to end at an SSE
+// boundary before returning parsed events for final-response assertions.
 func gatewayUsageCompleteSSEEvents(wire []byte) []gatewaySSEEvent {
 	if !strings.HasSuffix(strings.ReplaceAll(string(wire), "\r\n", "\n"), "\n\n") {
 		return nil
@@ -892,6 +906,8 @@ func gatewayUsageCompleteSSEEvents(wire []byte) []gatewaySSEEvent {
 	return gatewayUsageParseSSEEvents(wire)
 }
 
+// gatewayUsageCompleteSSEPrefixData returns completed event payloads from a live
+// stream buffer while leaving any unfinished trailing event out of the result.
 func gatewayUsageCompleteSSEPrefixData(wire []byte) []string {
 	events := gatewayUsageParseSSEEvents(wire)
 	data := make([]string, 0, len(events))
@@ -901,6 +917,8 @@ func gatewayUsageCompleteSSEPrefixData(wire []byte) []string {
 	return data
 }
 
+// gatewayUsageParseSSEEvents parses complete fixture events, retaining event
+// names and joining multiple data lines according to SSE framing.
 func gatewayUsageParseSSEEvents(wire []byte) []gatewaySSEEvent {
 	normalized := strings.ReplaceAll(string(wire), "\r\n", "\n")
 	blocks := strings.Split(normalized, "\n\n")
@@ -931,6 +949,7 @@ func gatewayUsageParseSSEEvents(wire []byte) []gatewaySSEEvent {
 	return events
 }
 
+// gatewayUsageCompleteSSEData extracts payloads only from a fully framed buffer.
 func gatewayUsageCompleteSSEData(wire []byte) []string {
 	events := gatewayUsageCompleteSSEEvents(wire)
 	data := make([]string, 0, len(events))
@@ -967,7 +986,8 @@ func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool,
 			}
 			require.True(t, gjson.Valid(event.data), "client SSE data must be valid JSON")
 			candidate := gjson.Parse(event.data)
-			if path == "/v1/messages" && event.event != "" {
+			if path == "/v1/messages" {
+				require.NotEmpty(t, event.event, "Claude SSE event must have an event name")
 				require.Equal(t, candidate.Get("type").String(), event.event, "Claude SSE event name must match payload type")
 			}
 			if path == "/v1/messages" {

@@ -162,6 +162,8 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 	}
 }
 
+// responsesInputItemToChatMessages maps Responses messages and tool items to chat
+// history, retaining structured tool output only for supported media conversion.
 func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message) ([]dto.Message, error) {
 	itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 	switch itemType {

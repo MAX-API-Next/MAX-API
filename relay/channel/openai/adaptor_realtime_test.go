@@ -56,6 +56,8 @@ func TestRealtimeBetaHeaderOnlyForPreviewModels(t *testing.T) {
 	}
 }
 
+// TestRealtimeRequestURLAlwaysUsesMappedModel checks that the upstream model is
+// used whether the client supplied a model query parameter or omitted it.
 func TestRealtimeRequestURLAlwaysUsesMappedModel(t *testing.T) {
 	tests := []struct {
 		name string

@@ -315,6 +315,8 @@ func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
 	return strings.Split(info.RequestURLPath, "?")[0]
 }
 
+// routeURL resolves the configured route and query authentication. Realtime
+// model overrides are also recorded in relay metadata for consistent logging.
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 	if info == nil {
 		return "", errors.New("missing relay info")
@@ -372,6 +374,7 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 	return parsedURL.String(), nil
 }
 
+// firstNonEmptyQueryValue selects the first configured nonempty query value.
 func firstNonEmptyQueryValue(values []string) string {
 	for _, value := range values {
 		if value != "" {
@@ -381,6 +384,8 @@ func firstNonEmptyQueryValue(values []string) string {
 	return ""
 }
 
+// rawQueryParamValues decodes matching values without reparsing unrelated query
+// components and reports invalid escapes or semicolons in the selected values.
 func rawQueryParamValues(rawQuery, name string) (values []string, malformed bool) {
 	for _, part := range strings.Split(rawQuery, "&") {
 		key, value := part, ""
