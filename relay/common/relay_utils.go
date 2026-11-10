@@ -72,6 +72,8 @@ func SetRawQueryParam(rawQuery, name, value string) string {
 	return strings.Join(parts, "&")
 }
 
+// HasRawQueryParam reports whether a raw query contains a parameter name while
+// tolerating valid and malformed percent-escaped keys.
 func HasRawQueryParam(rawQuery, name string) bool {
 	for _, part := range strings.Split(rawQuery, "&") {
 		key := part

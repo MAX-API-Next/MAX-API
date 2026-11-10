@@ -28,6 +28,8 @@ func MergeOpenAIUsage(dst *Usage, response []byte) bool {
 	return MergeOpenAIUsageWithPresence(dst, response, nil)
 }
 
+// MergeOpenAIUsageWithPresence merges a provider usage snapshot while
+// retaining explicit field-presence information for cumulative streams.
 func MergeOpenAIUsageWithPresence(dst *Usage, response []byte, presence *OpenAIUsagePresence) bool {
 	if dst == nil {
 		return false
