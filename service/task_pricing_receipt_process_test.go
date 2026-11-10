@@ -293,6 +293,7 @@ func TestTaskPricingReceiptFixtureCrashAndRecovery(t *testing.T) {
 				// one later worker consume the recorded backoff before asserting the
 				// final financial result.
 				require.Positive(t, record.Attempts)
+				require.Positive(t, record.NextAttempt)
 				require.True(t, strings.Contains(record.LastError, "SQLITE_BUSY") || strings.Contains(record.LastError, "database is locked"), record.LastError)
 				wait := time.Until(time.Unix(record.NextAttempt, 0))
 				require.LessOrEqual(t, wait, 64*time.Second)
