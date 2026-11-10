@@ -54,8 +54,8 @@ func TestGatewayUsageContractMySQL(t *testing.T) {
 	if os.Getenv("MAXAPI_GATEWAY_MYSQL") != "1" {
 		t.Skip("requires MAXAPI_GATEWAY_MYSQL=1 and dedicated test credentials")
 	}
-	cfg, err := mysqldriver.ParseDSN(os.Getenv("TEST_TASK_BILLING_MYSQL_DSN"))
-	if err != nil || cfg.DBName != "maxapi_task_billing_test_1" || cfg.AllowFallbackToPlaintext {
+	cfg, err := mysqldriver.ParseDSN(os.Getenv("TEST_GATEWAY_USAGE_MYSQL_DSN"))
+	if err != nil || cfg.DBName != "maxapi_gateway_usage_test_1" || cfg.AllowFallbackToPlaintext {
 		t.Fatal("invalid dedicated MySQL configuration (details withheld)")
 	}
 	pin, err := hex.DecodeString(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256"))
@@ -188,7 +188,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		gatewayGeminiQuota = 7
 		// Two successfully returned images, at 500 quota units each.
 		gatewayImageQuota = 1000
-		// 20 text seconds * 1 + 80 audio seconds * 4.
+		// 20 text tokens * 1 + 80 audio tokens * audio ratio 4.
 		gatewayAudioQuota = 340
 		// 100 input tokens + 20 output tokens * 2.
 		gatewayRealtimeQuota = 140

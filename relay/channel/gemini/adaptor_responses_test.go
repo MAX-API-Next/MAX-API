@@ -168,6 +168,7 @@ func TestConvertOpenAIResponsesToolOutputMediaToGeminiLegacyInlineData(t *testin
 	assert.Equal(t, "see this", parts[0].FunctionResponse.Response["content"])
 	require.NotNil(t, parts[1].InlineData)
 	assert.Equal(t, "application/pdf", parts[1].InlineData.MimeType)
+	assert.Equal(t, "JVBERi0xLjQK", parts[1].InlineData.Data)
 }
 
 func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.T) {
@@ -186,6 +187,23 @@ func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.
 	require.NotNil(t, response)
 	assert.Contains(t, response.Response["content"], "file_123")
 	assert.NotContains(t, response.Response["content"], "[image]")
+}
+
+func TestConvertOpenAIResponsesToolOutputAudioFileIDPreservesRawReference(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-3-flash-preview",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_audio", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_audio", "output": []map[string]any{
+				{"type": "input_audio", "file_id": "file_audio"},
+			}},
+		}),
+	})
+
+	response := got.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	assert.Contains(t, response.Response["content"], "file_audio")
+	assert.NotContains(t, response.Response["content"], "[audio]")
 }
 
 func TestGeminiSupportedMimeTypesFollowBlobFamilies(t *testing.T) {

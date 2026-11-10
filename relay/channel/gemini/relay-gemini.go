@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -597,6 +598,7 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 	texts := make([]string, 0, len(rawParts))
 	labels := make([]string, 0, len(rawParts))
 	media := make([]dto.GeminiPart, 0, len(rawParts))
+	mediaConversionFailed := false
 	for _, rawPart := range rawParts {
 		part, ok := rawPart.(map[string]any)
 		if !ok {
@@ -621,6 +623,7 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 			if geminiResponsesToolPartHasFileID(part) {
 				return geminiResponsesToolRawFallback(message, name), nil, nil
 			}
+			mediaConversionFailed = true
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted %s media: %v", partType, err))
 			continue
 		}
@@ -629,11 +632,14 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 			if geminiResponsesToolPartHasFileID(part) {
 				return geminiResponsesToolRawFallback(message, name), nil, nil
 			}
+			mediaConversionFailed = true
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output media load failed for %s: %v", partType, err))
 			continue
 		}
+		mimeType = normalizeGeminiMimeType(mimeType)
 		topLevelType := strings.TrimSpace(strings.SplitN(strings.ToLower(mimeType), "/", 2)[0])
 		if !isGeminiSupportedMimeType(mimeType) || (mediaInFunctionResponse && (topLevelType == "audio" || topLevelType == "video")) {
+			mediaConversionFailed = true
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported media type %q", mimeType))
 			continue
 		}
@@ -645,6 +651,9 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 		responseText = strings.Join(labels, " ")
 	}
 	if responseText == "" && len(media) == 0 {
+		return geminiResponsesToolRawFallback(message, name), nil, nil
+	}
+	if mediaConversionFailed {
 		return geminiResponsesToolRawFallback(message, name), nil, nil
 	}
 	response := &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": responseText}}
@@ -731,11 +740,19 @@ func geminiResponsesToolFileSource(part map[string]any, partType string) (types.
 }
 
 func isGeminiSupportedMimeType(mimeType string) bool {
-	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	mimeType = normalizeGeminiMimeType(mimeType)
 	if geminiSupportedMimeTypes[mimeType] {
 		return true
 	}
 	return strings.HasPrefix(mimeType, "audio/") || strings.HasPrefix(mimeType, "video/")
+}
+
+func normalizeGeminiMimeType(mimeType string) string {
+	mimeType = strings.TrimSpace(mimeType)
+	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
+		return strings.ToLower(strings.TrimSpace(mediaType))
+	}
+	return strings.ToLower(strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0]))
 }
 
 // parseStopSequences 解析停止序列，支持字符串或字符串数组
