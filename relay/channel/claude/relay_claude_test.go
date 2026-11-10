@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
@@ -898,6 +899,37 @@ func TestClaudeOpus55DefaultEffortFlowsToOpenAIBridge(t *testing.T) {
 		Model:    "claude-opus-5-5",
 		Thinking: &dto.Thinking{Type: "enabled"},
 	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
+}
+
+func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
+	tests := []struct {
+		name       string
+		request    dto.ClaudeRequest
+		wantEffort string
+		wantConfig string
+	}{
+		{name: "explicit effort", request: dto.ClaudeRequest{Model: "claude-opus-5-5", OutputConfig: []byte(`{"effort":"low"}`)}, wantEffort: "", wantConfig: `{"effort":"low"}`},
+		{name: "disabled thinking", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "disabled"}}, wantEffort: "", wantConfig: ""},
+		{name: "manual budget", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "enabled", BudgetTokens: common.GetPointer(2048)}}, wantEffort: "", wantConfig: ""},
+		{name: "unsupported output effort", request: dto.ClaudeRequest{Model: "claude-fable-5"}, wantEffort: "high", wantConfig: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotEffort, _, err := reasoningcompat.ApplyClaudeDefault(&tt.request)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantEffort, gotEffort)
+			assert.Equal(t, tt.wantConfig, string(tt.request.OutputConfig))
+		})
+	}
+
+	noSuffix := dto.ClaudeRequest{Model: "claude-opus-5-5"}
+	_, _, err := reasoningcompat.ApplyClaudeSuffix(&noSuffix, "claude-opus-5-5")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"effort":"medium"}`, string(noSuffix.OutputConfig))
+
+	converted, err := service.ClaudeToOpenAIRequest(dto.ClaudeRequest{Model: "claude-opus-5-5"}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
 	require.NoError(t, err)
 	assert.Equal(t, "medium", converted.ReasoningEffort)
 }

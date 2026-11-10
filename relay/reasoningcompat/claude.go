@@ -306,8 +306,14 @@ func ApplyClaudeDefault(req *dto.ClaudeRequest) (string, []string, error) {
 			return "", nil, nil
 		}
 	}
-	if err := setClaudeEffort(req, capabilities.defaultEffort); err != nil {
-		return "", nil, err
+	if capabilities.effort {
+		if err := setClaudeEffort(req, capabilities.defaultEffort); err != nil {
+			return "", nil, err
+		}
+	} else {
+		// Keep the normalized provider default in metadata without sending an
+		// unsupported output_config.effort field upstream.
+		req.OutputConfig = nil
 	}
 	return capabilities.defaultEffort, nil, nil
 }

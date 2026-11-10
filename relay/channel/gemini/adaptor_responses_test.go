@@ -170,6 +170,24 @@ func TestConvertOpenAIResponsesToolOutputMediaToGeminiLegacyInlineData(t *testin
 	assert.Equal(t, "application/pdf", parts[1].InlineData.MimeType)
 }
 
+func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-3-flash-preview",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_file", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_file", "output": []map[string]any{
+				{"type": "input_image", "image_url": map[string]any{"file_id": "file_123"}},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	response := got.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	assert.Contains(t, response.Response["content"], "file_123")
+	assert.NotContains(t, response.Response["content"], "[image]")
+}
+
 func TestGeminiSupportedMimeTypesFollowBlobFamilies(t *testing.T) {
 	for _, mimeType := range []string{"image/gif", "image/avif", "audio/ogg", "video/webm", "text/csv", "application/json"} {
 		assert.True(t, isGeminiSupportedMimeType(mimeType), mimeType)

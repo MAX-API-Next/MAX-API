@@ -618,11 +618,17 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 
 		source, err := geminiResponsesToolFileSource(part, partType)
 		if err != nil || source == nil {
+			if geminiResponsesToolPartHasFileID(part) {
+				return geminiResponsesToolRawFallback(message, name), nil, nil
+			}
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted %s media: %v", partType, err))
 			continue
 		}
 		base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting Responses tool output for Gemini")
 		if err != nil {
+			if geminiResponsesToolPartHasFileID(part) {
+				return geminiResponsesToolRawFallback(message, name), nil, nil
+			}
 			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output media load failed for %s: %v", partType, err))
 			continue
 		}
@@ -648,6 +654,24 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 		media = nil
 	}
 	return response, media, nil
+}
+
+func geminiResponsesToolRawFallback(message dto.Message, name string) *dto.GeminiFunctionResponse {
+	return &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": message.StringContent()}}
+}
+
+func geminiResponsesToolPartHasFileID(part map[string]any) bool {
+	if value := strings.TrimSpace(common.Interface2String(part["file_id"])); value != "" {
+		return true
+	}
+	for _, key := range []string{"image_url", "file", "video_url", "input_audio"} {
+		if nested, ok := part[key].(map[string]any); ok {
+			if value := strings.TrimSpace(common.Interface2String(nested["file_id"])); value != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func appendUniqueGeminiToolLabel(labels []string, label string) []string {
@@ -682,10 +706,10 @@ func geminiResponsesToolFileSource(part map[string]any, partType string) (types.
 	var mimeType string
 	switch partType {
 	case "input_image":
-		data = lookup(container, "url", "image_url", "file_data", "file_url", "file_id")
+		data = lookup(container, "url", "image_url", "file_data", "file_url")
 		mimeType = lookup(container, "mime_type", "mimeType")
 	case "input_file":
-		data = lookup(container, "file_data", "file_url", "url", "file_id")
+		data = lookup(container, "file_data", "file_url", "url")
 		mimeType = lookup(container, "mime_type", "mimeType")
 	case "input_audio":
 		data = lookup(container, "data", "url", "audio_url", "file_data")
@@ -694,7 +718,7 @@ func geminiResponsesToolFileSource(part map[string]any, partType string) (types.
 			mimeType = "audio/" + strings.TrimPrefix(format, "audio/")
 		}
 	case "input_video":
-		data = lookup(container, "url", "video_url", "file_data", "file_url", "file_id")
+		data = lookup(container, "url", "video_url", "file_data", "file_url")
 		mimeType = lookup(container, "mime_type", "mimeType")
 	}
 	if data == "" {

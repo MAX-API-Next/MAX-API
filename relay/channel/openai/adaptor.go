@@ -179,13 +179,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 		requestPath := info.RequestURLPath
 		if info.RelayMode == relayconstant.RelayModeRealtime && info.UpstreamModelName != "" {
-			path, rawQuery, hasQuery := strings.Cut(requestPath, "?")
-			if hasQuery {
-				requestPath = path + "?" + relaycommon.SetRawQueryParam(rawQuery, "model", info.UpstreamModelName)
-			} else {
-				requestPath = path + "?" + relaycommon.SetRawQueryParam("", "model", info.UpstreamModelName)
-			}
-			path, rawQuery, _ = strings.Cut(requestPath, "?")
+			path, rawQuery, _ := strings.Cut(requestPath, "?")
+			rawQuery = relaycommon.SetRawQueryParam(rawQuery, "model", info.UpstreamModelName)
 			requestPath = path + "?" + escapeRealtimeRawQuery(rawQuery)
 		}
 		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestPath, info.ChannelType), nil
