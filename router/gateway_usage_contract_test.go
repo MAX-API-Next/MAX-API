@@ -751,6 +751,10 @@ func gatewayUsageWaitHandler(t *testing.T, completed <-chan gatewayCompletion, a
 func gatewayUsageAssertRefundEffectComplete(t *testing.T, db *gorm.DB, requestID string) {
 	t.Helper()
 	finalizeKey := model.BillingRequestFinalizeOperationKey(requestID)
+	wait, poll := 10*time.Second, 20*time.Millisecond
+	if db.Name() == "mysql" {
+		wait, poll = 45*time.Second, 200*time.Millisecond
+	}
 	require.Eventually(t, func() bool {
 		var settlement model.BillingSettlement
 		if db.Where("operation_key = ?", finalizeKey).First(&settlement).Error != nil {
@@ -758,7 +762,7 @@ func gatewayUsageAssertRefundEffectComplete(t *testing.T, db *gorm.DB, requestID
 		}
 		return settlement.Status == model.BillingSettlementStatusApplied &&
 			(settlement.EffectPayload == "" || settlement.EffectStatus == model.BillingSettlementEffectApplied)
-	}, 10*time.Second, 20*time.Millisecond, "refund settlement effect must be complete before asserting zero consume logs")
+	}, wait, poll, "refund settlement effect must be complete before asserting zero consume logs")
 }
 
 const gatewayChatJSON = `{"id":"chatcmpl-gateway","model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":60}}}`
