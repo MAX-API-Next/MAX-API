@@ -44,6 +44,9 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 		case "adaptive":
 			if effort == "" {
 				effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+				if effort == "" {
+					effort = "high"
+				}
 			}
 		case "enabled":
 			if effort == "" {

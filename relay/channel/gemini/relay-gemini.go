@@ -644,6 +644,9 @@ func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto
 	if responseText == "" {
 		responseText = strings.Join(labels, " ")
 	}
+	if responseText == "" && len(media) == 0 {
+		return geminiResponsesToolRawFallback(message, name), nil, nil
+	}
 	response := &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": responseText}}
 	if mediaInFunctionResponse && len(media) > 0 {
 		parts, err := common.Marshal(media)

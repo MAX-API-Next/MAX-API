@@ -913,7 +913,7 @@ func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
 		{name: "explicit effort", request: dto.ClaudeRequest{Model: "claude-opus-5-5", OutputConfig: []byte(`{"effort":"low"}`)}, wantEffort: "", wantConfig: `{"effort":"low"}`},
 		{name: "disabled thinking", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "disabled"}}, wantEffort: "", wantConfig: ""},
 		{name: "manual budget", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "enabled", BudgetTokens: common.GetPointer(2048)}}, wantEffort: "", wantConfig: ""},
-		{name: "unsupported output effort", request: dto.ClaudeRequest{Model: "claude-fable-5"}, wantEffort: "high", wantConfig: ""},
+		{name: "unsupported output effort", request: dto.ClaudeRequest{Model: "claude-fable-5", OutputConfig: []byte(`{"format":"json"}`)}, wantEffort: "high", wantConfig: `{"format":"json"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -932,6 +932,13 @@ func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
 	converted, err := service.ClaudeToOpenAIRequest(dto.ClaudeRequest{Model: "claude-opus-5-5"}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
 	require.NoError(t, err)
 	assert.Equal(t, "medium", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-4-6",
+		Thinking: &dto.Thinking{Type: "adaptive"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-4-6", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "high", converted.ReasoningEffort)
 }
 
 func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {

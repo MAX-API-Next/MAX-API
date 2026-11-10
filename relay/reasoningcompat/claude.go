@@ -115,7 +115,11 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 	}
 	if intent.Empty() {
 		if c.defaultThinking {
-			return c.defaultEffort, notes, setClaudeEffort(req, c.defaultEffort)
+			outEffort := ""
+			if c.effort {
+				outEffort = c.defaultEffort
+			}
+			return c.defaultEffort, notes, setClaudeEffort(req, outEffort)
 		}
 		return "", notes, nil
 	}
@@ -127,7 +131,11 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 			if *intent.Include {
 				req.Thinking.Display = "summarized"
 			}
-			return c.defaultEffort, notes, setClaudeEffort(req, c.defaultEffort)
+			outEffort := ""
+			if c.effort {
+				outEffort = c.defaultEffort
+			}
+			return c.defaultEffort, notes, setClaudeEffort(req, outEffort)
 		}
 		return "", notes, nil
 	}
@@ -313,7 +321,9 @@ func ApplyClaudeDefault(req *dto.ClaudeRequest) (string, []string, error) {
 	} else {
 		// Keep the normalized provider default in metadata without sending an
 		// unsupported output_config.effort field upstream.
-		req.OutputConfig = nil
+		if err := setClaudeEffort(req, ""); err != nil {
+			return "", nil, err
+		}
 	}
 	return capabilities.defaultEffort, nil, nil
 }
