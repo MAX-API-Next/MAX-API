@@ -512,6 +512,8 @@ type GeminiUsageMetadata struct {
 	HasCachedContentTokenCount bool                        `json:"-"`
 }
 
+// UnmarshalJSON records which Gemini usage counters were present on the wire,
+// preserving explicit zero values when stream snapshots are merged.
 func (m *GeminiUsageMetadata) UnmarshalJSON(data []byte) error {
 	type plain GeminiUsageMetadata
 	var value plain

@@ -147,6 +147,82 @@ func TestResponsesRequestToChatCompletionsRequestFunctionCallConversation(t *tes
 	assert.JSONEq(t, `{"ok":true}`, got.Messages[1].StringContent())
 }
 
+func TestResponsesRequestToChatCompletionsRequestRestrictsStructuredToolMedia(t *testing.T) {
+	tests := []struct {
+		name       string
+		part       map[string]any
+		structured bool
+	}{
+		{
+			name: "supported image",
+			part: map[string]any{
+				"type":      "input_image",
+				"image_url": "data:image/png;base64,iVBORw0KGgo=",
+			},
+			structured: true,
+		},
+		{
+			name: "supported file",
+			part: map[string]any{
+				"type": "input_file",
+				"file": map[string]any{"file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+			},
+			structured: true,
+		},
+		{
+			name: "supported text file with MIME parameters",
+			part: map[string]any{
+				"type": "input_file",
+				"file": map[string]any{
+					"file_data": "data:text/plain;base64,SGVsbG8=",
+					"mime_type": "text/plain; charset=utf-8",
+				},
+			},
+			structured: true,
+		},
+		{
+			name: "unsupported image",
+			part: map[string]any{
+				"type":      "input_image",
+				"image_url": "data:image/gif;base64,R0lGODlh",
+			},
+		},
+		{
+			name: "unsupported image format",
+			part: map[string]any{
+				"type":      "input_image",
+				"image_url": "data:image/avif;base64,AA==",
+			},
+		},
+		{
+			name: "unsupported audio",
+			part: map[string]any{
+				"type": "input_audio",
+				"data": "data:audio/ogg;base64,T2dnUw==",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+				Model: "gemini-test",
+				Input: mustCompatRawMessage(t, []map[string]any{
+					{"type": "function_call_output", "call_id": "call_media", "output": []map[string]any{test.part}},
+				}),
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Messages, 1)
+			if test.structured {
+				require.NotNil(t, got.Messages[0].ResponsesToolOutput)
+			} else {
+				assert.Nil(t, got.Messages[0].ResponsesToolOutput)
+			}
+			assert.Contains(t, got.Messages[0].StringContent(), test.part["type"])
+		})
+	}
+}
+
 func TestResponsesRequestToChatCompletionsRequestToolsToolChoiceAndTextFormat(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",

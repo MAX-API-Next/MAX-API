@@ -185,8 +185,10 @@ func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.
 	require.Len(t, got.Contents, 2)
 	response := got.Contents[1].Parts[0].FunctionResponse
 	require.NotNil(t, response)
-	assert.Contains(t, response.Response["content"], "file_123")
-	assert.NotContains(t, response.Response["content"], "[image]")
+	rawResponse, err := common.Marshal(response.Response)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawResponse), "file_123")
+	assert.NotContains(t, string(rawResponse), "[image]")
 }
 
 func TestConvertOpenAIResponsesToolOutputAudioFileIDPreservesRawReference(t *testing.T) {
@@ -202,8 +204,10 @@ func TestConvertOpenAIResponsesToolOutputAudioFileIDPreservesRawReference(t *tes
 
 	response := got.Contents[1].Parts[0].FunctionResponse
 	require.NotNil(t, response)
-	assert.Contains(t, response.Response["content"], "file_audio")
-	assert.NotContains(t, response.Response["content"], "[audio]")
+	rawResponse, err := common.Marshal(response.Response)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawResponse), "file_audio")
+	assert.NotContains(t, string(rawResponse), "[audio]")
 }
 
 func TestGeminiSupportedMimeTypesFollowBlobFamilies(t *testing.T) {
