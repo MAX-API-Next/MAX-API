@@ -251,21 +251,26 @@ func responsesToolOutputAllowedMime(part map[string]any, allowed ...string) bool
 	if mimeType == "" {
 		mimeType = strings.TrimSpace(common.Interface2String(container["mimeType"]))
 	}
+	sourceKeys := []string{"url", "image_url", "file_data", "file_url"}
+	switch strings.TrimSpace(common.Interface2String(part["type"])) {
+	case "input_file":
+		sourceKeys = []string{"file_data", "file_url", "url"}
+	case "input_audio":
+		sourceKeys = []string{"data", "url", "audio_url", "file_data"}
+	case "input_video":
+		sourceKeys = []string{"url", "video_url", "file_data", "file_url"}
+	}
 	hasSource := false
-	for _, sourceKey := range []string{"url", "image_url", "file_data", "file_url", "data", "audio_url", "video_url"} {
+	for _, sourceKey := range sourceKeys {
 		source := strings.TrimSpace(common.Interface2String(container[sourceKey]))
 		if source == "" {
 			continue
 		}
 		hasSource = true
 		if mimeType == "" {
-			dataMime := responsesToolOutputDataMime(source)
-			if dataMime == "" {
-				continue
-			}
-			mimeType = dataMime
-			break
+			mimeType = responsesToolOutputDataMime(source)
 		}
+		break
 	}
 	if mimeType == "" {
 		return hasSource

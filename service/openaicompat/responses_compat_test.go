@@ -181,6 +181,17 @@ func TestResponsesRequestToChatCompletionsRequestRestrictsStructuredToolMedia(t 
 			structured: true,
 		},
 		{
+			name: "image uses first loader source",
+			part: map[string]any{
+				"type": "input_image",
+				"image_url": map[string]any{
+					"url":       "data:image/png;base64,iVBORw0KGgo=",
+					"file_data": "data:image/gif;base64,R0lGODlh",
+				},
+			},
+			structured: true,
+		},
+		{
 			name: "unsupported image",
 			part: map[string]any{
 				"type":      "input_image",

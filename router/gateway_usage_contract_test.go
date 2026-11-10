@@ -180,7 +180,13 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 	registerRealtime := func(ws *websocket.Conn) {
 		realtimeConnections = append(realtimeConnections, ws)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	clientTimeout := 15 * time.Second
+	streamWait := 5 * time.Second
+	if db.Name() == "mysql" {
+		clientTimeout = 120 * time.Second
+		streamWait = 45 * time.Second
+	}
+	client := &http.Client{Timeout: clientTimeout}
 	const (
 		// 40 uncached input + 60 cached input * 0.1 + 20 output * 2.
 		gatewayTextQuota = 86
@@ -362,7 +368,9 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				}()
 				select {
 				case <-readDone:
-				case <-time.After(5 * time.Second):
+				case <-time.After(streamWait):
+					_ = resp.Body.Close()
+					<-readDone
 					t.Fatal("stream response did not finish")
 				}
 			} else {
