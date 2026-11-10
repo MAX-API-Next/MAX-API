@@ -972,6 +972,10 @@ func TestGeminiStreamHandlerMergesExplicitZeroCachedContentCount(t *testing.T) {
 	})
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 10, usage.CompletionTokens)
+	require.Equal(t, 110, usage.TotalTokens)
+	require.Zero(t, usage.PromptTokensDetails.CachedTokens)
 	require.True(t, last.HasCachedContentTokenCount)
 	require.Zero(t, last.CachedContentTokenCount)
 }
