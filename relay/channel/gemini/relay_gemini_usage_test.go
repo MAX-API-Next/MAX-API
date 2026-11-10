@@ -900,6 +900,54 @@ func TestGeminiStreamHandlerDoesNotCountAudioInlineDataAsImage(t *testing.T) {
 	require.NotEqual(t, 1400, usage.CompletionTokens)
 }
 
+func TestGeminiStreamHandlerMergesCumulativeModalityDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-3-flash-preview"},
+	}
+	frames := []dto.GeminiChatResponse{
+		{
+			Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{{Text: "a"}}}}},
+			UsageMetadata: dto.GeminiUsageMetadata{
+				PromptTokenCount: 100, CandidatesTokenCount: 10, TotalTokenCount: 110,
+				PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+					{Modality: "IMAGE", TokenCount: 90}, {Modality: "TEXT", TokenCount: 10},
+				},
+			},
+		},
+		{
+			Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{{Text: "b"}}}}},
+			UsageMetadata: dto.GeminiUsageMetadata{
+				PromptTokenCount: 100, CandidatesTokenCount: 20, TotalTokenCount: 120,
+				PromptTokensDetails: []dto.GeminiPromptTokensDetails{{Modality: "TEXT", TokenCount: 20}},
+			},
+		},
+	}
+	var body strings.Builder
+	for _, frame := range frames {
+		data, err := common.Marshal(frame)
+		require.NoError(t, err)
+		body.WriteString("data: ")
+		body.Write(data)
+		body.WriteString("\n")
+	}
+	body.WriteString("data: [DONE]\n")
+
+	var last dto.GeminiUsageMetadata
+	usage, apiErr := geminiStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body.String()))}, func(_ string, response *dto.GeminiChatResponse) bool {
+		last = response.UsageMetadata
+		return true
+	})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Contains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "IMAGE", TokenCount: 90})
+	require.Contains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "TEXT", TokenCount: 20})
+	require.NotContains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "TEXT", TokenCount: 10})
+}
+
 func sseDataForEvent(t *testing.T, body string, eventType string) string {
 	t.Helper()
 	for _, event := range strings.Split(body, "\n\n") {

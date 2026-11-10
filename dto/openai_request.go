@@ -414,7 +414,11 @@ type Message struct {
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
 	Tools            json.RawMessage `json:"tools,omitempty"` // Kimi K3 message-scoped tool declarations.
-	parsedContent    []MediaContent
+	// ResponsesToolOutput preserves a structured function_call_output payload
+	// for provider-specific multimodal conversion. It is request-local state and
+	// must never be serialized as part of Chat Completions messages.
+	ResponsesToolOutput any `json:"-"`
+	parsedContent       []MediaContent
 	//parsedStringContent *string
 }
 

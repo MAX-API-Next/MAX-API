@@ -11,6 +11,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
@@ -864,6 +865,41 @@ func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+func TestRequestOpenAI2ClaudeMessage_ClaudeOpus55DefaultsToMediumEffort(t *testing.T) {
+	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model:    "claude-opus-5-5",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"effort":"medium"}`, string(claudeRequest.OutputConfig))
+
+	claudeRequest, err = RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model:            "claude-opus-5-5",
+		IncludeReasoning: common.GetPointer(true),
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, claudeRequest.Thinking)
+	require.Equal(t, "adaptive", claudeRequest.Thinking.Type)
+	require.JSONEq(t, `{"effort":"medium"}`, string(claudeRequest.OutputConfig))
+}
+
+func TestClaudeOpus55DefaultEffortFlowsToOpenAIBridge(t *testing.T) {
+	converted, err := service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-5-5",
+		Thinking: &dto.Thinking{Type: "adaptive"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-5-5",
+		Thinking: &dto.Thinking{Type: "enabled"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
 }
 
 func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {

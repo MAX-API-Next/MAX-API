@@ -10,7 +10,10 @@ import (
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 )
 
-type claudeCapabilities struct{ adaptive, manual, defaultThinking, effort, xhigh, max, strict, disable bool }
+type claudeCapabilities struct {
+	adaptive, manual, defaultThinking, effort, xhigh, max, strict, disable bool
+	defaultEffort                                                          string
+}
 
 func ClaudeEffort(req *dto.ClaudeRequest) string {
 	if req.Thinking != nil && req.Thinking.Type == "disabled" {
@@ -32,7 +35,7 @@ func ClaudeEffort(req *dto.ClaudeRequest) string {
 
 func claudeModelCapabilities(model string) claudeCapabilities {
 	model = strings.ToLower(model)
-	c := claudeCapabilities{manual: true, disable: true}
+	c := claudeCapabilities{manual: true, disable: true, defaultEffort: "high"}
 	switch {
 	case strings.HasPrefix(model, "claude-fable-5"), strings.HasPrefix(model, "claude-mythos-5"):
 		c.adaptive = true
@@ -48,6 +51,15 @@ func claudeModelCapabilities(model string) claudeCapabilities {
 		c.disable = false
 		c.strict = true
 		c.max = true
+	case strings.HasPrefix(model, "claude-opus-5-5"):
+		c.adaptive = true
+		c.manual = false
+		c.defaultThinking = true
+		c.defaultEffort = "medium"
+		c.effort = true
+		c.xhigh = true
+		c.max = true
+		c.strict = true
 	case strings.HasPrefix(model, "claude-opus-5"), strings.HasPrefix(model, "claude-sonnet-5"), strings.HasPrefix(model, "claude-opus-4-8"), strings.HasPrefix(model, "claude-opus-4-7"):
 		c.adaptive = true
 		c.manual = false
@@ -102,6 +114,9 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 		req.TopK = nil
 	}
 	if intent.Empty() {
+		if c.defaultThinking {
+			return c.defaultEffort, notes, setClaudeEffort(req, c.defaultEffort)
+		}
 		return "", notes, nil
 	}
 	if intent.Mode == "" && intent.Effort == "" && intent.Budget == nil {
@@ -112,7 +127,7 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 			if *intent.Include {
 				req.Thinking.Display = "summarized"
 			}
-			return "high", notes, nil
+			return c.defaultEffort, notes, setClaudeEffort(req, c.defaultEffort)
 		}
 		return "", notes, nil
 	}
@@ -154,7 +169,7 @@ func ApplyClaude(req *dto.ClaudeRequest, intent Intent) (string, []string, error
 			notes = append(notes, "thinking budget converted to adaptive effort")
 		}
 		if effort == "" {
-			effort = "high"
+			effort = c.defaultEffort
 		}
 		req.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 		if !c.effort {
@@ -241,8 +256,11 @@ func ApplyClaudeSuffix(req *dto.ClaudeRequest, origin string) (string, []string,
 		return "", nil, nil
 	}
 	base, intent, found, err := ParseSuffix(req.Model, "claude", model_setting.GetClaudeSettings().ThinkingAdapterEnabled)
-	if err != nil || !found {
+	if err != nil {
 		return "", nil, err
+	}
+	if !found {
+		return ApplyClaudeDefault(req)
 	}
 	if req.Thinking != nil || len(req.OutputConfig) > 0 {
 		native := Intent{Effort: req.GetEfforts()}
@@ -264,4 +282,42 @@ func ApplyClaudeSuffix(req *dto.ClaudeRequest, origin string) (string, []string,
 	}
 	req.Model = base
 	return ApplyClaude(req, intent)
+}
+
+// ApplyClaudeDefault makes a known model's provider default explicit for
+// native Claude requests that otherwise carry no effort or adaptive effort.
+// Explicit disabled/manual/effort controls remain untouched.
+func ApplyClaudeDefault(req *dto.ClaudeRequest) (string, []string, error) {
+	if req == nil {
+		return "", nil, nil
+	}
+	capabilities := claudeModelCapabilities(req.Model)
+	if !capabilities.defaultThinking || req.GetEfforts() != "" {
+		return "", nil, nil
+	}
+	if req.Thinking != nil {
+		switch req.Thinking.Type {
+		case "adaptive":
+		case "enabled":
+			if req.Thinking.BudgetTokens != nil {
+				return "", nil, nil
+			}
+		default:
+			return "", nil, nil
+		}
+	}
+	if err := setClaudeEffort(req, capabilities.defaultEffort); err != nil {
+		return "", nil, err
+	}
+	return capabilities.defaultEffort, nil, nil
+}
+
+// ClaudeDefaultEffort returns the model-specific provider default used when a
+// Claude request did not specify an effort.
+func ClaudeDefaultEffort(model string) string {
+	capabilities := claudeModelCapabilities(model)
+	if !capabilities.defaultThinking {
+		return ""
+	}
+	return capabilities.defaultEffort
 }

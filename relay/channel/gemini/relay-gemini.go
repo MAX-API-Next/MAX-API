@@ -29,25 +29,42 @@ import (
 
 // https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference?hl=zh-cn#blob
 var geminiSupportedMimeTypes = map[string]bool{
-	"application/pdf": true,
-	"audio/mpeg":      true,
-	"audio/mp3":       true,
-	"audio/wav":       true,
-	"image/png":       true,
-	"image/jpeg":      true,
-	"image/jpg":       true, // support old image/jpeg
-	"image/webp":      true,
-	"image/heic":      true,
-	"image/heif":      true,
-	"text/plain":      true,
-	"video/mov":       true,
-	"video/mpeg":      true,
-	"video/mp4":       true,
-	"video/mpg":       true,
-	"video/avi":       true,
-	"video/wmv":       true,
-	"video/mpegps":    true,
-	"video/flv":       true,
+	"application/pdf":           true,
+	"audio/mpeg":                true,
+	"audio/mp3":                 true,
+	"audio/wav":                 true,
+	"image/png":                 true,
+	"image/jpeg":                true,
+	"image/jpg":                 true, // support old image/jpeg
+	"image/webp":                true,
+	"image/heic":                true,
+	"image/heif":                true,
+	"image/gif":                 true,
+	"image/avif":                true,
+	"text/plain":                true,
+	"text/html":                 true,
+	"text/css":                  true,
+	"text/javascript":           true,
+	"text/x-typescript":         true,
+	"text/csv":                  true,
+	"text/markdown":             true,
+	"text/x-python":             true,
+	"text/xml":                  true,
+	"text/rtf":                  true,
+	"application/x-javascript":  true,
+	"application/x-typescript":  true,
+	"application/x-python-code": true,
+	"application/json":          true,
+	"application/x-ipynb+json":  true,
+	"application/rtf":           true,
+	"video/mov":                 true,
+	"video/mpeg":                true,
+	"video/mp4":                 true,
+	"video/mpg":                 true,
+	"video/avi":                 true,
+	"video/wmv":                 true,
+	"video/mpegps":              true,
+	"video/flv":                 true,
 }
 
 const thoughtSignatureBypassValue = "context_engineering_is_the_way_to_go"
@@ -347,8 +364,21 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 	}
 	tool_call_ids := make(map[string]string)
 	var system_content []string
+	var pendingToolMedia []dto.GeminiPart
+	flushPendingToolMedia := func() {
+		if len(pendingToolMedia) == 0 || len(geminiRequest.Contents) == 0 {
+			pendingToolMedia = nil
+			return
+		}
+		last := &geminiRequest.Contents[len(geminiRequest.Contents)-1]
+		last.Parts = append(last.Parts, pendingToolMedia...)
+		pendingToolMedia = nil
+	}
 	//shouldAddDummyModelMessage := false
 	for _, message := range textRequest.Messages {
+		if message.Role != "tool" && message.Role != "function" {
+			flushPendingToolMedia()
+		}
 		if message.Role == "system" || message.Role == "developer" {
 			system_content = append(system_content, message.StringContent())
 			continue
@@ -365,25 +395,9 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 			} else if val, exists := tool_call_ids[message.ToolCallId]; exists {
 				name = val
 			}
-			var contentMap map[string]interface{}
-			contentStr := message.StringContent()
-
-			// 1. 尝试解析为 JSON 对象
-			if err := json.Unmarshal([]byte(contentStr), &contentMap); err != nil {
-				// 2. 如果失败，尝试解析为 JSON 数组
-				var contentSlice []interface{}
-				if err := json.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
-					// 如果是数组，包装成对象
-					contentMap = map[string]interface{}{"result": contentSlice}
-				} else {
-					// 3. 如果再次失败，作为纯文本处理
-					contentMap = map[string]interface{}{"content": contentStr}
-				}
-			}
-
-			functionResp := &dto.GeminiFunctionResponse{
-				Name:     name,
-				Response: contentMap,
+			functionResp, media, err := geminiFunctionResponseFromMessage(c, info.UpstreamModelName, message, name)
+			if err != nil {
+				return nil, err
 			}
 			if message.ToolCallId != "" {
 				id, err := common.Marshal(message.ToolCallId)
@@ -396,6 +410,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 			*parts = append(*parts, dto.GeminiPart{
 				FunctionResponse: functionResp,
 			})
+			pendingToolMedia = append(pendingToolMedia, media...)
 			continue
 		}
 		var parts []dto.GeminiPart
@@ -506,7 +521,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				}
 
 				// 校验 MimeType 是否在 Gemini 支持的白名单中
-				if _, ok := geminiSupportedMimeTypes[strings.ToLower(mimeType)]; !ok {
+				if !isGeminiSupportedMimeType(mimeType) {
 					return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s', supported types are: %v", mimeType, source.GetIdentifier(), getSupportedMimeTypesList())
 				}
 
@@ -540,6 +555,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 			geminiRequest.Contents = append(geminiRequest.Contents, content)
 		}
 	}
+	flushPendingToolMedia()
 
 	if len(system_content) > 0 {
 		geminiRequest.SystemInstructions = &dto.GeminiChatContent{
@@ -552,6 +568,147 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 	}
 
 	return &geminiRequest, nil
+}
+
+func geminiFunctionResponseFromMessage(c *gin.Context, model string, message dto.Message, name string) (*dto.GeminiFunctionResponse, []dto.GeminiPart, error) {
+	if message.ResponsesToolOutput == nil {
+		contentMap := map[string]interface{}{}
+		contentStr := message.StringContent()
+		if err := json.Unmarshal([]byte(contentStr), &contentMap); err != nil {
+			var contentSlice []interface{}
+			if err := json.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
+				contentMap = map[string]interface{}{"result": contentSlice}
+			} else {
+				contentMap = map[string]interface{}{"content": contentStr}
+			}
+		}
+		return &dto.GeminiFunctionResponse{Name: name, Response: contentMap}, nil, nil
+	}
+
+	rawParts, ok := message.ResponsesToolOutput.([]any)
+	if !ok || len(rawParts) == 0 {
+		return &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": message.StringContent()}}, nil, nil
+	}
+	mediaInFunctionResponse := true
+	modelID := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	if strings.HasPrefix(modelID, "gemini-1.") || strings.HasPrefix(modelID, "gemini-2.") {
+		mediaInFunctionResponse = false
+	}
+	texts := make([]string, 0, len(rawParts))
+	labels := make([]string, 0, len(rawParts))
+	media := make([]dto.GeminiPart, 0, len(rawParts))
+	for _, rawPart := range rawParts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType := strings.TrimSpace(common.Interface2String(part["type"]))
+		switch partType {
+		case "input_text", "output_text", "text":
+			if text := common.Interface2String(part["text"]); text != "" {
+				texts = append(texts, text)
+			}
+			continue
+		case "input_image", "input_file", "input_audio", "input_video":
+			labels = appendUniqueGeminiToolLabel(labels, "["+strings.TrimPrefix(partType, "input_")+"]")
+		default:
+			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported content part type %q", partType))
+			continue
+		}
+
+		source, err := geminiResponsesToolFileSource(part, partType)
+		if err != nil || source == nil {
+			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted %s media: %v", partType, err))
+			continue
+		}
+		base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting Responses tool output for Gemini")
+		if err != nil {
+			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output media load failed for %s: %v", partType, err))
+			continue
+		}
+		topLevelType := strings.TrimSpace(strings.SplitN(strings.ToLower(mimeType), "/", 2)[0])
+		if !isGeminiSupportedMimeType(mimeType) || (mediaInFunctionResponse && (topLevelType == "audio" || topLevelType == "video")) {
+			logger.LogWarn(c, fmt.Sprintf("Gemini Responses tool output omitted unsupported media type %q", mimeType))
+			continue
+		}
+		media = append(media, dto.GeminiPart{InlineData: &dto.GeminiInlineData{MimeType: mimeType, Data: base64Data}})
+	}
+
+	responseText := strings.Join(texts, "\n")
+	if responseText == "" {
+		responseText = strings.Join(labels, " ")
+	}
+	response := &dto.GeminiFunctionResponse{Name: name, Response: map[string]interface{}{"content": responseText}}
+	if mediaInFunctionResponse && len(media) > 0 {
+		parts, err := common.Marshal(media)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal Gemini function response media: %w", err)
+		}
+		response.Parts = parts
+		media = nil
+	}
+	return response, media, nil
+}
+
+func appendUniqueGeminiToolLabel(labels []string, label string) []string {
+	for _, existing := range labels {
+		if existing == label {
+			return labels
+		}
+	}
+	return append(labels, label)
+}
+
+func geminiResponsesToolFileSource(part map[string]any, partType string) (types.FileSource, error) {
+	value := func(v any) string { return strings.TrimSpace(common.Interface2String(v)) }
+	lookup := func(container map[string]any, keys ...string) string {
+		for _, key := range keys {
+			if raw, exists := container[key]; exists {
+				if text := value(raw); text != "" {
+					return text
+				}
+			}
+		}
+		return ""
+	}
+	container := part
+	for _, key := range []string{"image_url", "file", "input_audio", "video_url"} {
+		if nested, ok := part[key].(map[string]any); ok {
+			container = nested
+			break
+		}
+	}
+	var data string
+	var mimeType string
+	switch partType {
+	case "input_image":
+		data = lookup(container, "url", "image_url", "file_data", "file_url", "file_id")
+		mimeType = lookup(container, "mime_type", "mimeType")
+	case "input_file":
+		data = lookup(container, "file_data", "file_url", "url", "file_id")
+		mimeType = lookup(container, "mime_type", "mimeType")
+	case "input_audio":
+		data = lookup(container, "data", "url", "audio_url", "file_data")
+		format := lookup(container, "format")
+		if format != "" {
+			mimeType = "audio/" + strings.TrimPrefix(format, "audio/")
+		}
+	case "input_video":
+		data = lookup(container, "url", "video_url", "file_data", "file_url", "file_id")
+		mimeType = lookup(container, "mime_type", "mimeType")
+	}
+	if data == "" {
+		return nil, fmt.Errorf("missing media source")
+	}
+	return types.NewFileSourceFromData(data, mimeType), nil
+}
+
+func isGeminiSupportedMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	if geminiSupportedMimeTypes[mimeType] {
+		return true
+	}
+	return strings.HasPrefix(mimeType, "audio/") || strings.HasPrefix(mimeType, "video/")
 }
 
 // parseStopSequences 解析停止序列，支持字符串或字符串数组
@@ -1506,6 +1663,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	responseText := strings.Builder{}
 	auditText := strings.Builder{}
 	functionCallObserver := newGeminiFunctionCallObserver(info)
+	var mergedMetadata *dto.GeminiUsageMetadata
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var geminiResponse dto.GeminiChatResponse
@@ -1542,7 +1700,10 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 更新使用量统计
 		if metadata := geminiResponse.GetUsageMetadata(); dto.HasGeminiUsageMetadataTokens(metadata) {
-			mappedUsage := buildUsageFromGeminiMetadata(*metadata, info.GetEstimatePromptTokens())
+			mergedMetadata = dto.MergeGeminiUsageMetadataNonZero(mergedMetadata, metadata)
+			geminiResponse.UsageMetadata = *mergedMetadata
+			geminiResponse.HasUsageMetadata = true
+			mappedUsage := buildUsageFromGeminiMetadata(*mergedMetadata, info.GetEstimatePromptTokens())
 			*usage = mappedUsage
 		}
 

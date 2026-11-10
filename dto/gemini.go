@@ -506,6 +506,10 @@ type GeminiUsageMetadata struct {
 	BillingUsage               *BillingUsage               `json:"billing_usage,omitempty"`
 	HasPromptTokenCount        bool                        `json:"-"`
 	HasCandidatesTokenCount    bool                        `json:"-"`
+	HasToolUsePromptTokenCount bool                        `json:"-"`
+	HasTotalTokenCount         bool                        `json:"-"`
+	HasThoughtsTokenCount      bool                        `json:"-"`
+	HasCachedContentTokenCount bool                        `json:"-"`
 }
 
 func (m *GeminiUsageMetadata) UnmarshalJSON(data []byte) error {
@@ -515,8 +519,12 @@ func (m *GeminiUsageMetadata) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var presence struct {
-		Prompt     *int `json:"promptTokenCount"`
-		Candidates *int `json:"candidatesTokenCount"`
+		Prompt        *int `json:"promptTokenCount"`
+		ToolUsePrompt *int `json:"toolUsePromptTokenCount"`
+		Candidates    *int `json:"candidatesTokenCount"`
+		Total         *int `json:"totalTokenCount"`
+		Thoughts      *int `json:"thoughtsTokenCount"`
+		Cached        *int `json:"cachedContentTokenCount"`
 	}
 	if err := common.Unmarshal(data, &presence); err != nil {
 		return err
@@ -524,6 +532,10 @@ func (m *GeminiUsageMetadata) UnmarshalJSON(data []byte) error {
 	*m = GeminiUsageMetadata(value)
 	m.HasPromptTokenCount = presence.Prompt != nil
 	m.HasCandidatesTokenCount = presence.Candidates != nil
+	m.HasToolUsePromptTokenCount = presence.ToolUsePrompt != nil
+	m.HasTotalTokenCount = presence.Total != nil
+	m.HasThoughtsTokenCount = presence.Thoughts != nil
+	m.HasCachedContentTokenCount = presence.Cached != nil
 	return nil
 }
 

@@ -181,8 +181,13 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		if callID == "" {
 			return nil, fmt.Errorf("%s item is missing call_id", itemType)
 		}
-		content := responseToolOutputToChatContent(item["output"])
-		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
+		output := item["output"]
+		content := responseToolOutputToChatContent(output)
+		message := dto.Message{Role: "tool", ToolCallId: callID, Content: content}
+		if _, ok := output.([]any); ok {
+			message.ResponsesToolOutput = output
+		}
+		return append(messages, message), nil
 	}
 	if !responsesInputItemHasChatMessageShape(itemType, item) {
 		return messages, nil

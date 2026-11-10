@@ -34,17 +34,24 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 	isOpenRouter := info.ChannelType == constant.ChannelTypeOpenRouter
 
 	effort := claudeRequest.GetEfforts()
+	if effort == "" && claudeRequest.Thinking == nil {
+		effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+	}
 	if claudeRequest.Thinking != nil {
 		switch claudeRequest.Thinking.Type {
 		case "disabled":
 			effort = "none"
 		case "adaptive":
 			if effort == "" {
-				effort = "high"
+				effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
 			}
 		case "enabled":
-			if effort == "" && claudeRequest.Thinking.BudgetTokens != nil {
-				effort = reasoningcompat.EffortFromBudget(*claudeRequest.Thinking.BudgetTokens)
+			if effort == "" {
+				if claudeRequest.Thinking.BudgetTokens != nil {
+					effort = reasoningcompat.EffortFromBudget(*claudeRequest.Thinking.BudgetTokens)
+				} else {
+					effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+				}
 			}
 		}
 	}
