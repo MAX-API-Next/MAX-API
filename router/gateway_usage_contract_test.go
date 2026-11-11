@@ -49,13 +49,14 @@ func TestGatewayUsageContractSQLite(t *testing.T) {
 }
 
 // External runs explicitly opt in, require an empty authorized disposable DB,
-// validate TLS and retain all synthetic rows for independent inspection.
+// validate TLS and retain all synthetic rows for independent inspection. Reusing
+// a non-default database requires TEST_GATEWAY_USAGE_MYSQL_DATABASE to match it.
 func TestGatewayUsageContractMySQL(t *testing.T) {
 	if os.Getenv("MAXAPI_GATEWAY_MYSQL") != "1" {
 		t.Skip("requires MAXAPI_GATEWAY_MYSQL=1 and dedicated test credentials")
 	}
 	cfg, err := mysqldriver.ParseDSN(os.Getenv("TEST_GATEWAY_USAGE_MYSQL_DSN"))
-	if err != nil || cfg.DBName != "maxapi_gateway_usage_test_1" || cfg.AllowFallbackToPlaintext {
+	if err != nil || !gatewayUsageMySQLDatabaseAllowed(cfg.DBName, os.Getenv("TEST_GATEWAY_USAGE_MYSQL_DATABASE")) || cfg.AllowFallbackToPlaintext {
 		t.Fatal("invalid dedicated MySQL configuration (details withheld)")
 	}
 	pin, err := hex.DecodeString(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256"))
@@ -107,6 +108,50 @@ func TestGatewayUsageContractMySQL(t *testing.T) {
 		t.Fatal("MySQL fixture ownership could not be claimed")
 	}
 	runGatewayUsageContract(t, db)
+}
+
+// gatewayUsageMySQLDatabaseAllowed requires the DSN to match the explicitly
+// confirmed disposable database, or the default when no override is provided.
+// System schemas are never valid targets, even with explicit confirmation.
+func gatewayUsageMySQLDatabaseAllowed(name, explicitName string) bool {
+	switch strings.ToLower(name) {
+	case "", "mysql", "sys", "information_schema", "performance_schema":
+		return false
+	}
+	expected := strings.TrimSpace(explicitName)
+	if expected == "" {
+		expected = "maxapi_gateway_usage_test_1"
+	}
+	return name == expected
+}
+
+// TestGatewayUsageMySQLDatabaseSelection checks explicit target confirmation
+// without connecting to or modifying an external database.
+func TestGatewayUsageMySQLDatabaseSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		database     string
+		explicitName string
+		allowed      bool
+	}{
+		{name: "default", database: "maxapi_gateway_usage_test_1", allowed: true},
+		{name: "explicit_test1", database: "test1", explicitName: "test1", allowed: true},
+		{name: "test1_not_confirmed", database: "test1"},
+		{name: "different_confirmation", database: "test1", explicitName: "test2"},
+		{name: "default_conflicts_with_confirmation", database: "maxapi_gateway_usage_test_1", explicitName: "test1"},
+		{name: "empty_database"},
+		{name: "empty_database_with_confirmation", explicitName: "test1"},
+		{name: "case_mismatch", database: "test1", explicitName: "TEST1"},
+		{name: "surrounding_confirmation_spaces", database: "test1", explicitName: " test1 ", allowed: true},
+		{name: "mysql_system_schema", database: "mysql", explicitName: "mysql"},
+		{name: "sys_system_schema", database: "sys", explicitName: "sys"},
+		{name: "information_schema", database: "information_schema", explicitName: "information_schema"},
+		{name: "performance_schema", database: "performance_schema", explicitName: "performance_schema"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.allowed, gatewayUsageMySQLDatabaseAllowed(tc.database, tc.explicitName))
+		})
+	}
 }
 
 type gatewayUsageTestOwnership struct {
