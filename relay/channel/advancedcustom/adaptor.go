@@ -315,7 +315,12 @@ func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
 	return strings.Split(info.RequestURLPath, "?")[0]
 }
 
+// routeURL resolves the configured route and query authentication. Realtime
+// model overrides are also recorded in relay metadata for consistent logging.
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
+	if info == nil {
+		return "", errors.New("missing relay info")
+	}
 	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(a.route.UpstreamPath), info), info)
 	if err != nil {
 		return "", err
@@ -333,13 +338,74 @@ func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 		case "http":
 			parsedURL.Scheme = "ws"
 		}
+		modelValues, malformedModelQuery := rawQueryParamValues(parsedURL.RawQuery, "model")
+		configuredModel := firstNonEmptyQueryValue(modelValues)
+		if malformedModelQuery {
+			return "", errors.New("advanced custom realtime model query is invalid")
+		}
+		if info.IsModelMapped && info.UpstreamModelName != "" {
+			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
+		} else if configuredModel == "" && relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") {
+			return "", errors.New("advanced custom realtime model query is invalid")
+		} else if configuredModel != "" {
+			if configuredModel != info.UpstreamModelName {
+				// A fixed custom-route model is an upstream override even without a
+				// channel model_mapping entry; retain it for usage-log attribution.
+				info.UpstreamModelName = configuredModel
+				info.IsModelMapped = true
+			}
+			// Normalize duplicate model parameters to the same value used for
+			// logging, so an upstream cannot select a different occurrence.
+			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
+		} else if info.UpstreamModelName != "" {
+			parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, "model", info.UpstreamModelName)
+		}
 	}
 	if a.route.Auth != nil && strings.TrimSpace(a.route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
-		query := parsedURL.Query()
-		query.Set(strings.TrimSpace(a.route.Auth.Name), applyAuthTemplate(a.route.Auth.Value, info.ApiKey))
-		parsedURL.RawQuery = query.Encode()
+		authName := strings.TrimSpace(a.route.Auth.Name)
+		authValue := applyAuthTemplate(a.route.Auth.Value, info.ApiKey)
+		authModelValues, _ := rawQueryParamValues(parsedURL.RawQuery, "model")
+		if info.RelayMode == relayconstant.RelayModeRealtime && authName == "model" &&
+			relaycommon.HasRawQueryParam(parsedURL.RawQuery, "model") && firstNonEmptyQueryValue(authModelValues) != authValue {
+			return "", errors.New("advanced custom realtime model conflicts with query authentication")
+		}
+		parsedURL.RawQuery = relaycommon.SetRawQueryParam(parsedURL.RawQuery, authName, authValue)
 	}
 	return parsedURL.String(), nil
+}
+
+// firstNonEmptyQueryValue selects the first configured nonempty query value.
+func firstNonEmptyQueryValue(values []string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// rawQueryParamValues decodes matching values without reparsing unrelated query
+// components and reports invalid escapes or semicolons in the selected values.
+func rawQueryParamValues(rawQuery, name string) (values []string, malformed bool) {
+	for _, part := range strings.Split(rawQuery, "&") {
+		key, value := part, ""
+		if separator := strings.IndexByte(part, '='); separator >= 0 {
+			key, value = part[:separator], part[separator+1:]
+		}
+		if relaycommon.HasRawQueryParam(key, name) {
+			if strings.Contains(value, ";") {
+				malformed = true
+				continue
+			}
+			decoded, err := url.QueryUnescape(value)
+			if err != nil {
+				malformed = true
+				continue
+			}
+			values = append(values, decoded)
+		}
+	}
+	return values, malformed
 }
 
 func resolveUpstreamTargetURL(upstreamPath string, info *relaycommon.RelayInfo) (*url.URL, error) {

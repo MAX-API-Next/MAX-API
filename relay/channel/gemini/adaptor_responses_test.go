@@ -124,6 +124,120 @@ func TestConvertOpenAIResponsesRequestToGeminiRejectsUnsupportedTools(t *testing
 	assert.Contains(t, err.Error(), `tool type "web_search_preview"`)
 }
 
+func TestConvertOpenAIResponsesToolOutputMediaToGeminiFunctionResponseParts(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-3-flash-preview",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_media", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_media", "output": []map[string]any{
+				{"type": "output_text", "text": "see this"},
+				{"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	parts := got.Contents[1].Parts
+	require.Len(t, parts, 1)
+	require.NotNil(t, parts[0].FunctionResponse)
+	assert.Equal(t, "see this", parts[0].FunctionResponse.Response["content"])
+	var responseParts []dto.GeminiPart
+	require.NoError(t, common.Unmarshal(parts[0].FunctionResponse.Parts, &responseParts))
+	require.Len(t, responseParts, 1)
+	require.NotNil(t, responseParts[0].InlineData)
+	assert.Equal(t, "image/png", responseParts[0].InlineData.MimeType)
+	assert.Equal(t, "iVBORw0KGgo=", responseParts[0].InlineData.Data)
+}
+
+func TestConvertOpenAIResponsesToolOutputMediaToGeminiLegacyInlineData(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-2.5-flash",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_media", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_media", "output": []map[string]any{
+				{"type": "output_text", "text": "see this"},
+				{"type": "input_file", "file": map[string]any{"file_data": "data:application/pdf;base64,JVBERi0xLjQK", "filename": "doc.pdf"}},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	parts := got.Contents[1].Parts
+	require.Len(t, parts, 2)
+	require.NotNil(t, parts[0].FunctionResponse)
+	assert.Equal(t, "see this", parts[0].FunctionResponse.Response["content"])
+	require.NotNil(t, parts[1].InlineData)
+	assert.Equal(t, "application/pdf", parts[1].InlineData.MimeType)
+	assert.Equal(t, "JVBERi0xLjQK", parts[1].InlineData.Data)
+}
+
+func TestConvertOpenAIResponsesToolOutputUnknownModelUsesLegacyInlineData(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "nano-banana",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_media", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_media", "output": []map[string]any{
+				{"type": "output_text", "text": "see this"},
+				{"type": "input_file", "file": map[string]any{"file_data": "data:application/pdf;base64,JVBERi0xLjQK", "filename": "doc.pdf"}},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	parts := got.Contents[1].Parts
+	require.Len(t, parts, 2)
+	require.NotNil(t, parts[0].FunctionResponse)
+	require.NotNil(t, parts[1].InlineData)
+	assert.Equal(t, "application/pdf", parts[1].InlineData.MimeType)
+}
+
+func TestConvertOpenAIResponsesToolOutputFileIDPreservesRawReference(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-3-flash-preview",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_file", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_file", "output": []map[string]any{
+				{"type": "input_image", "image_url": map[string]any{"file_id": "file_123"}},
+			}},
+		}),
+	})
+
+	require.Len(t, got.Contents, 2)
+	response := got.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	rawResponse, err := common.Marshal(response.Response)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawResponse), "file_123")
+	assert.NotContains(t, string(rawResponse), "[image]")
+}
+
+func TestConvertOpenAIResponsesToolOutputAudioFileIDPreservesRawReference(t *testing.T) {
+	got := mustConvertResponsesToGemini(t, dto.OpenAIResponsesRequest{
+		Model: "gemini-3-flash-preview",
+		Input: mustGeminiRawMessage(t, []map[string]any{
+			{"type": "function_call", "call_id": "call_audio", "name": "lookup", "arguments": `{}`},
+			{"type": "function_call_output", "call_id": "call_audio", "output": []map[string]any{
+				{"type": "input_audio", "file_id": "file_audio"},
+			}},
+		}),
+	})
+
+	response := got.Contents[1].Parts[0].FunctionResponse
+	require.NotNil(t, response)
+	rawResponse, err := common.Marshal(response.Response)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawResponse), "file_audio")
+	assert.NotContains(t, string(rawResponse), "[audio]")
+}
+
+// TestGeminiSupportedMimeTypesFollowBlobFamilies covers the general blob input
+// allowlist separately from the narrower function-response media allowlist.
+func TestGeminiSupportedMimeTypesFollowBlobFamilies(t *testing.T) {
+	for _, mimeType := range []string{"image/gif", "image/avif", "audio/ogg", "video/webm", "text/csv", "application/json"} {
+		assert.True(t, isGeminiSupportedMimeType(mimeType), mimeType)
+	}
+}
+
 func mustConvertResponsesToGemini(t *testing.T, req dto.OpenAIResponsesRequest) *dto.GeminiChatRequest {
 	t.Helper()
 	got, err := convertResponsesToGemini(req)

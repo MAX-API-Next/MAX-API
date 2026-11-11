@@ -3,8 +3,10 @@ package common
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/constant"
@@ -34,6 +36,116 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 		}
 	}
 	return fullRequestURL
+}
+
+// SetRawQueryParam replaces all occurrences of a query parameter while
+// preserving unrelated raw query components verbatim. url.Values parsing
+// rejects some provider-valid values (for example unescaped semicolons), so
+// model and auth rewrites must not round-trip the whole query through it.
+func SetRawQueryParam(rawQuery, name, value string) string {
+	encodedName := url.QueryEscape(name)
+	encodedValue := url.QueryEscape(value)
+	parts := strings.Split(rawQuery, "&")
+	found := false
+	for i, part := range parts {
+		key := part
+		if separator := strings.IndexByte(part, '='); separator >= 0 {
+			key = part[:separator]
+		}
+		decodedKey := decodeRawQueryKeyBytes(key)
+		if !rawQueryKeyMatches(decodedKey, name) {
+			continue
+		}
+		_, unescapeErr := url.QueryUnescape(key)
+		if decodedKey != name || unescapeErr != nil || strings.Contains(key, ";") {
+			key = encodedName
+		}
+		parts[i] = key + "=" + encodedValue
+		found = true
+	}
+	if !found {
+		if rawQuery == "" {
+			return encodedName + "=" + encodedValue
+		}
+		return rawQuery + "&" + encodedName + "=" + encodedValue
+	}
+	return strings.Join(parts, "&")
+}
+
+// HasRawQueryParam reports whether a raw query contains a parameter name while
+// tolerating valid and malformed percent-escaped keys.
+func HasRawQueryParam(rawQuery, name string) bool {
+	for _, part := range strings.Split(rawQuery, "&") {
+		key := part
+		if separator := strings.IndexByte(part, '='); separator >= 0 {
+			key = part[:separator]
+		}
+		if rawQueryKeyMatches(decodeRawQueryKeyBytes(key), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// rawQueryKeyMatches compares decoded names using both grouped and per-byte
+// replacement of invalid UTF-8 to recognize existing malformed query keys.
+func rawQueryKeyMatches(decodedKey, name string) bool {
+	if strings.ToValidUTF8(decodedKey, "\uFFFD") == name {
+		return true
+	}
+	var perByte strings.Builder
+	for len(decodedKey) > 0 {
+		r, size := utf8.DecodeRuneInString(decodedKey)
+		if r == utf8.RuneError && size == 1 {
+			perByte.WriteRune(utf8.RuneError)
+			decodedKey = decodedKey[1:]
+			continue
+		}
+		perByte.WriteRune(r)
+		decodedKey = decodedKey[size:]
+	}
+	return perByte.String() == name
+}
+
+// decodeRawQueryKeyBytes decodes valid percent escapes and plus signs while
+// retaining malformed percent sequences for tolerant key matching.
+func decodeRawQueryKeyBytes(raw string) string {
+	var decoded strings.Builder
+	decoded.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		switch raw[i] {
+		case '+':
+			decoded.WriteByte(' ')
+		case '%':
+			if i+2 < len(raw) {
+				high, highOK := fromHex(raw[i+1])
+				low, lowOK := fromHex(raw[i+2])
+				if highOK && lowOK {
+					decoded.WriteByte(high<<4 | low)
+					i += 2
+					continue
+				}
+			}
+			decoded.WriteByte('%')
+		default:
+			decoded.WriteByte(raw[i])
+		}
+	}
+	return decoded.String()
+}
+
+// fromHex decodes an ASCII hexadecimal digit and reports invalid input.
+func fromHex(value byte) (byte, bool) {
+	switch {
+	case '0' <= value && value <= '9':
+		return value - '0', true
+	case 'a' <= value && value <= 'f':
+		return value - 'a' + 10, true
+	case 'A' <= value && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func GetAPIVersion(c *gin.Context) string {

@@ -32,6 +32,31 @@ func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	require.Equal(t, constant.TaskActionGenerate, info.Action)
 }
 
+func TestSetRawQueryParamReplacesMalformedKeyWithoutDroppingOthers(t *testing.T) {
+	got := SetRawQueryParam("api%zzkey=old&session=a;b", "api%zzkey", "new")
+	require.Equal(t, "api%25zzkey=new&session=a;b", got)
+	got = SetRawQueryParam("api%zz%6bey=old&session=a;b", "api%zzkey", "new")
+	require.Equal(t, "api%25zzkey=new&session=a;b", got)
+	got = SetRawQueryParam("key%FF=old&session=a;b", "key�", "new")
+	require.Equal(t, "key%EF%BF%BD=new&session=a;b", got)
+	got = SetRawQueryParam("key%FF=old&key%ef%bf%bd=older&session=a;b", "key�", "new")
+	require.Equal(t, "key%EF%BF%BD=new&key%ef%bf%bd=new&session=a;b", got)
+	got = SetRawQueryParam("key%FF%FF=old&session=a;b", "key\uFFFD\uFFFD", "new")
+	require.Equal(t, "key%EF%BF%BD%EF%BF%BD=new&session=a;b", got)
+	got = SetRawQueryParam("api;key=old&session=a;b", "api;key", "new")
+	require.Equal(t, "api%3Bkey=new&session=a;b", got)
+
+}
+
+func TestRawQueryParamHelpersAppendAndMatch(t *testing.T) {
+	require.Equal(t, "model=gpt-4", SetRawQueryParam("", "model", "gpt-4"))
+	require.Equal(t, "a=1&model=gpt-4", SetRawQueryParam("a=1", "model", "gpt-4"))
+	require.Equal(t, "model=gpt-4&a=1", SetRawQueryParam("model&a=1", "model", "gpt-4"))
+	require.True(t, HasRawQueryParam("a=1&api%zzkey=x", "api%zzkey"))
+	require.True(t, HasRawQueryParam("key%FF=x", "key\uFFFD"))
+	require.False(t, HasRawQueryParam("a=1&b=2", "model"))
+}
+
 func TestValidateMultipartDirectNormalizesInputReferenceField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := strings.NewReader(`{"model":"wan2.7-i2v","prompt":"animate","input_reference":" https://example.com/first.png "}`)

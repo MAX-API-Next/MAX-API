@@ -94,6 +94,8 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	}
 }
 
+// GetRequestURL builds the provider-specific target. Realtime URLs use mapped
+// upstream models while preserving unrelated raw query components.
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.RelayMode == relayconstant.RelayModeRealtime {
 		if strings.HasPrefix(info.ChannelBaseUrl, "https://") {
@@ -161,6 +163,15 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	case constant.ChannelTypeCustom:
 		url := info.ChannelBaseUrl
 		url = strings.Replace(url, "{model}", info.UpstreamModelName, -1)
+		if info.RelayMode == relayconstant.RelayModeRealtime && info.IsModelMapped && info.UpstreamModelName != "" {
+			path, rawQuery, hasQuery := strings.Cut(url, "?")
+			if hasQuery {
+				rawQuery = relaycommon.SetRawQueryParam(rawQuery, "model", info.UpstreamModelName)
+			} else {
+				rawQuery = relaycommon.SetRawQueryParam("", "model", info.UpstreamModelName)
+			}
+			url = path + "?" + escapeRealtimeRawQuery(rawQuery)
+		}
 		return url, nil
 	default:
 		if (info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatGemini) &&
@@ -168,8 +179,42 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			info.RelayMode != relayconstant.RelayModeResponsesCompact {
 			return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 		}
-		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, info.RequestURLPath, info.ChannelType), nil
+		requestPath := info.RequestURLPath
+		if info.RelayMode == relayconstant.RelayModeRealtime && info.UpstreamModelName != "" {
+			path, rawQuery, _ := strings.Cut(requestPath, "?")
+			rawQuery = relaycommon.SetRawQueryParam(rawQuery, "model", info.UpstreamModelName)
+			requestPath = path + "?" + escapeRealtimeRawQuery(rawQuery)
+		}
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestPath, info.ChannelType), nil
 	}
+}
+
+// escapeRealtimeRawQuery escapes fragment delimiters and malformed percent
+// sequences without re-encoding valid escapes or unrelated query components.
+func escapeRealtimeRawQuery(rawQuery string) string {
+	var escaped strings.Builder
+	escaped.Grow(len(rawQuery))
+	for i := 0; i < len(rawQuery); i++ {
+		switch rawQuery[i] {
+		case '#':
+			escaped.WriteString("%23")
+		case '%':
+			if i+2 >= len(rawQuery) || !isHexDigit(rawQuery[i+1]) || !isHexDigit(rawQuery[i+2]) {
+				escaped.WriteString("%25")
+			} else {
+				escaped.WriteString(rawQuery[i : i+3])
+				i += 2
+			}
+		default:
+			escaped.WriteByte(rawQuery[i])
+		}
+	}
+	return escaped.String()
+}
+
+// isHexDigit reports whether a byte is an ASCII hexadecimal digit.
+func isHexDigit(value byte) bool {
+	return ('0' <= value && value <= '9') || ('a' <= value && value <= 'f') || ('A' <= value && value <= 'F')
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *relaycommon.RelayInfo) error {

@@ -3,6 +3,7 @@ package openai
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -53,4 +54,102 @@ func TestRealtimeBetaHeaderOnlyForPreviewModels(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRealtimeRequestURLAlwaysUsesMappedModel checks that the upstream model is
+// used whether the client supplied a model query parameter or omitted it.
+func TestRealtimeRequestURLAlwaysUsesMappedModel(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "supplied client model", path: "/v1/realtime?model=client-alias&foo=bar", want: "ws://upstream.example/v1/realtime?model=gpt-4&foo=bar"},
+		{name: "model omitted", path: "/v1/realtime", want: "ws://upstream.example/v1/realtime?model=gpt-4"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				RelayMode:      relayconstant.RelayModeRealtime,
+				RequestURLPath: tt.path,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelType:       constant.ChannelTypeOpenAI,
+					ChannelBaseUrl:    "http://upstream.example",
+					UpstreamModelName: "gpt-4",
+				},
+			}
+			got, err := (&Adaptor{}).GetRequestURL(info)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRealtimeRequestURLPreservesRawQueryComponents(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:      relayconstant.RelayModeRealtime,
+		RequestURLPath: "/v1/realtime?model=client-alias&session=a;b&opaque=x%2Fy",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "http://upstream.example",
+			UpstreamModelName: "gpt-4",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Contains(t, requestURL, "model=gpt-4")
+	assert.Contains(t, requestURL, "session=a;b")
+	assert.Contains(t, requestURL, "opaque=x%2Fy")
+}
+
+func TestRealtimeRequestURLPreservesLiteralHashAndInvalidEscapes(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:      relayconstant.RelayModeRealtime,
+		RequestURLPath: "/v1/realtime?model=client-alias&opaque=#%zz",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "http://upstream.example",
+			UpstreamModelName: "gpt-4",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "ws://upstream.example/v1/realtime?model=gpt-4&opaque=%23%25zz", requestURL)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "#%zz", parsed.Query().Get("opaque"))
+}
+
+func TestCustomRealtimeRequestURLUsesMappedModelQuery(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeRealtime,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeCustom,
+			ChannelBaseUrl:    "ws://upstream.example/v1/realtime?model=fixed-model&opaque=#%zz",
+			UpstreamModelName: "gpt-4",
+			IsModelMapped:     true,
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gpt-4"}, parsed.Query()["model"])
+	assert.Equal(t, "#%zz", parsed.Query().Get("opaque"))
+}
+
+func TestCustomRealtimeRequestURLPreservesPinnedModelWithoutMapping(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeRealtime,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeCustom,
+			ChannelBaseUrl:    "ws://upstream.example/v1/realtime?model=fixed-model",
+			UpstreamModelName: "client-alias",
+		},
+	}
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	parsed, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fixed-model"}, parsed.Query()["model"])
 }

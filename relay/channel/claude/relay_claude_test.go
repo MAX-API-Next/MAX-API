@@ -11,6 +11,8 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/reasoningcompat"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
@@ -864,6 +866,85 @@ func TestRequestOpenAI2ClaudeMessage_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
+}
+
+func TestRequestOpenAI2ClaudeMessage_ClaudeOpus55DefaultsToMediumEffort(t *testing.T) {
+	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model:    "claude-opus-5-5",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"effort":"medium"}`, string(claudeRequest.OutputConfig))
+
+	claudeRequest, err = RequestOpenAI2ClaudeMessage(nil, dto.GeneralOpenAIRequest{
+		Model:            "claude-opus-5-5",
+		IncludeReasoning: common.GetPointer(true),
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, claudeRequest.Thinking)
+	require.Equal(t, "adaptive", claudeRequest.Thinking.Type)
+	require.JSONEq(t, `{"effort":"medium"}`, string(claudeRequest.OutputConfig))
+}
+
+func TestClaudeOpus55DefaultEffortFlowsToOpenAIBridge(t *testing.T) {
+	converted, err := service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-5-5",
+		Thinking: &dto.Thinking{Type: "adaptive"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-5-5",
+		Thinking: &dto.Thinking{Type: "enabled"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
+}
+
+// TestClaudeReasoningCompatibilityDefaultBranches checks model-specific defaults
+// against explicit controls and models without effort support.
+func TestClaudeReasoningCompatibilityDefaultBranches(t *testing.T) {
+	tests := []struct {
+		name       string
+		request    dto.ClaudeRequest
+		wantEffort string
+		wantConfig string
+	}{
+		{name: "explicit effort", request: dto.ClaudeRequest{Model: "claude-opus-5-5", OutputConfig: []byte(`{"effort":"low"}`)}, wantEffort: "", wantConfig: `{"effort":"low"}`},
+		{name: "disabled thinking", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "disabled"}}, wantEffort: "", wantConfig: ""},
+		{name: "manual budget", request: dto.ClaudeRequest{Model: "claude-opus-5-5", Thinking: &dto.Thinking{Type: "enabled", BudgetTokens: common.GetPointer(2048)}}, wantEffort: "", wantConfig: ""},
+		{name: "unsupported output effort", request: dto.ClaudeRequest{Model: "claude-fable-5", OutputConfig: []byte(`{"format":"json"}`)}, wantEffort: "high", wantConfig: `{"format":"json"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotEffort, _, err := reasoningcompat.ApplyClaudeDefault(&tt.request)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantEffort, gotEffort)
+			assert.Equal(t, tt.wantConfig, string(tt.request.OutputConfig))
+		})
+	}
+
+	noSuffix := dto.ClaudeRequest{Model: "claude-opus-5-5"}
+	_, _, err := reasoningcompat.ApplyClaudeSuffix(&noSuffix, "claude-opus-5-5")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"effort":"medium"}`, string(noSuffix.OutputConfig))
+
+	converted, err := service.ClaudeToOpenAIRequest(dto.ClaudeRequest{Model: "claude-opus-5-5"}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-5-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "medium", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{
+		Model:    "claude-opus-4-6",
+		Thinking: &dto.Thinking{Type: "adaptive"},
+	}, &relaycommon.RelayInfo{OriginModelName: "claude-opus-4-6", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Equal(t, "high", converted.ReasoningEffort)
+
+	converted, err = service.ClaudeToOpenAIRequest(dto.ClaudeRequest{Model: "claude-fable-5"}, &relaycommon.RelayInfo{OriginModelName: "claude-fable-5", ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	assert.Empty(t, converted.ReasoningEffort)
 }
 
 func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {

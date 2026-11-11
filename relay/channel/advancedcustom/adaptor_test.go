@@ -23,7 +23,7 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 		Routes: []dto.AdvancedCustomRoute{
 			{
 				IncomingPath: "/v1/messages",
-				UpstreamPath: "https://upstream.example/v1/chat/completions?existing=1",
+				UpstreamPath: "https://upstream.example/v1/chat/completions?existing=a;b",
 				Converter:    dto.AdvancedCustomConverterAnthropicMessagesToOpenAIChatCompletions,
 				Auth: &dto.AdvancedCustomRouteAuth{
 					Type:  dto.AdvancedCustomAuthTypeQuery,
@@ -43,7 +43,7 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 	assert.Equal(t, "https", parsedURL.Scheme)
 	assert.Equal(t, "upstream.example", parsedURL.Host)
 	assert.Equal(t, "/v1/chat/completions", parsedURL.Path)
-	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+	assert.Contains(t, parsedURL.RawQuery, "existing=a;b")
 	assert.Equal(t, "sk-test", parsedURL.Query().Get("api_key"))
 }
 
@@ -206,6 +206,150 @@ func TestAdaptorReplacesModelPlaceholderInRouteURL(t *testing.T) {
 	assert.Equal(t, "/v1beta/models/gemini-2.5-flash:generateContent", parsedURL.Path)
 	assert.Equal(t, "sk-test", parsedURL.Query().Get("key"))
 	assert.Empty(t, parsedURL.Query().Get("alt"))
+}
+
+func TestRealtimeRouteUsesMappedModelQuery(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/realtime",
+				UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model&model=other-model&existing=1",
+				Converter:    dto.AdvancedCustomConverterNone,
+			},
+		},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime?model=client-alias"
+	info.UpstreamModelName = "gpt-4"
+	info.IsModelMapped = true
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "wss", parsedURL.Scheme)
+	assert.Equal(t, "gpt-4", parsedURL.Query().Get("model"))
+	assert.NotContains(t, parsedURL.RawQuery, "other-model")
+	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+}
+
+func TestRealtimeRoutePreservesPinnedModelWithoutMapping(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{
+			{
+				IncomingPath: "/v1/realtime",
+				UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model&existing=1",
+				Converter:    dto.AdvancedCustomConverterNone,
+			},
+		},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime?model=client-alias"
+	info.UpstreamModelName = "client-alias"
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, "fixed-model", parsedURL.Query().Get("model"))
+	assert.Equal(t, "1", parsedURL.Query().Get("existing"))
+	assert.True(t, info.IsModelMapped)
+	assert.Equal(t, "fixed-model", info.UpstreamModelName)
+}
+
+func TestRealtimeRouteRejectsInvalidModelQuery(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=a;b",
+			Converter:    dto.AdvancedCustomConverterNone,
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+
+	_, err := adaptor.GetRequestURL(info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model query is invalid")
+}
+
+// TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder verifies that
+// mapped models replace duplicate query values regardless of their ordering.
+func TestRealtimeMappedRouteAcceptsNonEmptyDuplicateModelInAnyOrder(t *testing.T) {
+	for _, path := range []string{
+		"/v1/realtime?model=&model=client-alias",
+		"/v1/realtime?model=client-alias&model=",
+	} {
+		t.Run(path, func(t *testing.T) {
+			adaptor := &Adaptor{}
+			info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+				Routes: []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/realtime",
+					UpstreamPath: "https://upstream.example" + path,
+					Converter:    dto.AdvancedCustomConverterNone,
+				}},
+			})
+			info.RelayMode = relayconstant.RelayModeRealtime
+			info.RelayFormat = types.RelayFormatOpenAIRealtime
+			info.RequestURLPath = "/v1/realtime"
+			info.UpstreamModelName = "gpt-4"
+			info.IsModelMapped = true
+
+			requestURL, err := adaptor.GetRequestURL(info)
+			require.NoError(t, err)
+			parsedURL, err := url.Parse(requestURL)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"gpt-4", "gpt-4"}, parsedURL.Query()["model"])
+			assert.Equal(t, "model=gpt-4&model=gpt-4", parsedURL.RawQuery)
+		})
+	}
+}
+
+func TestRealtimeMappedRouteReplacesEmptyModelQuery(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=",
+			Converter:    dto.AdvancedCustomConverterNone,
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+	info.UpstreamModelName = "gpt-4"
+	info.IsModelMapped = true
+
+	requestURL, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	parsedURL, err := url.Parse(requestURL)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gpt-4"}, parsedURL.Query()["model"])
+}
+
+func TestRealtimeRouteRejectsModelQueryAuthConflict(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{
+		Routes: []dto.AdvancedCustomRoute{{
+			IncomingPath: "/v1/realtime",
+			UpstreamPath: "https://upstream.example/v1/realtime?model=fixed-model",
+			Converter:    dto.AdvancedCustomConverterNone,
+			Auth:         &dto.AdvancedCustomRouteAuth{Type: dto.AdvancedCustomAuthTypeQuery, Name: "model", Value: "auth-model"},
+		}},
+	})
+	info.RelayMode = relayconstant.RelayModeRealtime
+	info.RelayFormat = types.RelayFormatOpenAIRealtime
+	info.RequestURLPath = "/v1/realtime"
+
+	_, err := adaptor.GetRequestURL(info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "model conflicts with query authentication")
 }
 
 func TestAdaptorSwitchesGeminiGenerateContentURLForStream(t *testing.T) {

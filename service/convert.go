@@ -13,6 +13,8 @@ import (
 	"github.com/samber/lo"
 )
 
+// ClaudeToOpenAIRequest translates Claude messages, tools and optional controls
+// into chat requests, applying model effort defaults only where supported.
 func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
@@ -34,17 +36,28 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 	isOpenRouter := info.ChannelType == constant.ChannelTypeOpenRouter
 
 	effort := claudeRequest.GetEfforts()
+	effortSupported := reasoningcompat.ClaudeSupportsEffort(claudeRequest.Model)
+	if effort == "" && claudeRequest.Thinking == nil && effortSupported {
+		effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+	}
 	if claudeRequest.Thinking != nil {
 		switch claudeRequest.Thinking.Type {
 		case "disabled":
 			effort = "none"
 		case "adaptive":
-			if effort == "" {
-				effort = "high"
+			if effort == "" && effortSupported {
+				effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+				if effort == "" {
+					effort = "high"
+				}
 			}
 		case "enabled":
-			if effort == "" && claudeRequest.Thinking.BudgetTokens != nil {
-				effort = reasoningcompat.EffortFromBudget(*claudeRequest.Thinking.BudgetTokens)
+			if effort == "" {
+				if claudeRequest.Thinking.BudgetTokens != nil {
+					effort = reasoningcompat.EffortFromBudget(*claudeRequest.Thinking.BudgetTokens)
+				} else if effortSupported {
+					effort = reasoningcompat.ClaudeDefaultEffort(claudeRequest.Model)
+				}
 			}
 		}
 	}

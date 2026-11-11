@@ -5,6 +5,7 @@ import (
 
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 
@@ -12,8 +13,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// WssHelper resolves model mapping before connecting the WebSocket adaptor and
+// submits successful returned usage using the original billing model identity.
 func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *types.MaxAPIError) {
 	info.InitChannelMeta(c)
+	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {

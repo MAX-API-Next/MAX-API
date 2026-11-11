@@ -621,6 +621,37 @@ func TestGeminiResponsesStreamIncompletePreservesProviderUsage(t *testing.T) {
 	require.Equal(t, 6, incomplete.Response.Usage.TotalTokens)
 }
 
+func TestGeminiResponsesStreamPreservesMergedProviderTotalAcrossPromptOnlyFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "gemini-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-test"},
+		DisablePing:     true,
+	}
+	first := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"a"}]}}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"totalTokenCount":10}}`
+	second := `{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"b"}]}}],"usageMetadata":{"promptTokenCount":4}}`
+	body := "data: " + first + "\n" + "data: " + second + "\n" + "data: [DONE]\n"
+	usage, maxAPIError := GeminiResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	require.Nil(t, maxAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 4, usage.PromptTokens)
+	require.Equal(t, 2, usage.CompletionTokens)
+	require.Equal(t, 10, usage.TotalTokens)
+	var completed dto.ResponsesStreamResponse
+	require.NoError(t, common.UnmarshalJsonStr(sseDataForEvent(t, recorder.Body.String(), "response.completed"), &completed))
+	require.NotNil(t, completed.Response)
+	require.NotNil(t, completed.Response.Usage)
+	require.Equal(t, 10, completed.Response.Usage.TotalTokens)
+}
+
 func TestGeminiResponsesStreamMalformedFrameIsAbnormal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -898,6 +929,88 @@ func TestGeminiStreamHandlerDoesNotCountAudioInlineDataAsImage(t *testing.T) {
 	require.NotNil(t, usage)
 	require.Zero(t, usage.CompletionTokenDetails.ImageTokens)
 	require.NotEqual(t, 1400, usage.CompletionTokens)
+}
+
+// TestGeminiStreamHandlerMergesCumulativeModalityDetails verifies that later text
+// counters replace earlier ones without discarding an omitted image modality.
+func TestGeminiStreamHandlerMergesCumulativeModalityDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-3-flash-preview"},
+	}
+	frames := []dto.GeminiChatResponse{
+		{
+			Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{{Text: "a"}}}}},
+			UsageMetadata: dto.GeminiUsageMetadata{
+				PromptTokenCount: 100, CandidatesTokenCount: 10, TotalTokenCount: 110,
+				PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+					{Modality: "IMAGE", TokenCount: 90}, {Modality: "TEXT", TokenCount: 10},
+				},
+			},
+		},
+		{
+			Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{Role: "model", Parts: []dto.GeminiPart{{Text: "b"}}}}},
+			UsageMetadata: dto.GeminiUsageMetadata{
+				PromptTokenCount: 100, CandidatesTokenCount: 20, TotalTokenCount: 120,
+				PromptTokensDetails: []dto.GeminiPromptTokensDetails{{Modality: "TEXT", TokenCount: 20}},
+			},
+		},
+	}
+	var body strings.Builder
+	for _, frame := range frames {
+		data, err := common.Marshal(frame)
+		require.NoError(t, err)
+		body.WriteString("data: ")
+		body.Write(data)
+		body.WriteString("\n")
+	}
+	body.WriteString("data: [DONE]\n")
+
+	var last dto.GeminiUsageMetadata
+	usage, apiErr := geminiStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body.String()))}, func(_ string, response *dto.GeminiChatResponse) bool {
+		last = response.UsageMetadata
+		return true
+	})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 20, usage.CompletionTokens)
+	require.Equal(t, 120, usage.TotalTokens)
+	require.Contains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "IMAGE", TokenCount: 90})
+	require.Contains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "TEXT", TokenCount: 20})
+	require.NotContains(t, last.PromptTokensDetails, dto.GeminiPromptTokensDetails{Modality: "TEXT", TokenCount: 10})
+}
+
+func TestGeminiStreamHandlerMergesExplicitZeroCachedContentCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-3-flash-preview"},
+	}
+	body := strings.Join([]string{
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"a"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"totalTokenCount":110,"cachedContentTokenCount":6}}`,
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"b"}]}}],"usageMetadata":{"cachedContentTokenCount":0}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	var last dto.GeminiUsageMetadata
+	usage, apiErr := geminiStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))}, func(_ string, response *dto.GeminiChatResponse) bool {
+		last = response.UsageMetadata
+		return true
+	})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 10, usage.CompletionTokens)
+	require.Equal(t, 110, usage.TotalTokens)
+	require.Zero(t, usage.PromptTokensDetails.CachedTokens)
+	require.True(t, last.HasCachedContentTokenCount)
+	require.Zero(t, last.CachedContentTokenCount)
 }
 
 func sseDataForEvent(t *testing.T, body string, eventType string) string {

@@ -17,7 +17,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service/openaicompat"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
@@ -75,6 +74,8 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	return &usage, nil
 }
 
+// GeminiResponsesStreamHandler renders Gemini events as a Responses stream,
+// tracking delivered output and merged provider usage across terminal events.
 func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	info.EnableFirstResultTracking()
 	responseID := helper.GetResponseID(c)
@@ -130,7 +131,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		return true
 	}
 
-	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+	usage, err := geminiStreamHandler(c, info, resp, func(_ string, geminiResponse *dto.GeminiChatResponse) bool {
 		if prepareErr := functionCalls.prepare(geminiResponse); prepareErr != nil {
 			streamErr = types.NewError(prepareErr, types.ErrorCodeBadResponseBody)
 			return false
@@ -173,10 +174,11 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 		}
 
 		retainUsage := func() {
-			inputReported := gjson.Get(data, "usageMetadata.promptTokenCount").Type == gjson.Number
-			outputReported := gjson.Get(data, "usageMetadata.candidatesTokenCount").Type == gjson.Number
+			metadata := geminiResponse.GetUsageMetadata()
+			inputReported := metadata != nil && metadata.HasPromptTokenCount
+			outputReported := metadata != nil && metadata.HasCandidatesTokenCount
 			if inputReported || outputReported || dto.HasGeminiUsageMetadataTokens(geminiResponse.GetUsageMetadata()) {
-				if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
+				if metadata != nil {
 					fallbackPrompt := 0
 					if !inputReported {
 						fallbackPrompt = info.GetEstimatePromptTokens()
@@ -207,10 +209,10 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 						mapped.BillingUsage = dto.NewEstimatedGeminiChatBillingUsage(&mapped)
 					}
 					if mapped.BillingUsage != nil {
-						mapped.BillingUsage.TokenCountsReported = inputReported && outputReported
+						mapped.BillingUsage.TokenCountsReported = metadata.HasPromptTokenCount && metadata.HasCandidatesTokenCount
 					}
 					reportedUsage = &mapped
-					reportedOutputUsage = outputReported
+					reportedOutputUsage = metadata.HasCandidatesTokenCount
 				}
 			}
 		}

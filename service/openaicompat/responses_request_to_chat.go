@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -161,6 +162,8 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 	}
 }
 
+// responsesInputItemToChatMessages maps Responses messages and tool items to chat
+// history, retaining structured tool output only for supported media conversion.
 func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message) ([]dto.Message, error) {
 	itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 	switch itemType {
@@ -181,8 +184,13 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		if callID == "" {
 			return nil, fmt.Errorf("%s item is missing call_id", itemType)
 		}
-		content := responseToolOutputToChatContent(item["output"])
-		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
+		output := item["output"]
+		content := responseToolOutputToChatContent(output)
+		message := dto.Message{Role: "tool", ToolCallId: callID, Content: content}
+		if responsesToolOutputSupportsStructuredConversion(output) {
+			message.ResponsesToolOutput = output
+		}
+		return append(messages, message), nil
 	}
 	if !responsesInputItemHasChatMessageShape(itemType, item) {
 		return messages, nil
@@ -197,6 +205,106 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		return nil, err
 	}
 	return append(messages, dto.Message{Role: role, Content: content}), nil
+}
+
+// responsesToolOutputSupportsStructuredConversion keeps Gemini function
+// responses on the documented media subset. Unsupported media remains in the
+// raw tool-output content so the upstream adapter can preserve the reference
+// instead of sending an invalid structured part.
+func responsesToolOutputSupportsStructuredConversion(value any) bool {
+	parts, ok := value.([]any)
+	if !ok || len(parts) == 0 {
+		return false
+	}
+	for _, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			return false
+		}
+		switch strings.TrimSpace(common.Interface2String(part["type"])) {
+		case "input_text", "output_text", "text":
+			continue
+		case "input_image":
+			if !responsesToolOutputAllowedMime(part, "image/png", "image/jpeg", "image/webp") {
+				return false
+			}
+		case "input_file":
+			if !responsesToolOutputAllowedMime(part, "application/pdf", "text/plain") {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// responsesToolOutputAllowedMime rejects a known unsupported type early while
+// allowing resolvable sources without metadata to be checked after loading.
+func responsesToolOutputAllowedMime(part map[string]any, allowed ...string) bool {
+	container := part
+	for _, key := range []string{"image_url", "file", "input_audio", "video_url"} {
+		if nested, ok := part[key].(map[string]any); ok {
+			container = nested
+			break
+		}
+	}
+	mimeType := strings.TrimSpace(common.Interface2String(container["mime_type"]))
+	if mimeType == "" {
+		mimeType = strings.TrimSpace(common.Interface2String(container["mimeType"]))
+	}
+	sourceKeys := []string{"url", "image_url", "file_data", "file_url"}
+	switch strings.TrimSpace(common.Interface2String(part["type"])) {
+	case "input_file":
+		sourceKeys = []string{"file_data", "file_url", "url"}
+	case "input_audio":
+		sourceKeys = []string{"data", "url", "audio_url", "file_data"}
+	case "input_video":
+		sourceKeys = []string{"url", "video_url", "file_data", "file_url"}
+	}
+	hasSource := false
+	for _, sourceKey := range sourceKeys {
+		source := strings.TrimSpace(common.Interface2String(container[sourceKey]))
+		if source == "" {
+			continue
+		}
+		hasSource = true
+		if mimeType == "" {
+			mimeType = responsesToolOutputDataMime(source)
+		}
+		break
+	}
+	if mimeType == "" {
+		return hasSource
+	}
+	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
+		mimeType = mediaType
+	} else {
+		mimeType = strings.TrimSpace(strings.SplitN(mimeType, ";", 2)[0])
+	}
+	mimeType = strings.ToLower(mimeType)
+	for _, candidate := range allowed {
+		if mimeType == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+// responsesToolOutputDataMime extracts a media type from a data URL header.
+func responsesToolOutputDataMime(source string) string {
+	if !strings.HasPrefix(strings.ToLower(source), "data:") {
+		return ""
+	}
+	headerEnd := strings.IndexByte(source, ',')
+	if headerEnd <= len("data:") {
+		return ""
+	}
+	header := strings.TrimPrefix(source[:headerEnd], "data:")
+	if mediaType, _, err := mime.ParseMediaType(header); err == nil {
+		return mediaType
+	}
+	return strings.TrimSpace(strings.SplitN(header, ";", 2)[0])
 }
 
 func responsesInputItemHasChatMessageShape(itemType string, item map[string]any) bool {
