@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
@@ -49,32 +50,19 @@ func TestGatewayUsageContractSQLite(t *testing.T) {
 }
 
 // External runs explicitly opt in, require an empty authorized disposable DB,
-// validate TLS and retain all synthetic rows for independent inspection.
+// preserve DSN transport settings and retain synthetic rows for inspection. Reusing
+// a non-default database requires TEST_GATEWAY_USAGE_MYSQL_DATABASE to match it.
+// TEST_MYSQL_TLS_CERT_SHA256 optionally pins the server certificate and forces TLS.
 func TestGatewayUsageContractMySQL(t *testing.T) {
 	if os.Getenv("MAXAPI_GATEWAY_MYSQL") != "1" {
 		t.Skip("requires MAXAPI_GATEWAY_MYSQL=1 and dedicated test credentials")
 	}
 	cfg, err := mysqldriver.ParseDSN(os.Getenv("TEST_GATEWAY_USAGE_MYSQL_DSN"))
-	if err != nil || cfg.DBName != "maxapi_gateway_usage_test_1" || cfg.AllowFallbackToPlaintext {
+	if err != nil || !gatewayUsageMySQLDatabaseAllowed(cfg.DBName, os.Getenv("TEST_GATEWAY_USAGE_MYSQL_DATABASE")) || cfg.AllowFallbackToPlaintext {
 		t.Fatal("invalid dedicated MySQL configuration (details withheld)")
 	}
-	pin, err := hex.DecodeString(os.Getenv("TEST_MYSQL_TLS_CERT_SHA256"))
-	if err != nil || len(pin) != sha256.Size {
-		t.Fatal("requires a verified MySQL certificate pin")
-	}
-	cfg.TLS = &tls.Config{MinVersion: tls.VersionTLS12,
-		//nolint:gosec // The exact configured certificate is verified below.
-		InsecureSkipVerify: true,
-		VerifyConnection: func(s tls.ConnectionState) error {
-			if len(s.PeerCertificates) == 0 {
-				return fmt.Errorf("missing MySQL certificate")
-			}
-			actual := sha256.Sum256(s.PeerCertificates[0].Raw)
-			if !hmac.Equal(actual[:], pin) {
-				return fmt.Errorf("MySQL certificate mismatch")
-			}
-			return nil
-		},
+	if err := gatewayUsageConfigureMySQLTLS(cfg, os.Getenv("TEST_MYSQL_TLS_CERT_SHA256")); err != nil {
+		t.Fatal("invalid MySQL certificate pin (details withheld)")
 	}
 	cfg.ParseTime = true
 	cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = 5*time.Second, 15*time.Second, 15*time.Second
@@ -107,6 +95,116 @@ func TestGatewayUsageContractMySQL(t *testing.T) {
 		t.Fatal("MySQL fixture ownership could not be claimed")
 	}
 	runGatewayUsageContract(t, db)
+}
+
+// gatewayUsageConfigureMySQLTLS preserves the DSN transport configuration when
+// no pin is supplied. A supplied pin forces TLS with exact leaf verification.
+func gatewayUsageConfigureMySQLTLS(cfg *mysqldriver.Config, fingerprint string) error {
+	if fingerprint == "" {
+		return nil
+	}
+	pin, err := hex.DecodeString(fingerprint)
+	if err != nil || len(pin) != sha256.Size {
+		return fmt.Errorf("invalid MySQL certificate pin")
+	}
+	cfg.TLS = &tls.Config{MinVersion: tls.VersionTLS12,
+		//nolint:gosec // The exact configured certificate is verified below.
+		InsecureSkipVerify: true,
+		VerifyConnection: func(s tls.ConnectionState) error {
+			if len(s.PeerCertificates) == 0 {
+				return fmt.Errorf("missing MySQL certificate")
+			}
+			actual := sha256.Sum256(s.PeerCertificates[0].Raw)
+			if !hmac.Equal(actual[:], pin) {
+				return fmt.Errorf("MySQL certificate mismatch")
+			}
+			return nil
+		},
+	}
+	return nil
+}
+
+// TestGatewayUsageMySQLTLSConfiguration verifies that an optional pin leaves
+// ordinary DSNs usable while a supplied pin remains mandatory and exact.
+func TestGatewayUsageMySQLTLSConfiguration(t *testing.T) {
+	for _, query := range []string{"", "?tls=true"} {
+		t.Run("no_pin"+query, func(t *testing.T) {
+			cfg, err := mysqldriver.ParseDSN("fixture:synthetic@tcp(127.0.0.1:3306)/test1" + query)
+			require.NoError(t, err)
+			original := cfg.TLS
+			require.NoError(t, gatewayUsageConfigureMySQLTLS(cfg, ""))
+			require.Equal(t, original, cfg.TLS, "omitting the pin must preserve the DSN TLS configuration")
+			if original != nil {
+				require.False(t, cfg.TLS.InsecureSkipVerify)
+			}
+		})
+	}
+	t.Run("valid_pin_forces_verified_tls", func(t *testing.T) {
+		cfg, err := mysqldriver.ParseDSN("fixture:synthetic@tcp(127.0.0.1:3306)/test1?tls=false")
+		require.NoError(t, err)
+		raw := []byte("synthetic leaf certificate bytes")
+		fingerprint := sha256.Sum256(raw)
+		require.NoError(t, gatewayUsageConfigureMySQLTLS(cfg, hex.EncodeToString(fingerprint[:])))
+		require.NotNil(t, cfg.TLS)
+		require.EqualValues(t, tls.VersionTLS12, cfg.TLS.MinVersion)
+		require.NotNil(t, cfg.TLS.VerifyConnection)
+		require.Error(t, cfg.TLS.VerifyConnection(tls.ConnectionState{}))
+		require.Error(t, cfg.TLS.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Raw: []byte("different certificate")}}}))
+		require.NoError(t, cfg.TLS.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Raw: raw}}}))
+	})
+	for _, fingerprint := range []string{"bad", strings.Repeat("z", 64)} {
+		t.Run("invalid_pin_"+fingerprint[:3], func(t *testing.T) {
+			cfg, err := mysqldriver.ParseDSN("fixture:synthetic@tcp(127.0.0.1:3306)/test1?tls=true")
+			require.NoError(t, err)
+			original := cfg.TLS
+			require.Error(t, gatewayUsageConfigureMySQLTLS(cfg, fingerprint))
+			require.Same(t, original, cfg.TLS, "an invalid pin must fail without weakening existing TLS settings")
+		})
+	}
+}
+
+// gatewayUsageMySQLDatabaseAllowed requires the DSN to match the explicitly
+// confirmed disposable database, or the default when no override is provided.
+// System schemas are never valid targets, even with explicit confirmation.
+func gatewayUsageMySQLDatabaseAllowed(name, explicitName string) bool {
+	switch strings.ToLower(name) {
+	case "", "mysql", "sys", "information_schema", "performance_schema":
+		return false
+	}
+	expected := strings.TrimSpace(explicitName)
+	if expected == "" {
+		expected = "maxapi_gateway_usage_test_1"
+	}
+	return name == expected
+}
+
+// TestGatewayUsageMySQLDatabaseSelection checks explicit target confirmation
+// without connecting to or modifying an external database.
+func TestGatewayUsageMySQLDatabaseSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		database     string
+		explicitName string
+		allowed      bool
+	}{
+		{name: "default", database: "maxapi_gateway_usage_test_1", allowed: true},
+		{name: "explicit_test1", database: "test1", explicitName: "test1", allowed: true},
+		{name: "test1_not_confirmed", database: "test1"},
+		{name: "different_confirmation", database: "test1", explicitName: "test2"},
+		{name: "default_conflicts_with_confirmation", database: "maxapi_gateway_usage_test_1", explicitName: "test1"},
+		{name: "empty_database"},
+		{name: "empty_database_with_confirmation", explicitName: "test1"},
+		{name: "case_mismatch", database: "test1", explicitName: "TEST1"},
+		{name: "surrounding_confirmation_spaces", database: "test1", explicitName: " test1 ", allowed: true},
+		{name: "mysql_system_schema", database: "mysql", explicitName: "mysql"},
+		{name: "sys_system_schema", database: "sys", explicitName: "sys"},
+		{name: "information_schema", database: "information_schema", explicitName: "information_schema"},
+		{name: "performance_schema", database: "performance_schema", explicitName: "performance_schema"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.allowed, gatewayUsageMySQLDatabaseAllowed(tc.database, tc.explicitName))
+		})
+	}
 }
 
 type gatewayUsageTestOwnership struct {
