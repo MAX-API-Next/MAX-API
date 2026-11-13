@@ -77,22 +77,14 @@ func InitChannelCache() {
 				common.SysError(fmt.Sprintf("channel cache refresh has incomplete group abilities: channel_id=%d", channel.Id))
 				return
 			}
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
 		}
+		appendChannelRoutingEntries(newGroup2model2channels, channel)
 	}
 
 	// sort by priority
 	for group, model2channels := range newGroup2model2channels {
 		for model, channels := range model2channels {
-			sort.Slice(channels, func(i, j int) bool {
-				return newChannelId2channel[channels[i]].GetPriority() > newChannelId2channel[channels[j]].GetPriority()
-			})
+			sortChannelRoutingEntries(channels, newChannelId2channel)
 			newGroup2model2channels[group][model] = channels
 		}
 	}
@@ -388,23 +380,57 @@ func CacheUpdateChannelStatus(id int, status int) {
 }
 
 func cacheUpdateChannelStatusLocked(id int, status int) {
-	if channel, ok := channelsIDM[id]; ok {
+	channel, found := channelsIDM[id]
+	if found {
 		channel.Status = status
 	}
-	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
+	// Remove all previous memberships, including old groups/models and any
+	// duplicate IDs. An enabled row is then reinserted from its current config.
+	for group, model2channels := range group2model2channels {
+		for model, channels := range model2channels {
+			remaining := channels[:0]
+			for _, channelID := range channels {
+				if channelID != id {
+					remaining = append(remaining, channelID)
 				}
+			}
+			group2model2channels[group][model] = remaining
+		}
+	}
+	if !found || status != common.ChannelStatusEnabled {
+		return
+	}
+	if group2model2channels == nil {
+		group2model2channels = make(map[string]map[string][]int)
+	}
+	appendChannelRoutingEntries(group2model2channels, channel)
+	for _, group := range strings.Split(channel.Group, ",") {
+		for _, model := range strings.Split(channel.Models, ",") {
+			sortChannelRoutingEntries(group2model2channels[group][model], channelsIDM)
+		}
+	}
+}
+
+func appendChannelRoutingEntries(routing map[string]map[string][]int, channel *Channel) {
+	seen := make(map[[2]string]bool)
+	for _, group := range strings.Split(channel.Group, ",") {
+		if routing[group] == nil {
+			routing[group] = make(map[string][]int)
+		}
+		for _, model := range strings.Split(channel.Models, ",") {
+			pair := [2]string{group, model}
+			if !seen[pair] {
+				routing[group][model] = append(routing[group][model], channel.Id)
+				seen[pair] = true
 			}
 		}
 	}
+}
+
+func sortChannelRoutingEntries(ids []int, channels map[int]*Channel) {
+	sort.Slice(ids, func(i, j int) bool {
+		return channels[ids[i]].GetPriority() > channels[ids[j]].GetPriority()
+	})
 }
 
 func CacheUpdateChannel(channel *Channel) {

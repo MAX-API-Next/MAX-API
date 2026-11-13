@@ -351,6 +351,65 @@ func TestIncompleteChannelRefreshKeepsCacheUntilAbilitiesCatchUp(t *testing.T) {
 	require.Equal(t, "new-group", cached.Group)
 }
 
+func TestRecoveredChannelImmediatelyReturnsToRoutingCandidates(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	isolateSecurityChannelCache(t)
+	InitChannelCache()
+	require.True(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic"))
+	require.True(t, UpdateChannelStatus(channel.Id, "second-key", common.ChannelStatusAutoDisabled, "synthetic"))
+	selected, err := GetRandomSatisfiedChannelExcluding("default", "gpt-test", 0, "", nil)
+	require.NoError(t, err)
+	require.Nil(t, selected)
+	require.True(t, RecoverChannelStatus(channel.Id, "first-key"))
+	selected, err = GetRandomSatisfiedChannelExcluding("default", "gpt-test", 0, "", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selected, "recovery must restore the only routing candidate without a full refresh")
+	require.Equal(t, channel.Id, selected.Id)
+	var ability Ability
+	require.NoError(t, db.First(&ability, "channel_id = ?", channel.Id).Error)
+	require.True(t, ability.Enabled)
+}
+
+func TestStatusPublicationRebuildsRoutingMembershipWithoutDuplicates(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	isolateSecurityChannelCache(t)
+	InitChannelCache()
+	low, high := int64(1), int64(20)
+	peer := &Channel{Name: "peer", Key: "peer-key", Models: "gpt-test", Group: "default", Status: common.ChannelStatusEnabled, Priority: &low}
+	require.NoError(t, db.Create(peer).Error)
+	require.NoError(t, peer.AddAbilities(nil))
+	InitChannelCache()
+	// This snapshot is visible before the administrator's full refresh; a
+	// status publication must repair group/model membership along with the row.
+	channel.Group, channel.Models, channel.Priority = "default,new-group", "gpt-test,new-model", &high
+	require.NoError(t, channel.UpdateFields("group", "models", "priority"))
+	for range 2 {
+		require.True(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic"))
+		require.True(t, RecoverChannelStatus(channel.Id, "first-key"))
+	}
+	func() {
+		channelSyncLock.RLock()
+		defer channelSyncLock.RUnlock()
+		require.Equal(t, []int{channel.Id, peer.Id}, group2model2channels["default"]["gpt-test"])
+		require.Equal(t, []int{channel.Id}, group2model2channels["new-group"]["new-model"])
+	}()
+	channel.Group, channel.Models = "moved-group", "moved-model"
+	require.NoError(t, channel.UpdateFields("group", "models"))
+	require.True(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic"))
+	require.True(t, RecoverChannelStatus(channel.Id, "first-key"))
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	require.Equal(t, []int{peer.Id}, group2model2channels["default"]["gpt-test"])
+	require.Empty(t, group2model2channels["new-group"]["new-model"])
+	require.Equal(t, []int{channel.Id}, group2model2channels["moved-group"]["moved-model"])
+}
+
 func TestLateAutomaticDisablePreservesManualChannel(t *testing.T) {
 	for _, memory := range []bool{false, true} {
 		t.Run(map[bool]string{false: "database", true: "stale-cache"}[memory], func(t *testing.T) {
