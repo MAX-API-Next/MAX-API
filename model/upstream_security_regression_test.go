@@ -1,0 +1,211 @@
+package model
+
+import (
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func assertSecurityUpdateColumns(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:security_columns", func(tx *gorm.DB) {
+		if values, ok := tx.Statement.Dest.(map[string]interface{}); ok && tx.Statement.Schema != nil {
+			for column := range values {
+				if _, ok := tx.Statement.Schema.FieldsByDBName[column]; !ok {
+					t.Errorf("unknown emitted update column: %s", column)
+					tx.AddError(errors.New("invalid update column"))
+				}
+			}
+		}
+	}))
+}
+
+func isolateSecurityChannelCache(t *testing.T) {
+	t.Helper()
+	channelSyncLock.Lock()
+	oldChannels, oldGroups := channelsIDM, group2model2channels
+	oldCustom, oldErrors := channel2advancedCustomConfig, channel2advancedCustomConfigError
+	channelsIDM, group2model2channels = nil, nil
+	channel2advancedCustomConfig, channel2advancedCustomConfigError = nil, nil
+	channelSyncLock.Unlock()
+	t.Cleanup(func() {
+		channelSyncLock.Lock()
+		defer channelSyncLock.Unlock()
+		channelsIDM, group2model2channels = oldChannels, oldGroups
+		channel2advancedCustomConfig, channel2advancedCustomConfigError = oldCustom, oldErrors
+	})
+}
+
+func TestTwoFAUsageWriteCannotRestoreCredentialSnapshot(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&TwoFA{}))
+	assertSecurityUpdateColumns(t, DB)
+	factor := TwoFA{UserId: 1, Secret: "old", IsEnabled: true}
+	require.NoError(t, DB.Create(&factor).Error)
+	require.NoError(t, DB.Model(&TwoFA{}).Where("id = ?", factor.Id).Updates(map[string]interface{}{"secret": "rotated", "is_enabled": false}).Error)
+	now := time.Now()
+	factor.LastUsedAt = &now
+	require.NoError(t, factor.updateUsageState())
+	var stored TwoFA
+	require.NoError(t, DB.First(&stored, factor.Id).Error)
+	require.Equal(t, "rotated", stored.Secret)
+	require.False(t, stored.IsEnabled)
+}
+
+func TestTwoFAFailureWindowRestartsAfterExpiry(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&TwoFA{}))
+	assertSecurityUpdateColumns(t, DB)
+	expired := time.Now().Add(-time.Minute)
+	factor := TwoFA{UserId: 1, Secret: "synthetic", IsEnabled: true, FailedAttempts: 5, LockedUntil: &expired}
+	require.NoError(t, DB.Create(&factor).Error)
+	require.NoError(t, factor.IncrementFailedAttempts())
+	var stored TwoFA
+	require.NoError(t, DB.First(&stored, factor.Id).Error)
+	require.Equal(t, 1, stored.FailedAttempts)
+	require.Nil(t, stored.LockedUntil)
+	// A stale caller must increment the authoritative value, never overwrite it.
+	stale := TwoFA{Id: factor.Id}
+	require.NoError(t, stale.IncrementFailedAttempts())
+	require.Equal(t, 2, stale.FailedAttempts)
+}
+
+func TestTwoFAFailureCountUsesStoredStateAndDoesNotExtendLock(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&TwoFA{}))
+	assertSecurityUpdateColumns(t, DB)
+	sqlDB, err := DB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	factor := TwoFA{UserId: 1, Secret: "synthetic", IsEnabled: true}
+	require.NoError(t, DB.Create(&factor).Error)
+	var wg sync.WaitGroup
+	errs := make(chan error, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- (&TwoFA{Id: factor.Id}).IncrementFailedAttempts() }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var stored TwoFA
+	require.NoError(t, DB.First(&stored, factor.Id).Error)
+	require.Equal(t, 3, stored.FailedAttempts)
+	require.Equal(t, "synthetic", stored.Secret)
+	deadline := time.Now().Add(time.Minute)
+	require.NoError(t, DB.Model(&stored).Updates(map[string]interface{}{"failed_attempts": 5, "locked_until": deadline}).Error)
+	require.NoError(t, factor.IncrementFailedAttempts())
+	require.Equal(t, 5, factor.FailedAttempts)
+	require.WithinDuration(t, deadline, *factor.LockedUntil, time.Millisecond)
+}
+
+func TestAccountBindingChecksAuthoritativeSession(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&CacheInvalidationTask{}))
+	user := User{Username: "session-identity", Email: "old@example.com", Status: common.UserStatusEnabled, SessionGeneration: 2}
+	require.NoError(t, DB.Create(&user).Error)
+	for _, bind := range []func(int64) error{
+		func(gen int64) error { return BindEmailToUserWithSession(user.Id, gen, "new@example.com") },
+		func(gen int64) error { return BindWeChatToUserWithSession(user.Id, gen, "synthetic-wechat") },
+	} {
+		require.ErrorIs(t, bind(1), ErrUserSessionInvalid)
+		require.NoError(t, DB.Model(&user).Update("status", common.UserStatusDisabled).Error)
+		require.ErrorIs(t, bind(2), ErrUserSessionInvalid)
+		require.NoError(t, DB.Model(&user).Update("status", common.UserStatusEnabled).Error)
+		require.NoError(t, bind(2))
+	}
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	require.Equal(t, "new@example.com", stored.Email)
+	require.Equal(t, "synthetic-wechat", stored.WeChatId)
+}
+
+func TestTwoFAChallengeRechecksGenerationAtConsumption(t *testing.T) {
+	setupAuthFlowTestDB(t)
+	user := User{Username: "challenge", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+	token, err := CreateTwoFALoginChallenge(&user, "session-a")
+	require.NoError(t, err)
+	_, err = GetTwoFALoginChallenge(token, "session-b")
+	require.Error(t, err)
+	_, err = GetTwoFALoginChallenge(token, "session-a")
+	require.NoError(t, err)
+	// Revocation after preflight must still defeat final challenge consumption.
+	require.NoError(t, DB.Model(&user).Update("session_generation", 1).Error)
+	_, err = CompleteTwoFALoginChallenge(token, "session-a")
+	require.ErrorIs(t, err, ErrUserSessionInvalid)
+}
+
+func TestChannelStatusRollbackDoesNotPublishCache(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	isolateSecurityChannelCache(t)
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	channel.ChannelInfo.MultiKeyPollingIndex = 2
+	CacheUpdateChannel(channel)
+	assertSecurityUpdateColumns(t, db)
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:reject_status", func(tx *gorm.DB) {
+		if tx.Statement.Table == "channels" {
+			tx.AddError(errors.New("synthetic rejected write"))
+		}
+	}))
+	require.False(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic"))
+	cached, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	require.Equal(t, common.ChannelStatusEnabled, cached.Status)
+	require.Equal(t, 2, cached.ChannelInfo.MultiKeyPollingIndex)
+	require.NotContains(t, cached.ChannelInfo.MultiKeyStatusList, 0)
+}
+
+func TestLateAutomaticDisablePreservesManualChannel(t *testing.T) {
+	for _, memory := range []bool{false, true} {
+		t.Run(map[bool]string{false: "database", true: "stale-cache"}[memory], func(t *testing.T) {
+			db, channel := setupChannelUpdateFieldsTestDB(t)
+			oldMemory := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = memory
+			t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+			if memory {
+				isolateSecurityChannelCache(t)
+				CacheUpdateChannel(channel)
+			}
+			const reason = `{"status_reason":"administrator pause"}`
+			require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(map[string]interface{}{"status": common.ChannelStatusManuallyDisabled, "other_info": reason}).Error)
+			if memory {
+				cached, err := CacheGetChannel(channel.Id)
+				require.NoError(t, err)
+				require.Equal(t, common.ChannelStatusEnabled, cached.Status, "fixture must really retain an old enabled cache")
+			}
+			require.False(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "late failure"))
+			var stored Channel
+			require.NoError(t, db.First(&stored, channel.Id).Error)
+			require.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
+			require.Equal(t, reason, stored.OtherInfo)
+		})
+	}
+}
+
+func TestAutomaticRecoveryCannotUndoManualDisableWithEmptyKey(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	for _, key := range []string{"", "first-key"} {
+		require.False(t, RecoverChannelStatus(channel.Id, key))
+	}
+	var stored Channel
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
+	// Explicit manual state changes keep the original API semantics.
+	require.True(t, UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "administrator enable"))
+	require.NoError(t, db.First(&stored, channel.Id).Error)
+	require.Equal(t, common.ChannelStatusEnabled, stored.Status)
+}

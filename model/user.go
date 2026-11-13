@@ -882,9 +882,18 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 // BindEmailToUser atomically checks email availability and assigns it to the
 // user, preventing concurrent binds from sharing the same normalized address.
 func BindEmailToUser(user *User, email string) error {
+	return bindEmailToUser(user, email, nil)
+}
+
+func bindEmailToUser(user *User, email string, generation *int64) error {
 	email = NormalizeEmail(email)
 	var cacheTask CacheInvalidationTask
 	if err := WithNormalizedEmailWriteTx(email, func(tx *gorm.DB) error {
+		if generation != nil {
+			if _, err := sessionUserWithDB(tx, user.Id, *generation, true); err != nil {
+				return err
+			}
+		}
 		if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
 			return err
 		}

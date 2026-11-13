@@ -12,7 +12,6 @@ import (
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/model"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -155,22 +154,12 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	session := sessions.Default(c)
-	id, ok := sessionUserID(session.Get("id"))
+	id, generation, ok := accountBindingSession(c)
 	if !ok {
 		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
 		return
 	}
-	user := model.User{
-		Id: id,
-	}
-	err = user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	user.WeChatId = wechatId
-	err = user.UpdateFields(false, model.UserUpdateFieldWeChatId)
+	err = model.BindWeChatToUserWithSession(id, generation, wechatId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

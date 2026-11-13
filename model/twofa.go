@@ -119,22 +119,64 @@ func (t *TwoFA) Delete() error {
 
 // ResetFailedAttempts 重置失败尝试次数
 func (t *TwoFA) ResetFailedAttempts() error {
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
+	}
 	t.FailedAttempts = 0
 	t.LockedUntil = nil
-	return t.Update()
+	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{"failed_attempts": 0, "locked_until": nil}).Error
+}
+
+func (t *TwoFA) updateUsageState() error {
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
+	}
+	// A login's stale snapshot must never restore rotated/disabled credentials.
+	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{
+		"failed_attempts": t.FailedAttempts, "locked_until": t.LockedUntil, "last_used_at": t.LastUsedAt,
+	}).Error
 }
 
 // IncrementFailedAttempts 增加失败尝试次数
 func (t *TwoFA) IncrementFailedAttempts() error {
-	t.FailedAttempts++
-
-	// 检查是否需要锁定
-	if t.FailedAttempts >= common.MaxFailAttempts {
-		lockUntil := time.Now().Add(time.Duration(common.LockoutDuration) * time.Second)
-		t.LockedUntil = &lockUntil
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
 	}
-
-	return t.Update()
+	for attempt := 0; attempt < 8; attempt++ {
+		var current TwoFA
+		if err := DB.Select("id", "failed_attempts", "locked_until").First(&current, t.Id).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		if current.LockedUntil != nil && now.Before(*current.LockedUntil) {
+			t.FailedAttempts, t.LockedUntil = current.FailedAttempts, current.LockedUntil
+			return nil
+		}
+		next := current.FailedAttempts + 1
+		var until *time.Time
+		if current.LockedUntil != nil {
+			next = 1
+		}
+		if next >= common.MaxFailAttempts {
+			deadline := now.Add(time.Duration(common.LockoutDuration) * time.Second)
+			until = &deadline
+		}
+		query := DB.Model(&TwoFA{}).Where("id = ? AND failed_attempts = ?", t.Id, current.FailedAttempts)
+		if current.LockedUntil == nil {
+			query = query.Where("locked_until IS NULL")
+		} else {
+			query = query.Where("locked_until = ?", *current.LockedUntil)
+		}
+		result := query.Updates(map[string]interface{}{"failed_attempts": next, "locked_until": until})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			t.FailedAttempts, t.LockedUntil = next, until
+			return nil
+		}
+	}
+	return errors.New("conflicting updates to 2FA failure count")
 }
 
 // IsLocked 检查账户是否被锁定
@@ -389,7 +431,7 @@ func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 	t.LockedUntil = nil
 	t.LastUsedAt = &now
 
-	if err := t.Update(); err != nil {
+	if err := t.updateUsageState(); err != nil {
 		common.SysLog("更新2FA使用记录失败: " + err.Error())
 	}
 
@@ -423,7 +465,7 @@ func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 	t.LockedUntil = nil
 	t.LastUsedAt = &now
 
-	if err := t.Update(); err != nil {
+	if err := t.updateUsageState(); err != nil {
 		common.SysLog("更新2FA使用记录失败: " + err.Error())
 	}
 
