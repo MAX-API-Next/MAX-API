@@ -367,6 +367,10 @@ func CacheUpdateChannelStatus(id int, status int) {
 	}
 	channelSyncLock.Lock()
 	defer channelSyncLock.Unlock()
+	cacheUpdateChannelStatusLocked(id, status)
+}
+
+func cacheUpdateChannelStatusLocked(id int, status int) {
 	if channel, ok := channelsIDM[id]; ok {
 		channel.Status = status
 	}
@@ -390,7 +394,7 @@ func CacheUpdateChannel(channel *Channel) {
 	cacheUpdateChannel(channel, false)
 }
 
-func cacheUpdateChannel(channel *Channel, preservePolling bool) {
+func cacheUpdateChannel(channel *Channel, fromStatusUpdate bool) {
 	if !common.MemoryCacheEnabled {
 		return
 	}
@@ -399,7 +403,16 @@ func cacheUpdateChannel(channel *Channel, preservePolling bool) {
 	if channel == nil {
 		return
 	}
-	if preservePolling {
+	if fromStatusUpdate {
+		// A later administrative commit/publication may have replaced the
+		// transaction's snapshot. Reload under the publication lock, before
+		// taking polling, and never publish that old snapshot on read failure.
+		var current Channel
+		if err := DB.First(&current, channel.Id).Error; err != nil {
+			common.SysError(fmt.Sprintf("channel status committed but cache reload failed: channel_id=%d, error=%v", channel.Id, err))
+			return
+		}
+		channel = &current
 		// Match GetNextEnabledKey and InitChannelCache: cache before polling.
 		pollingLock := GetChannelPollingLock(channel.Id)
 		pollingLock.Lock()
@@ -442,4 +455,7 @@ func cacheUpdateChannel(channel *Channel, preservePolling bool) {
 		delete(channel2advancedCustomConfigError, channel.Id)
 	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
+	if fromStatusUpdate {
+		cacheUpdateChannelStatusLocked(channel.Id, channel.Status)
+	}
 }

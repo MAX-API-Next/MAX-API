@@ -219,6 +219,42 @@ func TestChannelStatusPublicationReleasesPollingLockAndPreservesLatestCursor(t *
 	require.Equal(t, 2, index)
 }
 
+func TestDelayedStatusPublicationCannotRestoreAdministrativeConfig(t *testing.T) {
+	for _, queryFailed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new-config", true: "query-failed"}[queryFailed], func(t *testing.T) {
+			db, channel := setupChannelUpdateFieldsTestDB(t)
+			oldMemory := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = true
+			t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+			isolateSecurityChannelCache(t)
+			CacheUpdateChannel(channel)
+			require.True(t, UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic"))
+			var delayed Channel
+			require.NoError(t, db.First(&delayed, channel.Id).Error)
+			// The administrative write/publication finishes after the status SQL
+			// transaction, before its delayed cache publication resumes.
+			admin := cloneChannelForUpdate(&delayed)
+			baseURL := "https://new-provider.invalid"
+			admin.Key, admin.BaseURL, admin.Status = "new-key", &baseURL, common.ChannelStatusManuallyDisabled
+			require.NoError(t, admin.UpdateFields("key", "base_url", "status"))
+			InitChannelCache()
+			if queryFailed {
+				require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:status_publish_query_failed", func(tx *gorm.DB) {
+					if tx.Statement.Table == "channels" {
+						tx.AddError(errors.New("synthetic publication read failed"))
+					}
+				}))
+			}
+			cacheUpdateChannel(&delayed, true)
+			cached, err := CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			require.Equal(t, "new-key", cached.Key)
+			require.Equal(t, "https://new-provider.invalid", *cached.BaseURL)
+			require.Equal(t, common.ChannelStatusManuallyDisabled, cached.Status)
+		})
+	}
+}
+
 func TestLateAutomaticDisablePreservesManualChannel(t *testing.T) {
 	for _, memory := range []bool{false, true} {
 		t.Run(map[bool]string{false: "database", true: "stale-cache"}[memory], func(t *testing.T) {

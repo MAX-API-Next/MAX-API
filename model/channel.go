@@ -1003,7 +1003,6 @@ func updateChannelStatus(channelId int, usingKey string, status int, reason stri
 		// Release polling before acquiring cache locks. Copy the latest cursor
 		// atomically with publication in the cache -> polling lock order.
 		cacheUpdateChannel(&channel, true)
-		CacheUpdateChannelStatus(channelId, channel.Status)
 	}
 	return changed
 }
