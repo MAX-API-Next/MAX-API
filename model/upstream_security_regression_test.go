@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -253,6 +254,101 @@ func TestDelayedStatusPublicationCannotRestoreAdministrativeConfig(t *testing.T)
 			require.Equal(t, common.ChannelStatusManuallyDisabled, cached.Status)
 		})
 	}
+}
+
+func TestChannelRefreshCannotPublishOlderSnapshotLast(t *testing.T) {
+	for _, kind := range []string{"full", "status"} {
+		t.Run(kind, func(t *testing.T) {
+			db, channel := setupChannelUpdateFieldsTestDB(t)
+			oldMemory := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = true
+			t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+			isolateSecurityChannelCache(t)
+			CacheUpdateChannel(channel)
+			read, release := make(chan struct{}), make(chan struct{})
+			var snapshotReads atomic.Int32
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:pause_old_channel_snapshot", func(tx *gorm.DB) {
+				if _, ok := tx.Statement.Dest.(*[]*Channel); ok && snapshotReads.Add(1) == 1 {
+					close(read)
+					<-release
+				}
+			}))
+			firstDone, secondDone := make(chan struct{}), make(chan struct{})
+			go func() { defer close(firstDone); InitChannelCache() }()
+			<-read
+			newInfo := cloneChannelForUpdate(channel).ChannelInfo
+			newInfo.MultiKeyStatusList[1] = common.ChannelStatusManuallyDisabled
+			require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Update("channel_info", newInfo).Error)
+			go func() {
+				defer close(secondDone)
+				if kind == "full" {
+					InitChannelCache()
+				} else {
+					UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic")
+				}
+			}()
+			publishedEarly := false
+			select {
+			case <-secondDone:
+				publishedEarly = true
+			case <-time.After(time.Second):
+			}
+			close(release)
+			<-firstDone
+			<-secondDone
+			require.False(t, publishedEarly, "a later publication must wait for the paused full refresh")
+			cached, err := CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			require.Equal(t, common.ChannelStatusManuallyDisabled, cached.ChannelInfo.MultiKeyStatusList[1])
+			if kind == "status" {
+				require.Equal(t, common.ChannelStatusAutoDisabled, cached.ChannelInfo.MultiKeyStatusList[0])
+			}
+		})
+	}
+}
+
+func TestFailedChannelRefreshPreservesPublishedCache(t *testing.T) {
+	for _, failedTable := range []string{"channels", "abilities"} {
+		t.Run(failedTable, func(t *testing.T) {
+			db, channel := setupChannelUpdateFieldsTestDB(t)
+			oldMemory := common.MemoryCacheEnabled
+			common.MemoryCacheEnabled = true
+			t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+			isolateSecurityChannelCache(t)
+			InitChannelCache()
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:reject_channel_refresh_read", func(tx *gorm.DB) {
+				if tx.Statement.Table == failedTable {
+					tx.AddError(errors.New("synthetic full refresh read failed"))
+				}
+			}))
+			InitChannelCache()
+			cached, err := CacheGetChannel(channel.Id)
+			require.NoError(t, err)
+			require.Equal(t, channel.Key, cached.Key)
+			require.Equal(t, channel.Status, cached.Status)
+		})
+	}
+}
+
+func TestIncompleteChannelRefreshKeepsCacheUntilAbilitiesCatchUp(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	isolateSecurityChannelCache(t)
+	InitChannelCache()
+	// Equivalent to reads straddling an admin transaction: the channel's new
+	// group is visible, but its matching abilities are not in this snapshot.
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Update("group", "new-group").Error)
+	InitChannelCache()
+	cached, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	require.Equal(t, "default", cached.Group)
+	require.NoError(t, db.Model(&Ability{}).Where("channel_id = ?", channel.Id).Update("group", "new-group").Error)
+	InitChannelCache()
+	cached, err = CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	require.Equal(t, "new-group", cached.Group)
 }
 
 func TestLateAutomaticDisablePreservesManualChannel(t *testing.T) {

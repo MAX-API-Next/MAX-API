@@ -20,16 +20,24 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channel2advancedCustomConfigError map[int]error
 var channelSyncLock sync.RWMutex
+var channelRefreshLock sync.Mutex
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
 	}
+	// Serialize the entire read/publication cycle, including status refreshes.
+	// Callers must release polling before entering this lock order.
+	channelRefreshLock.Lock()
+	defer channelRefreshLock.Unlock()
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	newChannel2advancedCustomConfigError := make(map[int]error)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysError("channel cache refresh read failed: " + err.Error())
+		return
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
@@ -45,7 +53,10 @@ func InitChannelCache() {
 		}
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
+	if err := DB.Find(&abilities).Error; err != nil {
+		common.SysError("channel ability cache refresh read failed: " + err.Error())
+		return
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -60,6 +71,12 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			if newGroup2model2channels[group] == nil {
+				// The two reads may straddle an administrative transaction.
+				// Keep the published cache until a complete snapshot is available.
+				common.SysError(fmt.Sprintf("channel cache refresh has incomplete group abilities: channel_id=%d", channel.Id))
+				return
+			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
@@ -397,6 +414,10 @@ func CacheUpdateChannel(channel *Channel) {
 func cacheUpdateChannel(channel *Channel, fromStatusUpdate bool) {
 	if !common.MemoryCacheEnabled {
 		return
+	}
+	if fromStatusUpdate {
+		channelRefreshLock.Lock()
+		defer channelRefreshLock.Unlock()
 	}
 	channelSyncLock.Lock()
 	defer channelSyncLock.Unlock()
