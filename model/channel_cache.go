@@ -20,16 +20,24 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channel2advancedCustomConfigError map[int]error
 var channelSyncLock sync.RWMutex
+var channelRefreshLock sync.Mutex
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
 	}
+	// Serialize the entire read/publication cycle, including status refreshes.
+	// Callers must release polling before entering this lock order.
+	channelRefreshLock.Lock()
+	defer channelRefreshLock.Unlock()
 	newChannelId2channel := make(map[int]*Channel)
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	newChannel2advancedCustomConfigError := make(map[int]error)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysError("channel cache refresh read failed: " + err.Error())
+		return
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
@@ -45,7 +53,10 @@ func InitChannelCache() {
 		}
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
+	if err := DB.Find(&abilities).Error; err != nil {
+		common.SysError("channel ability cache refresh read failed: " + err.Error())
+		return
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -60,22 +71,20 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
+			if newGroup2model2channels[group] == nil {
+				// The two reads may straddle an administrative transaction.
+				// Keep the published cache until a complete snapshot is available.
+				common.SysError(fmt.Sprintf("channel cache refresh has incomplete group abilities: channel_id=%d", channel.Id))
+				return
 			}
 		}
+		appendChannelRoutingEntries(newGroup2model2channels, channel)
 	}
 
 	// sort by priority
 	for group, model2channels := range newGroup2model2channels {
 		for model, channels := range model2channels {
-			sort.Slice(channels, func(i, j int) bool {
-				return newChannelId2channel[channels[i]].GetPriority() > newChannelId2channel[channels[j]].GetPriority()
-			})
+			sortChannelRoutingEntries(channels, newChannelId2channel)
 			newGroup2model2channels[group][model] = channels
 		}
 	}
@@ -367,33 +376,100 @@ func CacheUpdateChannelStatus(id int, status int) {
 	}
 	channelSyncLock.Lock()
 	defer channelSyncLock.Unlock()
-	if channel, ok := channelsIDM[id]; ok {
+	cacheUpdateChannelStatusLocked(id, status)
+}
+
+func cacheUpdateChannelStatusLocked(id int, status int) {
+	channel, found := channelsIDM[id]
+	if found {
 		channel.Status = status
 	}
-	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
+	// Remove all previous memberships, including old groups/models and any
+	// duplicate IDs. An enabled row is then reinserted from its current config.
+	for group, model2channels := range group2model2channels {
+		for model, channels := range model2channels {
+			remaining := channels[:0]
+			for _, channelID := range channels {
+				if channelID != id {
+					remaining = append(remaining, channelID)
 				}
+			}
+			group2model2channels[group][model] = remaining
+		}
+	}
+	if !found || status != common.ChannelStatusEnabled {
+		return
+	}
+	if group2model2channels == nil {
+		group2model2channels = make(map[string]map[string][]int)
+	}
+	appendChannelRoutingEntries(group2model2channels, channel)
+	for _, group := range strings.Split(channel.Group, ",") {
+		for _, model := range strings.Split(channel.Models, ",") {
+			sortChannelRoutingEntries(group2model2channels[group][model], channelsIDM)
+		}
+	}
+}
+
+func appendChannelRoutingEntries(routing map[string]map[string][]int, channel *Channel) {
+	seen := make(map[[2]string]bool)
+	for _, group := range strings.Split(channel.Group, ",") {
+		if routing[group] == nil {
+			routing[group] = make(map[string][]int)
+		}
+		for _, model := range strings.Split(channel.Models, ",") {
+			pair := [2]string{group, model}
+			if !seen[pair] {
+				routing[group][model] = append(routing[group][model], channel.Id)
+				seen[pair] = true
 			}
 		}
 	}
 }
 
+func sortChannelRoutingEntries(ids []int, channels map[int]*Channel) {
+	sort.Slice(ids, func(i, j int) bool {
+		return channels[ids[i]].GetPriority() > channels[ids[j]].GetPriority()
+	})
+}
+
 func CacheUpdateChannel(channel *Channel) {
+	cacheUpdateChannel(channel, false)
+}
+
+func cacheUpdateChannel(channel *Channel, fromStatusUpdate bool) {
 	if !common.MemoryCacheEnabled {
 		return
+	}
+	if fromStatusUpdate {
+		channelRefreshLock.Lock()
+		defer channelRefreshLock.Unlock()
 	}
 	channelSyncLock.Lock()
 	defer channelSyncLock.Unlock()
 	if channel == nil {
 		return
+	}
+	if fromStatusUpdate {
+		// A later administrative commit/publication may have replaced the
+		// transaction's snapshot. Reload under the publication lock, before
+		// taking polling, and never publish that old snapshot on read failure.
+		var current Channel
+		if err := DB.First(&current, channel.Id).Error; err != nil {
+			common.SysError(fmt.Sprintf("channel status committed but cache reload failed: channel_id=%d, error=%v", channel.Id, err))
+			return
+		}
+		channel = &current
+		// Match GetNextEnabledKey and InitChannelCache: cache before polling.
+		pollingLock := GetChannelPollingLock(channel.Id)
+		pollingLock.Lock()
+		defer pollingLock.Unlock()
+		if old, ok := channelsIDM[channel.Id]; ok && old.Key == channel.Key &&
+			old.ChannelInfo.IsMultiKey && channel.ChannelInfo.IsMultiKey &&
+			old.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling &&
+			channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
+			channel.ChannelInfo.MultiKeyPollingIndex = old.ChannelInfo.MultiKeyPollingIndex
+		}
 	}
 
 	if channelsIDM == nil {
@@ -426,4 +502,7 @@ func CacheUpdateChannel(channel *Channel) {
 		delete(channel2advancedCustomConfigError, channel.Id)
 	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
+	if fromStatusUpdate {
+		cacheUpdateChannelStatusLocked(channel.Id, channel.Status)
+	}
 }

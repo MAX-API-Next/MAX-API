@@ -119,22 +119,68 @@ func (t *TwoFA) Delete() error {
 
 // ResetFailedAttempts 重置失败尝试次数
 func (t *TwoFA) ResetFailedAttempts() error {
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
+	}
 	t.FailedAttempts = 0
 	t.LockedUntil = nil
-	return t.Update()
+	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{"failed_attempts": 0, "locked_until": nil}).Error
+}
+
+func (t *TwoFA) updateUsageState() error {
+	return t.updateUsageStateWithDB(DB)
+}
+
+func (t *TwoFA) updateUsageStateWithDB(db *gorm.DB) error {
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
+	}
+	// A login's stale snapshot must never restore rotated/disabled credentials.
+	return db.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{
+		"failed_attempts": t.FailedAttempts, "locked_until": t.LockedUntil, "last_used_at": t.LastUsedAt,
+	}).Error
 }
 
 // IncrementFailedAttempts 增加失败尝试次数
 func (t *TwoFA) IncrementFailedAttempts() error {
-	t.FailedAttempts++
-
-	// 检查是否需要锁定
-	if t.FailedAttempts >= common.MaxFailAttempts {
-		lockUntil := time.Now().Add(time.Duration(common.LockoutDuration) * time.Second)
-		t.LockedUntil = &lockUntil
+	if t.Id <= 0 {
+		return errors.New("2FA record ID is empty")
 	}
-
-	return t.Update()
+	for attempt := 0; attempt < 8; attempt++ {
+		var current TwoFA
+		if err := DB.Select("id", "failed_attempts", "locked_until").First(&current, t.Id).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		if current.LockedUntil != nil && now.Before(*current.LockedUntil) {
+			t.FailedAttempts, t.LockedUntil = current.FailedAttempts, current.LockedUntil
+			return nil
+		}
+		next := current.FailedAttempts + 1
+		var until *time.Time
+		if current.LockedUntil != nil {
+			next = 1
+		}
+		if next >= common.MaxFailAttempts {
+			deadline := now.Add(time.Duration(common.LockoutDuration) * time.Second)
+			until = &deadline
+		}
+		query := DB.Model(&TwoFA{}).Where("id = ? AND failed_attempts = ?", t.Id, current.FailedAttempts)
+		if current.LockedUntil == nil {
+			query = query.Where("locked_until IS NULL")
+		} else {
+			query = query.Where("locked_until = ?", *current.LockedUntil)
+		}
+		result := query.Updates(map[string]interface{}{"failed_attempts": next, "locked_until": until})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			t.FailedAttempts, t.LockedUntil = next, until
+			return nil
+		}
+	}
+	return errors.New("conflicting updates to 2FA failure count")
 }
 
 // IsLocked 检查账户是否被锁定
@@ -195,14 +241,32 @@ func lockTwoFACredentialUserTx(tx *gorm.DB, userID int) error {
 
 // ValidateBackupCode 验证并使用备用码
 func ValidateBackupCode(userId int, code string) (bool, error) {
+	validated := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		validated, err = ValidateBackupCodeTx(tx, userId, code)
+		return err
+	})
+	return validated, err
+}
+
+// ValidateBackupCodeTx consumes a code in the caller's transaction, allowing
+// challenge rejection or a later write failure to roll it back as well.
+func ValidateBackupCodeTx(tx *gorm.DB, userId int, code string) (bool, error) {
+	if tx == nil {
+		return false, errors.New("backup code transaction is missing")
+	}
 	if !common.ValidateBackupCode(code) {
 		return false, errors.New("验证码或备用码不正确")
 	}
 
 	normalizedCode := common.NormalizeBackupCode(code)
+	if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
+		return false, err
+	}
 
 	var backupCodes []TwoFABackupCode
-	if err := DB.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
+	if err := tx.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
 		return false, err
 	}
 	matchedID := 0
@@ -218,22 +282,11 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 		return false, nil
 	}
 
-	validated := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
-			return err
-		}
-		now := time.Now()
-		result := tx.Model(&TwoFABackupCode{}).
-			Where("id = ? AND user_id = ? AND code_hash = ? AND is_used = ?", matchedID, userId, matchedHash, false).
-			Updates(map[string]interface{}{"is_used": true, "used_at": &now})
-		if result.Error != nil {
-			return result.Error
-		}
-		validated = result.RowsAffected == 1
-		return nil
-	})
-	return validated, err
+	now := time.Now()
+	result := tx.Model(&TwoFABackupCode{}).
+		Where("id = ? AND user_id = ? AND code_hash = ? AND is_used = ?", matchedID, userId, matchedHash, false).
+		Updates(map[string]interface{}{"is_used": true, "used_at": &now})
+	return result.RowsAffected == 1, result.Error
 }
 
 // GetUnusedBackupCodeCount 获取未使用的备用码数量
@@ -389,7 +442,7 @@ func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 	t.LockedUntil = nil
 	t.LastUsedAt = &now
 
-	if err := t.Update(); err != nil {
+	if err := t.updateUsageState(); err != nil {
 		common.SysLog("更新2FA使用记录失败: " + err.Error())
 	}
 
@@ -423,7 +476,7 @@ func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 	t.LockedUntil = nil
 	t.LastUsedAt = &now
 
-	if err := t.Update(); err != nil {
+	if err := t.updateUsageState(); err != nil {
 		common.SysLog("更新2FA使用记录失败: " + err.Error())
 	}
 

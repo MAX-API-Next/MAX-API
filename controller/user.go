@@ -77,13 +77,29 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 检查是否启用2FA
-	if model.IsTwoFAEnabled(user.Id) {
+	// A failed factor lookup is not evidence that the account has no 2FA.
+	twoFA, err := model.GetTwoFAByUserId(user.Id)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+		return
+	}
+	if twoFA != nil && twoFA.IsEnabled {
 		// 设置pending session，等待2FA验证
 		session := sessions.Default(c)
+		sessionID, err := ensureAuthSessionID(session)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		flowToken, err := model.CreateTwoFALoginChallenge(&user, sessionID)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		session.Set("pending_username", user.Username)
 		session.Set("pending_user_id", user.Id)
-		err := session.Save()
+		session.Set("pending_twofa_flow", flowToken)
+		err = session.Save()
 		if err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
 			return
@@ -1308,21 +1324,12 @@ func EmailBind(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 		return
 	}
-	session := sessions.Default(c)
-	id, ok := sessionUserID(session.Get("id"))
+	id, generation, ok := accountBindingSession(c)
 	if !ok {
 		common.ApiErrorMsg(c, "用户未登录或登录状态已失效")
 		return
 	}
-	user := model.User{
-		Id: id,
-	}
-	err := user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.BindEmailToUser(&user, email); err != nil {
+	if err := model.BindEmailToUserWithSession(id, generation, email); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 			return

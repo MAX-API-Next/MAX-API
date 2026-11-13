@@ -611,7 +611,7 @@
       "post": {
         "summary": "两步验证登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（登录流程）",
+        "description": "登录流程的第二步：必须携带与密码登录相同的会话 cookie。挑战有效期为 5 分钟且仅能完成一次；过期、密码变更或会话撤销后需重新输入密码。",
         "tags": [
           "用户登陆注册"
         ],
@@ -947,14 +947,28 @@
       }
     },
     "/api/oauth/wechat/bind": {
-      "get": {
+      "post": {
         "summary": "绑定微信",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "需要当前有效登录会话；禁用账号或已撤销的会话不能绑定。通过 JSON body 提交验证码，不使用 URL 查询参数。",
         "tags": [
           "OAuth"
         ],
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {
+                  "code": {"type": "string"}
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "成功",
@@ -963,42 +977,35 @@
         },
         "security": [
           {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
+            "SessionAuth1": []
           }
         ]
       }
     },
     "/api/oauth/email/bind": {
-      "get": {
+      "post": {
         "summary": "绑定邮箱",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "需要当前有效登录会话；禁用账号或已撤销的会话不能绑定。通过 JSON body 提交邮箱和验证码，不使用 URL 查询参数。",
         "tags": [
           "OAuth"
         ],
-        "parameters": [
-          {
-            "name": "email",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "code",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "code"],
+                "properties": {
+                  "email": {"type": "string", "format": "email"},
+                  "code": {"type": "string"}
+                }
+              }
             }
           }
-        ],
+        },
         "responses": {
           "200": {
             "description": "成功",
@@ -1007,10 +1014,7 @@
         },
         "security": [
           {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
+            "SessionAuth1": []
           }
         ]
       }

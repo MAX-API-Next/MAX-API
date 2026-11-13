@@ -414,28 +414,12 @@ func Verify2FALogin(c *gin.Context) {
 
 	// 从会话中获取pending用户信息
 	session := sessions.Default(c)
-	pendingUserId := session.Get("pending_user_id")
-	if pendingUserId == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
-		return
-	}
-	userId, ok := pendingUserId.(int)
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话数据无效，请重新登录",
-		})
-		return
-	}
-	// 获取用户信息
-	user, err := model.GetUserById(userId, false)
+	flowToken, _ := session.Get("pending_twofa_flow").(string)
+	user, err := model.GetTwoFALoginChallenge(flowToken, authSessionID(session))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "用户不存在",
+			"message": "会话已过期，请重新登录",
 		})
 		return
 	}
@@ -465,14 +449,17 @@ func Verify2FALogin(c *gin.Context) {
 	}
 
 	if !isValidTOTP {
-		// 尝试验证备用码
-		isValidBackup, err = twoFA.ValidateBackupCodeAndUpdateUsage(req.Code)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
+		// Consume the backup code and the challenge in the same transaction.
+		user, err = model.CompleteTwoFALoginChallengeWithBackupCode(flowToken, authSessionID(session), req.Code)
+		if errors.Is(err, model.ErrTwoFABackupCodeInvalid) {
+			if updateErr := twoFA.IncrementFailedAttempts(); updateErr != nil {
+				common.SysLog("更新2FA失败次数失败: " + updateErr.Error())
+			}
+		} else if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 			return
+		} else {
+			isValidBackup = true
 		}
 	}
 
@@ -485,8 +472,16 @@ func Verify2FALogin(c *gin.Context) {
 	}
 
 	// 2FA验证成功，清理pending会话信息并完成登录
+	if isValidTOTP {
+		user, err = model.CompleteTwoFALoginChallenge(flowToken, authSessionID(session))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "会话已过期，请重新登录"})
+			return
+		}
+	}
 	session.Delete("pending_username")
 	session.Delete("pending_user_id")
+	session.Delete("pending_twofa_flow")
 	session.Save()
 
 	setupLogin(user, c)

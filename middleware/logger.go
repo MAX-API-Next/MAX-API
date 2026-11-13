@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/gin-gonic/gin"
@@ -34,7 +35,36 @@ func SetUpLogger(server *gin.Engine) {
 			param.Latency,
 			param.ClientIP,
 			param.Method,
-			param.Path,
+			accessLogPath(param),
 		)
 	}))
+}
+
+// Only sanitize the log projection; request handlers still need original keys.
+func accessLogPath(param gin.LogFormatterParams) string {
+	if param.Request == nil || param.Request.URL == nil {
+		path, _, _ := strings.Cut(param.Path, "?")
+		return path
+	}
+	u := param.Request.URL
+	path := u.EscapedPath()
+	if strings.HasPrefix(u.Path, "/api/oauth/") || strings.HasPrefix(u.Path, "/oauth/") {
+		return path
+	}
+	query := u.Query()
+	for key := range query {
+		name := strings.ToLower(strings.TrimSpace(key))
+		sensitive := strings.Contains(name, "token") || strings.Contains(name, "secret") || strings.Contains(name, "signature")
+		switch name {
+		case "key", "api_key", "api-key", "apikey", "x-api-key", "authorization", "auth", "password", "passwd", "sig", "awsaccesskeyid", "x-amz-credential", "code", "state":
+			sensitive = true
+		}
+		if sensitive {
+			query.Set(key, "***masked***")
+		}
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -1544,7 +1545,14 @@ func ManageMultiKeys(c *gin.Context) {
 
 	lock := model.GetChannelPollingLock(request.ChannelId)
 	lock.Lock()
-	defer lock.Unlock()
+	unlock := sync.OnceFunc(lock.Unlock)
+	defer unlock()
+	refreshCache := func() {
+		// Cache sync takes cache before polling; release the mutation lock
+		// before publishing, including on the normal success path.
+		unlock()
+		model.InitChannelCache()
+	}
 
 	channel, err := model.GetChannelById(request.ChannelId, true)
 	if err != nil {
@@ -1725,7 +1733,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已禁用",
@@ -1768,7 +1776,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已启用",
@@ -1793,7 +1801,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": fmt.Sprintf("已启用 %d 个密钥", enabledCount),
@@ -1841,7 +1849,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": fmt.Sprintf("已禁用 %d 个密钥", disabledCount),
@@ -1922,7 +1930,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "密钥已删除",
@@ -1991,7 +1999,7 @@ func ManageMultiKeys(c *gin.Context) {
 		}
 
 		recordMultiKeyManageAudit()
-		model.InitChannelCache()
+		refreshCache()
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": fmt.Sprintf("已删除 %d 个自动禁用的密钥", deletedCount),

@@ -320,6 +320,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 		{"stt_audio_usage", "/v1/audio/transcriptions", "", `{"text":"synthetic","usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_token_details":{"text_tokens":20,"audio_tokens":80}}}`, constant.ChannelTypeOpenAI, gatewayAudioQuota, 100, 0, false, false, false, false, true, "/v1/audio/transcriptions"},
 		{"unauthorized", "/v1/chat/completions", "", gatewayChatJSON, constant.ChannelTypeOpenAI, gatewayZeroQuota, 0, 0, false, true, false, false, false, "/v1/chat/completions"},
 		{"upstream_failure_refund", "/v1/chat/completions", "", `{"error":{"message":"synthetic unavailable","type":"server_error"}}`, constant.ChannelTypeOpenAI, gatewayZeroQuota, 0, 0, false, false, true, false, false, "/v1/chat/completions"},
+		// At model ratio 1, each authoritative input token is one quota unit.
+		{"gemini_embedding_reported", "/v1/embeddings", `{"model":"gateway-audit","input":"hi"}`, `{"embeddings":[{"values":[0.1]}],"usageMetadata":{"promptTokenCount":120}}`, constant.ChannelTypeGemini, 120, 120, 0, false, false, false, false, false, "/v1beta/models/gemini-embedding-001:batchEmbedContents"},
+		{"gemini_embedding_zero", "/v1/embeddings", `{"model":"gateway-audit","input":"hi"}`, `{"embeddings":[{"values":[0.1]}],"usageMetadata":{"promptTokenCount":0}}`, constant.ChannelTypeGemini, 0, 0, 0, false, false, false, false, false, "/v1beta/models/gemini-embedding-001:batchEmbedContents"},
+		{"gemini_embedding_native", "/v1beta/models/gateway-audit:embedContent", `{"content":{"parts":[{"text":"hi"}]}}`, `{"embedding":{"values":[0.1]},"usageMetadata":{"promptTokenCount":120}}`, constant.ChannelTypeGemini, 120, 120, 0, false, false, false, false, false, "/v1beta/models/gemini-embedding-001:embedContent"},
+		{"gemini_embedding_native_zero", "/v1beta/models/gateway-audit:embedContent", `{"content":{"parts":[{"text":"hi"}]}}`, `{"embedding":{"values":[0.1]},"usageMetadata":{"promptTokenCount":0}}`, constant.ChannelTypeGemini, 0, 0, 0, false, false, false, false, false, "/v1beta/models/gemini-embedding-001:embedContent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gatewayUsagePrices(t, tc.path == "/v1/images/generations")
@@ -396,6 +401,11 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 			}))
 			t.Cleanup(upstream.Close)
 			fixture := gatewayUsageSeed(t, db, id, upstream.URL, tc.channel)
+			mappedModel := "gpt-4"
+			if strings.HasPrefix(tc.name, "gemini_embedding") {
+				mappedModel = "gemini-embedding-001"
+				require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", fixture.ChannelID).Update("model_mapping", `{"gateway-audit":"gemini-embedding-001"}`).Error)
+			}
 			failureFixture = fixture
 			body := tc.body
 			if body == "" {
@@ -506,7 +516,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				select {
 				case upstreamModel := <-upstreamModels:
 					if tc.channel == constant.ChannelTypeGemini {
-						require.Contains(t, upstreamModel, "/models/gpt-4:")
+						require.Contains(t, upstreamModel, "/models/"+mappedModel+":")
 					} else {
 						require.Equal(t, "gpt-4", upstreamModel, "upstream receives mapped model; ledger retains origin")
 					}
@@ -529,7 +539,7 @@ func runGatewayUsageContract(t *testing.T, db *gorm.DB) {
 				require.NotEmpty(t, log.RequestId)
 				require.Equal(t, fixture.TokenID, log.TokenId)
 				require.True(t, gjson.Get(log.Other, "is_model_mapped").Bool())
-				require.Equal(t, "gpt-4", gjson.Get(log.Other, "upstream_model_name").String())
+				require.Equal(t, mappedModel, gjson.Get(log.Other, "upstream_model_name").String())
 				if tc.name == "native_json" {
 					require.EqualValues(t, 60, gjson.GetBytes(wire, "usage.prompt_tokens_details.cached_tokens").Int())
 					finalizeKey := model.BillingRequestFinalizeOperationKey(resp.Header.Get(common.RequestIdKey))
@@ -1072,6 +1082,19 @@ func TestGatewayUsageSSEParserJoinsDataLines(t *testing.T) {
 // payloads emitted before a final zero-usage event.
 func gatewayUsageAssertWire(t *testing.T, wire []byte, path string, stream bool, prompt, completion int, answer string) {
 	t.Helper()
+	if path == "/v1/embeddings" {
+		require.Equal(t, 0.1, gjson.GetBytes(wire, "data.0.embedding.0").Float())
+		require.Equal(t, gjson.Number, gjson.GetBytes(wire, "usage.prompt_tokens").Type)
+		require.EqualValues(t, prompt, gjson.GetBytes(wire, "usage.prompt_tokens").Int())
+		require.EqualValues(t, prompt, gjson.GetBytes(wire, "usage.total_tokens").Int())
+		return
+	}
+	if strings.HasSuffix(path, ":embedContent") {
+		require.Equal(t, 0.1, gjson.GetBytes(wire, "embedding.values.0").Float())
+		require.Equal(t, gjson.Number, gjson.GetBytes(wire, "usageMetadata.promptTokenCount").Type)
+		require.EqualValues(t, prompt, gjson.GetBytes(wire, "usageMetadata.promptTokenCount").Int())
+		return
+	}
 	var usage gjson.Result
 	var text strings.Builder
 	streamContentAt, streamUsageAt, streamStopAt := -1, -1, -1
