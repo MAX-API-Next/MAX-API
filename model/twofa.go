@@ -128,11 +128,15 @@ func (t *TwoFA) ResetFailedAttempts() error {
 }
 
 func (t *TwoFA) updateUsageState() error {
+	return t.updateUsageStateWithDB(DB)
+}
+
+func (t *TwoFA) updateUsageStateWithDB(db *gorm.DB) error {
 	if t.Id <= 0 {
 		return errors.New("2FA record ID is empty")
 	}
 	// A login's stale snapshot must never restore rotated/disabled credentials.
-	return DB.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{
+	return db.Model(&TwoFA{}).Where("id = ?", t.Id).Updates(map[string]interface{}{
 		"failed_attempts": t.FailedAttempts, "locked_until": t.LockedUntil, "last_used_at": t.LastUsedAt,
 	}).Error
 }
@@ -237,14 +241,32 @@ func lockTwoFACredentialUserTx(tx *gorm.DB, userID int) error {
 
 // ValidateBackupCode 验证并使用备用码
 func ValidateBackupCode(userId int, code string) (bool, error) {
+	validated := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		validated, err = ValidateBackupCodeTx(tx, userId, code)
+		return err
+	})
+	return validated, err
+}
+
+// ValidateBackupCodeTx consumes a code in the caller's transaction, allowing
+// challenge rejection or a later write failure to roll it back as well.
+func ValidateBackupCodeTx(tx *gorm.DB, userId int, code string) (bool, error) {
+	if tx == nil {
+		return false, errors.New("backup code transaction is missing")
+	}
 	if !common.ValidateBackupCode(code) {
 		return false, errors.New("验证码或备用码不正确")
 	}
 
 	normalizedCode := common.NormalizeBackupCode(code)
+	if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
+		return false, err
+	}
 
 	var backupCodes []TwoFABackupCode
-	if err := DB.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
+	if err := tx.Where("user_id = ? AND is_used = ?", userId, false).Find(&backupCodes).Error; err != nil {
 		return false, err
 	}
 	matchedID := 0
@@ -260,22 +282,11 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 		return false, nil
 	}
 
-	validated := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockTwoFACredentialUserTx(tx, userId); err != nil {
-			return err
-		}
-		now := time.Now()
-		result := tx.Model(&TwoFABackupCode{}).
-			Where("id = ? AND user_id = ? AND code_hash = ? AND is_used = ?", matchedID, userId, matchedHash, false).
-			Updates(map[string]interface{}{"is_used": true, "used_at": &now})
-		if result.Error != nil {
-			return result.Error
-		}
-		validated = result.RowsAffected == 1
-		return nil
-	})
-	return validated, err
+	now := time.Now()
+	result := tx.Model(&TwoFABackupCode{}).
+		Where("id = ? AND user_id = ? AND code_hash = ? AND is_used = ?", matchedID, userId, matchedHash, false).
+		Updates(map[string]interface{}{"is_used": true, "used_at": &now})
+	return result.RowsAffected == 1, result.Error
 }
 
 // GetUnusedBackupCodeCount 获取未使用的备用码数量

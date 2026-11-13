@@ -387,6 +387,10 @@ func CacheUpdateChannelStatus(id int, status int) {
 }
 
 func CacheUpdateChannel(channel *Channel) {
+	cacheUpdateChannel(channel, false)
+}
+
+func cacheUpdateChannel(channel *Channel, preservePolling bool) {
 	if !common.MemoryCacheEnabled {
 		return
 	}
@@ -394,6 +398,18 @@ func CacheUpdateChannel(channel *Channel) {
 	defer channelSyncLock.Unlock()
 	if channel == nil {
 		return
+	}
+	if preservePolling {
+		// Match GetNextEnabledKey and InitChannelCache: cache before polling.
+		pollingLock := GetChannelPollingLock(channel.Id)
+		pollingLock.Lock()
+		defer pollingLock.Unlock()
+		if old, ok := channelsIDM[channel.Id]; ok && old.Key == channel.Key &&
+			old.ChannelInfo.IsMultiKey && channel.ChannelInfo.IsMultiKey &&
+			old.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling &&
+			channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
+			channel.ChannelInfo.MultiKeyPollingIndex = old.ChannelInfo.MultiKeyPollingIndex
+		}
 	}
 
 	if channelsIDM == nil {

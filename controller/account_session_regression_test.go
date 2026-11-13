@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestEmailBindingRejectsRevokedSessionAtWriteBoundary(t *testing.T) {
@@ -32,9 +34,9 @@ func TestEmailBindingRejectsRevokedSessionAtWriteBoundary(t *testing.T) {
 	})
 	r.POST("/bind", EmailBind)
 	login := httptest.NewRecorder()
-	r.ServeHTTP(login, httptest.NewRequest("GET", "/cookie", nil))
+	r.ServeHTTP(login, httptest.NewRequestWithContext(t.Context(), "GET", "/cookie", nil))
 	common.RegisterVerificationCodeWithKey("new@example.com", "123456", common.EmailVerificationPurpose)
-	req := httptest.NewRequest("POST", "/bind", strings.NewReader(`{"email":"new@example.com","code":"123456"}`))
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/bind", strings.NewReader(`{"email":"new@example.com","code":"123456"}`))
 	req.Header.Set("Content-Type", "application/json")
 	for _, ck := range login.Result().Cookies() {
 		req.AddCookie(ck)
@@ -45,6 +47,105 @@ func TestEmailBindingRejectsRevokedSessionAtWriteBoundary(t *testing.T) {
 	var stored model.User
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	require.Equal(t, "old@example.com", stored.Email)
+}
+
+func TestTwoFABackupLoginCommitsWithChallenge(t *testing.T) {
+	require.NoError(t, appi18n.Init())
+	for _, scenario := range []string{"expired", "revoked", "consumed", "backup-write-failed", "usage-write-failed", "wrong-code", "success"} {
+		t.Run(scenario, func(t *testing.T) {
+			db := setupUserSettingControllerTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.AuthFlow{}, &model.TwoFA{}, &model.TwoFABackupCode{}, &model.Log{}))
+			oldEnabled := common.PasswordLoginEnabled
+			common.PasswordLoginEnabled = true
+			t.Cleanup(func() { common.PasswordLoginEnabled = oldEnabled })
+			hash, err := common.Password2Hash("synthetic-password")
+			require.NoError(t, err)
+			user := model.User{Username: "backup-audit", Password: hash, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default"}
+			require.NoError(t, db.Create(&user).Error)
+			factor := model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true, FailedAttempts: 2}
+			require.NoError(t, db.Create(&factor).Error)
+			const code = "ABCD-EFGH"
+			require.NoError(t, model.CreateBackupCodes(user.Id, []string{code}))
+			r := gin.New()
+			r.Use(sessions.Sessions("session", cookie.NewStore([]byte("backup-session-test"))))
+			r.POST("/login", Login)
+			r.POST("/verify", Verify2FALogin)
+			login := httptest.NewRecorder()
+			q := httptest.NewRequestWithContext(t.Context(), "POST", "/login", strings.NewReader(`{"username":"backup-audit","password":"synthetic-password"}`))
+			q.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(login, q)
+			require.Contains(t, login.Body.String(), `"require_2fa":true`)
+			// Inject a competing change after the challenge preflight but before
+			// the factor is verified. This is the controller's real ordering.
+			changed := false
+			require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:backup_preflight", func(tx *gorm.DB) {
+				if changed || tx.Statement.Table != "two_fas" {
+					return
+				}
+				changed = true
+				fresh := tx.Session(&gorm.Session{NewDB: true})
+				var err error
+				switch scenario {
+				case "expired":
+					err = fresh.Model(&model.AuthFlow{}).Where("user_id = ?", user.Id).Update("expires_at", time.Now().Add(-time.Minute)).Error
+				case "revoked":
+					err = fresh.Model(&model.User{}).Where("id = ?", user.Id).Update("session_generation", 1).Error
+				case "consumed":
+					err = fresh.Model(&model.AuthFlow{}).Where("user_id = ?", user.Id).Update("consumed_at", time.Now()).Error
+				}
+				if err != nil {
+					tx.AddError(err)
+				}
+			}))
+			if scenario == "usage-write-failed" || scenario == "backup-write-failed" {
+				require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:backup_usage_failure", func(tx *gorm.DB) {
+					if (scenario == "usage-write-failed" && tx.Statement.Table == "two_fas") ||
+						(scenario == "backup-write-failed" && tx.Statement.Table == "two_fa_backup_codes") {
+						tx.AddError(errors.New("synthetic usage write failed"))
+					}
+				}))
+			}
+			perform := func(input string) *httptest.ResponseRecorder {
+				q := httptest.NewRequestWithContext(t.Context(), "POST", "/verify", strings.NewReader(`{"code":"`+input+`"}`))
+				q.Header.Set("Content-Type", "application/json")
+				for _, ck := range login.Result().Cookies() {
+					q.AddCookie(ck)
+				}
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, q)
+				return w
+			}
+			input := code
+			if scenario == "wrong-code" {
+				input = "IJKL-MNOP"
+			}
+			result := perform(input)
+			var backup model.TwoFABackupCode
+			require.NoError(t, db.First(&backup, "user_id = ?", user.Id).Error)
+			var flow model.AuthFlow
+			require.NoError(t, db.First(&flow, "user_id = ?", user.Id).Error)
+			if scenario == "success" {
+				require.Contains(t, result.Body.String(), `"success":true`)
+				require.True(t, backup.IsUsed)
+				require.NotNil(t, backup.UsedAt)
+				require.NotNil(t, flow.ConsumedAt)
+				require.Contains(t, perform(code).Body.String(), `"success":false`)
+			} else {
+				require.Contains(t, result.Body.String(), `"success":false`)
+				require.False(t, backup.IsUsed, "rejected login must not burn the backup code")
+				require.Nil(t, backup.UsedAt)
+				if scenario == "usage-write-failed" || scenario == "backup-write-failed" || scenario == "wrong-code" {
+					require.Nil(t, flow.ConsumedAt, "factor write failure must also roll back challenge consumption")
+				}
+				if scenario == "wrong-code" {
+					var stored model.TwoFA
+					require.NoError(t, db.First(&stored, factor.Id).Error)
+					require.Equal(t, 3, stored.FailedAttempts)
+					require.Contains(t, perform(code).Body.String(), `"success":true`, "wrong code must leave the challenge available for a valid retry")
+				}
+			}
+		})
+	}
 }
 
 func TestPasswordLoginFailsClosedWhenFactorLookupFails(t *testing.T) {
@@ -59,7 +160,7 @@ func TestPasswordLoginFailsClosedWhenFactorLookupFails(t *testing.T) {
 	r := gin.New()
 	r.Use(sessions.Sessions("session", cookie.NewStore([]byte("factor-error-test"))))
 	r.POST("/login", Login)
-	q := httptest.NewRequest("POST", "/login", strings.NewReader(`{"username":"factor-db-error","password":"synthetic-password"}`))
+	q := httptest.NewRequestWithContext(t.Context(), "POST", "/login", strings.NewReader(`{"username":"factor-db-error","password":"synthetic-password"}`))
 	q.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, q)
@@ -85,7 +186,7 @@ func TestTwoFALoginChallengeRejectsRevocationExpiryAndReplay(t *testing.T) {
 			r.POST("/login", Login)
 			r.POST("/verify", Verify2FALogin)
 			login := httptest.NewRecorder()
-			req := httptest.NewRequest("POST", "/login", strings.NewReader(`{"username":"pending-audit","password":"synthetic-password"}`))
+			req := httptest.NewRequestWithContext(t.Context(), "POST", "/login", strings.NewReader(`{"username":"pending-audit","password":"synthetic-password"}`))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(login, req)
 			require.Contains(t, login.Body.String(), `"require_2fa":true`)
@@ -98,7 +199,7 @@ func TestTwoFALoginChallengeRejectsRevocationExpiryAndReplay(t *testing.T) {
 			perform := func() *httptest.ResponseRecorder {
 				code, err := totp.GenerateCode("JBSWY3DPEHPK3PXP", time.Now())
 				require.NoError(t, err)
-				q := httptest.NewRequest("POST", "/verify", strings.NewReader(`{"code":"`+code+`"}`))
+				q := httptest.NewRequestWithContext(t.Context(), "POST", "/verify", strings.NewReader(`{"code":"`+code+`"}`))
 				q.Header.Set("Content-Type", "application/json")
 				for _, ck := range login.Result().Cookies() {
 					q.AddCookie(ck)

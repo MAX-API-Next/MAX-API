@@ -9,6 +9,7 @@ import (
 )
 
 var ErrUserSessionInvalid = errors.New("user session is no longer valid")
+var ErrTwoFABackupCodeInvalid = errors.New("invalid two-factor backup code")
 
 // Recheck at the commit boundary, not only against middleware/cache state.
 func sessionUserWithDB(db *gorm.DB, userID int, generation int64, lock bool) (*User, error) {
@@ -99,6 +100,37 @@ func GetTwoFALoginChallenge(token, sessionID string) (*User, error) {
 // frozen password-auth generation in the same transaction. A later revocation
 // invalidates the returned generation; it must never be upgraded at setupLogin.
 func CompleteTwoFALoginChallenge(token, sessionID string) (*User, error) {
+	return completeTwoFALoginChallenge(token, sessionID, nil)
+}
+
+// A backup code, its usage state, and the login challenge share one commit.
+// No code is consumed when the challenge/session is rejected or a write fails.
+func CompleteTwoFALoginChallengeWithBackupCode(token, sessionID, code string) (*User, error) {
+	return completeTwoFALoginChallenge(token, sessionID, func(tx *gorm.DB, user *User) error {
+		var factor TwoFA
+		if err := withRowLock(tx).Where("user_id = ?", user.Id).First(&factor).Error; err != nil {
+			return err
+		}
+		if !factor.IsEnabled {
+			return ErrTwoFANotEnabled
+		}
+		if factor.IsLocked() {
+			return errors.New("账户已被锁定，请稍后重试")
+		}
+		valid, err := ValidateBackupCodeTx(tx, user.Id, code)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return ErrTwoFABackupCodeInvalid
+		}
+		now := time.Now()
+		factor.FailedAttempts, factor.LockedUntil, factor.LastUsedAt = 0, nil, &now
+		return factor.updateUsageStateWithDB(tx)
+	})
+}
+
+func completeTwoFALoginChallenge(token, sessionID string, action func(*gorm.DB, *User) error) (*User, error) {
 	if sessionID == "" {
 		return nil, ErrAuthFlowInvalid
 	}
@@ -106,7 +138,13 @@ func CompleteTwoFALoginChallenge(token, sessionID string) (*User, error) {
 	_, err := ConsumeAuthFlowWithAction(token, AuthFlowMatch{Purpose: AuthFlowPurposeTwoFALogin, SessionId: sessionID}, func(tx *gorm.DB, flow *AuthFlow) error {
 		var err error
 		user, err = twoFALoginUser(tx, flow, true)
-		return err
+		if err != nil {
+			return err
+		}
+		if action != nil {
+			return action(tx, user)
+		}
+		return nil
 	})
 	return user, err
 }

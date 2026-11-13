@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -163,6 +164,59 @@ func TestChannelStatusRollbackDoesNotPublishCache(t *testing.T) {
 	require.Equal(t, common.ChannelStatusEnabled, cached.Status)
 	require.Equal(t, 2, cached.ChannelInfo.MultiKeyPollingIndex)
 	require.NotContains(t, cached.ChannelInfo.MultiKeyStatusList, 0)
+}
+
+func TestChannelStatusPublicationReleasesPollingLockAndPreservesLatestCursor(t *testing.T) {
+	db, channel := setupChannelUpdateFieldsTestDB(t)
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	isolateSecurityChannelCache(t)
+	channel.ChannelInfo.MultiKeyMode = constant.MultiKeyModePolling
+	channel.ChannelInfo.MultiKeyStatusList = map[int]int{}
+	channel.ChannelInfo.MultiKeyDisabledTime = map[int]int64{}
+	channel.ChannelInfo.MultiKeyDisabledReason = map[int]string{}
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Update("channel_info", channel.ChannelInfo).Error)
+	channel.ChannelInfo.MultiKeyPollingIndex = 1
+	CacheUpdateChannel(channel)
+	updated := make(chan struct{}, 1)
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("test:status_reached_write", func(tx *gorm.DB) {
+		if tx.Statement.Table == "channels" {
+			updated <- struct{}{}
+		}
+	}))
+	// A cache reader prevents publication. The updater must release polling
+	// before waiting for the cache writer, or cache -> polling readers deadlock.
+	channelSyncLock.RLock()
+	completed := make(chan bool, 1)
+	go func() {
+		completed <- UpdateChannelStatus(channel.Id, "first-key", common.ChannelStatusAutoDisabled, "synthetic")
+	}()
+	<-updated
+	advanced := make(chan struct{})
+	go func() {
+		lock := GetChannelPollingLock(channel.Id)
+		lock.Lock()
+		// Simulate the last in-flight request advancing while publication waits.
+		channel.ChannelInfo.MultiKeyPollingIndex = 2
+		lock.Unlock()
+		close(advanced)
+	}()
+	select {
+	case <-advanced:
+	case <-time.After(time.Second):
+		t.Error("status publication held polling while waiting for the cache lock")
+	}
+	channelSyncLock.RUnlock()
+	require.True(t, <-completed)
+	<-advanced
+	cached, err := CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	require.Equal(t, 2, cached.ChannelInfo.MultiKeyPollingIndex, "publication must preserve the latest cursor, not a pre-unlock snapshot")
+	require.Equal(t, common.ChannelStatusAutoDisabled, cached.ChannelInfo.MultiKeyStatusList[0])
+	_, index, keyErr := cached.GetNextEnabledKey()
+	require.Nil(t, keyErr)
+	require.Equal(t, 2, index)
 }
 
 func TestLateAutomaticDisablePreservesManualChannel(t *testing.T) {

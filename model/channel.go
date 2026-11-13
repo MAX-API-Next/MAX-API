@@ -933,76 +933,76 @@ func updateChannelStatus(channelId int, usingKey string, status int, reason stri
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
 	}
-	pollingLock := GetChannelPollingLock(channelId)
-	pollingLock.Lock()
-	defer pollingLock.Unlock()
 	var channel Channel
 	changed := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := withRowLock(tx).First(&channel, "id = ?", channelId).Error; err != nil {
-			return err
-		}
-		// The stored row is authoritative even when this node's cache is stale.
-		// Background failures/key recovery cannot override an administrator pause.
-		if channel.Status == common.ChannelStatusManuallyDisabled && (status == common.ChannelStatusAutoDisabled || automaticRecovery) {
-			return nil
-		}
-		beforeStatus, beforeOther := channel.Status, channel.OtherInfo
-		beforeInfo, err := common.Marshal(channel.ChannelInfo)
-		if err != nil {
-			return err
-		}
-		if channel.ChannelInfo.IsMultiKey {
-			handlerMultiKeyUpdate(&channel, usingKey, status, reason)
-		} else {
-			if channel.Status == status {
-				return nil
-			}
-			info := channel.GetOtherInfo()
-			info["status_reason"] = reason
-			info["status_time"] = common.GetTimestamp()
-			channel.SetOtherInfo(info)
-			channel.Status = status
-		}
-		afterInfo, err := common.Marshal(channel.ChannelInfo)
-		if err != nil {
-			return err
-		}
-		if beforeStatus == channel.Status && beforeOther == channel.OtherInfo && string(beforeInfo) == string(afterInfo) {
-			return nil
-		}
-		query := tx.Model(&Channel{}).Where("id = ? AND status = ?", channelId, beforeStatus)
-		if beforeOther == "" {
-			query = query.Where("(other_info IS NULL OR other_info = ?)", "")
-		} else {
-			query = query.Where("other_info = ?", beforeOther)
-		}
-		result := query.Updates(map[string]interface{}{"status": channel.Status, "channel_info": channel.ChannelInfo, "other_info": channel.OtherInfo})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return errors.New("channel status changed concurrently")
-		}
-		if beforeStatus != channel.Status {
-			if err := tx.Model(&Ability{}).Where("channel_id = ?", channelId).Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
+	err := func() error {
+		pollingLock := GetChannelPollingLock(channelId)
+		pollingLock.Lock()
+		defer pollingLock.Unlock()
+		return DB.Transaction(func(tx *gorm.DB) error {
+			if err := withRowLock(tx).First(&channel, "id = ?", channelId).Error; err != nil {
 				return err
 			}
-		}
-		changed = true
-		return nil
-	})
+			// The stored row is authoritative even when this node's cache is stale.
+			// Background failures/key recovery cannot override an administrator pause.
+			if channel.Status == common.ChannelStatusManuallyDisabled && (status == common.ChannelStatusAutoDisabled || automaticRecovery) {
+				return nil
+			}
+			beforeStatus, beforeOther := channel.Status, channel.OtherInfo
+			beforeInfo, err := common.Marshal(channel.ChannelInfo)
+			if err != nil {
+				return err
+			}
+			if channel.ChannelInfo.IsMultiKey {
+				handlerMultiKeyUpdate(&channel, usingKey, status, reason)
+			} else {
+				if channel.Status == status {
+					return nil
+				}
+				info := channel.GetOtherInfo()
+				info["status_reason"] = reason
+				info["status_time"] = common.GetTimestamp()
+				channel.SetOtherInfo(info)
+				channel.Status = status
+			}
+			afterInfo, err := common.Marshal(channel.ChannelInfo)
+			if err != nil {
+				return err
+			}
+			if beforeStatus == channel.Status && beforeOther == channel.OtherInfo && string(beforeInfo) == string(afterInfo) {
+				return nil
+			}
+			query := tx.Model(&Channel{}).Where("id = ? AND status = ?", channelId, beforeStatus)
+			if beforeOther == "" {
+				query = query.Where("(other_info IS NULL OR other_info = ?)", "")
+			} else {
+				query = query.Where("other_info = ?", beforeOther)
+			}
+			result := query.Updates(map[string]interface{}{"status": channel.Status, "channel_info": channel.ChannelInfo, "other_info": channel.OtherInfo})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("channel status changed concurrently")
+			}
+			if beforeStatus != channel.Status {
+				if err := tx.Model(&Ability{}).Where("channel_id = ?", channelId).Update("enabled", channel.Status == common.ChannelStatusEnabled).Error; err != nil {
+					return err
+				}
+			}
+			changed = true
+			return nil
+		})
+	}()
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channelId, status, err))
 		return false
 	}
 	// Never publish a state which the database/ability transaction rejected.
 	if common.MemoryCacheEnabled {
-		// Polling advances in memory; publishing DB status must not rewind it.
-		if cached, err := CacheGetChannel(channelId); err == nil && cached.Key == channel.Key && cached.ChannelInfo.IsMultiKey {
-			channel.ChannelInfo.MultiKeyPollingIndex = cached.ChannelInfo.MultiKeyPollingIndex
-		}
-		CacheUpdateChannel(&channel)
+		// Release polling before acquiring cache locks. Copy the latest cursor
+		// atomically with publication in the cache -> polling lock order.
+		cacheUpdateChannel(&channel, true)
 		CacheUpdateChannelStatus(channelId, channel.Status)
 	}
 	return changed
