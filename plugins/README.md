@@ -69,7 +69,9 @@ compatibility requests with both URL and Base64 frames are rejected before
 submission because splitting them into separate arrays loses first/tail order.
 Use a single ordered representation until an owned conversion path is available.
 Kling's OpenAI Video JSON path also rejects nonempty `images` lists; use its
-supported `image` or `input_reference` field. xAI rejects a legacy `images`
+supported `image` or `input_reference` field. Its Responses path accepts at most
+two distinct images and selects the action from the metadata-merged image fields.
+xAI rejects a legacy `images`
 list combined with scalar or `reference_images` input instead of discarding
 one representation. These restrictions are enforced before authorization.
 

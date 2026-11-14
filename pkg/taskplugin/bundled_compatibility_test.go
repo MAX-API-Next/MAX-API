@@ -602,6 +602,9 @@ func TestBundledXAIRejectsConflictingImageRepresentations(t *testing.T) {
 		require.Error(t, err, "a mixed scalar/reference-list and legacy list must fail instead of silently losing media")
 		_, err = p.Call(t.Context(), "extractUsage", driverInput("grok-imagine-video", "image_to_video", fields))
 		require.Error(t, err, "quote preparation must use the same rejection contract")
+		fields["model"], fields["input"] = "grok-imagine-video", "test"
+		_, err = p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": "grok-imagine-video", "body": map[string]any{"kind": "json", "value": fields}})
+		require.Error(t, err, "Responses must reject conflicts before normalization hides the original representations")
 	}
 	for _, images := range [][]any{{"https://synthetic.invalid/first.png"}, {"https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"}} {
 		out := hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", "image_to_video", map[string]any{"prompt": "test", "images": images}))
@@ -611,5 +614,51 @@ func TestBundledXAIRejectsConflictingImageRepresentations(t *testing.T) {
 		} else {
 			require.Len(t, body["reference_images"], 2)
 		}
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "grok-imagine-video", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "grok-imagine-video", "input": "test", "images": images}}})
+		out = hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", decoded["action"].(string), decoded["requestBody"]))
+		require.Equal(t, body, out["body"], "valid list-only input must retain every image through Responses conversion")
 	}
+}
+
+func TestBundledKlingActionUsesEffectiveMergedImages(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, protocol := range []string{"openai_video", "openai_responses"} {
+		for _, image := range []any{"", nil, "https://synthetic.invalid/replacement.png"} {
+			fields := map[string]any{"model": "kling-v2-5-turbo", "prompt": "test", "input": "test", "image": "https://synthetic.invalid/original.png", "metadata": map[string]any{"image": image}}
+			decoded := hookObject(t, p, "protocols."+protocol+".decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": fields}})
+			action, endpoint := "text_to_video", "/v1/videos/text2video"
+			if image != nil && image != "" {
+				action, endpoint = "image_to_video", "/v1/videos/image2video"
+			}
+			require.Equal(t, action, decoded["action"], "%s image=%v", protocol, image)
+			out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", decoded["action"].(string), decoded["requestBody"]))
+			require.Equal(t, action, out["action"])
+			require.Equal(t, "https://provider.invalid"+endpoint, out["url"])
+			body := out["body"].(map[string]any)
+			if action == "text_to_video" {
+				require.NotContains(t, body, "image")
+			} else {
+				require.Equal(t, image, body["image"])
+			}
+		}
+	}
+}
+
+func TestBundledKlingResponsesRejectExcessFrames(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const first, last, extra = "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png", "https://synthetic.invalid/extra.png"
+	for _, fields := range []map[string]any{
+		{"images": []any{first, last, extra}},
+		{"image": first, "images": []any{last, extra}},
+		{"images": []any{first, last}, "input": []any{map[string]any{"type": "input_image", "image_url": extra}}},
+	} {
+		fields["model"], fields["prompt"] = "kling-v2-5-turbo", "test"
+		_, err := p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": fields}})
+		require.Error(t, err, "excess media must be rejected before selecting first and last frames")
+	}
+	decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"input": "test", "images": []any{first, last}}}})
+	out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", decoded["action"].(string), decoded["requestBody"]))
+	body := out["body"].(map[string]any)
+	require.Equal(t, first, body["image"])
+	require.Equal(t, last, body["image_tail"])
 }

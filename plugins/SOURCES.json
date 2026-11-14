@@ -122,25 +122,27 @@
     },
     {
       "key": "kling",
-      "version": "1.2.0-maxapi.5",
-      "path": "plugins/tasks/kling/1.2.0-maxapi.5/plugin.js",
-      "sha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.6/plugin.js",
+      "sha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9",
       "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-5",
+        "revision": "pr78-compatibility-6",
         "changes": [
           "Estimate the effective metadata-overridden outbound mode",
           "Include metadata images in Responses action selection",
           "Create snapshots expose canonical pending status",
           "Reject callback_url/external_task_id after merging the final request body",
-          "Reject unsupported OpenAI Video image lists instead of dropping reference frames"
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.4",
-      "previousSha256": "e20005901f2e55dd05a1111f1f5973d03c121855181405b6471332e83cf9b87b"
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb"
     },
     {
       "key": "sora",
@@ -226,15 +228,15 @@
     },
     {
       "key": "xai",
-      "version": "1.2.0-maxapi.5",
-      "path": "plugins/tasks/xai/1.2.0-maxapi.5/plugin.js",
-      "sha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.6/plugin.js",
+      "sha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816",
       "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-5",
+        "revision": "pr78-compatibility-6",
         "changes": [
           "Allow valid keyframe-only generation through semantic validator",
           "Merge measured poll state with submitted extension state",
@@ -242,11 +244,12 @@
           "Explicit top-level duration/seconds override metadata duration",
           "Parse and validate multipart metadata before request normalization",
           "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
-          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation"
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
+          "Reject conflicting Responses image representations before normalization"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.4",
-      "previousSha256": "75522345fd6d47ffe3a9b204b7fca76c89b3815365604e333970e1c8b33e8c71"
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2"
     }
   ],
   "retainedVersions": [
@@ -836,6 +839,52 @@
       },
       "previousVersion": "1.2.0-maxapi.3",
       "previousSha256": "e4465b3fb679559f7bc2295471f685c935a9a512b56dfe8f9a6645b7caf2643b"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.5",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.5/plugin.js",
+      "sha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-5",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.4",
+      "previousSha256": "e20005901f2e55dd05a1111f1f5973d03c121855181405b6471332e83cf9b87b"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.5",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.5/plugin.js",
+      "sha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-5",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.4",
+      "previousSha256": "75522345fd6d47ffe3a9b204b7fca76c89b3815365604e333970e1c8b33e8c71"
     }
   ]
 }
