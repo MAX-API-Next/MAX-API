@@ -62,6 +62,8 @@ type pricingAuthority struct {
 	plugins      []taskplugin.StoredPackage
 	catalogReady bool
 	selfUse      bool
+	// Local to this captured authority; never shared across revisions/nodes.
+	validatedPackages map[string]*taskplugin.Package
 }
 
 func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
@@ -184,10 +186,18 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 		if !entry.Active {
 			continue
 		}
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
-		if err != nil {
-			continue
-		} // snapshot validation above already rejects corruption
+		if a.validatedPackages == nil {
+			a.validatedPackages = make(map[string]*taskplugin.Package)
+		}
+		pkg := a.validatedPackages[entry.Digest]
+		if pkg == nil {
+			var err error
+			pkg, err = taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+			if err != nil {
+				continue
+			} // snapshot validation above already rejects corruption
+			a.validatedPackages[entry.Digest] = pkg
+		}
 		manifest := pkg.Manifest()
 		if !slices.Contains(manifest.Models, model) {
 			continue

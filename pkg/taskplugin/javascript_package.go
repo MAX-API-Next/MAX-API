@@ -147,9 +147,32 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 	// schema for other models. Materialize that inheritance for MAX's exact map.
 	if len(m.UsageProfiles) > 0 {
 		covered := map[string]bool{}
+		// Inheritance copies happen in Go, outside the JavaScript heap budget.
+		// Bound both map-entry growth and repeated enum/label payloads first.
+		const maxExpandedFields = 8192
+		base, err := common.Marshal(m.UsageSchema)
+		if err != nil {
+			return Manifest{}, ErrPluginCompile
+		}
+		fields, size := len(m.UsageSchema), len(base)
 		for _, profile := range m.UsageProfiles {
+			encoded, err := common.Marshal(profile.Schema)
+			if err != nil || len(profile.Schema) > maxExpandedFields-fields || len(encoded) > MaxPackageBytes-size {
+				return Manifest{}, ErrPluginLimit
+			}
+			fields += len(profile.Schema)
+			size += len(encoded)
 			for _, model := range profile.Models {
 				covered[model] = true
+			}
+		}
+		for _, model := range m.Models {
+			if !covered[model] {
+				if len(m.UsageSchema) > maxExpandedFields-fields || len(base) > MaxPackageBytes-size {
+					return Manifest{}, ErrPluginLimit
+				}
+				fields += len(m.UsageSchema)
+				size += len(base)
 			}
 		}
 		for _, model := range m.Models {

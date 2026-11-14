@@ -9,7 +9,7 @@ SHA-256 pins. Sources are copied from Git blobs, preserving the published bytes
 (a Windows checkout may use different line endings). Do not edit a published
 script in place; adopt a new reviewed version and retain the previous identity.
 
-Versions ending in `-maxapi.1` are explicit MAX-API-Next compatibility revisions,
+Versions containing `-maxapi.` are explicit MAX-API-Next compatibility revisions,
 not unmodified upstream releases. `SOURCES.json` records their original version
 and SHA-256, modified source SHA-256, maintainer and individual changes. Original
 files remain byte-for-byte intact in `retainedVersions`; existing pinned download
@@ -55,3 +55,9 @@ SDK non-proxy requests retain a protected dialer even when protection is off,
 revalidate policy immediately before transport, and disable connection reuse so
 connections opened under an older policy cannot bypass a later policy change.
 Proxy brokers also reject sends if protection has since been enabled.
+
+Synchronous image paths that require a host-issued gateway task ID, and remix
+paths that require an ownership-checked origin task, are refused before dispatch
+until the durable task caller supplies those contexts. Accepted image/frame
+counts are validated rather than silently truncated. Profile inheritance is
+bounded before Go map expansion (8,192 fields and 1 MiB serialized schemas).

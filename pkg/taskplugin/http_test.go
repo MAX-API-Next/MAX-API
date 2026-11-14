@@ -36,6 +36,7 @@ func TestBrokerPoliciesRunBeforeAuthorizationOrNetwork(t *testing.T) {
 		{"unsupported SSE", SubmitRequest, RequestDescriptor{URL: server.URL, ResponseType: "sse"}},
 		{"unsupported multipart", SubmitRequest, RequestDescriptor{URL: server.URL, BodyType: "multipart"}},
 		{"unresolved attachment", SubmitRequest, RequestDescriptor{URL: server.URL, Body: []byte(`{"nested":[{"__fileRef":"request_file:image","encoding":"base64"}]}`)}},
+		{"serialized unresolved attachment", SubmitRequest, RequestDescriptor{URL: server.URL, Body: []byte(`"{\"nested\":{\"__fileRef\":\"request_file:image\"}}"`)}},
 		{"invalid JSON descriptor", SubmitRequest, RequestDescriptor{URL: server.URL, Body: []byte(`{"unfinished":`)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

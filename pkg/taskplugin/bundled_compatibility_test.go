@@ -259,7 +259,7 @@ func TestBundledResponsesPreserveRepeatedFramesAndResolution(t *testing.T) {
 			p := recommendedBundle(t, key)
 			model := "viduq3-pro"
 			if key == "vertex-ai" {
-				model = "omni-1"
+				model = "gemini-omni-1.2-flash"
 			}
 			decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "input": "test", "images": []any{frame, frame}, "resolution": "1080p"}}})
 			request := decoded["requestBody"].(map[string]any)
@@ -277,4 +277,145 @@ func TestBundledXAIRejectsUnmeasurableEditBeforeSubmission(t *testing.T) {
 	p := recommendedBundle(t, "xai")
 	_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("grok-imagine-video", "video_edit", map[string]any{"prompt": "test", "video": map[string]any{"url": "https://synthetic.invalid/input.mp4"}}))
 	require.Error(t, err, "this SDK cannot measure output resolution and must not silently bill the 720p reservation as actual")
+}
+
+func TestBundledGoogleMetadataDurationMatchesWireAndFacts(t *testing.T) {
+	p := recommendedBundle(t, "google")
+	input := driverInput(videoModel(t, p), "text_to_video", map[string]any{"prompt": "test", "metadata": map[string]any{"durationSeconds": 4}})
+	wire := hookObject(t, p, "buildSubmitRequest", input)["body"].(map[string]any)
+	require.Equal(t, float64(4), wire["parameters"].(map[string]any)["durationSeconds"])
+	facts := hookObject(t, p, "extractUsage", input)
+	require.Equal(t, float64(4), facts["seconds"])
+}
+
+func TestBundledJimengMixedImagesAndExplicitRemoval(t *testing.T) {
+	p := recommendedBundle(t, "jimeng")
+	for _, images := range [][]any{{"https://synthetic.invalid/frame.png", "aGVsbG8="}, {"aGVsbG8=", "https://synthetic.invalid/frame.png"}} {
+		input := driverInput("jimeng_v30", "first_tail_to_video", map[string]any{"prompt": "test", "images": images})
+		input["apiKey"] = "sk-synthetic-only"
+		desc := hookObject(t, p, "buildSubmitRequest", input)
+		var wire map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(desc["body"].(string), &wire))
+		require.Equal(t, []any{"https://synthetic.invalid/frame.png"}, wire["image_urls"])
+		require.Equal(t, []any{"aGVsbG8="}, wire["binary_data_base64"])
+	}
+	input := driverInput("jimeng_vgfm_t2v_l20", "text_to_video", map[string]any{"prompt": "test", "images": []any{"https://synthetic.invalid/frame.png"}, "metadata": map[string]any{"image_urls": []any{}}})
+	input["apiKey"] = "sk-synthetic-only"
+	desc := hookObject(t, p, "buildSubmitRequest", input)
+	var wire map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(desc["body"].(string), &wire))
+	require.Equal(t, "jimeng_vgfm_t2v_l20", wire["req_key"], "explicit empty override removes the image, so the request is text-only")
+	require.Equal(t, "text_to_video", desc["action"])
+}
+
+func TestBundledSoraCanonicalReferenceAndDuration(t *testing.T) {
+	p := recommendedBundle(t, "sora")
+	decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "sora-2", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "sora-2", "input": "test", "image": "https://synthetic.invalid/frame.png"}}})
+	desc := hookObject(t, p, "buildSubmitRequest", driverInput("sora-2", "image_to_video", decoded["requestBody"]))
+	require.Equal(t, map[string]any{"image_url": "https://synthetic.invalid/frame.png"}, desc["body"].(map[string]any)["input_reference"])
+	decoded = hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "sora-2", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "duration": 8}}})
+	desc = hookObject(t, p, "buildSubmitRequest", driverInput("sora-2", "text_to_video", decoded["requestBody"]))
+	body := desc["body"].(map[string]any)
+	require.Equal(t, "8", body["seconds"])
+	require.NotContains(t, body, "duration")
+}
+
+func TestBundledVertexCompletedOperationRequiresVideo(t *testing.T) {
+	p := recommendedBundle(t, "vertex-ai")
+	input := driverInput(videoModel(t, p), "text_to_video", map[string]any{})
+	out := hookObject(t, p, "parseTaskResult", input, map[string]any{"name": "operation-1", "done": true, "response": map[string]any{"raiMediaFilteredReasons": []any{"filtered synthetic output"}}})
+	require.Equal(t, "FAILURE", out["status"])
+	require.Contains(t, out["reason"], "filtered synthetic output")
+	out = hookObject(t, p, "parseTaskResult", input, map[string]any{"name": "operation-1", "done": true, "response": map[string]any{"videos": []any{map[string]any{"gcsUri": "gs://synthetic/video.mp4"}}}})
+	require.Equal(t, "SUCCESS", out["status"])
+}
+
+func TestBundledProtocolReferenceActionsMatchForwardedMedia(t *testing.T) {
+	for _, test := range []struct {
+		key, model, protocol string
+		fields               map[string]any
+	}{
+		{"doubao", "doubao-seedance-1-0-pro-250528", "openai_video", map[string]any{"images": []any{"https://synthetic.invalid/frame.png"}}},
+		{"doubao", "doubao-seedance-1-0-pro-250528", "openai_responses", map[string]any{"metadata": map[string]any{"content": []any{map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://synthetic.invalid/video.mp4"}}}}}},
+		{"hailuo", "MiniMax-H3", "openai_video", map[string]any{"metadata": map[string]any{"reference_video": "https://synthetic.invalid/video.mp4"}}},
+		{"hailuo", "MiniMax-H3", "openai_responses", map[string]any{"metadata": map[string]any{"reference_video": "https://synthetic.invalid/video.mp4"}}},
+		{"kling", "kling-v2-5-turbo", "openai_responses", map[string]any{"metadata": map[string]any{"image": "https://synthetic.invalid/frame.png"}}},
+	} {
+		t.Run(test.key+test.protocol, func(t *testing.T) {
+			p := recommendedBundle(t, test.key)
+			req := map[string]any{"model": test.model, "prompt": "test", "input": "test"}
+			for k, v := range test.fields {
+				req[k] = v
+			}
+			decoded := hookObject(t, p, "protocols."+test.protocol+".decodeRequest", map[string]any{"model": test.model, "upstreamModel": test.model, "body": map[string]any{"kind": "json", "value": req}})
+			require.Equal(t, "image_to_video", decoded["action"])
+		})
+	}
+}
+
+func TestBundledImageAndVideoPreparationRejectUnsupportedContexts(t *testing.T) {
+	t.Run("synchronous image has no host task id", func(t *testing.T) {
+		p := recommendedBundle(t, "doubao")
+		_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("doubao-seedream-4-0-250828", "text_to_image", map[string]any{"prompt": "test"}))
+		require.Error(t, err)
+	})
+	t.Run("remix has no ownership checked origin", func(t *testing.T) {
+		p := recommendedBundle(t, "sora")
+		_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("sora-2", "remix", map[string]any{"prompt": "test"}))
+		require.Error(t, err)
+	})
+	for _, key := range []string{"google", "vertex-ai"} {
+		t.Run(key+" extra Veo image", func(t *testing.T) {
+			p := recommendedBundle(t, key)
+			model := videoModel(t, p)
+			_, err := p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "input": "test", "images": []any{"data:image/png;base64,iVBORw0KGgo=", "data:image/png;base64,iVBORw0KGgoAA=="}}}})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestBundledEffectiveVideoSettingsPreserveExplicitFields(t *testing.T) {
+	t.Run("doubao resolution", func(t *testing.T) {
+		p := recommendedBundle(t, "doubao")
+		out := hookObject(t, p, "buildSubmitRequest", driverInput("doubao-seedance-1-0-pro-250528", "text_to_video", map[string]any{"prompt": "test", "seconds": 5, "resolution": "480p"}))
+		require.Equal(t, "480p", out["body"].(map[string]any)["resolution"])
+	})
+	t.Run("doubao fractional duration", func(t *testing.T) {
+		p := recommendedBundle(t, "doubao")
+		_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("doubao-seedance-1-0-pro-250528", "text_to_video", map[string]any{"prompt": "test", "seconds": 0.5}))
+		require.Error(t, err)
+	})
+	t.Run("vidu metadata size", func(t *testing.T) {
+		p := recommendedBundle(t, "vidu")
+		out := hookObject(t, p, "buildSubmitRequest", driverInput("viduq3-pro", "text_to_video", map[string]any{"prompt": "test", "metadata": map[string]any{"size": "1920x1080"}}))
+		require.Equal(t, "1080p", out["body"].(map[string]any)["resolution"])
+	})
+	t.Run("xai top seconds overrides metadata duration", func(t *testing.T) {
+		p := recommendedBundle(t, "xai")
+		input := driverInput("grok-imagine-video", "text_to_video", map[string]any{"prompt": "test", "seconds": 4, "metadata": map[string]any{"duration": 12}})
+		out := hookObject(t, p, "buildSubmitRequest", input)
+		require.Equal(t, float64(4), out["body"].(map[string]any)["duration"])
+		facts := hookObject(t, p, "extractUsage", input)
+		require.Equal(t, float64(4), facts["seconds"])
+	})
+}
+
+func TestBundledHailuoRateLimitedPollIsRetryable(t *testing.T) {
+	p := recommendedBundle(t, "hailuo")
+	_, err := p.Call(t.Context(), "parseTaskResult", driverInput("MiniMax-Hailuo-02", "text_to_video", map[string]any{}), map[string]any{"base_resp": map[string]any{"status_code": 1002, "status_msg": "synthetic rate limit"}})
+	require.Error(t, err, "a transient poll must not terminally fail an accepted task")
+}
+
+func TestBundledAlibabaNativeActionsAndCreateIdentity(t *testing.T) {
+	p := recommendedBundle(t, "alibaba")
+	const model = "qwen-image-2.0"
+	input := map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"text": "test"}, map[string]any{"image": "https://synthetic.invalid/frame.png"}}}}}
+	decoded := hookObject(t, p, "native.createImageTask", map[string]any{"model": model, "upstreamModel": model, "path": "/api/v1/services/aigc/multimodal-generation/generation", "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "input": input}}})
+	require.Equal(t, "image_to_image", decoded["action"])
+	decoded = hookObject(t, p, "protocols.openai_image.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "prompt": "test", "input": input}}})
+	require.Equal(t, "image_to_image", decoded["action"])
+	out := hookObject(t, p, "native.taskCreated", map[string]any{}, map[string]any{"task_id": "public-1", "data": map[string]any{"output": map[string]any{"task_id": "private-1"}}})
+	require.Equal(t, "public-1", out["output"].(map[string]any)["task_id"])
+	decoded = hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "wan3.0-video", "upstreamModel": "wan3.0-video", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "audio_url": "https://synthetic.invalid/audio.mp3"}}})
+	require.Equal(t, "image_to_video", decoded["action"], "audio shorthand must classify exactly as forwarded reference media")
 }

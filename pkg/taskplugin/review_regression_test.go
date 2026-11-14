@@ -3,6 +3,7 @@ package taskplugin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"testing"
@@ -63,4 +64,19 @@ func TestRetainingReloadedActiveIdentityAllowsNewSubmission(t *testing.T) {
 	require.NoError(t, e.CheckSubmit(), "reloading identical immutable bytes cannot disable an active version")
 	require.NoError(t, host.Revoke("synthetic", p1.Manifest().Version))
 	require.ErrorIs(t, e.CheckSubmit(), ErrBindingRejected)
+}
+
+func TestInheritedSchemaExpansionIsBoundedBeforeMaterialization(t *testing.T) {
+	models := make([]string, 200)
+	schema := map[string]any{}
+	for i := range models {
+		models[i] = fmt.Sprintf("m%d", i)
+		schema[fmt.Sprintf("f%d", i)] = map[string]any{"type": "number", "unit": "second"}
+	}
+	meta, err := common.Marshal(map[string]any{"apiVersion": 1, "key": "growth", "name": "Growth", "version": "1.0.0", "models": models, "usageSchema": schema, "usageProfiles": []any{map[string]any{"models": []string{"m0"}, "schema": map[string]any{"u": map[string]any{"type": "number", "unit": "second"}}}}})
+	require.NoError(t, err)
+	p, err := CompileJavaScript("export const meta="+string(meta)+`;export function buildSubmitRequest(){return {}}export function parseSubmitResponse(){return {}}export function buildQueryRequest(){return {}}export function parseTaskResult(){return {}}`, RuntimeOptions{})
+	require.NoError(t, err)
+	_, err = p.Manifest(context.Background())
+	require.ErrorIs(t, err, ErrPluginLimit, "199 inherited schemas * 200 fields exceeds the host expansion budget before copying")
 }

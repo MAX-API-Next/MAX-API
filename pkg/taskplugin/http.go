@@ -191,6 +191,13 @@ func validateDescriptorBody(body []byte) error {
 	if common.Unmarshal(body, &value) != nil {
 		return ErrRequestPolicy
 	}
+	// A top-level JSON string is serialized wire JSON (for signed requests).
+	// Validate its structure too; send the original decoded bytes unchanged.
+	if text, ok := value.(string); ok {
+		if common.Unmarshal([]byte(text), &value) != nil {
+			return ErrRequestPolicy
+		}
+	}
 	var nodes int
 	var walk func(any, int) error
 	walk = func(value any, depth int) error {

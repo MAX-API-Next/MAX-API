@@ -36,7 +36,7 @@ func TestOfficialTaskPluginRootInstallAndUpgradeGuard(t *testing.T) {
 	r := call("GET", "/api/task_plugins/bundled", nil, true)
 	require.Equal(t, 200, r.Code)
 	require.Contains(t, r.Body.String(), `"key":"kling"`)
-	require.Contains(t, r.Body.String(), `"version":"1.2.0-maxapi.1"`, "picker recommends the explicit compatibility revision")
+	require.Contains(t, r.Body.String(), `"version":"1.2.0-maxapi.2"`, "picker recommends the explicit compatibility revision")
 	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0", nil, true)
 	require.Equal(t, 200, r.Code)
 	var download struct {
@@ -50,6 +50,10 @@ func TestOfficialTaskPluginRootInstallAndUpgradeGuard(t *testing.T) {
 	// Old pinned download references remain exact, while a new installation
 	// uses the separately versioned recommendation with a different source pin.
 	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0-maxapi.1", nil, true)
+	require.Equal(t, 200, r.Code)
+	require.NoError(t, common.Unmarshal(r.Body.Bytes(), &download))
+	require.Equal(t, "c08fd5526f9157200386286a49dbdd51f8769997d6613f4fbb492fceb5b616be", download.Data.Pin, "published first revision stays immutable")
+	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0-maxapi.2", nil, true)
 	require.Equal(t, 200, r.Code)
 	require.NoError(t, common.Unmarshal(r.Body.Bytes(), &download))
 	require.NotEqual(t, "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240", download.Data.Pin)
