@@ -771,3 +771,21 @@ func TestBundledKlingResponsesKeepsRepeatedFramePositions(t *testing.T) {
 		require.Error(t, err, "three ordered frame positions cannot fit a first/tail request even when their URLs match")
 	}
 }
+
+func TestBundledKlingCountsFramesAfterSingleImageOverride(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const old, first, last = "https://synthetic.invalid/old.png", "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"
+	for _, model := range []string{"kling-v2-5-turbo", "kling-4.0"} {
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "image": old, "metadata": map[string]any{"image": first, "image_tail": last}}}})
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
+		body := out["body"].(map[string]any)
+		if model == "kling-4.0" {
+			require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": first}, map[string]any{"type": "last_frame", "url": last}}, body["contents"])
+		} else {
+			require.Equal(t, first, body["image"])
+			require.Equal(t, last, body["image_tail"])
+		}
+	}
+}
