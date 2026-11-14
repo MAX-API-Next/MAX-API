@@ -235,7 +235,11 @@ func (e *Executor) Poll(ctx context.Context, b *HTTPBroker, channel ChannelInput
 			headers[k] = v[0]
 		}
 	}
-	raw, err := e.call(ctx, "parseTaskResult", input, json.RawMessage(response.Body), map[string]any{"status": response.StatusCode, "headers": headers})
+	var pollBody json.RawMessage
+	if len(bytes.TrimSpace(response.Body)) > 0 {
+		pollBody = response.Body
+	}
+	raw, err := e.call(ctx, "parseTaskResult", input, pollBody, map[string]any{"status": response.StatusCode, "headers": headers})
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +249,7 @@ func (e *Executor) Poll(ctx context.Context, b *HTTPBroker, channel ChannelInput
 	}
 	var facts types.TaskPricingFacts
 	if result.Status == "SUCCESS" {
-		facts, err = e.facts(ctx, "extractUsageOnComplete", input, json.RawMessage(raw), json.RawMessage(response.Body))
+		facts, err = e.facts(ctx, "extractUsageOnComplete", input, json.RawMessage(raw), pollBody)
 		if err != nil {
 			return nil, err
 		}

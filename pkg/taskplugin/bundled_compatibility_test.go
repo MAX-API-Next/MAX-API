@@ -339,6 +339,7 @@ func TestBundledProtocolReferenceActionsMatchForwardedMedia(t *testing.T) {
 		{"doubao", "doubao-seedance-1-0-pro-250528", "openai_responses", map[string]any{"metadata": map[string]any{"content": []any{map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://synthetic.invalid/video.mp4"}}}}}},
 		{"hailuo", "MiniMax-H3", "openai_video", map[string]any{"metadata": map[string]any{"reference_video": "https://synthetic.invalid/video.mp4"}}},
 		{"hailuo", "MiniMax-H3", "openai_responses", map[string]any{"metadata": map[string]any{"reference_video": "https://synthetic.invalid/video.mp4"}}},
+		{"hailuo", "MiniMax-Hailuo-2.3", "openai_responses", map[string]any{"metadata": map[string]any{"first_frame_image": "https://synthetic.invalid/frame.png"}}},
 		{"kling", "kling-v2-5-turbo", "openai_responses", map[string]any{"metadata": map[string]any{"image": "https://synthetic.invalid/frame.png"}}},
 	} {
 		t.Run(test.key+test.protocol, func(t *testing.T) {
@@ -418,4 +419,70 @@ func TestBundledAlibabaNativeActionsAndCreateIdentity(t *testing.T) {
 	require.Equal(t, "public-1", out["output"].(map[string]any)["task_id"])
 	decoded = hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "wan3.0-video", "upstreamModel": "wan3.0-video", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "audio_url": "https://synthetic.invalid/audio.mp3"}}})
 	require.Equal(t, "image_to_video", decoded["action"], "audio shorthand must classify exactly as forwarded reference media")
+}
+
+func TestBundledAlibabaEffectiveOverrideAndRepeatedFrames(t *testing.T) {
+	p := recommendedBundle(t, "alibaba")
+	decoded := hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "wan3.0-video", "upstreamModel": "wan3.0-video", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "media": []any{map[string]any{"type": "reference_image", "url": "https://synthetic.invalid/frame.png"}}, "metadata": map[string]any{"input": map[string]any{"media": []any{}}}}}})
+	require.Equal(t, "text_to_video", decoded["action"], "explicit empty effective media replaces top-level media")
+	decoded = hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "wan2.2-kf2v-flash", "upstreamModel": "wan2.2-kf2v-flash", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "wan2.2-kf2v-flash", "input": "test", "images": []any{"https://synthetic.invalid/frame.png", "https://synthetic.invalid/frame.png"}}}})
+	require.Len(t, decoded["requestBody"].(map[string]any)["images"], 2)
+}
+
+func TestBundledGoogleFilteredCompletionHasNoSuccessfulDelivery(t *testing.T) {
+	p := recommendedBundle(t, "google")
+	input := driverInput(videoModel(t, p), "text_to_video", map[string]any{})
+	body := map[string]any{"name": "operation-1", "done": true, "response": map[string]any{"generateVideoResponse": map[string]any{"raiMediaFilteredCount": 1, "raiMediaFilteredReasons": []any{"synthetic filter"}}}}
+	out := hookObject(t, p, "parseTaskResult", input, body)
+	require.Equal(t, "FAILURE", out["status"])
+	out = hookObject(t, p, "parseSubmitResponse", input, map[string]any{"body": body})
+	require.Equal(t, "FAILURE", out["immediate"].(map[string]any)["status"])
+}
+
+func TestBundledJimengDecoderUsesEffectiveKeyAndImageFields(t *testing.T) {
+	p := recommendedBundle(t, "jimeng")
+	model := "jimeng_vgfm_t2v_l20"
+	decoded := hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "images": []any{"https://synthetic.invalid/old.png"}, "metadata": map[string]any{"image_urls": []any{"https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"}}}}})
+	require.Equal(t, "first_tail_to_video", decoded["action"])
+	decoded = hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "seconds": 10, "metadata": map[string]any{"req_key": "jimeng_v30"}}}})
+	require.Equal(t, float64(10), decoded["requestBody"].(map[string]any)["duration"])
+}
+
+func TestBundledKlingCreateSnapshotCarriesPendingStatus(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	out := hookObject(t, p, "native.taskStatus", map[string]any{}, map[string]any{"task_id": "public-1", "status": "SUBMITTED", "data": map[string]any{"code": 0, "data": map[string]any{"task_id": "private-1"}}})
+	require.Equal(t, "submitted", out["data"].(map[string]any)["task_status"])
+	require.Equal(t, "public-1", out["data"].(map[string]any)["task_id"])
+}
+
+func TestBundledViduUnsupportedActionDoesNotBecomeTextGeneration(t *testing.T) {
+	p := recommendedBundle(t, "vidu")
+	_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("viduq3-pro", "remix", map[string]any{"prompt": "test", "metadata": map[string]any{"action": "remixGenerate"}}))
+	require.Error(t, err)
+}
+
+func TestBundledXAIMultipartMetadataPreservesExplicitValues(t *testing.T) {
+	p := recommendedBundle(t, "xai")
+	out := hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "grok-imagine-video", "upstreamModel": "grok-imagine-video", "body": map[string]any{"kind": "multipart", "fields": map[string]any{"prompt": []string{"test"}, "metadata": []string{`{"duration":4,"resolution":"720p","generate_audio":false}`}}}})
+	body := out["requestBody"].(map[string]any)
+	require.Equal(t, float64(4), body["duration"])
+	require.Equal(t, "720p", body["resolution"])
+	require.Equal(t, false, body["generate_audio"], "an explicit false in multipart metadata is not a missing value")
+}
+
+func TestDeclaredUnavailableVendorCapabilitiesRemainClosed(t *testing.T) {
+	t.Run("MiniMax direct file lookup", func(t *testing.T) {
+		p := recommendedBundle(t, "hailuo")
+		_, err := p.Call(t.Context(), "buildContentRequest", map[string]any{"model": "MiniMax-Hailuo-02", "upstreamModel": "MiniMax-Hailuo-02", "data": map[string]any{"file_id": "synthetic-file"}, "artifactKey": "video", "baseUrl": "https://provider.invalid", "apiKey": "synthetic-only", "upstream": map[string]any{"kind": "vendor"}, "clientRequest": map[string]any{"method": "GET"}})
+		require.Error(t, err, "utils.fetch is explicitly unavailable; no artifact delivery is claimed")
+	})
+	t.Run("Jimeng direct V4 signing", func(t *testing.T) {
+		host := NewHost()
+		_, err := host.Install(recommendedBundle(t, "jimeng"))
+		require.NoError(t, err)
+		e, err := host.BindExecutor(Actor{UserID: 11, TokenID: 22, ChannelID: 33, RequestID: "r"}, "jimeng", "jimeng_vgfm_t2v_l20", "jimeng_vgfm_t2v_l20", "text_to_video")
+		require.NoError(t, err)
+		_, err = e.Prepare(t.Context(), ChannelInput{ID: 33, BaseURL: "https://provider.invalid", APIKey: "synthetic-ak|synthetic-sk", UpstreamKind: "vendor"}, []byte(`{"prompt":"test","duration":5}`))
+		require.Error(t, err, "unimplemented signing cannot reach host authorization or dispatch")
+	})
 }

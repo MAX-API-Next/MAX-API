@@ -88,6 +88,10 @@ func runtimeFailure(err error) error {
 }
 
 func (p *Program) run(ctx context.Context, action func(*moejs.Runtime) (moejs.Value, error)) (json.RawMessage, error) {
+	return p.runInEnvironment(ctx, false, action)
+}
+
+func (p *Program) runInEnvironment(ctx context.Context, metadata bool, action func(*moejs.Runtime) (moejs.Value, error)) (json.RawMessage, error) {
 	if ctx == nil || p == nil {
 		return nil, ErrPluginHook
 	}
@@ -99,7 +103,26 @@ func (p *Program) run(ctx context.Context, action func(*moejs.Runtime) (moejs.Va
 	case <-ctx.Done():
 		return nil, runtimeFailure(ctx.Err())
 	}
-	rt := moejs.NewRuntime(moejs.Options{DisableDynamicCode: true, TimeZone: time.UTC, MemoryLimit: p.options.MemoryLimit})
+	rt := moejs.NewRuntime(moejs.Options{DisableDynamicCode: true, MutableIntrinsics: metadata, TimeZone: time.UTC, MemoryLimit: p.options.MemoryLimit})
+	deterministic := func() bool { return metadata }
+	rt.Realm().SetNow(func() time.Time {
+		if deterministic() {
+			return time.Unix(0, 0).UTC()
+		}
+		return p.options.Now()
+	})
+	if metadata {
+		// Metadata gets isolated intrinsics with no entropy source. Execution
+		// hooks retain their frozen shared intrinsics and normal randomness.
+		r := rt.Realm()
+		mathObject, err := r.Global.GetProp(r, r.KeyFromGoString("Math"))
+		if err != nil || !mathObject.IsObject() {
+			return nil, ErrPluginSDK
+		}
+		if err := mathObject.AsObject().SetProp(r, r.KeyFromGoString("random"), rt.Function("random", 0, func(*moejs.Realm, moejs.Value, []moejs.Value) (moejs.Value, error) { return rt.FromGo(0.5) })); err != nil {
+			return nil, runtimeFailure(err)
+		}
+	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { rt.Interrupt(context.Cause(ctx)); close(done) })
 	defer func() {
@@ -107,7 +130,7 @@ func (p *Program) run(ctx context.Context, action func(*moejs.Runtime) (moejs.Va
 			<-done
 		}
 	}()
-	if err := p.installUtils(rt); err != nil {
+	if err := p.installUtils(rt, deterministic); err != nil {
 		return nil, runtimeFailure(err)
 	}
 	if err := rt.Load(p.module); err != nil {
@@ -134,7 +157,7 @@ func (p *Program) run(ctx context.Context, action func(*moejs.Runtime) (moejs.Va
 }
 
 func (p *Program) Export(ctx context.Context, name string) (json.RawMessage, error) {
-	return p.run(ctx, func(rt *moejs.Runtime) (moejs.Value, error) {
+	return p.runInEnvironment(ctx, true, func(rt *moejs.Runtime) (moejs.Value, error) {
 		v, ok := rt.Export(name)
 		if !ok {
 			return moejs.Undefined(), ErrPluginHook
@@ -144,7 +167,7 @@ func (p *Program) Export(ctx context.Context, name string) (json.RawMessage, err
 }
 
 func (p *Program) hasFunctions(ctx context.Context, paths []string) bool {
-	_, err := p.run(ctx, func(rt *moejs.Runtime) (moejs.Value, error) {
+	_, err := p.runInEnvironment(ctx, true, func(rt *moejs.Runtime) (moejs.Value, error) {
 		for _, path := range paths {
 			parts := strings.Split(path, ".")
 			v, ok := rt.Export(parts[0])
@@ -211,7 +234,7 @@ func sdkString(r *moejs.Realm, args []moejs.Value, i int) (string, error) {
 	return s.GoString(), nil
 }
 
-func (p *Program) installUtils(rt *moejs.Runtime) error {
+func (p *Program) installUtils(rt *moejs.Runtime, deterministic func() bool) error {
 	stringFn := func(fn func(string) (string, error)) moejs.NativeFunc {
 		return func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
 			if len(args) != 1 {
@@ -230,9 +253,15 @@ func (p *Program) installUtils(rt *moejs.Runtime) error {
 	})
 	utils := map[string]any{
 		"unixNow": moejs.NativeFunc(func(*moejs.Realm, moejs.Value, []moejs.Value) (moejs.Value, error) {
+			if deterministic() {
+				return moejs.Int(0), nil
+			}
 			return moejs.Int(p.options.Now().Unix()), nil
 		}),
 		"uuid": moejs.NativeFunc(func(*moejs.Realm, moejs.Value, []moejs.Value) (moejs.Value, error) {
+			if deterministic() {
+				return moejs.String("00000000-0000-4000-8000-000000000000"), nil
+			}
 			return moejs.String(uuid.NewString()), nil
 		}),
 		"hasCapability": moejs.NativeFunc(func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {

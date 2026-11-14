@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/plugins"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
@@ -55,4 +56,18 @@ func TestOfficialPluginSavedPriceAndConfigurationQuotes(t *testing.T) {
 	_, err = QuoteModelPricing(ModelPricingQuoteRequest{ModelName: entry.ModelName, ContextID: "plugin:kling", ExpectedVersion: entry.Version, ExpectedBindingVersion: entry.BindingVersion, ExpectedContractDigest: entry.ContractDigest, Group: "default", Submit: types.TaskPricingFacts{"units": 1.5}})
 	require.ErrorIs(t, err, ErrModelPricingConflict, "stale price cannot quote after a successful update")
 	require.False(t, db.Migrator().HasTable(&BillingSettlement{}), "configuration samples must not initialize or write a ledger")
+}
+
+func TestPreviewPluginDoesNotMigrateLegacyDefaultConstant(t *testing.T) {
+	db := setupModelPricingTest(t)
+	source, err := plugins.TaskSources.ReadFile("tasks/kling/1.2.0/plugin.js")
+	require.NoError(t, err)
+	p, err := taskplugin.LoadJavaScript(bytes.NewReader(source), "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240")
+	require.NoError(t, err)
+	_, err = NewTaskPluginCatalogStore(db).CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{{Document: p.Document(), Digest: p.Digest(), Active: true, Enabled: true}})
+	require.NoError(t, err)
+	pricingChannelForTest(t, db, constant.ChannelTypeOpenAI, "kling-v2-5-turbo")
+	entry := pricingEntryForTest(t, db, "kling-v2-5-turbo")
+	_, err = UpdateModelPricing([]types.ModelPricingChange{pricingChangeForTest(entry, types.ModelPricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": "0.1", billing_setting.PluginBillingExprOption: map[string]any{"kling": `u("units") * 0.2`}})})
+	require.NoError(t, err, "a configuration-only plugin cannot reclassify a legacy constant as task money")
 }

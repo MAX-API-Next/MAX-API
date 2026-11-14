@@ -61,3 +61,11 @@ paths that require an ownership-checked origin task, are refused before dispatch
 until the durable task caller supplies those contexts. Accepted image/frame
 counts are validated rather than silently truncated. Profile inheritance is
 bounded before Go map expansion (8,192 fields and 1 MiB serialized schemas).
+
+Metadata export and hook discovery use an isolated deterministic environment:
+Date and SDK time are the Unix epoch, UUID is fixed, and Math.random is 0.5.
+Execution hooks and their initialization retain frozen intrinsics and current
+host time/randomness. Existing experimental format-3 catalogs must be revalidated before
+upgrading; this does not migrate previously persisted nondeterministic metadata.
+Direct MiniMax file lookup and Volcengine V4 signing remain unavailable SDK
+capabilities and fail without external I/O; they are not certified integrations.

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/require"
@@ -79,4 +80,35 @@ func TestInheritedSchemaExpansionIsBoundedBeforeMaterialization(t *testing.T) {
 	require.NoError(t, err)
 	_, err = p.Manifest(context.Background())
 	require.ErrorIs(t, err, ErrPluginLimit, "199 inherited schemas * 200 fields exceeds the host expansion budget before copying")
+}
+
+func TestMetadataRemainsReloadableAcrossClockChanges(t *testing.T) {
+	clock := time.Unix(3600, 0)
+	const source = `export const meta={apiVersion:1,key:"clock",name:"Plugin-"+Math.floor(utils.unixNow()/3600),version:"1.0.0",models:["m"]};export function buildSubmitRequest(){return {}}export function parseSubmitResponse(){return {}}export function buildQueryRequest(){return {}}export function parseTaskResult(){return {}}export function clock(){return utils.unixNow()}`
+	p, err := CompileJavaScript(source, RuntimeOptions{Now: func() time.Time { return clock }})
+	require.NoError(t, err)
+	first, err := p.Manifest(t.Context())
+	require.NoError(t, err)
+	clock = time.Unix(7200, 0)
+	second, err := p.Manifest(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, first, second, "immutable metadata cannot change with the host clock")
+	raw, err := common.Marshal(PackageDocument{FormatVersion: 3, Manifest: first, Source: source})
+	require.NoError(t, err)
+	restored, err := LoadPackage(bytes.NewReader(raw), fmt.Sprintf("%x", sha256.Sum256(raw)))
+	require.NoError(t, err)
+	host := NewHost()
+	_, err = host.Install(restored)
+	require.NoError(t, err)
+	value, err := p.Call(t.Context(), "clock")
+	require.NoError(t, err)
+	require.Equal(t, "7200", string(value), "hook SDK time must remain real after deterministic top-level initialization")
+}
+
+func TestMetadataUsesDeterministicDateRandomAndUUID(t *testing.T) {
+	const source = `export const meta={apiVersion:1,key:"stable",name:"Plugin-"+Date.now()+"-"+new Date().getTime()+"-"+Math.random()+"-"+utils.uuid(),version:"1.0.0",models:["m"]};export function buildSubmitRequest(){return {}}export function parseSubmitResponse(){return {}}export function buildQueryRequest(){return {}}export function parseTaskResult(){return {}}`
+	p := reviewedSource(t, source)
+	require.Equal(t, "Plugin-0-0-0.5-00000000-0000-4000-8000-000000000000", p.Manifest().Name)
+	_, err := LoadPackage(bytes.NewReader(p.Document()), p.Digest())
+	require.NoError(t, err)
 }

@@ -327,3 +327,19 @@ func TestPollPreservesTaskLocalDataStateAndRawEvidence(t *testing.T) {
 	require.Equal(t, upstream, string(result.UpstreamBody))
 	require.Nil(t, result.ActualFacts)
 }
+
+func TestBodyless202PollReachesXAIParser(t *testing.T) {
+	host := NewHost()
+	_, err := host.Install(recommendedBundle(t, "xai"))
+	require.NoError(t, err)
+	e, err := host.BindExecutor(Actor{UserID: 11, TokenID: 22, ChannelID: 33, RequestID: "r"}, "xai", "grok-imagine-video", "grok-imagine-video", "text_to_video")
+	require.NoError(t, err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(202) }))
+	defer server.Close()
+	channel, broker := localBroker(t, e, server)
+	out, err := e.Poll(t.Context(), broker, channel, ExecutionTask{Binding: e.Binding(), UpstreamTaskID: "supplier-1"}, func(ExecutionBinding) error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, "IN_PROGRESS", out.Result.Status)
+	require.Empty(t, out.UpstreamBody)
+	require.Nil(t, out.ActualFacts)
+}
