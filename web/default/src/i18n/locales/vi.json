@@ -1,5 +1,9 @@
 {
   "translation": {
+    "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Chọn plugin JavaScript đi kèm hoặc gói MAX. Bản sửa tương thích có phiên bản MAX và mã băm nguồn riêng. Việc tiếp nhận tác vụ trả phí cần được xác minh riêng.",
+    "Bundled plugins": "Plugin đi kèm",
+    "Select a bundled plugin version": "Chọn phiên bản plugin đi kèm",
+    "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Chọn nguồn khả dụng để tính giá. Plugin chỉ xem trước hỗ trợ mẫu cấu hình; việc tiếp nhận tác vụ trả phí được xác minh riêng.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "Chưa rõ kết quả. Không thử ghi lại. Đọc lại danh mục không chứng minh yêu cầu trước đã thất bại hay kết thúc.",
     "Task Plugins": "Plugin tác vụ",
     "Plugin": "Plugin",
@@ -6025,6 +6029,15 @@
     "Penalty expiry in this snapshot: {{time}}": "Thời điểm hết phạt trong ảnh chụp này: {{time}}",
     "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Chỉ áp dụng cho định tuyến thông thường theo độ ưu tiên. Cấu hình, chính sách và bộ nhớ đệm trạng thái của nút phải khớp ảnh chụp; nhóm, mô hình, lần thử lại và trọng số cũng ảnh hưởng lựa chọn.",
     "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Không rõ nghĩa là giao diện chưa xác nhận được trạng thái. Định tuyến có thể dùng trạng thái trong bộ nhớ đệm hoặc độ ưu tiên đã cấu hình.",
-    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Thời gian ảnh chụp là thời điểm nút phản hồi tính toán, không phải phiên bản trạng thái toàn cục hay bản ghi của yêu cầu trước đó."
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Thời gian ảnh chụp là thời điểm nút phản hồi tính toán, không phải phiên bản trạng thái toàn cục hay bản ghi của yêu cầu trước đó.",
+    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Chọn plugin JavaScript chính thức hoặc gói MAX. Siêu dữ liệu JavaScript được xác thực trong môi trường hạn chế. Việc tiếp nhận tác vụ trả phí cần được xác minh riêng.",
+    "Bundled official plugins": "Plugin chính thức đi kèm",
+    "Select an official plugin version": "Chọn phiên bản plugin chính thức",
+    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "Tất cả nút danh mục đều hỗ trợ định dạng gói này. Các nút cũ có thể tạm dừng toàn bộ bộ chạy plugin.",
+    "Official plugin list could not be read": "Không thể đọc danh sách plugin chính thức",
+    "Official plugin source could not be read": "Không thể đọc mã nguồn plugin chính thức",
+    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Mẫu giá plugin: các trường khi hoàn tất thay thế giá trị ước tính lúc gửi. Trường bị thiếu giữ nguyên ước tính; giá trị 0 được chỉ định rõ vẫn là 0. Tác vụ trả phí chưa được bật.",
+    "Stored package SHA-256": "SHA-256 của gói đã lưu",
+    "Source SHA-256": "SHA-256 của mã nguồn"
   }
 }

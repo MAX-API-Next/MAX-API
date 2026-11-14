@@ -19,6 +19,26 @@ import (
 
 const taskPluginAdminBodyLimit = 6*taskplugin.MaxPackageBytes + 4096
 
+func GetBundledTaskPlugins(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	entries, err := service.BundledTaskPlugins()
+	if err != nil {
+		taskPluginAdminError(c, err)
+		return
+	}
+	common.ApiSuccess(c, entries)
+}
+
+func GetBundledTaskPluginSource(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	source, pin, err := service.BundledTaskPluginSource(c.Param("key"), c.Param("version"))
+	if err != nil {
+		taskPluginAdminError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"document": source, "expected_sha256": pin})
+}
+
 func taskPluginAdminError(c *gin.Context, err error) {
 	status, message := http.StatusBadRequest, "Invalid task plugin request"
 	switch {
@@ -64,7 +84,7 @@ func taskPluginAdminRevision(fields map[string]json.RawMessage) (int64, error) {
 	return n, nil
 }
 func taskPluginAdminPackage(fields map[string]json.RawMessage) (*taskplugin.Package, error) {
-	return taskplugin.LoadPackage(bytes.NewReader([]byte(taskPluginAdminString(fields, "document"))), taskPluginAdminString(fields, "expected_sha256"))
+	return taskplugin.LoadUpload(bytes.NewReader([]byte(taskPluginAdminString(fields, "document"))), taskPluginAdminString(fields, "expected_sha256"))
 }
 
 func GetTaskPluginManagement(c *gin.Context) {
@@ -95,11 +115,11 @@ func ValidateTaskPluginPackage(c *gin.Context) {
 		taskPluginAdminError(c, err)
 		return
 	}
-	common.ApiSuccess(c, service.TaskPluginManagementView(taskplugin.ManagementEntry{Manifest: pkg.Manifest(), Digest: pkg.Digest(), FormatVersion: pkg.FormatVersion()}))
+	common.ApiSuccess(c, service.TaskPluginManagementView(taskplugin.ManagementEntry{Manifest: pkg.Manifest(), Digest: pkg.Digest(), SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion()}))
 }
 
 func MutateTaskPluginManagement(c *gin.Context) {
-	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean"})
+	fields, err := taskPluginAdminFields(c, map[string]string{"expected_revision": "string", "action": "string", "key": "string", "version": "string", "document": "string", "expected_sha256": "string", "format2_nodes_ready": "boolean", "format3_nodes_ready": "boolean"})
 	if err != nil {
 		taskPluginAdminError(c, err)
 		return
@@ -150,7 +170,11 @@ func MutateTaskPluginManagement(c *gin.Context) {
 		}
 		var ready bool
 		_ = common.Unmarshal(fields["format2_nodes_ready"], &ready)
-		if format == 2 && !ready {
+		if format == 3 {
+			ready = false
+			_ = common.Unmarshal(fields["format3_nodes_ready"], &ready)
+		}
+		if format >= 2 && !ready {
 			taskPluginAdminError(c, taskplugin.ErrCatalogInvalid)
 			return
 		}

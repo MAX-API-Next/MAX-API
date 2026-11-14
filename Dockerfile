@@ -40,6 +40,8 @@ RUN apt-get update \
 
 COPY --from=builder2 /build/max-api /
 COPY LICENSE THIRD-PARTY-LICENSES.md /licenses/
+COPY plugins/tasks/LICENSE /licenses/task-plugins/LICENSE
+COPY plugins/runtime-licenses/ /licenses/plugin-runtime/
 EXPOSE 3000
 WORKDIR /data
 ENTRYPOINT ["/max-api"]

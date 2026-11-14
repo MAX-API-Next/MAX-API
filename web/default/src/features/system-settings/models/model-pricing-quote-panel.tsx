@@ -20,7 +20,9 @@ export function ModelPricingQuotePanel(props: {
   const d = props.document
   const context = d.base?.contexts.find((c) => c.id === d.source)
   const result = d.quote?.result
-  const ready = Boolean(context?.available && context.contract)
+  const ready = Boolean(
+    context?.available && (context.contract || context.preview_only)
+  )
   return (
     <section
       className='space-y-3 rounded-md border p-3'
@@ -35,7 +37,14 @@ export function ModelPricingQuotePanel(props: {
       {!ready && (
         <p role='note' className='text-muted-foreground text-sm'>
           {t(
-            'Select an available host source with a vetted phase contract to quote. A plugin schema alone is insufficient.'
+            'Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.'
+          )}
+        </p>
+      )}
+      {context?.preview_only && (
+        <p role='note' className='text-muted-foreground text-sm'>
+          {t(
+            'Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.'
           )}
         </p>
       )}

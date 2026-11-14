@@ -19,6 +19,11 @@
 *.html text eol=lf
 *.css text eol=lf
 
+# Preserve upstream runtime notices verbatim, including their original spaces.
+plugins/runtime-licenses/* text eol=lf
+plugins/tasks/LICENSE text eol=lf
+plugins/runtime-licenses/MOEJS-THIRD-PARTY-NOTICES -whitespace
+
 # Shell scripts
 *.sh text eol=lf
 

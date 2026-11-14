@@ -86,6 +86,31 @@ test('validation rejects a receipt for different pinned bytes', async () => {
     (e) => e instanceof PluginError && e.kind === 'read'
   )
 })
+
+test('official JavaScript validates its source pin independently of the stored envelope', async () => {
+  respond({
+    success: true,
+    data: { ...entry, format_version: 3, source_sha256: 'b'.repeat(64) },
+  })
+  const result = await taskPluginAPI.validate({
+    document: 'export const meta = {}',
+    expected_sha256: 'b'.repeat(64),
+  })
+  assert.equal(result.format_version, 3)
+  assert.equal(result.digest, 'a'.repeat(64))
+  await taskPluginAPI.validate({
+    document: 'synthetic stored envelope',
+    expected_sha256: 'a'.repeat(64),
+  })
+  await assert.rejects(
+    () =>
+      taskPluginAPI.validate({
+        document: 'synthetic',
+        expected_sha256: 'c'.repeat(64),
+      }),
+    PluginError
+  )
+})
 test('mutations classify conflicts and unknown receipts without retrying', async () => {
   for (const [status, kind] of [
     [409, 'conflict'],

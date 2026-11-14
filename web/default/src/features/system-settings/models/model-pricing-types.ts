@@ -54,6 +54,7 @@ const contextSchema = z.strictObject({
   schema_compatible: z.boolean(),
   available: z.boolean(),
   execution_ready: z.boolean(),
+  preview_only: z.boolean().optional(),
   reason: z.string().optional(),
 })
 export const modelPricingEntrySchema = z.strictObject({

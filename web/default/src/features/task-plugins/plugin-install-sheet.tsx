@@ -35,6 +35,9 @@ type Props = {
   installRevision: string
   snapshot: PluginSnapshot | undefined
   mutate: (command: PluginMutation) => Promise<void>
+  bundles: { key: string; version: string; sha256: string }[]
+  bundleLoading: boolean
+  loadBundled: (key: string, version: string) => Promise<void>
 }
 export function PluginInstallSheet(props: Props) {
   const { t } = useTranslation()
@@ -53,17 +56,44 @@ export function PluginInstallSheet(props: Props) {
           <SheetTitle>{t('Install plugin package')}</SheetTitle>
           <SheetDescription>
             {t(
-              'Select a MAX package document. Installation retains immutable bytes and activates this version; it does not execute JavaScript.'
+              'Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.'
             )}
           </SheetDescription>
         </SheetHeader>
         <div className='space-y-4 px-4 pb-6'>
           <TaskPluginFeedback {...props.feedbackProps} showRefresh />
+          {props.bundles.length > 0 && (
+            <>
+              <Label htmlFor='official-plugin'>{t('Bundled plugins')}</Label>
+              <select
+                id='official-plugin'
+                className='border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm'
+                disabled={props.busy || props.bundleLoading}
+                value=''
+                onChange={(e) => {
+                  const entry = props.bundles.find(
+                    (p) => `${p.key}@${p.version}` === e.target.value
+                  )
+                  if (entry) void props.loadBundled(entry.key, entry.version)
+                }}
+              >
+                <option value=''>{t('Select a bundled plugin version')}</option>
+                {props.bundles.map((p) => (
+                  <option
+                    key={`${p.key}@${p.version}`}
+                    value={`${p.key}@${p.version}`}
+                  >
+                    {p.key} · {p.version}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           <Label htmlFor='plugin-file'>{t('Package file')}</Label>
           <Input
             id='plugin-file'
             type='file'
-            accept='.json,application/json'
+            accept='.js,.json,text/javascript,application/javascript,application/json'
             disabled={props.busy}
             onChange={(e) => void props.loadFile(e.target.files?.[0])}
           />
@@ -107,7 +137,7 @@ export function PluginInstallSheet(props: Props) {
                 {t('Package format')} {props.validated.format_version} ·{' '}
                 {props.validated.models.length} {t('Models')}
               </p>
-              {props.validated.format_version === 2 && (
+              {props.validated.format_version >= 2 && (
                 <label className='flex items-start gap-2'>
                   <input
                     type='checkbox'
@@ -115,7 +145,7 @@ export function PluginInstallSheet(props: Props) {
                     onChange={(e) => props.setNodesReady(e.target.checked)}
                   />
                   {t(
-                    'All catalog nodes have been upgraded for format 2. Older nodes may suspend their entire plugin host.'
+                    'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
                   )}
                 </label>
               )}
@@ -130,7 +160,7 @@ export function PluginInstallSheet(props: Props) {
                 disabled={
                   props.disabled ||
                   props.installRevision !== props.snapshot?.revision ||
-                  (props.validated.format_version === 2 && !props.nodesReady)
+                  (props.validated.format_version >= 2 && !props.nodesReady)
                 }
                 onClick={() =>
                   void props.mutate({
@@ -139,6 +169,7 @@ export function PluginInstallSheet(props: Props) {
                     expected_sha256: props.expectedHash,
                     expected_revision: props.installRevision,
                     format2_nodes_ready: props.nodesReady,
+                    format3_nodes_ready: props.nodesReady,
                   })
                 }
               >

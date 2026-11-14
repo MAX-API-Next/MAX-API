@@ -38,6 +38,7 @@ type ModelPricingContext struct {
 	SchemaCompatible      bool                            `json:"schema_compatible"`
 	Available             bool                            `json:"available"`
 	ExecutionReady        bool                            `json:"execution_ready"`
+	PreviewOnly           bool                            `json:"preview_only,omitempty"`
 	Reason                string                          `json:"reason,omitempty"`
 	source                taskpricing.Source
 	binding               any
@@ -61,6 +62,8 @@ type pricingAuthority struct {
 	plugins      []taskplugin.StoredPackage
 	catalogReady bool
 	selfUse      bool
+	// Local to this captured authority; never shared across revisions/nodes.
+	validatedPackages map[string]*taskplugin.Package
 }
 
 func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
@@ -183,10 +186,18 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 		if !entry.Active {
 			continue
 		}
-		pkg, err := taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
-		if err != nil {
-			continue
-		} // snapshot validation above already rejects corruption
+		if a.validatedPackages == nil {
+			a.validatedPackages = make(map[string]*taskplugin.Package)
+		}
+		pkg := a.validatedPackages[entry.Digest]
+		if pkg == nil {
+			var err error
+			pkg, err = taskplugin.LoadPackage(bytes.NewReader(entry.Document), entry.Digest)
+			if err != nil {
+				continue
+			} // snapshot validation above already rejects corruption
+			a.validatedPackages[entry.Digest] = pkg
+		}
 		manifest := pkg.Manifest()
 		if !slices.Contains(manifest.Models, model) {
 			continue
@@ -202,9 +213,14 @@ func (a *pricingAuthority) contexts(model string) []ModelPricingContext {
 		for key, field := range modelSchema {
 			context.Schema[key] = types.TaskUsageField{Type: field.Type, Unit: field.Unit, Enum: field.Enum}
 		}
-		// Matching a familiar plugin key/schema is NOT approval of this pinned
-		// package's phase semantics. No executable plugin contract is registered
-		// by P1.2; retain schema-only editing and reject quotes until P2 vetting.
+		if pkg.Executable() && entry.Enabled && !entry.Revoked {
+			context.Available = true
+			context.PreviewOnly = true
+			context.Profile = taskpricing.NewAPITask
+			context.Reason = "plugin configuration preview only; paid task admission unavailable"
+		}
+		// Executable packages allow configuration samples, not paid admission.
+		// Data-only packages still lack a vetted lifecycle and remain unquotable.
 		if !entry.Enabled || entry.Revoked {
 			context.Reason = "plugin disabled or revoked"
 		}
@@ -294,6 +310,8 @@ func buildModelPricingEntry(values pricingMaps, a *pricingAuthority, name string
 			context.SchemaCompatible = validatePricingSchema(text, context.Schema) == nil
 			if context.Contract != nil {
 				context.Compatible = taskpricing.ValidateExpressionContract(text, *context.Contract) == nil
+			} else if context.PreviewOnly {
+				context.Compatible = context.SchemaCompatible
 			}
 		}
 	}

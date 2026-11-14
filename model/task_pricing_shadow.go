@@ -93,7 +93,7 @@ func readTaskPricingShadowWithPlugin(db *gorm.DB, ctx context.Context, request T
 			selected, approvalID = pluginContext, id
 			found = true
 		}
-		if !found || !selected.Available || selected.Contract == nil || selected.Profile != taskpricing.NewAPITask ||
+		if !found || !selected.Available || selected.PreviewOnly || selected.Contract == nil || selected.Profile != taskpricing.NewAPITask ||
 			(pinned == nil && selected.source.Driver != types.TaskUsageProducerKindGoAdapter) {
 			return errors.New("configured channel has no explicit task shadow profile and available host contract")
 		}
