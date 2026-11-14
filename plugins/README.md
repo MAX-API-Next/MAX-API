@@ -72,6 +72,8 @@ Kling's OpenAI Video JSON path also rejects nonempty `images` lists; use its
 supported `image` or `input_reference` field. Its Responses path accepts at most
 two distinct images including metadata frames, rejects overrides that discard
 one of two submitted frames, and selects the action from the merged image fields.
+An explicit metadata override of a single image remains supported, including in
+Kling 4.0; it replaces the shorthand image rather than adding a second frame.
 xAI rejects a legacy `images`
 list combined with scalar or `reference_images` input instead of discarding
 one representation. These restrictions are enforced before authorization.

@@ -36,7 +36,7 @@ func TestOfficialTaskPluginRootInstallAndUpgradeGuard(t *testing.T) {
 	r := call("GET", "/api/task_plugins/bundled", nil, true)
 	require.Equal(t, 200, r.Code)
 	require.Contains(t, r.Body.String(), `"key":"kling"`)
-	require.Contains(t, r.Body.String(), `"version":"1.2.0-maxapi.7"`, "picker recommends the explicit compatibility revision")
+	require.Contains(t, r.Body.String(), `"version":"1.2.0-maxapi.8"`, "picker recommends the explicit compatibility revision")
 	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0", nil, true)
 	require.Equal(t, 200, r.Code)
 	var download struct {
@@ -57,7 +57,7 @@ func TestOfficialTaskPluginRootInstallAndUpgradeGuard(t *testing.T) {
 	require.Equal(t, 200, r.Code)
 	require.NoError(t, common.Unmarshal(r.Body.Bytes(), &download))
 	require.Equal(t, "c343f49f049fd537f6b2ee4c747a80aaf5bbf03bad2aec2d10c71773b2612feb", download.Data.Pin)
-	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0-maxapi.7", nil, true)
+	r = call("GET", "/api/task_plugins/bundled/kling/1.2.0-maxapi.8", nil, true)
 	require.Equal(t, 200, r.Code)
 	require.NoError(t, common.Unmarshal(r.Body.Bytes(), &download))
 	require.NotEqual(t, "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240", download.Data.Pin)

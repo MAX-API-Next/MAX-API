@@ -695,3 +695,37 @@ func TestBundledKlingResponsesMetadataCannotDiscardDistinctFrames(t *testing.T) 
 		require.ElementsMatch(t, []any{first, last}, []any{body["image"], body["image_tail"]})
 	}
 }
+
+func TestBundledKling4UsesEffectiveResponseFrames(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const first, last = "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"
+	decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-4.0", "body": map[string]any{"kind": "json", "value": map[string]any{"input": "test", "images": []any{first, last}, "metadata": map[string]any{"image": last, "image_tail": first}}}})
+	action, ok := decoded["action"].(string)
+	require.True(t, ok)
+	out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-4.0", action, decoded["requestBody"]))
+	body := out["body"].(map[string]any)
+	require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": last}, map[string]any{"type": "last_frame", "url": first}}, body["contents"])
+}
+
+func TestBundledXAIResponsesPreservesObjectImages(t *testing.T) {
+	p := recommendedBundle(t, "xai")
+	const first, last = "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"
+	for _, fields := range []map[string]any{{"image": map[string]any{"url": first}}, {"input_reference": map[string]any{"image_url": first}}, {"images": []any{map[string]any{"url": first}, map[string]any{"image_url": last}}}} {
+		fields["model"], fields["input"] = "grok-imagine-video", "test"
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "grok-imagine-video", "body": map[string]any{"kind": "json", "value": fields}})
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		require.NotEqual(t, "text_to_video", action)
+		out := hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", action, decoded["requestBody"]))
+		body := out["body"].(map[string]any)
+		if _, listed := fields["images"]; listed {
+			require.Equal(t, []any{map[string]any{"url": first}, map[string]any{"url": last}}, body["reference_images"])
+		} else {
+			require.Equal(t, map[string]any{"url": first}, body["image"])
+		}
+	}
+	for _, image := range []any{map[string]any{}, map[string]any{"file_id": "unsupported-private-file"}, 42} {
+		_, err := p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": "grok-imagine-video", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "grok-imagine-video", "input": "test", "image": image}}})
+		require.Error(t, err, "invalid image representations must not silently become a text-only task")
+	}
+}
