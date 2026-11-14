@@ -37,7 +37,7 @@ export function ModelPricingQuotePanel(props: {
       {!ready && (
         <p role='note' className='text-muted-foreground text-sm'>
           {t(
-            'Select an available host source with a vetted phase contract to quote. A plugin schema alone is insufficient.'
+            'Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.'
           )}
         </p>
       )}

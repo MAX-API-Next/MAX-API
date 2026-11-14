@@ -56,7 +56,7 @@ export function PluginInstallSheet(props: Props) {
           <SheetTitle>{t('Install plugin package')}</SheetTitle>
           <SheetDescription>
             {t(
-              'Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.'
+              'Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.'
             )}
           </SheetDescription>
         </SheetHeader>
@@ -64,9 +64,7 @@ export function PluginInstallSheet(props: Props) {
           <TaskPluginFeedback {...props.feedbackProps} showRefresh />
           {props.bundles.length > 0 && (
             <>
-              <Label htmlFor='official-plugin'>
-                {t('Bundled official plugins')}
-              </Label>
+              <Label htmlFor='official-plugin'>{t('Bundled plugins')}</Label>
               <select
                 id='official-plugin'
                 className='border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm'
@@ -79,9 +77,7 @@ export function PluginInstallSheet(props: Props) {
                   if (entry) void props.loadBundled(entry.key, entry.version)
                 }}
               >
-                <option value=''>
-                  {t('Select an official plugin version')}
-                </option>
+                <option value=''>{t('Select a bundled plugin version')}</option>
                 {props.bundles.map((p) => (
                   <option
                     key={`${p.key}@${p.version}`}

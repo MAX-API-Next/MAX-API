@@ -31,7 +31,8 @@ func TestBrokerPoliciesRunBeforeAuthorizationOrNetwork(t *testing.T) {
 		{"framing header", SubmitRequest, RequestDescriptor{URL: server.URL, Headers: map[string]string{"Content-Length": "0"}}},
 		{"header injection", SubmitRequest, RequestDescriptor{URL: server.URL, Headers: map[string]string{"X-Key": "x\r\nX-Other:y"}}},
 		{"duplicate auth", SubmitRequest, RequestDescriptor{URL: server.URL, Headers: map[string]string{"authorization": "a", "Authorization": "b"}}},
-		{"query mutation", QueryRequest, RequestDescriptor{URL: server.URL, Method: "POST"}},
+		{"unsupported query method", QueryRequest, RequestDescriptor{URL: server.URL, Method: "PATCH"}},
+		{"artifact mutation", ArtifactRequest, RequestDescriptor{URL: server.URL, Method: "POST"}},
 		{"unsupported SSE", SubmitRequest, RequestDescriptor{URL: server.URL, ResponseType: "sse"}},
 		{"unsupported multipart", SubmitRequest, RequestDescriptor{URL: server.URL, BodyType: "multipart"}},
 		{"unresolved attachment", SubmitRequest, RequestDescriptor{URL: server.URL, Body: []byte(`{"nested":[{"__fileRef":"request_file:image","encoding":"base64"}]}`)}},
@@ -142,4 +143,26 @@ func TestBrokerSendsSerializedTextWithoutAddingJSONQuotes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = b.Do(t.Context(), SubmitRequest, RequestDescriptor{URL: server.URL, Body: wire, Method: " post "}, func() error { return nil })
 	require.NoError(t, err)
+}
+
+func TestBrokerSupportsAuthorizedPostQuery(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != "POST" || string(body) != `{"ids":["original-task"]}` {
+			t.Error("query descriptor changed")
+		}
+		_, _ = io.WriteString(w, `{"code":"success","data":[]}`)
+	}))
+	defer server.Close()
+	b, err := NewHTTPBroker(server.URL, nil, server.Client(), func(string) error { return nil })
+	require.NoError(t, err)
+	_, err = b.Do(t.Context(), QueryRequest, RequestDescriptor{URL: server.URL, Method: "POST", Body: []byte(`{"ids":["original-task"]}`)}, nil)
+	require.ErrorIs(t, err, ErrRequestNotAuthorized)
+	require.Zero(t, requests.Load())
+	r, err := b.Do(t.Context(), QueryRequest, RequestDescriptor{URL: server.URL, Method: "POST", Body: []byte(`{"ids":["original-task"]}`)}, func() error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode)
+	require.EqualValues(t, 1, requests.Load())
 }

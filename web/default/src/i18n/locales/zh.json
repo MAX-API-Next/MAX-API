@@ -1,5 +1,9 @@
 {
   "translation": {
+    "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "选择内置 JavaScript 插件或 MAX 包。兼容修订使用明确的 MAX 版本和源码摘要；付费任务准入仍需单独验证。",
+    "Bundled plugins": "内置插件",
+    "Select a bundled plugin version": "选择内置插件版本",
+    "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "选择可用来源进行报价。仅预览插件支持配置样本；付费任务准入需另行验证。",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "操作结果未知，未重试写入。重新读取目录也不能证明此前请求已失败或已结束。",
     "Task Plugins": "任务插件",
     "Plugin": "插件",

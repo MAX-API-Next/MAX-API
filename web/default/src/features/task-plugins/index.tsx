@@ -1,7 +1,8 @@
 // Copyright (C) 2023-2026 MAX-API-Next. Licensed under AGPL-3.0-or-later.
 // Selective workflow reference: QuantumNous/new-api 70e6af64 plugin list,
 // upload and detail sheet. No upstream JS execution/editor/marketplace code.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,6 +36,8 @@ const PACKAGE_LIMIT = 1024 * 1024
 export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const transport = props.transport ?? taskPluginAPI
   const { t } = useTranslation()
+  const bundleScope = useId()
+  const queryClient = useQueryClient()
   const catalog = useTaskPluginCatalog(transport)
   const {
     snapshot,
@@ -58,9 +61,16 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const [validated, setValidated] = useState<PluginEntry>()
   const [validating, setValidating] = useState(false)
   const [nodesReady, setNodesReady] = useState(false)
-  const [bundles, setBundles] = useState<
-    { key: string; version: string; sha256: string }[]
-  >([])
+  const bundleList = useQuery({
+    queryKey: ['task-plugin-bundles', bundleScope, transport],
+    queryFn: () => transport.bundled?.() ?? Promise.resolve([]),
+    enabled: false,
+    retry: false,
+    gcTime: 0,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  })
+  const bundles = bundleList.isError ? [] : (bundleList.data ?? [])
   const [bundleLoading, setBundleLoading] = useState(false)
   const [confirm, setConfirm] = useState<PluginConfirmation>()
   const validation = useRef(new PluginRequestOrder())
@@ -71,6 +81,11 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     setValidated(undefined)
     setValidating(false)
   }
+  useEffect(() => {
+    if (installOpen && transport.bundled)
+      void bundleList.refetch({ cancelRefetch: true })
+  }, [installOpen, transport, bundleList.refetch])
+
   useEffect(() => {
     mounted.current = true
     const validationOrder = validation.current
@@ -83,30 +98,25 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   }, [])
 
   useEffect(() => {
-    let active = true
-    if (installOpen && transport.bundled)
-      void transport
-        .bundled()
-        .then((value) => {
-          if (active) setBundles(value)
-        })
-        .catch(() => {
-          if (active) setError('Official plugin list could not be read')
-        })
-    return () => {
-      active = false
-    }
-  }, [installOpen, transport, setError])
+    if (installOpen && bundleList.isError)
+      setError('Official plugin list could not be read')
+  }, [installOpen, bundleList.isError, bundleList.errorUpdatedAt, setError])
 
   async function loadBundled(key: string, version: string) {
-    if (!transport.bundle) return
+    const download = transport.bundle
+    if (!download) return
     resetValidation()
     const id = files.current.next()
     setBundleLoading(true)
     setDocument('')
     setError('')
     try {
-      const upload = await transport.bundle(key, version)
+      const upload = await queryClient.fetchQuery({
+        queryKey: ['task-plugin-source', bundleScope, transport, key, version],
+        queryFn: () => download.call(transport, key, version),
+        retry: false,
+        gcTime: 0,
+      })
       if (mounted.current && files.current.current(id)) {
         setDocument(upload.document)
         setExpectedHash(upload.expected_sha256)

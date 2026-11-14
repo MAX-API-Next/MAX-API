@@ -6,6 +6,194 @@
   "plugins": [
     {
       "key": "alibaba",
+      "version": "1.5.0-maxapi.1",
+      "path": "plugins/tasks/alibaba/1.5.0-maxapi.1/plugin.js",
+      "sha256": "5b9e0bb8395f7c4aed71e7e7e81015cc22e14bed00b17d4d819672dafe293b9a",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Gateway terminal status/failure reason in OpenAI Video presentation",
+          "Reject reported image counts conflicting with delivered images"
+        ]
+      }
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0-maxapi.1",
+      "path": "plugins/tasks/doubao/1.5.0-maxapi.1/plugin.js",
+      "sha256": "92de43959eda7969b3b98b23cb51f86177e99dab574103d52974e40f3b7271e6",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve scalar image/input_reference alongside images in video construction",
+          "Forward the accepted video size as the outbound Ark resolution"
+        ]
+      }
+    },
+    {
+      "key": "google",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/google/1.2.0-maxapi.1/plugin.js",
+      "sha256": "b5334cccb7bf680cf922bcfb4e24996a79b76ac66b5410ed58386c4b9067ead8",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Veo REST bytesBase64Encoded/mimeType image shape",
+          "Force sampleCount=1 and remove unsupported numberOfVideos",
+          "Normalize and validate scalar image references and accepted resolution"
+        ]
+      }
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0-maxapi.1",
+      "path": "plugins/tasks/hailuo/1.4.0-maxapi.1/plugin.js",
+      "sha256": "4c5eee12ea056e34eaab75130cdf8bde0a7baef856979e3c80e309b2e7a6f145",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "upstreamVersion": "1.4.0",
+      "upstreamSha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Normalize accepted v1 frame inputs; reject unsupported extra frames"
+        ]
+      }
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/jimeng/1.2.0-maxapi.1/plugin.js",
+      "sha256": "1e74db2ff1ee79b4c3ed8382409db8b85fa10e9f25d9d2f6702eef2eab420b6a",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Return gateway task identity from native create presenter",
+          "Derive submit/query req_key from the same merged image fields"
+        ]
+      }
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.1/plugin.js",
+      "sha256": "c08fd5526f9157200386286a49dbdd51f8769997d6613f4fbb492fceb5b616be",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode"
+        ]
+      }
+    },
+    {
+      "key": "sora",
+      "version": "1.1.0-maxapi.1",
+      "path": "plugins/tasks/sora/1.1.0-maxapi.1/plugin.js",
+      "sha256": "064d27c46444610d6a298db68b0adfb139d5111bc64e7bae00a28b53d65a1c71",
+      "upstreamPath": "plugins/tasks/sora/1.1.0/plugin.js",
+      "upstreamVersion": "1.1.0",
+      "upstreamSha256": "0ffd66fdf389c7eff407dede145da9409b185c248e89e93e686c97ac3ba15c4e",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve gateway identity/status/failure while retaining compatible provider fields"
+        ]
+      }
+    },
+    {
+      "key": "sunoapi",
+      "version": "1.1.0-maxapi.1",
+      "path": "plugins/tasks/sunoapi/1.1.0-maxapi.1/plugin.js",
+      "sha256": "9b5cf5b05a44d0d6fb037c2b754962701ec15033748db2df46854adc7eaa551f",
+      "upstreamPath": "plugins/tasks/sunoapi/1.1.0/plugin.js",
+      "upstreamVersion": "1.1.0",
+      "upstreamSha256": "a4679364a8a8f119ab993ae5064b727d9e0af91e4075f6d0bb32d9297ef5285a",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Consume actual batch envelope for per-task polling and select the requested task",
+          "Count only the selected task completion payload, preserving its action"
+        ]
+      }
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1-maxapi.1",
+      "path": "plugins/tasks/vertex-ai/1.3.1-maxapi.1/plugin.js",
+      "sha256": "bbb1c82440f9cb26c343a19a2137d58d5914206265f7a1d008d69468f613e0a6",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "upstreamVersion": "1.3.1",
+      "upstreamSha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Align effective submitted duration and usage",
+          "Propagate accepted resolution and scalar input images",
+          "Preserve repeated frame positions in Responses requests"
+        ]
+      }
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/vidu/1.2.0-maxapi.1/plugin.js",
+      "sha256": "773bf9ae85a4667278417ebb34838679da2db2de76f8503fb14e1307b65c0e28",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve repeated frame positions and top-level resolution"
+        ]
+      }
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.1/plugin.js",
+      "sha256": "e86403577501a8912879aa62441d08f4698563f5e8565ba2433f06b99b60f062",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing"
+        ]
+      }
+    }
+  ],
+  "retainedVersions": [
+    {
+      "key": "alibaba",
       "version": "1.5.0",
       "path": "plugins/tasks/alibaba/1.5.0/plugin.js",
       "sha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
@@ -24,13 +212,6 @@
       "path": "plugins/tasks/google/1.2.0/plugin.js",
       "sha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
       "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js"
-    },
-    {
-      "key": "hailuo",
-      "version": "1.4.0",
-      "path": "plugins/tasks/hailuo/1.4.0/plugin.js",
-      "sha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
-      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js"
     },
     {
       "key": "jimeng",
@@ -68,18 +249,25 @@
       "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js"
     },
     {
-      "key": "vidu",
-      "version": "1.2.0",
-      "path": "plugins/tasks/vidu/1.2.0/plugin.js",
-      "sha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
-      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js"
-    },
-    {
       "key": "xai",
       "version": "1.2.0",
       "path": "plugins/tasks/xai/1.2.0/plugin.js",
       "sha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
       "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js"
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0",
+      "path": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "sha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0",
+      "path": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "sha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js"
     }
   ]
 }

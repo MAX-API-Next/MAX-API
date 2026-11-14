@@ -1,5 +1,9 @@
 {
   "translation": {
+    "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Sélectionnez un plugin JavaScript inclus ou un paquet MAX. Les révisions de compatibilité ont des versions MAX et des empreintes de code source explicites. L’acceptation des tâches payantes nécessite une vérification distincte.",
+    "Bundled plugins": "Plugins inclus",
+    "Select a bundled plugin version": "Sélectionnez une version de plugin incluse",
+    "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Sélectionnez une source disponible pour calculer un devis. Les plugins limités à l’aperçu permettent des exemples de configuration ; l’acceptation des tâches payantes reste distincte.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "Le résultat est inconnu. L’écriture n’a pas été répétée. Relire le catalogue ne prouve ni l’échec ni la fin de la requête précédente.",
     "Task Plugins": "Plugins de tâches",
     "Plugin": "Plugin",
@@ -6026,14 +6030,14 @@
     "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Concerne le routage ordinaire par priorité. La configuration, la politique et les caches d’exécution du nœud doivent correspondre à cet instantané ; le groupe, le modèle, les tentatives et les poids influencent aussi la sélection.",
     "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Inconnu signifie que l’affichage n’a pas pu confirmer l’état d’exécution. Le routage peut utiliser un état en cache ou la priorité configurée.",
     "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "L’heure de l’instantané est celle du calcul par le nœud répondant, pas une version globale de l’état ni un relevé d’une requête passée.",
-    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.",
-    "Bundled official plugins": "Bundled official plugins",
-    "Select an official plugin version": "Select an official plugin version",
-    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.",
-    "Official plugin list could not be read": "Official plugin list could not be read",
-    "Official plugin source could not be read": "Official plugin source could not be read",
-    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.",
-    "Stored package SHA-256": "Stored package SHA-256",
-    "Source SHA-256": "Source SHA-256"
+    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Sélectionnez un plugin JavaScript officiel ou un paquet MAX. Les métadonnées JavaScript sont validées dans un environnement restreint. L’acceptation des tâches payantes nécessite une vérification distincte.",
+    "Bundled official plugins": "Plugins officiels inclus",
+    "Select an official plugin version": "Sélectionnez une version officielle du plugin",
+    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "Tous les nœuds du catalogue prennent en charge ce format de paquet. Les nœuds plus anciens peuvent suspendre entièrement leur hôte de plugins.",
+    "Official plugin list could not be read": "Impossible de lire la liste des plugins officiels",
+    "Official plugin source could not be read": "Impossible de lire le code source du plugin officiel",
+    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Exemple de tarification du plugin : les données de fin remplacent les estimations soumises. Les champs absents conservent l’estimation ; un zéro explicite reste nul. Les tâches payantes ne sont pas activées.",
+    "Stored package SHA-256": "SHA-256 du paquet enregistré",
+    "Source SHA-256": "SHA-256 du code source"
   }
 }

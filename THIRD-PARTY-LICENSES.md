@@ -10,7 +10,7 @@ Task plugin runtime and sources added in this version:
 
 - `github.com/MoeForge/moejs v0.1.0` — Apache-2.0, with Unicode, ICU and V8 notices retained verbatim in `plugins/runtime-licenses/MOEJS-THIRD-PARTY-NOTICES`.
 - `github.com/MoeForge/moego v0.1.0-alpha.3` — MIT, copyright Calcium-Ion; full text in `plugins/runtime-licenses/MOEGO-LICENSE`.
-- Eleven unmodified QuantumNous official task plugins — Apache-2.0; the exact upstream commit, versions and SHA-256 pins are in `plugins/SOURCES.json`, and the full license is in `plugins/tasks/LICENSE`.
+- Eleven QuantumNous official task-plugin families — Apache-2.0; original releases remain unmodified. Explicit `-maxapi.1` compatibility revisions identify MAX-API-Next modifications separately. Original/modified versions, SHA-256 pins and individual changes are in `plugins/SOURCES.json`; the full license is in `plugins/tasks/LICENSE`.
 
 These license/notice texts are embedded in the binary's plugin source filesystem
 and copied into `/licenses/` in the Docker image. Source distributions must retain

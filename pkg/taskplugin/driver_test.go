@@ -308,3 +308,22 @@ func TestRestoredExecutionCannotSelectAnotherDeclaredModelsSchema(t *testing.T) 
 	_, err = host.RestoreExecutor(changed, changed.Actor)
 	require.ErrorIs(t, err, ErrBindingRejected)
 }
+
+func TestPollPreservesTaskLocalDataStateAndRawEvidence(t *testing.T) {
+	p := syntheticExecutable(t, "")
+	host := NewHost()
+	_, err := host.Install(p)
+	require.NoError(t, err)
+	e, err := host.BindExecutor(Actor{UserID: 11, TokenID: 22, ChannelID: 33, RequestID: "request"}, "synthetic", "m", "m", "")
+	require.NoError(t, err)
+	const upstream = `{"taskId":"supplier-1","status":"IN_PROGRESS","data":{"task_local":true},"state":{"extension_seconds":2}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, upstream) }))
+	defer server.Close()
+	channel, b := localBroker(t, e, server)
+	result, err := e.Poll(t.Context(), b, channel, ExecutionTask{Binding: e.Binding(), UpstreamTaskID: "supplier-1"}, func(ExecutionBinding) error { return nil })
+	require.NoError(t, err)
+	require.JSONEq(t, `{"task_local":true}`, string(result.Data))
+	require.JSONEq(t, `{"extension_seconds":2}`, string(result.Result.State))
+	require.Equal(t, upstream, string(result.UpstreamBody))
+	require.Nil(t, result.ActualFacts)
+}

@@ -342,7 +342,7 @@ test('late official source download cannot replace a manually changed pin', asyn
   f.api.bundle = async () => download.promise
   await v.findByText('Kling Fixture')
   fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
-  const select = await v.findByLabelText('Bundled official plugins')
+  const select = await v.findByLabelText('Bundled plugins')
   fireEvent.change(select, { target: { value: 'kling@1.2.0' } })
   fireEvent.change(v.getByLabelText('Trusted package SHA-256'), {
     target: { value: 'b'.repeat(64) },
@@ -383,6 +383,34 @@ test('catalog read failures remove actionable stale state', async () => {
     true
   )
   assert.equal(v.queryByText('Kling Fixture'), null)
+})
+
+test('failed bundle query clears loading and does not retry or install', async () => {
+  const f = fixture()
+  let requests = 0
+  f.api.bundled = async () => [
+    { key: 'kling', version: '1.2.0-maxapi.1', sha256: 'a'.repeat(64) },
+  ]
+  f.api.bundle = async () => {
+    requests++
+    throw new Error('synthetic download failure')
+  }
+  const v = f.view()
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
+  const select = await v.findByLabelText('Bundled plugins')
+  fireEvent.change(select, { target: { value: 'kling@1.2.0-maxapi.1' } })
+  await v.findByText('Official plugin source could not be read')
+  await waitFor(() =>
+    assert.equal((select as HTMLSelectElement).disabled, false)
+  )
+  assert.equal(requests, 1)
+  assert.equal(f.writes.length, 0)
+  assert.equal(
+    (v.getByRole('button', { name: 'Validate package' }) as HTMLButtonElement)
+      .disabled,
+    true
+  )
 })
 
 test('a rejected catalog operation stays visible inside the detail dialog', async () => {

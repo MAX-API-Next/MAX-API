@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"reflect"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 )
@@ -191,5 +190,15 @@ func (p *Program) Manifest(ctx context.Context) (Manifest, error) {
 
 func (p *Program) matchesManifest(m Manifest) bool {
 	compiled, err := p.Manifest(context.Background())
-	return err == nil && reflect.DeepEqual(compiled, m)
+	if err != nil {
+		return false
+	}
+	// Compare the persisted contract: omitempty makes empty optional arrays
+	// equivalent to absent ones, but nonempty and explicit scalar values remain.
+	actual, err := common.Marshal(compiled)
+	if err != nil {
+		return false
+	}
+	expected, err := common.Marshal(m)
+	return err == nil && bytes.Equal(actual, expected)
 }

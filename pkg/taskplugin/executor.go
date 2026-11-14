@@ -100,7 +100,8 @@ func (e *Executor) CheckSubmit() error {
 	if err != nil {
 		return err
 	}
-	if e.host.state.Load().active[e.binding.PluginKey] != p {
+	active := e.host.state.Load().active[e.binding.PluginKey]
+	if active == nil || active.manifest.Key != p.manifest.Key || active.manifest.Version != p.manifest.Version || active.digest != p.digest {
 		return ErrBindingRejected
 	}
 	return nil
@@ -286,18 +287,29 @@ func (e *Executor) DecodeNative(ctx context.Context, request DecodeInput) (Submi
 	path := request.Path
 	// Native routes are also exposed under /{plugin-key}, as in the SDK.
 	prefix := "/" + p.manifest.Key
+	var selected *routeBinding
+	selectedPath := ""
+	method := strings.ToUpper(strings.TrimSpace(request.Method))
 	for _, route := range p.manifest.Routes {
 		candidate := path
 		if !routeMatches(route.Path, candidate) && strings.HasPrefix(candidate, prefix+"/") {
 			candidate = strings.TrimPrefix(candidate, prefix)
 		}
-		if route.Type != "submit" || route.Method != request.Method || !routeMatches(route.Path, candidate) || !routeAllowsModel(route, e.binding.DeclaredModel) {
+		if route.Type != "submit" || strings.ToUpper(strings.TrimSpace(route.Method)) != method || !routeMatches(route.Path, candidate) || !routeAllowsModel(route, e.binding.DeclaredModel) {
 			continue
 		}
+		binding := routeBinding{pluginKey: p.manifest.Key, route: route}
+		if selected == nil || routeBindingLess(binding, *selected) {
+			selected = &binding
+			selectedPath = candidate
+		}
+	}
+	if selected != nil {
+		route := selected.route
 		params := map[string]string{}
 		for i, part := range strings.Split(route.Path, "/") {
 			if strings.HasPrefix(part, ":") {
-				value, err := url.PathUnescape(strings.Split(candidate, "/")[i])
+				value, err := url.PathUnescape(strings.Split(selectedPath, "/")[i])
 				if err != nil {
 					return SubmitIntent{}, ErrBindingRejected
 				}
@@ -305,6 +317,7 @@ func (e *Executor) DecodeNative(ctx context.Context, request DecodeInput) (Submi
 			}
 		}
 		input["params"] = params
+		input["method"] = method
 		return e.decodeIntent(ctx, "native."+route.Decode, input, route.Action)
 	}
 	return SubmitIntent{}, ErrBindingRejected

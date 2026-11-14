@@ -146,7 +146,13 @@ func (b *HTTPBroker) validate(purpose RequestPurpose, descriptor RequestDescript
 		if method != "POST" {
 			return "", nil, nil, ErrRequestPolicy
 		}
-	} else if purpose == QueryRequest || purpose == ArtifactRequest {
+	} else if purpose == QueryRequest {
+		// API v1 query hooks also use POST for Suno and Vertex long-running
+		// operation lookups. The same host authorization and origin policy apply.
+		if method != "GET" && method != "HEAD" && method != "POST" {
+			return "", nil, nil, ErrRequestPolicy
+		}
+	} else if purpose == ArtifactRequest {
 		if method != "GET" && method != "HEAD" {
 			return "", nil, nil, ErrRequestPolicy
 		}

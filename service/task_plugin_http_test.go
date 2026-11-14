@@ -54,4 +54,36 @@ func TestOfficialTaskDriverUsesHostProtectedHTTP(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "isolated-1", result.Task.UpstreamTaskID)
 	require.EqualValues(t, 1, requests.Load())
+	// A broker created while protection is off must refuse a retained proxy
+	// both before authorization and if policy changes in that callback.
+	proxyBroker, err := NewTaskPluginHTTPBroker(e, channel, server.URL)
+	require.NoError(t, err)
+	prepared, err = e.Prepare(t.Context(), channel, []byte(`{"duration":5}`))
+	require.NoError(t, err)
+	system_setting.GetFetchSetting().EnableSSRFProtection = true
+	_, err = prepared.Submit(t.Context(), proxyBroker, func(taskplugin.ExecutionBinding) error {
+		t.Error("newly protected proxy must fail before authorization")
+		return nil
+	})
+	require.ErrorIs(t, err, taskplugin.ErrRequestPolicy)
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	_, err = prepared.Submit(t.Context(), proxyBroker, func(taskplugin.ExecutionBinding) error {
+		system_setting.GetFetchSetting().EnableSSRFProtection = true
+		return nil
+	})
+	// The generic host conservatively reports an unknown submission after
+	// authorization; the transport still must not send even one byte.
+	require.ErrorIs(t, err, taskplugin.ErrSubmissionUnknown)
+	require.EqualValues(t, 1, requests.Load())
+	// The already constructed non-proxy client must also keep policy-aware
+	// dialing if policy is enabled after URL validation/authorization.
+	system_setting.GetFetchSetting().EnableSSRFProtection = false
+	prepared, err = e.Prepare(t.Context(), channel, []byte(`{"duration":5}`))
+	require.NoError(t, err)
+	_, err = prepared.Submit(t.Context(), b, func(taskplugin.ExecutionBinding) error {
+		system_setting.GetFetchSetting().EnableSSRFProtection = true
+		return nil
+	})
+	require.ErrorIs(t, err, taskplugin.ErrSubmissionUnknown)
+	require.EqualValues(t, 1, requests.Load())
 }

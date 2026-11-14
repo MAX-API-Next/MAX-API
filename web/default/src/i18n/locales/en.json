@@ -1,5 +1,9 @@
 {
   "translation": {
+    "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.",
+    "Bundled plugins": "Bundled plugins",
+    "Select a bundled plugin version": "Select a bundled plugin version",
+    "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.",
     "Task Plugins": "Task Plugins",
     "Plugin": "Plugin",

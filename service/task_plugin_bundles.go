@@ -16,17 +16,25 @@ type BundledTaskPlugin struct {
 	SHA256  string `json:"sha256"`
 }
 
+type taskBundleIndex struct {
+	Plugins          []BundledTaskPlugin `json:"plugins"`
+	RetainedVersions []BundledTaskPlugin `json:"retainedVersions"`
+}
+
+func readTaskBundleIndex() (taskBundleIndex, error) {
+	data, err := plugins.TaskSources.ReadFile("SOURCES.json")
+	var index taskBundleIndex
+	if err != nil || common.Unmarshal(data, &index) != nil {
+		return index, taskplugin.ErrPluginCompile
+	}
+	return index, nil
+}
+
 // The reviewed embedded index is the only source for download identities.
 // No caller-controlled URL/path or live marketplace request is accepted here.
 func BundledTaskPlugins() ([]BundledTaskPlugin, error) {
-	data, err := plugins.TaskSources.ReadFile("SOURCES.json")
+	index, err := readTaskBundleIndex()
 	if err != nil {
-		return nil, taskplugin.ErrPluginCompile
-	}
-	var index struct {
-		Plugins []struct{ Key, Version, SHA256 string }
-	}
-	if common.Unmarshal(data, &index) != nil {
 		return nil, taskplugin.ErrPluginCompile
 	}
 	out := make([]BundledTaskPlugin, 0, len(index.Plugins))
@@ -37,10 +45,13 @@ func BundledTaskPlugins() ([]BundledTaskPlugin, error) {
 }
 
 func BundledTaskPluginSource(key, version string) (string, string, error) {
-	entries, err := BundledTaskPlugins()
+	index, err := readTaskBundleIndex()
 	if err != nil {
 		return "", "", err
 	}
+	// Retained, pinned releases stay available for audit/recovery and explicit
+	// old references. Only current recommendations appear in the picker.
+	entries := append(index.Plugins, index.RetainedVersions...)
 	for _, entry := range entries {
 		if entry.Key == key && entry.Version == version {
 			data, err := plugins.TaskSources.ReadFile("tasks/" + entry.Key + "/" + entry.Version + "/plugin.js")

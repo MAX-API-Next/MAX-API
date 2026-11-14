@@ -93,15 +93,7 @@ func (registry *Registry) Publish(manifest Manifest) (uint64, error) {
 		}
 		for method := range next.byMethod {
 			sort.SliceStable(next.byMethod[method], func(i, j int) bool {
-				a, b := next.byMethod[method][i], next.byMethod[method][j]
-				sa, sb := routeSpecificity(a.route.Path), routeSpecificity(b.route.Path)
-				if sa != sb {
-					return sa > sb
-				}
-				if a.pluginKey != b.pluginKey {
-					return a.pluginKey < b.pluginKey
-				}
-				return a.route.Path < b.route.Path
+				return routeBindingLess(next.byMethod[method][i], next.byMethod[method][j])
 			})
 		}
 		if registry.state.CompareAndSwap(current, next) {
@@ -170,6 +162,17 @@ func (snapshot Snapshot) MatchRoute(method, requestPath, model string) (RouteMat
 type routeBinding struct {
 	pluginKey string
 	route     Route
+}
+
+func routeBindingLess(a, b routeBinding) bool {
+	sa, sb := routeSpecificity(a.route.Path), routeSpecificity(b.route.Path)
+	if sa != sb {
+		return sa > sb
+	}
+	if a.pluginKey != b.pluginKey {
+		return a.pluginKey < b.pluginKey
+	}
+	return a.route.Path < b.route.Path
 }
 
 func cloneState(source *registryState) *registryState {

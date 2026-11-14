@@ -1,5 +1,9 @@
 {
   "translation": {
+    "Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.": "同梱の JavaScript プラグインまたは MAX パッケージを選択してください。互換性修正版には明示的な MAX バージョンとソースハッシュがあります。有料タスクの受付には別途検証が必要です。",
+    "Bundled plugins": "同梱プラグイン",
+    "Select a bundled plugin version": "同梱プラグインのバージョンを選択",
+    "Select an available source to quote. Preview-only plugins support configuration samples; paid task admission remains separate.": "利用可能な提供元を選択して料金を計算してください。プレビュー専用プラグインは設定サンプルに対応しますが、有料タスクの受付には別途検証が必要です。",
     "The mutation result is unknown. The write was not retried. Rereading the catalog cannot prove the earlier request failed or finished.": "操作結果が不明です。書き込みは再試行していません。カタログを再読込しても、前の要求の失敗や完了は証明できません。",
     "Task Plugins": "タスクプラグイン",
     "Plugin": "プラグイン",
@@ -6026,14 +6030,14 @@
     "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "通常の優先度ルーティングが対象です。ノードの設定、ポリシー、実行時キャッシュがこのスナップショットと一致する必要があります。グループ、モデル、再試行、重みも選択に影響します。",
     "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "不明は、画面で実行時状態を確認できなかったことを示します。ルーティングではキャッシュされた状態や設定優先度が使われる場合があります。",
     "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "スナップショット時刻は応答ノードの計算時刻であり、グローバルな状態バージョンや過去のリクエストの記録ではありません。",
-    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.",
-    "Bundled official plugins": "Bundled official plugins",
-    "Select an official plugin version": "Select an official plugin version",
-    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.",
-    "Official plugin list could not be read": "Official plugin list could not be read",
-    "Official plugin source could not be read": "Official plugin source could not be read",
-    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.",
-    "Stored package SHA-256": "Stored package SHA-256",
-    "Source SHA-256": "Source SHA-256"
+    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "公式 JavaScript プラグインまたは MAX パッケージを選択してください。JavaScript メタデータは制限された実行環境で検証されます。有料タスクの受付には別途検証が必要です。",
+    "Bundled official plugins": "同梱の公式プラグイン",
+    "Select an official plugin version": "公式プラグインのバージョンを選択",
+    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "すべてのカタログノードがこのパッケージ形式に対応しています。古いノードではプラグインホスト全体が停止する可能性があります。",
+    "Official plugin list could not be read": "公式プラグイン一覧を読み込めませんでした",
+    "Official plugin source could not be read": "公式プラグインのソースを読み込めませんでした",
+    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "プラグイン料金のサンプル：完了時のフィールドが送信時の見積もりを上書きします。欠落したフィールドは見積もりを維持し、明示的なゼロはゼロのままです。有料タスクは有効になっていません。",
+    "Stored package SHA-256": "保存済みパッケージの SHA-256",
+    "Source SHA-256": "ソースの SHA-256"
   }
 }

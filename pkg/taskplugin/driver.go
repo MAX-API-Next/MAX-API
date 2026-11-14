@@ -44,14 +44,16 @@ type SubmitResult struct {
 }
 
 type NormalizedResult struct {
-	TaskID           string   `json:"taskId,omitempty"`
-	Status           string   `json:"status"`
-	Progress         string   `json:"progress,omitempty"`
-	Reason           string   `json:"reason,omitempty"`
-	URL              string   `json:"url,omitempty"`
-	RemoteURL        string   `json:"remoteUrl,omitempty"`
-	CompletionTokens *float64 `json:"completionTokens,omitempty"`
-	TotalTokens      *float64 `json:"totalTokens,omitempty"`
+	TaskID           string          `json:"taskId,omitempty"`
+	Status           string          `json:"status"`
+	Progress         string          `json:"progress,omitempty"`
+	Reason           string          `json:"reason,omitempty"`
+	URL              string          `json:"url,omitempty"`
+	RemoteURL        string          `json:"remoteUrl,omitempty"`
+	CompletionTokens *float64        `json:"completionTokens,omitempty"`
+	TotalTokens      *float64        `json:"totalTokens,omitempty"`
+	Data             json.RawMessage `json:"data,omitempty"`
+	State            json.RawMessage `json:"state,omitempty"`
 }
 
 type PollResult struct {
@@ -60,6 +62,9 @@ type PollResult struct {
 	// Nil means no final facts were supplied, whereas {"units":0} is an
 	// explicit zero. Estimated facts are not merged or replaced here.
 	ActualFacts types.TaskPricingFacts
+	// The exact response remains separate when a batch/per-task parser returns
+	// task-local Data. It is private provenance for the eventual durable caller.
+	UpstreamBody json.RawMessage `json:"-"`
 }
 
 func (e *Executor) NewHTTPBroker(channel ChannelInput, client *http.Client, validateURL func(string) error) (*HTTPBroker, error) {
@@ -245,7 +250,11 @@ func (e *Executor) Poll(ctx context.Context, b *HTTPBroker, channel ChannelInput
 			return nil, err
 		}
 	}
-	return &PollResult{Result: result, Data: bytes.Clone(response.Body), ActualFacts: facts}, nil
+	data := result.Data
+	if len(data) == 0 {
+		data = bytes.Clone(response.Body)
+	}
+	return &PollResult{Result: result, Data: data, ActualFacts: facts, UpstreamBody: bytes.Clone(response.Body)}, nil
 }
 
 func validUpstreamTaskID(id string) bool {
