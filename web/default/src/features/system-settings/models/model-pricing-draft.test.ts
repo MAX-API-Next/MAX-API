@@ -48,6 +48,35 @@ function fixture() {
     view: () => session.getSnapshot().document!,
   }
 }
+
+test('executable plugin configuration samples need no paid-admission phase contract', async () => {
+  const f = fixture(),
+    snapshot = entry()
+  snapshot.contexts[0] = {
+    ...snapshot.contexts[0],
+    id: 'plugin:kling',
+    plugin_key: 'kling',
+    channel_id: undefined,
+    contract: undefined,
+    preview_only: true,
+  }
+  f.setServer(snapshot)
+  f.transport.quote = async (input) => {
+    const result = quoted(input)
+    result.preview.source = { driver: 'task_plugin', plugin_key: 'kling' }
+    return result
+  }
+  await f.session.refresh()
+  f.session.selectSource('plugin:kling')
+  f.session.setSample({
+    group: 'default',
+    submit: { units: 1.5 },
+    actual: { units: 0.6 },
+  })
+  const ok = await f.session.quote()
+  assert.equal(ok, true)
+  assert.equal(f.view().base?.contexts[0].execution_ready, false)
+})
 test('draft keeps explicit zero, inherited absence and complete hidden configuration on save', async () => {
   const f = fixture()
   await f.session.refresh()

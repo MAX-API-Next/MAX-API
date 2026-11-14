@@ -249,7 +249,7 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 			return ErrModelPricingConflict
 		}
 		context, exists := findPricingContext(entry.Contexts, request.ContextID)
-		if !exists || !context.Available || context.Contract == nil {
+		if !exists || !context.Available || context.Contract == nil && !context.PreviewOnly {
 			return modelPricingValidation(errors.New("host source has no available phase contract for quoting"))
 		}
 		if context.ChannelID > 0 && !slices.Contains(context.Groups, request.Group) {
@@ -285,12 +285,23 @@ func QuoteModelPricing(request ModelPricingQuoteRequest) (*ModelPricingQuote, er
 		}
 		// The outer guard covers all model contexts; the core checks the ONE
 		// selected contract. These equality tokens deliberately prove different objects.
-		selectedDigest, err := taskpricing.ContractDigest(*context.Contract)
-		if err != nil {
-			return err
+		selectedDigest := pricingDigest(context.Schema)
+		if context.Contract != nil {
+			selectedDigest, err = taskpricing.ContractDigest(*context.Contract)
+			if err != nil {
+				return err
+			}
 		}
 		guards := taskpricing.Guards{PriceVersion: entry.Version, ContractDigest: selectedDigest, BindingVersion: entry.BindingVersion}
-		preview, err := taskpricing.Preview(taskpricing.PreviewInput{Profile: taskpricing.NewAPITask, Prices: taskPriceMaps(candidate), Source: context.source, OriginalModel: request.ModelName, MappedModel: context.MappedModel, Contract: *context.Contract, Expected: guards, Current: guards, Submit: request.Submit, Actual: request.Actual, Request: billingexpr.RequestInput{Body: request.RequestBody, Headers: request.RequestHeaders}, PricingAt: at, QuotaPerUnit: quotaPerUnit, GroupRatio: ratio, ReservationFloor: floor})
+		input := taskpricing.PreviewInput{Profile: taskpricing.NewAPITask, Prices: taskPriceMaps(candidate), Source: context.source, OriginalModel: request.ModelName, MappedModel: context.MappedModel, Expected: guards, Current: guards, Submit: request.Submit, Actual: request.Actual, Request: billingexpr.RequestInput{Body: request.RequestBody, Headers: request.RequestHeaders}, PricingAt: at, QuotaPerUnit: quotaPerUnit, GroupRatio: ratio, ReservationFloor: floor}
+		var preview taskpricing.PreviewResult
+		if context.PreviewOnly {
+			preview, err = taskpricing.PreviewPluginSchema(input, context.Schema)
+			preview.ContractDigest = selectedDigest
+		} else {
+			input.Contract = *context.Contract
+			preview, err = taskpricing.Preview(input)
+		}
 		if err != nil {
 			return modelPricingValidation(err)
 		}

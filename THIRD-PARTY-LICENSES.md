@@ -6,6 +6,16 @@ It is an engineering compliance artifact and should be kept with Docker images, 
 Scope: direct dependencies from `go.mod`, `web/default/package.json`, and `electron/package.json`.
 Transitive dependencies should be audited before a final external release.
 
+Task plugin runtime and sources added in this version:
+
+- `github.com/MoeForge/moejs v0.1.0` — Apache-2.0, with Unicode, ICU and V8 notices retained verbatim in `plugins/runtime-licenses/MOEJS-THIRD-PARTY-NOTICES`.
+- `github.com/MoeForge/moego v0.1.0-alpha.3` — MIT, copyright Calcium-Ion; full text in `plugins/runtime-licenses/MOEGO-LICENSE`.
+- Eleven unmodified QuantumNous official task plugins — Apache-2.0; the exact upstream commit, versions and SHA-256 pins are in `plugins/SOURCES.json`, and the full license is in `plugins/tasks/LICENSE`.
+
+These license/notice texts are embedded in the binary's plugin source filesystem
+and copied into `/licenses/` in the Docker image. Source distributions must retain
+the same files and attribution. Bundling does not certify provider or paid-task support.
+
 ## Dependency Inventory
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |
@@ -45,7 +55,7 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/samber/lo`                                | `v1.52.0`                            | MIT                                                |
 | backend     | production  | Go        | `github.com/shirou/gopsutil`                          | `v3.21.11+incompatible`              | BSD-3-Clause                                       |
 | backend     | production  | Go        | `github.com/shopspring/decimal`                       | `v1.4.0`                             | MIT                                                |
-| backend     | production  | Go        | `github.com/stretchr/testify`                         | `v1.11.1`                            | MIT                                                |
+| backend     | production  | Go        | `github.com/stretchr/testify`                         | `v1.12.1`                            | MIT                                                |
 | backend     | production  | Go        | `github.com/stripe/stripe-go/v81`                     | `v81.4.0`                            | MIT                                                |
 | backend     | production  | Go        | `github.com/tcolgate/mp3`                             | `v0.0.0-20170426193717-e79c5a46d300` | MIT                                                |
 | backend     | production  | Go        | `github.com/thanhpk/randstr`                          | `v1.0.6`                             | MIT                                                |

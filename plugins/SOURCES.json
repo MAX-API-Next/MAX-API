@@ -1,0 +1,85 @@
+{
+  "repository": "https://github.com/QuantumNous/new-api-plugins",
+  "commit": "2a8288645b49aeb8de25a4de312ee3c3f507e995",
+  "license": "Apache-2.0",
+  "author": "QuantumNous",
+  "plugins": [
+    {
+      "key": "alibaba",
+      "version": "1.5.0",
+      "path": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "sha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js"
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0",
+      "path": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "sha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0",
+      "path": "plugins/tasks/google/1.2.0/plugin.js",
+      "sha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js"
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0",
+      "path": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "sha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js"
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0",
+      "path": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "sha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0",
+      "path": "plugins/tasks/kling/1.2.0/plugin.js",
+      "sha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js"
+    },
+    {
+      "key": "sora",
+      "version": "1.1.0",
+      "path": "plugins/tasks/sora/1.1.0/plugin.js",
+      "sha256": "0ffd66fdf389c7eff407dede145da9409b185c248e89e93e686c97ac3ba15c4e",
+      "upstreamPath": "plugins/tasks/sora/1.1.0/plugin.js"
+    },
+    {
+      "key": "sunoapi",
+      "version": "1.1.0",
+      "path": "plugins/tasks/sunoapi/1.1.0/plugin.js",
+      "sha256": "a4679364a8a8f119ab993ae5064b727d9e0af91e4075f6d0bb32d9297ef5285a",
+      "upstreamPath": "plugins/tasks/sunoapi/1.1.0/plugin.js"
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1",
+      "path": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "sha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0",
+      "path": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "sha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0",
+      "path": "plugins/tasks/xai/1.2.0/plugin.js",
+      "sha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js"
+    }
+  ]
+}

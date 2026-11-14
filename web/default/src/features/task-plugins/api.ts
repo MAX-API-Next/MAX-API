@@ -25,13 +25,18 @@ export const pluginSchema = z.object({
   name: z.string(),
   version: z.string(),
   digest,
-  format_version: z.union([z.literal(1), z.literal(2)]),
+  source_sha256: digest.optional(),
+  format_version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   active: z.boolean(),
   enabled: z.boolean(),
   revoked: z.boolean(),
   models: z.array(z.string()),
   protocols: z.array(
-    z.object({ name: z.string(), supports: z.array(z.string()) })
+    z.object({
+      name: z.string(),
+      supports: z.array(z.string()),
+      models: z.array(z.string()).optional(),
+    })
   ),
   routes: z.array(
     z.object({ method: z.string(), path: z.string(), type: z.string() })
@@ -63,6 +68,7 @@ export type PluginUpload = { document: string; expected_sha256: string }
 export type PluginMutation = {
   expected_revision: string
   format2_nodes_ready?: boolean
+  format3_nodes_ready?: boolean
 } & (
   | ({ action: 'install' } & PluginUpload)
   | { action: PluginAction; key: string; version: string }
@@ -131,6 +137,22 @@ async function request<T>(
   }
 }
 export const taskPluginAPI = {
+  bundled: () =>
+    request(
+      () => api.get(`${endpoint}/bundled`, options),
+      z.array(
+        z.object({ key: z.string(), version: z.string(), sha256: digest })
+      )
+    ),
+  bundle: (key: string, version: string) =>
+    request(
+      () =>
+        api.get(
+          `${endpoint}/bundled/${encodeURIComponent(key)}/${encodeURIComponent(version)}`,
+          options
+        ),
+      z.object({ document: z.string(), expected_sha256: digest })
+    ),
   read: (signal?: AbortSignal) =>
     request(
       () => api.get(endpoint, { ...options, signal, disableDuplicate: true }),
@@ -141,7 +163,13 @@ export const taskPluginAPI = {
       () => api.post(`${endpoint}/validate`, upload, options),
       pluginSchema
     )
-    if (entry.digest !== upload.expected_sha256)
+    if (
+      entry.digest !== upload.expected_sha256 &&
+      !(
+        entry.format_version === 3 &&
+        entry.source_sha256 === upload.expected_sha256
+      )
+    )
       throw new PluginError('read', 'Invalid task plugin response')
     return entry
   },
@@ -156,7 +184,8 @@ export const taskPluginAPI = {
     return receipt
   },
 }
-export type TaskPluginAPI = typeof taskPluginAPI
+export type TaskPluginAPI = Omit<typeof taskPluginAPI, 'bundled' | 'bundle'> &
+  Partial<Pick<typeof taskPluginAPI, 'bundled' | 'bundle'>>
 
 // Serial UI observations: superseded reads/file validation cannot overwrite a
 // newer input, and an ambiguous mutation never becomes success after a GET.

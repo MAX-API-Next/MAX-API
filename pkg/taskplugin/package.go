@@ -31,8 +31,8 @@ import (
 
 const MaxPackageBytes = 1 << 20
 
-// PackageDocument is MAX-API's data-only transport envelope, not executable
-// JavaScript metadata. Source is retained for a future sandbox, never evaluated.
+// PackageDocument versions 1/2 are data-only and never execute Source. Version
+// 3 is explicit JavaScript; its manifest must equal compiled source metadata.
 type PackageDocument struct {
 	FormatVersion int      `json:"format_version"`
 	Manifest      Manifest `json:"manifest"`
@@ -48,6 +48,7 @@ type Package struct {
 	size          int
 	document      []byte
 	formatVersion int
+	program       *Program
 }
 
 // LoadPackage accepts exactly one bounded document and requires a trusted hash
@@ -79,20 +80,32 @@ func LoadPackage(reader io.Reader, expectedSHA256 string) (*Package, error) {
 	if err := common.Unmarshal(data, &document); err != nil {
 		return nil, errors.New("invalid task plugin package document")
 	}
-	if (document.FormatVersion != 1 && document.FormatVersion != 2) || document.Source == "" || !utf8.ValidString(document.Source) {
+	if (document.FormatVersion != 1 && document.FormatVersion != 2 && document.FormatVersion != 3) || document.Source == "" || !utf8.ValidString(document.Source) {
 		return nil, errors.New("unsupported task plugin package format or invalid source")
 	}
 	// Old hosts ignore unknown manifest fields. Version 2 makes them reject a
 	// profile-bearing package rather than silently using its fallback schema.
-	if len(document.Manifest.UsageProfiles) > 0 && document.FormatVersion != 2 {
+	if len(document.Manifest.UsageProfiles) > 0 && document.FormatVersion < 2 {
 		return nil, errors.New("model usage profiles require package format 2")
+	}
+	for _, claim := range document.Manifest.Protocols {
+		if len(claim.Models) > 0 && document.FormatVersion < 3 {
+			return nil, errors.New("protocol model restrictions require package format 3")
+		}
 	}
 	if err := ValidateManifest(document.Manifest); err != nil {
 		// Validation errors can contain attacker-supplied metadata. Keep source
 		// and credentials out of any caller's logs and API error response.
 		return nil, errors.New("invalid task plugin package manifest")
 	}
-	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion}, nil
+	var program *Program
+	if document.FormatVersion == 3 {
+		program, err = CompileJavaScript(document.Source, RuntimeOptions{})
+		if err != nil || !program.matchesManifest(document.Manifest) {
+			return nil, ErrPluginCompile
+		}
+	}
+	return &Package{manifest: cloneManifest(document.Manifest), source: document.Source, digest: hex.EncodeToString(actual[:]), size: len(data), document: data, formatVersion: document.FormatVersion, program: program}, nil
 }
 
 func (p *Package) Manifest() Manifest { return cloneManifest(p.manifest) }

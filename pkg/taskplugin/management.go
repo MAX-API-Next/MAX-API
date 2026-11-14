@@ -11,6 +11,7 @@ import (
 type ManagementEntry struct {
 	Manifest                 Manifest
 	Digest                   string
+	SourceDigest             string
 	FormatVersion            int
 	Active, Enabled, Revoked bool
 }
@@ -29,7 +30,7 @@ func (catalog *Catalog) ManagementSnapshot(ctx context.Context) ([]ManagementEnt
 	for _, row := range catalog.snapshot.Packages {
 		// The published generation already validated these exact immutable bytes.
 		pkg := byDigest[row.Digest]
-		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, FormatVersion: pkg.FormatVersion(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
+		entries = append(entries, ManagementEntry{Manifest: pkg.Manifest(), Digest: row.Digest, SourceDigest: pkg.SourceDigest(), FormatVersion: pkg.FormatVersion(), Active: row.Active, Enabled: row.Enabled, Revoked: row.Revoked})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Manifest.Key != entries[j].Manifest.Key {

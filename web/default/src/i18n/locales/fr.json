@@ -6025,6 +6025,15 @@
     "Penalty expiry in this snapshot: {{time}}": "Expiration de la pénalité dans cet instantané : {{time}}",
     "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Concerne le routage ordinaire par priorité. La configuration, la politique et les caches d’exécution du nœud doivent correspondre à cet instantané ; le groupe, le modèle, les tentatives et les poids influencent aussi la sélection.",
     "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Inconnu signifie que l’affichage n’a pas pu confirmer l’état d’exécution. Le routage peut utiliser un état en cache ou la priorité configurée.",
-    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "L’heure de l’instantané est celle du calcul par le nœud répondant, pas une version globale de l’état ni un relevé d’une requête passée."
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "L’heure de l’instantané est celle du calcul par le nœud répondant, pas une version globale de l’état ni un relevé d’une requête passée.",
+    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.",
+    "Bundled official plugins": "Bundled official plugins",
+    "Select an official plugin version": "Select an official plugin version",
+    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.",
+    "Official plugin list could not be read": "Official plugin list could not be read",
+    "Official plugin source could not be read": "Official plugin source could not be read",
+    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.",
+    "Stored package SHA-256": "Stored package SHA-256",
+    "Source SHA-256": "Source SHA-256"
   }
 }

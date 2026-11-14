@@ -6028,6 +6028,15 @@
     "Penalty expiry in this snapshot: {{time}}": "Penalty expiry in this snapshot: {{time}}",
     "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.": "Ordinary priority routing only. Node configuration, policy and runtime caches must match this snapshot; group, model, retry and weights also affect selection.",
     "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.": "Unknown means the display could not confirm runtime state. Routing may use cached state or configured priority.",
-    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request."
+    "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.": "Snapshot time is the responding node’s calculation time, not a global state version or a record of a past request.",
+    "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.": "Select an official JavaScript plugin or a MAX package. JavaScript metadata is validated in a restricted runtime. Paid task admission requires separate verification.",
+    "Bundled official plugins": "Bundled official plugins",
+    "Select an official plugin version": "Select an official plugin version",
+    "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.": "All catalog nodes support this package format. Older nodes may suspend their entire plugin host.",
+    "Official plugin list could not be read": "Official plugin list could not be read",
+    "Official plugin source could not be read": "Official plugin source could not be read",
+    "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.": "Plugin pricing sample: completion fields override submitted estimates. Missing completion fields retain the estimate; explicit zero remains zero. Paid tasks are not enabled.",
+    "Stored package SHA-256": "Stored package SHA-256",
+    "Source SHA-256": "Source SHA-256"
   }
 }

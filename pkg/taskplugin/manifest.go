@@ -42,15 +42,16 @@ var (
 	allowedUsageUnits    = map[string]struct{}{"second": {}, "count": {}, "token": {}, "credit": {}}
 )
 
-// Manifest is the host-owned portion of the Task Plugin v1 contract. It is
-// deliberately data-only: executing plugin code belongs to a later sandboxed
-// driver layer and is not part of validation or registry publication.
+// Manifest is detached host-owned Task Plugin v1 metadata. Formats 1/2 are
+// data-only. Format 3 derives these fields by bounded JavaScript evaluation;
+// a stored manifest cannot override the corresponding source declarations.
 type Manifest struct {
 	APIVersion    int
 	Key           string
 	Name          string
 	Version       string
 	Models        []string
+	ChannelTypes  []int `json:"channelTypes,omitempty"`
 	Protocols     []ProtocolClaim
 	Routes        []Route
 	BaseURL       string
@@ -71,6 +72,7 @@ type ProtocolClaim struct {
 	Name     string
 	Supports []string
 	Bare     bool
+	Models   []string `json:"models,omitempty"`
 }
 
 type Route struct {
@@ -79,6 +81,7 @@ type Route struct {
 	Type         string
 	Decode       string
 	Render       string
+	Action       string
 	TaskIDParam  string
 	Models       []string
 	RetainResult *bool
@@ -109,6 +112,15 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if err := validateProtocols(manifest.Protocols); err != nil {
 		return err
+	}
+	for _, claim := range manifest.Protocols {
+		seen := map[string]bool{}
+		for _, model := range claim.Models {
+			if _, declared := modelSet[model]; !declared || seen[model] || claim.Bare {
+				return fmt.Errorf("invalid protocol model claim")
+			}
+			seen[model] = true
+		}
 	}
 	if err := validateRoutes(manifest.Routes, modelSet); err != nil {
 		return err
@@ -225,7 +237,7 @@ func validateRoutes(routes []Route, models map[string]struct{}) error {
 			if !identifierPattern.MatchString(route.Render) {
 				return fmt.Errorf("query route %q requires a valid render hook", route.Path)
 			}
-			if route.TaskIDParam != "" && !routeHasParameter(route.Path, route.TaskIDParam) {
+			if route.TaskIDParam != "" && (!identifierPattern.MatchString(route.TaskIDParam) || strings.Contains(route.Path, "/:") && !routeHasParameter(route.Path, route.TaskIDParam)) {
 				return fmt.Errorf("query route %q task id parameter %q is not in the path", route.Path, route.TaskIDParam)
 			}
 		} else {

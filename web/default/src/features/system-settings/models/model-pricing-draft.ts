@@ -641,7 +641,7 @@ export class ModelPricingDraftSession {
       Object.keys(d.inputs ?? {}).length > 0 ||
       d.writeState !== 'idle' ||
       !context?.available ||
-      !context.contract
+      (!context.contract && !context.preview_only)
     )
       return false
     const change = pricingChange(d.base, d.pricing)

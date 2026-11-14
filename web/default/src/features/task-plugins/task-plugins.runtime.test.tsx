@@ -332,6 +332,39 @@ test('late validation is ignored after changing the pin; v2 installation require
   if (f.writes[0].action === 'install')
     assert.equal(f.writes[0].expected_sha256, 'b'.repeat(64))
 })
+test('late official source download cannot replace a manually changed pin', async () => {
+  const f = fixture(),
+    download = deferred<{ document: string; expected_sha256: string }>(),
+    v = f.view()
+  f.api.bundled = async () => [
+    { key: 'kling', version: '1.2.0', sha256: 'a'.repeat(64) },
+  ]
+  f.api.bundle = async () => download.promise
+  await v.findByText('Kling Fixture')
+  fireEvent.click(v.getByRole('button', { name: 'Install plugin package' }))
+  const select = await v.findByLabelText('Bundled official plugins')
+  fireEvent.change(select, { target: { value: 'kling@1.2.0' } })
+  fireEvent.change(v.getByLabelText('Trusted package SHA-256'), {
+    target: { value: 'b'.repeat(64) },
+  })
+  await act(async () =>
+    download.resolve({
+      document: 'late source',
+      expected_sha256: 'a'.repeat(64),
+    })
+  )
+  assert.equal(
+    (v.getByLabelText('Trusted package SHA-256') as HTMLInputElement).value,
+    'b'.repeat(64)
+  )
+  assert.equal(
+    (v.getByRole('button', { name: 'Validate package' }) as HTMLButtonElement)
+      .disabled,
+    true
+  )
+  assert.equal(f.writes.length, 0)
+})
+
 test('catalog read failures remove actionable stale state', async () => {
   const f = fixture(),
     v = f.view()

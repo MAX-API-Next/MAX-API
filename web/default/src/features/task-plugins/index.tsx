@@ -58,6 +58,10 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
   const [validated, setValidated] = useState<PluginEntry>()
   const [validating, setValidating] = useState(false)
   const [nodesReady, setNodesReady] = useState(false)
+  const [bundles, setBundles] = useState<
+    { key: string; version: string; sha256: string }[]
+  >([])
+  const [bundleLoading, setBundleLoading] = useState(false)
   const [confirm, setConfirm] = useState<PluginConfirmation>()
   const validation = useRef(new PluginRequestOrder())
   const files = useRef(new PluginRequestOrder())
@@ -78,7 +82,52 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
     }
   }, [])
 
+  useEffect(() => {
+    let active = true
+    if (installOpen && transport.bundled)
+      void transport
+        .bundled()
+        .then((value) => {
+          if (active) setBundles(value)
+        })
+        .catch(() => {
+          if (active) setError('Official plugin list could not be read')
+        })
+    return () => {
+      active = false
+    }
+  }, [installOpen, transport, setError])
+
+  async function loadBundled(key: string, version: string) {
+    if (!transport.bundle) return
+    resetValidation()
+    const id = files.current.next()
+    setBundleLoading(true)
+    setDocument('')
+    setError('')
+    try {
+      const upload = await transport.bundle(key, version)
+      if (mounted.current && files.current.current(id)) {
+        setDocument(upload.document)
+        setExpectedHash(upload.expected_sha256)
+        setFileName(`${key}@${version}/plugin.js`)
+        setNodesReady(false)
+      }
+    } catch (e) {
+      if (mounted.current && files.current.current(id))
+        setError(
+          e instanceof PluginError
+            ? e.message
+            : 'Official plugin source could not be read'
+        )
+    } finally {
+      if (mounted.current && files.current.current(id)) setBundleLoading(false)
+    }
+  }
+
   async function loadFile(file: File | undefined) {
+    setBundleLoading(false)
+    setNodesReady(false)
     resetValidation()
     setDocument('')
     setFileName(file?.name ?? '')
@@ -270,15 +319,28 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
       />
       <PluginInstallSheet
         installOpen={installOpen}
-        setInstallOpen={setInstallOpen}
+        setInstallOpen={(open) => {
+          if (!open) {
+            files.current.next()
+            setBundleLoading(false)
+          }
+          setInstallOpen(open)
+        }}
         busy={busy}
         disabled={disabled}
         resetValidation={resetValidation}
         feedbackProps={feedbackProps}
         loadFile={loadFile}
+        bundles={bundles}
+        bundleLoading={bundleLoading}
+        loadBundled={loadBundled}
         fileName={fileName}
         expectedHash={expectedHash}
-        setExpectedHash={setExpectedHash}
+        setExpectedHash={(value) => {
+          if (bundleLoading) files.current.next()
+          setBundleLoading(false)
+          setExpectedHash(value)
+        }}
         document={document}
         validating={validating}
         validate={validate}
