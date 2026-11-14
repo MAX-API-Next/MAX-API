@@ -576,3 +576,40 @@ func TestBundledViduRendererKeepsOriginalModel(t *testing.T) {
 	out := hookObject(t, p, "protocols.openai_video.render", map[string]any{}, map[string]any{"task_id": "public-1", "status": "SUBMITTED", "properties": map[string]any{"origin_model_name": "logical-vidu"}})
 	require.Equal(t, "logical-vidu", out["model"])
 }
+
+func TestBundledKlingVideoRejectsUnsupportedImageLists(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, images := range []any{[]any{"https://synthetic.invalid/first.png"}, []any{"https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"}, "not-an-array"} {
+		_, err := p.Call(t.Context(), "protocols.openai_video.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "images": images}}})
+		require.Error(t, err, "unsupported list input must not become an accepted text-only task")
+	}
+	for _, tc := range []struct {
+		fields map[string]any
+		action string
+	}{{map[string]any{"images": []any{}}, "text_to_video"}, {map[string]any{"image": "https://synthetic.invalid/first.png"}, "image_to_video"}, {map[string]any{"input_reference": "https://synthetic.invalid/first.png"}, "image_to_video"}} {
+		fields := tc.fields
+		fields["prompt"] = "test"
+		out := hookObject(t, p, "protocols.openai_video.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": fields}})
+		require.Equal(t, tc.action, out["action"])
+	}
+}
+
+func TestBundledXAIRejectsConflictingImageRepresentations(t *testing.T) {
+	p := recommendedBundle(t, "xai")
+	for _, fields := range []map[string]any{{"image": "https://synthetic.invalid/scalar.png"}, {"input_reference": "https://synthetic.invalid/scalar.png"}, {"metadata": map[string]any{"image": "https://synthetic.invalid/scalar.png"}}, {"reference_images": []any{"https://synthetic.invalid/scalar.png"}}} {
+		fields["prompt"], fields["images"] = "test", []any{"https://synthetic.invalid/listed.png"}
+		_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("grok-imagine-video", "image_to_video", fields))
+		require.Error(t, err, "a mixed scalar/reference-list and legacy list must fail instead of silently losing media")
+		_, err = p.Call(t.Context(), "extractUsage", driverInput("grok-imagine-video", "image_to_video", fields))
+		require.Error(t, err, "quote preparation must use the same rejection contract")
+	}
+	for _, images := range [][]any{{"https://synthetic.invalid/first.png"}, {"https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"}} {
+		out := hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", "image_to_video", map[string]any{"prompt": "test", "images": images}))
+		body := out["body"].(map[string]any)
+		if len(images) == 1 {
+			require.NotNil(t, body["image"])
+		} else {
+			require.Len(t, body["reference_images"], 2)
+		}
+	}
+}
