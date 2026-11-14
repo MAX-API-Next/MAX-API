@@ -843,3 +843,44 @@ func TestBundledKlingVideoRendererCompletesOnlyTerminalTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestBundledKlingRequiresPromptOrEffectiveFrames(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const image = "https://synthetic.invalid/first.png"
+	for _, model := range []string{"kling-v3", "kling-4.0"} {
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"metadata": map[string]any{"image": image}}}})
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		require.Equal(t, "image_to_video", action)
+		out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
+		body := out["body"].(map[string]any)
+		if model == "kling-4.0" {
+			require.Equal(t, []any{map[string]any{"type": "first_frame", "url": image}}, body["contents"])
+		} else {
+			require.Equal(t, image, body["image"])
+		}
+		for _, empty := range []any{nil, "", " "} {
+			_, err := p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"image": image, "metadata": map[string]any{"image": empty}}}})
+			require.Error(t, err, "an override removing the only image without a prompt must fail")
+		}
+	}
+}
+
+func TestBundledKlingSingleImageDropsBlankTail(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const image = "https://synthetic.invalid/first.png"
+	for _, model := range []string{"kling-v3", "kling-4.0"} {
+		for _, tail := range []any{nil, "", " "} {
+			decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "images": []any{image}, "metadata": map[string]any{"image_tail": tail}}}})
+			action, ok := decoded["action"].(string)
+			require.True(t, ok)
+			out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
+			body := out["body"].(map[string]any)
+			if model == "kling-4.0" {
+				require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": image}}, body["contents"])
+			} else {
+				require.NotContains(t, body, "image_tail")
+			}
+		}
+	}
+}

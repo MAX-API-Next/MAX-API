@@ -122,15 +122,15 @@
     },
     {
       "key": "kling",
-      "version": "1.2.0-maxapi.11",
-      "path": "plugins/tasks/kling/1.2.0-maxapi.11/plugin.js",
-      "sha256": "5959b369be333768c271f59c6eb7448b6703892c027299662ef640618683cf3a",
+      "version": "1.2.0-maxapi.12",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.12/plugin.js",
+      "sha256": "09628ec745c2447483cb1c4b443caa8d6c25e805d769bcf865ac2eecd34d80d3",
       "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-11",
+        "revision": "pr78-compatibility-12",
         "changes": [
           "Estimate the effective metadata-overridden outbound mode",
           "Include metadata images in Responses action selection",
@@ -145,11 +145,13 @@
           "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
           "Count effective frames after a single-image metadata override without weakening two-position retention",
           "Use the normalized effective tail value after frame validation",
-          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal"
+          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal",
+          "Validate required input against effective frames after metadata overrides",
+          "Normalize or remove optional metadata tail for any submitted image count"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.10",
-      "previousSha256": "4fa613e0b0c7daa55953be69a69f5bf9d5efe054aa5548c781ae8928b178e902"
+      "previousVersion": "1.2.0-maxapi.11",
+      "previousSha256": "5959b369be333768c271f59c6eb7448b6703892c027299662ef640618683cf3a"
     },
     {
       "key": "sora",
@@ -1077,6 +1079,37 @@
       },
       "previousVersion": "1.2.0-maxapi.9",
       "previousSha256": "f46a8448e9b99f18fbb563db6b78821bbc73bbc767e55a59a79e6874c27af509"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.11",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.11/plugin.js",
+      "sha256": "5959b369be333768c271f59c6eb7448b6703892c027299662ef640618683cf3a",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-11",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
+          "Count effective frames after a single-image metadata override without weakening two-position retention",
+          "Use the normalized effective tail value after frame validation",
+          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.10",
+      "previousSha256": "4fa613e0b0c7daa55953be69a69f5bf9d5efe054aa5548c781ae8928b178e902"
     }
   ]
 }
