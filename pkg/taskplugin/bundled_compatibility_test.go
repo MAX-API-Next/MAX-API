@@ -871,16 +871,52 @@ func TestBundledKlingSingleImageDropsBlankTail(t *testing.T) {
 	const image = "https://synthetic.invalid/first.png"
 	for _, model := range []string{"kling-v3", "kling-4.0"} {
 		for _, tail := range []any{nil, "", " "} {
-			decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "images": []any{image}, "metadata": map[string]any{"image_tail": tail}}}})
+			for _, protocol := range []string{"openai_responses", "openai_video"} {
+				fields := map[string]any{"prompt": "test", "image": image, "metadata": map[string]any{"image_tail": tail}}
+				decoded := hookObject(t, p, "protocols."+protocol+".decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": fields}})
+				action, ok := decoded["action"].(string)
+				require.True(t, ok)
+				out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
+				body := out["body"].(map[string]any)
+				if model == "kling-4.0" {
+					require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": image}}, body["contents"])
+				} else {
+					require.NotContains(t, body, "image_tail")
+				}
+			}
+		}
+	}
+}
+
+func TestBundledKlingBlankMetadataImageClearsShorthand(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, protocol := range []string{"openai_responses", "openai_video"} {
+		for _, model := range []string{"kling-v3", "kling-4.0"} {
+			decoded := hookObject(t, p, "protocols."+protocol+".decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "image": "https://synthetic.invalid/old.png", "metadata": map[string]any{"image": " "}}}})
 			action, ok := decoded["action"].(string)
 			require.True(t, ok)
+			require.Equal(t, "text_to_video", action)
 			out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
 			body := out["body"].(map[string]any)
-			if model == "kling-4.0" {
-				require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": image}}, body["contents"])
-			} else {
-				require.NotContains(t, body, "image_tail")
-			}
+			require.Equal(t, "text_to_video", out["action"])
+			require.NotContains(t, body, "image")
+			require.NotContains(t, body, "contents")
+		}
+	}
+}
+
+func TestBundledKlingProtocolModePrecedenceMatchesQuote(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, protocol := range []string{"openai_responses", "openai_video"} {
+		for _, mode := range []any{"std", nil, ""} {
+			decoded := hookObject(t, p, "protocols."+protocol+".decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "seconds": 5, "mode": "pro", "metadata": map[string]any{"mode": mode}}}})
+			action, ok := decoded["action"].(string)
+			require.True(t, ok)
+			input := driverInput("kling-v2-5-turbo", action, decoded["requestBody"])
+			out := hookObject(t, p, "buildSubmitRequest", input)
+			require.Equal(t, "std", out["body"].(map[string]any)["mode"])
+			facts := hookObject(t, p, "extractUsage", input)
+			require.Equal(t, 1.5, facts["units"], "effective std mode is five seconds at .3 credit/second")
 		}
 	}
 }
