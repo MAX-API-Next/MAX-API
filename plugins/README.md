@@ -18,3 +18,16 @@ The runtime uses MoeJS v0.1.0 (Apache-2.0) and moego v0.1.0-alpha.3 (MIT).
 Their license and third-party notice texts are retained in `runtime-licenses/`
 and embedded with the sources. The SDK host is independently implemented from
 the published API v1 contract; the upstream gateway host is not vendored.
+
+The host currently implements a bounded JSON submit/query driver, including
+native and declared protocol decoding, selected-channel identity checks and
+immutable package bindings. Outbound I/O uses the host's protected HTTP policy
+and an independent authorization callback. An accepted request whose response
+is lost is never automatically resubmitted. Old tasks retain their pinned
+package for queries; revocation blocks further hook calls and sends.
+
+This is a staged SDK implementation, not a complete API v1 or paid gateway.
+Multipart/files, SSE, batch polling, OAuth/signing variants, artifact delivery
+and the durable task/funding caller still require integration and validation.
+Protected destination DNS with a channel proxy is currently refused rather
+than bypassed. Installation readiness remains separate from these SDK helpers.

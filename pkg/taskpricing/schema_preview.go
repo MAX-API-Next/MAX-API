@@ -3,8 +3,6 @@ package taskpricing
 
 import (
 	"fmt"
-	"math"
-	"slices"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
@@ -36,35 +34,6 @@ func PreviewPluginSchema(input PreviewInput, schema map[string]types.TaskUsageFi
 			return out, fmt.Errorf("undeclared plugin price fact %q", key)
 		}
 	}
-	check := func(facts types.TaskPricingFacts) error {
-		for key, value := range facts {
-			field, ok := schema[key]
-			if !ok {
-				return fmt.Errorf("undeclared plugin fact %q", key)
-			}
-			if len(field.Enum) > 0 {
-				v, ok := value.(string)
-				if !ok || !slices.Contains(field.Enum, v) {
-					return fmt.Errorf("invalid enum fact %q", key)
-				}
-				continue
-			}
-			switch field.Type {
-			case "number":
-				v, ok := value.(float64)
-				if !ok || v < 0 || math.IsInf(v, 0) || math.IsNaN(v) {
-					return fmt.Errorf("invalid numeric fact %q", key)
-				}
-			case "boolean":
-				if _, ok := value.(bool); !ok {
-					return fmt.Errorf("invalid boolean fact %q", key)
-				}
-			default:
-				return fmt.Errorf("unsupported plugin fact %q", key)
-			}
-		}
-		return nil
-	}
 	// Validate the schema even for constant expressions and empty sample maps.
 	s := map[string]taskplugin.UsageField{}
 	for k, f := range schema {
@@ -77,7 +46,8 @@ func PreviewPluginSchema(input PreviewInput, schema map[string]types.TaskUsageFi
 	if err := taskplugin.ValidateUsageSchema(s); err != nil {
 		return out, err
 	}
-	if err := check(input.Submit); err != nil {
+	input.Submit, err = taskplugin.NormalizeDriverFacts(s, input.Submit, false)
+	if err != nil {
 		return out, err
 	}
 	quote := func(facts types.TaskPricingFacts) (billingexpr.TaskQuote, error) {
@@ -92,7 +62,8 @@ func PreviewPluginSchema(input PreviewInput, schema map[string]types.TaskUsageFi
 		out.ReservedQuota = max(out.ReservedQuota, input.ReservationFloor)
 	}
 	if input.Actual != nil {
-		if err := check(input.Actual); err != nil {
+		input.Actual, err = taskplugin.NormalizeDriverFacts(s, input.Actual, true)
+		if err != nil {
 			return out, err
 		}
 		merged := types.TaskPricingFacts{}

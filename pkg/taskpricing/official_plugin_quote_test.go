@@ -3,7 +3,6 @@ package taskpricing
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,49 +45,26 @@ func TestOfficialKlingSubmitQueryFactsAndPrice(t *testing.T) {
 	require.NoError(t, err)
 	p, err := taskplugin.LoadJavaScript(bytes.NewReader(source), "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240")
 	require.NoError(t, err)
-	driver := map[string]any{"requestBody": map[string]any{"prompt": "synthetic", "mode": "std", "duration": 5}, "action": "text_to_video", "model": "kling-v2-5-turbo", "upstreamModel": "kling-v2-5-turbo", "baseUrl": provider.URL, "apiKey": "synthetic-only", "upstream": map[string]any{"kind": "vendor"}, "usagePurpose": "facts"}
-	request := func(hook string) (json.RawMessage, int) {
-		wire, err := p.Call(t.Context(), hook, driver)
-		require.NoError(t, err)
-		var descriptor struct {
-			URL, Method string
-			Headers     map[string]string
-			Body        json.RawMessage
-		}
-		require.NoError(t, common.Unmarshal(wire, &descriptor))
-		req, err := http.NewRequestWithContext(t.Context(), descriptor.Method, descriptor.URL, bytes.NewReader(descriptor.Body))
-		require.NoError(t, err)
-		for k, v := range descriptor.Headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := provider.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		return body, resp.StatusCode
-	}
-	body, status := request("buildSubmitRequest")
-	wire, err := p.Call(t.Context(), "parseSubmitResponse", driver, map[string]any{"statusCode": status, "body": json.RawMessage(body)})
+	host := taskplugin.NewHost()
+	_, err = host.Install(p)
 	require.NoError(t, err)
-	var submitted struct {
-		TaskID string `json:"taskId"`
-	}
-	require.NoError(t, common.Unmarshal(wire, &submitted))
-	require.Equal(t, "supplier-1", submitted.TaskID)
-	wire, err = p.Call(t.Context(), "extractUsage", driver)
+	e, err := host.BindExecutor(taskplugin.Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "sample"}, "kling", "kling-v2-5-turbo", "kling-v2-5-turbo", "text_to_video")
 	require.NoError(t, err)
-	var estimated types.TaskPricingFacts
-	require.NoError(t, common.Unmarshal(wire, &estimated))
+	intent, err := e.DecodeProtocol(t.Context(), "openai_video", "", taskplugin.DecodeInput{Method: "POST", Path: "/v1/videos", Body: []byte(`{"prompt":"synthetic","seconds":5,"mode":"std"}`)})
+	require.NoError(t, err)
+	channel := taskplugin.ChannelInput{ID: 3, BaseURL: provider.URL, APIKey: "synthetic-only", UpstreamKind: "vendor"}
+	b, err := e.NewHTTPBroker(channel, provider.Client(), func(string) error { return nil })
+	require.NoError(t, err)
+	prepared, err := e.Prepare(t.Context(), channel, intent.RequestBody)
+	require.NoError(t, err)
+	estimated := prepared.Facts()
 	require.Equal(t, 1.5, estimated["units"])
-	driver["taskId"] = submitted.TaskID
-	body, _ = request("buildQueryRequest")
-	result, err := p.Call(t.Context(), "parseTaskResult", driver, json.RawMessage(body))
+	submitted, err := prepared.Submit(t.Context(), b, func(taskplugin.ExecutionBinding) error { return nil })
 	require.NoError(t, err)
-	wire, err = p.Call(t.Context(), "extractUsageOnComplete", driver, json.RawMessage(result), json.RawMessage(body))
+	require.Equal(t, "supplier-1", submitted.Task.UpstreamTaskID)
+	polled, err := e.Poll(t.Context(), b, channel, submitted.Task, func(taskplugin.ExecutionBinding) error { return nil })
 	require.NoError(t, err)
-	var actual types.TaskPricingFacts
-	require.NoError(t, common.Unmarshal(wire, &actual))
+	actual := polled.ActualFacts
 	require.Equal(t, 0.6, actual["units"])
 	quote, err := PreviewPluginSchema(PreviewInput{Profile: NewAPITask, Source: Source{Driver: "task_plugin", PluginKey: "kling"}, OriginalModel: "kling-v2-5-turbo", MappedModel: "kling-v2-5-turbo", Prices: types.TaskPricingMaps{PluginBillingExpr: map[string]string{"kling::kling-v2-5-turbo": `u("units") * 0.1`}}, Submit: estimated, Actual: actual, PricingAt: time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC), QuotaPerUnit: 1000, GroupRatio: 1}, map[string]types.TaskUsageField{"units": {Type: "number", Unit: "credit"}})
 	require.NoError(t, err)
@@ -100,4 +76,19 @@ func TestOfficialKlingSubmitQueryFactsAndPrice(t *testing.T) {
 	require.Equal(t, -90, *quote.FinalMinusReserved)
 	require.Equal(t, 1, submissions)
 	require.Equal(t, 1, queries)
+}
+
+func TestPluginConfigurationPriceIgnoresCompatibleAuxiliaryFacts(t *testing.T) {
+	input := PreviewInput{Profile: NewAPITask, Source: Source{Driver: "task_plugin", PluginKey: "hailuo"}, OriginalModel: "MiniMax-Hailuo-2.3", MappedModel: "MiniMax-Hailuo-2.3", Prices: types.TaskPricingMaps{PluginBillingExpr: map[string]string{"hailuo::MiniMax-Hailuo-2.3": `u("seconds") * 0.1`}}, Submit: types.TaskPricingFacts{"seconds": float64(6), "resolution": "768P", "input_images": float64(0), "input_video_seconds": float64(0)}, Actual: types.TaskPricingFacts{"resolution": "1080P"}, PricingAt: time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC), QuotaPerUnit: 1000, GroupRatio: 1}
+	schema := map[string]types.TaskUsageField{"seconds": {Type: "number", Unit: "second"}, "resolution": {Type: "enum", Enum: []string{"768P", "1080P"}}}
+	quote, err := PreviewPluginSchema(input, schema)
+	require.NoError(t, err)
+	// Independent: 6 s * USD .1/s * 1000 quota/USD = 600. The zero
+	// auxiliary dimensions are preserved evidence, not extra multipliers.
+	require.Equal(t, 600, quote.ReservedQuota)
+	require.Equal(t, 600, quote.Final.QuotaAfterGroup)
+	require.Zero(t, *quote.FinalMinusReserved)
+	input.Prices.PluginBillingExpr["hailuo::MiniMax-Hailuo-2.3"] = `u("input_images") * 0.1`
+	_, err = PreviewPluginSchema(input, schema)
+	require.Error(t, err, "retaining auxiliary evidence does not silently expand the selected price schema")
 }
