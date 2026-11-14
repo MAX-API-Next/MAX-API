@@ -122,15 +122,15 @@
     },
     {
       "key": "kling",
-      "version": "1.2.0-maxapi.6",
-      "path": "plugins/tasks/kling/1.2.0-maxapi.6/plugin.js",
-      "sha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9",
+      "version": "1.2.0-maxapi.7",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.7/plugin.js",
+      "sha256": "979b7f2f4a3d1aaaaecf4c1e0cb9285e98d4f72a96fedba1d15fa504ef6ad4ba",
       "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-6",
+        "revision": "pr78-compatibility-7",
         "changes": [
           "Estimate the effective metadata-overridden outbound mode",
           "Include metadata images in Responses action selection",
@@ -138,11 +138,12 @@
           "Reject callback_url/external_task_id after merging the final request body",
           "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
           "Select protocol action from the effective metadata-merged image fields",
-          "Reject excess Responses images before selecting first and last frames"
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.5",
-      "previousSha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb"
+      "previousVersion": "1.2.0-maxapi.6",
+      "previousSha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9"
     },
     {
       "key": "sora",
@@ -228,15 +229,15 @@
     },
     {
       "key": "xai",
-      "version": "1.2.0-maxapi.6",
-      "path": "plugins/tasks/xai/1.2.0-maxapi.6/plugin.js",
-      "sha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816",
+      "version": "1.2.0-maxapi.7",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.7/plugin.js",
+      "sha256": "3e97c69dff3733750d539f00b47d857e1f5350adeaba1b6611ddabefc561e3fd",
       "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-6",
+        "revision": "pr78-compatibility-7",
         "changes": [
           "Allow valid keyframe-only generation through semantic validator",
           "Merge measured poll state with submitted extension state",
@@ -245,11 +246,12 @@
           "Parse and validate multipart metadata before request normalization",
           "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
           "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
-          "Reject conflicting Responses image representations before normalization"
+          "Reject conflicting Responses image representations before normalization",
+          "Project terminal host failure over rejected provider done snapshots while preserving moderation and provider failure payloads"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.5",
-      "previousSha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2"
+      "previousVersion": "1.2.0-maxapi.6",
+      "previousSha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816"
     }
   ],
   "retainedVersions": [
@@ -885,6 +887,55 @@
       },
       "previousVersion": "1.2.0-maxapi.4",
       "previousSha256": "75522345fd6d47ffe3a9b204b7fca76c89b3815365604e333970e1c8b33e8c71"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.6/plugin.js",
+      "sha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-6",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.6/plugin.js",
+      "sha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-6",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
+          "Reject conflicting Responses image representations before normalization"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2"
     }
   ]
 }

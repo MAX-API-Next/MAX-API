@@ -517,8 +517,18 @@ func TestBundledXAIOrdinaryMissingVideoFailsButModerationKeepsPolicy(t *testing.
 		moderated bool
 		status    string
 	}{{false, "FAILURE"}, {true, "SUCCESS"}} {
-		out := hookObject(t, p, "parseTaskResult", input, map[string]any{"status": "done", "video": map[string]any{"respect_moderation": !tc.moderated, "duration": 8}})
+		snapshot := map[string]any{"status": "done", "video": map[string]any{"respect_moderation": !tc.moderated, "duration": float64(8)}}
+		out := hookObject(t, p, "parseTaskResult", input, snapshot)
 		require.Equal(t, tc.status, out["status"])
+		view := hookObject(t, p, "native.videoStatus", map[string]any{}, map[string]any{"status": out["status"], "fail_reason": out["reason"], "data": snapshot})
+		if tc.moderated {
+			require.Equal(t, snapshot, view, "intentional moderation retains the successful host policy and provider result")
+		} else {
+			require.Equal(t, "failed", view["status"])
+			failure, ok := view["error"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "completed video result has no video URL", failure["message"])
+		}
 	}
 }
 
@@ -615,7 +625,9 @@ func TestBundledXAIRejectsConflictingImageRepresentations(t *testing.T) {
 			require.Len(t, body["reference_images"], 2)
 		}
 		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "grok-imagine-video", "body": map[string]any{"kind": "json", "value": map[string]any{"model": "grok-imagine-video", "input": "test", "images": images}}})
-		out = hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", decoded["action"].(string), decoded["requestBody"]))
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		out = hookObject(t, p, "buildSubmitRequest", driverInput("grok-imagine-video", action, decoded["requestBody"]))
 		require.Equal(t, body, out["body"], "valid list-only input must retain every image through Responses conversion")
 	}
 }
@@ -631,7 +643,9 @@ func TestBundledKlingActionUsesEffectiveMergedImages(t *testing.T) {
 				action, endpoint = "image_to_video", "/v1/videos/image2video"
 			}
 			require.Equal(t, action, decoded["action"], "%s image=%v", protocol, image)
-			out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", decoded["action"].(string), decoded["requestBody"]))
+			decodedAction, ok := decoded["action"].(string)
+			require.True(t, ok)
+			out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", decodedAction, decoded["requestBody"]))
 			require.Equal(t, action, out["action"])
 			require.Equal(t, "https://provider.invalid"+endpoint, out["url"])
 			body := out["body"].(map[string]any)
@@ -657,8 +671,27 @@ func TestBundledKlingResponsesRejectExcessFrames(t *testing.T) {
 		require.Error(t, err, "excess media must be rejected before selecting first and last frames")
 	}
 	decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"input": "test", "images": []any{first, last}}}})
-	out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", decoded["action"].(string), decoded["requestBody"]))
+	action, ok := decoded["action"].(string)
+	require.True(t, ok)
+	out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", action, decoded["requestBody"]))
 	body := out["body"].(map[string]any)
 	require.Equal(t, first, body["image"])
 	require.Equal(t, last, body["image_tail"])
+}
+
+func TestBundledKlingResponsesMetadataCannotDiscardDistinctFrames(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const first, last, extra = "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png", "https://synthetic.invalid/extra.png"
+	for _, metadata := range []map[string]any{{"image_tail": extra}, {"image": extra}, {"image_tail": first}, {"image": last}, {"image": ""}} {
+		_, err := p.Call(t.Context(), "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"input": "test", "images": []any{first, last}, "metadata": metadata}}})
+		require.Error(t, err, "metadata must not silently replace one of two distinct submitted frames")
+	}
+	for _, metadata := range []map[string]any{{"image_tail": last}, {"image": last, "image_tail": first}} {
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": "kling-v2-5-turbo", "body": map[string]any{"kind": "json", "value": map[string]any{"input": "test", "images": []any{first, last}, "metadata": metadata}}})
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		out := hookObject(t, p, "buildSubmitRequest", driverInput("kling-v2-5-turbo", action, decoded["requestBody"]))
+		body := out["body"].(map[string]any)
+		require.ElementsMatch(t, []any{first, last}, []any{body["image"], body["image_tail"]})
+	}
 }
