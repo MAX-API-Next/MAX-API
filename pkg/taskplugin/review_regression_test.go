@@ -112,3 +112,42 @@ func TestMetadataUsesDeterministicDateRandomAndUUID(t *testing.T) {
 	_, err := LoadPackage(bytes.NewReader(p.Document()), p.Digest())
 	require.NoError(t, err)
 }
+
+func TestNativeDecodingUsesBoundMappedModel(t *testing.T) {
+	for _, tc := range []struct{ alias, mapped, path, body string }{{"logical-image", "qwen-image-2.0", "/api/v1/services/aigc/multimodal-generation/generation", `{"model":"logical-image","input":{"messages":[{"role":"user","content":[{"text":"test"}]}]}}`}, {"logical-video", "wan3.0-video", "/api/v1/services/aigc/video-generation/video-synthesis", `{"model":"logical-video","input":{"prompt":"test"},"parameters":{"duration":5}}`}} {
+		t.Run(tc.alias, func(t *testing.T) {
+			host := NewHost()
+			_, err := host.Install(recommendedBundle(t, "alibaba"))
+			require.NoError(t, err)
+			action := "text_to_image"
+			if tc.alias == "logical-video" {
+				action = "text_to_video"
+			}
+			e, err := host.BindExecutor(Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "r"}, "alibaba", tc.alias, tc.mapped, action)
+			require.NoError(t, err)
+			intent, err := e.DecodeNative(t.Context(), DecodeInput{Method: "POST", Path: tc.path, Body: []byte(tc.body)})
+			require.NoError(t, err)
+			require.Equal(t, tc.alias, intent.Model)
+			prepared, err := e.Prepare(t.Context(), ChannelInput{ID: 3, BaseURL: "https://provider.invalid", APIKey: "synthetic-only", UpstreamKind: "vendor"}, intent.RequestBody)
+			require.NoError(t, err)
+			var wire map[string]any
+			require.NoError(t, common.Unmarshal(prepared.descriptor.Body, &wire))
+			require.Equal(t, tc.mapped, wire["model"], "the declared identity stays logical while the outbound model is channel-bound")
+		})
+	}
+}
+
+func TestSoraExecutorRejectsUnsupportedMultipartBeforePreparation(t *testing.T) {
+	host := NewHost()
+	_, err := host.Install(recommendedBundle(t, "sora"))
+	require.NoError(t, err)
+	e, err := host.BindExecutor(Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "r"}, "sora", "sora-2", "sora-2", "image_to_video")
+	require.NoError(t, err)
+	// DecodeInput exposes JSON only; no file descriptors or caller headers can
+	// smuggle a multipart upload into the task-owned execution context.
+	body := []byte("--synthetic\r\nContent-Disposition: form-data; name=\"input_reference\"; filename=\"frame.png\"\r\n\r\nimage\r\n--synthetic--")
+	_, err = e.DecodeNative(t.Context(), DecodeInput{Method: "POST", Path: "/v1/videos", Body: body})
+	require.ErrorIs(t, err, ErrPluginHook)
+	_, err = e.DecodeProtocol(t.Context(), "openai_video", "sync", DecodeInput{Method: "POST", Path: "/v1/videos", Body: body})
+	require.ErrorIs(t, err, ErrPluginHook)
+}

@@ -9,10 +9,17 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBrokerClampsNonpositiveTimeout(t *testing.T) {
+	b, err := NewHTTPBroker("https://provider.invalid", nil, &http.Client{Timeout: -time.Second}, func(string) error { return nil })
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, b.client.Timeout)
+}
 
 func TestBrokerPoliciesRunBeforeAuthorizationOrNetwork(t *testing.T) {
 	var sends, grants atomic.Int32

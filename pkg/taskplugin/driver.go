@@ -249,14 +249,14 @@ func (e *Executor) Poll(ctx context.Context, b *HTTPBroker, channel ChannelInput
 	}
 	var facts types.TaskPricingFacts
 	if result.Status == "SUCCESS" {
-		facts, err = e.facts(ctx, "extractUsageOnComplete", input, json.RawMessage(raw), pollBody)
+		facts, err = e.facts(ctx, "extractUsageOnComplete", input, raw, pollBody)
 		if err != nil {
 			return nil, err
 		}
 	}
 	data := result.Data
-	if len(data) == 0 {
-		data = bytes.Clone(response.Body)
+	if len(data) == 0 && len(pollBody) > 0 {
+		data = bytes.Clone(pollBody)
 	}
 	return &PollResult{Result: result, Data: data, ActualFacts: facts, UpstreamBody: bytes.Clone(response.Body)}, nil
 }

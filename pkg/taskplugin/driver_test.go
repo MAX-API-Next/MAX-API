@@ -342,4 +342,8 @@ func TestBodyless202PollReachesXAIParser(t *testing.T) {
 	require.Equal(t, "IN_PROGRESS", out.Result.Status)
 	require.Empty(t, out.UpstreamBody)
 	require.Nil(t, out.ActualFacts)
+	// Carry canonical task-local Data into the next poll. Empty raw bytes are
+	// retained only as private evidence and cannot become invalid JSON input.
+	_, err = e.Poll(t.Context(), broker, channel, ExecutionTask{Binding: e.Binding(), UpstreamTaskID: "supplier-1", Data: out.Data}, func(ExecutionBinding) error { return nil })
+	require.NoError(t, err)
 }

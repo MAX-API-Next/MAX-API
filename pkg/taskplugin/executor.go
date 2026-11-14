@@ -284,6 +284,7 @@ func (e *Executor) DecodeNative(ctx context.Context, request DecodeInput) (Submi
 	if err != nil {
 		return SubmitIntent{}, err
 	}
+	input["model"], input["upstreamModel"] = e.binding.OriginalModel, e.binding.UpstreamModel
 	path := request.Path
 	// Native routes are also exposed under /{plugin-key}, as in the SDK.
 	prefix := "/" + p.manifest.Key

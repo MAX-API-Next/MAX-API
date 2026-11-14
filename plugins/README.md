@@ -62,6 +62,13 @@ until the durable task caller supplies those contexts. Accepted image/frame
 counts are validated rather than silently truncated. Profile inheritance is
 bounded before Go map expansion (8,192 fields and 1 MiB serialized schemas).
 
+The recommended Google and Vertex video revisions accept one output per task:
+missing counts default to one, and explicit `sampleCount` or `numberOfVideos`
+values other than the integer one are rejected rather than rewritten. Jimeng
+compatibility requests with both URL and Base64 frames are rejected before
+submission because splitting them into separate arrays loses first/tail order.
+Use a single ordered representation until an owned conversion path is available.
+
 Metadata export and hook discovery use an isolated deterministic environment:
 Date and SDK time are the Unix epoch, UUID is fixed, and Math.random is 0.5.
 Execution hooks and their initialization retain frozen intrinsics and current

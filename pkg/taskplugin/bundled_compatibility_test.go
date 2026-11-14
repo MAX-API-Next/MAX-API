@@ -113,7 +113,7 @@ func TestBundledVideoScalarImagesAndResolutionReachWire(t *testing.T) {
 func TestBundledGoogleUsesVersionedRESTImageAndCount(t *testing.T) {
 	p := recommendedBundle(t, "google")
 	model := videoModel(t, p)
-	input := driverInput(model, "text_to_video", map[string]any{"prompt": "test", "duration": 4, "metadata": map[string]any{"sampleCount": 2, "numberOfVideos": 9}})
+	input := driverInput(model, "text_to_video", map[string]any{"prompt": "test", "duration": 4, "metadata": map[string]any{"sampleCount": 1, "numberOfVideos": 1}})
 	descriptor := hookObject(t, p, "buildSubmitRequest", input)
 	params := descriptor["body"].(map[string]any)["parameters"].(map[string]any)
 	require.Equal(t, float64(1), params["sampleCount"])
@@ -202,7 +202,7 @@ func TestBundledHailuoImageArraysReachV1Frames(t *testing.T) {
 
 func TestBundledJimengSubmittedQueryKeyMatchesMergedImages(t *testing.T) {
 	p := recommendedBundle(t, "jimeng")
-	input := driverInput("jimeng_v30", "first_tail_to_video", map[string]any{"prompt": "test", "duration": 5, "images": []any{"aGVsbG8="}, "metadata": map[string]any{"image_urls": []any{"https://synthetic.invalid/last.png"}}})
+	input := driverInput("jimeng_v30", "first_tail_to_video", map[string]any{"prompt": "test", "duration": 5, "images": []any{"https://synthetic.invalid/ignored.png"}, "metadata": map[string]any{"image_urls": []any{"https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"}}})
 	input["apiKey"] = "sk-synthetic-only"
 	descriptor := hookObject(t, p, "buildSubmitRequest", input)
 	var wire map[string]any
@@ -293,11 +293,8 @@ func TestBundledJimengMixedImagesAndExplicitRemoval(t *testing.T) {
 	for _, images := range [][]any{{"https://synthetic.invalid/frame.png", "aGVsbG8="}, {"aGVsbG8=", "https://synthetic.invalid/frame.png"}} {
 		input := driverInput("jimeng_v30", "first_tail_to_video", map[string]any{"prompt": "test", "images": images})
 		input["apiKey"] = "sk-synthetic-only"
-		desc := hookObject(t, p, "buildSubmitRequest", input)
-		var wire map[string]any
-		require.NoError(t, common.UnmarshalJsonStr(desc["body"].(string), &wire))
-		require.Equal(t, []any{"https://synthetic.invalid/frame.png"}, wire["image_urls"])
-		require.Equal(t, []any{"aGVsbG8="}, wire["binary_data_base64"])
+		_, err := p.Call(t.Context(), "buildSubmitRequest", input)
+		require.Error(t, err, "both frame orders must fail before a request can lose their positions")
 	}
 	input := driverInput("jimeng_vgfm_t2v_l20", "text_to_video", map[string]any{"prompt": "test", "images": []any{"https://synthetic.invalid/frame.png"}, "metadata": map[string]any{"image_urls": []any{}}})
 	input["apiKey"] = "sk-synthetic-only"
@@ -485,4 +482,97 @@ func TestDeclaredUnavailableVendorCapabilitiesRemainClosed(t *testing.T) {
 		_, err = e.Prepare(t.Context(), ChannelInput{ID: 33, BaseURL: "https://provider.invalid", APIKey: "synthetic-ak|synthetic-sk", UpstreamKind: "vendor"}, []byte(`{"prompt":"test","duration":5}`))
 		require.Error(t, err, "unimplemented signing cannot reach host authorization or dispatch")
 	})
+}
+
+func TestBundledAlibabaNativeOSSConsentReachesWire(t *testing.T) {
+	p := recommendedBundle(t, "alibaba")
+	model := "qwen-image-2.0"
+	decoded := hookObject(t, p, "native.createImageTask", map[string]any{"model": model, "upstreamModel": model, "path": "/api/v1/services/aigc/multimodal-generation/generation", "requestHeaders": map[string]any{"X-DashScope-OssResourceResolve": "enable"}, "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "input": map[string]any{"messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"text": "test"}, map[string]any{"image": "oss://synthetic/frame.png"}}}}}}}})
+	out := hookObject(t, p, "buildSubmitRequest", driverInput(model, "image_to_image", decoded["requestBody"]))
+	require.Equal(t, "enable", out["headers"].(map[string]any)["X-DashScope-OssResourceResolve"])
+}
+
+func TestBundledKlingRejectsCallbackFieldsFromMetadata(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, key := range []string{"callback_url", "external_task_id"} {
+		_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput("kling-v2-5-turbo", "text_to_video", map[string]any{"prompt": "test", "duration": 5, "metadata": map[string]any{key: "synthetic"}}))
+		require.Error(t, err, key)
+	}
+}
+
+func TestBundledViduMetadataImagesMatchActionAndEndpoint(t *testing.T) {
+	p := recommendedBundle(t, "vidu")
+	model := "viduq3-pro"
+	decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "upstreamModel": model, "body": map[string]any{"kind": "json", "value": map[string]any{"model": model, "input": "test", "metadata": map[string]any{"images": []any{"https://synthetic.invalid/frame.png"}}}}})
+	require.Equal(t, "image_to_video", decoded["action"])
+	out := hookObject(t, p, "buildSubmitRequest", driverInput(model, "image_to_video", decoded["requestBody"]))
+	require.Contains(t, out["url"], "/img2video")
+	require.Len(t, out["body"].(map[string]any)["images"], 1)
+}
+
+func TestBundledXAIOrdinaryMissingVideoFailsButModerationKeepsPolicy(t *testing.T) {
+	p := recommendedBundle(t, "xai")
+	input := driverInput("grok-imagine-video", "text_to_video", map[string]any{})
+	for _, tc := range []struct {
+		moderated bool
+		status    string
+	}{{false, "FAILURE"}, {true, "SUCCESS"}} {
+		out := hookObject(t, p, "parseTaskResult", input, map[string]any{"status": "done", "video": map[string]any{"respect_moderation": !tc.moderated, "duration": 8}})
+		require.Equal(t, tc.status, out["status"])
+	}
+}
+
+func TestBundledDoubaoMetadataPreservesTextAndRejectsCallback(t *testing.T) {
+	p := recommendedBundle(t, "doubao")
+	model := "doubao-seedance-1-0-pro-250528"
+	_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput(model, "text_to_video", map[string]any{"prompt": "test", "metadata": map[string]any{"callback_url": "https://synthetic.invalid/callback"}}))
+	require.Error(t, err)
+	out := hookObject(t, p, "buildSubmitRequest", driverInput(model, "image_to_video", map[string]any{"metadata": map[string]any{"content": []any{map[string]any{"type": "text", "text": "keep my instructions"}, map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://synthetic.invalid/frame.png"}}}}}))
+	content := out["body"].(map[string]any)["content"].([]any)
+	require.Contains(t, content, map[string]any{"type": "text", "text": "keep my instructions"})
+	req := map[string]any{"prompt": "replacement instructions", "metadata": map[string]any{"content": content}}
+	out = hookObject(t, p, "buildSubmitRequest", driverInput(model, "image_to_video", req))
+	content = out["body"].(map[string]any)["content"].([]any)
+	require.Contains(t, content, map[string]any{"type": "text", "text": "replacement instructions"})
+	require.NotContains(t, content, map[string]any{"type": "text", "text": "keep my instructions"})
+}
+
+func TestBundledDoubaoRatioUsesEffectiveResolution(t *testing.T) {
+	p := recommendedBundle(t, "doubao")
+	input := driverInput("doubao-seedance-2-0-260128", "text_to_video", map[string]any{"prompt": "test", "resolution": "1080p"})
+	input["usagePurpose"] = "billing_ratios"
+	out := hookObject(t, p, "extractUsage", input)
+	require.InDelta(t, 51.0/46.0, out["video_input_ratio"], 1e-12)
+}
+
+func TestBundledVideoCountMustBeExplicitlySupported(t *testing.T) {
+	for _, key := range []string{"google", "vertex-ai"} {
+		t.Run(key, func(t *testing.T) {
+			p := recommendedBundle(t, key)
+			for _, field := range []string{"sampleCount", "numberOfVideos"} {
+				for _, count := range []any{2, 0, nil} {
+					_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput(videoModel(t, p), "text_to_video", map[string]any{"prompt": "test", "metadata": map[string]any{field: count}}))
+					require.Error(t, err, "one-video host must reject unsupported explicit quantities rather than silently rewrite them")
+				}
+			}
+			for _, metadata := range []any{map[string]any{}, map[string]any{"sampleCount": 1, "numberOfVideos": 1}} {
+				out := hookObject(t, p, "buildSubmitRequest", driverInput(videoModel(t, p), "text_to_video", map[string]any{"prompt": "test", "metadata": metadata}))
+				params := out["body"].(map[string]any)["parameters"].(map[string]any)
+				require.Equal(t, float64(1), params["sampleCount"])
+				require.NotContains(t, params, "numberOfVideos")
+			}
+			if key == "vertex-ai" {
+				model := videoModel(t, p)
+				decoded := hookObject(t, p, "native.modelMethod", map[string]any{"params": map[string]any{"model": model + ":predictLongRunning"}, "body": map[string]any{"kind": "json", "value": map[string]any{"instances": []any{map[string]any{"prompt": "test"}}, "parameters": map[string]any{"sampleCount": 2}}}})
+				_, err := p.Call(t.Context(), "buildSubmitRequest", driverInput(model, "text_to_video", decoded["requestBody"]))
+				require.Error(t, err, "native parameters must reach the same pre-submission quantity guard")
+			}
+		})
+	}
+}
+
+func TestBundledViduRendererKeepsOriginalModel(t *testing.T) {
+	p := recommendedBundle(t, "vidu")
+	out := hookObject(t, p, "protocols.openai_video.render", map[string]any{}, map[string]any{"task_id": "public-1", "status": "SUBMITTED", "properties": map[string]any{"origin_model_name": "logical-vidu"}})
+	require.Equal(t, "logical-vidu", out["model"])
 }

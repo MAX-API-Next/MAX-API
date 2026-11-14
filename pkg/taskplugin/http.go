@@ -57,7 +57,7 @@ func NewHTTPBroker(baseURL string, allowed []string, client *http.Client, valida
 	copyClient := *client
 	copyClient.Jar = nil
 	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if copyClient.Timeout == 0 || copyClient.Timeout > 15*time.Second {
+	if copyClient.Timeout <= 0 || copyClient.Timeout > 15*time.Second {
 		copyClient.Timeout = 15 * time.Second
 	}
 	return &HTTPBroker{base: base, allowed: append([]string(nil), allowed...), client: &copyClient, validateURL: validateURL}, nil
