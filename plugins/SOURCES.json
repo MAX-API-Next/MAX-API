@@ -122,15 +122,15 @@
     },
     {
       "key": "kling",
-      "version": "1.2.0-maxapi.8",
-      "path": "plugins/tasks/kling/1.2.0-maxapi.8/plugin.js",
-      "sha256": "6babf10ca60320c8fe6917758af458191d82d65e56787a5ea42660949a104133",
+      "version": "1.2.0-maxapi.9",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.9/plugin.js",
+      "sha256": "f46a8448e9b99f18fbb563db6b78821bbc73bbc767e55a59a79e6874c27af509",
       "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
       "upstreamVersion": "1.2.0",
       "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
       "adaptation": {
         "author": "MAX-API-Next",
-        "revision": "pr78-compatibility-8",
+        "revision": "pr78-compatibility-9",
         "changes": [
           "Estimate the effective metadata-overridden outbound mode",
           "Include metadata images in Responses action selection",
@@ -140,11 +140,13 @@
           "Select protocol action from the effective metadata-merged image fields",
           "Reject excess Responses images before selecting first and last frames",
           "Validate metadata frames and reject distinct-frame loss before selecting outputs",
-          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests"
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position"
         ]
       },
-      "previousVersion": "1.2.0-maxapi.7",
-      "previousSha256": "979b7f2f4a3d1aaaaecf4c1e0cb9285e98d4f72a96fedba1d15fa504ef6ad4ba"
+      "previousVersion": "1.2.0-maxapi.8",
+      "previousSha256": "6babf10ca60320c8fe6917758af458191d82d65e56787a5ea42660949a104133"
     },
     {
       "key": "sora",
@@ -989,6 +991,32 @@
       },
       "previousVersion": "1.2.0-maxapi.6",
       "previousSha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.8",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.8/plugin.js",
+      "sha256": "6babf10ca60320c8fe6917758af458191d82d65e56787a5ea42660949a104133",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-8",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.7",
+      "previousSha256": "979b7f2f4a3d1aaaaecf4c1e0cb9285e98d4f72a96fedba1d15fa504ef6ad4ba"
     }
   ]
 }
