@@ -789,3 +789,57 @@ func TestBundledKlingCountsFramesAfterSingleImageOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestBundledKlingNormalizesWhitespaceTailBeforeBuilding(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	const first, last = "https://synthetic.invalid/first.png", "https://synthetic.invalid/last.png"
+	for _, model := range []string{"kling-v3", "kling-4.0"} {
+		decoded := hookObject(t, p, "protocols.openai_responses.decodeRequest", map[string]any{"model": model, "body": map[string]any{"kind": "json", "value": map[string]any{"prompt": "test", "images": []any{first, last}, "metadata": map[string]any{"image_tail": " "}}}})
+		action, ok := decoded["action"].(string)
+		require.True(t, ok)
+		out := hookObject(t, p, "buildSubmitRequest", driverInput(model, action, decoded["requestBody"]))
+		body := out["body"].(map[string]any)
+		if model == "kling-4.0" {
+			require.Equal(t, []any{map[string]any{"type": "prompt", "text": "test"}, map[string]any{"type": "first_frame", "url": first}, map[string]any{"type": "last_frame", "url": last}}, body["contents"])
+		} else {
+			require.Equal(t, last, body["image_tail"])
+		}
+	}
+}
+
+func TestBundledKlingVideoRendererKeepsOriginalModel(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, model := range []string{"logical-kling-alias", "kling-v3", "kling-4.0"} {
+		out := hookObject(t, p, "protocols.openai_video.render", map[string]any{"model": "current-channel-model"}, map[string]any{"task_id": "public-1", "status": "SUBMITTED", "properties": map[string]any{"origin_model_name": model}})
+		require.Equal(t, model, out["model"], "historical task identity wins over the current channel")
+	}
+}
+
+func TestBundledKlingVideoRendererConvertsProviderMilliseconds(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, data := range []map[string]any{
+		{"id": "vendor-1", "status": "succeeded", "create_time": 1714000000123, "update_time": 1714000009876},
+		{"task_id": "vendor-1", "task_status": "succeed", "created_at": 1714000000123, "updated_at": 1714000009876},
+	} {
+		out := hookObject(t, p, "protocols.openai_video.render", map[string]any{}, map[string]any{"task_id": "public-1", "status": "SUCCESS", "data": map[string]any{"code": 0, "data": data}})
+		require.Equal(t, float64(1714000000), out["created_at"])
+		require.Equal(t, float64(1714000009), out["completed_at"])
+	}
+}
+
+func TestBundledKlingVideoRendererCompletesOnlyTerminalTasks(t *testing.T) {
+	p := recommendedBundle(t, "kling")
+	for _, data := range []map[string]any{
+		{"id": "vendor-1", "status": "processing", "create_time": 1714000000123, "update_time": 1714000009876},
+		{"task_id": "vendor-1", "task_status": "processing", "created_at": 1714000000123, "updated_at": 1714000009876},
+	} {
+		for _, status := range []string{"IN_PROGRESS", "SUCCESS", "FAILURE"} {
+			out := hookObject(t, p, "protocols.openai_video.render", map[string]any{}, map[string]any{"task_id": "public-1", "status": status, "data": map[string]any{"code": 0, "data": data}})
+			if status == "IN_PROGRESS" {
+				require.NotContains(t, out, "completed_at")
+			} else {
+				require.Equal(t, float64(1714000009), out["completed_at"])
+			}
+		}
+	}
+}
