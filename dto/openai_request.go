@@ -1219,7 +1219,8 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 								imageUrl = url
 							}
 						}
-						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl})
+						detail, _ := item["detail"].(string)
+						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl, Detail: detail})
 					case "input_file":
 						// file_url may be string or object with url field
 						var fileUrl string

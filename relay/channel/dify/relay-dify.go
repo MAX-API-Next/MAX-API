@@ -264,6 +264,9 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 	}
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if presence.Total && presence.ReportedTotal > 0 && (!presence.Prompt || !presence.Completion) {
+		usage.TotalTokens = presence.ReportedTotal
+	}
 	return usage, nil
 }
 

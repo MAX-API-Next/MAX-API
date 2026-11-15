@@ -100,6 +100,10 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	} else if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.ExtractOutputTextFromResponses(&responsesResp))
 	}
+	if total := gjson.GetBytes(body, "usage.total_tokens"); total.Type == gjson.Number {
+		// Conversion helpers can normalize zero to a sum; raw presence wins.
+		usage.TotalTokens = int(total.Int())
+	}
 	usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
 	usage.BillingUsage.TokenCountsReported = promptReported && completionReported
 	usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported

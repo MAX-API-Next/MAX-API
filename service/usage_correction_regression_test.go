@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/dify"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -168,6 +169,51 @@ func TestResponsesMissingInputFloorSettlement(t *testing.T) {
 			assertUsageReplayBalance(t, info, 100) // Known cached subset: 1000*0.1; no uncached/output tokens.
 		})
 	}
+}
+
+func TestResponsesToolImageDetailEstimateSettlement(t *testing.T) {
+	oldCount, oldMedia := constant.CountToken, constant.GetMediaToken
+	constant.CountToken, constant.GetMediaToken = true, false
+	t.Cleanup(func() { constant.CountToken, constant.GetMediaToken = oldCount, oldMedia })
+	service.InitTokenEncoders()
+	for i, detail := range []string{"low", "high", "auto"} {
+		t.Run(detail, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 9620+i, "")
+			info.UpstreamModelName = "gpt-4o"
+			c.Set(string(constant.ContextKeyOriginalModel), "gpt-4o")
+			var request dto.OpenAIResponsesRequest
+			require.NoError(t, common.UnmarshalJsonStr(`{"input":[{"type":"function_call_output","output":[{"type":"input_image","image_url":"https://example.invalid/image.png","detail":"`+detail+`"}]}]}`, &request))
+			estimate, err := service.EstimateRequestToken(c, request.GetTokenCountMeta(), info)
+			require.NoError(t, err)
+			want := 258
+			if detail == "low" {
+				want = 88
+			}
+			require.Equal(t, want, estimate) // Existing 3-token envelope + 85/255 image heuristic.
+			info.SetEstimatePromptTokens(estimate)
+			u, apiErr := openai.OaiResponsesToChatHandler(c, info, usageReplayResponse(`{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"output_tokens":0}}`))
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, want)
+		})
+	}
+}
+
+func TestDifyReportedPartialTotalSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	c, info := usageReplayInfo(t, 9630, "")
+	info.IsStream = true
+	a := &dify.Adaptor{}
+	a.Init(info)
+	raw := "data: " + `{"event":"message","answer":"hi"}` + "\n\ndata: " + `{"event":"message_end","metadata":{"usage":{"total_tokens":50}}}` + "\n\n"
+	u, apiErr := a.DoResponse(c, usageReplayResponse(raw), info)
+	require.Nil(t, apiErr)
+	usage := u.(*dto.Usage)
+	service.PostTextConsumeQuota(c, info, usage, nil)
+	service.PostTextConsumeQuota(c, info, usage, nil)
+	assertUsageReplayBalance(t, info, 42) // 38 input + existing estimate 2 output at ratio 2.
+	require.Equal(t, 50, usage.TotalTokens)
 }
 
 func TestUsageCorrectionClaudeCallerPartialSettlement(t *testing.T) {

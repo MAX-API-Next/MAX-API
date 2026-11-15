@@ -28,6 +28,16 @@ func TestUsageCorrectionResponsesCustomMultimodalHistory(t *testing.T) {
 	require.Equal(t, types.FileTypeImage, meta.Files[0].FileType)
 }
 
+func TestResponsesToolOutputImageDetail(t *testing.T) {
+	for _, kind := range []string{"function_call_output", "custom_tool_call_output"} {
+		var request OpenAIResponsesRequest
+		require.NoError(t, common.UnmarshalJsonStr(`{"input":[{"type":"`+kind+`","output":[{"type":"input_image","image_url":"https://example.invalid/image.png","detail":"low"}]}]}`, &request))
+		meta := request.GetTokenCountMeta()
+		require.Len(t, meta.Files, 1)
+		require.Equal(t, "low", meta.Files[0].Detail)
+	}
+}
+
 func TestUsageCorrectionGeminiMultimodalHistoryIsStable(t *testing.T) {
 	var request GeminiChatRequest
 	require.NoError(t, common.UnmarshalJsonStr(`{"systemInstruction":{"parts":[{"text":"SYSTEM"}]},"contents":[{"role":"user","parts":[{"text":"QUESTION"},{"functionResponse":{"name":"computer","response":{"z":"LAST","a":"FIRST"},"parts":[{"inlineData":{"mimeType":"image/png","data":"YQ=="}}]}}]}]}`, &request))

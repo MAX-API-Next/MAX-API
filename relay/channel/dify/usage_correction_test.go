@@ -47,3 +47,24 @@ func TestUsageCorrectionDifyCounterPresence(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageCorrectionDifyReportedPartialTotal(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, tc := range []struct {
+		counts        string
+		prompt, total int
+	}{
+		{`{"total_tokens":50}`, 38, 50},
+		{`{"prompt_tokens":0,"total_tokens":10}`, 0, 10},
+	} {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		info := &relaycommon.RelayInfo{IsStream: true, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+		info.SetEstimatePromptTokens(38)
+		raw := "data: " + `{"event":"message","answer":"hi"}` + "\n\ndata: " + `{"event":"message_end","metadata":{"usage":` + tc.counts + `}}` + "\n\n"
+		u, apiErr := difyStreamHandler(c, info, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))})
+		require.Nil(t, apiErr)
+		require.Equal(t, tc.prompt, u.PromptTokens)
+		require.Equal(t, tc.total, u.TotalTokens)
+	}
+}

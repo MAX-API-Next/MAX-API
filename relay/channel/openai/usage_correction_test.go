@@ -284,6 +284,7 @@ func TestUsageCorrectionResponsesPreservesTotalAndInputFloor(t *testing.T) {
 		}{
 			{"reported_total", `{"input_tokens":0,"total_tokens":100}`, 0, 2, 100},
 			{"reported_zero_total", `{"input_tokens":0,"total_tokens":0}`, 0, 2, 0},
+			{"nonzero_input_zero_total", `{"input_tokens":7,"total_tokens":0}`, 7, 2, 0},
 			{"cached_subset", `{"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 1000, 0, 1000},
 			{"explicit_parent_zero", `{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 0, 0, 0},
 		} {
@@ -302,7 +303,7 @@ func TestUsageCorrectionResponsesPreservesTotalAndInputFloor(t *testing.T) {
 				u, apiErr := handler(c, info, correctionResponse(raw))
 				require.Nil(t, apiErr)
 				output, total := tc.output, tc.total
-				if mode == "native" && (tc.name == "reported_total" || tc.name == "reported_zero_total") {
+				if mode == "native" && (tc.name == "reported_total" || tc.name == "reported_zero_total" || tc.name == "nonzero_input_zero_total") {
 					output = 1
 				}
 				require.Equal(t, tc.prompt, u.PromptTokens)
