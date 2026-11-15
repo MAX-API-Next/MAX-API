@@ -454,6 +454,7 @@ func knownPartialStreamUsage(info *relaycommon.RelayInfo, usage *dto.Usage, reco
 		// for Responses-upstream-to-Chat streams.
 		knownRoute = knownRoute ||
 			(evidence.Source == dto.BillingUsageSourceClaudeMessages && (info.RelayFormat == types.RelayFormatClaude || chatRequest)) ||
+			(evidence.Source == dto.BillingUsageSourceOAIResponses && info.RelayFormat == types.RelayFormatClaude) ||
 			(evidence.Source == dto.BillingUsageSourceOAIChat && chatRequest)
 	}
 	if !knownRoute {

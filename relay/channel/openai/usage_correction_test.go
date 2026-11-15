@@ -121,6 +121,135 @@ func TestUsageCorrectionChatRequiresCompletionEvidence(t *testing.T) {
 	}
 }
 
+func TestUsageCorrectionChatChoiceCompletion(t *testing.T) {
+	for _, ending := range []string{"partial", "missing_choice", "duplicate", "complete", "done"} {
+		t.Run(ending, func(t *testing.T) {
+			c, _, info := correctionContext(t, "/v1/chat/completions")
+			info.IsStream = true
+			info.Request = &dto.GeneralOpenAIRequest{N: common.GetPointer(2)}
+			raw := "data: " + `{"choices":[{"index":0,"delta":{"content":"first"}}]}` + "\n\n"
+			if ending != "missing_choice" {
+				raw += "data: " + `{"choices":[{"index":1,"delta":{"content":"second"}}]}` + "\n\n"
+			}
+			raw += "data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}` + "\n\n"
+			if ending == "duplicate" {
+				raw += "data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+			}
+			if ending == "complete" {
+				raw += "data: " + `{"choices":[{"index":1,"delta":{},"finish_reason":"length"}]}` + "\n\n"
+			}
+			if ending == "done" {
+				raw += "data: [DONE]\n\n"
+			}
+			u, apiErr := OaiStreamHandler(c, info, correctionResponse(raw))
+			require.NotNil(t, u)
+			require.Equal(t, 4, u.PromptTokens)
+			require.Equal(t, 2, u.CompletionTokens)
+			if ending == "complete" || ending == "done" {
+				require.Nil(t, apiErr)
+			} else {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.True(t, info.StreamStatus.IsAbnormalEnd())
+			}
+		})
+	}
+}
+
+func TestUsageCorrectionResponsesStreamCounterPresence(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatOpenAIResponses} {
+		for _, ending := range []string{"provider", "eof", "timeout", "complete"} {
+			for _, tc := range []struct {
+				name, counts       string
+				prompt, completion int
+			}{
+				{"input_zero", `{"input_tokens":0}`, 0, 1},
+				{"output_zero", `{"output_tokens":0}`, 38, 0},
+				{"both_zero", `{"input_tokens":0,"output_tokens":0}`, 0, 0},
+				{"late_input_zero", `{"input_tokens":0}`, 0, 2},
+			} {
+				t.Run(string(format)+"/"+ending+"/"+tc.name, func(t *testing.T) {
+					c, _, info := correctionContext(t, "/v1/chat/completions")
+					info.IsStream, info.RelayFormat = true, format
+					raw := ""
+					if tc.name == "late_input_zero" {
+						raw = "data: " + `{"type":"response.created","response":{"usage":{"input_tokens":4,"output_tokens":2}}}` + "\n\n"
+					}
+					raw += "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.in_progress","response":{"usage":` + tc.counts + `}}` + "\n\n"
+					if ending == "provider" {
+						raw += "data: " + `{"type":"response.failed","response":{"status":"failed","error":{"message":"synthetic failure"}}}` + "\n\n"
+					}
+					if ending == "complete" {
+						raw += "data: " + `{"type":"response.completed","response":{"status":"completed"}}` + "\n\n"
+					}
+					resp := correctionResponse(raw)
+					if ending == "timeout" {
+						constant.StreamingTimeout = 1
+						r, w := io.Pipe()
+						t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+						go func() { _, _ = io.WriteString(w, raw) }()
+						resp.Body = r
+					}
+					handler := OaiResponsesToChatStreamHandler
+					if format == types.RelayFormatOpenAIResponses {
+						handler = OaiResponsesStreamHandler
+					}
+					u, apiErr := handler(c, info, resp)
+					if ending == "complete" {
+						require.Nil(t, apiErr)
+					} else {
+						require.NotNil(t, apiErr)
+					}
+					require.NotNil(t, u)
+					require.Equal(t, tc.prompt, u.PromptTokens)
+					wantOutput := tc.completion
+					if tc.name == "input_zero" && format != types.RelayFormatOpenAIResponses {
+						wantOutput = 2
+					} // Preserve each handler's existing estimator.
+					require.Equal(t, wantOutput, u.CompletionTokens)
+					require.Equal(t, tc.prompt+wantOutput, u.TotalTokens)
+					require.NotNil(t, u.BillingUsage)
+					require.Equal(t, tc.name == "both_zero" || tc.name == "late_input_zero", u.BillingUsage.TokenCountsReported)
+				})
+			}
+		}
+	}
+}
+
+func TestUsageCorrectionResponsesStandardFieldsPrecedeChatAliases(t *testing.T) {
+	for _, handler := range []func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.MaxAPIError){OaiResponsesStreamHandler, OaiResponsesToChatStreamHandler} {
+		for _, zero := range []bool{false, true} {
+			c, _, info := correctionContext(t, "/v1/chat/completions")
+			info.IsStream = true
+			counts := `{"input_tokens":100,"output_tokens":50,"prompt_tokens":0,"completion_tokens":0,"input_tokens_details":{"cached_tokens":1},"prompt_tokens_details":{"cached_tokens":0}}`
+			if zero {
+				counts = `{"input_tokens":0,"output_tokens":0,"prompt_tokens":100,"completion_tokens":50,"input_tokens_details":{"cached_tokens":0},"prompt_tokens_details":{"cached_tokens":1}}`
+			}
+			raw := "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":` + counts + `}}` + "\n\n"
+			u, apiErr := handler(c, info, correctionResponse(raw))
+			require.Nil(t, apiErr)
+			if zero {
+				require.Zero(t, u.PromptTokens)
+				require.Zero(t, u.CompletionTokens)
+				require.Zero(t, u.PromptTokensDetails.CachedTokens)
+			} else {
+				require.Equal(t, 100, u.PromptTokens)
+				require.Equal(t, 50, u.CompletionTokens)
+				require.Equal(t, 1, u.PromptTokensDetails.CachedTokens)
+			}
+		}
+	}
+}
+
+func TestUsageCorrectionResponsesEmptyDetailsKeepPresentAlias(t *testing.T) {
+	c, _, info := correctionContext(t, "/v1/chat/completions")
+	info.IsStream = true
+	raw := "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":100,"output_tokens":50,"input_tokens_details":{},"prompt_tokens_details":{"cached_tokens":1}}}}` + "\n\n"
+	u, apiErr := OaiResponsesToChatStreamHandler(c, info, correctionResponse(raw))
+	require.Nil(t, apiErr)
+	require.Equal(t, 1, u.PromptTokensDetails.CachedTokens, "an empty details object does not report cached_tokens=0")
+}
+
 func TestUsageCorrectionResponsesPresence(t *testing.T) {
 	for _, tc := range []struct {
 		name, usage        string

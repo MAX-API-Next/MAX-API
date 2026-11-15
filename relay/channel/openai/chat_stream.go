@@ -61,6 +61,7 @@ type chatStreamFrame struct {
 	Error   json.RawMessage `json:"error"`
 	Usage   *dto.Usage      `json:"usage"`
 	Choices []struct {
+		Index        int            `json:"index"`
 		Delta        map[string]any `json:"delta"`
 		FinishReason string         `json:"finish_reason"`
 	} `json:"choices"`
@@ -209,7 +210,11 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	usage := &dto.Usage{}
 	containUsage, hasPayload := false, false
-	finishReasonSeen := false
+	choiceFinished := make(map[int]bool)
+	expectedChoices := 1
+	if request, ok := info.Request.(*dto.GeneralOpenAIRequest); ok && request != nil && request.N != nil && *request.N > 1 {
+		expectedChoices = *request.N
+	}
 	var usagePresence dto.OpenAIUsagePresence
 	var text strings.Builder
 	var toolCount int
@@ -297,9 +302,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			return
 		}
 		for _, choice := range frame.Choices {
-			if strings.TrimSpace(choice.FinishReason) != "" {
-				finishReasonSeen = true
-			}
+			choiceFinished[choice.Index] = choiceFinished[choice.Index] || strings.TrimSpace(choice.FinishReason) != ""
 		}
 		visible := frame.hasPayload()
 		if !info.ShouldIncludeUsage && frame.Usage != nil && len(frame.Choices) == 0 {
@@ -347,11 +350,21 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	if streamErr == nil && !info.StreamStatus.IsNormalEnd() {
 		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
-	if streamErr == nil && hasPayload && !finishReasonSeen && info.StreamStatus.EndReason != relaycommon.StreamEndReasonDone {
+	if streamErr == nil && hasPayload && info.StreamStatus.EndReason != relaycommon.StreamEndReasonDone {
 		// Compatible providers may omit DONE; a finish_reason still completes
-		// their stream. Plain EOF alone cannot complete delivered generation.
-		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended before a completion marker"), types.ErrorCodeBadResponse, http.StatusBadGateway)
-		info.StreamStatus.RecordFatalError(streamErr)
+		// each requested choice. A duplicate finish cannot hide a missing one.
+		finishedRequested := 0
+		allFinished := true
+		for index, finished := range choiceFinished {
+			allFinished = allFinished && finished
+			if finished && index >= 0 && index < expectedChoices {
+				finishedRequested++
+			}
+		}
+		if !allFinished || finishedRequested != expectedChoices {
+			streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended before a completion marker"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+			info.StreamStatus.RecordFatalError(streamErr)
+		}
 	}
 	if streamErr != nil {
 		if c.Writer.Written() {

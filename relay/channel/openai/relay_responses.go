@@ -16,7 +16,36 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
+
+// Responses input/output fields take precedence over Chat aliases. This also
+// handles DTOs that serialize unused Chat fields as numeric/detail zeros.
+func mergeResponsesStreamUsage(usage *dto.Usage, presence *dto.OpenAIUsagePresence, data string) {
+	raw := gjson.Get(data, "response").Raw
+	for _, pair := range [][2]string{
+		{"input_tokens", "prompt_tokens"}, {"output_tokens", "completion_tokens"},
+	} {
+		value := gjson.Get(raw, "usage."+pair[0])
+		if value.Type == gjson.Number {
+			if normalized, err := sjson.SetRaw(raw, "usage."+pair[1], value.Raw); err == nil {
+				raw = normalized
+			}
+		}
+	}
+	for _, pair := range [][2]string{{"input_tokens_details", "prompt_tokens_details"}, {"output_tokens_details", "completion_tokens_details"}} {
+		for _, field := range []string{"cached_tokens", "cached_creation_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "audio_tokens", "reasoning_tokens"} {
+			value := gjson.Get(raw, "usage."+pair[0]+"."+field)
+			if value.Type == gjson.Number {
+				if normalized, err := sjson.SetRaw(raw, "usage."+pair[1]+"."+field, value.Raw); err == nil {
+					raw = normalized
+				}
+			}
+		}
+	}
+	dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(raw), presence)
+}
 
 const maxPendingResponsesStreamEvents = 32
 
@@ -392,7 +421,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	emptyCompletionRecorded := false
 	terminalEventSeen := false
 	terminalDelivered := false
-	usageReported := false
+	var usagePresence dto.OpenAIUsagePresence
 	outputDelivered := false
 
 	sendEvent := func(event pendingResponsesStreamEvent) bool {
@@ -424,15 +453,21 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return true
 	}
 	finalizeUsage := func() {
-		if !usageReported {
-			if usage.CompletionTokens == 0 {
-				usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
-			}
-			if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-				usage.PromptTokens = info.GetEstimatePromptTokens()
-			}
+		if !usagePresence.Completion {
+			usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
+			usage.OutputTokens = usage.CompletionTokens
+		}
+		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "") {
+			usage.PromptTokens = info.GetEstimatePromptTokens()
+			usage.InputTokens = usage.PromptTokens
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if usagePresence.Total {
+			usage.TotalTokens = usagePresence.ReportedTotal
+		}
+		usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
 	}
 	flushPendingEvents := func() bool {
 		for _, event := range pendingEvents {
@@ -466,16 +501,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
-		if streamResponse.Response != nil && (dto.HasOpenAIUsageTokens(streamResponse.Response.Usage) ||
-			helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-			helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens")) {
-			usageReported = true
-			applyResponsesUsage(usage, streamResponse.Response.Usage)
-			if helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-				helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens") {
-				usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
-			}
-		}
+		mergeResponsesStreamUsage(usage, &usagePresence, data)
 		if responsesStreamHasVisibleOutput(&streamResponse) {
 			hasVisiblePayload = true
 		}

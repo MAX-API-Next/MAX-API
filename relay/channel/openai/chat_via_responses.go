@@ -155,7 +155,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		hasVisiblePayload       bool
 		outputDelivered         bool
 		deliveredUsageText      strings.Builder
-		usageReported           bool
+		usagePresence           dto.OpenAIUsagePresence
 		emptyCompletionRecorded bool
 		streamErr               *types.MaxAPIError
 	)
@@ -173,6 +173,24 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
 	}
 	partialUsageSupported := info.RelayFormat == types.RelayFormatOpenAI || info.RelayFormat == types.RelayFormatClaude
+	finalizeUsage := func(text string) {
+		if !usagePresence.Prompt || !usagePresence.Completion {
+			estimate := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+			if !usagePresence.Prompt {
+				usage.PromptTokens, usage.InputTokens = estimate.PromptTokens, estimate.PromptTokens
+			}
+			if !usagePresence.Completion {
+				usage.CompletionTokens, usage.OutputTokens = estimate.CompletionTokens, estimate.CompletionTokens
+			}
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if usagePresence.Total {
+			usage.TotalTokens = usagePresence.ReportedTotal
+		}
+		usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+	}
 
 	sendChatChunk := func(chunk *dto.ChatCompletionsStreamResponse) bool {
 		if chunk == nil {
@@ -393,12 +411,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
-		if streamResp.Response != nil && (helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-			helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens")) {
-			applyResponsesUsage(usage, streamResp.Response.Usage)
-			usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
-			usageReported = true
-		}
+		mergeResponsesStreamUsage(usage, &usagePresence, data)
 
 		switch streamResp.Type {
 		case "response.created":
@@ -568,9 +581,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				if streamResp.Response.CreatedAt != 0 {
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
-				if streamResp.Response.Usage != nil && !usageReported {
-					usage = openaicompat.UsageFromResponsesUsage(streamResp.Response.Usage)
-				}
 				if outputText.Len() == 0 {
 					completedText := service.ExtractOutputTextFromResponses(streamResp.Response)
 					if strings.TrimSpace(completedText) != "" {
@@ -639,9 +649,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			// Converted terminal usage must be the same snapshot returned for
 			// settlement. A reported numeric zero must never become an estimate.
-			if !usageReported && usage.TotalTokens == 0 {
-				usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+			finalizeUsage(usageText.String())
 			if !sentStop {
 				if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil {
 					info.ClaudeConvertInfo.Usage = usage
@@ -672,9 +680,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		if outputDelivered && partialUsageSupported {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+			finalizeUsage(deliveredUsageText.String())
 			return usage, apiErr
 		}
 		return nil, apiErr
@@ -685,9 +691,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			types.ErrOptionWithSkipRetry()(streamErr)
 		}
 		if outputDelivered && partialUsageSupported {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+			finalizeUsage(deliveredUsageText.String())
 			return usage, streamErr
 		}
 		return nil, streamErr
@@ -705,9 +709,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		apiErr := openaicompat.NewResponsesStreamIncompleteError(reason)
 		if outputDelivered && partialUsageSupported {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+			finalizeUsage(deliveredUsageText.String())
 			return usage, apiErr
 		}
 		return nil, apiErr
