@@ -178,6 +178,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 
 	usage, maxAPIError := adaptor.DoResponse(c, httpResp, info)
 	if maxAPIError != nil {
+		if partial, ok := usage.(*dto.Usage); ok && partial != nil && info.IsStream && types.IsSkipRetryError(maxAPIError) {
+			service.PostPartialConsumeQuota(c, info, partial)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError

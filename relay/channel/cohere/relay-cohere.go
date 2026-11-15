@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 )
 
 func requestOpenAI2Cohere(textRequest dto.GeneralOpenAIRequest) *CohereRequest {
@@ -83,6 +84,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
+	var promptReported, completionReported bool
 	responseText := ""
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
@@ -152,8 +154,15 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 					},
 				}
 				if cohereResp.Response != nil {
-					usage.PromptTokens = cohereResp.Response.Meta.BilledUnits.InputTokens
-					usage.CompletionTokens = cohereResp.Response.Meta.BilledUnits.OutputTokens
+					counts := gjson.Get(data, "response.meta.billed_units")
+					if counts.Get("input_tokens").Type == gjson.Number {
+						usage.PromptTokens = cohereResp.Response.Meta.BilledUnits.InputTokens
+						promptReported = true
+					}
+					if counts.Get("output_tokens").Type == gjson.Number {
+						usage.CompletionTokens = cohereResp.Response.Meta.BilledUnits.OutputTokens
+						completionReported = true
+					}
 				}
 			} else {
 				openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
@@ -188,9 +197,16 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	close(done)
 	service.CloseResponseBodyGracefully(resp)
 	<-producerDone
-	if usage.PromptTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	if !promptReported || !completionReported {
+		estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !promptReported {
+			usage.PromptTokens = estimated.PromptTokens
+		}
+		if !completionReported {
+			usage.CompletionTokens = estimated.CompletionTokens
+		}
 	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	return usage, nil
 }
 
@@ -247,20 +263,15 @@ func cohereRerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 	service.CloseResponseBodyGracefully(resp)
 	var cohereResp CohereRerankResponseResult
-	err = json.Unmarshal(responseBody, &cohereResp)
+	err = common.Unmarshal(responseBody, &cohereResp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
-	usage := dto.Usage{}
-	if cohereResp.Meta.BilledUnits.InputTokens == 0 {
+	usage := dto.Usage{PromptTokens: cohereResp.Meta.BilledUnits.InputTokens, CompletionTokens: cohereResp.Meta.BilledUnits.OutputTokens}
+	if gjson.GetBytes(responseBody, "meta.billed_units.input_tokens").Type != gjson.Number {
 		usage.PromptTokens = info.GetEstimatePromptTokens()
-		usage.CompletionTokens = 0
-		usage.TotalTokens = info.GetEstimatePromptTokens()
-	} else {
-		usage.PromptTokens = cohereResp.Meta.BilledUnits.InputTokens
-		usage.CompletionTokens = cohereResp.Meta.BilledUnits.OutputTokens
-		usage.TotalTokens = cohereResp.Meta.BilledUnits.InputTokens + cohereResp.Meta.BilledUnits.OutputTokens
 	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	var rerankResp dto.RerankResponse
 	rerankResp.Results = cohereResp.Results

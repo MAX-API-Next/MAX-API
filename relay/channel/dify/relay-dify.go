@@ -19,6 +19,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -223,16 +224,17 @@ func streamResponseDify2OpenAI(difyResponse DifyChunkChatCompletionResponse) *dt
 func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	var responseText string
 	usage := &dto.Usage{}
+	var presence dto.OpenAIUsagePresence
 	helper.SetEventStreamHeaders(c)
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
-		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
+		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			sr.Error(err)
 			return
 		}
 		if difyResponse.Event == "message_end" {
-			usage = &difyResponse.MetaData.Usage
+			dto.MergeOpenAIUsageWithPresence(usage, []byte(gjson.Get(data, "metadata").Raw), &presence)
 			sr.Done()
 			return
 		} else if difyResponse.Event == "error" {
@@ -252,9 +254,16 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, apiErr
 	}
 	helper.Done(c)
-	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	if !presence.Prompt || !presence.Completion {
+		estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !presence.Prompt {
+			usage.PromptTokens = estimated.PromptTokens
+		}
+		if !presence.Completion {
+			usage.CompletionTokens = estimated.CompletionTokens
+		}
 	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	return usage, nil
 }
 

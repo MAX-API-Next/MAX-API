@@ -440,11 +440,23 @@ func streamFallbackQuota(relayInfo *relaycommon.RelayInfo, quota int) (int, bool
 	return fallbackQuota, true
 }
 
-// Only failed Responses generations may bypass the abnormal-stream reservation
-// fallback using known usage and a successfully resolved price. Other callers
-// retain their existing policy, including unknown usage and expression errors.
-func knownResponsesPartialUsage(info *relaycommon.RelayInfo, usage *dto.Usage, recordSuccess, priceResolved bool) bool {
-	if recordSuccess || !priceResolved || info == nil || !info.IsStream || info.RelayMode != relayconstant.RelayModeResponses || usage == nil {
+// Failed generations with retained usage and a resolved price must not turn a
+// reported zero (or a zero-price result) into the full reservation. Callers with
+// unknown usage or an expression error retain their existing fallback policy.
+func knownPartialStreamUsage(info *relaycommon.RelayInfo, usage *dto.Usage, recordSuccess, priceResolved bool) bool {
+	if recordSuccess || !priceResolved || info == nil || !info.IsStream || usage == nil {
+		return false
+	}
+	chatRequest := info.RelayMode == relayconstant.RelayModeChatCompletions && info.RelayFormat == types.RelayFormatOpenAI
+	knownRoute := info.RelayMode == relayconstant.RelayModeResponses
+	if evidence := usage.BillingUsage; evidence != nil {
+		// Client format alone must not expand the existing reservation policy
+		// for Responses-upstream-to-Chat streams.
+		knownRoute = knownRoute ||
+			(evidence.Source == dto.BillingUsageSourceClaudeMessages && (info.RelayFormat == types.RelayFormatClaude || chatRequest)) ||
+			(evidence.Source == dto.BillingUsageSourceOAIChat && chatRequest)
+	}
+	if !knownRoute {
 		return false
 	}
 	counts := effectiveBillingUsage(usage)
@@ -531,7 +543,7 @@ func postTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		fallbackBaseQuota = 0
 	}
 	if fallbackQuota, ok := streamFallbackQuota(relayInfo, fallbackBaseQuota); ok &&
-		!knownResponsesPartialUsage(relayInfo, originUsage, recordSuccess, !tieredBillingApplied || tieredResult != nil) {
+		!knownPartialStreamUsage(relayInfo, originUsage, recordSuccess, !tieredBillingApplied || tieredResult != nil) {
 		summary.Quota = fallbackQuota
 		shouldUpdateUsageStats = true
 		extraContent = append(extraContent, fmt.Sprintf("stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota))

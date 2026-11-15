@@ -597,6 +597,9 @@ type ClaudeResponseInfo struct {
 	responsesFinalOutputUsageReported bool
 	responsesUsageFinalized           bool
 	responsesDeliveredText            strings.Builder
+	streamOutputDelivered             bool
+	streamDeliveredText               strings.Builder
+	streamDeliveryTracked             bool
 
 	pendingToolUses []claudePendingToolUse
 }
@@ -990,10 +993,14 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	complete := claudeInfo.Done
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		complete = claudeInfo.ResponsesTerminalSeen
+	} else if claudeInfo.responsesFinalOutputUsageReported {
+		// A final numeric counter remains authoritative even when a later
+		// provider error or client disconnect interrupts the stream.
+		complete = true
 	}
 	explicitZero := complete && claudeInfo.responsesFinalOutputUsageReported
 	estimated := false
-	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
+	if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
 		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
 		estimated = claudeInfo.Usage.PromptTokens > 0
 	}
@@ -1005,6 +1012,8 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 		text := claudeInfo.ResponseText.String()
 		if info.RelayFormat == types.RelayFormatOpenAIResponses {
 			text = claudeInfo.responsesDeliveredText.String()
+		} else if claudeInfo.streamDeliveryTracked {
+			text = claudeInfo.streamDeliveredText.String()
 		}
 		fallback := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) ||
@@ -1085,14 +1094,48 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		claudeInfo.ResponsesState.CustomToolNames = service.ResponsesCustomToolNames(info)
 	}
 	defer claudeInfo.discardPendingToolUses()
+	var writeObserver *claudeStreamWriteObserver
+	if info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatOpenAI {
+		claudeInfo.streamDeliveryTracked = true
+		writeObserver = &claudeStreamWriteObserver{ResponseWriter: c.Writer}
+		c.Writer = writeObserver
+		defer func() {
+			if writeObserver.err == nil {
+				c.Writer = writeObserver.ResponseWriter
+			}
+		}()
+	}
 	var err *types.MaxAPIError
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		before := c.Writer.Size()
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
+		if writeObserver != nil {
+			if writeObserver.err != nil {
+				err = types.NewError(writeObserver.err, types.ErrorCodeBadResponse)
+			} else if err == nil && c.Writer.Size() > before {
+				claudeInfo.recordDeliveredStreamOutput(data)
+			}
+		}
 		if err != nil {
 			sr.Stop(err)
 		}
 	})
+	if writeObserver != nil && err == nil {
+		err = helper.FirstResultTimeoutError(c, info)
+		if err == nil && c.Request.Context().Err() != nil {
+			err = types.NewError(c.Request.Context().Err(), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+		} else if err == nil && info.StreamStatus.IsAbnormalEnd() {
+			err = types.NewError(fmt.Errorf("upstream Claude stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse)
+		}
+	}
 	if err != nil {
+		if writeObserver != nil && c.Writer.Written() {
+			types.ErrOptionWithSkipRetry()(err)
+			if claudeInfo.streamOutputDelivered {
+				finalizeClaudeStreamUsage(c, info, claudeInfo)
+				return claudeInfo.Usage, err
+			}
+		}
 		if info.RelayFormat == types.RelayFormatOpenAIResponses && c.Writer.Written() {
 			err = types.NewError(err, err.GetErrorCode(), types.ErrOptionWithSkipRetry())
 			if !claudeInfo.responsesOutputDelivered {

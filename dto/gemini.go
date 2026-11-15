@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -75,29 +76,65 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	}
 
 	var inputTexts []string
-	for _, content := range r.Contents {
+	contents := make([]GeminiChatContent, 0, len(r.Contents)+1)
+	if r.SystemInstructions != nil {
+		contents = append(contents, *r.SystemInstructions)
+	}
+	contents = append(contents, r.Contents...)
+	for _, content := range contents {
 		for _, part := range content.Parts {
 			if part.Text != "" {
 				inputTexts = append(inputTexts, part.Text)
 			}
-			if source := part.InlineData.ToFileSource(); source != nil {
-				mimeType := part.InlineData.MimeType
-				var fileType types.FileType
-				if strings.HasPrefix(mimeType, "image/") {
-					fileType = types.FileTypeImage
-				} else if strings.HasPrefix(mimeType, "audio/") {
-					fileType = types.FileTypeAudio
-				} else if strings.HasPrefix(mimeType, "video/") {
-					fileType = types.FileTypeVideo
-				} else {
-					fileType = types.FileTypeFile
+			if part.FunctionCall != nil {
+				arguments, _ := common.Marshal(part.FunctionCall.Arguments)
+				inputTexts = append(inputTexts, part.FunctionCall.FunctionName, string(arguments))
+			}
+			mediaParts := []GeminiPart{part}
+			if part.FunctionResponse != nil {
+				inputTexts = append(inputTexts, part.FunctionResponse.Name)
+				keys := make([]string, 0, len(part.FunctionResponse.Response))
+				for key := range part.FunctionResponse.Response {
+					keys = append(keys, key)
 				}
-				files = append(files, &types.FileMeta{
-					FileType: fileType,
-					Source:   source,
-				})
+				sort.Strings(keys)
+				for _, key := range keys {
+					value := part.FunctionResponse.Response[key]
+					if text, ok := value.(string); ok {
+						inputTexts = append(inputTexts, text)
+					} else {
+						raw, _ := common.Marshal(value)
+						inputTexts = append(inputTexts, string(raw))
+					}
+				}
+				var responseParts []GeminiPart
+				if common.Unmarshal(part.FunctionResponse.Parts, &responseParts) == nil {
+					mediaParts = append(mediaParts, responseParts...)
+				}
+			}
+			for _, media := range mediaParts {
+				if source := media.InlineData.ToFileSource(); source != nil {
+					mimeType := media.InlineData.MimeType
+					var fileType types.FileType
+					if strings.HasPrefix(mimeType, "image/") {
+						fileType = types.FileTypeImage
+					} else if strings.HasPrefix(mimeType, "audio/") {
+						fileType = types.FileTypeAudio
+					} else if strings.HasPrefix(mimeType, "video/") {
+						fileType = types.FileTypeVideo
+					} else {
+						fileType = types.FileTypeFile
+					}
+					files = append(files, &types.FileMeta{
+						FileType: fileType,
+						Source:   source,
+					})
+				}
 			}
 		}
+	}
+	if len(r.Tools) > 0 {
+		inputTexts = append(inputTexts, string(r.Tools))
 	}
 
 	inputText := strings.Join(inputTexts, "\n")

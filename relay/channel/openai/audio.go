@@ -57,8 +57,7 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 				if err := common.Unmarshal([]byte(data), &simpleResponse); err != nil {
 					logger.LogError(c, err.Error())
 					sr.Error(err)
-				} else if dto.HasOpenAIUsageTokens(&simpleResponse.Usage) {
-					*usage = simpleResponse.Usage
+				} else if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
 					// Accounting evidence and semantics belong to the host.
 					usage.BillingUsage = nil
 					usage.UsageSemantic, usage.UsageSource = "", ""

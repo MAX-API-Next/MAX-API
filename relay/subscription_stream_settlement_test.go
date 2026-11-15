@@ -245,8 +245,10 @@ func TestStreamSettlementRetainsOriginalFunding(t *testing.T) {
 							}
 						}
 						quota := prompt + completion
-						if usageKind == "zero" && ending == "transport" && info.RelayFormat == types.RelayFormatOpenAI {
-							quota = 100 // Preserve Chat's abnormal zero-usage reservation policy.
+						if usageKind == "zero" && ending == "transport" && strings.HasPrefix(route, "responses_to_chat_") {
+							// Converted Responses streams retain their reservation policy.
+							// Native Chat's reported zero now settles zero, including after disconnect.
+							quota = 100
 						}
 						if ending == "no_delivery" {
 							quota = 0

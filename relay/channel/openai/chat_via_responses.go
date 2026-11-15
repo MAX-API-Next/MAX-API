@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func responsesStreamIndexKey(itemID string, idx *int) string {
@@ -77,16 +78,30 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return nil, newEmptyCompletionRetryError()
 		}
 	}
-	if usage == nil || usage.TotalTokens == 0 {
+	promptReported := gjson.GetBytes(body, "usage.input_tokens").Type == gjson.Number
+	completionReported := gjson.GetBytes(body, "usage.output_tokens").Type == gjson.Number
+	if !promptReported || !completionReported {
 		outputAuditText := service.ExtractOutputTextFromResponses(&responsesResp)
-		usage = service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
-		chatResp.Usage = *usage
+		estimated := service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !promptReported {
+			usage.PromptTokens = estimated.PromptTokens
+			usage.InputTokens = estimated.PromptTokens
+		}
+		if !completionReported {
+			usage.CompletionTokens = estimated.CompletionTokens
+			usage.OutputTokens = estimated.CompletionTokens
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		if service.ResponseAuditEnabled() {
 			service.SetRelayResponseAuditContent(info, outputAuditText)
 		}
 	} else if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.ExtractOutputTextFromResponses(&responsesResp))
 	}
+	usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+	usage.BillingUsage.TokenCountsReported = promptReported && completionReported
+	usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+	chatResp.Usage = *usage
 	if !emptyCompletion {
 		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}

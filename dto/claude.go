@@ -436,6 +436,23 @@ func ProcessTools(tools []any) ([]*Tool, []*ClaudeWebSearchTool) {
 			normalTools = append(normalTools, &t)
 		case ClaudeWebSearchTool:
 			webSearchTools = append(webSearchTools, &t)
+		case map[string]any:
+			raw, err := common.Marshal(t)
+			if err != nil {
+				continue
+			}
+			toolType, _ := t["type"].(string)
+			if strings.HasPrefix(toolType, "web_search") {
+				var decoded ClaudeWebSearchTool
+				if common.Unmarshal(raw, &decoded) == nil {
+					webSearchTools = append(webSearchTools, &decoded)
+				}
+			} else {
+				var decoded Tool
+				if common.Unmarshal(raw, &decoded) == nil {
+					normalTools = append(normalTools, &decoded)
+				}
+			}
 		default:
 			// 未知类型，跳过
 			continue

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/dto"
@@ -19,6 +20,11 @@ import (
 const (
 	maxPendingChatStreamEvents = 32
 	maxPendingChatStreamBytes  = 64 << 10
+	// Some compatible providers report final usage after their error event.
+	// Retain it only after delivered output, with strictly bounded tail reads.
+	chatErrorUsageGracePeriod = time.Second
+	maxChatErrorUsageEvents   = 8
+	maxChatErrorUsageBytes    = 64 << 10
 )
 
 // Observe native Chat writes because legacy SSE rendering can discard writer
@@ -208,6 +214,8 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	var toolCount int
 	var lastData string
 	var streamErr *types.MaxAPIError
+	var errorUsageTimer *time.Timer
+	drainingErrorUsage, errorUsageEvents, errorUsageBytes := false, 0, 0
 	pending := make([]string, 0, 4)
 	pendingBytes := 0
 	buffering := shouldRetryEmptyCompletion(c, info)
@@ -255,6 +263,19 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if drainingErrorUsage {
+			errorUsageEvents++
+			errorUsageBytes += len(data)
+			if errorUsageEvents > maxChatErrorUsageEvents || errorUsageBytes > maxChatErrorUsageBytes {
+				sr.Stop(streamErr)
+				return
+			}
+			var frame chatStreamFrame
+			if common.UnmarshalJsonStr(data, &frame) == nil && frame.Usage != nil {
+				recordUsage(&frame, data)
+			}
+			return // Never forward generation data after the terminal error.
+		}
 		var frame chatStreamFrame
 		if err := common.UnmarshalJsonStr(data, &frame); err != nil {
 			streamErr = types.NewOpenAIError(fmt.Errorf("invalid upstream chat stream: %w", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
@@ -263,7 +284,15 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		// Inspect the current error before releasing any preceding role frame.
 		if streamErr = frame.upstreamError(); streamErr != nil {
-			sr.Stop(streamErr)
+			if !hasPayload {
+				sr.Stop(streamErr)
+				return
+			}
+			recordUsage(&frame, data)
+			drainingErrorUsage = true
+			sr.Error(streamErr)
+			info.StreamStatus.RecordFatalError(streamErr)
+			errorUsageTimer = time.AfterFunc(chatErrorUsageGracePeriod, func() { _ = resp.Body.Close() })
 			return
 		}
 		visible := frame.hasPayload()
@@ -298,10 +327,13 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			sr.Error(err)
 		}
 	})
+	if errorUsageTimer != nil {
+		errorUsageTimer.Stop()
+	}
 
 	// The scanner has joined its workers, so a concurrent ping/write cannot
 	// race the final retry decision. Cancellation is never an empty completion.
-	if c.Request.Context().Err() != nil {
+	if c.Request.Context().Err() != nil && streamErr == nil {
 		streamErr = types.NewOpenAIError(c.Request.Context().Err(), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	} else if streamErr == nil {
 		streamErr = helper.FirstResultTimeoutError(c, info)
@@ -328,6 +360,13 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		containUsage = false
 	}
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastData))
+	// Failed generations need host-owned evidence after normalization,
+	// including a reported zero pair. Provider JSON cannot supply it.
+	if streamErr != nil && usagePresence.Any {
+		usage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, text.String())
 	}

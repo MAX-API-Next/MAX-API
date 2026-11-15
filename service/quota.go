@@ -391,7 +391,7 @@ func postAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		}
 	}
 	if fallbackQuota, ok := streamFallbackQuota(relayInfo, quota); ok &&
-		!knownResponsesPartialUsage(relayInfo, usage, recordSuccess, !tieredOk || tieredResult != nil) {
+		!knownPartialStreamUsage(relayInfo, usage, recordSuccess, !tieredOk || tieredResult != nil) {
 		quota = fallbackQuota
 		shouldUpdateUsageStats = true
 		logContent += fmt.Sprintf(", stream ended abnormally (%s), billed pre-consumed quota %d", relayInfo.StreamStatus.EndReason, fallbackQuota)

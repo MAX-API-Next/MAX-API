@@ -1,0 +1,78 @@
+package claude
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+)
+
+type correctionClaudeWriter struct{ *httptest.ResponseRecorder }
+
+func (w *correctionClaudeWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "undelivered") {
+		return len(p) / 2, errors.New("synthetic short write")
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+func TestUsageCorrectionClaudePartialError(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, failure := range []string{"provider", "disconnect", "write", "metadata", "zero", "known"} {
+			t.Run(string(format)+"/"+failure, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				var writer http.ResponseWriter = &correctionClaudeWriter{recorder}
+				c, _ := gin.CreateTestContext(writer)
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true,
+					ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+				info.SetEstimatePromptTokens(38)
+				raw := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"test\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":100}}}\n\n"
+				if failure != "metadata" {
+					raw += "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"some delivered output\"}}\n\n"
+				}
+				switch failure {
+				case "known":
+					raw += "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":22}}\n\n"
+				case "zero":
+					raw += "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":0}}\n\n"
+				case "write":
+					raw += "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"undelivered\"}}\n\n"
+				}
+				var body io.ReadCloser
+				if failure == "disconnect" {
+					body = &claudeResponsesBrokenBody{strings.NewReader(raw)}
+				} else {
+					raw += "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"synthetic provider failure\"}}\n\n"
+					body = io.NopCloser(strings.NewReader(raw))
+				}
+				u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: body}, info)
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr), "written metadata also prevents replay")
+				if failure == "metadata" {
+					require.Nil(t, u, "metadata alone is not a billable partial response")
+					return
+				}
+				require.NotNil(t, u)
+				require.Equal(t, 100, u.PromptTokens)
+				require.NotNil(t, u.BillingUsage)
+				if failure == "known" {
+					require.Equal(t, 22, u.CompletionTokens)
+				} else if failure == "zero" {
+					require.Zero(t, u.CompletionTokens)
+				} else {
+					require.Positive(t, u.CompletionTokens)
+				}
+				require.Equal(t, u.PromptTokens+u.CompletionTokens, u.TotalTokens)
+				require.NotContains(t, recorder.Body.String(), "[DONE]")
+			})
+		}
+	}
+}
