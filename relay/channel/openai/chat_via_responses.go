@@ -88,8 +88,8 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			usage.InputTokens = usage.PromptTokens
 		}
 		if !completionReported {
-			usage.CompletionTokens = estimated.CompletionTokens
-			usage.OutputTokens = estimated.CompletionTokens
+			usage.CompletionTokens = max(estimated.CompletionTokens, responsesOutputTokenFloor(usage))
+			usage.OutputTokens = usage.CompletionTokens
 		}
 		if gjson.GetBytes(body, "usage.total_tokens").Type != gjson.Number {
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
@@ -187,7 +187,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				usage.InputTokens = usage.PromptTokens
 			}
 			if !usagePresence.Completion {
-				usage.CompletionTokens, usage.OutputTokens = estimate.CompletionTokens, estimate.CompletionTokens
+				usage.CompletionTokens = max(estimate.CompletionTokens, responsesOutputTokenFloor(usage))
+				usage.OutputTokens = usage.CompletionTokens
 			}
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens

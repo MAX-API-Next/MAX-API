@@ -287,6 +287,9 @@ func TestUsageCorrectionResponsesPreservesTotalAndInputFloor(t *testing.T) {
 			{"nonzero_input_zero_total", `{"input_tokens":7,"total_tokens":0}`, 7, 2, 0},
 			{"cached_subset", `{"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 1000, 0, 1000},
 			{"explicit_parent_zero", `{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 0, 0, 0},
+			{"output_subset", `{"input_tokens":100,"output_tokens_details":{"reasoning_tokens":1000}}`, 100, 1000, 1100},
+			{"explicit_output_zero", `{"input_tokens":100,"output_tokens":0,"output_tokens_details":{"reasoning_tokens":1000}}`, 100, 0, 100},
+			{"explicit_output_positive", `{"input_tokens":100,"output_tokens":7,"output_tokens_details":{"reasoning_tokens":1000}}`, 100, 7, 107},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				c, _, info := correctionContext(t, "/v1/chat/completions")

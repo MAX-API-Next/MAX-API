@@ -172,6 +172,38 @@ func TestResponsesMissingInputFloorSettlement(t *testing.T) {
 	}
 }
 
+func TestResponsesMissingOutputFloorSettlement(t *testing.T) {
+	for i, mode := range []string{"nonstream", "converted", "native"} {
+		for j, reported := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", mode, reported), func(t *testing.T) {
+				c, info := usageReplayInfo(t, 9660+i*2+j, "")
+				counts := `"input_tokens":100,"output_tokens_details":{"reasoning_tokens":1000}`
+				output := 1000
+				if reported {
+					counts += `,"output_tokens":0`
+					output = 0
+				}
+				raw := `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{` + counts + `}}`
+				handler := openai.OaiResponsesToChatHandler
+				if mode != "nonstream" {
+					info.IsStream = true
+					handler = openai.OaiResponsesToChatStreamHandler
+					raw = "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":{` + counts + `}}}` + "\n\n"
+					if mode == "native" {
+						handler = openai.OaiResponsesStreamHandler
+					}
+				}
+				u, apiErr := handler(c, info, usageReplayResponse(raw))
+				require.Nil(t, apiErr)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, 100+output*2)
+				require.Equal(t, output, u.CompletionTokens)
+			})
+		}
+	}
+}
+
 func TestResponsesToolImageDetailEstimateSettlement(t *testing.T) {
 	oldCount, oldMedia := constant.CountToken, constant.GetMediaToken
 	constant.CountToken, constant.GetMediaToken = true, false

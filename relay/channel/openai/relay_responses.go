@@ -54,6 +54,11 @@ func responsesInputTokenFloor(usage *dto.Usage) int {
 		usage.ClaudeCacheCreation5mTokens+usage.ClaudeCacheCreation1hTokens)
 }
 
+func responsesOutputTokenFloor(usage *dto.Usage) int {
+	return max(usage.CompletionTokenDetails.TextTokens, usage.CompletionTokenDetails.AudioTokens,
+		usage.CompletionTokenDetails.ImageTokens, usage.CompletionTokenDetails.ReasoningTokens)
+}
+
 const maxPendingResponsesStreamEvents = 32
 
 // Collect generated output only after its complete SSE frame was delivered.
@@ -466,7 +471,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	finalizeUsage := func() {
 		if !usagePresence.Completion {
-			usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
+			usage.CompletionTokens = max(service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName), responsesOutputTokenFloor(usage))
 			usage.OutputTokens = usage.CompletionTokens
 		}
 		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "" || imageOutputDelivered || responsesInputTokenFloor(usage) > 0) {

@@ -465,7 +465,7 @@ func knownPartialStreamUsage(info *relaycommon.RelayInfo, usage *dto.Usage, reco
 		counts.PromptTokens < 0 || counts.CompletionTokens < 0 || counts.TotalTokens < 0 {
 		return false
 	}
-	return counts.PromptTokens > 0 || counts.CompletionTokens > 0 || counts.TotalTokens > 0 ||
+	return counts.PromptTokens > 0 || counts.CompletionTokens > 0 || counts.TotalTokens > 0 || counts.InputTokens > 0 ||
 		(usage.BillingUsage != nil && usage.BillingUsage.TokenCountsReported)
 }
 

@@ -77,6 +77,62 @@ func TestChatEstimatedZeroPriceRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
+func TestClaudeCacheOnlyRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, funding := range streamFundingCases() {
+			for _, cacheRatio := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/cache_ratio_%d", format, funding.name, cacheRatio), func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.Header().Set("Content-Length", "100000")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"cache_read_input_tokens":50}}}`+"\n\ndata: "+`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}`+"\n\ndata: "+`{"type":"message_delta","usage":{"output_tokens":0}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := fmt.Sprintf("cache-only-%s-%s-%d", format, funding.name, cacheRatio)
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+					info.PriceData.CacheRatio = float64(cacheRatio)
+					info.RelayFormat = format
+					if format == types.RelayFormatClaude {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						info.RequestURLPath = "/v1/messages"
+						info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					if cacheRatio == 0 {
+						// Legacy token pricing has a one-quota minimum. A resolved
+						// zero expression isolates the reservation fallback boundary.
+						info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "0", ExprHash: billingexpr.ExprHashString("0"), GroupRatio: 1, QuotaPerUnit: 500000}
+					}
+					var apiErr *types.MaxAPIError
+					if format == types.RelayFormatClaude {
+						apiErr = ClaudeHelper(c, info)
+					} else {
+						apiErr = TextHelper(c, info)
+					}
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					require.Contains(t, recorder.Body.String(), "accepted")
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					quota := 50 * cacheRatio
+					var settlement model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+					require.Equal(t, funding.source, settlement.Source)
+					require.EqualValues(t, quota-100, settlement.FundingDelta)
+					require.EqualValues(t, quota-100, settlement.AppliedFundingDelta)
+					require.EqualValues(t, quota-100, settlement.AppliedTokenDelta)
+					assertStreamFundingBalances(t, db, funding, requestID, quota, true, 0, 0, 50)
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					require.Contains(t, log.Other, `"cache_tokens":50`)
+				})
+			}
+		}
+	}
+}
+
 func TestClaudeGlobalResponsesFailureSettlesOriginalFunding(t *testing.T) {
 	initRequestReplayTests(t)
 	for _, funding := range streamFundingCases() {
@@ -526,7 +582,7 @@ func TestStreamSettlementRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
-func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundingCase, requestID string, quota int, delivered bool, prompt, completion int) {
+func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundingCase, requestID string, quota int, delivered bool, prompt, completion int, cacheTokens ...int) {
 	t.Helper()
 	var user model.User
 	var token model.Token
@@ -566,7 +622,7 @@ func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundin
 		wantLogs = 1
 		// Free pricing and a zero-valued expression still count a request with
 		// measured generation; explicit numeric zero usage does not.
-		if quota != 0 || prompt+completion > 0 {
+		if quota != 0 || prompt+completion > 0 || (len(cacheTokens) > 0 && cacheTokens[0] > 0) {
 			wantRequests = 1
 		}
 	}
