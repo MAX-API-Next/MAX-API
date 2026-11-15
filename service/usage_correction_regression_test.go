@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/dify"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/gemini"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -214,6 +215,61 @@ func TestDifyReportedPartialTotalSettlement(t *testing.T) {
 	service.PostTextConsumeQuota(c, info, usage, nil)
 	assertUsageReplayBalance(t, info, 42) // 38 input + existing estimate 2 output at ratio 2.
 	require.Equal(t, 50, usage.TotalTokens)
+}
+
+func TestGeminiFileDataFallbackSettlement(t *testing.T) {
+	oldCount, oldMedia := constant.CountToken, constant.GetMediaToken
+	constant.CountToken, constant.GetMediaToken = true, false
+	t.Cleanup(func() { constant.CountToken, constant.GetMediaToken = oldCount, oldMedia })
+	service.InitTokenEncoders()
+	for i, tool := range []bool{false, true} {
+		t.Run(fmt.Sprint(tool), func(t *testing.T) {
+			c, info := usageReplayInfo(t, 9640+i, "")
+			info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatGemini, types.RelayFormatGemini
+			c.Set(string(constant.ContextKeyOriginalModel), "gemini-test")
+			part := `{"fileData":{"mimeType":"image/png","fileUri":"https://example.invalid/media"}}`
+			text := ""
+			if tool {
+				part = `{"functionResponse":{"name":"lookup","response":{},"parts":[` + part + `]}}`
+				text = "lookup"
+			}
+			var request dto.GeminiChatRequest
+			require.NoError(t, common.UnmarshalJsonStr(`{"contents":[{"role":"user","parts":[`+part+`]}]}`, &request))
+			estimate, err := service.EstimateRequestToken(c, request.GetTokenCountMeta(), info)
+			require.NoError(t, err)
+			want := 520 + service.CountTextToken(text, "gemini-test")
+			require.Equal(t, want, estimate)
+			info.SetEstimatePromptTokens(estimate)
+			u, apiErr := gemini.GeminiChatHandler(c, info, usageReplayResponse(`{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":0}}`))
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, want)
+		})
+	}
+}
+
+func TestResponsesImageOnlyMissingInputSettlement(t *testing.T) {
+	for i, reported := range []bool{false, true} {
+		t.Run(fmt.Sprint(reported), func(t *testing.T) {
+			c, info := usageReplayInfo(t, 9650+i, "")
+			info.RelayMode, info.RelayFormat, info.IsStream = relayconstant.RelayModeResponses, types.RelayFormatOpenAIResponses, true
+			counts := `"output_tokens":0`
+			prompt := 38
+			if reported {
+				counts += `,"input_tokens":0`
+				prompt = 0
+			}
+			raw := "data: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"image_generation_call","status":"completed","result":"synthetic-image","quality":"low","size":"1024x1024"}],"usage":{` + counts + `}}}` + "\n\n"
+			u, apiErr := openai.OaiResponsesStreamHandler(c, info, usageReplayResponse(raw))
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, 5500+prompt) // Existing USD .011 image call + input at ratio 1.
+			require.Equal(t, prompt, u.PromptTokens)
+			require.Zero(t, u.CompletionTokens)
+		})
+	}
 }
 
 func TestUsageCorrectionClaudeCallerPartialSettlement(t *testing.T) {

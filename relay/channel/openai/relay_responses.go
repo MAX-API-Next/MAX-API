@@ -430,12 +430,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	terminalDelivered := false
 	var usagePresence dto.OpenAIUsagePresence
 	outputDelivered := false
+	imageOutputDelivered := false
 
 	sendEvent := func(event pendingResponsesStreamEvent) bool {
 		delivered, writeErr := sendResponsesStreamData(c, event.response, event.data)
 		if delivered {
 			streamForwarded = true
 			outputEstimate.observe(event.response)
+			if (event.response.Response != nil && event.response.Response.HasImageGenerationCall()) ||
+				(event.response.Item != nil && event.response.Item.Type == dto.ResponsesOutputTypeImageGenerationCall) {
+				imageOutputDelivered = true
+			}
 			if helper.ResponsesStreamEventHasOutput(event.response) || responsesStreamHasVisibleOutput(&event.response) {
 				outputDelivered = true
 			}
@@ -464,7 +469,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
 			usage.OutputTokens = usage.CompletionTokens
 		}
-		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "" || responsesInputTokenFloor(usage) > 0) {
+		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "" || imageOutputDelivered || responsesInputTokenFloor(usage) > 0) {
 			usage.PromptTokens = max(info.GetEstimatePromptTokens(), responsesInputTokenFloor(usage))
 			usage.InputTokens = usage.PromptTokens
 		}

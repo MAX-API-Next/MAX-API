@@ -385,9 +385,9 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		containUsage = false
 	}
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastData))
-	// Failed generations need host-owned evidence after normalization,
-	// including a reported zero pair. Provider JSON cannot supply it.
-	if streamErr != nil && usagePresence.Any {
+	// Failed generations need host-owned evidence after normalization for
+	// usable estimates and reported zeros. Provider JSON cannot supply it.
+	if streamErr != nil && (usagePresence.Any || dto.HasOpenAIUsageTokens(usage)) {
 		usage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(usage)
 		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
 		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported

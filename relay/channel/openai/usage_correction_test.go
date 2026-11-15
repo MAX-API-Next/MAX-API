@@ -376,6 +376,28 @@ func TestUsageCorrectionTTSZeroSnapshot(t *testing.T) {
 	require.Zero(t, usage.TotalTokens)
 }
 
+func TestUsageCorrectionTTSReportedTotal(t *testing.T) {
+	for _, tc := range []struct {
+		name, total, followup string
+		prompt, want          int
+	}{
+		{"zero", `,"total_tokens":0`, `{}`, 5, 0},
+		{"positive", `,"total_tokens":99`, `{}`, 5, 99},
+		{"missing", "", `{}`, 5, 12},
+		{"later_parent", `,"total_tokens":0`, `{"prompt_tokens":6}`, 6, 13},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, info := correctionContext(t, "/v1/audio/speech")
+			info.IsStream = true
+			raw := "data: " + `{"usage":{"prompt_tokens":5,"completion_tokens":7` + tc.total + `}}` + "\n\ndata: " + `{"usage":` + tc.followup + `}` + "\n\ndata: [DONE]\n\n"
+			u := OpenaiTTSHandler(c, correctionResponse(raw), info)
+			require.Equal(t, tc.prompt, u.PromptTokens)
+			require.Equal(t, 7, u.CompletionTokens)
+			require.Equal(t, tc.want, u.TotalTokens)
+		})
+	}
+}
+
 func TestUsageCorrectionGeminiRequestsUsage(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, supported := range []bool{false, true} {

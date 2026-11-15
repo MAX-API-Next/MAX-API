@@ -114,8 +114,14 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 				}
 			}
 			for _, media := range mediaParts {
-				if source := media.InlineData.ToFileSource(); source != nil {
-					mimeType := media.InlineData.MimeType
+				var source types.FileSource
+				var mimeType string
+				if media.InlineData != nil {
+					source, mimeType = media.InlineData.ToFileSource(), media.InlineData.MimeType
+				} else if media.FileData != nil && (strings.HasPrefix(media.FileData.FileUri, "https://") || strings.HasPrefix(media.FileData.FileUri, "http://")) {
+					source, mimeType = types.NewURLFileSource(media.FileData.FileUri), media.FileData.MimeType
+				}
+				if source != nil {
 					var fileType types.FileType
 					if strings.HasPrefix(mimeType, "image/") {
 						fileType = types.FileTypeImage

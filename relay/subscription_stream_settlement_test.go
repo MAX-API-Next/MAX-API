@@ -14,6 +14,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -40,6 +41,39 @@ func streamFundingCases() []streamFundingCase {
 		{name: "wallet_only", preference: "wallet_only", source: "wallet", wallet: 1000},
 		{name: "wallet_first", preference: "wallet_first", source: "wallet", wallet: 1000},
 		{name: "subscription_first_to_wallet", preference: "subscription_first", source: "wallet", wallet: 1000, subscriptionUsed: 1000, allowOverflow: true},
+	}
+}
+
+func TestChatEstimatedZeroPriceRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		t.Run(funding.name, func(t *testing.T) {
+			db := setupStreamFundingLedger(t, funding)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Content-Length", "100000") // Fail after delivered text, without any provider usage.
+				_, _ = fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"partial output"}}]}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			requestID := "estimated-zero-price-" + funding.name
+			c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+			require.Nil(t, service.PreConsumeBilling(c, 100, info))
+			info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "0", ExprHash: billingexpr.ExprHashString("0"), GroupRatio: 1, QuotaPerUnit: 500000}
+			apiErr := TextHelper(c, info)
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr))
+			require.Contains(t, recorder.Body.String(), "partial output")
+			service.HandleFailedBilling(c, info, apiErr)
+			service.HandleFailedBilling(c, info, apiErr)
+			completion := service.EstimateTokenByModel("gpt-test", "partial output")
+			assertStreamFundingBalances(t, db, funding, requestID, 0, true, 10, completion)
+			var settlement model.BillingSettlement
+			require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+			require.Equal(t, funding.source, settlement.Source)
+			require.EqualValues(t, -100, settlement.FundingDelta)
+			require.EqualValues(t, -100, settlement.AppliedFundingDelta)
+			require.EqualValues(t, -100, settlement.AppliedTokenDelta)
+		})
 	}
 }
 

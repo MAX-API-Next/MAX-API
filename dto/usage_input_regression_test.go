@@ -87,3 +87,36 @@ func TestGeminiFunctionResponseKeyContributesToTokenMetadata(t *testing.T) {
 	require.Contains(t, meta.CombineText, "HISTORY_RESULT_FOUND")
 	require.Contains(t, meta.CombineText, "true")
 }
+
+func TestGeminiFileDataTokenMetadata(t *testing.T) {
+	for _, tool := range []bool{false, true} {
+		for _, tc := range []struct {
+			mime string
+			kind types.FileType
+		}{
+			{"image/png", types.FileTypeImage}, {"audio/wav", types.FileTypeAudio},
+			{"video/mp4", types.FileTypeVideo}, {"application/pdf", types.FileTypeFile},
+		} {
+			part := `{"fileData":{"mimeType":"` + tc.mime + `","fileUri":"https://example.invalid/media"}}`
+			if tool {
+				part = `{"functionResponse":{"name":"lookup","response":{},"parts":[` + part + `]}}`
+			}
+			var request GeminiChatRequest
+			require.NoError(t, common.UnmarshalJsonStr(`{"contents":[{"role":"user","parts":[`+part+`]}]}`, &request))
+			before, err := common.Marshal(request)
+			require.NoError(t, err)
+			meta := request.GetTokenCountMeta()
+			require.Len(t, meta.Files, 1)
+			require.Equal(t, tc.kind, meta.Files[0].FileType)
+			require.True(t, meta.Files[0].Source.IsURL())
+			require.Equal(t, "https://example.invalid/media", meta.Files[0].Source.GetRawData())
+			after, err := common.Marshal(request)
+			require.NoError(t, err)
+			require.JSONEq(t, string(before), string(after))
+		}
+	}
+	for _, uri := range []string{"", "gs://bucket/media", "file:///media"} {
+		request := GeminiChatRequest{Contents: []GeminiChatContent{{Parts: []GeminiPart{{FileData: &GeminiFileData{MimeType: "image/png", FileUri: uri}}}}}}
+		require.Empty(t, request.GetTokenCountMeta().Files)
+	}
+}

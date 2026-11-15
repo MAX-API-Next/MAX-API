@@ -51,17 +51,21 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	c.Writer.WriteHeader(resp.StatusCode)
 
 	if info.IsStream {
+		var usagePresence dto.OpenAIUsagePresence
 		helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 			if service.SundaySearch(data, "usage") {
 				var simpleResponse dto.SimpleResponse
 				if err := common.Unmarshal([]byte(data), &simpleResponse); err != nil {
 					logger.LogError(c, err.Error())
 					sr.Error(err)
-				} else if dto.MergeOpenAIUsage(usage, common.StringToByteSlice(data)) {
+				} else if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 					// Accounting evidence and semantics belong to the host.
 					usage.BillingUsage = nil
 					usage.UsageSemantic, usage.UsageSource = "", ""
 					normalizeOpenAIAudioUsage(usage)
+					if usagePresence.Total {
+						usage.TotalTokens = usagePresence.ReportedTotal
+					}
 				}
 			}
 			if err := helper.StringData(c, data); err != nil {

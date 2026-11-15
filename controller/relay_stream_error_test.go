@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
@@ -61,7 +62,13 @@ func TestNativeChatWriteFailureStaysLatchedThroughController(t *testing.T) {
 				require.True(t, types.IsSkipRetryError(apiErr))
 				require.False(t, shouldRetry(c, apiErr, 1))
 				if partial {
-					require.Equal(t, service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38), usage)
+					expected := service.ResponseText2Usage(c, "hello", info.UpstreamModelName, 38)
+					billingCounts := *expected
+					expected.BillingUsage = &dto.BillingUsage{
+						Source: dto.BillingUsageSourceOAIChat, Semantic: dto.BillingUsageSemanticOpenAI,
+						Estimated: true, TokenCountsReported: false, OpenAIUsage: &billingCounts,
+					}
+					require.Equal(t, expected, usage)
 				} else {
 					require.Nil(t, usage)
 				}
