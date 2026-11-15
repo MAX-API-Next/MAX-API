@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -26,6 +29,53 @@ const (
 	maxChatErrorUsageEvents   = 8
 	maxChatErrorUsageBytes    = 64 << 10
 )
+
+// Cache aliases can live outside the typed usage object. Read one accepted
+// frame at a time so later metadata cannot erase them or freeze an older value.
+func chatStreamReportedCache(channel int, data string) (int, bool) {
+	root := gjson.Parse(data)
+	number := func(value gjson.Result) (int, bool) {
+		if value.Type != gjson.Number {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(value.Raw, 10, 0)
+		return int(n), err == nil && n >= 0
+	}
+	for _, field := range []string{"usage.prompt_tokens_details.cached_tokens", "usage.input_tokens_details.cached_tokens"} {
+		if n, ok := number(root.Get(field)); ok {
+			return n, true
+		}
+	}
+	var aliases []string
+	switch channel {
+	case constant.ChannelTypeMoonshot:
+		for _, choice := range root.Get("choices").Array() {
+			if n, ok := number(choice.Get("usage.cached_tokens")); ok {
+				return n, true
+			}
+		}
+		aliases = []string{"usage.cached_tokens", "usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeZhipu_v4:
+		aliases = []string{"usage.cached_tokens", "usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeDeepSeek:
+		aliases = []string{"usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeOpenAI:
+		aliases = []string{"timings.cache_n"}
+	}
+	for _, field := range aliases {
+		if n, ok := number(root.Get(field)); ok {
+			return n, true
+		}
+	}
+	prompt := root.Get("usage.prompt_tokens")
+	if prompt.Type != gjson.Number {
+		prompt = root.Get("usage.input_tokens")
+	}
+	if n, ok := number(prompt); ok && n == 0 {
+		return 0, true // An explicit zero parent clears retained cache details.
+	}
+	return 0, false
+}
 
 // Observe native Chat writes because legacy SSE rendering can discard writer
 // errors. The scanner serializes this wrapper with ping writes.
@@ -216,6 +266,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		expectedChoices = *request.N
 	}
 	var usagePresence dto.OpenAIUsagePresence
+	cacheReported, reportedCache := false, 0
 	var text strings.Builder
 	var toolCount int
 	var lastData string
@@ -255,6 +306,14 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 			containUsage = true
 		}
+		if cached, ok := chatStreamReportedCache(info.ChannelType, data); ok {
+			cacheReported, reportedCache = true, cached
+			usage.PromptTokensDetails.CachedTokens = cached
+			if usage.InputTokensDetails != nil {
+				usage.InputTokensDetails.CachedTokens = cached
+			}
+			usagePresence.Any, containUsage = true, true
+		}
 	}
 	flushPending := func() bool {
 		buffering = false
@@ -277,8 +336,11 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 				return
 			}
 			var frame chatStreamFrame
-			if common.UnmarshalJsonStr(data, &frame) == nil && frame.Usage != nil {
-				recordUsage(&frame, data)
+			if common.UnmarshalJsonStr(data, &frame) == nil {
+				_, hasCache := chatStreamReportedCache(info.ChannelType, data)
+				if frame.Usage != nil || hasCache {
+					recordUsage(&frame, data)
+				}
 			}
 			return // Never forward generation data after the terminal error.
 		}
@@ -385,6 +447,10 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		containUsage = false
 	}
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastData))
+	if cacheReported {
+		// Legacy fallback normalization cannot override accepted numeric zeros.
+		usage.PromptTokensDetails.CachedTokens = reportedCache
+	}
 	// Failed generations need host-owned evidence after normalization for
 	// usable estimates and reported zeros. Provider JSON cannot supply it.
 	if streamErr != nil && (usagePresence.Any || dto.HasOpenAIUsageTokens(usage)) {

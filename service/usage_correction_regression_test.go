@@ -101,6 +101,60 @@ func TestUsageCorrectionInterruptedCallerLedger(t *testing.T) {
 	}
 }
 
+func TestChatProviderCacheErrorSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	service.InitHttpClient()
+	oldPolicy := model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy
+	model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy.Enabled = false
+	t.Cleanup(func() { model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = oldPolicy })
+	for i, tc := range []struct{ channel, cached int }{
+		{constant.ChannelTypeMoonshot, 90}, {constant.ChannelTypeOpenAI, 90},
+		{constant.ChannelTypeZhipu_v4, 90}, {constant.ChannelTypeDeepSeek, 90}, {constant.ChannelTypeMoonshot, 0},
+	} {
+		t.Run(fmt.Sprintf("%d/%d", tc.channel, tc.cached), func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9680+i, "")
+			counts := map[string]any{"prompt_tokens": 100, "completion_tokens": 10}
+			choice := map[string]any{"delta": map[string]any{"content": "partial output"}}
+			frame := map[string]any{"usage": counts, "choices": []any{choice}}
+			switch tc.channel {
+			case constant.ChannelTypeMoonshot:
+				choice["usage"] = map[string]any{"cached_tokens": tc.cached}
+			case constant.ChannelTypeOpenAI:
+				frame["timings"] = map[string]any{"cache_n": tc.cached}
+			case constant.ChannelTypeZhipu_v4:
+				counts["cached_tokens"] = tc.cached
+			case constant.ChannelTypeDeepSeek:
+				counts["prompt_cache_hit_tokens"] = tc.cached
+			}
+			raw, err := common.Marshal(frame)
+			require.NoError(t, err)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: "+string(raw)+"\n\ndata: "+`{"error":{"type":"overloaded_error","message":"synthetic failure"}}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			c.Set(string(constant.ContextKeyChannelType), tc.channel)
+			c.Set(string(constant.ContextKeyChannelId), info.ChannelId)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			info.IsStream = true
+			info.Request = &dto.GeneralOpenAIRequest{Model: "audit-model", Stream: common.GetPointer(true)}
+			apiErr := relay.TextHelper(c, info)
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr))
+			service.HandleFailedBilling(c, info, apiErr)
+			service.HandleFailedBilling(c, info, apiErr)
+			want := 39 // (100-90) + 90*0.1 + 10*2.
+			if tc.cached == 0 {
+				want = 120
+			}
+			assertUsageReplayBalance(t, info, want)
+		})
+	}
+}
+
 func TestUsageCorrectionResponsesExplicitZeroSettlement(t *testing.T) {
 	c, info := usageReplayInfo(t, 9530, "")
 	raw := `{"id":"resp_synthetic","object":"response","status":"completed","model":"synthetic-model","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Visible response with explicitly reported zero usage"}]}],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}`

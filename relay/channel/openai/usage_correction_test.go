@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,87 @@ func TestUsageCorrectionChatChoiceCompletion(t *testing.T) {
 				require.True(t, info.StreamStatus.IsAbnormalEnd())
 			}
 		})
+	}
+}
+
+func TestUsageCorrectionChatRetainsProviderCache(t *testing.T) {
+	for _, channel := range []int{constant.ChannelTypeMoonshot, constant.ChannelTypeOpenAI, constant.ChannelTypeZhipu_v4, constant.ChannelTypeDeepSeek} {
+		for _, ending := range []string{"error", "trailing", "trailing_cache_only", "updated", "vendor_zero", "canonical_zero", "parent_zero", "cache_only"} {
+			t.Run(fmt.Sprintf("%d/%s", channel, ending), func(t *testing.T) {
+				c, w, info := correctionContext(t, "/v1/chat/completions")
+				info.IsStream, info.ChannelType = true, channel
+				frame := func(cached int, canonicalZero, cacheOnly bool) string {
+					counts := map[string]any{}
+					if !cacheOnly {
+						counts["prompt_tokens"], counts["completion_tokens"] = 100, 10
+					}
+					choice := map[string]any{"delta": map[string]any{"content": "partial output"}}
+					body := map[string]any{"usage": counts, "choices": []any{choice}}
+					switch channel {
+					case constant.ChannelTypeMoonshot:
+						choice["usage"] = map[string]any{"cached_tokens": cached}
+					case constant.ChannelTypeOpenAI:
+						body["timings"] = map[string]any{"cache_n": cached}
+					case constant.ChannelTypeZhipu_v4:
+						counts["cached_tokens"] = cached
+					case constant.ChannelTypeDeepSeek:
+						counts["prompt_cache_hit_tokens"] = cached
+					}
+					if canonicalZero {
+						counts["prompt_tokens_details"] = map[string]any{"cached_tokens": 0}
+					}
+					if cacheOnly && (channel == constant.ChannelTypeMoonshot || channel == constant.ChannelTypeOpenAI) {
+						delete(body, "usage")
+					}
+					raw, err := common.Marshal(body)
+					require.NoError(t, err)
+					return string(raw)
+				}
+				frames := []string{frame(90, false, ending == "cache_only")}
+				cached, prompt, output := 90, 100, 10
+				switch ending {
+				case "updated":
+					cached = 80
+					frames = append(frames, frame(80, false, false))
+				case "vendor_zero":
+					cached = 0
+					frames = append(frames, frame(0, false, false))
+				case "canonical_zero":
+					cached = 0
+					frames = append(frames, frame(90, true, false))
+				case "parent_zero":
+					cached, prompt, output = 0, 0, 0
+					frames = append(frames, `{"choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0}}`)
+				case "cache_only":
+					prompt, output = 90, service.EstimateTokenByModel(info.UpstreamModelName, "partial output")
+				}
+				frames = append(frames, `{"error":{"type":"overloaded_error","message":"synthetic failure"}}`)
+				if ending == "trailing" {
+					frames = append(frames, `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":10}}`)
+				}
+				if ending == "trailing_cache_only" {
+					cached = 80
+					frames = append(frames, frame(80, false, true))
+				}
+				u, apiErr := OaiStreamHandler(c, info, correctionResponse("data: "+strings.Join(frames, "\n\ndata: ")+"\n\n"))
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.Equal(t, prompt, u.PromptTokens)
+				require.Equal(t, output, u.CompletionTokens)
+				require.Equal(t, cached, u.PromptTokensDetails.CachedTokens)
+				require.Equal(t, cached, u.BillingUsage.OpenAIUsage.PromptTokensDetails.CachedTokens)
+				require.NotContains(t, w.Body.String(), "synthetic failure")
+			})
+		}
+	}
+	for _, short := range []bool{false, true} {
+		c, _, info := correctionContext(t, "/v1/chat/completions")
+		failed, _ := gin.CreateTestContext(&rejectedChatResponseWriter{header: make(http.Header), short: short})
+		c.Writer = failed.Writer
+		info.IsStream, info.ChannelType = true, constant.ChannelTypeMoonshot
+		u, apiErr := OaiStreamHandler(c, info, correctionResponse("data: "+`{"choices":[{"delta":{"content":"never delivered"},"usage":{"cached_tokens":90}}],"usage":{"prompt_tokens":100,"completion_tokens":10}}`+"\n\n"))
+		require.NotNil(t, apiErr)
+		require.Nil(t, u, "rejected output must not enter cache or billing evidence")
 	}
 }
 
