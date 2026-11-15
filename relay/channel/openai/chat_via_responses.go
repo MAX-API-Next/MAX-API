@@ -747,8 +747,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
-		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage))
+		if err == nil {
+			err = writeObserver.err
+		}
+		if err != nil {
+			info.StreamStatus.RecordError(err.Error())
+			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
 		}
 	}
 

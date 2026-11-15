@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -31,6 +32,84 @@ type streamFundingCase struct {
 	name, preference, source string
 	wallet, subscriptionUsed int64
 	allowOverflow            bool
+}
+
+type finalUsageFundingWriter struct {
+	gin.ResponseWriter
+	mode   string
+	cancel context.CancelFunc
+}
+
+func (w *finalUsageFundingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), `"choices":[]`) && strings.Contains(string(p), `"usage":`) {
+		switch w.mode {
+		case "cancel":
+			w.cancel()
+			return 0, context.Canceled
+		case "write_error":
+			return 0, fmt.Errorf("synthetic final usage write failure")
+		case "short_write":
+			return w.ResponseWriter.Write(p[:len(p)-1])
+		}
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *finalUsageFundingWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestResponsesFinalUsageWriteFailureOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, route := range []string{"responses_to_chat_global", "responses_to_chat_custom"} {
+		for _, funding := range streamFundingCases() {
+			for _, mode := range []string{"cancel", "write_error", "short_write", "success", "no_usage"} {
+				t.Run(route+"/"+funding.name+"/"+mode, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					var calls atomic.Int32
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"accepted"}`+"\n\ndata: "+`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := route + "-final-usage-" + funding.name + "-" + mode
+					channel := constant.ChannelTypeOpenAI
+					if route == "responses_to_chat_custom" {
+						channel = constant.ChannelTypeAdvancedCustom
+					}
+					c, info, recorder := streamFundingContext(t, route, requestID, upstream.URL, channel, funding)
+					ctx, cancel := context.WithCancel(c.Request.Context())
+					t.Cleanup(cancel)
+					c.Request = c.Request.WithContext(ctx)
+					c.Writer = &finalUsageFundingWriter{ResponseWriter: c.Writer, mode: mode, cancel: cancel}
+					if mode == "no_usage" {
+						info.Request.(*dto.GeneralOpenAIRequest).StreamOptions = &dto.StreamOptions{IncludeUsage: false}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					apiErr := TextHelper(c, info)
+					failed := mode != "success" && mode != "no_usage"
+					if failed {
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+						require.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+						require.NotContains(t, recorder.Body.String(), "[DONE]")
+					} else {
+						require.Nil(t, apiErr)
+						require.Contains(t, recorder.Body.String(), "[DONE]")
+					}
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.EqualValues(t, 1, calls.Load())
+					require.Contains(t, recorder.Body.String(), "accepted")
+					assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					if failed {
+						require.Contains(t, log.Other, `"status":"error"`)
+					}
+				})
+			}
+		}
+	}
 }
 
 func streamFundingCases() []streamFundingCase {
