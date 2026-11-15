@@ -1045,6 +1045,9 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 			claudeInfo.Usage.BillingUsage.TokenCountsReported = claudeInfo.responsesInputUsageReported && claudeInfo.responsesFinalOutputUsageReported
 		}
 	}
+	if claudeInfo.Usage.BillingUsage != nil {
+		claudeInfo.Usage.BillingUsage.InputTokensReported = claudeInfo.responsesInputUsageReported
+	}
 	claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		claudeInfo.responsesUsageFinalized = true

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -448,6 +449,49 @@ func TestUsageCorrectionConvertedChatFallback(t *testing.T) {
 			require.Contains(t, w.Body.String(), "Visible converted content")
 			require.Positive(t, usage.CompletionTokens)
 		})
+	}
+}
+
+type convertedUsageWriter struct{ gin.ResponseWriter }
+
+func (w *convertedUsageWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "undelivered") {
+		return 0, errors.New("synthetic converted write failure")
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *convertedUsageWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestUsageCorrectionConvertedWritesGateEstimates(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
+		for _, ending := range []string{"first_failure", "partial_failure", "last_payload"} {
+			t.Run(string(format)+"/"+ending, func(t *testing.T) {
+				c, w, info := correctionContext(t, "/v1/messages")
+				c.Writer = &convertedUsageWriter{c.Writer}
+				info.RelayFormat, info.IsStream = format, true
+				info.EnableFirstResultTracking()
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+				frames := []string{}
+				text := ""
+				if ending != "first_failure" {
+					text = "accepted"
+					frames = append(frames, `{"choices":[{"index":0,"delta":{"content":"accepted"}}]}`)
+				}
+				if ending != "last_payload" {
+					frames = append(frames, `{"choices":[{"index":0,"delta":{"content":"undelivered `+strings.Repeat("output ", 128)+`"}}]}`, `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+				}
+				raw := "data: " + strings.Join(frames, "\n\ndata: ") + "\n\ndata: [DONE]\n\n"
+				u, apiErr := OaiStreamHandler(c, info, correctionResponse(raw))
+				require.Nil(t, apiErr, "retain the legacy soft-error return contract")
+				require.Equal(t, service.EstimateTokenByModel(info.UpstreamModelName, text), u.CompletionTokens)
+				require.Equal(t, ending != "first_failure", info.HasRecordedChannelFirstResult())
+				if ending != "last_payload" {
+					require.True(t, info.StreamStatus.HasErrors())
+				}
+				require.Equal(t, strings.Count(text, "accepted"), strings.Count(w.Body.String(), "accepted"), "last payload must be forwarded exactly once")
+			})
+		}
 	}
 }
 

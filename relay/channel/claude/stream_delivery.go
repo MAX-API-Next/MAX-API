@@ -36,6 +36,9 @@ func (w *claudeStreamWriteObserver) Unwrap() http.ResponseWriter { return w.Resp
 
 func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string, nativeOutput bool) {
 	var text strings.Builder
+	if nativeOutput {
+		text.WriteString(gjson.Get(data, "content_block.thinking").String())
+	}
 	for _, path := range []string{"delta.text", "delta.thinking", "delta.partial_json", "content_block.text"} {
 		text.WriteString(gjson.Get(data, path).String())
 	}

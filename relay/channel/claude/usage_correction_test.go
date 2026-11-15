@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -112,8 +113,34 @@ func TestClaudeOpaqueThinkingDelivery(t *testing.T) {
 					require.NotNil(t, u)
 					require.Equal(t, 100, u.PromptTokens)
 					require.Zero(t, u.CompletionTokens, "opaque ciphertext must not become estimated plaintext tokens")
+					require.True(t, u.BillingUsage.InputTokensReported)
+					require.False(t, u.BillingUsage.TokenCountsReported)
+					require.True(t, dto.CloneBillingUsage(u.BillingUsage).InputTokensReported)
 				})
 			}
+		}
+	}
+}
+
+func TestClaudeInitialThinkingEstimate(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, signature := range []string{"", "synthetic-signature"} {
+			t.Run(string(format)+"/"+signature, func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+				text := strings.Repeat("initial thinking ", 64)
+				raw := "data: " + `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":100}}}` + "\n\ndata: " + `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"` + text + `","signature":"` + signature + `"}}` + "\n\ndata: " + `{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}` + "\n\n"
+				u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, info)
+				require.NotNil(t, apiErr)
+				if format != types.RelayFormatClaude {
+					require.Nil(t, u)
+					return
+				}
+				require.NotNil(t, u)
+				require.Equal(t, service.EstimateTokenByModel(info.UpstreamModelName, text), u.CompletionTokens)
+			})
 		}
 	}
 }

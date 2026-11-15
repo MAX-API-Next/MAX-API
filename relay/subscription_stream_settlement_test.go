@@ -186,6 +186,39 @@ func TestClaudeOpaqueThinkingRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
+func TestClaudeZeroInputOpaqueRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, input := range []string{`"input_tokens":0,`, `"input_tokens":null,`, "", `"billing_usage":{"input_tokens_reported":true},`} {
+		for _, funding := range streamFundingCases() {
+			t.Run(input+funding.name, func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Content-Length", "100000")
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{`+input+`"output_tokens":0}}}`+"\n\ndata: "+`{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"synthetic-opaque-ciphertext"}}`+"\n\n")
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "zero-opaque-" + funding.name + "-" + fmt.Sprint(len(input))
+				c, info, _ := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				info.RelayFormat, info.RequestURLPath = types.RelayFormatClaude, "/v1/messages"
+				info.SetEstimatePromptTokens(0)
+				info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				apiErr := ClaudeHelper(c, info)
+				require.NotNil(t, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				quota := 100 // Missing/null input and no usable estimate retain fallback.
+				if input == `"input_tokens":0,` {
+					quota = 0
+				}
+				assertStreamFundingBalances(t, db, funding, requestID, quota, true, 0, 0)
+			})
+		}
+	}
+}
+
 func TestClaudeGlobalResponsesFailureSettlesOriginalFunding(t *testing.T) {
 	initRequestReplayTests(t)
 	for _, funding := range streamFundingCases() {

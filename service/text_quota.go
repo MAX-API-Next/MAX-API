@@ -466,7 +466,8 @@ func knownPartialStreamUsage(info *relaycommon.RelayInfo, usage *dto.Usage, reco
 		return false
 	}
 	return counts.PromptTokens > 0 || counts.CompletionTokens > 0 || counts.TotalTokens > 0 || counts.InputTokens > 0 ||
-		(usage.BillingUsage != nil && usage.BillingUsage.TokenCountsReported)
+		(usage.BillingUsage != nil && (usage.BillingUsage.TokenCountsReported ||
+			(usage.BillingUsage.Source == dto.BillingUsageSourceClaudeMessages && usage.BillingUsage.InputTokensReported)))
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {

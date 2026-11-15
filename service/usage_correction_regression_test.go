@@ -16,12 +16,53 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/dify"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/gemini"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
+	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type replayConvertedWriter struct{ gin.ResponseWriter }
+
+func (w *replayConvertedWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "undelivered") {
+		return 0, fmt.Errorf("synthetic converted write failure")
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *replayConvertedWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func TestConvertedWriteEstimateSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
+		for j, partial := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/partial=%t", format, partial), func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9700+i*2+j, "")
+				c.Writer = &replayConvertedWriter{c.Writer}
+				info.IsStream, info.RelayFormat = true, format
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+				text, raw := "", ""
+				if partial {
+					text = "accepted"
+					raw = "data: " + `{"choices":[{"index":0,"delta":{"content":"accepted"}}]}` + "\n\n"
+				}
+				raw += "data: " + `{"choices":[{"index":0,"delta":{"content":"` + strings.Repeat("undelivered ", 128) + `"}}]}` + "\n\ndata: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+				u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+				require.Nil(t, apiErr, "converted renderer retains its legacy soft-error return")
+				service.PostTextConsumeQuota(c, info, u, nil)
+				service.PostTextConsumeQuota(c, info, u, nil)
+				assertUsageReplayBalance(t, info, 38+service.EstimateTokenByModel(info.UpstreamModelName, text)*2)
+			})
+		}
+	}
+}
 
 func TestUsageCorrectionInterruptedCallerLedger(t *testing.T) {
 	service.InitTokenEncoders()
