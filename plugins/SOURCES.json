@@ -1,0 +1,1150 @@
+{
+  "repository": "https://github.com/QuantumNous/new-api-plugins",
+  "commit": "2a8288645b49aeb8de25a4de312ee3c3f507e995",
+  "license": "Apache-2.0",
+  "author": "QuantumNous",
+  "plugins": [
+    {
+      "key": "alibaba",
+      "version": "1.5.0-maxapi.4",
+      "path": "plugins/tasks/alibaba/1.5.0-maxapi.4/plugin.js",
+      "sha256": "f50292b8e42c207f8bfb60ddea0c1967f822a89348d5e87c1c9c066f717636c6",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Gateway terminal status/failure reason in OpenAI Video presentation",
+          "Reject reported image counts conflicting with delivered images",
+          "Align native/image/passthrough actions with converted input",
+          "Recognize audio shorthand in Wan3 actions",
+          "Expose gateway identity in native create presentation",
+          "Effective metadata.input overrides drive video action",
+          "Preserve repeated frame-array positions",
+          "Retain validated native OSS resource-resolution consent through host context rebuilding"
+        ]
+      },
+      "previousVersion": "1.5.0-maxapi.3",
+      "previousSha256": "7ed55b1adf86247b74d2108cd543b8c8bef1987ed2378b222afdd71ec0aa5e65"
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0-maxapi.3",
+      "path": "plugins/tasks/doubao/1.5.0-maxapi.3/plugin.js",
+      "sha256": "00689c52d1ab2c8f97c70c0d91c16083e740b505e4e02a0a161e49c0cebc15e8",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Preserve scalar image/input_reference alongside images in video construction",
+          "Forward the accepted video size as the outbound Ark resolution",
+          "Fail closed before synchronous image dispatch without a host task ID",
+          "Unify reference classification and duration validation",
+          "Honor top-level resolution",
+          "Reject compatibility callback_url after merging metadata",
+          "Retain metadata text unless replaced by a top-level prompt",
+          "Calculate legacy video ratios from the effective outbound resolution"
+        ]
+      },
+      "previousVersion": "1.5.0-maxapi.2",
+      "previousSha256": "45b9dc152c7c4fea0cc035ba2ec489c1e7a93d38ed29cfd89ec6e57caa1a3d86"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0-maxapi.4",
+      "path": "plugins/tasks/google/1.2.0-maxapi.4/plugin.js",
+      "sha256": "b9a917124f15acf9307cfab08f75d05dc3e7f63b242e5029b0f34b6b22998234",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Veo REST bytesBase64Encoded/mimeType image shape",
+          "Force sampleCount=1 and remove unsupported numberOfVideos",
+          "Normalize and validate scalar image references and accepted resolution",
+          "Use one effective duration for outbound request and usage facts",
+          "Reject excess input images instead of discarding them",
+          "Filtered or missing output cannot produce successful poll/immediate delivery",
+          "Reject explicit unsupported video quantities instead of silently replacing them"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.3",
+      "previousSha256": "3441d6f0ca79a05f695bd2c142b5831490721c34f358e99db95cc46ec5737320"
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0-maxapi.2",
+      "path": "plugins/tasks/hailuo/1.4.0-maxapi.2/plugin.js",
+      "sha256": "53b903342666128b284278a1d15f00a4c3d81ee246523172beac92610616c0c8",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "upstreamVersion": "1.4.0",
+      "upstreamSha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Normalize accepted v1 frame inputs; reject unsupported extra frames",
+          "Use H3 visual-content action for reference video",
+          "Keep rate-limited v1 polls retryable"
+        ]
+      },
+      "previousVersion": "1.4.0-maxapi.1",
+      "previousSha256": "4c5eee12ea056e34eaab75130cdf8bde0a7baef856979e3c80e309b2e7a6f145"
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0-maxapi.4",
+      "path": "plugins/tasks/jimeng/1.2.0-maxapi.4/plugin.js",
+      "sha256": "8098adf6b2283d3f218224b343a7df075af22b213f1bc187dbcd71895522fb19",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Return gateway task identity from native create presenter",
+          "Derive submit/query req_key from the same merged image fields",
+          "Classify each image reference and derive action/key from final overridden image fields",
+          "Decode action and duration from the final overridden image fields and req_key",
+          "Reject mixed URL/Base64 frame representations that cannot preserve first/tail order"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.3",
+      "previousSha256": "78abb92c6839c825564aa2a844f0c3cbe2c63bc7934609a82adac906e2734268"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.13",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.13/plugin.js",
+      "sha256": "9ac5007b22c283458031c0e8145d761b711fdaa7c8aeb6b90e286460cd1ccbcc",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-13",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
+          "Count effective frames after a single-image metadata override without weakening two-position retention",
+          "Use the normalized effective tail value after frame validation",
+          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal",
+          "Validate required input against effective frames after metadata overrides",
+          "Normalize or remove optional metadata tail for any submitted image count",
+          "Share metadata image normalization between Video and Responses while preserving explicit empty overrides",
+          "Preserve metadata mode precedence including explicit null/empty; normalize optional tails through both protocols"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.12",
+      "previousSha256": "09628ec745c2447483cb1c4b443caa8d6c25e805d769bcf865ac2eecd34d80d3"
+    },
+    {
+      "key": "sora",
+      "version": "1.1.0-maxapi.2",
+      "path": "plugins/tasks/sora/1.1.0-maxapi.2/plugin.js",
+      "sha256": "128718ad97883996ded280624e7d6aca0f4b5a8d20619ee03d042dd742af5cd1",
+      "upstreamPath": "plugins/tasks/sora/1.1.0/plugin.js",
+      "upstreamVersion": "1.1.0",
+      "upstreamSha256": "0ffd66fdf389c7eff407dede145da9409b185c248e89e93e686c97ac3ba15c4e",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Preserve gateway identity/status/failure while retaining compatible provider fields",
+          "Normalize URL references to image_url objects and duration aliases to seconds",
+          "Reject remix preparation without an ownership-checked origin task"
+        ]
+      },
+      "previousVersion": "1.1.0-maxapi.1",
+      "previousSha256": "064d27c46444610d6a298db68b0adfb139d5111bc64e7bae00a28b53d65a1c71"
+    },
+    {
+      "key": "sunoapi",
+      "version": "1.1.0-maxapi.1",
+      "path": "plugins/tasks/sunoapi/1.1.0-maxapi.1/plugin.js",
+      "sha256": "9b5cf5b05a44d0d6fb037c2b754962701ec15033748db2df46854adc7eaa551f",
+      "upstreamPath": "plugins/tasks/sunoapi/1.1.0/plugin.js",
+      "upstreamVersion": "1.1.0",
+      "upstreamSha256": "a4679364a8a8f119ab993ae5064b727d9e0af91e4075f6d0bb32d9297ef5285a",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Consume actual batch envelope for per-task polling and select the requested task",
+          "Count only the selected task completion payload, preserving its action"
+        ]
+      }
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1-maxapi.3",
+      "path": "plugins/tasks/vertex-ai/1.3.1-maxapi.3/plugin.js",
+      "sha256": "11db95d68ce86bf1fa0d2297a3c44375e9af7bb1e6ad8a07eb64540f3b25a7dc",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "upstreamVersion": "1.3.1",
+      "upstreamSha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Align effective submitted duration and usage",
+          "Propagate accepted resolution and scalar input images",
+          "Preserve repeated frame positions in Responses requests",
+          "Do not mark a completed Veo operation successful without a video; retain filtering reason",
+          "Reject excess Veo images while preserving ordered Omni frames",
+          "Reject explicit unsupported video quantities instead of silently replacing them"
+        ]
+      },
+      "previousVersion": "1.3.1-maxapi.2",
+      "previousSha256": "89725ccb2044dde84576dad14db2ff90bcfd2d3cf5bf24d9c710e9f13f2c29a2"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0-maxapi.4",
+      "path": "plugins/tasks/vidu/1.2.0-maxapi.4/plugin.js",
+      "sha256": "effc79ff834dcdcd31cff1009e2d074a0eee0f189f65ba78f6b7181dcd5dbdfc",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Preserve repeated frame positions and top-level resolution",
+          "Honor metadata.size fallback",
+          "Reject unsupported task actions before endpoint selection",
+          "Use the same effective metadata/top-level images for action, profile and outbound body",
+          "Return the original task-bound model in the OpenAI video renderer"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.3",
+      "previousSha256": "380247b3edfe169cafba60860d65d36f524b0fdfffb1931e7f3c7b9dad02168b"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.8",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.8/plugin.js",
+      "sha256": "9753d83139648996edfad646de01cead3c204c269e9f5e8b8c2940f839a65b6d",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-8",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
+          "Reject conflicting Responses image representations before normalization",
+          "Project terminal host failure over rejected provider done snapshots while preserving moderation and provider failure payloads",
+          "Normalize Responses string and object images with mediaInput instead of silently dropping object inputs"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.7",
+      "previousSha256": "3e97c69dff3733750d539f00b47d857e1f5350adeaba1b6611ddabefc561e3fd"
+    }
+  ],
+  "retainedVersions": [
+    {
+      "key": "alibaba",
+      "version": "1.5.0",
+      "path": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "sha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js"
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0",
+      "path": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "sha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0",
+      "path": "plugins/tasks/google/1.2.0/plugin.js",
+      "sha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js"
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0",
+      "path": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "sha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0",
+      "path": "plugins/tasks/kling/1.2.0/plugin.js",
+      "sha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js"
+    },
+    {
+      "key": "sora",
+      "version": "1.1.0",
+      "path": "plugins/tasks/sora/1.1.0/plugin.js",
+      "sha256": "0ffd66fdf389c7eff407dede145da9409b185c248e89e93e686c97ac3ba15c4e",
+      "upstreamPath": "plugins/tasks/sora/1.1.0/plugin.js"
+    },
+    {
+      "key": "sunoapi",
+      "version": "1.1.0",
+      "path": "plugins/tasks/sunoapi/1.1.0/plugin.js",
+      "sha256": "a4679364a8a8f119ab993ae5064b727d9e0af91e4075f6d0bb32d9297ef5285a",
+      "upstreamPath": "plugins/tasks/sunoapi/1.1.0/plugin.js"
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1",
+      "path": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "sha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0",
+      "path": "plugins/tasks/xai/1.2.0/plugin.js",
+      "sha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js"
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0",
+      "path": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "sha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0",
+      "path": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "sha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/google/1.2.0-maxapi.1/plugin.js",
+      "sha256": "b5334cccb7bf680cf922bcfb4e24996a79b76ac66b5410ed58386c4b9067ead8",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Veo REST bytesBase64Encoded/mimeType image shape",
+          "Force sampleCount=1 and remove unsupported numberOfVideos",
+          "Normalize and validate scalar image references and accepted resolution"
+        ]
+      }
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/jimeng/1.2.0-maxapi.1/plugin.js",
+      "sha256": "1e74db2ff1ee79b4c3ed8382409db8b85fa10e9f25d9d2f6702eef2eab420b6a",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Return gateway task identity from native create presenter",
+          "Derive submit/query req_key from the same merged image fields"
+        ]
+      }
+    },
+    {
+      "key": "sora",
+      "version": "1.1.0-maxapi.1",
+      "path": "plugins/tasks/sora/1.1.0-maxapi.1/plugin.js",
+      "sha256": "064d27c46444610d6a298db68b0adfb139d5111bc64e7bae00a28b53d65a1c71",
+      "upstreamPath": "plugins/tasks/sora/1.1.0/plugin.js",
+      "upstreamVersion": "1.1.0",
+      "upstreamSha256": "0ffd66fdf389c7eff407dede145da9409b185c248e89e93e686c97ac3ba15c4e",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve gateway identity/status/failure while retaining compatible provider fields"
+        ]
+      }
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1-maxapi.1",
+      "path": "plugins/tasks/vertex-ai/1.3.1-maxapi.1/plugin.js",
+      "sha256": "bbb1c82440f9cb26c343a19a2137d58d5914206265f7a1d008d69468f613e0a6",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "upstreamVersion": "1.3.1",
+      "upstreamSha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Align effective submitted duration and usage",
+          "Propagate accepted resolution and scalar input images",
+          "Preserve repeated frame positions in Responses requests"
+        ]
+      }
+    },
+    {
+      "key": "alibaba",
+      "version": "1.5.0-maxapi.1",
+      "path": "plugins/tasks/alibaba/1.5.0-maxapi.1/plugin.js",
+      "sha256": "5b9e0bb8395f7c4aed71e7e7e81015cc22e14bed00b17d4d819672dafe293b9a",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Gateway terminal status/failure reason in OpenAI Video presentation",
+          "Reject reported image counts conflicting with delivered images"
+        ]
+      }
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0-maxapi.1",
+      "path": "plugins/tasks/doubao/1.5.0-maxapi.1/plugin.js",
+      "sha256": "92de43959eda7969b3b98b23cb51f86177e99dab574103d52974e40f3b7271e6",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve scalar image/input_reference alongside images in video construction",
+          "Forward the accepted video size as the outbound Ark resolution"
+        ]
+      }
+    },
+    {
+      "key": "hailuo",
+      "version": "1.4.0-maxapi.1",
+      "path": "plugins/tasks/hailuo/1.4.0-maxapi.1/plugin.js",
+      "sha256": "4c5eee12ea056e34eaab75130cdf8bde0a7baef856979e3c80e309b2e7a6f145",
+      "upstreamPath": "plugins/tasks/hailuo/1.4.0/plugin.js",
+      "upstreamVersion": "1.4.0",
+      "upstreamSha256": "f5fed7c4c76d8f8d1a03da22f8a87fa61a28fdba577b613c045ec48e6d48b7d9",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Normalize accepted v1 frame inputs; reject unsupported extra frames"
+        ]
+      }
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.1/plugin.js",
+      "sha256": "c08fd5526f9157200386286a49dbdd51f8769997d6613f4fbb492fceb5b616be",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode"
+        ]
+      }
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/vidu/1.2.0-maxapi.1/plugin.js",
+      "sha256": "773bf9ae85a4667278417ebb34838679da2db2de76f8503fb14e1307b65c0e28",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Preserve repeated frame positions and top-level resolution"
+        ]
+      }
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.1",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.1/plugin.js",
+      "sha256": "e86403577501a8912879aa62441d08f4698563f5e8565ba2433f06b99b60f062",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-1",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing"
+        ]
+      }
+    },
+    {
+      "key": "alibaba",
+      "version": "1.5.0-maxapi.2",
+      "path": "plugins/tasks/alibaba/1.5.0-maxapi.2/plugin.js",
+      "sha256": "162834119d098ceac9c4013cf03d7b11e227c94a43c5db2b3f571a3248844a56",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Gateway terminal status/failure reason in OpenAI Video presentation",
+          "Reject reported image counts conflicting with delivered images",
+          "Align native/image/passthrough actions with converted input",
+          "Recognize audio shorthand in Wan3 actions",
+          "Expose gateway identity in native create presentation"
+        ]
+      },
+      "previousVersion": "1.5.0-maxapi.1",
+      "previousSha256": "5b9e0bb8395f7c4aed71e7e7e81015cc22e14bed00b17d4d819672dafe293b9a"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0-maxapi.2",
+      "path": "plugins/tasks/google/1.2.0-maxapi.2/plugin.js",
+      "sha256": "377d2b278e0344ea3a124fe0d559948ce1ec243e3befb9a8a778db88cfe4ee7e",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Veo REST bytesBase64Encoded/mimeType image shape",
+          "Force sampleCount=1 and remove unsupported numberOfVideos",
+          "Normalize and validate scalar image references and accepted resolution",
+          "Use one effective duration for outbound request and usage facts",
+          "Reject excess input images instead of discarding them"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.1",
+      "previousSha256": "b5334cccb7bf680cf922bcfb4e24996a79b76ac66b5410ed58386c4b9067ead8"
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0-maxapi.2",
+      "path": "plugins/tasks/jimeng/1.2.0-maxapi.2/plugin.js",
+      "sha256": "1d0dc134ba89f6533206dc9154405945b22d93b045f1168d189562ab158f7008",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Return gateway task identity from native create presenter",
+          "Derive submit/query req_key from the same merged image fields",
+          "Classify each image reference and derive action/key from final overridden image fields"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.1",
+      "previousSha256": "1e74db2ff1ee79b4c3ed8382409db8b85fa10e9f25d9d2f6702eef2eab420b6a"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.2",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.2/plugin.js",
+      "sha256": "c343f49f049fd537f6b2ee4c747a80aaf5bbf03bad2aec2d10c71773b2612feb",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.1",
+      "previousSha256": "c08fd5526f9157200386286a49dbdd51f8769997d6613f4fbb492fceb5b616be"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0-maxapi.2",
+      "path": "plugins/tasks/vidu/1.2.0-maxapi.2/plugin.js",
+      "sha256": "bd05e2a4dd1309b4fa5df79d1770ffa93b56e5dabb3361e0070a5bcb1638431c",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Preserve repeated frame positions and top-level resolution",
+          "Honor metadata.size fallback"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.1",
+      "previousSha256": "773bf9ae85a4667278417ebb34838679da2db2de76f8503fb14e1307b65c0e28"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.2",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.2/plugin.js",
+      "sha256": "b718254e5bb98ecd7328594621839c72ce99f508ebc9da11c98611735ffd9362",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.1",
+      "previousSha256": "e86403577501a8912879aa62441d08f4698563f5e8565ba2433f06b99b60f062"
+    },
+    {
+      "key": "alibaba",
+      "version": "1.5.0-maxapi.3",
+      "path": "plugins/tasks/alibaba/1.5.0-maxapi.3/plugin.js",
+      "sha256": "7ed55b1adf86247b74d2108cd543b8c8bef1987ed2378b222afdd71ec0aa5e65",
+      "upstreamPath": "plugins/tasks/alibaba/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "c5f7397f7fa6a2062f80341a2155d7528e837f4debf1e1acc1783c9d762b41d2",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Gateway terminal status/failure reason in OpenAI Video presentation",
+          "Reject reported image counts conflicting with delivered images",
+          "Align native/image/passthrough actions with converted input",
+          "Recognize audio shorthand in Wan3 actions",
+          "Expose gateway identity in native create presentation",
+          "Effective metadata.input overrides drive video action",
+          "Preserve repeated frame-array positions"
+        ]
+      },
+      "previousVersion": "1.5.0-maxapi.2",
+      "previousSha256": "162834119d098ceac9c4013cf03d7b11e227c94a43c5db2b3f571a3248844a56"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.3",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.3/plugin.js",
+      "sha256": "3c933fa3adc10427599b8382c1fca4863cfe6fd699b55f1eaebf101bf05915b7",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.2",
+      "previousSha256": "c343f49f049fd537f6b2ee4c747a80aaf5bbf03bad2aec2d10c71773b2612feb"
+    },
+    {
+      "key": "vidu",
+      "version": "1.2.0-maxapi.3",
+      "path": "plugins/tasks/vidu/1.2.0-maxapi.3/plugin.js",
+      "sha256": "380247b3edfe169cafba60860d65d36f524b0fdfffb1931e7f3c7b9dad02168b",
+      "upstreamPath": "plugins/tasks/vidu/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "102d2d8e8013870f06fd437bc5d6fb7552840344539c465254fbe90496773919",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Preserve repeated frame positions and top-level resolution",
+          "Honor metadata.size fallback",
+          "Reject unsupported task actions before endpoint selection"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.2",
+      "previousSha256": "bd05e2a4dd1309b4fa5df79d1770ffa93b56e5dabb3361e0070a5bcb1638431c"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.3",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.3/plugin.js",
+      "sha256": "e4465b3fb679559f7bc2295471f685c935a9a512b56dfe8f9a6645b7caf2643b",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.2",
+      "previousSha256": "b718254e5bb98ecd7328594621839c72ce99f508ebc9da11c98611735ffd9362"
+    },
+    {
+      "key": "doubao",
+      "version": "1.5.0-maxapi.2",
+      "path": "plugins/tasks/doubao/1.5.0-maxapi.2/plugin.js",
+      "sha256": "45b9dc152c7c4fea0cc035ba2ec489c1e7a93d38ed29cfd89ec6e57caa1a3d86",
+      "upstreamPath": "plugins/tasks/doubao/1.5.0/plugin.js",
+      "upstreamVersion": "1.5.0",
+      "upstreamSha256": "8b3c9de6b03dc4ca4aff2e2848f60563aa9f07d020449211903de056c85dbfa6",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Preserve scalar image/input_reference alongside images in video construction",
+          "Forward the accepted video size as the outbound Ark resolution",
+          "Fail closed before synchronous image dispatch without a host task ID",
+          "Unify reference classification and duration validation",
+          "Honor top-level resolution"
+        ]
+      },
+      "previousVersion": "1.5.0-maxapi.1",
+      "previousSha256": "92de43959eda7969b3b98b23cb51f86177e99dab574103d52974e40f3b7271e6"
+    },
+    {
+      "key": "google",
+      "version": "1.2.0-maxapi.3",
+      "path": "plugins/tasks/google/1.2.0-maxapi.3/plugin.js",
+      "sha256": "3441d6f0ca79a05f695bd2c142b5831490721c34f358e99db95cc46ec5737320",
+      "upstreamPath": "plugins/tasks/google/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "deb68290adbda09cf98314260df661439e35d8bd912ec42cd475dab714d00179",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Veo REST bytesBase64Encoded/mimeType image shape",
+          "Force sampleCount=1 and remove unsupported numberOfVideos",
+          "Normalize and validate scalar image references and accepted resolution",
+          "Use one effective duration for outbound request and usage facts",
+          "Reject excess input images instead of discarding them",
+          "Filtered or missing output cannot produce successful poll/immediate delivery"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.2",
+      "previousSha256": "377d2b278e0344ea3a124fe0d559948ce1ec243e3befb9a8a778db88cfe4ee7e"
+    },
+    {
+      "key": "jimeng",
+      "version": "1.2.0-maxapi.3",
+      "path": "plugins/tasks/jimeng/1.2.0-maxapi.3/plugin.js",
+      "sha256": "78abb92c6839c825564aa2a844f0c3cbe2c63bc7934609a82adac906e2734268",
+      "upstreamPath": "plugins/tasks/jimeng/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "ca30e406dcfeea7af6d3cb3e17b9ee7fb1b6d24164ab657489435902d5909682",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-3",
+        "changes": [
+          "Return gateway task identity from native create presenter",
+          "Derive submit/query req_key from the same merged image fields",
+          "Classify each image reference and derive action/key from final overridden image fields",
+          "Decode action and duration from the final overridden image fields and req_key"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.2",
+      "previousSha256": "1d0dc134ba89f6533206dc9154405945b22d93b045f1168d189562ab158f7008"
+    },
+    {
+      "key": "vertex-ai",
+      "version": "1.3.1-maxapi.2",
+      "path": "plugins/tasks/vertex-ai/1.3.1-maxapi.2/plugin.js",
+      "sha256": "89725ccb2044dde84576dad14db2ff90bcfd2d3cf5bf24d9c710e9f13f2c29a2",
+      "upstreamPath": "plugins/tasks/vertex-ai/1.3.1/plugin.js",
+      "upstreamVersion": "1.3.1",
+      "upstreamSha256": "6efae5949e8f5ab8225c9a900c24d8daae34688c45505290a1d3dae3d7bb9257",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-2",
+        "changes": [
+          "Align effective submitted duration and usage",
+          "Propagate accepted resolution and scalar input images",
+          "Preserve repeated frame positions in Responses requests",
+          "Do not mark a completed Veo operation successful without a video; retain filtering reason",
+          "Reject excess Veo images while preserving ordered Omni frames"
+        ]
+      },
+      "previousVersion": "1.3.1-maxapi.1",
+      "previousSha256": "bbb1c82440f9cb26c343a19a2137d58d5914206265f7a1d008d69468f613e0a6"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.4",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.4/plugin.js",
+      "sha256": "e20005901f2e55dd05a1111f1f5973d03c121855181405b6471332e83cf9b87b",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.3",
+      "previousSha256": "3c933fa3adc10427599b8382c1fca4863cfe6fd699b55f1eaebf101bf05915b7"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.4",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.4/plugin.js",
+      "sha256": "75522345fd6d47ffe3a9b204b7fca76c89b3815365604e333970e1c8b33e8c71",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-4",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.3",
+      "previousSha256": "e4465b3fb679559f7bc2295471f685c935a9a512b56dfe8f9a6645b7caf2643b"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.5",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.5/plugin.js",
+      "sha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-5",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.4",
+      "previousSha256": "e20005901f2e55dd05a1111f1f5973d03c121855181405b6471332e83cf9b87b"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.5",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.5/plugin.js",
+      "sha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-5",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.4",
+      "previousSha256": "75522345fd6d47ffe3a9b204b7fca76c89b3815365604e333970e1c8b33e8c71"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.6/plugin.js",
+      "sha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-6",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "1c1741af410c2fdb3315984b7c31d28c5b31fd45012d8fa2e17bab08bf0939bb"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.6",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.6/plugin.js",
+      "sha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-6",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
+          "Reject conflicting Responses image representations before normalization"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.5",
+      "previousSha256": "a11ef6d592f1aa0b336a316d7d8025757468b474260de59adb3283b03abf45d2"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.7",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.7/plugin.js",
+      "sha256": "979b7f2f4a3d1aaaaecf4c1e0cb9285e98d4f72a96fedba1d15fa504ef6ad4ba",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-7",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.6",
+      "previousSha256": "6475ab2eee3cdd41a598d14b17ed22ea704a1e0a903aaa92f0b38619621ac4e9"
+    },
+    {
+      "key": "xai",
+      "version": "1.2.0-maxapi.7",
+      "path": "plugins/tasks/xai/1.2.0-maxapi.7/plugin.js",
+      "sha256": "3e97c69dff3733750d539f00b47d857e1f5350adeaba1b6611ddabefc561e3fd",
+      "upstreamPath": "plugins/tasks/xai/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "74aa8a13b63f6a9130372bcd6b26aa3cf20e2b01019973315d454666ed915ce4",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-7",
+        "changes": [
+          "Allow valid keyframe-only generation through semantic validator",
+          "Merge measured poll state with submitted extension state",
+          "Reject edit/extension submissions requiring unsupported output-resolution probing",
+          "Explicit top-level duration/seconds override metadata duration",
+          "Parse and validate multipart metadata before request normalization",
+          "Fail ordinary done results lacking video URL while preserving intentional moderation charging",
+          "Reject conflicting scalar/reference_images and legacy images lists in both request and usage preparation",
+          "Reject conflicting Responses image representations before normalization",
+          "Project terminal host failure over rejected provider done snapshots while preserving moderation and provider failure payloads"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.6",
+      "previousSha256": "8f1b25d53a62ce2e9593195ca905068c54f91b3ffc69ed8b7a8b0b93f0092816"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.8",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.8/plugin.js",
+      "sha256": "6babf10ca60320c8fe6917758af458191d82d65e56787a5ea42660949a104133",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-8",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.7",
+      "previousSha256": "979b7f2f4a3d1aaaaecf4c1e0cb9285e98d4f72a96fedba1d15fa504ef6ad4ba"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.9",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.9/plugin.js",
+      "sha256": "f46a8448e9b99f18fbb563db6b78821bbc73bbc767e55a59a79e6874c27af509",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-9",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.8",
+      "previousSha256": "6babf10ca60320c8fe6917758af458191d82d65e56787a5ea42660949a104133"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.10",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.10/plugin.js",
+      "sha256": "4fa613e0b0c7daa55953be69a69f5bf9d5efe054aa5548c781ae8928b178e902",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-10",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
+          "Count effective frames after a single-image metadata override without weakening two-position retention"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.9",
+      "previousSha256": "f46a8448e9b99f18fbb563db6b78821bbc73bbc767e55a59a79e6874c27af509"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.11",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.11/plugin.js",
+      "sha256": "5959b369be333768c271f59c6eb7448b6703892c027299662ef640618683cf3a",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-11",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
+          "Count effective frames after a single-image metadata override without weakening two-position retention",
+          "Use the normalized effective tail value after frame validation",
+          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.10",
+      "previousSha256": "4fa613e0b0c7daa55953be69a69f5bf9d5efe054aa5548c781ae8928b178e902"
+    },
+    {
+      "key": "kling",
+      "version": "1.2.0-maxapi.12",
+      "path": "plugins/tasks/kling/1.2.0-maxapi.12/plugin.js",
+      "sha256": "09628ec745c2447483cb1c4b443caa8d6c25e805d769bcf865ac2eecd34d80d3",
+      "upstreamPath": "plugins/tasks/kling/1.2.0/plugin.js",
+      "upstreamVersion": "1.2.0",
+      "upstreamSha256": "f4b949679dba31e287d2b21d4b3b4c09980c9bb744da9ede5153f1801cf84240",
+      "adaptation": {
+        "author": "MAX-API-Next",
+        "revision": "pr78-compatibility-12",
+        "changes": [
+          "Estimate the effective metadata-overridden outbound mode",
+          "Include metadata images in Responses action selection",
+          "Create snapshots expose canonical pending status",
+          "Reject callback_url/external_task_id after merging the final request body",
+          "Reject unsupported OpenAI Video image lists instead of dropping reference frames",
+          "Select protocol action from the effective metadata-merged image fields",
+          "Reject excess Responses images before selecting first and last frames",
+          "Validate metadata frames and reject distinct-frame loss before selecting outputs",
+          "Use the effective metadata-overridden first frame in Kling 4.0 as in legacy requests",
+          "Reject metadata.contents in Kling 4.0 host protocols; native contents remain supported",
+          "Preserve repeated ordered first/tail positions, deduplicate only redundant scalar aliases, and reject loss of a repeated position",
+          "Count effective frames after a single-image metadata override without weakening two-position retention",
+          "Use the normalized effective tail value after frame validation",
+          "Project original task model, convert both provider timestamp families from milliseconds to Video seconds, and omit completion while nonterminal",
+          "Validate required input against effective frames after metadata overrides",
+          "Normalize or remove optional metadata tail for any submitted image count"
+        ]
+      },
+      "previousVersion": "1.2.0-maxapi.11",
+      "previousSha256": "5959b369be333768c271f59c6eb7448b6703892c027299662ef640618683cf3a"
+    }
+  ]
+}

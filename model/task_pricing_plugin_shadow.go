@@ -63,6 +63,7 @@ func approvedPluginShadow(a *pricingAuthority, request TaskPricingShadowRequest,
 			return rejected()
 		}
 		selected.Contract, selected.Schema = &approved.Contract, approved.Contract.UsageSchema
+		selected.PreviewOnly = false // Only the exact vetted phase proof exits sample-only scope.
 		selected.source = taskpricing.Source{Driver: types.TaskUsageProducerKindTaskPlugin, PluginKey: m.Key}
 		selected.PluginKey, selected.Available, selected.Reason = m.Key, true, ""
 		return selected, approved.ApprovalID, nil

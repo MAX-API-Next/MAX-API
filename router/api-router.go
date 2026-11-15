@@ -203,6 +203,8 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
 		taskPluginRoute := apiRouter.Group("/task_plugins", middleware.RootAuth())
 		taskPluginRoute.GET("", controller.GetTaskPluginManagement)
+		taskPluginRoute.GET("/bundled", controller.GetBundledTaskPlugins)
+		taskPluginRoute.GET("/bundled/:key/:version", controller.GetBundledTaskPluginSource)
 		taskPluginRoute.POST("/validate", controller.ValidateTaskPluginPackage)
 		taskPluginRoute.POST("/mutate", controller.MutateTaskPluginManagement)
 		optionRoute := apiRouter.Group("/option")

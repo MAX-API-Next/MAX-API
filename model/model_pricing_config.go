@@ -232,7 +232,7 @@ func validateModelPricing(name string, draft, previous types.ModelPricingValues,
 			// A known contract alone must not migrate a legacy default.
 			taskDefault := len(keys) > 0
 			for _, context := range contexts {
-				if draft["billing_setting.billing_mode"] == "tiered_expr" && context.Profile == taskpricing.NewAPITask {
+				if draft["billing_setting.billing_mode"] == "tiered_expr" && context.Profile == taskpricing.NewAPITask && !context.PreviewOnly {
 					taskDefault = true
 					break
 				}
@@ -478,7 +478,7 @@ func protectedTaskPricing(values types.ModelPricingValues, contexts []ModelPrici
 		}
 	}
 	for _, context := range contexts {
-		if context.Profile == taskpricing.NewAPITask {
+		if context.Profile == taskpricing.NewAPITask && !context.PreviewOnly {
 			return true
 		}
 	}

@@ -87,8 +87,16 @@ export function PluginDetailSheet(props: Props) {
                 {detail.format_version}
               </p>
               <p className='font-mono text-xs break-all'>
-                SHA-256: {detail.digest}
+                {detail.format_version === 3
+                  ? t('Stored package SHA-256')
+                  : 'SHA-256'}
+                : {detail.digest}
               </p>
+              {detail.format_version === 3 && detail.source_sha256 && (
+                <p className='font-mono text-xs break-all'>
+                  {t('Source SHA-256')}: {detail.source_sha256}
+                </p>
+              )}
               <p>
                 {t(
                   'Disabling blocks new bindings. Revoking permanently rejects this version and its historical sessions.'
@@ -150,7 +158,7 @@ export function PluginDetailSheet(props: Props) {
                     {detail.key}@{detail.version}
                   </p>
                   {confirmation.action === 'activate' &&
-                    detail.format_version === 2 && (
+                    detail.format_version >= 2 && (
                       <label className='flex items-start gap-2'>
                         <input
                           type='checkbox'
@@ -160,7 +168,7 @@ export function PluginDetailSheet(props: Props) {
                           }
                         />
                         {t(
-                          'All catalog nodes have been upgraded for format 2. Older nodes may suspend their entire plugin host.'
+                          'All catalog nodes support this package format. Older nodes may suspend their entire plugin host.'
                         )}
                       </label>
                     )}
@@ -176,7 +184,7 @@ export function PluginDetailSheet(props: Props) {
                       props.disabled ||
                       confirmation.revision !== props.snapshot?.revision ||
                       (confirmation.action === 'activate' &&
-                        detail.format_version === 2 &&
+                        detail.format_version >= 2 &&
                         !props.nodesReady)
                     }
                     onClick={() =>
@@ -186,6 +194,7 @@ export function PluginDetailSheet(props: Props) {
                         version: confirmation.entry.version,
                         expected_revision: confirmation.revision,
                         format2_nodes_ready: props.nodesReady,
+                        format3_nodes_ready: props.nodesReady,
                       })
                     }
                   >
@@ -221,6 +230,11 @@ export function PluginDetailSheet(props: Props) {
                 {detail.protocols.map((p) => (
                   <li key={p.name}>
                     {p.name} {p.supports.join(', ')}
+                    {p.models?.length ? (
+                      <span className='text-muted-foreground block text-xs break-all'>
+                        {p.models.join(', ')}
+                      </span>
+                    ) : null}
                   </li>
                 ))}
                 {detail.routes.map((r, i) => (
