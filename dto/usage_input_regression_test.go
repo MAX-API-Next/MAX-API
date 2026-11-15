@@ -35,7 +35,7 @@ func TestUsageCorrectionGeminiMultimodalHistoryIsStable(t *testing.T) {
 	require.NoError(t, err)
 	first, second := request.GetTokenCountMeta(), request.GetTokenCountMeta()
 	require.Equal(t, first.CombineText, second.CombineText)
-	require.Contains(t, first.CombineText, "FIRST\nLAST")
+	require.Contains(t, first.CombineText, "a\nFIRST\nz\nLAST")
 	require.Len(t, first.Files, 1)
 	require.Equal(t, types.FileTypeImage, first.Files[0].FileType)
 	after, err := common.Marshal(request)
@@ -68,4 +68,12 @@ func TestUsageCorrectionGeminiAgentInput(t *testing.T) {
 	for _, marker := range []string{"SYSTEM_INSTRUCTION", "HISTORY_ARGUMENT", "HISTORY_RESULT", "TOOL_DESCRIPTION"} {
 		require.Contains(t, meta.CombineText, marker)
 	}
+}
+
+func TestGeminiFunctionResponseKeyContributesToTokenMetadata(t *testing.T) {
+	var request GeminiChatRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"HISTORY_RESULT_FOUND":true}}}]}]}`, &request))
+	meta := request.GetTokenCountMeta()
+	require.Contains(t, meta.CombineText, "HISTORY_RESULT_FOUND")
+	require.Contains(t, meta.CombineText, "true")
 }

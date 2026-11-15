@@ -1049,11 +1049,14 @@ func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 					})
 				}
 			} else if input.Type == "input_file" {
+				var source types.FileSource
 				if input.FileUrl != "" {
-					fileMeta = append(fileMeta, &types.FileMeta{
-						FileType: types.FileTypeFile,
-						Source:   types.NewFileSourceFromData(input.FileUrl, ""),
-					})
+					source = types.NewFileSourceFromData(input.FileUrl, "")
+				} else if input.FileData != "" {
+					source = types.NewBase64FileSource(input.FileData, "")
+				}
+				if source != nil {
+					fileMeta = append(fileMeta, &types.FileMeta{FileType: types.FileTypeFile, Source: source})
 				}
 			} else {
 				texts = append(texts, input.Text)
@@ -1129,6 +1132,7 @@ type MediaInput struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	FileUrl  string `json:"file_url,omitempty"`
+	FileData string `json:"file_data,omitempty"`
 	ImageUrl string `json:"image_url,omitempty"`
 	Detail   string `json:"detail,omitempty"` // 仅 input_image 有效
 }
@@ -1227,7 +1231,8 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 								fileUrl = url
 							}
 						}
-						mediaInputs = append(mediaInputs, MediaInput{Type: "input_file", FileUrl: fileUrl})
+						fileData, _ := item["file_data"].(string)
+						mediaInputs = append(mediaInputs, MediaInput{Type: "input_file", FileUrl: fileUrl, FileData: fileData})
 					}
 				}
 			}

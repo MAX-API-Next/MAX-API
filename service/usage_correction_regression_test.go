@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -115,6 +116,145 @@ func TestUsageCorrectionChatLateUsageSettlement(t *testing.T) {
 			service.HandleFailedBilling(c, info, apiErr)
 			service.HandleFailedBilling(c, info, apiErr)
 			assertUsageReplayBalance(t, info, want)
+		})
+	}
+}
+
+func TestClaudeIncompleteEOFCallerSettlesOnce(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		t.Run(string(format), func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9560+i, "")
+			service.InitHttpClient()
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"audit-model","usage":{"input_tokens":100}}}`+"\n\ndata: "+
+					`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial output"}}`+"\n\ndata: "+
+					`{"type":"message_delta","usage":{"output_tokens":22}}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeAnthropic)
+			c.Set(string(constant.ContextKeyChannelId), info.ChannelId)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			info.RelayFormat, info.IsStream = format, true
+			var apiErr *types.MaxAPIError
+			if format == types.RelayFormatClaude {
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info.Request = &dto.ClaudeRequest{Model: "audit-model", Stream: common.GetPointer(true), MaxTokens: common.GetPointer(uint(100))}
+				apiErr = relay.ClaudeHelper(c, info)
+			} else {
+				info.Request = &dto.GeneralOpenAIRequest{Model: "audit-model", Stream: common.GetPointer(true)}
+				apiErr = relay.TextHelper(c, info)
+			}
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr))
+			service.HandleFailedBilling(c, info, apiErr)
+			service.HandleFailedBilling(c, info, apiErr)
+			assertUsageReplayBalance(t, info, 144) // 100*1 + 22*2, not the reserved 1000.
+			var log model.Log
+			require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", info.UserId, model.LogTypeConsume).First(&log).Error)
+			var projected struct {
+				StreamStatus struct {
+					Status    string `json:"status"`
+					EndReason string `json:"end_reason"`
+				} `json:"stream_status"`
+			}
+			require.NoError(t, common.UnmarshalJsonStr(log.Other, &projected))
+			require.Equal(t, "error", projected.StreamStatus.Status)
+			require.Equal(t, "eof", projected.StreamStatus.EndReason)
+		})
+	}
+}
+
+func TestResponsesToolOutputInlineFileEstimateAndSettlement(t *testing.T) {
+	oldCount, oldMedia := constant.CountToken, constant.GetMediaToken
+	constant.CountToken, constant.GetMediaToken = true, false
+	t.Cleanup(func() { constant.CountToken, constant.GetMediaToken = oldCount, oldMedia })
+	service.InitTokenEncoders()
+	for i, tc := range []struct {
+		name, field, value string
+		url                bool
+	}{
+		{"raw_base64", "file_data", "JVBERi0xLjQK", false},
+		{"data_uri", "file_data", "data:application/pdf;base64,JVBERi0xLjQK", false},
+		{"existing_url", "file_url", "https://example.invalid/document.pdf", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 9570+i, "")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			var request dto.OpenAIResponsesRequest
+			raw := `{"input":[{"type":"function_call_output","call_id":"call_file","output":[{"type":"input_file","filename":"document.pdf","` + tc.field + `":"` + tc.value + `"}]}]}`
+			require.NoError(t, common.UnmarshalJsonStr(raw, &request))
+			meta := request.GetTokenCountMeta()
+			require.Len(t, meta.Files, 1)
+			require.Equal(t, types.FileTypeFile, meta.Files[0].FileType)
+			require.Equal(t, tc.url, meta.Files[0].Source.IsURL())
+			require.Equal(t, tc.value, meta.Files[0].Source.GetRawData())
+			withoutFile := *meta
+			withoutFile.Files = nil
+			textOnly, err := service.EstimateRequestToken(c, &withoutFile, info)
+			require.NoError(t, err)
+			require.Equal(t, 3, textOnly) // Existing Chat-format envelope estimate.
+			estimate, err := service.EstimateRequestToken(c, meta, info)
+			require.NoError(t, err)
+			require.Equal(t, 4099, estimate) // 3 envelope + existing 4096-per-file heuristic.
+			info.SetEstimatePromptTokens(estimate)
+			u, apiErr := openai.OaiResponsesToChatHandler(c, info, usageReplayResponse(`{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"visible"}]}],"usage":{"output_tokens":0}}`))
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, 4099)
+		})
+	}
+}
+
+func TestClaudeEmptyEOFRetryCallerSettlesOnlySuccess(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		t.Run(string(format), func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9580+i, "")
+			service.InitHttpClient()
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				if calls.Add(1) == 1 {
+					return // Empty EOF before headers or content reach the downstream writer.
+				}
+				_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"audit-model","usage":{"input_tokens":100}}}`+"\n\ndata: "+
+					`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"second attempt"}}`+"\n\ndata: "+
+					`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":22}}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeAnthropic)
+			c.Set(string(constant.ContextKeyChannelId), info.ChannelId)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			info.RelayFormat, info.IsStream = format, true
+			if format == types.RelayFormatClaude {
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info.Request = &dto.ClaudeRequest{Model: "audit-model", Stream: common.GetPointer(true), MaxTokens: common.GetPointer(uint(100))}
+			} else {
+				info.Request = &dto.GeneralOpenAIRequest{Model: "audit-model", Stream: common.GetPointer(true)}
+			}
+			call := func() *types.MaxAPIError {
+				if format == types.RelayFormatClaude {
+					return relay.ClaudeHelper(c, info)
+				}
+				return relay.TextHelper(c, info)
+			}
+			firstErr := call()
+			require.NotNil(t, firstErr)
+			require.False(t, types.IsSkipRetryError(firstErr))
+			require.False(t, c.Writer.Written())
+			info.RetryIndex++
+			require.Nil(t, call())
+			require.EqualValues(t, 2, calls.Load())
+			service.HandleFailedBilling(c, info, firstErr)
+			service.HandleFailedBilling(c, info, firstErr)
+			assertUsageReplayBalance(t, info, 144)
 		})
 	}
 }

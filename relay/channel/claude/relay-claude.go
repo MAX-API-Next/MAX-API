@@ -600,6 +600,7 @@ type ClaudeResponseInfo struct {
 	streamOutputDelivered             bool
 	streamDeliveredText               strings.Builder
 	streamDeliveryTracked             bool
+	streamTerminalSeen                bool
 
 	pendingToolUses []claudePendingToolUse
 }
@@ -852,6 +853,11 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	if claudeResponse.Type == "message_stop" ||
+		(claudeResponse.Type == "message_delta" && claudeResponse.Delta != nil &&
+			claudeResponse.Delta.StopReason != nil && strings.TrimSpace(*claudeResponse.Delta.StopReason) != "") {
+		claudeInfo.streamTerminalSeen = true
+	}
 	if claudeResponse.StopReason != "" {
 		maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	}
@@ -1081,6 +1087,11 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.MaxAPIError) {
+	if info.RetryIndex > 0 && !c.Writer.Written() &&
+		(info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatOpenAI) {
+		info.StreamStatus = nil
+		info.SendResponseCount, info.ReceivedResponseCount = 0, 0
+	}
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
@@ -1126,6 +1137,9 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			err = types.NewError(c.Request.Context().Err(), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 		} else if err == nil && info.StreamStatus.IsAbnormalEnd() {
 			err = types.NewError(fmt.Errorf("upstream Claude stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse)
+		} else if err == nil && !claudeInfo.streamTerminalSeen {
+			err = types.NewError(fmt.Errorf("upstream Claude stream ended before a terminal event"), types.ErrorCodeBadResponse)
+			info.StreamStatus.RecordFatalError(err)
 		}
 	}
 	if err != nil {

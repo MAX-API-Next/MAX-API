@@ -99,6 +99,7 @@ func (r *GeminiChatRequest) GetTokenCountMeta() *types.TokenCountMeta {
 				}
 				sort.Strings(keys)
 				for _, key := range keys {
+					inputTexts = append(inputTexts, key)
 					value := part.FunctionResponse.Response[key]
 					if text, ok := value.(string); ok {
 						inputTexts = append(inputTexts, text)
