@@ -2,6 +2,7 @@ package claude
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +72,49 @@ func TestClaudePartialToolEstimateMatchesClientPayload(t *testing.T) {
 			}
 			require.Equal(t, service.ResponseText2Usage(c, text, "claude-test", 100).CompletionTokens, u.CompletionTokens)
 		})
+	}
+}
+
+func TestClaudeOpaqueThinkingDelivery(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, block := range []string{"redacted", "signature", "thinking_start"} {
+			for _, ending := range []string{"provider", "eof", "write", "empty"} {
+				t.Run(fmt.Sprintf("%s/%s/%s", format, block, ending), func(t *testing.T) {
+					recorder := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(&correctionClaudeWriter{recorder})
+					c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+					info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+					payload := "synthetic-opaque-ciphertext"
+					if ending == "write" {
+						payload = "undelivered-opaque-ciphertext"
+					} else if ending == "empty" {
+						payload = ""
+					}
+					frame := `{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"` + payload + `"}}`
+					if block == "signature" {
+						frame = `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"` + payload + `"}}`
+					} else if block == "thinking_start" {
+						frame = `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"` + payload + `"}}`
+					}
+					raw := "data: " + `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":100,"output_tokens":0}}}` + "\n\ndata: " + frame + "\n\n"
+					if ending != "eof" {
+						raw += "data: " + `{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}` + "\n\n"
+					}
+					u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, info)
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					if format != types.RelayFormatClaude || ending == "write" || ending == "empty" {
+						require.Nil(t, u, "only native clients receive complete opaque output")
+						return
+					}
+					require.Contains(t, recorder.Body.String(), payload)
+					require.NotNil(t, u)
+					require.Equal(t, 100, u.PromptTokens)
+					require.Zero(t, u.CompletionTokens, "opaque ciphertext must not become estimated plaintext tokens")
+				})
+			}
+		}
 	}
 }
 

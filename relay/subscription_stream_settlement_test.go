@@ -133,6 +133,59 @@ func TestClaudeCacheOnlyRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
+func TestClaudeOpaqueThinkingRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, block := range []string{"redacted", "signature"} {
+			for _, funding := range streamFundingCases() {
+				t.Run(string(format)+"/"+block+"/"+funding.name, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					frame := `{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"synthetic-opaque-ciphertext"}}`
+					if block == "signature" {
+						frame = `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"synthetic-opaque-ciphertext"}}`
+					}
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"input_tokens":100,"output_tokens":0}}}`+"\n\ndata: "+frame+"\n\ndata: "+`{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := "opaque-" + string(format) + "-" + block + "-" + funding.name
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+					info.RelayFormat = format
+					if format == types.RelayFormatClaude {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						info.RequestURLPath = "/v1/messages"
+						info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					var apiErr *types.MaxAPIError
+					if format == types.RelayFormatClaude {
+						apiErr = ClaudeHelper(c, info)
+					} else {
+						apiErr = TextHelper(c, info)
+					}
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					quota, prompt, delivered := 0, 0, format == types.RelayFormatClaude
+					if delivered {
+						quota, prompt = 100, 100
+						require.Contains(t, recorder.Body.String(), "synthetic-opaque-ciphertext")
+					} else {
+						require.NotContains(t, recorder.Body.String(), "synthetic-opaque-ciphertext")
+					}
+					assertStreamFundingBalances(t, db, funding, requestID, quota, delivered, prompt, 0)
+					var settlement model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+					require.Equal(t, funding.source, settlement.Source)
+					require.EqualValues(t, quota-100, settlement.FundingDelta)
+				})
+			}
+		}
+	}
+}
+
 func TestClaudeGlobalResponsesFailureSettlesOriginalFunding(t *testing.T) {
 	initRequestReplayTests(t)
 	for _, funding := range streamFundingCases() {

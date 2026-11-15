@@ -34,7 +34,7 @@ func (w *claudeStreamWriteObserver) WriteString(data string) (int, error) {
 
 func (w *claudeStreamWriteObserver) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string, includeInitialToolInput bool) {
+func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string, nativeOutput bool) {
 	var text strings.Builder
 	for _, path := range []string{"delta.text", "delta.thinking", "delta.partial_json", "content_block.text"} {
 		text.WriteString(gjson.Get(data, path).String())
@@ -43,8 +43,20 @@ func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string, include
 		text.WriteString(gjson.Get(data, "content_block.name").String())
 		// The Chat converter sends an empty arguments string at tool start.
 		// Only native Claude clients receive the initial input object.
-		if includeInitialToolInput {
+		if nativeOutput {
 			text.WriteString(gjson.Get(data, "content_block.input").Raw)
+		}
+	}
+	// Native clients also receive opaque thinking payloads. Mark delivery
+	// without treating encrypted data/signatures as estimated plaintext.
+	if nativeOutput {
+		eventType := gjson.Get(data, "type").String()
+		blockType := gjson.Get(data, "content_block.type").String()
+		if (eventType == "content_block_start" &&
+			((blockType == "redacted_thinking" && gjson.Get(data, "content_block.data").String() != "") ||
+				(blockType == "thinking" && gjson.Get(data, "content_block.signature").String() != ""))) ||
+			(eventType == "content_block_delta" && gjson.Get(data, "delta.type").String() == "signature_delta" && gjson.Get(data, "delta.signature").String() != "") {
+			info.streamOutputDelivered = true
 		}
 	}
 	if text.Len() > 0 {
