@@ -82,6 +82,45 @@ func correctionResponse(raw string) *http.Response {
 	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(raw))}
 }
 
+func TestUsageCorrectionChatRequiresCompletionEvidence(t *testing.T) {
+	for _, ending := range []string{"missing", "finish_only", "done_only", "zero_missing"} {
+		t.Run(ending, func(t *testing.T) {
+			c, w, info := correctionContext(t, "/v1/chat/completions")
+			info.IsStream = true
+			raw := "data: " + `{"choices":[{"delta":{"content":"delivered text"}}]}` + "\n\n"
+			counts := `{"prompt_tokens":100,"completion_tokens":22}`
+			if ending == "zero_missing" {
+				counts = `{"prompt_tokens":0,"completion_tokens":0}`
+			}
+			raw += "data: " + `{"choices":[],"usage":` + counts + `}` + "\n\n"
+			if ending == "finish_only" {
+				raw += "data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+			}
+			if ending == "done_only" {
+				raw += "data: [DONE]\n\n"
+			}
+			u, apiErr := OaiStreamHandler(c, info, correctionResponse(raw))
+			require.NotNil(t, u)
+			if ending == "missing" || ending == "zero_missing" {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.True(t, info.StreamStatus.IsAbnormalEnd())
+				require.NotContains(t, w.Body.String(), "[DONE]")
+				require.NotNil(t, u.BillingUsage)
+			} else {
+				require.Nil(t, apiErr, "finish_reason without DONE remains compatible")
+			}
+			if ending == "zero_missing" {
+				require.Zero(t, u.PromptTokens)
+				require.Zero(t, u.CompletionTokens)
+			} else {
+				require.Equal(t, 100, u.PromptTokens)
+				require.Equal(t, 22, u.CompletionTokens)
+			}
+		})
+	}
+}
+
 func TestUsageCorrectionResponsesPresence(t *testing.T) {
 	for _, tc := range []struct {
 		name, usage        string

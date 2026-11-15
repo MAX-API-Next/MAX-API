@@ -9,10 +9,70 @@ import (
 	"testing"
 
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
+	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClaudeMissingFinalCounterEstimatesDeliveredOutput(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, counter := range []string{"", `,"output_tokens":0`, `,"output_tokens":22`} {
+			t.Run(string(format)+counter, func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true,
+					ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+				text := strings.Repeat("delivered output ", 32)
+				raw := "data: " + `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":100,"output_tokens":1}}}` + "\n\ndata: " +
+					`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}` + "\n\ndata: " +
+					`{"type":"message_delta","usage":{"input_tokens":100` + counter + `}}` + "\n\ndata: " +
+					`{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}` + "\n\n"
+				u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, info)
+				require.NotNil(t, apiErr)
+				require.NotNil(t, u)
+				want := service.ResponseText2Usage(c, text, "claude-test", 100).CompletionTokens
+				if counter == `,"output_tokens":0` {
+					want = 0
+				}
+				if counter == `,"output_tokens":22` {
+					want = 22
+				}
+				require.Greater(t, service.ResponseText2Usage(c, text, "claude-test", 100).CompletionTokens, 1)
+				require.Equal(t, want, u.CompletionTokens)
+			})
+		}
+	}
+}
+
+func TestClaudePartialToolEstimateMatchesClientPayload(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		t.Run(string(format), func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+			info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true,
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+			input := `{"value":"` + strings.Repeat("undelivered argument ", 128) + `"}`
+			raw := "data: " + `{"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":100}}}` + "\n\ndata: " +
+				`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_test","name":"lookup","input":` + input + `}}` + "\n\ndata: " +
+				`{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}` + "\n\n"
+			u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, info)
+			require.NotNil(t, apiErr)
+			require.NotNil(t, u)
+			text := "lookup"
+			if format == types.RelayFormatClaude {
+				text += input
+				require.Contains(t, w.Body.String(), "undelivered argument")
+			} else {
+				require.NotContains(t, w.Body.String(), "undelivered argument")
+			}
+			require.Equal(t, service.ResponseText2Usage(c, text, "claude-test", 100).CompletionTokens, u.CompletionTokens)
+		})
+	}
+}
 
 type correctionClaudeWriter struct{ *httptest.ResponseRecorder }
 

@@ -100,6 +100,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 
 		usage, maxApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
 		if maxApiErr != nil {
+			if usage != nil && info.IsStream && types.IsSkipRetryError(maxApiErr) {
+				info.StreamStatus.RecordFatalError(maxApiErr)
+				service.PostPartialConsumeQuota(c, info, usage)
+			}
 			return maxApiErr
 		}
 

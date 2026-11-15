@@ -209,6 +209,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	usage := &dto.Usage{}
 	containUsage, hasPayload := false, false
+	finishReasonSeen := false
 	var usagePresence dto.OpenAIUsagePresence
 	var text strings.Builder
 	var toolCount int
@@ -295,6 +296,11 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			errorUsageTimer = time.AfterFunc(chatErrorUsageGracePeriod, func() { _ = resp.Body.Close() })
 			return
 		}
+		for _, choice := range frame.Choices {
+			if strings.TrimSpace(choice.FinishReason) != "" {
+				finishReasonSeen = true
+			}
+		}
 		visible := frame.hasPayload()
 		if !info.ShouldIncludeUsage && frame.Usage != nil && len(frame.Choices) == 0 {
 			recordUsage(&frame, data)
@@ -340,6 +346,12 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	if streamErr == nil && !info.StreamStatus.IsNormalEnd() {
 		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	if streamErr == nil && hasPayload && !finishReasonSeen && info.StreamStatus.EndReason != relaycommon.StreamEndReasonDone {
+		// Compatible providers may omit DONE; a finish_reason still completes
+		// their stream. Plain EOF alone cannot complete delivered generation.
+		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended before a completion marker"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+		info.StreamStatus.RecordFatalError(streamErr)
 	}
 	if streamErr != nil {
 		if c.Writer.Written() {

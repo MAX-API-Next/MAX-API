@@ -996,13 +996,11 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.responsesUsageFinalized {
 		return
 	}
-	complete := claudeInfo.Done
+	// Only a numeric message_delta counter makes native output usage final.
+	// message_start and usage-only deltas can precede more delivered output.
+	complete := claudeInfo.responsesFinalOutputUsageReported
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		complete = claudeInfo.ResponsesTerminalSeen
-	} else if claudeInfo.responsesFinalOutputUsageReported {
-		// A final numeric counter remains authoritative even when a later
-		// provider error or client disconnect interrupts the stream.
-		complete = true
 	}
 	explicitZero := complete && claudeInfo.responsesFinalOutputUsageReported
 	estimated := false
@@ -1124,7 +1122,7 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 			if writeObserver.err != nil {
 				err = types.NewError(writeObserver.err, types.ErrorCodeBadResponse)
 			} else if err == nil && c.Writer.Size() > before {
-				claudeInfo.recordDeliveredStreamOutput(data)
+				claudeInfo.recordDeliveredStreamOutput(data, info.RelayFormat == types.RelayFormatClaude)
 			}
 		}
 		if err != nil {

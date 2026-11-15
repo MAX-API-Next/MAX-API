@@ -43,6 +43,56 @@ func streamFundingCases() []streamFundingCase {
 	}
 }
 
+func TestClaudeGlobalResponsesFailureSettlesOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, ending := range []string{"no_delivery", "provider", "eof", "transport"} {
+			t.Run(funding.name+"/"+ending, func(t *testing.T) {
+				delivered := ending != "no_delivery"
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					if ending == "transport" {
+						w.Header().Set("Content-Length", "100000")
+					}
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"response.created","response":{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					if delivered {
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"partial output"}`+"\n\n")
+					}
+					if ending == "provider" || ending == "no_delivery" {
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.failed","response":{"status":"failed","error":{"message":"synthetic failure"},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					}
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "claude-global-failure-" + funding.name + ending
+				c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				info.RelayFormat, info.RequestURLPath, info.IsFirstRequest = types.RelayFormatClaude, "/v1/messages", true
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+				info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				apiErr := ClaudeHelper(c, info)
+				require.NotNil(t, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				quota, prompt, completion := 0, 0, 0
+				if delivered {
+					quota, prompt, completion = 6, 4, 2
+					require.True(t, types.IsSkipRetryError(apiErr))
+					require.Contains(t, recorder.Body.String(), "partial output")
+				}
+				assertStreamFundingBalances(t, db, funding, requestID, quota, delivered, prompt, completion)
+				if delivered {
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					require.Contains(t, log.Other, `"status":"error"`, "partial settlement must retain failure status even on clean EOF")
+				}
+			})
+		}
+	}
+}
+
 func setupStreamFundingLedger(t *testing.T, funding streamFundingCase) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

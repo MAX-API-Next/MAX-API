@@ -34,14 +34,18 @@ func (w *claudeStreamWriteObserver) WriteString(data string) (int, error) {
 
 func (w *claudeStreamWriteObserver) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string) {
+func (info *ClaudeResponseInfo) recordDeliveredStreamOutput(data string, includeInitialToolInput bool) {
 	var text strings.Builder
 	for _, path := range []string{"delta.text", "delta.thinking", "delta.partial_json", "content_block.text"} {
 		text.WriteString(gjson.Get(data, path).String())
 	}
 	if gjson.Get(data, "content_block.type").String() == "tool_use" {
 		text.WriteString(gjson.Get(data, "content_block.name").String())
-		text.WriteString(gjson.Get(data, "content_block.input").Raw)
+		// The Chat converter sends an empty arguments string at tool start.
+		// Only native Claude clients receive the initial input object.
+		if includeInitialToolInput {
+			text.WriteString(gjson.Get(data, "content_block.input").Raw)
+		}
 	}
 	if text.Len() > 0 {
 		info.streamOutputDelivered = true

@@ -16,9 +16,88 @@ import (
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageCorrectionInterruptedCallerLedger(t *testing.T) {
+	service.InitTokenEncoders()
+	service.InitHttpClient()
+	oldPolicy := model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy
+	model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy.Enabled = false
+	t.Cleanup(func() { model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = oldPolicy })
+	text := strings.Repeat("delivered output ", 32)
+	for i, tc := range []struct {
+		name             string
+		format           types.RelayFormat
+		chat, tool, zero bool
+	}{
+		{"claude_missing_counter", types.RelayFormatClaude, false, false, false},
+		{"converted_missing_counter", types.RelayFormatOpenAI, false, false, false},
+		{"converted_tool_input", types.RelayFormatOpenAI, false, true, false},
+		{"chat_missing_terminal", types.RelayFormatOpenAI, true, false, false},
+		{"chat_zero_missing_terminal", types.RelayFormatOpenAI, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9590+i, "")
+			frames := []string{
+				`{"type":"message_start","message":{"model":"audit-model","usage":{"input_tokens":100,"output_tokens":1}}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}`,
+				`{"type":"message_delta","usage":{"input_tokens":100}}`,
+				`{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}`,
+			}
+			prompt, output := 100, service.EstimateTokenByModel("audit-model", text)
+			require.Greater(t, output, 1)
+			channelType := constant.ChannelTypeAnthropic
+			if tc.tool {
+				frames = []string{frames[0], `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_test","name":"lookup","input":{"value":"` + strings.Repeat("hidden argument ", 128) + `"}}}`, frames[3]}
+				output = service.EstimateTokenByModel("audit-model", "lookup")
+			}
+			if tc.chat {
+				channelType = constant.ChannelTypeOpenAI
+				counts := `{"prompt_tokens":100,"completion_tokens":22}`
+				prompt, output = 100, 22
+				if tc.zero {
+					counts = `{"prompt_tokens":0,"completion_tokens":0}`
+					prompt, output = 0, 0
+				}
+				frames = []string{`{"choices":[{"delta":{"content":"partial output"}}]}`, `{"choices":[],"usage":` + counts + `}`}
+			}
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			c.Set(string(constant.ContextKeyChannelType), channelType)
+			c.Set(string(constant.ContextKeyChannelId), info.ChannelId)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			info.RelayFormat, info.IsStream = tc.format, true
+			var apiErr *types.MaxAPIError
+			if tc.format == types.RelayFormatClaude {
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info.Request = &dto.ClaudeRequest{Model: "audit-model", Stream: common.GetPointer(true), MaxTokens: common.GetPointer(uint(100))}
+				apiErr = relay.ClaudeHelper(c, info)
+			} else {
+				info.Request = &dto.GeneralOpenAIRequest{Model: "audit-model", Stream: common.GetPointer(true)}
+				apiErr = relay.TextHelper(c, info)
+			}
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr))
+			service.HandleFailedBilling(c, info, apiErr)
+			service.HandleFailedBilling(c, info, apiErr)
+			assertUsageReplayBalance(t, info, prompt+output*2)
+			var log model.Log
+			require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", info.UserId, model.LogTypeConsume).First(&log).Error)
+			require.Equal(t, prompt, log.PromptTokens)
+			require.Equal(t, output, log.CompletionTokens)
+			require.Contains(t, log.Other, `"status":"error"`)
+		})
+	}
+}
 
 func TestUsageCorrectionResponsesExplicitZeroSettlement(t *testing.T) {
 	c, info := usageReplayInfo(t, 9530, "")
