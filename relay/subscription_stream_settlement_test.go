@@ -199,6 +199,38 @@ func TestResponsesCounterPresenceOriginalFunding(t *testing.T) {
 	}
 }
 
+func TestConvertedResponsesTerminalUsageRetainsFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+			t.Run(funding.name+"/"+string(format), func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"accepted output"}`+"\n\ndata: "+`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":2}}}`+"\n\ndata: "+`{"type":"response.in_progress","response":{"usage":{"input_tokens":0}}}`+"\n\n")
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "converted-terminal-" + funding.name + string(format)
+				c, info, _ := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+				model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+				if format == types.RelayFormatClaude {
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+					info.RelayFormat, info.RequestURLPath, info.IsFirstRequest = format, "/v1/messages", true
+					info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				if format == types.RelayFormatClaude {
+					require.Nil(t, ClaudeHelper(c, info))
+				} else {
+					require.Nil(t, TextHelper(c, info))
+				}
+				service.HandleFailedBilling(c, info, types.NewError(fmt.Errorf("late duplicate cleanup"), types.ErrorCodeBadResponse))
+				assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+			})
+		}
+	}
+}
+
 func setupStreamFundingLedger(t *testing.T, funding streamFundingCase) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})

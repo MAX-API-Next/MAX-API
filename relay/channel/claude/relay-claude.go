@@ -1005,8 +1005,8 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	explicitZero := complete && claudeInfo.responsesFinalOutputUsageReported
 	estimated := false
 	if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
-		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
-		estimated = claudeInfo.Usage.PromptTokens > 0
+		claudeInfo.Usage.PromptTokens = max(0, info.GetEstimatePromptTokens()-claudeInfo.Usage.PromptTokensDetails.CachedTokens-cacheCreationTokensForOpenAIUsage(claudeInfo.Usage))
+		estimated = info.GetEstimatePromptTokens() > 0
 	}
 	if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) || !complete {
 		if common.DebugEnabled {
@@ -1026,7 +1026,7 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 			estimated = true
 		}
 		if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
-			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+			claudeInfo.Usage.PromptTokens = max(0, fallback.PromptTokens-claudeInfo.Usage.PromptTokensDetails.CachedTokens-cacheCreationTokensForOpenAIUsage(claudeInfo.Usage))
 			estimated = true
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens

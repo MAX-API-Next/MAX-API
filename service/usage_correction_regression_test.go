@@ -116,6 +116,60 @@ func TestUsageCorrectionResponsesExplicitZeroSettlement(t *testing.T) {
 	require.Zero(t, logs[0].Quota)
 }
 
+func TestClaudeMissingInputCacheCallerSettlement(t *testing.T) {
+	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		t.Run(string(format), func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9600+i, "")
+			service.InitHttpClient()
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"audit-model","usage":{"cache_read_input_tokens":10,"cache_creation_input_tokens":8}}}`+"\n\ndata: "+`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}`+"\n\ndata: "+`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			c.Set(string(constant.ContextKeyChannelType), constant.ChannelTypeAnthropic)
+			c.Set(string(constant.ContextKeyChannelId), info.ChannelId)
+			c.Set(string(constant.ContextKeyChannelBaseUrl), upstream.URL)
+			c.Set(string(constant.ContextKeyChannelKey), "synthetic-test-key")
+			c.Set(string(constant.ContextKeyOriginalModel), "audit-model")
+			info.IsStream, info.RelayFormat = true, format
+			if format == types.RelayFormatClaude {
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info.Request = &dto.ClaudeRequest{Model: "audit-model", Stream: common.GetPointer(true), MaxTokens: common.GetPointer(uint(100))}
+				require.Nil(t, relay.ClaudeHelper(c, info))
+			} else {
+				info.Request = &dto.GeneralOpenAIRequest{Model: "audit-model", Stream: common.GetPointer(true)}
+				require.Nil(t, relay.TextHelper(c, info))
+			}
+			service.HandleFailedBilling(c, info, types.NewError(fmt.Errorf("duplicate cleanup"), types.ErrorCodeBadResponse))
+			assertUsageReplayBalance(t, info, 31) // (38-10-8) + 10*0.1 + 8*1.25.
+		})
+	}
+}
+
+func TestResponsesMissingInputFloorSettlement(t *testing.T) {
+	for i, mode := range []string{"nonstream", "converted", "native"} {
+		t.Run(mode, func(t *testing.T) {
+			c, info := usageReplayInfo(t, 9610+i, "")
+			raw := `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}}`
+			handler := openai.OaiResponsesToChatHandler
+			if mode != "nonstream" {
+				info.IsStream = true
+				handler = openai.OaiResponsesToChatStreamHandler
+				raw = "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":{"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}}}` + "\n\n"
+				if mode == "native" {
+					handler = openai.OaiResponsesStreamHandler
+				}
+			}
+			u, apiErr := handler(c, info, usageReplayResponse(raw))
+			require.Nil(t, apiErr)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, 100) // Known cached subset: 1000*0.1; no uncached/output tokens.
+		})
+	}
+}
+
 func TestUsageCorrectionClaudeCallerPartialSettlement(t *testing.T) {
 	for i, zero := range []bool{false, true} {
 		t.Run(fmt.Sprint(zero), func(t *testing.T) {

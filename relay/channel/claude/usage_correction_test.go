@@ -76,6 +76,32 @@ func TestClaudePartialToolEstimateMatchesClientPayload(t *testing.T) {
 
 type correctionClaudeWriter struct{ *httptest.ResponseRecorder }
 
+func TestClaudeMissingInputEstimateExcludesReportedCache(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		for _, input := range []string{"", `"input_tokens":0,`, `"input_tokens":7,`} {
+			t.Run(string(format)+input, func(t *testing.T) {
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+				info := &relaycommon.RelayInfo{IsStream: true, RelayFormat: format, DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"}}
+				info.SetEstimatePromptTokens(38)
+				raw := "data: " + `{"type":"message_start","message":{"model":"claude-test","usage":{` + input + `"cache_read_input_tokens":10,"cache_creation_input_tokens":8}}}` + "\n\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}` + "\n\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}` + "\n\n"
+				u, apiErr := ClaudeStreamHandler(c, &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(raw))}, info)
+				require.Nil(t, apiErr)
+				require.NotNil(t, u.BillingUsage)
+				want := 20
+				if input == `"input_tokens":0,` {
+					want = 0
+				}
+				if input == `"input_tokens":7,` {
+					want = 7
+				}
+				require.Equal(t, want, u.BillingUsage.ClaudeUsage.InputTokens)
+				require.Equal(t, want+18, buildOpenAIStyleUsageFromClaudeUsage(u).PromptTokens)
+			})
+		}
+	}
+}
+
 func (w *correctionClaudeWriter) Write(p []byte) (int, error) {
 	if strings.Contains(string(p), "undelivered") {
 		return len(p) / 2, errors.New("synthetic short write")

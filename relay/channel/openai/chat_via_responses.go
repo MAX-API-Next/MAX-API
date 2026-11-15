@@ -84,14 +84,16 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		outputAuditText := service.ExtractOutputTextFromResponses(&responsesResp)
 		estimated := service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		if !promptReported {
-			usage.PromptTokens = estimated.PromptTokens
-			usage.InputTokens = estimated.PromptTokens
+			usage.PromptTokens = max(estimated.PromptTokens, responsesInputTokenFloor(usage))
+			usage.InputTokens = usage.PromptTokens
 		}
 		if !completionReported {
 			usage.CompletionTokens = estimated.CompletionTokens
 			usage.OutputTokens = estimated.CompletionTokens
 		}
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if gjson.GetBytes(body, "usage.total_tokens").Type != gjson.Number {
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		}
 		if service.ResponseAuditEnabled() {
 			service.SetRelayResponseAuditContent(info, outputAuditText)
 		}
@@ -177,7 +179,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if !usagePresence.Prompt || !usagePresence.Completion {
 			estimate := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 			if !usagePresence.Prompt {
-				usage.PromptTokens, usage.InputTokens = estimate.PromptTokens, estimate.PromptTokens
+				usage.PromptTokens = max(estimate.PromptTokens, responsesInputTokenFloor(usage))
+				usage.InputTokens = usage.PromptTokens
 			}
 			if !usagePresence.Completion {
 				usage.CompletionTokens, usage.OutputTokens = estimate.CompletionTokens, estimate.CompletionTokens
@@ -401,6 +404,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
+			return
+		}
+		// A delivered terminal fixes this generation's output and usage.
+		// Its own usage was merged before sentStop became true.
+		if sentStop {
 			return
 		}
 

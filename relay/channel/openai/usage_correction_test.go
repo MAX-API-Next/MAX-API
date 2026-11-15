@@ -250,6 +250,69 @@ func TestUsageCorrectionResponsesEmptyDetailsKeepPresentAlias(t *testing.T) {
 	require.Equal(t, 1, u.PromptTokensDetails.CachedTokens, "an empty details object does not report cached_tokens=0")
 }
 
+func TestUsageCorrectionConvertedTerminalFreezesSnapshot(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for _, tail := range []string{
+			`{"type":"response.in_progress","response":{"usage":{"input_tokens":0}}}`,
+			`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":999,"output_tokens":999}}}`,
+			`{"type":"response.output_text.delta","delta":"late output"}`,
+			`{"type":"response.failed","response":{"status":"failed","error":{"message":"late failure"}}}`,
+			`{broken`,
+		} {
+			t.Run(string(format)+"/"+tail, func(t *testing.T) {
+				c, w, info := correctionContext(t, "/v1/chat/completions")
+				info.IsStream, info.RelayFormat = true, format
+				info.IsFirstRequest = true
+				raw := "data: " + `{"type":"response.output_text.delta","delta":"accepted output"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":100,"output_tokens":22}}}` + "\n\ndata: " + tail + "\n\n"
+				u, apiErr := OaiResponsesToChatStreamHandler(c, info, correctionResponse(raw))
+				require.Nil(t, apiErr)
+				require.Equal(t, 100, u.PromptTokens)
+				require.Equal(t, 22, u.CompletionTokens)
+				require.NotNil(t, u.BillingUsage)
+				require.Equal(t, 100, u.BillingUsage.OpenAIUsage.PromptTokens)
+				require.NotContains(t, w.Body.String(), "late output")
+			})
+		}
+	}
+}
+
+func TestUsageCorrectionResponsesPreservesTotalAndInputFloor(t *testing.T) {
+	for _, mode := range []string{"nonstream", "converted", "native"} {
+		for _, tc := range []struct {
+			name, counts          string
+			prompt, output, total int
+		}{
+			{"reported_total", `{"input_tokens":0,"total_tokens":100}`, 0, 2, 100},
+			{"reported_zero_total", `{"input_tokens":0,"total_tokens":0}`, 0, 2, 0},
+			{"cached_subset", `{"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 1000, 0, 1000},
+			{"explicit_parent_zero", `{"input_tokens":0,"output_tokens":0,"input_tokens_details":{"cached_tokens":1000}}`, 0, 0, 0},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				c, _, info := correctionContext(t, "/v1/chat/completions")
+				raw := `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":` + tc.counts + `}`
+				handler := OaiResponsesToChatHandler
+				if mode != "nonstream" {
+					info.IsStream = true
+					raw = "data: " + `{"type":"response.output_text.delta","delta":"hi"}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","usage":` + tc.counts + `}}` + "\n\n"
+					handler = OaiResponsesToChatStreamHandler
+					if mode == "native" {
+						handler = OaiResponsesStreamHandler
+					}
+				}
+				u, apiErr := handler(c, info, correctionResponse(raw))
+				require.Nil(t, apiErr)
+				output, total := tc.output, tc.total
+				if mode == "native" && (tc.name == "reported_total" || tc.name == "reported_zero_total") {
+					output = 1
+				}
+				require.Equal(t, tc.prompt, u.PromptTokens)
+				require.Equal(t, output, u.CompletionTokens)
+				require.Equal(t, total, u.TotalTokens)
+			})
+		}
+	}
+}
+
 func TestUsageCorrectionResponsesPresence(t *testing.T) {
 	for _, tc := range []struct {
 		name, usage        string

@@ -47,6 +47,13 @@ func mergeResponsesStreamUsage(usage *dto.Usage, presence *dto.OpenAIUsagePresen
 	dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(raw), presence)
 }
 
+func responsesInputTokenFloor(usage *dto.Usage) int {
+	return max(usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedCreationTokens,
+		usage.PromptTokensDetails.CacheWriteTokens, usage.PromptTokensDetails.TextTokens,
+		usage.PromptTokensDetails.AudioTokens, usage.PromptTokensDetails.ImageTokens,
+		usage.ClaudeCacheCreation5mTokens+usage.ClaudeCacheCreation1hTokens)
+}
+
 const maxPendingResponsesStreamEvents = 32
 
 // Collect generated output only after its complete SSE frame was delivered.
@@ -457,8 +464,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
 			usage.OutputTokens = usage.CompletionTokens
 		}
-		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "") {
-			usage.PromptTokens = info.GetEstimatePromptTokens()
+		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "" || responsesInputTokenFloor(usage) > 0) {
+			usage.PromptTokens = max(info.GetEstimatePromptTokens(), responsesInputTokenFloor(usage))
 			usage.InputTokens = usage.PromptTokens
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
