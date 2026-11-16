@@ -602,7 +602,8 @@ type ClaudeResponseInfo struct {
 	streamDeliveryTracked             bool
 	streamTerminalSeen                bool
 
-	pendingToolUses []claudePendingToolUse
+	pendingToolUses       []claudePendingToolUse
+	pendingToolStopReason string
 }
 
 type claudePendingToolUse struct {
@@ -641,6 +642,7 @@ func (info *ClaudeResponseInfo) finishToolUses(relayInfo *relaycommon.RelayInfo,
 func (info *ClaudeResponseInfo) discardPendingToolUses() {
 	if info != nil {
 		info.pendingToolUses = nil
+		info.pendingToolStopReason = ""
 	}
 }
 
@@ -957,6 +959,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		return writeClaudeResponsesEvents(c, info, claudeInfo, events)
 	}
+	// Tool completion depends on the delivered stop marker. Numeric usage
+	// received with that metadata remains authoritative if its write fails.
+	if err == nil && claudeInfo.pendingToolStopReason != "" {
+		if writer, ok := c.Writer.(*claudeStreamWriteObserver); !ok || writer.err == nil {
+			claudeInfo.finishToolUses(info, claudeInfo.pendingToolStopReason)
+			claudeInfo.pendingToolStopReason = ""
+		}
+	}
 	return nil
 }
 
@@ -967,6 +977,16 @@ func writeClaudeResponsesEvents(c *gin.Context, info *relaycommon.RelayInfo, cla
 			return types.NewError(marshalErr, types.ErrorCodeJsonMarshalFailed)
 		}
 		delivered, writeErr := helper.ResponseChunkDataWithDelivery(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
+		if delivered && event.Type == dto.ResponsesOutputTypeItemDone && event.Payload.Item != nil &&
+			strings.EqualFold(strings.TrimSpace(claudeInfo.pendingToolStopReason), "tool_use") && event.Payload.Item.Status == "completed" {
+			// Converted tools finish independently; retain an accepted first
+			// call even if a later item or terminal snapshot cannot be written.
+			for _, toolUse := range claudeInfo.pendingToolUses {
+				if toolUse.identity.CallID != "" && toolUse.identity.CallID == event.Payload.Item.CallId {
+					info.ObserveCustomToolCall(toolUse.name, toolUse.identity)
+				}
+			}
+		}
 		if delivered && helper.ResponsesStreamEventHasOutput(event.Payload) {
 			claudeInfo.responsesOutputDelivered = true
 			if event.Payload.Delta != "" {
@@ -1315,7 +1335,7 @@ func observeClaudeStreamToolUses(info *relaycommon.RelayInfo, claudeInfo *Claude
 		stopReason = *response.Delta.StopReason
 	}
 	if strings.TrimSpace(stopReason) != "" {
-		claudeInfo.finishToolUses(info, stopReason)
+		claudeInfo.pendingToolStopReason = stopReason
 	}
 }
 

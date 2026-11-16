@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/claude"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/cohere"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/dify"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/gemini"
@@ -31,9 +32,11 @@ import (
 
 type replayConvertedWriter struct {
 	gin.ResponseWriter
-	short  bool
-	marker string
-	failed bool
+	short       bool
+	marker      string
+	failed      bool
+	skipMatches int
+	matches     int
 }
 
 type replayCohereWriter struct {
@@ -49,6 +52,10 @@ func (w *replayConvertedWriter) Write(p []byte) (int, error) {
 		marker = "undelivered"
 	}
 	if strings.Contains(string(p), marker) {
+		w.matches++
+		if w.matches <= w.skipMatches {
+			return w.ResponseWriter.Write(p)
+		}
 		w.failed = true
 		if w.short {
 			return w.ResponseWriter.Write(p[:len(p)-1])
@@ -164,6 +171,223 @@ func TestConvertedRejectedToolSurchargeSettlement(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestClaudeRejectedToolTerminalSurchargeSettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		for _, mode := range []string{"error", "short", "success"} {
+			t.Run(string(format)+"/"+mode, func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9804, "")
+				info.IsStream, info.RelayFormat = true, format
+				marker := `"stop_reason":"tool_use"`
+				if format == types.RelayFormatOpenAI {
+					marker = `"finish_reason":"tool_calls"`
+				} else if format == types.RelayFormatOpenAIResponses {
+					marker = "response.output_item.done"
+				}
+				var writer *replayConvertedWriter
+				if mode != "success" {
+					writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short", marker: marker}
+					c.Writer = writer
+				}
+				raw := "data: " + `{"type":"message_start","message":{"id":"msg_test","model":"gpt-4","usage":{"input_tokens":10}}}` + "\n\ndata: " +
+					`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"undelivered_tool","input":{}}}` + "\n\ndata: " +
+					`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}` + "\n\ndata: " +
+					`{"type":"content_block_stop","index":0}` + "\n\ndata: " +
+					`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}` + "\n\ndata: " + `{"type":"message_stop"}` + "\n\n"
+				u, apiErr := claude.ClaudeStreamHandler(c, usageReplayResponse(raw), info)
+				want := 14
+				if mode == "success" {
+					require.Nil(t, apiErr)
+					want += 500
+				} else {
+					require.True(t, writer.failed, "actual completion marker write must fail")
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+				}
+				require.NotNil(t, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				assertUsageReplayBalance(t, info, want)
+				if mode == "success" {
+					require.Len(t, info.ToolUsageSnapshot().Items, 1)
+				} else {
+					require.Empty(t, info.ToolUsageSnapshot().Items)
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeResponsesMixedToolDeliverySettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	for _, mode := range []string{"error", "short", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9806, "")
+			info.IsStream, info.RelayFormat = true, types.RelayFormatOpenAIResponses
+			if mode != "success" {
+				c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short", marker: "response.output_item.done", skipMatches: 1}
+			}
+			raw := "data: " + `{"type":"message_start","message":{"id":"msg_test","model":"gpt-4","usage":{"input_tokens":10}}}` + "\n\n"
+			for index, name := range []string{"accepted_tool", "undelivered_tool"} {
+				raw += fmt.Sprintf("data: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_%d\",\"name\":\"%s\",\"input\":{}}}\n\n", index, index, name)
+				raw += fmt.Sprintf("data: {\"type\":\"content_block_delta\",\"index\":%d,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n", index)
+				raw += fmt.Sprintf("data: {\"type\":\"content_block_stop\",\"index\":%d}\n\n", index)
+			}
+			raw += "data: " + `{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}` + "\n\ndata: " + `{"type":"message_stop"}` + "\n\n"
+			u, apiErr := claude.ClaudeStreamHandler(c, usageReplayResponse(raw), info)
+			want, calls := 514, 1
+			if mode == "success" {
+				require.Nil(t, apiErr)
+				want, calls = 1014, 2
+			} else {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+			}
+			require.NotNil(t, u)
+			service.PostPartialConsumeQuota(c, info, u)
+			service.PostPartialConsumeQuota(c, info, u)
+			assertUsageReplayBalance(t, info, want)
+			require.Len(t, info.ToolUsageSnapshot().Items, calls)
+		})
+	}
+}
+
+func TestClaudeMetadataFinishFailurePreservesReportedUsage(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses} {
+		for _, zero := range []bool{false, true} {
+			for _, mode := range []string{"error", "short", "success"} {
+				t.Run(fmt.Sprintf("%s/zero=%t/%s", format, zero, mode), func(t *testing.T) {
+					usageReplayRatios(t)
+					c, info := usageReplayInfo(t, 9807, "")
+					info.IsStream, info.RelayFormat = true, format
+					marker := `"stop_reason":"end_turn"`
+					if format == types.RelayFormatOpenAI {
+						marker = `"finish_reason":"stop"`
+					} else if format == types.RelayFormatOpenAIResponses {
+						marker = "response.completed"
+					}
+					var writer *replayConvertedWriter
+					if mode != "success" {
+						writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short", marker: marker}
+						c.Writer = writer
+					}
+					count, want := 999, 2997
+					if zero {
+						count, want = 0, 0
+					}
+					raw := "data: " + `{"type":"message_start","message":{"id":"msg_test","model":"gpt-4","usage":{"input_tokens":100}}}` + "\n\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}` + "\n\ndata: " +
+						fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":%d,"output_tokens":%d}}`, count, count) + "\n\ndata: " + `{"type":"message_stop"}` + "\n\n"
+					u, apiErr := claude.ClaudeStreamHandler(c, usageReplayResponse(raw), info)
+					if mode == "success" {
+						require.Nil(t, apiErr)
+					} else {
+						require.True(t, writer.failed)
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+					}
+					require.NotNil(t, u)
+					require.Equal(t, count, u.PromptTokens)
+					require.Equal(t, count, u.CompletionTokens)
+					service.PostPartialConsumeQuota(c, info, u)
+					service.PostPartialConsumeQuota(c, info, u)
+					assertUsageReplayBalance(t, info, want)
+				})
+			}
+		}
+	}
+}
+
+func TestChatPostErrorOutputUsageSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, channel := range []int{constant.ChannelTypeMoonshot, constant.ChannelTypeOpenAI, constant.ChannelTypeZhipu_v4, constant.ChannelTypeDeepSeek} {
+		for _, kind := range []string{"output", "output_zero", "whitespace", "tool", "error_frame_output", "usage_only", "usage_only_zero", "cache_only", "no_cache", "canonical_zero", "creation", "creation_zero"} {
+			t.Run(fmt.Sprintf("%d/%s", channel, kind), func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9805, "")
+				info.IsStream, info.ChannelType = true, channel
+				recorder := usageReplayRecorder(c)
+				counts := map[string]any{"prompt_tokens": 999, "completion_tokens": 999, "total_tokens": 1998}
+				delta := map[string]any{"content": "undelivered"}
+				choice := map[string]any{"index": 0, "delta": delta}
+				body := map[string]any{"choices": []any{choice}, "usage": counts}
+				cached, want := 80, 32 // (100-80) uncached + 80*.1 cache + 2*2 output.
+				switch kind {
+				case "error_frame_output":
+					body["error"] = map[string]any{"message": "synthetic terminal failure"}
+				case "creation":
+					counts["input_tokens_details"] = map[string]any{"cached_creation_tokens": 4, "cache_write_tokens": 4}
+					want = 33 // (100-80-4) + 80*.1 + 4*1.25 + 2*2.
+				case "creation_zero":
+					counts["prompt_tokens_details"] = map[string]any{"cached_creation_tokens": 0, "cache_write_tokens": 0}
+				case "output_zero":
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 0, 0, 0
+				case "whitespace":
+					delta["content"] = " "
+				case "tool":
+					delete(delta, "content")
+					delta["tool_calls"] = []any{map[string]any{"index": 0, "id": "call_1", "type": "function", "function": map[string]any{"name": "undelivered_tool", "arguments": "{}"}}}
+				case "usage_only":
+					body["choices"] = []any{}
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 200, 3, 203
+					want = 134 // (200-80) + 80*.1 + 3*2.
+				case "usage_only_zero":
+					body["choices"] = []any{}
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 0, 0, 0
+					cached, want = 0, 0
+				case "cache_only":
+					delete(counts, "prompt_tokens")
+					delete(counts, "completion_tokens")
+					delete(counts, "total_tokens")
+				case "no_cache":
+					cached, want = 20, 86
+				case "canonical_zero":
+					counts["prompt_tokens_details"] = map[string]any{"cached_tokens": 0}
+					want = 104
+				}
+				if kind != "no_cache" {
+					switch channel {
+					case constant.ChannelTypeMoonshot:
+						if kind == "usage_only" || kind == "usage_only_zero" {
+							counts["cached_tokens"] = cached
+						} else {
+							choice["usage"] = map[string]any{"cached_tokens": cached}
+						}
+					case constant.ChannelTypeOpenAI:
+						body["timings"] = map[string]any{"cache_n": cached}
+					case constant.ChannelTypeZhipu_v4:
+						counts["cached_tokens"] = cached
+					case constant.ChannelTypeDeepSeek:
+						counts["prompt_cache_hit_tokens"] = cached
+					}
+				}
+				late, err := common.Marshal(body)
+				require.NoError(t, err)
+				initial := `{"choices":[{"index":0,"delta":{"content":"hi"}}],"usage":{"prompt_tokens":100,"completion_tokens":2,"total_tokens":102,"prompt_tokens_details":{"cached_tokens":20}}}`
+				if kind == "creation_zero" {
+					initial = strings.Replace(initial, `"cached_tokens":20`, `"cached_tokens":20,"cached_creation_tokens":4,"cache_write_tokens":4`, 1)
+				}
+				raw := "data: " + initial + "\n\ndata: "
+				if kind != "error_frame_output" {
+					raw += `{"error":{"type":"overloaded_error","message":"synthetic terminal failure"}}` + "\n\ndata: "
+				}
+				raw += string(late) + "\n\n"
+				u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+				require.NotNil(t, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				assertUsageReplayBalance(t, info, want)
+				require.NotContains(t, recorder.Body.String(), "undelivered")
+				require.NotContains(t, recorder.Body.String(), "synthetic terminal failure")
+				require.Empty(t, info.ToolUsageSnapshot().Items)
+			})
 		}
 	}
 }

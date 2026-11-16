@@ -148,6 +148,22 @@ func (frame *chatStreamFrame) hasPayload() bool {
 	return false
 }
 
+// Discarded whitespace is still generated output, even though it cannot
+// satisfy the separate visible-output predicate used by empty retries.
+func (frame *chatStreamFrame) hasOutput() bool {
+	if frame.hasPayload() {
+		return true
+	}
+	for _, choice := range frame.Choices {
+		for key, value := range choice.Delta {
+			if text, ok := value.(string); key != "role" && ok && text != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Keep timing separate from the conservative empty-retry predicate. Provider
 // metadata and fields dropped by typed formatting are not delivered results.
 func (frame *chatStreamFrame) hasFirstResult(formatted bool) bool {
@@ -301,11 +317,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		return true
 	}
-	recordUsage := func(frame *chatStreamFrame, data string) {
-		lastData = data
-		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
-			containUsage = true
-		}
+	recordCache := func(data string) {
 		if cached, ok := chatStreamReportedCache(info.ChannelType, data); ok {
 			cacheReported, reportedCache = true, cached
 			usage.PromptTokensDetails.CachedTokens = cached
@@ -313,6 +325,55 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 				usage.InputTokensDetails.CachedTokens = cached
 			}
 			usagePresence.Any, containUsage = true, true
+		}
+	}
+	recordUsage := func(frame *chatStreamFrame, data string) {
+		lastData = data
+		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+			containUsage = true
+		}
+		recordCache(data)
+	}
+	recordErrorTailUsage := func(frame *chatStreamFrame, data string) {
+		if !frame.hasOutput() {
+			recordUsage(frame, data)
+			return
+		}
+		// Generation data is never forwarded after an error. Retain only
+		// independent cache facts, without merging its parents/output details
+		// or making it the final raw response used by post-processing.
+		recordCache(data)
+		var cacheUsage dto.Usage
+		if !dto.MergeOpenAIUsage(&cacheUsage, common.StringToByteSlice(data)) {
+			return
+		}
+		raw := gjson.Get(data, "usage")
+		for field, target := range map[string]*int{
+			"cached_creation_tokens": &usage.PromptTokensDetails.CachedCreationTokens,
+			"cache_write_tokens":     &usage.PromptTokensDetails.CacheWriteTokens,
+		} {
+			if raw.Get("prompt_tokens_details."+field).Type != gjson.Number && raw.Get("input_tokens_details."+field).Type != gjson.Number {
+				continue
+			}
+			if field == "cached_creation_tokens" {
+				*target = cacheUsage.PromptTokensDetails.CachedCreationTokens
+			} else {
+				*target = cacheUsage.PromptTokensDetails.CacheWriteTokens
+			}
+			if usage.InputTokensDetails != nil {
+				usage.InputTokensDetails.CachedCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+				usage.InputTokensDetails.CacheWriteTokens = usage.PromptTokensDetails.CacheWriteTokens
+			}
+			usagePresence.Any, containUsage = true, true
+		}
+		for field, target := range map[string]*int{
+			"claude_cache_creation_5_m_tokens": &usage.ClaudeCacheCreation5mTokens,
+			"claude_cache_creation_1_h_tokens": &usage.ClaudeCacheCreation1hTokens,
+		} {
+			if value := raw.Get(field); value.Type == gjson.Number {
+				*target = int(value.Int())
+				usagePresence.Any, containUsage = true, true
+			}
 		}
 	}
 	flushPending := func() bool {
@@ -339,7 +400,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			if common.UnmarshalJsonStr(data, &frame) == nil {
 				_, hasCache := chatStreamReportedCache(info.ChannelType, data)
 				if frame.Usage != nil || hasCache {
-					recordUsage(&frame, data)
+					recordErrorTailUsage(&frame, data)
 				}
 			}
 			return // Never forward generation data after the terminal error.
@@ -356,7 +417,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 				sr.Stop(streamErr)
 				return
 			}
-			recordUsage(&frame, data)
+			recordErrorTailUsage(&frame, data)
 			drainingErrorUsage = true
 			sr.Error(streamErr)
 			info.StreamStatus.RecordFatalError(streamErr)
