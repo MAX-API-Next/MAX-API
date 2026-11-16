@@ -449,6 +449,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		if delivered {
 			streamForwarded = true
+			switch event.response.Type {
+			case "response.completed", "response.incomplete", "response.done":
+				if response := event.response.Response; response != nil && responsesTerminalError(response, http.StatusInternalServerError, true) == nil {
+					observeResponsesOutputs(info, response.Output)
+					if event.response.Type == "response.completed" && response.HasImageGenerationCall() {
+						c.Set("image_generation_call", true)
+						c.Set("image_generation_call_quality", response.GetQuality())
+						c.Set("image_generation_call_size", response.GetSize())
+					}
+				}
+			case dto.ResponsesOutputTypeItemDone:
+				observeResponsesToolOutput(info, event.response.Item, event.response.OutputIndex)
+			}
 			outputEstimate.observe(event.response)
 			if (event.response.Response != nil && event.response.Response.HasImageGenerationCall()) ||
 				(event.response.Item != nil && event.response.Item.Type == dto.ResponsesOutputTypeImageGenerationCall) {
@@ -549,12 +562,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					terminalEventErr = terminalErr
 					break
 				}
-				observeResponsesOutputs(info, streamResponse.Response.Output)
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
-				}
 			}
 			if !hasVisiblePayload {
 				emptyCompletionRecorded = true
@@ -571,17 +578,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					terminalEventErr = terminalErr
 					break
 				}
-				observeResponsesOutputs(info, streamResponse.Response.Output)
 			}
 		case "response.output_text.delta":
-		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall, dto.BuildInCallFileSearchCall, dto.BuildInCallFunctionCall, dto.BuildInCallCustomToolCall, dto.BuildInCallToolUse:
-					observeResponsesToolOutput(info, streamResponse.Item, streamResponse.OutputIndex)
-				}
-			}
 		case "error", "response.error", "response.failed", "response.cancelled", "response.canceled":
 			terminalEventErr = responsesStreamTerminalError(&streamResponse, streamForwarded)
 		}

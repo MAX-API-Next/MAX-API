@@ -538,10 +538,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			if streamResp.Item.Type != dto.BuildInCallFunctionCall && streamResp.Item.Type != dto.BuildInCallCustomToolCall {
 				break
 			}
-			if streamResp.Type == dto.ResponsesOutputTypeItemDone {
-				observeResponsesToolOutput(info, streamResp.Item, streamResp.OutputIndex)
-			}
-
 			itemID := strings.TrimSpace(streamResp.Item.ID)
 			callID := strings.TrimSpace(streamResp.Item.CallId)
 			if callID == "" {
@@ -571,6 +567,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				usagePending = false
 				sr.Stop(streamErr)
 				return
+			}
+			if streamResp.Type == dto.ResponsesOutputTypeItemDone && callID != "" {
+				observeResponsesToolOutput(info, streamResp.Item, streamResp.OutputIndex)
 			}
 
 		case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -607,7 +606,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					sr.Stop(streamErr)
 					return
 				}
-				observeResponsesOutputs(info, streamResp.Response.Output)
 				completedOutputTypes = responsesOutputTypes(streamResp.Response)
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
@@ -648,8 +646,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 						hasVisiblePayload = true
 					}
 				}
-				for _, out := range streamResp.Response.Output {
+				for outputIndex, out := range streamResp.Response.Output {
 					if out.Type != dto.BuildInCallFunctionCall && out.Type != dto.BuildInCallCustomToolCall {
+						// Server-side search facts have no converted tool payload.
+						if out.Type == dto.BuildInCallWebSearchCall || out.Type == dto.BuildInCallFileSearchCall {
+							observeResponsesToolOutput(info, &out, &outputIndex)
+						}
 						continue
 					}
 					itemID := strings.TrimSpace(out.ID)
@@ -658,12 +660,16 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 						callID = itemID
 					}
 					if _, alreadyEmitted := toolCallIndexByID[callID]; alreadyEmitted {
+						observeResponsesToolOutput(info, &out, &outputIndex)
 						continue
 					}
 					if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
 						usagePending = false
 						sr.Stop(streamErr)
 						return
+					}
+					if callID != "" {
+						observeResponsesToolOutput(info, &out, &outputIndex)
 					}
 				}
 				if streamResp.Response.HasImageGenerationCall() {

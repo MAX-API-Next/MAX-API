@@ -168,6 +168,309 @@ func TestConvertedRejectedToolSurchargeSettlement(t *testing.T) {
 	}
 }
 
+func TestChatContradictoryZeroTotalAudioSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, failed := range []bool{false, true} {
+		for _, tc := range []struct {
+			name                          string
+			prompt, completion, rawTotal  int
+			textInput, audioInput, output int
+			wantTotal, quota              int
+			free                          bool
+		}{
+			{"contradictory_zero", 2, 1, 0, 1, 1, 1, 3, 17, false},
+			{"reported_zero", 0, 0, 0, 0, 0, 0, 0, 0, false},
+			{"coherent", 2, 1, 3, 1, 1, 1, 3, 17, false},
+			{"positive_total", 2, 1, 99, 1, 1, 1, 99, 17, false},
+			{"free_price", 2, 1, 0, 1, 1, 1, 3, 0, true},
+		} {
+			t.Run(fmt.Sprintf("failed=%t/%s", failed, tc.name), func(t *testing.T) {
+				usageReplayRatios(t)
+				expr := ""
+				if tc.free {
+					expr = `tier("free", 0)`
+				}
+				c, info := usageReplayInfo(t, 9799, expr)
+				info.IsStream, info.ShouldIncludeUsage = true, true
+				recorder := usageReplayRecorder(c)
+				facts := fmt.Sprintf(`{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d,"prompt_tokens_details":{"text_tokens":%d,"audio_tokens":%d},"completion_tokens_details":{"audio_tokens":%d}}`, tc.prompt, tc.completion, tc.rawTotal, tc.textInput, tc.audioInput, tc.output)
+				raw := "data: " + `{"choices":[{"index":0,"delta":{"content":"hi"}}]}` + "\n\ndata: " + `{"choices":[],"usage":` + facts + `}` + "\n\n"
+				if failed {
+					raw += "data: " + `{"error":{"type":"server_error","message":"synthetic audio stream failure"}}` + "\n\n"
+				} else {
+					raw += "data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+				}
+				u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+				if failed {
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+				} else {
+					require.Nil(t, apiErr)
+				}
+				require.NotNil(t, u)
+				settle := func() {
+					if failed {
+						service.PostPartialConsumeQuota(c, info, u)
+					} else {
+						service.PostAudioConsumeQuota(c, info, u, "")
+					}
+				}
+				settle()
+				settle()
+				assertUsageReplayBalance(t, info, tc.quota) // 1 text + 1 audio*4 + 1 output audio*4*3 =17.
+				require.Equal(t, tc.prompt, u.PromptTokens)
+				require.Equal(t, tc.completion, u.CompletionTokens)
+				require.Equal(t, tc.wantTotal, u.TotalTokens)
+				if tc.free {
+					var user model.User
+					require.NoError(t, model.DB.First(&user, info.UserId).Error)
+					require.Equal(t, 1, user.RequestCount, "known zero-price usage refunds reservation and records one request")
+				}
+				if failed {
+					require.NotNil(t, u.BillingUsage)
+					require.True(t, u.BillingUsage.TokenCountsReported)
+					require.False(t, u.BillingUsage.Estimated)
+				} else {
+					var last *dto.Usage
+					for _, line := range strings.Split(recorder.Body.String(), "\n") {
+						data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+						if !strings.HasPrefix(line, "data:") || data == "[DONE]" {
+							continue
+						}
+						var event dto.ChatCompletionsStreamResponse
+						require.NoError(t, common.UnmarshalJsonStr(data, &event))
+						if event.Usage != nil {
+							last = event.Usage
+						}
+					}
+					require.NotNil(t, last)
+					require.Equal(t, tc.wantTotal, last.TotalTokens)
+				}
+			})
+		}
+	}
+}
+
+func usageReplayPricedResponsesTools(t *testing.T) {
+	t.Helper()
+	service.InitTokenEncoders()
+	oldUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
+	setting := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	oldPrices := setting.Prices
+	setting.Prices = make(map[string]float64, len(oldPrices)+3)
+	for name, price := range oldPrices {
+		setting.Prices[name] = price
+	}
+	for _, name := range []string{"undelivered_tool", "accepted_tool", dto.BuildInToolFileSearch} {
+		setting.Prices[name] = 1
+	}
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() { setting.Prices = oldPrices; operation_setting.RebuildToolPriceIndex() })
+}
+
+func TestResponsesRejectedToolSurchargeSettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for _, kind := range []string{dto.BuildInCallFunctionCall, dto.BuildInCallCustomToolCall, dto.BuildInCallFileSearchCall, dto.BuildInCallToolUse, "idless"} {
+			if kind == dto.BuildInCallFileSearchCall && format != types.RelayFormatOpenAIResponses || kind == "idless" && format == types.RelayFormatOpenAIResponses {
+				continue
+			}
+			for _, frame := range []string{"item", "terminal"} {
+				for _, mode := range []string{"error", "short", "success"} {
+					skipped := kind == "idless" || kind == dto.BuildInCallToolUse && format != types.RelayFormatOpenAIResponses
+					if skipped && mode != "success" {
+						continue
+					}
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", format, kind, frame, mode), func(t *testing.T) {
+						usageReplayRatios(t)
+						c, info := usageReplayInfo(t, 9800, "")
+						info.IsStream, info.RelayFormat, info.FinalRequestRelayFormat = true, format, types.RelayFormatOpenAIResponses
+						handler := openai.OaiResponsesToChatStreamHandler
+						if format == types.RelayFormatOpenAIResponses {
+							info.RelayMode, handler = relayconstant.RelayModeResponses, openai.OaiResponsesStreamHandler
+						}
+						info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+							dto.BuildInToolFileSearch: {ToolName: dto.BuildInToolFileSearch},
+						}}
+						recorder := usageReplayRecorder(c)
+						if mode != "success" {
+							c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+						}
+						item := map[string]any{"type": kind, "id": "tool_1", "call_id": "call_1", "name": "undelivered_tool", "status": "completed"}
+						if kind == dto.BuildInCallCustomToolCall {
+							item["input"] = "{}"
+						} else {
+							item["arguments"] = "{}"
+						}
+						if kind == "idless" {
+							item["type"], item["id"], item["call_id"] = dto.BuildInCallFunctionCall, "", ""
+						}
+						terminal := map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{item}}}
+						encodedTerminal, err := common.Marshal(terminal)
+						require.NoError(t, err)
+						raw := "data: " + `{"type":"response.output_text.delta","delta":"hi","response":{"usage":{"input_tokens":10,"output_tokens":2}}}` + "\n\n"
+						if frame == "item" {
+							encodedItem, err := common.Marshal(map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item})
+							require.NoError(t, err)
+							raw += "data: " + string(encodedItem) + "\n\n"
+						}
+						raw += "data: " + string(encodedTerminal) + "\n\n"
+						u, apiErr := handler(c, info, usageReplayResponse(raw))
+						if mode == "success" {
+							require.Nil(t, apiErr)
+						} else {
+							require.NotNil(t, apiErr)
+							require.True(t, types.IsSkipRetryError(apiErr))
+						}
+						require.NotNil(t, u)
+						settle := func() {
+							if mode == "success" {
+								service.PostTextConsumeQuota(c, info, u, nil)
+							} else {
+								service.PostPartialConsumeQuota(c, info, u)
+							}
+						}
+						settle()
+						settle()
+						want := 14
+						if mode == "success" && !skipped {
+							want += 500 // One completed custom/file-search call at $1/1K; terminal duplicate must not add a second.
+						}
+						assertUsageReplayBalance(t, info, want)
+						if kind == dto.BuildInCallFileSearchCall {
+							calls := 0
+							if mode == "success" {
+								calls = 1
+							}
+							require.Equal(t, calls, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch].CallCount)
+						} else if want == 14 {
+							require.Empty(t, info.ToolUsageSnapshot().Items)
+						}
+						if skipped {
+							require.NotContains(t, recorder.Body.String(), "undelivered_tool", "skipped converted output cannot be billed")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestResponsesMixedTerminalToolDeliverySettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAIResponses, types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for _, mode := range []string{"error", "short", "success"} {
+			t.Run(fmt.Sprintf("%s/%s", format, mode), func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9801, "")
+				info.IsStream, info.RelayFormat, info.FinalRequestRelayFormat = true, format, types.RelayFormatOpenAIResponses
+				handler := openai.OaiResponsesToChatStreamHandler
+				if format == types.RelayFormatOpenAIResponses {
+					info.RelayMode, handler = relayconstant.RelayModeResponses, openai.OaiResponsesStreamHandler
+				}
+				if mode != "success" {
+					c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+				}
+				raw := "data: " + `{"type":"response.output_text.delta","delta":"hi","response":{"usage":{"input_tokens":10,"output_tokens":2}}}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","id":"tool_1","call_id":"call_1","name":"accepted_tool","arguments":"{}"},{"type":"function_call","id":"tool_2","call_id":"call_2","name":"undelivered_tool","arguments":"{}"}]}}` + "\n\n"
+				u, apiErr := handler(c, info, usageReplayResponse(raw))
+				want := 14
+				if mode == "success" {
+					require.Nil(t, apiErr)
+					want += 1000
+				} else {
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					if format != types.RelayFormatOpenAIResponses {
+						want += 500 // First converted tool was fully written before the second failed.
+					}
+				}
+				require.NotNil(t, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				assertUsageReplayBalance(t, info, want)
+			})
+		}
+	}
+}
+
+func TestNativeResponsesRejectedImageSurchargeSettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	for _, mode := range []string{"error", "short", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9802, "")
+			info.IsStream, info.RelayMode = true, relayconstant.RelayModeResponses
+			info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponses
+			if mode != "success" {
+				c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+			}
+			raw := "data: " + `{"type":"response.output_text.delta","delta":"hi","response":{"usage":{"input_tokens":10,"output_tokens":2}}}` + "\n\ndata: " + `{"type":"response.completed","response":{"status":"completed","output":[{"type":"image_generation_call","id":"image_1","status":"completed","quality":"low","size":"1024x1024","result":"undelivered"}]}}` + "\n\n"
+			u, apiErr := openai.OaiResponsesStreamHandler(c, info, usageReplayResponse(raw))
+			want := 14
+			if mode == "success" {
+				require.Nil(t, apiErr)
+				want += 5500 // Fixed low1024 image price .011 * 500000 quota/USD.
+			} else {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+			}
+			require.NotNil(t, u)
+			service.PostPartialConsumeQuota(c, info, u)
+			service.PostPartialConsumeQuota(c, info, u)
+			assertUsageReplayBalance(t, info, want)
+			require.Equal(t, mode == "success", c.GetBool("image_generation_call"))
+		})
+	}
+}
+
+func TestNativeResponsesBufferedSurchargeSettlement(t *testing.T) {
+	usageReplayPricedResponsesTools(t)
+	oldEnabled, oldRetries := common.EmptyCompletionRetryEnabled, common.RetryTimes
+	common.EmptyCompletionRetryEnabled, common.RetryTimes = true, 3
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled, common.RetryTimes = oldEnabled, oldRetries })
+	for _, kind := range []string{dto.BuildInCallFunctionCall, dto.BuildInCallFileSearchCall, dto.ResponsesOutputTypeImageGenerationCall} {
+		for _, mode := range []string{"error", "short", "success"} {
+			t.Run(kind+"/"+mode, func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9803, "")
+				info.IsStream, info.RelayMode = true, relayconstant.RelayModeResponses
+				info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponses
+				info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+					dto.BuildInToolFileSearch: {ToolName: dto.BuildInToolFileSearch},
+				}}
+				if mode != "success" {
+					c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+				}
+				item := map[string]any{"type": kind, "id": "item_1", "call_id": "call_1", "name": "undelivered_tool", "arguments": "{}", "status": "completed", "quality": "low", "size": "1024x1024", "result": "undelivered"}
+				visible := map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "accepted"}}}
+				terminal, err := common.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "output": []any{visible, item}}})
+				require.NoError(t, err)
+				// Whitespace is delivered output, but stays buffered until the visible terminal arrives.
+				raw := "data: " + `{"type":"response.output_text.delta","delta":" ","response":{"usage":{"input_tokens":10,"output_tokens":2}}}` + "\n\ndata: " + string(terminal) + "\n\n"
+				u, apiErr := openai.OaiResponsesStreamHandler(c, info, usageReplayResponse(raw))
+				want := 14
+				if mode == "success" {
+					require.Nil(t, apiErr)
+					if kind == dto.ResponsesOutputTypeImageGenerationCall {
+						want += 5500
+					} else {
+						want += 500
+					}
+				} else {
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+				}
+				require.NotNil(t, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				service.PostPartialConsumeQuota(c, info, u)
+				assertUsageReplayBalance(t, info, want)
+			})
+		}
+	}
+}
+
 func TestResponsesNonstreamToolEstimateSettlement(t *testing.T) {
 	service.InitTokenEncoders()
 	oldAudit, oldLimit := common.LogResponseContentEnabled, common.LogContentMaxCharacters
