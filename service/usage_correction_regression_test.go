@@ -20,7 +20,9 @@ import (
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
+	"github.com/MAX-API-Next/MAX-API/setting/config"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/operation_setting"
 	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
@@ -29,7 +31,9 @@ import (
 
 type replayConvertedWriter struct {
 	gin.ResponseWriter
-	short bool
+	short  bool
+	marker string
+	failed bool
 }
 
 type replayCohereWriter struct {
@@ -40,7 +44,12 @@ type replayCohereWriter struct {
 func (w *replayCohereWriter) CloseNotify() <-chan bool { return w.closed }
 
 func (w *replayConvertedWriter) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), "undelivered") {
+	marker := w.marker
+	if marker == "" {
+		marker = "undelivered"
+	}
+	if strings.Contains(string(p), marker) {
+		w.failed = true
 		if w.short {
 			return w.ResponseWriter.Write(p[:len(p)-1])
 		}
@@ -92,6 +101,67 @@ func TestConvertedWriteEstimateSettlement(t *testing.T) {
 					assertUsageReplayBalance(t, info, prompt+output*2)
 					require.Equal(t, prompt, u.PromptTokens)
 					require.Equal(t, output, u.CompletionTokens)
+				})
+			}
+		}
+	}
+}
+
+func TestConvertedRejectedToolSurchargeSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	oldUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = oldUnit })
+	setting := config.GlobalConfig.Get("tool_price_setting").(*operation_setting.ToolPriceSetting)
+	oldPrices := setting.Prices
+	setting.Prices = make(map[string]float64, len(oldPrices)+1)
+	for name, price := range oldPrices {
+		setting.Prices[name] = price
+	}
+	setting.Prices["undelivered_tool"] = 1 // $1 / 1K calls = 500 quota for one call.
+	operation_setting.RebuildToolPriceIndex()
+	t.Cleanup(func() { setting.Prices = oldPrices; operation_setting.RebuildToolPriceIndex() })
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
+		for _, mode := range []string{"error", "short", "success"} {
+			for _, finish := range []string{"same_frame", "trailing_finish"} {
+				t.Run(fmt.Sprintf("%s/%s/%s", format, mode, finish), func(t *testing.T) {
+					usageReplayRatios(t)
+					c, info := usageReplayInfo(t, 9797, "")
+					info.IsStream, info.RelayFormat = true, format
+					info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+					if mode != "success" {
+						c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+					}
+					raw := "data: " + `{"choices":[{"index":0,"delta":{"content":"hi"}}]}` + "\n\n"
+					finishField := ""
+					if finish == "same_frame" {
+						finishField = `,"finish_reason":"tool_calls"`
+					}
+					raw += "data: " + `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"undelivered_tool","arguments":"{}"}}]}` + finishField + `}]}` + "\n\n"
+					if finish == "trailing_finish" {
+						raw += "data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n"
+					}
+					raw += "data: " + `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}` + "\n\ndata: [DONE]\n\n"
+					u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+					require.Nil(t, apiErr, "preserve converted legacy soft-error return")
+					service.PostTextConsumeQuota(c, info, u, nil)
+					service.PostTextConsumeQuota(c, info, u, nil)
+					want := 14 // Reported 10 input + 2 output * ratio2.
+					if mode == "success" {
+						want += 500
+					}
+					assertUsageReplayBalance(t, info, want)
+					var log model.Log
+					require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", info.UserId, model.LogTypeConsume).First(&log).Error)
+					var other map[string]any
+					require.NoError(t, common.Unmarshal([]byte(log.Other), &other))
+					if mode == "success" {
+						require.Len(t, info.ToolUsageSnapshot().Items, 1)
+						require.Contains(t, other, "tool_calls")
+					} else {
+						require.Empty(t, info.ToolUsageSnapshot().Items)
+						require.NotContains(t, other, "tool_calls")
+					}
 				})
 			}
 		}
@@ -655,6 +725,41 @@ func TestCohereRejectedTextSettlement(t *testing.T) {
 				require.NotContains(t, recorder.Body.String(), "undelivered terminal text")
 			}
 		})
+	}
+}
+
+func TestCohereMetadataFinishFailurePreservesReportedUsage(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, short := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, counts       string
+			prompt, completion int
+		}{
+			{"reported", `{"input_tokens":1000,"output_tokens":999}`, 1000, 999},
+			{"zero", `{"input_tokens":0,"output_tokens":0}`, 0, 0},
+			{"missing_output", `{"input_tokens":1000}`, 1000, 2},
+		} {
+			t.Run(fmt.Sprintf("short=%t/%s", short, tc.name), func(t *testing.T) {
+				usageReplayRatios(t)
+				c, info := usageReplayInfo(t, 9798, "")
+				info.IsStream = true
+				c.Writer = &replayCohereWriter{ResponseWriter: c.Writer, closed: make(chan bool)}
+				writer := &replayConvertedWriter{ResponseWriter: c.Writer, short: short, marker: `"finish_reason":"stop"`}
+				c.Writer = writer
+				a := &cohere.Adaptor{}
+				a.Init(info)
+				raw := `{"text":"hi"}` + "\n" + `{"is_finished":true,"finish_reason":"COMPLETE","response":{"meta":{"billed_units":` + tc.counts + `}}}` + "\n"
+				u, apiErr := a.DoResponse(c, usageReplayResponse(raw), info)
+				require.Nil(t, apiErr, "retain legacy soft-error return")
+				require.True(t, writer.failed, "the metadata-only finish must actually fail its write")
+				usage := u.(*dto.Usage)
+				service.PostTextConsumeQuota(c, info, usage, nil)
+				service.PostTextConsumeQuota(c, info, usage, nil)
+				assertUsageReplayBalance(t, info, tc.prompt+tc.completion*2)
+				require.Equal(t, tc.prompt, usage.PromptTokens)
+				require.Equal(t, tc.completion, usage.CompletionTokens)
+			})
+		}
 	}
 }
 

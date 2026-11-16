@@ -180,7 +180,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 					info.FinishReason = *choice.FinishReason
 				}
 			}
-			observeOpenAIStreamToolCalls(toolCallObserver, data)
 			if convertedWriter.err != nil {
 				if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 					containStreamUsage = true
@@ -213,6 +212,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				sr.Error(formatErr)
 				return
 			}
+			observeOpenAIStreamToolCalls(toolCallObserver, data)
 			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 				containStreamUsage = true
 			}
