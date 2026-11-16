@@ -32,7 +32,8 @@ const (
 
 // Cache aliases can live outside the typed usage object. Read one accepted
 // frame at a time so later metadata cannot erase them or freeze an older value.
-func chatStreamReportedCache(channel int, data string) (int, bool) {
+// Parent-zero invalidation applies only when that parent is accepted.
+func chatStreamReportedCache(channel int, data string, acceptParentZero bool) (int, bool) {
 	root := gjson.Parse(data)
 	number := func(value gjson.Result) (int, bool) {
 		if value.Type != gjson.Number {
@@ -71,7 +72,7 @@ func chatStreamReportedCache(channel int, data string) (int, bool) {
 	if prompt.Type != gjson.Number {
 		prompt = root.Get("usage.input_tokens")
 	}
-	if n, ok := number(prompt); ok && n == 0 {
+	if n, ok := number(prompt); acceptParentZero && ok && n == 0 {
 		return 0, true // An explicit zero parent clears retained cache details.
 	}
 	return 0, false
@@ -151,12 +152,18 @@ func (frame *chatStreamFrame) hasPayload() bool {
 // Discarded whitespace is still generated output, even though it cannot
 // satisfy the separate visible-output predicate used by empty retries.
 func (frame *chatStreamFrame) hasOutput() bool {
-	if frame.hasPayload() {
-		return true
-	}
 	for _, choice := range frame.Choices {
 		for key, value := range choice.Delta {
-			if text, ok := value.(string); key != "role" && ok && text != "" {
+			if key == "role" {
+				continue
+			}
+			if text, ok := value.(string); ok {
+				if text != "" {
+					return true
+				}
+				continue
+			}
+			if chatStreamValueHasPayload(value) {
 				return true
 			}
 		}
@@ -317,8 +324,8 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		return true
 	}
-	recordCache := func(data string) {
-		if cached, ok := chatStreamReportedCache(info.ChannelType, data); ok {
+	recordCache := func(data string, acceptParentZero bool) {
+		if cached, ok := chatStreamReportedCache(info.ChannelType, data, acceptParentZero); ok {
 			cacheReported, reportedCache = true, cached
 			usage.PromptTokensDetails.CachedTokens = cached
 			if usage.InputTokensDetails != nil {
@@ -332,7 +339,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 			containUsage = true
 		}
-		recordCache(data)
+		recordCache(data, true)
 	}
 	recordErrorTailUsage := func(frame *chatStreamFrame, data string) {
 		if !frame.hasOutput() {
@@ -342,7 +349,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		// Generation data is never forwarded after an error. Retain only
 		// independent cache facts, without merging its parents/output details
 		// or making it the final raw response used by post-processing.
-		recordCache(data)
+		recordCache(data, false)
 		var cacheUsage dto.Usage
 		if !dto.MergeOpenAIUsage(&cacheUsage, common.StringToByteSlice(data)) {
 			return
@@ -398,7 +405,7 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			}
 			var frame chatStreamFrame
 			if common.UnmarshalJsonStr(data, &frame) == nil {
-				_, hasCache := chatStreamReportedCache(info.ChannelType, data)
+				_, hasCache := chatStreamReportedCache(info.ChannelType, data, false)
 				if frame.Usage != nil || hasCache {
 					recordErrorTailUsage(&frame, data)
 				}

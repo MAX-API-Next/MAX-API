@@ -306,7 +306,7 @@ func TestClaudeMetadataFinishFailurePreservesReportedUsage(t *testing.T) {
 func TestChatPostErrorOutputUsageSettlement(t *testing.T) {
 	service.InitTokenEncoders()
 	for _, channel := range []int{constant.ChannelTypeMoonshot, constant.ChannelTypeOpenAI, constant.ChannelTypeZhipu_v4, constant.ChannelTypeDeepSeek} {
-		for _, kind := range []string{"output", "output_zero", "whitespace", "tool", "error_frame_output", "usage_only", "usage_only_zero", "cache_only", "no_cache", "canonical_zero", "creation", "creation_zero"} {
+		for _, kind := range []string{"output", "output_zero", "whitespace", "tool", "error_frame_output", "usage_only", "usage_only_zero", "cache_only", "no_cache", "canonical_zero", "creation", "creation_zero", "finish_positive", "finish_zero", "finish_role_zero", "discard_zero_no_cache", "discard_input_zero_no_cache", "error_zero_no_cache", "discard_explicit_cache_zero", "accepted_parent_zero"} {
 			t.Run(fmt.Sprintf("%d/%s", channel, kind), func(t *testing.T) {
 				usageReplayRatios(t)
 				c, info := usageReplayInfo(t, 9805, "")
@@ -318,6 +318,35 @@ func TestChatPostErrorOutputUsageSettlement(t *testing.T) {
 				body := map[string]any{"choices": []any{choice}, "usage": counts}
 				cached, want := 80, 32 // (100-80) uncached + 80*.1 cache + 2*2 output.
 				switch kind {
+				case "discard_zero_no_cache", "discard_input_zero_no_cache", "error_zero_no_cache", "discard_explicit_cache_zero":
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 0, 0, 0
+					cached, want = 20, 86
+					if kind == "discard_input_zero_no_cache" {
+						delete(counts, "prompt_tokens")
+						counts["input_tokens"] = 0
+					}
+					if kind == "error_zero_no_cache" {
+						body["error"] = map[string]any{"message": "synthetic terminal failure"}
+					}
+					if kind == "discard_explicit_cache_zero" {
+						counts["prompt_tokens_details"] = map[string]any{"cached_tokens": 0}
+						cached, want = 0, 104
+					}
+				case "accepted_parent_zero":
+					body["choices"] = []any{}
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 0, 7, 7
+					cached, want = 0, 14
+				case "finish_positive":
+					choice["delta"], choice["finish_reason"] = map[string]any{}, "content_filter"
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 200, 3, 203
+					want = 134
+				case "finish_zero", "finish_role_zero":
+					choice["delta"], choice["finish_reason"] = map[string]any{}, "content_filter"
+					if kind == "finish_role_zero" {
+						choice["delta"] = map[string]any{"role": "assistant"}
+					}
+					counts["prompt_tokens"], counts["completion_tokens"], counts["total_tokens"] = 0, 0, 0
+					cached, want = 0, 0
 				case "error_frame_output":
 					body["error"] = map[string]any{"message": "synthetic terminal failure"}
 				case "creation":
@@ -350,7 +379,7 @@ func TestChatPostErrorOutputUsageSettlement(t *testing.T) {
 					counts["prompt_tokens_details"] = map[string]any{"cached_tokens": 0}
 					want = 104
 				}
-				if kind != "no_cache" {
+				if !strings.HasSuffix(kind, "no_cache") && kind != "accepted_parent_zero" {
 					switch channel {
 					case constant.ChannelTypeMoonshot:
 						if kind == "usage_only" || kind == "usage_only_zero" {
@@ -373,7 +402,7 @@ func TestChatPostErrorOutputUsageSettlement(t *testing.T) {
 					initial = strings.Replace(initial, `"cached_tokens":20`, `"cached_tokens":20,"cached_creation_tokens":4,"cache_write_tokens":4`, 1)
 				}
 				raw := "data: " + initial + "\n\ndata: "
-				if kind != "error_frame_output" {
+				if kind != "error_frame_output" && kind != "error_zero_no_cache" {
 					raw += `{"error":{"type":"overloaded_error","message":"synthetic terminal failure"}}` + "\n\ndata: "
 				}
 				raw += string(late) + "\n\n"
