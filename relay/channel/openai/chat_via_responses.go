@@ -756,7 +756,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
-		err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage))
+		clientUsage := *usage
+		clientUsage.BillingUsage = nil
+		err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, clientUsage))
 		if err == nil {
 			err = writeObserver.err
 		}
@@ -768,6 +770,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		helper.Done(c)
+		if writeObserver.err != nil {
+			info.StreamStatus.RecordError(writeObserver.err.Error())
+			return usage, types.NewOpenAIError(writeObserver.err, types.ErrorCodeBadResponse, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
+		}
 	}
 	auditText := outputText.String()
 	if strings.TrimSpace(auditText) == "" {

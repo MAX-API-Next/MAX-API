@@ -43,24 +43,43 @@ func TestConvertedWriteEstimateSettlement(t *testing.T) {
 	service.InitTokenEncoders()
 	for i, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
 		for j, partial := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/partial=%t", format, partial), func(t *testing.T) {
-				usageReplayRatios(t)
-				c, info := usageReplayInfo(t, 9700+i*2+j, "")
-				c.Writer = &replayConvertedWriter{c.Writer}
-				info.IsStream, info.RelayFormat = true, format
-				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
-				text, raw := "", ""
-				if partial {
-					text = "accepted"
-					raw = "data: " + `{"choices":[{"index":0,"delta":{"content":"accepted"}}]}` + "\n\n"
-				}
-				raw += "data: " + `{"choices":[{"index":0,"delta":{"content":"` + strings.Repeat("undelivered ", 128) + `"}}]}` + "\n\ndata: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
-				u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
-				require.Nil(t, apiErr, "converted renderer retains its legacy soft-error return")
-				service.PostTextConsumeQuota(c, info, u, nil)
-				service.PostTextConsumeQuota(c, info, u, nil)
-				assertUsageReplayBalance(t, info, 38+service.EstimateTokenByModel(info.UpstreamModelName, text)*2)
-			})
+			for k, facts := range []string{"missing", "rejected_last", "rejected_then_finish", "trailing", "usage_only"} {
+				t.Run(fmt.Sprintf("%s/partial=%t/%s", format, partial, facts), func(t *testing.T) {
+					usageReplayRatios(t)
+					c, info := usageReplayInfo(t, 9700+i*10+j*5+k, "")
+					c.Writer = &replayConvertedWriter{c.Writer}
+					info.IsStream, info.RelayFormat = true, format
+					info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+					text, raw := "", ""
+					if partial {
+						text = "accepted"
+						raw = "data: " + `{"choices":[{"index":0,"delta":{"content":"accepted"}}]}` + "\n\n"
+					}
+					if facts != "usage_only" {
+						ownUsage := ""
+						if facts != "missing" {
+							ownUsage = `,"usage":{"prompt_tokens":999,"completion_tokens":999}`
+						}
+						raw += "data: " + `{"choices":[{"index":0,"delta":{"content":"` + strings.Repeat("undelivered ", 128) + `"}}]` + ownUsage + "}\n\n"
+					}
+					prompt, output := 38, service.EstimateTokenByModel(info.UpstreamModelName, text)
+					if facts == "trailing" || facts == "usage_only" {
+						raw += "data: " + `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}` + "\n\n"
+						prompt, output = 100, 7
+					}
+					if facts != "rejected_last" {
+						raw += "data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+					}
+					raw += "data: [DONE]\n\n"
+					u, apiErr := openai.OaiStreamHandler(c, info, usageReplayResponse(raw))
+					require.Nil(t, apiErr, "converted renderer retains its legacy soft-error return")
+					service.PostTextConsumeQuota(c, info, u, nil)
+					service.PostTextConsumeQuota(c, info, u, nil)
+					assertUsageReplayBalance(t, info, prompt+output*2)
+					require.Equal(t, prompt, u.PromptTokens)
+					require.Equal(t, output, u.CompletionTokens)
+				})
+			}
 		}
 	}
 }

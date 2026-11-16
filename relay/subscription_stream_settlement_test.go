@@ -41,14 +41,16 @@ type finalUsageFundingWriter struct {
 }
 
 func (w *finalUsageFundingWriter) Write(p []byte) (int, error) {
-	if strings.Contains(string(p), `"choices":[]`) && strings.Contains(string(p), `"usage":`) {
+	usageFrame := strings.Contains(string(p), `"choices":[]`) && strings.Contains(string(p), `"usage":`)
+	doneFrame := strings.Contains(string(p), "[DONE]")
+	if (usageFrame && !strings.HasPrefix(w.mode, "done_")) || (doneFrame && strings.HasPrefix(w.mode, "done_")) {
 		switch w.mode {
 		case "cancel":
 			w.cancel()
 			return 0, context.Canceled
-		case "write_error":
+		case "write_error", "done_write_error":
 			return 0, fmt.Errorf("synthetic final usage write failure")
-		case "short_write":
+		case "short_write", "done_short_write":
 			return w.ResponseWriter.Write(p[:len(p)-1])
 		}
 	}
@@ -57,11 +59,66 @@ func (w *finalUsageFundingWriter) Write(p []byte) (int, error) {
 
 func (w *finalUsageFundingWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
 
+func TestChatFinalWriteFailureOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, channel := range []int{constant.ChannelTypeAnthropic, constant.ChannelTypeOpenAI} {
+		for _, funding := range streamFundingCases() {
+			for _, mode := range []string{"cancel", "write_error", "short_write", "done_write_error", "done_short_write", "success", "no_usage"} {
+				t.Run(fmt.Sprintf("channel=%d/%s/%s", channel, funding.name, mode), func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					var calls atomic.Int32
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						w.Header().Set("Content-Type", "text/event-stream")
+						if channel == constant.ChannelTypeOpenAI {
+							_, _ = fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"accepted"}}],"usage":{"prompt_tokens":4}}`+"\n\ndata: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+						} else {
+							_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"input_tokens":4,"output_tokens":0}}}`+"\n\ndata: "+`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}`+"\n\ndata: "+`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`+"\n\ndata: "+`{"type":"message_stop"}`+"\n\n")
+						}
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := fmt.Sprintf("chat-final-write-%d-%s-%s", channel, funding.name, mode)
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, channel, funding)
+					ctx, cancel := context.WithCancel(c.Request.Context())
+					t.Cleanup(cancel)
+					c.Request = c.Request.WithContext(ctx)
+					c.Writer = &finalUsageFundingWriter{ResponseWriter: c.Writer, mode: mode, cancel: cancel}
+					if mode == "no_usage" {
+						info.Request.(*dto.GeneralOpenAIRequest).StreamOptions = &dto.StreamOptions{IncludeUsage: false}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					apiErr := TextHelper(c, info)
+					failed := mode != "success" && mode != "no_usage"
+					if failed {
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+						require.True(t, info.StreamStatus.HasErrors())
+					} else {
+						require.Nil(t, apiErr)
+						require.Contains(t, recorder.Body.String(), "[DONE]")
+					}
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.EqualValues(t, 1, calls.Load())
+					require.Contains(t, recorder.Body.String(), "accepted")
+					require.NotContains(t, recorder.Body.String(), `"billing_usage"`, "OpenAI client usage frames exclude internal evidence")
+					assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+					if failed {
+						var log model.Log
+						require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+						require.Contains(t, log.Other, `"status":"error"`)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestResponsesFinalUsageWriteFailureOriginalFunding(t *testing.T) {
 	initRequestReplayTests(t)
 	for _, route := range []string{"responses_to_chat_global", "responses_to_chat_custom"} {
 		for _, funding := range streamFundingCases() {
-			for _, mode := range []string{"cancel", "write_error", "short_write", "success", "no_usage"} {
+			for _, mode := range []string{"cancel", "write_error", "short_write", "done_write_error", "done_short_write", "success", "no_usage"} {
 				t.Run(route+"/"+funding.name+"/"+mode, func(t *testing.T) {
 					db := setupStreamFundingLedger(t, funding)
 					var calls atomic.Int32
@@ -91,7 +148,9 @@ func TestResponsesFinalUsageWriteFailureOriginalFunding(t *testing.T) {
 						require.NotNil(t, apiErr)
 						require.True(t, types.IsSkipRetryError(apiErr))
 						require.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
-						require.NotContains(t, recorder.Body.String(), "[DONE]")
+						if !strings.HasPrefix(mode, "done_") {
+							require.NotContains(t, recorder.Body.String(), "[DONE]")
+						}
 					} else {
 						require.Nil(t, apiErr)
 						require.Contains(t, recorder.Body.String(), "[DONE]")
@@ -100,6 +159,7 @@ func TestResponsesFinalUsageWriteFailureOriginalFunding(t *testing.T) {
 					service.HandleFailedBilling(c, info, apiErr)
 					require.EqualValues(t, 1, calls.Load())
 					require.Contains(t, recorder.Body.String(), "accepted")
+					require.NotContains(t, recorder.Body.String(), `"billing_usage"`, "OpenAI client usage frames exclude internal evidence")
 					assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
 					var log model.Log
 					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)

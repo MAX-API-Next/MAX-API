@@ -150,11 +150,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if converted {
+			previousStreamData := lastStreamData
 			lastStreamData = data
 			convertedLastValid = false
-			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
-				containStreamUsage = true
-			}
 			var frame dto.ChatCompletionsStreamResponse
 			if err := common.UnmarshalJsonStr(data, &frame); err != nil {
 				sr.Error(err)
@@ -184,6 +182,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 			observeOpenAIStreamToolCalls(toolCallObserver, data)
 			if convertedWriter.err != nil {
+				if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+					containStreamUsage = true
+				}
 				return // Keep accepting usage facts after a latched write failure.
 			}
 			frame.Usage = nil // Emit the merged final usage separately.
@@ -208,8 +209,12 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				formatErr = convertedWriter.err
 			}
 			if formatErr != nil {
+				lastStreamData = previousStreamData // Do not re-merge rejected usage during final processing.
 				sr.Error(formatErr)
 				return
+			}
+			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+				containStreamUsage = true
 			}
 			if c.Writer.Size() > before {
 				beforeText, beforeTools := responseTextBuilder.Len(), toolCount

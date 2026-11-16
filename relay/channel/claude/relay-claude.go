@@ -1076,6 +1076,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+			openAIUsage.BillingUsage = nil
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
@@ -1203,6 +1204,10 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
 		return claudeInfo.Usage, finalErr
+	}
+	if writeObserver != nil && writeObserver.err != nil {
+		info.StreamStatus.RecordError(writeObserver.err.Error())
+		return claudeInfo.Usage, types.NewError(writeObserver.err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, claudeInfo.ResponseText.String())

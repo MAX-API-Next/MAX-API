@@ -452,10 +452,16 @@ func TestUsageCorrectionConvertedChatFallback(t *testing.T) {
 	}
 }
 
-type convertedUsageWriter struct{ gin.ResponseWriter }
+type convertedUsageWriter struct {
+	gin.ResponseWriter
+	short bool
+}
 
 func (w *convertedUsageWriter) Write(p []byte) (int, error) {
 	if strings.Contains(string(p), "undelivered") {
+		if w.short {
+			return w.ResponseWriter.Write(p[:len(p)-1])
+		}
 		return 0, errors.New("synthetic converted write failure")
 	}
 	return w.ResponseWriter.Write(p)
@@ -468,7 +474,7 @@ func TestUsageCorrectionConvertedWritesGateEstimates(t *testing.T) {
 		for _, ending := range []string{"first_failure", "partial_failure", "last_payload"} {
 			t.Run(string(format)+"/"+ending, func(t *testing.T) {
 				c, w, info := correctionContext(t, "/v1/messages")
-				c.Writer = &convertedUsageWriter{c.Writer}
+				c.Writer = &convertedUsageWriter{ResponseWriter: c.Writer}
 				info.RelayFormat, info.IsStream = format, true
 				info.EnableFirstResultTracking()
 				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -491,6 +497,33 @@ func TestUsageCorrectionConvertedWritesGateEstimates(t *testing.T) {
 				}
 				require.Equal(t, strings.Count(text, "accepted"), strings.Count(w.Body.String(), "accepted"), "last payload must be forwarded exactly once")
 			})
+		}
+	}
+}
+
+func TestConvertedRejectedUsageAndLateFacts(t *testing.T) {
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
+		for _, short := range []bool{false, true} {
+			for _, trailing := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/short=%t/trailing=%t", format, short, trailing), func(t *testing.T) {
+					c, _, info := correctionContext(t, "/v1/messages")
+					info.RelayFormat, info.IsStream = format, true
+					c.Writer = &convertedUsageWriter{ResponseWriter: c.Writer, short: short}
+					raw := "data: " + `{"choices":[{"index":0,"delta":{"content":"undelivered"}}],"usage":{"prompt_tokens":999,"completion_tokens":999,"prompt_tokens_details":{"cached_tokens":900}}}` + "\n\n"
+					prompt, output := 38, 0
+					if trailing {
+						raw += "data: " + `{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}` + "\n\n"
+						prompt, output = 100, 7
+					}
+					u, apiErr := OaiStreamHandler(c, info, correctionResponse(raw+"data: [DONE]\n\n"))
+					require.Nil(t, apiErr, "converted streams retain their legacy soft-error return")
+					require.Equal(t, prompt, u.PromptTokens)
+					require.Equal(t, output, u.CompletionTokens)
+					require.Zero(t, u.PromptTokensDetails.CachedTokens)
+					require.True(t, info.StreamStatus.HasErrors())
+					require.False(t, info.HasRecordedChannelFirstResult())
+				})
+			}
 		}
 	}
 }

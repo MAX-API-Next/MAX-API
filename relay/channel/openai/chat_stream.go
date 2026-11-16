@@ -477,5 +477,12 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	var metadata dto.ChatCompletionsStreamResponse
 	_ = common.UnmarshalJsonStr(lastData, &metadata)
 	HandleFinalResponse(c, info, lastData, metadata.Id, metadata.Created, metadata.Model, metadata.GetSystemFingerprint(), usage, containUsage)
+	if writeObserver.err != nil {
+		info.StreamStatus.RecordError(writeObserver.err.Error())
+		usage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+		return usage, types.NewError(writeObserver.err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+	}
 	return usage, nil
 }
