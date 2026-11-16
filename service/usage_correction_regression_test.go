@@ -20,6 +20,7 @@ import (
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/setting/model_setting"
+	"github.com/MAX-API-Next/MAX-API/setting/system_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -374,6 +375,78 @@ func TestGeminiFileDataFallbackSettlement(t *testing.T) {
 			assertUsageReplayBalance(t, info, want)
 		})
 	}
+}
+
+func TestGeminiURLImageAliasEstimateAndSettlement(t *testing.T) {
+	oldCount, oldMedia, oldNonStream := constant.CountToken, constant.GetMediaToken, constant.GetMediaTokenNotStream
+	oldFetch, oldWorker := *system_setting.GetFetchSetting(), system_setting.WorkerUrl
+	constant.CountToken, constant.GetMediaToken = true, true
+	*system_setting.GetFetchSetting() = system_setting.FetchSetting{EnableSSRFProtection: false}
+	system_setting.WorkerUrl = ""
+	t.Cleanup(func() {
+		constant.CountToken, constant.GetMediaToken, constant.GetMediaTokenNotStream = oldCount, oldMedia, oldNonStream
+		*system_setting.GetFetchSetting(), system_setting.WorkerUrl = oldFetch, oldWorker
+	})
+	service.InitHttpClient()
+	service.InitTokenEncoders()
+	var downloads atomic.Int32
+	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(imageServer.Close)
+	id := 9720
+	for _, modelName := range []string{"gpt-4o", "gemini-test"} {
+		for _, tool := range []bool{false, true} {
+			for _, stream := range []bool{false, true} {
+				for _, countNonStream := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/tool=%t/stream=%t/local_nonstream=%t", modelName, tool, stream, countNonStream), func(t *testing.T) {
+						id++
+						constant.GetMediaTokenNotStream = countNonStream
+						c, info := usageReplayInfo(t, id, "")
+						info.RelayFormat, info.FinalRequestRelayFormat, info.IsStream = types.RelayFormatGemini, types.RelayFormatGemini, stream
+						c.Set(string(constant.ContextKeyOriginalModel), modelName)
+						part := `{"fileData":{"mimeType":"image/png","fileUri":"` + imageServer.URL + `/image"}}`
+						text := ""
+						if tool {
+							part = `{"functionResponse":{"name":"lookup","response":{},"parts":[` + part + `]}}`
+							text = "lookup"
+						}
+						var request dto.GeminiChatRequest
+						require.NoError(t, common.UnmarshalJsonStr(`{"contents":[{"role":"user","parts":[`+part+`]}]}`, &request))
+						before := downloads.Load()
+						estimate, err := service.EstimateRequestToken(c, request.GetTokenCountMeta(), info)
+						require.Equal(t, before, downloads.Load(), "Gemini URL estimation must not fetch the image")
+						require.NoError(t, err)
+						want := 520 + service.CountTextToken(text, modelName)
+						require.Equal(t, want, estimate)
+						info.SetEstimatePromptTokens(estimate)
+						raw := `{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":0}}`
+						var usage *dto.Usage
+						var apiErr *types.MaxAPIError
+						if stream {
+							usage, apiErr = gemini.GeminiChatStreamHandler(c, info, usageReplayResponse("data: "+raw+"\n\n"))
+						} else {
+							usage, apiErr = gemini.GeminiChatHandler(c, info, usageReplayResponse(raw))
+						}
+						require.Nil(t, apiErr)
+						service.PostTextConsumeQuota(c, info, usage, nil)
+						service.PostTextConsumeQuota(c, info, usage, nil)
+						assertUsageReplayBalance(t, info, want)
+					})
+				}
+			}
+		}
+	}
+	t.Run("other_formats_keep_local_image_load", func(t *testing.T) {
+		c, info := usageReplayInfo(t, 9740, "")
+		info.IsStream = true
+		c.Set(string(constant.ContextKeyOriginalModel), "gpt-4o")
+		before := downloads.Load()
+		_, err := service.EstimateRequestToken(c, &types.TokenCountMeta{Files: []*types.FileMeta{{FileType: types.FileTypeImage, Source: types.NewURLFileSource(imageServer.URL + "/image")}}}, info)
+		require.Error(t, err)
+		require.EqualValues(t, before+1, downloads.Load())
+	})
 }
 
 func TestResponsesImageOnlyMissingInputSettlement(t *testing.T) {
