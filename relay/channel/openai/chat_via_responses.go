@@ -129,6 +129,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		geminiResp := service.ResponseOpenAI2Gemini(chatResp, info)
 		responseBody, err = common.Marshal(geminiResp)
 	default:
+		chatResp.Usage.BillingUsage = nil // Internal evidence stays on the settlement result.
 		responseBody, err = common.Marshal(chatResp)
 	}
 	if err != nil {

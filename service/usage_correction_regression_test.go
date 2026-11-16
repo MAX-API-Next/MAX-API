@@ -80,6 +80,7 @@ func TestResponsesNonstreamToolEstimateSettlement(t *testing.T) {
 						id++
 						c, info := usageReplayInfo(t, id, "")
 						info.RelayFormat, info.FinalRequestRelayFormat = format, types.RelayFormatOpenAIResponses
+						recorder := usageReplayRecorder(c)
 						tool := map[string]any{"type": kind, "id": "tool_1", "call_id": "call_1", "name": " lookup "}
 						field := "arguments"
 						if kind == dto.BuildInCallCustomToolCall {
@@ -102,8 +103,19 @@ func TestResponsesNonstreamToolEstimateSettlement(t *testing.T) {
 						require.NoError(t, err)
 						u, apiErr := openai.OaiResponsesToChatHandler(c, info, usageReplayResponse(string(raw)))
 						require.Nil(t, apiErr)
+						require.NotNil(t, u.BillingUsage, "settlement retains internal billing evidence")
+						require.Equal(t, reported >= 0, u.BillingUsage.TokenCountsReported)
+						require.NotEmpty(t, recorder.Body.String())
+						if format == types.RelayFormatOpenAI {
+							require.NotContains(t, recorder.Body.String(), `"billing_usage"`, "Chat client response excludes internal billing evidence")
+							var wire struct{ Usage map[string]any }
+							require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &wire))
+							require.EqualValues(t, u.PromptTokens, wire.Usage["prompt_tokens"])
+							require.EqualValues(t, u.CompletionTokens, wire.Usage["completion_tokens"])
+							require.EqualValues(t, u.TotalTokens, wire.Usage["total_tokens"])
+						}
 						require.Equal(t, audit, info.AuditResponseContent, "tool estimation must not alter message-only audit text")
-						require.NotContains(t, usageReplayRecorder(c).Body.String(), "unforwarded tool data")
+						require.NotContains(t, recorder.Body.String(), "unforwarded tool data")
 						service.PostTextConsumeQuota(c, info, u, nil)
 						service.PostTextConsumeQuota(c, info, u, nil)
 						assertUsageReplayBalance(t, info, 100+2*output)
