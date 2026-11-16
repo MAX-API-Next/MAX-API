@@ -17,7 +17,9 @@ type BillingUsage struct {
 	Estimated bool   `json:"estimated,omitempty"`
 	// TokenCountsReported distinguishes numeric zero from absent/null counters.
 	// Set only from provider wire fields, never inferred from Go zero values.
-	TokenCountsReported bool                 `json:"token_counts_reported,omitempty"`
+	TokenCountsReported bool `json:"token_counts_reported,omitempty"`
+	// Independent input presence remains valid before a final output count arrives.
+	InputTokensReported bool                 `json:"input_tokens_reported,omitempty"`
 	OpenAIUsage         *Usage               `json:"openai_usage,omitempty"`
 	ClaudeUsage         *ClaudeUsage         `json:"claude_usage,omitempty"`
 	GeminiUsageMetadata *GeminiUsageMetadata `json:"gemini_usage_metadata,omitempty"`

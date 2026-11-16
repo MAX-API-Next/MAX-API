@@ -19,6 +19,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -220,19 +221,54 @@ func streamResponseDify2OpenAI(difyResponse DifyChunkChatCompletionResponse) *dt
 	return &response
 }
 
+// The event renderer can swallow write errors. Latch them, including short
+// writes, before using a converted message as completion estimate evidence.
+type difyStreamWriteObserver struct {
+	gin.ResponseWriter
+	err error
+}
+
+func (w *difyStreamWriteObserver) Write(data []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.ResponseWriter.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func (w *difyStreamWriteObserver) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
+
+func (w *difyStreamWriteObserver) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	var responseText string
 	usage := &dto.Usage{}
+	var presence dto.OpenAIUsagePresence
+	writeObserver := &difyStreamWriteObserver{ResponseWriter: c.Writer}
+	c.Writer = writeObserver
+	defer func() {
+		if writeObserver.err == nil {
+			c.Writer = writeObserver.ResponseWriter
+		}
+	}()
 	helper.SetEventStreamHeaders(c)
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
-		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
+		if err := common.Unmarshal([]byte(data), &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			sr.Error(err)
 			return
 		}
 		if difyResponse.Event == "message_end" {
-			usage = &difyResponse.MetaData.Usage
+			dto.MergeOpenAIUsageWithPresence(usage, []byte(gjson.Get(data, "metadata").Raw), &presence)
 			sr.Done()
 			return
 		} else if difyResponse.Event == "error" {
@@ -240,20 +276,35 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			return
 		}
 		openaiResponse := *streamResponseDify2OpenAI(difyResponse)
-		if len(openaiResponse.Choices) != 0 {
-			responseText += openaiResponse.Choices[0].Delta.GetContentString()
+		err := helper.ObjectData(c, openaiResponse)
+		if err == nil {
+			err = writeObserver.err
 		}
-		if err := helper.ObjectData(c, openaiResponse); err != nil {
+		if err != nil {
 			common.SysLog(err.Error())
 			sr.Error(err)
+			return // Later message_end usage remains authoritative; no failed text is estimated.
+		}
+		if len(openaiResponse.Choices) != 0 {
+			responseText += openaiResponse.Choices[0].Delta.GetContentString()
 		}
 	})
 	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
 		return nil, apiErr
 	}
 	helper.Done(c)
-	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	if !presence.Prompt || !presence.Completion {
+		estimated := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !presence.Prompt {
+			usage.PromptTokens = estimated.PromptTokens
+		}
+		if !presence.Completion {
+			usage.CompletionTokens = estimated.CompletionTokens
+		}
+	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if presence.Total && presence.ReportedTotal > 0 && (!presence.Prompt || !presence.Completion) {
+		usage.TotalTokens = presence.ReportedTotal
 	}
 	return usage, nil
 }

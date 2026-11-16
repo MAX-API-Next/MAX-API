@@ -128,25 +128,106 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	toolCallObserver := newOpenAIStreamToolCallObserver(info)
+	tokenRelayMode := info.RelayMode
+	converted := info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatGemini
+	convertedLastValid := false
+	var convertedFinal dto.ChatCompletionsStreamResponse
+	convertedChoices := make(map[int]int)
+	var convertedWriter *chatStreamWriteObserver
+	if converted {
+		info.EnableFirstResultTracking()
+		convertedWriter = &chatStreamWriteObserver{ResponseWriter: c.Writer}
+		c.Writer = convertedWriter
+		defer func() {
+			if convertedWriter.err == nil {
+				c.Writer = convertedWriter.ResponseWriter
+			}
+		}()
+		if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
+			info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+		}
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if lastStreamData != "" {
-			pending := lastStreamData
+		if converted {
+			previousStreamData := lastStreamData
+			lastStreamData = data
+			convertedLastValid = false
+			var frame dto.ChatCompletionsStreamResponse
+			if err := common.UnmarshalJsonStr(data, &frame); err != nil {
+				sr.Error(err)
+				return
+			}
+			convertedLastValid = true
+			if frame.Id != "" {
+				convertedFinal.Id = frame.Id
+			}
+			if frame.Model != "" {
+				convertedFinal.Model = frame.Model
+			}
+			if frame.Created != 0 {
+				convertedFinal.Created = frame.Created
+			}
+			for _, choice := range frame.Choices {
+				index, ok := convertedChoices[choice.Index]
+				if !ok {
+					index = len(convertedFinal.Choices)
+					convertedChoices[choice.Index] = index
+					convertedFinal.Choices = append(convertedFinal.Choices, dto.ChatCompletionsStreamResponseChoice{Index: choice.Index})
+				}
+				if choice.FinishReason != nil {
+					convertedFinal.Choices[index].FinishReason = choice.FinishReason
+					info.FinishReason = *choice.FinishReason
+				}
+			}
+			if convertedWriter.err != nil {
+				if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+					containStreamUsage = true
+				}
+				return // Keep accepting usage facts after a latched write failure.
+			}
+			frame.Usage = nil // Emit the merged final usage separately.
+			before := c.Writer.Size()
 			var formatErr error
 			if info.RelayFormat == types.RelayFormatClaude {
-				// Usage updates are cumulative facts, not Claude terminal events.
-				// Only the final merged snapshot may close the converted message.
-				var frame dto.ChatCompletionsStreamResponse
 				info.SendResponseCount++
-				formatErr = common.UnmarshalJsonStr(pending, &frame)
-				if formatErr == nil {
-					frame.Usage = nil
-					info.ClaudeConvertInfo.Usage = nil
-					formatErr = handleClaudeStreamFrame(c, &frame, info)
-				}
+				info.ClaudeConvertInfo.Usage = nil
+				formatErr = handleClaudeStreamFrame(c, &frame, info)
 			} else {
-				formatErr = HandleStreamFormat(c, info, pending, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
+				for i := range frame.Choices {
+					frame.Choices[i].FinishReason = nil // Defer STOP until final usage.
+					frame.Choices[i].Delta.ReasoningContent, frame.Choices[i].Delta.Reasoning = nil, nil
+				}
+				var encoded []byte
+				encoded, formatErr = common.Marshal(frame)
+				if formatErr == nil {
+					formatErr = HandleStreamFormat(c, info, string(encoded), false, false)
+				}
 			}
+			if formatErr == nil {
+				formatErr = convertedWriter.err
+			}
+			if formatErr != nil {
+				lastStreamData = previousStreamData // Do not re-merge rejected usage during final processing.
+				sr.Error(formatErr)
+				return
+			}
+			observeOpenAIStreamToolCalls(toolCallObserver, data)
+			if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
+				containStreamUsage = true
+			}
+			if c.Writer.Size() > before {
+				beforeText, beforeTools := responseTextBuilder.Len(), toolCount
+				_ = ProcessStreamResponse(frame, &responseTextBuilder, &toolCount)
+				if responseTextBuilder.Len() > beforeText || toolCount > beforeTools {
+					info.SetFirstResultTime()
+				}
+			}
+			return
+		}
+		if lastStreamData != "" {
+			pending := lastStreamData
+			formatErr := HandleStreamFormat(c, info, pending, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 			if formatErr != nil {
 				common.SysLog("error handling stream format: " + formatErr.Error())
 				sr.Error(formatErr)
@@ -159,7 +240,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 			lastStreamData = data
 			observeOpenAIStreamToolCalls(toolCallObserver, data)
-			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+			if err := processTokenData(tokenRelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			} else {
@@ -197,7 +278,22 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		service.SetRelayResponseAuditContent(info, responseTextBuilder.String())
 	}
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	finalData := lastStreamData
+	if converted && convertedLastValid {
+		// Payload frames were already delivered and counted. Close with usage
+		// and finish metadata only, including a stream ending in a text frame.
+		if encoded, err := common.Marshal(convertedFinal); err == nil {
+			finalData = string(encoded)
+		}
+	}
+	beforeFinalError := error(nil)
+	if convertedWriter != nil {
+		beforeFinalError = convertedWriter.err
+	}
+	HandleFinalResponse(c, info, finalData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	if convertedWriter != nil && beforeFinalError == nil && convertedWriter.err != nil {
+		info.StreamStatus.RecordError(convertedWriter.err.Error())
+	}
 
 	return usage, nil
 }

@@ -16,7 +16,48 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
+
+// Responses input/output fields take precedence over Chat aliases. This also
+// handles DTOs that serialize unused Chat fields as numeric/detail zeros.
+func mergeResponsesStreamUsage(usage *dto.Usage, presence *dto.OpenAIUsagePresence, data string) {
+	raw := gjson.Get(data, "response").Raw
+	for _, pair := range [][2]string{
+		{"input_tokens", "prompt_tokens"}, {"output_tokens", "completion_tokens"},
+	} {
+		value := gjson.Get(raw, "usage."+pair[0])
+		if value.Type == gjson.Number {
+			if normalized, err := sjson.SetRaw(raw, "usage."+pair[1], value.Raw); err == nil {
+				raw = normalized
+			}
+		}
+	}
+	for _, pair := range [][2]string{{"input_tokens_details", "prompt_tokens_details"}, {"output_tokens_details", "completion_tokens_details"}} {
+		for _, field := range []string{"cached_tokens", "cached_creation_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "audio_tokens", "reasoning_tokens"} {
+			value := gjson.Get(raw, "usage."+pair[0]+"."+field)
+			if value.Type == gjson.Number {
+				if normalized, err := sjson.SetRaw(raw, "usage."+pair[1]+"."+field, value.Raw); err == nil {
+					raw = normalized
+				}
+			}
+		}
+	}
+	dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(raw), presence)
+}
+
+func responsesInputTokenFloor(usage *dto.Usage) int {
+	return max(usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedCreationTokens,
+		usage.PromptTokensDetails.CacheWriteTokens, usage.PromptTokensDetails.TextTokens,
+		usage.PromptTokensDetails.AudioTokens, usage.PromptTokensDetails.ImageTokens,
+		usage.ClaudeCacheCreation5mTokens+usage.ClaudeCacheCreation1hTokens)
+}
+
+func responsesOutputTokenFloor(usage *dto.Usage) int {
+	return max(usage.CompletionTokenDetails.TextTokens, usage.CompletionTokenDetails.AudioTokens,
+		usage.CompletionTokenDetails.ImageTokens, usage.CompletionTokenDetails.ReasoningTokens)
+}
 
 const maxPendingResponsesStreamEvents = 32
 
@@ -392,14 +433,40 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	emptyCompletionRecorded := false
 	terminalEventSeen := false
 	terminalDelivered := false
-	usageReported := false
+	var usagePresence dto.OpenAIUsagePresence
+	var pendingUsageBase dto.Usage
+	var pendingPresenceBase dto.OpenAIUsagePresence
 	outputDelivered := false
+	imageOutputDelivered := false
 
+	eventHasOutput := func(response dto.ResponsesStreamResponse) bool {
+		return helper.ResponsesStreamEventHasOutput(response) || responsesStreamHasVisibleOutput(&response)
+	}
 	sendEvent := func(event pendingResponsesStreamEvent) bool {
 		delivered, writeErr := sendResponsesStreamData(c, event.response, event.data)
+		if delivered || !eventHasOutput(event.response) {
+			mergeResponsesStreamUsage(usage, &usagePresence, event.data)
+		}
 		if delivered {
 			streamForwarded = true
+			switch event.response.Type {
+			case "response.completed", "response.incomplete", "response.done":
+				if response := event.response.Response; response != nil && responsesTerminalError(response, http.StatusInternalServerError, true) == nil {
+					observeResponsesOutputs(info, response.Output)
+					if event.response.Type == "response.completed" && response.HasImageGenerationCall() {
+						c.Set("image_generation_call", true)
+						c.Set("image_generation_call_quality", response.GetQuality())
+						c.Set("image_generation_call_size", response.GetSize())
+					}
+				}
+			case dto.ResponsesOutputTypeItemDone:
+				observeResponsesToolOutput(info, event.response.Item, event.response.OutputIndex)
+			}
 			outputEstimate.observe(event.response)
+			if (event.response.Response != nil && event.response.Response.HasImageGenerationCall()) ||
+				(event.response.Item != nil && event.response.Item.Type == dto.ResponsesOutputTypeImageGenerationCall) {
+				imageOutputDelivered = true
+			}
 			if helper.ResponsesStreamEventHasOutput(event.response) || responsesStreamHasVisibleOutput(&event.response) {
 				outputDelivered = true
 			}
@@ -424,24 +491,37 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return true
 	}
 	finalizeUsage := func() {
-		if !usageReported {
-			if usage.CompletionTokens == 0 {
-				usage.CompletionTokens = service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName)
-			}
-			if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-				usage.PromptTokens = info.GetEstimatePromptTokens()
-			}
+		if !usagePresence.Completion {
+			usage.CompletionTokens = max(service.CountTextToken(outputEstimate.textForTokens(), info.UpstreamModelName), responsesOutputTokenFloor(usage))
+			usage.OutputTokens = usage.CompletionTokens
+		}
+		if !usagePresence.Prompt && (usage.CompletionTokens != 0 || outputEstimate.textForTokens() != "" || imageOutputDelivered || responsesInputTokenFloor(usage) > 0) {
+			usage.PromptTokens = max(info.GetEstimatePromptTokens(), responsesInputTokenFloor(usage))
+			usage.InputTokens = usage.PromptTokens
 		}
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if usagePresence.Total {
+			usage.TotalTokens = usagePresence.ReportedTotal
+		}
+		usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
 	}
 	flushPendingEvents := func() bool {
+		// Rebuild buffered usage in arrival order using delivered output only.
+		// Independent later metadata remains valid even if an earlier write fails.
+		*usage = pendingUsageBase
+		usagePresence = pendingPresenceBase
+		written := true
 		for _, event := range pendingEvents {
-			if !sendEvent(event) {
-				return false
+			if written {
+				written = sendEvent(event)
+			} else if !eventHasOutput(event.response) {
+				mergeResponsesStreamUsage(usage, &usagePresence, event.data)
 			}
 		}
 		pendingEvents = pendingEvents[:0]
-		return true
+		return written
 	}
 	shouldBufferForEmptyRetry := func() bool {
 		return !streamForwarded && shouldRetryEmptyCompletion(c, info)
@@ -466,15 +546,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
-		if streamResponse.Response != nil && (dto.HasOpenAIUsageTokens(streamResponse.Response.Usage) ||
-			helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-			helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens")) {
-			usageReported = true
-			applyResponsesUsage(usage, streamResponse.Response.Usage)
-			if helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-				helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens") {
-				usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
-			}
+		usageBeforeFrame, presenceBeforeFrame := *usage, usagePresence
+		if !eventHasOutput(streamResponse) {
+			mergeResponsesStreamUsage(usage, &usagePresence, data)
 		}
 		if responsesStreamHasVisibleOutput(&streamResponse) {
 			hasVisiblePayload = true
@@ -487,12 +561,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				if terminalErr := responsesTerminalError(streamResponse.Response, http.StatusInternalServerError, streamForwarded); terminalErr != nil {
 					terminalEventErr = terminalErr
 					break
-				}
-				observeResponsesOutputs(info, streamResponse.Response.Output)
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
 			if !hasVisiblePayload {
@@ -510,17 +578,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					terminalEventErr = terminalErr
 					break
 				}
-				observeResponsesOutputs(info, streamResponse.Response.Output)
 			}
 		case "response.output_text.delta":
-		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall, dto.BuildInCallFileSearchCall, dto.BuildInCallFunctionCall, dto.BuildInCallCustomToolCall, dto.BuildInCallToolUse:
-					observeResponsesToolOutput(info, streamResponse.Item, streamResponse.OutputIndex)
-				}
-			}
 		case "error", "response.error", "response.failed", "response.cancelled", "response.canceled":
 			terminalEventErr = responsesStreamTerminalError(&streamResponse, streamForwarded)
 		}
@@ -544,6 +603,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 
+		if len(pendingEvents) == 0 {
+			pendingUsageBase, pendingPresenceBase = usageBeforeFrame, presenceBeforeFrame
+		}
 		pendingEvents = append(pendingEvents, pendingResponsesStreamEvent{
 			response: streamResponse,
 			data:     data,

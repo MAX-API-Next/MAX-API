@@ -275,6 +275,12 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 	for i, file := range meta.Files {
 		switch file.FileType {
 		case types.FileTypeImage:
+			// Gemini passes URL images upstream. An OpenAI-named alias must
+			// not turn its fixed image estimate into a local network fetch.
+			if info.RelayFormat == types.RelayFormatGemini && file.Source != nil && file.Source.IsURL() {
+				tkm += 520
+				continue
+			}
 			if common.IsOpenAITextModel(model) {
 				token, err := getImageToken(c, file, model, info.IsStream)
 				if err != nil {

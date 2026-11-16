@@ -232,6 +232,9 @@ func TestNativeChatStreamFlushesFirstPayloadWithoutWaitingForAnotherFrame(t *tes
 				err = fmt.Errorf("first payload was not flushed")
 			}
 		}
+		if err == nil {
+			_, err = io.WriteString(w, "data: [DONE]\n\n")
+		}
 		producer <- err
 		_ = w.Close()
 	}()

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
+	"github.com/MAX-API-Next/MAX-API/pkg/billingexpr"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	relayconstant "github.com/MAX-API-Next/MAX-API/relay/constant"
 	"github.com/MAX-API-Next/MAX-API/service"
@@ -32,6 +34,144 @@ type streamFundingCase struct {
 	allowOverflow            bool
 }
 
+type finalUsageFundingWriter struct {
+	gin.ResponseWriter
+	mode   string
+	cancel context.CancelFunc
+}
+
+func (w *finalUsageFundingWriter) Write(p []byte) (int, error) {
+	usageFrame := strings.Contains(string(p), `"choices":[]`) && strings.Contains(string(p), `"usage":`)
+	doneFrame := strings.Contains(string(p), "[DONE]")
+	if (usageFrame && !strings.HasPrefix(w.mode, "done_")) || (doneFrame && strings.HasPrefix(w.mode, "done_")) {
+		switch w.mode {
+		case "cancel":
+			w.cancel()
+			return 0, context.Canceled
+		case "write_error", "done_write_error":
+			return 0, fmt.Errorf("synthetic final usage write failure")
+		case "short_write", "done_short_write":
+			return w.ResponseWriter.Write(p[:len(p)-1])
+		}
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *finalUsageFundingWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestChatFinalWriteFailureOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, channel := range []int{constant.ChannelTypeAnthropic, constant.ChannelTypeOpenAI} {
+		for _, funding := range streamFundingCases() {
+			for _, mode := range []string{"cancel", "write_error", "short_write", "done_write_error", "done_short_write", "success", "no_usage"} {
+				t.Run(fmt.Sprintf("channel=%d/%s/%s", channel, funding.name, mode), func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					var calls atomic.Int32
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						w.Header().Set("Content-Type", "text/event-stream")
+						if channel == constant.ChannelTypeOpenAI {
+							_, _ = fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"accepted"}}],"usage":{"prompt_tokens":4}}`+"\n\ndata: "+`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+						} else {
+							_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"input_tokens":4,"output_tokens":0}}}`+"\n\ndata: "+`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}`+"\n\ndata: "+`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`+"\n\ndata: "+`{"type":"message_stop"}`+"\n\n")
+						}
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := fmt.Sprintf("chat-final-write-%d-%s-%s", channel, funding.name, mode)
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, channel, funding)
+					ctx, cancel := context.WithCancel(c.Request.Context())
+					t.Cleanup(cancel)
+					c.Request = c.Request.WithContext(ctx)
+					c.Writer = &finalUsageFundingWriter{ResponseWriter: c.Writer, mode: mode, cancel: cancel}
+					if mode == "no_usage" {
+						info.Request.(*dto.GeneralOpenAIRequest).StreamOptions = &dto.StreamOptions{IncludeUsage: false}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					apiErr := TextHelper(c, info)
+					failed := mode != "success" && mode != "no_usage"
+					if failed {
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+						require.True(t, info.StreamStatus.HasErrors())
+					} else {
+						require.Nil(t, apiErr)
+						require.Contains(t, recorder.Body.String(), "[DONE]")
+					}
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.EqualValues(t, 1, calls.Load())
+					require.Contains(t, recorder.Body.String(), "accepted")
+					require.NotContains(t, recorder.Body.String(), `"billing_usage"`, "OpenAI client usage frames exclude internal evidence")
+					assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+					if failed {
+						var log model.Log
+						require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+						require.Contains(t, log.Other, `"status":"error"`)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestResponsesFinalUsageWriteFailureOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, route := range []string{"responses_to_chat_global", "responses_to_chat_custom"} {
+		for _, funding := range streamFundingCases() {
+			for _, mode := range []string{"cancel", "write_error", "short_write", "done_write_error", "done_short_write", "success", "no_usage"} {
+				t.Run(route+"/"+funding.name+"/"+mode, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					var calls atomic.Int32
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						calls.Add(1)
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"accepted"}`+"\n\ndata: "+`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := route + "-final-usage-" + funding.name + "-" + mode
+					channel := constant.ChannelTypeOpenAI
+					if route == "responses_to_chat_custom" {
+						channel = constant.ChannelTypeAdvancedCustom
+					}
+					c, info, recorder := streamFundingContext(t, route, requestID, upstream.URL, channel, funding)
+					ctx, cancel := context.WithCancel(c.Request.Context())
+					t.Cleanup(cancel)
+					c.Request = c.Request.WithContext(ctx)
+					c.Writer = &finalUsageFundingWriter{ResponseWriter: c.Writer, mode: mode, cancel: cancel}
+					if mode == "no_usage" {
+						info.Request.(*dto.GeneralOpenAIRequest).StreamOptions = &dto.StreamOptions{IncludeUsage: false}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					apiErr := TextHelper(c, info)
+					failed := mode != "success" && mode != "no_usage"
+					if failed {
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+						require.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+						if !strings.HasPrefix(mode, "done_") {
+							require.NotContains(t, recorder.Body.String(), "[DONE]")
+						}
+					} else {
+						require.Nil(t, apiErr)
+						require.Contains(t, recorder.Body.String(), "[DONE]")
+					}
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					require.EqualValues(t, 1, calls.Load())
+					require.Contains(t, recorder.Body.String(), "accepted")
+					require.NotContains(t, recorder.Body.String(), `"billing_usage"`, "OpenAI client usage frames exclude internal evidence")
+					assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					if failed {
+						require.Contains(t, log.Other, `"status":"error"`)
+					}
+				})
+			}
+		}
+	}
+}
+
 func streamFundingCases() []streamFundingCase {
 	return []streamFundingCase{
 		{name: "subscription_only", preference: "subscription_only", source: "subscription", wallet: 1000},
@@ -40,6 +180,369 @@ func streamFundingCases() []streamFundingCase {
 		{name: "wallet_only", preference: "wallet_only", source: "wallet", wallet: 1000},
 		{name: "wallet_first", preference: "wallet_first", source: "wallet", wallet: 1000},
 		{name: "subscription_first_to_wallet", preference: "subscription_first", source: "wallet", wallet: 1000, subscriptionUsed: 1000, allowOverflow: true},
+	}
+}
+
+func TestChatEstimatedZeroPriceRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		t.Run(funding.name, func(t *testing.T) {
+			db := setupStreamFundingLedger(t, funding)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Content-Length", "100000") // Fail after delivered text, without any provider usage.
+				_, _ = fmt.Fprint(w, "data: "+`{"choices":[{"index":0,"delta":{"content":"partial output"}}]}`+"\n\n")
+			}))
+			t.Cleanup(upstream.Close)
+			requestID := "estimated-zero-price-" + funding.name
+			c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+			require.Nil(t, service.PreConsumeBilling(c, 100, info))
+			info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "0", ExprHash: billingexpr.ExprHashString("0"), GroupRatio: 1, QuotaPerUnit: 500000}
+			apiErr := TextHelper(c, info)
+			require.NotNil(t, apiErr)
+			require.True(t, types.IsSkipRetryError(apiErr))
+			require.Contains(t, recorder.Body.String(), "partial output")
+			service.HandleFailedBilling(c, info, apiErr)
+			service.HandleFailedBilling(c, info, apiErr)
+			completion := service.EstimateTokenByModel("gpt-test", "partial output")
+			assertStreamFundingBalances(t, db, funding, requestID, 0, true, 10, completion)
+			var settlement model.BillingSettlement
+			require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+			require.Equal(t, funding.source, settlement.Source)
+			require.EqualValues(t, -100, settlement.FundingDelta)
+			require.EqualValues(t, -100, settlement.AppliedFundingDelta)
+			require.EqualValues(t, -100, settlement.AppliedTokenDelta)
+		})
+	}
+}
+
+func TestClaudeCacheOnlyRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, funding := range streamFundingCases() {
+			for _, cacheRatio := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/cache_ratio_%d", format, funding.name, cacheRatio), func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.Header().Set("Content-Length", "100000")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"cache_read_input_tokens":50}}}`+"\n\ndata: "+`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"accepted"}}`+"\n\ndata: "+`{"type":"message_delta","usage":{"output_tokens":0}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := fmt.Sprintf("cache-only-%s-%s-%d", format, funding.name, cacheRatio)
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+					info.PriceData.CacheRatio = float64(cacheRatio)
+					info.RelayFormat = format
+					if format == types.RelayFormatClaude {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						info.RequestURLPath = "/v1/messages"
+						info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					if cacheRatio == 0 {
+						// Legacy token pricing has a one-quota minimum. A resolved
+						// zero expression isolates the reservation fallback boundary.
+						info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "0", ExprHash: billingexpr.ExprHashString("0"), GroupRatio: 1, QuotaPerUnit: 500000}
+					}
+					var apiErr *types.MaxAPIError
+					if format == types.RelayFormatClaude {
+						apiErr = ClaudeHelper(c, info)
+					} else {
+						apiErr = TextHelper(c, info)
+					}
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					require.Contains(t, recorder.Body.String(), "accepted")
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					quota := 50 * cacheRatio
+					var settlement model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+					require.Equal(t, funding.source, settlement.Source)
+					require.EqualValues(t, quota-100, settlement.FundingDelta)
+					require.EqualValues(t, quota-100, settlement.AppliedFundingDelta)
+					require.EqualValues(t, quota-100, settlement.AppliedTokenDelta)
+					assertStreamFundingBalances(t, db, funding, requestID, quota, true, 0, 0, 50)
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					require.Contains(t, log.Other, `"cache_tokens":50`)
+				})
+			}
+		}
+	}
+}
+
+func TestClaudeOpaqueThinkingRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAI} {
+		for _, block := range []string{"redacted", "signature"} {
+			for _, funding := range streamFundingCases() {
+				t.Run(string(format)+"/"+block+"/"+funding.name, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					frame := `{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"synthetic-opaque-ciphertext"}}`
+					if block == "signature" {
+						frame = `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"synthetic-opaque-ciphertext"}}`
+					}
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{"input_tokens":100,"output_tokens":0}}}`+"\n\ndata: "+frame+"\n\ndata: "+`{"type":"error","error":{"type":"overloaded_error","message":"synthetic failure"}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					requestID := "opaque-" + string(format) + "-" + block + "-" + funding.name
+					c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+					info.RelayFormat = format
+					if format == types.RelayFormatClaude {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						info.RequestURLPath = "/v1/messages"
+						info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					var apiErr *types.MaxAPIError
+					if format == types.RelayFormatClaude {
+						apiErr = ClaudeHelper(c, info)
+					} else {
+						apiErr = TextHelper(c, info)
+					}
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					quota, prompt, delivered := 0, 0, format == types.RelayFormatClaude
+					if delivered {
+						quota, prompt = 100, 100
+						require.Contains(t, recorder.Body.String(), "synthetic-opaque-ciphertext")
+					} else {
+						require.NotContains(t, recorder.Body.String(), "synthetic-opaque-ciphertext")
+					}
+					assertStreamFundingBalances(t, db, funding, requestID, quota, delivered, prompt, 0)
+					var settlement model.BillingSettlement
+					require.NoError(t, db.Where("operation_key = ?", model.BillingRequestFinalizeOperationKey(requestID)).First(&settlement).Error)
+					require.Equal(t, funding.source, settlement.Source)
+					require.EqualValues(t, quota-100, settlement.FundingDelta)
+				})
+			}
+		}
+	}
+}
+
+func TestClaudeZeroInputOpaqueRetainsOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, input := range []string{`"input_tokens":0,`, `"input_tokens":null,`, "", `"billing_usage":{"input_tokens_reported":true},`} {
+		for _, funding := range streamFundingCases() {
+			t.Run(input+funding.name, func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					w.Header().Set("Content-Length", "100000")
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"message_start","message":{"model":"gpt-test","usage":{`+input+`"output_tokens":0}}}`+"\n\ndata: "+`{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"synthetic-opaque-ciphertext"}}`+"\n\n")
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "zero-opaque-" + funding.name + "-" + fmt.Sprint(len(input))
+				c, info, _ := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeAnthropic, funding)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				info.RelayFormat, info.RequestURLPath = types.RelayFormatClaude, "/v1/messages"
+				info.SetEstimatePromptTokens(0)
+				info.Request = &dto.ClaudeRequest{Model: "gpt-test", MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				apiErr := ClaudeHelper(c, info)
+				require.NotNil(t, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				quota := 100 // Missing/null input and no usable estimate retain fallback.
+				if input == `"input_tokens":0,` {
+					quota = 0
+				}
+				assertStreamFundingBalances(t, db, funding, requestID, quota, true, 0, 0)
+			})
+		}
+	}
+}
+
+func TestClaudeGlobalResponsesFailureSettlesOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, ending := range []string{"no_delivery", "provider", "eof", "transport"} {
+			t.Run(funding.name+"/"+ending, func(t *testing.T) {
+				delivered := ending != "no_delivery"
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					if ending == "transport" {
+						w.Header().Set("Content-Length", "100000")
+					}
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"response.created","response":{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					if delivered {
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"partial output"}`+"\n\n")
+					}
+					if ending == "provider" || ending == "no_delivery" {
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.failed","response":{"status":"failed","error":{"message":"synthetic failure"},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}`+"\n\n")
+					}
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "claude-global-failure-" + funding.name + ending
+				c, info, recorder := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+				info.RelayFormat, info.RequestURLPath, info.IsFirstRequest = types.RelayFormatClaude, "/v1/messages", true
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+				info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				apiErr := ClaudeHelper(c, info)
+				require.NotNil(t, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				service.HandleFailedBilling(c, info, apiErr)
+				quota, prompt, completion := 0, 0, 0
+				if delivered {
+					quota, prompt, completion = 6, 4, 2
+					require.True(t, types.IsSkipRetryError(apiErr))
+					require.Contains(t, recorder.Body.String(), "partial output")
+				}
+				assertStreamFundingBalances(t, db, funding, requestID, quota, delivered, prompt, completion)
+				if delivered {
+					var log model.Log
+					require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+					require.Contains(t, log.Other, `"status":"error"`, "partial settlement must retain failure status even on clean EOF")
+				}
+			})
+		}
+	}
+}
+
+func TestChatMultipleChoicesEOFSettlement(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, ending := range []string{"partial", "complete"} {
+			t.Run(funding.name+"/"+ending, func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				frames := []string{
+					`{"choices":[{"index":0,"delta":{"content":"first"}},{"index":1,"delta":{"content":"second"}}]}`,
+					`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}`,
+				}
+				if ending == "complete" {
+					frames = append(frames, `{"choices":[{"index":1,"delta":{},"finish_reason":"stop"}]}`)
+				}
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprint(w, "data: "+strings.Join(frames, "\n\ndata: ")+"\n\n")
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "choice-eof-" + funding.name + ending
+				c, info, _ := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+				info.Request.(*dto.GeneralOpenAIRequest).N = common.GetPointer(2)
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				apiErr := TextHelper(c, info)
+				if ending == "partial" {
+					require.NotNil(t, apiErr)
+					require.True(t, types.IsSkipRetryError(apiErr))
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+				} else {
+					require.Nil(t, apiErr)
+				}
+				assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+				var log model.Log
+				require.NoError(t, db.Where("type = ?", model.LogTypeConsume).First(&log).Error)
+				if ending == "partial" {
+					require.Contains(t, log.Other, `"status":"error"`)
+				} else {
+					require.Contains(t, log.Other, `"status":"ok"`)
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesCounterPresenceOriginalFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, format := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatOpenAIResponses, types.RelayFormatOpenAI} {
+			for _, counts := range []string{`{"input_tokens":0}`, `{"output_tokens":0}`, `{"input_tokens":0,"output_tokens":0}`} {
+				t.Run(funding.name+"/"+string(format)+"/"+counts, func(t *testing.T) {
+					db := setupStreamFundingLedger(t, funding)
+					upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "text/event-stream")
+						w.Header().Set("Content-Length", "100000")
+						_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"hi"}`+"\n\ndata: "+`{"type":"response.in_progress","response":{"usage":`+counts+`}}`+"\n\n")
+					}))
+					t.Cleanup(upstream.Close)
+					fingerprint := sha256.Sum256([]byte(t.Name()))
+					requestID := fmt.Sprintf("counter-%x", fingerprint[:16])
+					route := "chat_native"
+					if format == types.RelayFormatOpenAIResponses {
+						route = "responses_native"
+					}
+					c, info, _ := streamFundingContext(t, route, requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+					if format != types.RelayFormatOpenAIResponses {
+						model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+					}
+					if format == types.RelayFormatClaude {
+						c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+						info.RelayFormat, info.RequestURLPath, info.IsFirstRequest = format, "/v1/messages", true
+						info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+					}
+					require.Nil(t, service.PreConsumeBilling(c, 100, info))
+					var apiErr *types.MaxAPIError
+					switch format {
+					case types.RelayFormatClaude:
+						apiErr = ClaudeHelper(c, info)
+					case types.RelayFormatOpenAIResponses:
+						apiErr = ResponsesHelper(c, info)
+					default:
+						apiErr = TextHelper(c, info)
+					}
+					require.NotNil(t, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					service.HandleFailedBilling(c, info, apiErr)
+					prompt, completion := 0, 0
+					if counts == `{"input_tokens":0}` {
+						completion = 1
+						if format != types.RelayFormatOpenAIResponses {
+							completion = 2
+						}
+					}
+					if counts == `{"output_tokens":0}` {
+						prompt = 10
+					}
+					quota := prompt + completion
+					if format == types.RelayFormatOpenAI && quota == 0 {
+						quota = 100
+					} // Existing converted-Chat reservation policy.
+					assertStreamFundingBalances(t, db, funding, requestID, quota, true, prompt, completion)
+				})
+			}
+		}
+	}
+}
+
+func TestConvertedResponsesTerminalUsageRetainsFunding(t *testing.T) {
+	initRequestReplayTests(t)
+	for _, funding := range streamFundingCases() {
+		for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+			t.Run(funding.name+"/"+string(format), func(t *testing.T) {
+				db := setupStreamFundingLedger(t, funding)
+				upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = fmt.Fprint(w, "data: "+`{"type":"response.output_text.delta","delta":"accepted output"}`+"\n\ndata: "+`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":2}}}`+"\n\ndata: "+`{"type":"response.in_progress","response":{"usage":{"input_tokens":0}}}`+"\n\n")
+				}))
+				t.Cleanup(upstream.Close)
+				requestID := "converted-terminal-" + funding.name + string(format)
+				c, info, _ := streamFundingContext(t, "chat_native", requestID, upstream.URL, constant.ChannelTypeOpenAI, funding)
+				model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy = model_setting.ChatCompletionsToResponsesPolicy{Enabled: true, AllChannels: true, ModelPatterns: []string{"^gpt-test$"}}
+				if format == types.RelayFormatClaude {
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+					info.RelayFormat, info.RequestURLPath, info.IsFirstRequest = format, "/v1/messages", true
+					info.Request = &dto.ClaudeRequest{Model: "gpt-test", Messages: []dto.ClaudeMessage{{Role: "user", Content: "test"}}, MaxTokens: common.GetPointer(uint(64)), Stream: common.GetPointer(true)}
+				}
+				require.Nil(t, service.PreConsumeBilling(c, 100, info))
+				if format == types.RelayFormatClaude {
+					require.Nil(t, ClaudeHelper(c, info))
+				} else {
+					require.Nil(t, TextHelper(c, info))
+				}
+				service.HandleFailedBilling(c, info, types.NewError(fmt.Errorf("late duplicate cleanup"), types.ErrorCodeBadResponse))
+				assertStreamFundingBalances(t, db, funding, requestID, 6, true, 4, 2)
+			})
+		}
 	}
 }
 
@@ -245,8 +748,10 @@ func TestStreamSettlementRetainsOriginalFunding(t *testing.T) {
 							}
 						}
 						quota := prompt + completion
-						if usageKind == "zero" && ending == "transport" && info.RelayFormat == types.RelayFormatOpenAI {
-							quota = 100 // Preserve Chat's abnormal zero-usage reservation policy.
+						if usageKind == "zero" && ending == "transport" && strings.HasPrefix(route, "responses_to_chat_") {
+							// Converted Responses streams retain their reservation policy.
+							// Native Chat's reported zero now settles zero, including after disconnect.
+							quota = 100
 						}
 						if ending == "no_delivery" {
 							quota = 0
@@ -302,7 +807,7 @@ func TestStreamSettlementRetainsOriginalFunding(t *testing.T) {
 	}
 }
 
-func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundingCase, requestID string, quota int, delivered bool, prompt, completion int) {
+func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundingCase, requestID string, quota int, delivered bool, prompt, completion int, cacheTokens ...int) {
 	t.Helper()
 	var user model.User
 	var token model.Token
@@ -342,7 +847,7 @@ func assertStreamFundingBalances(t *testing.T, db *gorm.DB, funding streamFundin
 		wantLogs = 1
 		// Free pricing and a zero-valued expression still count a request with
 		// measured generation; explicit numeric zero usage does not.
-		if quota != 0 || prompt+completion > 0 {
+		if quota != 0 || prompt+completion > 0 || (len(cacheTokens) > 0 && cacheTokens[0] > 0) {
 			wantRequests = 1
 		}
 	}

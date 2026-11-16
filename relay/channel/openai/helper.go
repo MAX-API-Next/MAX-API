@@ -105,6 +105,13 @@ func fillMissingStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, usage *
 		return true
 	}
 	if presence.Prompt && presence.Completion {
+		// Reported parents stay authoritative. A contradictory zero aggregate
+		// must not discard them; keep genuine zero and positive totals unchanged.
+		total := usage.PromptTokens + usage.CompletionTokens
+		if presence.Total && presence.ReportedTotal == 0 && usage.PromptTokens >= 0 && usage.CompletionTokens >= 0 && total > 0 {
+			usage.TotalTokens = total
+			return true // Publish the reconciled total without estimating either parent.
+		}
 		return false
 	}
 	inputFloor := max(usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedCreationTokens,
@@ -199,7 +206,9 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		if info.ShouldIncludeUsage && !containStreamUsage {
-			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
+			clientUsage := *usage
+			clientUsage.BillingUsage = nil
+			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, clientUsage)
 			response.SetSystemFingerprint(systemFingerprint)
 			helper.ObjectData(c, response)
 		}

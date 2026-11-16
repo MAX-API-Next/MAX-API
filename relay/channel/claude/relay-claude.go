@@ -597,8 +597,13 @@ type ClaudeResponseInfo struct {
 	responsesFinalOutputUsageReported bool
 	responsesUsageFinalized           bool
 	responsesDeliveredText            strings.Builder
+	streamOutputDelivered             bool
+	streamDeliveredText               strings.Builder
+	streamDeliveryTracked             bool
+	streamTerminalSeen                bool
 
-	pendingToolUses []claudePendingToolUse
+	pendingToolUses       []claudePendingToolUse
+	pendingToolStopReason string
 }
 
 type claudePendingToolUse struct {
@@ -637,6 +642,7 @@ func (info *ClaudeResponseInfo) finishToolUses(relayInfo *relaycommon.RelayInfo,
 func (info *ClaudeResponseInfo) discardPendingToolUses() {
 	if info != nil {
 		info.pendingToolUses = nil
+		info.pendingToolStopReason = ""
 	}
 }
 
@@ -849,6 +855,11 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	if claudeResponse.Type == "message_stop" ||
+		(claudeResponse.Type == "message_delta" && claudeResponse.Delta != nil &&
+			claudeResponse.Delta.StopReason != nil && strings.TrimSpace(*claudeResponse.Delta.StopReason) != "") {
+		claudeInfo.streamTerminalSeen = true
+	}
 	if claudeResponse.StopReason != "" {
 		maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	}
@@ -948,6 +959,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		return writeClaudeResponsesEvents(c, info, claudeInfo, events)
 	}
+	// Tool completion depends on the delivered stop marker. Numeric usage
+	// received with that metadata remains authoritative if its write fails.
+	if err == nil && claudeInfo.pendingToolStopReason != "" {
+		if writer, ok := c.Writer.(*claudeStreamWriteObserver); !ok || writer.err == nil {
+			claudeInfo.finishToolUses(info, claudeInfo.pendingToolStopReason)
+			claudeInfo.pendingToolStopReason = ""
+		}
+	}
 	return nil
 }
 
@@ -958,6 +977,16 @@ func writeClaudeResponsesEvents(c *gin.Context, info *relaycommon.RelayInfo, cla
 			return types.NewError(marshalErr, types.ErrorCodeJsonMarshalFailed)
 		}
 		delivered, writeErr := helper.ResponseChunkDataWithDelivery(c, dto.ResponsesStreamResponse{Type: event.Type}, string(payload))
+		if delivered && event.Type == dto.ResponsesOutputTypeItemDone && event.Payload.Item != nil &&
+			strings.EqualFold(strings.TrimSpace(claudeInfo.pendingToolStopReason), "tool_use") && event.Payload.Item.Status == "completed" {
+			// Converted tools finish independently; retain an accepted first
+			// call even if a later item or terminal snapshot cannot be written.
+			for _, toolUse := range claudeInfo.pendingToolUses {
+				if toolUse.identity.CallID != "" && toolUse.identity.CallID == event.Payload.Item.CallId {
+					info.ObserveCustomToolCall(toolUse.name, toolUse.identity)
+				}
+			}
+		}
 		if delivered && helper.ResponsesStreamEventHasOutput(event.Payload) {
 			claudeInfo.responsesOutputDelivered = true
 			if event.Payload.Delta != "" {
@@ -987,15 +1016,17 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.responsesUsageFinalized {
 		return
 	}
-	complete := claudeInfo.Done
+	// Only a numeric message_delta counter makes native output usage final.
+	// message_start and usage-only deltas can precede more delivered output.
+	complete := claudeInfo.responsesFinalOutputUsageReported
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
 		complete = claudeInfo.ResponsesTerminalSeen
 	}
 	explicitZero := complete && claudeInfo.responsesFinalOutputUsageReported
 	estimated := false
-	if info.RelayFormat == types.RelayFormatOpenAIResponses && claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
-		claudeInfo.Usage.PromptTokens = info.GetEstimatePromptTokens()
-		estimated = claudeInfo.Usage.PromptTokens > 0
+	if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
+		claudeInfo.Usage.PromptTokens = max(0, info.GetEstimatePromptTokens()-claudeInfo.Usage.PromptTokensDetails.CachedTokens-cacheCreationTokensForOpenAIUsage(claudeInfo.Usage))
+		estimated = info.GetEstimatePromptTokens() > 0
 	}
 	if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) || !complete {
 		if common.DebugEnabled {
@@ -1005,6 +1036,8 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 		text := claudeInfo.ResponseText.String()
 		if info.RelayFormat == types.RelayFormatOpenAIResponses {
 			text = claudeInfo.responsesDeliveredText.String()
+		} else if claudeInfo.streamDeliveryTracked {
+			text = claudeInfo.streamDeliveredText.String()
 		}
 		fallback := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		if (claudeInfo.Usage.CompletionTokens == 0 && !explicitZero) ||
@@ -1013,7 +1046,7 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 			estimated = true
 		}
 		if claudeInfo.Usage.PromptTokens == 0 && !claudeInfo.responsesInputUsageReported {
-			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+			claudeInfo.Usage.PromptTokens = max(0, fallback.PromptTokens-claudeInfo.Usage.PromptTokensDetails.CachedTokens-cacheCreationTokensForOpenAIUsage(claudeInfo.Usage))
 			estimated = true
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
@@ -1031,6 +1064,9 @@ func finalizeClaudeStreamUsage(c *gin.Context, info *relaycommon.RelayInfo, clau
 			claudeInfo.Usage.BillingUsage.Estimated = estimated
 			claudeInfo.Usage.BillingUsage.TokenCountsReported = claudeInfo.responsesInputUsageReported && claudeInfo.responsesFinalOutputUsageReported
 		}
+	}
+	if claudeInfo.Usage.BillingUsage != nil {
+		claudeInfo.Usage.BillingUsage.InputTokensReported = claudeInfo.responsesInputUsageReported
 	}
 	claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 	if info.RelayFormat == types.RelayFormatOpenAIResponses {
@@ -1060,6 +1096,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+			openAIUsage.BillingUsage = nil
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
@@ -1072,6 +1109,11 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 }
 
 func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.MaxAPIError) {
+	if info.RetryIndex > 0 && !c.Writer.Written() &&
+		(info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatOpenAI) {
+		info.StreamStatus = nil
+		info.SendResponseCount, info.ReceivedResponseCount = 0, 0
+	}
 	claudeInfo := &ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
 		Created:      common.GetTimestamp(),
@@ -1085,14 +1127,51 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		claudeInfo.ResponsesState.CustomToolNames = service.ResponsesCustomToolNames(info)
 	}
 	defer claudeInfo.discardPendingToolUses()
+	var writeObserver *claudeStreamWriteObserver
+	if info.RelayFormat == types.RelayFormatClaude || info.RelayFormat == types.RelayFormatOpenAI {
+		claudeInfo.streamDeliveryTracked = true
+		writeObserver = &claudeStreamWriteObserver{ResponseWriter: c.Writer}
+		c.Writer = writeObserver
+		defer func() {
+			if writeObserver.err == nil {
+				c.Writer = writeObserver.ResponseWriter
+			}
+		}()
+	}
 	var err *types.MaxAPIError
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		before := c.Writer.Size()
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
+		if writeObserver != nil {
+			if writeObserver.err != nil {
+				err = types.NewError(writeObserver.err, types.ErrorCodeBadResponse)
+			} else if err == nil && c.Writer.Size() > before {
+				claudeInfo.recordDeliveredStreamOutput(data, info.RelayFormat == types.RelayFormatClaude)
+			}
+		}
 		if err != nil {
 			sr.Stop(err)
 		}
 	})
+	if writeObserver != nil && err == nil {
+		err = helper.FirstResultTimeoutError(c, info)
+		if err == nil && c.Request.Context().Err() != nil {
+			err = types.NewError(c.Request.Context().Err(), types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+		} else if err == nil && info.StreamStatus.IsAbnormalEnd() {
+			err = types.NewError(fmt.Errorf("upstream Claude stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse)
+		} else if err == nil && !claudeInfo.streamTerminalSeen {
+			err = types.NewError(fmt.Errorf("upstream Claude stream ended before a terminal event"), types.ErrorCodeBadResponse)
+			info.StreamStatus.RecordFatalError(err)
+		}
+	}
 	if err != nil {
+		if writeObserver != nil && c.Writer.Written() {
+			types.ErrOptionWithSkipRetry()(err)
+			if claudeInfo.streamOutputDelivered {
+				finalizeClaudeStreamUsage(c, info, claudeInfo)
+				return claudeInfo.Usage, err
+			}
+		}
 		if info.RelayFormat == types.RelayFormatOpenAIResponses && c.Writer.Written() {
 			err = types.NewError(err, err.GetErrorCode(), types.ErrOptionWithSkipRetry())
 			if !claudeInfo.responsesOutputDelivered {
@@ -1145,6 +1224,10 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 
 	if finalErr := HandleStreamFinalResponse(c, info, claudeInfo); finalErr != nil {
 		return claudeInfo.Usage, finalErr
+	}
+	if writeObserver != nil && writeObserver.err != nil {
+		info.StreamStatus.RecordError(writeObserver.err.Error())
+		return claudeInfo.Usage, types.NewError(writeObserver.err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, claudeInfo.ResponseText.String())
@@ -1252,7 +1335,7 @@ func observeClaudeStreamToolUses(info *relaycommon.RelayInfo, claudeInfo *Claude
 		stopReason = *response.Delta.StopReason
 	}
 	if strings.TrimSpace(stopReason) != "" {
-		claudeInfo.finishToolUses(info, stopReason)
+		claudeInfo.pendingToolStopReason = stopReason
 	}
 }
 

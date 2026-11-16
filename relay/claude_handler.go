@@ -100,6 +100,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 
 		usage, maxApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
 		if maxApiErr != nil {
+			if usage != nil && info.IsStream && types.IsSkipRetryError(maxApiErr) {
+				info.StreamStatus.RecordFatalError(maxApiErr)
+				service.PostPartialConsumeQuota(c, info, usage)
+			}
 			return maxApiErr
 		}
 
@@ -178,6 +182,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (maxAPIError *typ
 
 	usage, maxAPIError := adaptor.DoResponse(c, httpResp, info)
 	if maxAPIError != nil {
+		if partial, ok := usage.(*dto.Usage); ok && partial != nil && info.IsStream && types.IsSkipRetryError(maxAPIError) {
+			service.PostPartialConsumeQuota(c, info, partial)
+		}
 		// reset status code 重置状态码
 		service.ResetStatusCode(maxAPIError, statusCodeMappingStr)
 		return maxAPIError

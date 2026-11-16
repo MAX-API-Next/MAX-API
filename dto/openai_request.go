@@ -216,6 +216,13 @@ func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
 				tokenCountMeta.ToolsCount += len(tools)
 			}
 		}
+		for _, call := range message.ParseToolCalls() {
+			if len(call.Custom) > 0 {
+				texts = append(texts, string(call.Custom))
+			} else {
+				texts = append(texts, call.Function.Name, call.Function.Arguments)
+			}
+		}
 		if message.Content != nil {
 			if message.Name != nil {
 				tokenCountMeta.NameCount++
@@ -1042,11 +1049,14 @@ func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 					})
 				}
 			} else if input.Type == "input_file" {
+				var source types.FileSource
 				if input.FileUrl != "" {
-					fileMeta = append(fileMeta, &types.FileMeta{
-						FileType: types.FileTypeFile,
-						Source:   types.NewFileSourceFromData(input.FileUrl, ""),
-					})
+					source = types.NewFileSourceFromData(input.FileUrl, "")
+				} else if input.FileData != "" {
+					source = types.NewBase64FileSource(input.FileData, "")
+				}
+				if source != nil {
+					fileMeta = append(fileMeta, &types.FileMeta{FileType: types.FileTypeFile, Source: source})
 				}
 			} else {
 				texts = append(texts, input.Text)
@@ -1109,15 +1119,20 @@ type Reasoning struct {
 }
 
 type Input struct {
-	Type    string          `json:"type,omitempty"`
-	Role    string          `json:"role,omitempty"`
-	Content json.RawMessage `json:"content,omitempty"`
+	Type      string          `json:"type,omitempty"`
+	Role      string          `json:"role,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	ToolInput json.RawMessage `json:"input,omitempty"`
 }
 
 type MediaInput struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	FileUrl  string `json:"file_url,omitempty"`
+	FileData string `json:"file_data,omitempty"`
 	ImageUrl string `json:"image_url,omitempty"`
 	Detail   string `json:"detail,omitempty"` // 仅 input_image 有效
 }
@@ -1151,15 +1166,27 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 		var inputs []Input
 		_ = common.Unmarshal(r.Input, &inputs)
 		for _, input := range inputs {
-			if common.GetJsonType(input.Content) == "string" {
+			content := input.Content
+			switch input.Type {
+			case "function_call":
+				content = input.Arguments
+			case "custom_tool_call":
+				content = input.ToolInput
+			case "function_call_output", "custom_tool_call_output", "local_shell_call_output":
+				content = input.Output
+			}
+			if input.Name != "" {
+				mediaInputs = append(mediaInputs, MediaInput{Type: "input_text", Text: input.Name})
+			}
+			if common.GetJsonType(content) == "string" {
 				var str string
-				_ = common.Unmarshal(input.Content, &str)
+				_ = common.Unmarshal(content, &str)
 				mediaInputs = append(mediaInputs, MediaInput{Type: "input_text", Text: str})
 			}
 
-			if common.GetJsonType(input.Content) == "array" {
+			if common.GetJsonType(content) == "array" {
 				var array []any
-				_ = common.Unmarshal(input.Content, &array)
+				_ = common.Unmarshal(content, &array)
 				for _, itemAny := range array {
 					// Already parsed MediaContent
 					if media, ok := itemAny.(MediaInput); ok {
@@ -1192,7 +1219,8 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 								imageUrl = url
 							}
 						}
-						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl})
+						detail, _ := item["detail"].(string)
+						mediaInputs = append(mediaInputs, MediaInput{Type: "input_image", ImageUrl: imageUrl, Detail: detail})
 					case "input_file":
 						// file_url may be string or object with url field
 						var fileUrl string
@@ -1204,7 +1232,8 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 								fileUrl = url
 							}
 						}
-						mediaInputs = append(mediaInputs, MediaInput{Type: "input_file", FileUrl: fileUrl})
+						fileData, _ := item["file_data"].(string)
+						mediaInputs = append(mediaInputs, MediaInput{Type: "input_file", FileUrl: fileUrl, FileData: fileData})
 					}
 				}
 			}

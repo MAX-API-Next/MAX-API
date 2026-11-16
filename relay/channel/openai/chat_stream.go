@@ -5,21 +5,78 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MAX-API-Next/MAX-API/common"
+	"github.com/MAX-API-Next/MAX-API/constant"
 	"github.com/MAX-API-Next/MAX-API/dto"
 	relaycommon "github.com/MAX-API-Next/MAX-API/relay/common"
 	"github.com/MAX-API-Next/MAX-API/relay/helper"
 	"github.com/MAX-API-Next/MAX-API/service"
 	"github.com/MAX-API-Next/MAX-API/types"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 const (
 	maxPendingChatStreamEvents = 32
 	maxPendingChatStreamBytes  = 64 << 10
+	// Some compatible providers report final usage after their error event.
+	// Retain it only after delivered output, with strictly bounded tail reads.
+	chatErrorUsageGracePeriod = time.Second
+	maxChatErrorUsageEvents   = 8
+	maxChatErrorUsageBytes    = 64 << 10
 )
+
+// Cache aliases can live outside the typed usage object. Read one accepted
+// frame at a time so later metadata cannot erase them or freeze an older value.
+// Parent-zero invalidation applies only when that parent is accepted.
+func chatStreamReportedCache(channel int, data string, acceptParentZero bool) (int, bool) {
+	root := gjson.Parse(data)
+	number := func(value gjson.Result) (int, bool) {
+		if value.Type != gjson.Number {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(value.Raw, 10, 0)
+		return int(n), err == nil && n >= 0
+	}
+	for _, field := range []string{"usage.prompt_tokens_details.cached_tokens", "usage.input_tokens_details.cached_tokens"} {
+		if n, ok := number(root.Get(field)); ok {
+			return n, true
+		}
+	}
+	var aliases []string
+	switch channel {
+	case constant.ChannelTypeMoonshot:
+		for _, choice := range root.Get("choices").Array() {
+			if n, ok := number(choice.Get("usage.cached_tokens")); ok {
+				return n, true
+			}
+		}
+		aliases = []string{"usage.cached_tokens", "usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeZhipu_v4:
+		aliases = []string{"usage.cached_tokens", "usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeDeepSeek:
+		aliases = []string{"usage.prompt_cache_hit_tokens"}
+	case constant.ChannelTypeOpenAI:
+		aliases = []string{"timings.cache_n"}
+	}
+	for _, field := range aliases {
+		if n, ok := number(root.Get(field)); ok {
+			return n, true
+		}
+	}
+	prompt := root.Get("usage.prompt_tokens")
+	if prompt.Type != gjson.Number {
+		prompt = root.Get("usage.input_tokens")
+	}
+	if n, ok := number(prompt); acceptParentZero && ok && n == 0 {
+		return 0, true // An explicit zero parent clears retained cache details.
+	}
+	return 0, false
+}
 
 // Observe native Chat writes because legacy SSE rendering can discard writer
 // errors. The scanner serializes this wrapper with ping writes.
@@ -55,6 +112,7 @@ type chatStreamFrame struct {
 	Error   json.RawMessage `json:"error"`
 	Usage   *dto.Usage      `json:"usage"`
 	Choices []struct {
+		Index        int            `json:"index"`
 		Delta        map[string]any `json:"delta"`
 		FinishReason string         `json:"finish_reason"`
 	} `json:"choices"`
@@ -84,6 +142,28 @@ func (frame *chatStreamFrame) hasPayload() bool {
 		}
 		for key, value := range choice.Delta {
 			if key != "role" && chatStreamValueHasPayload(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Discarded whitespace is still generated output, even though it cannot
+// satisfy the separate visible-output predicate used by empty retries.
+func (frame *chatStreamFrame) hasOutput() bool {
+	for _, choice := range frame.Choices {
+		for key, value := range choice.Delta {
+			if key == "role" {
+				continue
+			}
+			if text, ok := value.(string); ok {
+				if text != "" {
+					return true
+				}
+				continue
+			}
+			if chatStreamValueHasPayload(value) {
 				return true
 			}
 		}
@@ -203,11 +283,19 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 	usage := &dto.Usage{}
 	containUsage, hasPayload := false, false
+	choiceFinished := make(map[int]bool)
+	expectedChoices := 1
+	if request, ok := info.Request.(*dto.GeneralOpenAIRequest); ok && request != nil && request.N != nil && *request.N > 1 {
+		expectedChoices = *request.N
+	}
 	var usagePresence dto.OpenAIUsagePresence
+	cacheReported, reportedCache := false, 0
 	var text strings.Builder
 	var toolCount int
 	var lastData string
 	var streamErr *types.MaxAPIError
+	var errorUsageTimer *time.Timer
+	drainingErrorUsage, errorUsageEvents, errorUsageBytes := false, 0, 0
 	pending := make([]string, 0, 4)
 	pendingBytes := 0
 	buffering := shouldRetryEmptyCompletion(c, info)
@@ -236,10 +324,63 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		return true
 	}
+	recordCache := func(data string, acceptParentZero bool) {
+		if cached, ok := chatStreamReportedCache(info.ChannelType, data, acceptParentZero); ok {
+			cacheReported, reportedCache = true, cached
+			usage.PromptTokensDetails.CachedTokens = cached
+			if usage.InputTokensDetails != nil {
+				usage.InputTokensDetails.CachedTokens = cached
+			}
+			usagePresence.Any, containUsage = true, true
+		}
+	}
 	recordUsage := func(frame *chatStreamFrame, data string) {
 		lastData = data
 		if dto.MergeOpenAIUsageWithPresence(usage, common.StringToByteSlice(data), &usagePresence) {
 			containUsage = true
+		}
+		recordCache(data, true)
+	}
+	recordErrorTailUsage := func(frame *chatStreamFrame, data string) {
+		if !frame.hasOutput() {
+			recordUsage(frame, data)
+			return
+		}
+		// Generation data is never forwarded after an error. Retain only
+		// independent cache facts, without merging its parents/output details
+		// or making it the final raw response used by post-processing.
+		recordCache(data, false)
+		var cacheUsage dto.Usage
+		if !dto.MergeOpenAIUsage(&cacheUsage, common.StringToByteSlice(data)) {
+			return
+		}
+		raw := gjson.Get(data, "usage")
+		for field, target := range map[string]*int{
+			"cached_creation_tokens": &usage.PromptTokensDetails.CachedCreationTokens,
+			"cache_write_tokens":     &usage.PromptTokensDetails.CacheWriteTokens,
+		} {
+			if raw.Get("prompt_tokens_details."+field).Type != gjson.Number && raw.Get("input_tokens_details."+field).Type != gjson.Number {
+				continue
+			}
+			if field == "cached_creation_tokens" {
+				*target = cacheUsage.PromptTokensDetails.CachedCreationTokens
+			} else {
+				*target = cacheUsage.PromptTokensDetails.CacheWriteTokens
+			}
+			if usage.InputTokensDetails != nil {
+				usage.InputTokensDetails.CachedCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+				usage.InputTokensDetails.CacheWriteTokens = usage.PromptTokensDetails.CacheWriteTokens
+			}
+			usagePresence.Any, containUsage = true, true
+		}
+		for field, target := range map[string]*int{
+			"claude_cache_creation_5_m_tokens": &usage.ClaudeCacheCreation5mTokens,
+			"claude_cache_creation_1_h_tokens": &usage.ClaudeCacheCreation1hTokens,
+		} {
+			if value := raw.Get(field); value.Type == gjson.Number {
+				*target = int(value.Int())
+				usagePresence.Any, containUsage = true, true
+			}
 		}
 	}
 	flushPending := func() bool {
@@ -255,6 +396,22 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if drainingErrorUsage {
+			errorUsageEvents++
+			errorUsageBytes += len(data)
+			if errorUsageEvents > maxChatErrorUsageEvents || errorUsageBytes > maxChatErrorUsageBytes {
+				sr.Stop(streamErr)
+				return
+			}
+			var frame chatStreamFrame
+			if common.UnmarshalJsonStr(data, &frame) == nil {
+				_, hasCache := chatStreamReportedCache(info.ChannelType, data, false)
+				if frame.Usage != nil || hasCache {
+					recordErrorTailUsage(&frame, data)
+				}
+			}
+			return // Never forward generation data after the terminal error.
+		}
 		var frame chatStreamFrame
 		if err := common.UnmarshalJsonStr(data, &frame); err != nil {
 			streamErr = types.NewOpenAIError(fmt.Errorf("invalid upstream chat stream: %w", err), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
@@ -263,8 +420,19 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		}
 		// Inspect the current error before releasing any preceding role frame.
 		if streamErr = frame.upstreamError(); streamErr != nil {
-			sr.Stop(streamErr)
+			if !hasPayload {
+				sr.Stop(streamErr)
+				return
+			}
+			recordErrorTailUsage(&frame, data)
+			drainingErrorUsage = true
+			sr.Error(streamErr)
+			info.StreamStatus.RecordFatalError(streamErr)
+			errorUsageTimer = time.AfterFunc(chatErrorUsageGracePeriod, func() { _ = resp.Body.Close() })
 			return
+		}
+		for _, choice := range frame.Choices {
+			choiceFinished[choice.Index] = choiceFinished[choice.Index] || strings.TrimSpace(choice.FinishReason) != ""
 		}
 		visible := frame.hasPayload()
 		if !info.ShouldIncludeUsage && frame.Usage != nil && len(frame.Choices) == 0 {
@@ -298,16 +466,35 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			sr.Error(err)
 		}
 	})
+	if errorUsageTimer != nil {
+		errorUsageTimer.Stop()
+	}
 
 	// The scanner has joined its workers, so a concurrent ping/write cannot
 	// race the final retry decision. Cancellation is never an empty completion.
-	if c.Request.Context().Err() != nil {
+	if c.Request.Context().Err() != nil && streamErr == nil {
 		streamErr = types.NewOpenAIError(c.Request.Context().Err(), types.ErrorCodeBadResponse, http.StatusBadGateway, types.ErrOptionWithSkipRetry())
 	} else if streamErr == nil {
 		streamErr = helper.FirstResultTimeoutError(c, info)
 	}
 	if streamErr == nil && !info.StreamStatus.IsNormalEnd() {
 		streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended: %s", info.StreamStatus.Summary()), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	if streamErr == nil && hasPayload && info.StreamStatus.EndReason != relaycommon.StreamEndReasonDone {
+		// Compatible providers may omit DONE; a finish_reason still completes
+		// each requested choice. A duplicate finish cannot hide a missing one.
+		finishedRequested := 0
+		allFinished := true
+		for index, finished := range choiceFinished {
+			allFinished = allFinished && finished
+			if finished && index >= 0 && index < expectedChoices {
+				finishedRequested++
+			}
+		}
+		if !allFinished || finishedRequested != expectedChoices {
+			streamErr = types.NewOpenAIError(fmt.Errorf("upstream chat stream ended before a completion marker"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+			info.StreamStatus.RecordFatalError(streamErr)
+		}
 	}
 	if streamErr != nil {
 		if c.Writer.Written() {
@@ -328,6 +515,17 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		containUsage = false
 	}
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastData))
+	if cacheReported {
+		// Legacy fallback normalization cannot override accepted numeric zeros.
+		usage.PromptTokensDetails.CachedTokens = reportedCache
+	}
+	// Failed generations need host-owned evidence after normalization for
+	// usable estimates and reported zeros. Provider JSON cannot supply it.
+	if streamErr != nil && (usagePresence.Any || dto.HasOpenAIUsageTokens(usage)) {
+		usage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+	}
 	if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, text.String())
 	}
@@ -347,5 +545,12 @@ func oaiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 	var metadata dto.ChatCompletionsStreamResponse
 	_ = common.UnmarshalJsonStr(lastData, &metadata)
 	HandleFinalResponse(c, info, lastData, metadata.Id, metadata.Created, metadata.Model, metadata.GetSystemFingerprint(), usage, containUsage)
+	if writeObserver.err != nil {
+		info.StreamStatus.RecordError(writeObserver.err.Error())
+		usage.BillingUsage = dto.NewReportedOpenAIChatBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+		return usage, types.NewError(writeObserver.err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
+	}
 	return usage, nil
 }

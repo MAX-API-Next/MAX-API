@@ -17,6 +17,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func responsesStreamIndexKey(itemID string, idx *int) string {
@@ -77,16 +78,44 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return nil, newEmptyCompletionRetryError()
 		}
 	}
-	if usage == nil || usage.TotalTokens == 0 {
+	promptReported := gjson.GetBytes(body, "usage.input_tokens").Type == gjson.Number
+	completionReported := gjson.GetBytes(body, "usage.output_tokens").Type == gjson.Number
+	if !promptReported || !completionReported {
 		outputAuditText := service.ExtractOutputTextFromResponses(&responsesResp)
-		usage = service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
-		chatResp.Usage = *usage
+		var estimateText strings.Builder
+		estimateText.WriteString(outputAuditText)
+		for _, choice := range chatResp.Choices {
+			for _, tool := range choice.Message.ParseToolCalls() {
+				estimateText.WriteString(tool.Function.Name)
+				estimateText.WriteString(tool.Function.Arguments)
+			}
+		}
+		estimated := service.ResponseText2Usage(c, estimateText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
+		if !promptReported {
+			usage.PromptTokens = max(estimated.PromptTokens, responsesInputTokenFloor(usage))
+			usage.InputTokens = usage.PromptTokens
+		}
+		if !completionReported {
+			usage.CompletionTokens = max(estimated.CompletionTokens, responsesOutputTokenFloor(usage))
+			usage.OutputTokens = usage.CompletionTokens
+		}
+		if gjson.GetBytes(body, "usage.total_tokens").Type != gjson.Number {
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		}
 		if service.ResponseAuditEnabled() {
 			service.SetRelayResponseAuditContent(info, outputAuditText)
 		}
 	} else if service.ResponseAuditEnabled() {
 		service.SetRelayResponseAuditContent(info, service.ExtractOutputTextFromResponses(&responsesResp))
 	}
+	if total := gjson.GetBytes(body, "usage.total_tokens"); total.Type == gjson.Number {
+		// Conversion helpers can normalize zero to a sum; raw presence wins.
+		usage.TotalTokens = int(total.Int())
+	}
+	usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+	usage.BillingUsage.TokenCountsReported = promptReported && completionReported
+	usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
+	chatResp.Usage = *usage
 	if !emptyCompletion {
 		recordEmptyCompletionRetrySuccess(c, info, usage)
 	}
@@ -100,6 +129,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		geminiResp := service.ResponseOpenAI2Gemini(chatResp, info)
 		responseBody, err = common.Marshal(geminiResp)
 	default:
+		chatResp.Usage.BillingUsage = nil // Internal evidence stays on the settlement result.
 		responseBody, err = common.Marshal(chatResp)
 	}
 	if err != nil {
@@ -140,7 +170,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		hasVisiblePayload       bool
 		outputDelivered         bool
 		deliveredUsageText      strings.Builder
-		usageReported           bool
+		usagePresence           dto.OpenAIUsagePresence
 		emptyCompletionRecorded bool
 		streamErr               *types.MaxAPIError
 	)
@@ -156,6 +186,27 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
+	}
+	partialUsageSupported := info.RelayFormat == types.RelayFormatOpenAI || info.RelayFormat == types.RelayFormatClaude
+	finalizeUsage := func(text string) {
+		if !usagePresence.Prompt || !usagePresence.Completion {
+			estimate := service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+			if !usagePresence.Prompt {
+				usage.PromptTokens = max(estimate.PromptTokens, responsesInputTokenFloor(usage))
+				usage.InputTokens = usage.PromptTokens
+			}
+			if !usagePresence.Completion {
+				usage.CompletionTokens = max(estimate.CompletionTokens, responsesOutputTokenFloor(usage))
+				usage.OutputTokens = usage.CompletionTokens
+			}
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+		if usagePresence.Total {
+			usage.TotalTokens = usagePresence.ReportedTotal
+		}
+		usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
+		usage.BillingUsage.TokenCountsReported = usagePresence.Prompt && usagePresence.Completion
+		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
 	}
 
 	sendChatChunk := func(chunk *dto.ChatCompletionsStreamResponse) bool {
@@ -203,6 +254,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
+		before := c.Writer.Size()
 		if err := HandleStreamFormat(c, info, string(chunkData), false, false); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
@@ -211,7 +263,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = types.NewOpenAIError(writeObserver.err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
-		recordFirstResult()
+		if c.Writer.Size() > before {
+			recordFirstResult()
+		}
 		return true
 	}
 
@@ -366,6 +420,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
+		// A delivered terminal fixes this generation's output and usage.
+		// Its own usage was merged before sentStop became true.
+		if sentStop {
+			return
+		}
 
 		var streamResp dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
@@ -374,12 +433,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
-		if streamResp.Response != nil && (helper.HasUsageTokenFields(data, "response.usage", "input_tokens", "output_tokens") ||
-			helper.HasUsageTokenFields(data, "response.usage", "prompt_tokens", "completion_tokens")) {
-			applyResponsesUsage(usage, streamResp.Response.Usage)
-			usage.BillingUsage = dto.NewReportedOpenAIResponsesBillingUsage(usage)
-			usageReported = true
-		}
+		// Accept this frame's counters only after its required output writes.
+		// Terminal metadata is committed before the converted stop/usage snapshot.
+		usagePending := true
+		defer func() {
+			if usagePending {
+				mergeResponsesStreamUsage(usage, &usagePresence, data)
+			}
+		}()
 
 		switch streamResp.Type {
 		case "response.created":
@@ -402,6 +463,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.reasoning_summary_text.delta":
 			if !sendReasoningSummaryDelta(streamResp.Delta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
 			}
@@ -441,6 +503,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					pendingTextPrefix.Reset()
 				}
 				if !sendStartIfNeeded() {
+					usagePending = false
 					sr.Stop(streamErr)
 					return
 				}
@@ -462,6 +525,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					},
 				}
 				if !sendChatChunk(chunk) {
+					usagePending = false
 					sr.Stop(streamErr)
 					return
 				}
@@ -474,10 +538,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			if streamResp.Item.Type != dto.BuildInCallFunctionCall && streamResp.Item.Type != dto.BuildInCallCustomToolCall {
 				break
 			}
-			if streamResp.Type == dto.ResponsesOutputTypeItemDone {
-				observeResponsesToolOutput(info, streamResp.Item, streamResp.OutputIndex)
-			}
-
 			itemID := strings.TrimSpace(streamResp.Item.ID)
 			callID := strings.TrimSpace(streamResp.Item.CallId)
 			if callID == "" {
@@ -504,8 +564,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 
 			if !sendToolCallDelta(callID, name, argsDelta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
+			}
+			if streamResp.Type == dto.ResponsesOutputTypeItemDone && callID != "" {
+				observeResponsesToolOutput(info, streamResp.Item, streamResp.OutputIndex)
 			}
 
 		case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
@@ -519,6 +583,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			toolCallArgsByID[callID] += streamResp.Delta
 			if !sendToolCallDelta(callID, "", streamResp.Delta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
 			}
@@ -541,7 +606,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					sr.Stop(streamErr)
 					return
 				}
-				observeResponsesOutputs(info, streamResp.Response.Output)
 				completedOutputTypes = responsesOutputTypes(streamResp.Response)
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
@@ -549,13 +613,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				if streamResp.Response.CreatedAt != 0 {
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
-				if streamResp.Response.Usage != nil && !usageReported {
-					usage = openaicompat.UsageFromResponsesUsage(streamResp.Response.Usage)
-				}
 				if outputText.Len() == 0 {
 					completedText := service.ExtractOutputTextFromResponses(streamResp.Response)
 					if strings.TrimSpace(completedText) != "" {
 						if !sendStartIfNeeded() {
+							usagePending = false
 							sr.Stop(streamErr)
 							return
 						}
@@ -577,14 +639,19 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 							},
 						}
 						if !sendChatChunk(chunk) {
+							usagePending = false
 							sr.Stop(streamErr)
 							return
 						}
 						hasVisiblePayload = true
 					}
 				}
-				for _, out := range streamResp.Response.Output {
+				for outputIndex, out := range streamResp.Response.Output {
 					if out.Type != dto.BuildInCallFunctionCall && out.Type != dto.BuildInCallCustomToolCall {
+						// Server-side search facts have no converted tool payload.
+						if out.Type == dto.BuildInCallWebSearchCall || out.Type == dto.BuildInCallFileSearchCall {
+							observeResponsesToolOutput(info, &out, &outputIndex)
+						}
 						continue
 					}
 					itemID := strings.TrimSpace(out.ID)
@@ -593,17 +660,24 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 						callID = itemID
 					}
 					if _, alreadyEmitted := toolCallIndexByID[callID]; alreadyEmitted {
+						observeResponsesToolOutput(info, &out, &outputIndex)
 						continue
 					}
 					if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
+						usagePending = false
 						sr.Stop(streamErr)
 						return
+					}
+					if callID != "" {
+						observeResponsesToolOutput(info, &out, &outputIndex)
 					}
 				}
 				if streamResp.Response.HasImageGenerationCall() {
 					hasVisiblePayload = true
 				}
 			}
+			mergeResponsesStreamUsage(usage, &usagePresence, data)
+			usagePending = false
 
 			if !hasVisiblePayload {
 				emptyCompletionRecorded = true
@@ -620,9 +694,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			// Converted terminal usage must be the same snapshot returned for
 			// settlement. A reported numeric zero must never become an estimate.
-			if !usageReported && usage.TotalTokens == 0 {
-				usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+			finalizeUsage(usageText.String())
 			if !sentStop {
 				if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil {
 					info.ClaudeConvertInfo.Usage = usage
@@ -652,10 +724,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	})
 
 	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
-		if outputDelivered && info.RelayFormat == types.RelayFormatOpenAI {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+		if outputDelivered && partialUsageSupported {
+			finalizeUsage(deliveredUsageText.String())
 			return usage, apiErr
 		}
 		return nil, apiErr
@@ -665,10 +735,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if c.Writer.Written() {
 			types.ErrOptionWithSkipRetry()(streamErr)
 		}
-		if outputDelivered && info.RelayFormat == types.RelayFormatOpenAI {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+		if outputDelivered && partialUsageSupported {
+			finalizeUsage(deliveredUsageText.String())
 			return usage, streamErr
 		}
 		return nil, streamErr
@@ -685,10 +753,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			reason = string(info.StreamStatus.EndReason)
 		}
 		apiErr := openaicompat.NewResponsesStreamIncompleteError(reason)
-		if outputDelivered && info.RelayFormat == types.RelayFormatOpenAI {
-			if !usageReported {
-				usage = service.ResponseText2Usage(c, deliveredUsageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-			}
+		if outputDelivered && partialUsageSupported {
+			finalizeUsage(deliveredUsageText.String())
 			return usage, apiErr
 		}
 		return nil, apiErr
@@ -713,13 +779,24 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
-		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		clientUsage := *usage
+		clientUsage.BillingUsage = nil
+		err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, clientUsage))
+		if err == nil {
+			err = writeObserver.err
+		}
+		if err != nil {
+			info.StreamStatus.RecordError(err.Error())
+			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
 		}
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		helper.Done(c)
+		if writeObserver.err != nil {
+			info.StreamStatus.RecordError(writeObserver.err.Error())
+			return usage, types.NewOpenAIError(writeObserver.err, types.ErrorCodeBadResponse, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
+		}
 	}
 	auditText := outputText.String()
 	if strings.TrimSpace(auditText) == "" {
