@@ -26,10 +26,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type replayConvertedWriter struct{ gin.ResponseWriter }
+type replayConvertedWriter struct {
+	gin.ResponseWriter
+	short bool
+}
 
 func (w *replayConvertedWriter) Write(p []byte) (int, error) {
 	if strings.Contains(string(p), "undelivered") {
+		if w.short {
+			return w.ResponseWriter.Write(p[:len(p)-1])
+		}
 		return 0, fmt.Errorf("synthetic converted write failure")
 	}
 	return w.ResponseWriter.Write(p)
@@ -47,7 +53,7 @@ func TestConvertedWriteEstimateSettlement(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/partial=%t/%s", format, partial, facts), func(t *testing.T) {
 					usageReplayRatios(t)
 					c, info := usageReplayInfo(t, 9700+i*10+j*5+k, "")
-					c.Writer = &replayConvertedWriter{c.Writer}
+					c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer}
 					info.IsStream, info.RelayFormat = true, format
 					info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
 					text, raw := "", ""
@@ -140,6 +146,74 @@ func TestResponsesNonstreamToolEstimateSettlement(t *testing.T) {
 						assertUsageReplayBalance(t, info, 100+2*output)
 						require.Equal(t, output, u.CompletionTokens)
 						require.Equal(t, 100+output, u.TotalTokens)
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestResponsesConvertedRejectedFrameSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude} {
+		for _, mode := range []string{"error", "short", "success", "success_zero"} {
+			for _, prior := range []string{"missing", "zero", "reported"} {
+				for _, kind := range []string{"text", "tool"} {
+					t.Run(fmt.Sprintf("%s/%s/prior=%s/%s", format, mode, prior, kind), func(t *testing.T) {
+						usageReplayRatios(t)
+						c, info := usageReplayInfo(t, 9791, "")
+						info.IsStream, info.RelayFormat = true, format
+						info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses
+						recorder := usageReplayRecorder(c)
+						failed := mode == "error" || mode == "short"
+						if failed {
+							c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+						}
+						raw, prompt, output := "", 38, 2 // A fully delivered tool name "hi" estimates two output tokens.
+						if prior != "missing" {
+							facts := `{"input_tokens":0,"output_tokens":0}`
+							prompt, output = 0, 0
+							if prior == "reported" {
+								facts, prompt, output = `{"input_tokens":20,"output_tokens":3}`, 20, 3
+							}
+							raw += "data: " + `{"type":"response.created","response":{"usage":` + facts + `}}` + "\n\n"
+						}
+						raw += "data: " + `{"type":"response.output_item.added","item":{"type":"function_call","id":"tool_1","call_id":"call_1","name":"hi","arguments":""}}` + "\n\n"
+						facts := `{"input_tokens":100,"output_tokens":999}`
+						if mode == "success_zero" {
+							facts = `{"input_tokens":0,"output_tokens":0}`
+						}
+						if failed {
+							facts = `{"input_tokens":100,"output_tokens":999,"input_tokens_details":{"cached_tokens":90},"output_tokens_details":{"reasoning_tokens":900}}`
+						} else if mode == "success_zero" {
+							prompt, output = 0, 0
+						} else {
+							prompt, output = 100, 999
+						}
+						terminalOutput := `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"undelivered fallback"}]}]`
+						if kind == "tool" {
+							terminalOutput = `[{"type":"function_call","id":"tool_2","call_id":"call_2","name":"undelivered","arguments":""}]`
+						}
+						raw += "data: " + `{"type":"response.completed","response":{"status":"completed","output":` + terminalOutput + `,"usage":` + facts + `}}` + "\n\n"
+						u, apiErr := openai.OaiResponsesToChatStreamHandler(c, info, usageReplayResponse(raw))
+						if failed {
+							require.NotNil(t, apiErr)
+							require.True(t, types.IsSkipRetryError(apiErr))
+							require.NotNil(t, u)
+						} else {
+							require.Nil(t, apiErr)
+							require.Contains(t, recorder.Body.String(), "undelivered")
+						}
+						service.PostTextConsumeQuota(c, info, u, nil)
+						service.PostTextConsumeQuota(c, info, u, nil)
+						assertUsageReplayBalance(t, info, prompt+output*2)
+						require.Equal(t, prompt, u.PromptTokens)
+						require.Equal(t, output, u.CompletionTokens)
+						require.Equal(t, !failed || prior != "missing", u.BillingUsage.TokenCountsReported)
+						if failed {
+							require.Zero(t, u.PromptTokensDetails.CachedTokens)
+							require.Zero(t, u.CompletionTokenDetails.ReasoningTokens)
+						}
 					})
 				}
 			}
@@ -425,6 +499,47 @@ func TestDifyReportedPartialTotalSettlement(t *testing.T) {
 	service.PostTextConsumeQuota(c, info, usage, nil)
 	assertUsageReplayBalance(t, info, 42) // 38 input + existing estimate 2 output at ratio 2.
 	require.Equal(t, 50, usage.TotalTokens)
+}
+
+func TestDifyRejectedTextSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, short := range []bool{false, true} {
+		for _, partial := range []bool{false, true} {
+			for _, counts := range []string{"missing", "zero", "reported"} {
+				t.Run(fmt.Sprintf("short=%t/partial=%t/%s", short, partial, counts), func(t *testing.T) {
+					usageReplayRatios(t)
+					c, info := usageReplayInfo(t, 9790, "")
+					info.IsStream = true
+					c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: short}
+					a := &dify.Adaptor{}
+					a.Init(info)
+					raw, prompt, output := "", 38, 0
+					if partial {
+						raw = "data: " + `{"event":"message","answer":"hi"}` + "\n\n"
+						output = 2
+					}
+					raw += "data: " + `{"event":"message","answer":"` + strings.Repeat("undelivered ", 128) + `"}` + "\n\n"
+					raw += "data: " + `{"event":"message","answer":"ignored after failure"}` + "\n\n"
+					facts := `{}`
+					if counts == "zero" {
+						facts, prompt, output = `{"prompt_tokens":100,"completion_tokens":0}`, 100, 0
+					} else if counts == "reported" {
+						facts, prompt, output = `{"prompt_tokens":100,"completion_tokens":7}`, 100, 7
+					}
+					raw += "data: " + `{"event":"message_end","metadata":{"usage":` + facts + `}}` + "\n\n"
+					u, apiErr := a.DoResponse(c, usageReplayResponse(raw), info)
+					require.Nil(t, apiErr, "preserve Dify's existing soft-error return")
+					usage := u.(*dto.Usage)
+					service.PostTextConsumeQuota(c, info, usage, nil)
+					service.PostTextConsumeQuota(c, info, usage, nil)
+					assertUsageReplayBalance(t, info, prompt+output*2)
+					require.Equal(t, prompt, usage.PromptTokens)
+					require.Equal(t, output, usage.CompletionTokens)
+					require.True(t, info.StreamStatus.HasErrors())
+				})
+			}
+		}
+	}
 }
 
 func TestGeminiFileDataFallbackSettlement(t *testing.T) {

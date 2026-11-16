@@ -433,7 +433,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(streamErr)
 			return
 		}
-		mergeResponsesStreamUsage(usage, &usagePresence, data)
+		// Accept this frame's counters only after its required output writes.
+		// Terminal metadata is committed before the converted stop/usage snapshot.
+		usagePending := true
+		defer func() {
+			if usagePending {
+				mergeResponsesStreamUsage(usage, &usagePresence, data)
+			}
+		}()
 
 		switch streamResp.Type {
 		case "response.created":
@@ -456,6 +463,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.reasoning_summary_text.delta":
 			if !sendReasoningSummaryDelta(streamResp.Delta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
 			}
@@ -495,6 +503,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					pendingTextPrefix.Reset()
 				}
 				if !sendStartIfNeeded() {
+					usagePending = false
 					sr.Stop(streamErr)
 					return
 				}
@@ -516,6 +525,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					},
 				}
 				if !sendChatChunk(chunk) {
+					usagePending = false
 					sr.Stop(streamErr)
 					return
 				}
@@ -558,6 +568,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 
 			if !sendToolCallDelta(callID, name, argsDelta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
 			}
@@ -573,6 +584,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 			toolCallArgsByID[callID] += streamResp.Delta
 			if !sendToolCallDelta(callID, "", streamResp.Delta) {
+				usagePending = false
 				sr.Stop(streamErr)
 				return
 			}
@@ -607,6 +619,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					completedText := service.ExtractOutputTextFromResponses(streamResp.Response)
 					if strings.TrimSpace(completedText) != "" {
 						if !sendStartIfNeeded() {
+							usagePending = false
 							sr.Stop(streamErr)
 							return
 						}
@@ -628,6 +641,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 							},
 						}
 						if !sendChatChunk(chunk) {
+							usagePending = false
 							sr.Stop(streamErr)
 							return
 						}
@@ -647,6 +661,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 						continue
 					}
 					if !sendToolCallDelta(callID, strings.TrimSpace(out.Name), out.ArgumentsString()) {
+						usagePending = false
 						sr.Stop(streamErr)
 						return
 					}
@@ -655,6 +670,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					hasVisiblePayload = true
 				}
 			}
+			mergeResponsesStreamUsage(usage, &usagePresence, data)
+			usagePending = false
 
 			if !hasVisiblePayload {
 				emptyCompletionRecorded = true

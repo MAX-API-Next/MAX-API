@@ -221,10 +221,44 @@ func streamResponseDify2OpenAI(difyResponse DifyChunkChatCompletionResponse) *dt
 	return &response
 }
 
+// The event renderer can swallow write errors. Latch them, including short
+// writes, before using a converted message as completion estimate evidence.
+type difyStreamWriteObserver struct {
+	gin.ResponseWriter
+	err error
+}
+
+func (w *difyStreamWriteObserver) Write(data []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.ResponseWriter.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func (w *difyStreamWriteObserver) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
+
+func (w *difyStreamWriteObserver) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
 	var responseText string
 	usage := &dto.Usage{}
 	var presence dto.OpenAIUsagePresence
+	writeObserver := &difyStreamWriteObserver{ResponseWriter: c.Writer}
+	c.Writer = writeObserver
+	defer func() {
+		if writeObserver.err == nil {
+			c.Writer = writeObserver.ResponseWriter
+		}
+	}()
 	helper.SetEventStreamHeaders(c)
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
@@ -242,12 +276,17 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			return
 		}
 		openaiResponse := *streamResponseDify2OpenAI(difyResponse)
-		if len(openaiResponse.Choices) != 0 {
-			responseText += openaiResponse.Choices[0].Delta.GetContentString()
+		err := helper.ObjectData(c, openaiResponse)
+		if err == nil {
+			err = writeObserver.err
 		}
-		if err := helper.ObjectData(c, openaiResponse); err != nil {
+		if err != nil {
 			common.SysLog(err.Error())
 			sr.Error(err)
+			return // Later message_end usage remains authoritative; no failed text is estimated.
+		}
+		if len(openaiResponse.Choices) != 0 {
+			responseText += openaiResponse.Choices[0].Delta.GetContentString()
 		}
 	})
 	if apiErr := helper.FirstResultTimeoutError(c, info); apiErr != nil {
