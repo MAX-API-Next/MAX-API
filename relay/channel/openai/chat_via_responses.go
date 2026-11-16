@@ -82,7 +82,15 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	completionReported := gjson.GetBytes(body, "usage.output_tokens").Type == gjson.Number
 	if !promptReported || !completionReported {
 		outputAuditText := service.ExtractOutputTextFromResponses(&responsesResp)
-		estimated := service.ResponseText2Usage(c, outputAuditText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		var estimateText strings.Builder
+		estimateText.WriteString(outputAuditText)
+		for _, choice := range chatResp.Choices {
+			for _, tool := range choice.Message.ParseToolCalls() {
+				estimateText.WriteString(tool.Function.Name)
+				estimateText.WriteString(tool.Function.Arguments)
+			}
+		}
+		estimated := service.ResponseText2Usage(c, estimateText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		if !promptReported {
 			usage.PromptTokens = max(estimated.PromptTokens, responsesInputTokenFloor(usage))
 			usage.InputTokens = usage.PromptTokens

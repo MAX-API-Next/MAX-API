@@ -65,6 +65,57 @@ func TestConvertedWriteEstimateSettlement(t *testing.T) {
 	}
 }
 
+func TestResponsesNonstreamToolEstimateSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	oldAudit, oldLimit := common.LogResponseContentEnabled, common.LogContentMaxCharacters
+	common.LogResponseContentEnabled, common.LogContentMaxCharacters = true, 10000
+	t.Cleanup(func() { common.LogResponseContentEnabled, common.LogContentMaxCharacters = oldAudit, oldLimit })
+	args := `{"payload":"` + strings.Repeat("tool argument ", 32) + `"}`
+	id := 9750
+	for _, format := range []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude, types.RelayFormatGemini} {
+		for _, kind := range []string{dto.BuildInCallFunctionCall, dto.BuildInCallCustomToolCall} {
+			for _, reported := range []int{-1, 0, 7} {
+				for _, mixed := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/%s/output=%d/mixed=%t", format, kind, reported, mixed), func(t *testing.T) {
+						id++
+						c, info := usageReplayInfo(t, id, "")
+						info.RelayFormat, info.FinalRequestRelayFormat = format, types.RelayFormatOpenAIResponses
+						tool := map[string]any{"type": kind, "id": "tool_1", "call_id": "call_1", "name": " lookup "}
+						field := "arguments"
+						if kind == dto.BuildInCallCustomToolCall {
+							field = "input"
+						}
+						tool[field] = args
+						outputs := []any{tool, map[string]any{"type": dto.BuildInCallFunctionCall, "name": " ", "arguments": "unforwarded tool data"}}
+						audit := ""
+						if mixed {
+							audit = "visible"
+							outputs = append(outputs, map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": audit}}})
+						}
+						counts := map[string]any{"input_tokens": 100}
+						output := service.EstimateTokenByModel(info.UpstreamModelName, audit+"lookup"+args)
+						if reported >= 0 {
+							counts["output_tokens"] = reported
+							output = reported
+						}
+						raw, err := common.Marshal(map[string]any{"status": "completed", "output": outputs, "usage": counts})
+						require.NoError(t, err)
+						u, apiErr := openai.OaiResponsesToChatHandler(c, info, usageReplayResponse(string(raw)))
+						require.Nil(t, apiErr)
+						require.Equal(t, audit, info.AuditResponseContent, "tool estimation must not alter message-only audit text")
+						require.NotContains(t, usageReplayRecorder(c).Body.String(), "unforwarded tool data")
+						service.PostTextConsumeQuota(c, info, u, nil)
+						service.PostTextConsumeQuota(c, info, u, nil)
+						assertUsageReplayBalance(t, info, 100+2*output)
+						require.Equal(t, output, u.CompletionTokens)
+						require.Equal(t, 100+output, u.TotalTokens)
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestUsageCorrectionInterruptedCallerLedger(t *testing.T) {
 	service.InitTokenEncoders()
 	service.InitHttpClient()
