@@ -434,11 +434,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	terminalEventSeen := false
 	terminalDelivered := false
 	var usagePresence dto.OpenAIUsagePresence
+	var pendingUsageBase dto.Usage
+	var pendingPresenceBase dto.OpenAIUsagePresence
 	outputDelivered := false
 	imageOutputDelivered := false
 
+	eventHasOutput := func(response dto.ResponsesStreamResponse) bool {
+		return helper.ResponsesStreamEventHasOutput(response) || responsesStreamHasVisibleOutput(&response)
+	}
 	sendEvent := func(event pendingResponsesStreamEvent) bool {
 		delivered, writeErr := sendResponsesStreamData(c, event.response, event.data)
+		if delivered || !eventHasOutput(event.response) {
+			mergeResponsesStreamUsage(usage, &usagePresence, event.data)
+		}
 		if delivered {
 			streamForwarded = true
 			outputEstimate.observe(event.response)
@@ -487,13 +495,20 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage.BillingUsage.Estimated = !usage.BillingUsage.TokenCountsReported
 	}
 	flushPendingEvents := func() bool {
+		// Rebuild buffered usage in arrival order using delivered output only.
+		// Independent later metadata remains valid even if an earlier write fails.
+		*usage = pendingUsageBase
+		usagePresence = pendingPresenceBase
+		written := true
 		for _, event := range pendingEvents {
-			if !sendEvent(event) {
-				return false
+			if written {
+				written = sendEvent(event)
+			} else if !eventHasOutput(event.response) {
+				mergeResponsesStreamUsage(usage, &usagePresence, event.data)
 			}
 		}
 		pendingEvents = pendingEvents[:0]
-		return true
+		return written
 	}
 	shouldBufferForEmptyRetry := func() bool {
 		return !streamForwarded && shouldRetryEmptyCompletion(c, info)
@@ -518,7 +533,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(streamErr)
 			return
 		}
-		mergeResponsesStreamUsage(usage, &usagePresence, data)
+		usageBeforeFrame, presenceBeforeFrame := *usage, usagePresence
+		if !eventHasOutput(streamResponse) {
+			mergeResponsesStreamUsage(usage, &usagePresence, data)
+		}
 		if responsesStreamHasVisibleOutput(&streamResponse) {
 			hasVisiblePayload = true
 		}
@@ -587,6 +605,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 
+		if len(pendingEvents) == 0 {
+			pendingUsageBase, pendingPresenceBase = usageBeforeFrame, presenceBeforeFrame
+		}
 		pendingEvents = append(pendingEvents, pendingResponsesStreamEvent{
 			response: streamResponse,
 			data:     data,

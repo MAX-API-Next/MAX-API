@@ -13,6 +13,7 @@ import (
 	"github.com/MAX-API-Next/MAX-API/dto"
 	"github.com/MAX-API-Next/MAX-API/model"
 	"github.com/MAX-API-Next/MAX-API/relay"
+	"github.com/MAX-API-Next/MAX-API/relay/channel/cohere"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/dify"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/gemini"
 	"github.com/MAX-API-Next/MAX-API/relay/channel/openai"
@@ -30,6 +31,13 @@ type replayConvertedWriter struct {
 	gin.ResponseWriter
 	short bool
 }
+
+type replayCohereWriter struct {
+	gin.ResponseWriter
+	closed chan bool
+}
+
+func (w *replayCohereWriter) CloseNotify() <-chan bool { return w.closed }
 
 func (w *replayConvertedWriter) Write(p []byte) (int, error) {
 	if strings.Contains(string(p), "undelivered") {
@@ -218,6 +226,106 @@ func TestResponsesConvertedRejectedFrameSettlement(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestNativeResponsesRejectedFrameSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, mode := range []string{"error", "short", "success"} {
+		for _, frame := range []string{"terminal", "delta", "metadata"} {
+			for _, counts := range []string{"partial", "zero", "positive_details"} {
+				t.Run(mode+"/"+frame+"/"+counts, func(t *testing.T) {
+					usageReplayRatios(t)
+					c, info := usageReplayInfo(t, 9793, "")
+					info.IsStream, info.RelayMode = true, relayconstant.RelayModeResponses
+					info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponses
+					failed := mode != "success"
+					if failed {
+						c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+					}
+					raw := "data: " + `{"type":"response.output_text.delta","delta":"hi","response":{"usage":{"input_tokens":20,"output_tokens":3}}}` + "\n\n"
+					facts, prompt, output, cache, quota := `{"input_tokens":100}`, 100, 3, 0, 106
+					if counts == "zero" {
+						facts, prompt, output, quota = `{"input_tokens":0,"output_tokens":0}`, 0, 0, 0
+					} else if counts == "positive_details" {
+						facts, output, cache, quota = `{"input_tokens":100,"output_tokens":999,"input_tokens_details":{"cached_tokens":90},"output_tokens_details":{"reasoning_tokens":900}}`, 999, 90, 2017
+					}
+					response := `{"id":"undelivered","status":"completed","usage":` + facts + `}`
+					var event string
+					switch frame {
+					case "terminal":
+						event = `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"undelivered"}]}],"usage":` + facts + `}}`
+					case "delta":
+						event = `{"type":"response.output_text.delta","delta":"undelivered","response":` + response + `}`
+					case "metadata":
+						event = `{"type":"response.created","response":` + response + `}`
+					}
+					if failed && frame != "metadata" {
+						prompt, output, cache, quota = 20, 3, 0, 26
+					}
+					raw += "data: " + event + "\n\n"
+					if frame != "terminal" {
+						raw += "data: " + `{"type":"response.completed","response":{"status":"completed","output":[]}}` + "\n\n"
+					}
+					u, apiErr := openai.OaiResponsesStreamHandler(c, info, usageReplayResponse(raw))
+					if failed {
+						require.NotNil(t, apiErr)
+						require.True(t, types.IsSkipRetryError(apiErr))
+					} else {
+						require.Nil(t, apiErr)
+					}
+					require.NotNil(t, u)
+					service.PostTextConsumeQuota(c, info, u, nil)
+					service.PostTextConsumeQuota(c, info, u, nil)
+					assertUsageReplayBalance(t, info, quota)
+					require.Equal(t, prompt, u.PromptTokens)
+					require.Equal(t, output, u.CompletionTokens)
+					require.Equal(t, cache, u.PromptTokensDetails.CachedTokens)
+					require.True(t, u.BillingUsage.TokenCountsReported)
+				})
+			}
+		}
+	}
+}
+
+func TestNativeResponsesBufferedUsageSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	oldEnabled, oldRetries := common.EmptyCompletionRetryEnabled, common.RetryTimes
+	common.EmptyCompletionRetryEnabled, common.RetryTimes = true, 3
+	t.Cleanup(func() { common.EmptyCompletionRetryEnabled, common.RetryTimes = oldEnabled, oldRetries })
+	for _, mode := range []string{"error", "short", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9794, "")
+			info.IsStream, info.RelayMode = true, relayconstant.RelayModeResponses
+			info.RelayFormat, info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses, types.RelayFormatOpenAIResponses
+			if mode != "success" {
+				c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: mode == "short"}
+			}
+			frames := []string{
+				`{"type":"response.created","response":{"usage":{"input_tokens":20,"output_tokens":3}}}`,
+				`{"type":"response.output_text.delta","delta":" ","response":{"usage":{"input_tokens":50,"output_tokens":5}}}`,
+				`{"type":"response.output_text.delta","delta":" ","response":{"id":"undelivered","usage":{"input_tokens":100,"output_tokens":999}}}`,
+				`{"type":"response.created","response":{"usage":{"input_tokens":30}}}`,
+				`{"type":"response.output_text.delta","delta":"hi"}`,
+				`{"type":"response.completed","response":{"status":"completed","output":[]}}`,
+			}
+			u, apiErr := openai.OaiResponsesStreamHandler(c, info, usageReplayResponse("data: "+strings.Join(frames, "\n\ndata: ")+"\n\n"))
+			output := 5
+			if mode == "success" {
+				require.Nil(t, apiErr)
+				output = 999
+			} else {
+				require.NotNil(t, apiErr)
+				require.True(t, types.IsSkipRetryError(apiErr))
+			}
+			require.NotNil(t, u, "the first complete whitespace frame is delivered output")
+			service.PostTextConsumeQuota(c, info, u, nil)
+			service.PostTextConsumeQuota(c, info, u, nil)
+			assertUsageReplayBalance(t, info, 30+output*2)
+			require.Equal(t, 30, u.PromptTokens, "later independent metadata stays authoritative across buffered flush failure")
+			require.Equal(t, output, u.CompletionTokens)
+		})
 	}
 }
 
@@ -499,6 +607,55 @@ func TestDifyReportedPartialTotalSettlement(t *testing.T) {
 	service.PostTextConsumeQuota(c, info, usage, nil)
 	assertUsageReplayBalance(t, info, 42) // 38 input + existing estimate 2 output at ratio 2.
 	require.Equal(t, 50, usage.TotalTokens)
+}
+
+func TestCohereRejectedTextSettlement(t *testing.T) {
+	service.InitTokenEncoders()
+	for _, tc := range []struct {
+		name, counts           string
+		partial, short, reject bool
+		prompt, completion     int
+	}{
+		{"error_first", `{}`, false, false, true, 38, 0},
+		{"error_partial", `{}`, true, false, true, 38, 2},
+		{"short_first", `{}`, false, true, true, 38, 0},
+		{"short_partial", `{}`, true, true, true, 38, 2},
+		{"missing_output", `{"input_tokens":100}`, true, false, false, 100, 2},
+		{"reported_zero", `{"input_tokens":0,"output_tokens":0}`, true, false, false, 0, 0},
+		{"reported_positive", `{"input_tokens":100,"output_tokens":7}`, true, false, false, 100, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usageReplayRatios(t)
+			c, info := usageReplayInfo(t, 9792, "")
+			info.IsStream = true
+			recorder := usageReplayRecorder(c)
+			c.Writer = &replayCohereWriter{ResponseWriter: c.Writer, closed: make(chan bool)}
+			if tc.reject {
+				c.Writer = &replayConvertedWriter{ResponseWriter: c.Writer, short: tc.short}
+			}
+			a := &cohere.Adaptor{}
+			a.Init(info)
+			raw := ""
+			if tc.partial {
+				raw = `{"text":"hi"}` + "\n"
+			}
+			if tc.reject {
+				raw += `{"text":"` + strings.Repeat("undelivered ", 128) + `"}` + "\n"
+			}
+			raw += `{"is_finished":true,"text":"undelivered terminal text","finish_reason":"COMPLETE","response":{"meta":{"billed_units":` + tc.counts + `}}}` + "\n"
+			u, apiErr := a.DoResponse(c, usageReplayResponse(raw), info)
+			require.Nil(t, apiErr, "preserve the existing Cohere soft-error return")
+			usage := u.(*dto.Usage)
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			service.PostTextConsumeQuota(c, info, usage, nil)
+			assertUsageReplayBalance(t, info, tc.prompt+tc.completion*2)
+			require.Equal(t, tc.prompt, usage.PromptTokens)
+			require.Equal(t, tc.completion, usage.CompletionTokens)
+			if !tc.reject {
+				require.NotContains(t, recorder.Body.String(), "undelivered terminal text")
+			}
+		})
+	}
 }
 
 func TestDifyRejectedTextSettlement(t *testing.T) {

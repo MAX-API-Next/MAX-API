@@ -80,7 +80,41 @@ func stopReasonCohere2OpenAI(reason string) string {
 	}
 }
 
+// The event renderer can hide errors and short writes. Retain the first failure
+// so rejected text cannot enter the fallback completion estimate.
+type cohereStreamWriteObserver struct {
+	gin.ResponseWriter
+	err error
+}
+
+func (w *cohereStreamWriteObserver) Write(data []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.ResponseWriter.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
+}
+
+func (w *cohereStreamWriteObserver) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
+}
+
+func (w *cohereStreamWriteObserver) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.MaxAPIError) {
+	writeObserver := &cohereStreamWriteObserver{ResponseWriter: c.Writer}
+	c.Writer = writeObserver
+	defer func() {
+		if writeObserver.err == nil {
+			c.Writer = writeObserver.ResponseWriter
+		}
+	}()
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
@@ -174,18 +208,24 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 						Index: 0,
 					},
 				}
-				responseText += cohereResp.Text
 			}
 			jsonStr, err := json.Marshal(openaiResp)
 			if err != nil {
 				common.SysLog("error marshalling stream response: " + err.Error())
 				return true
 			}
-			if err := helper.StringData(c, string(jsonStr)); err != nil {
+			err = helper.StringData(c, string(jsonStr))
+			if err == nil {
+				err = writeObserver.err
+			}
+			if err != nil {
 				common.SysLog("error writing stream response: " + err.Error())
 				return false
 			}
 			info.SetFirstResponseTime()
+			if !cohereResp.IsFinished {
+				responseText += cohereResp.Text
+			}
 			return true
 		case <-stopChan:
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
