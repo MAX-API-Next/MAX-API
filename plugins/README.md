@@ -41,7 +41,11 @@ revocation records from older releases remain enforced and are reported during
 validation, before an installation attempt.
 
 Before using deletion, upgrade every catalog node and let the master migrate
-the deletion-receipt table. Confirm this in the deletion dialog. Older nodes do
+the deletion-receipt table, including its declared-model index. Channel writers
+must be upgraded too: their model and mapping writes share the deletion lock
+and reject references to deleted models. Old experimental receipts without the
+index cannot identify model names from a digest alone. Confirm the upgrade in
+the deletion dialog. Older nodes do
 not understand authorized history removal and may suspend their entire plugin
 host; rolling back to an older binary after deleting versions has the same risk.
 

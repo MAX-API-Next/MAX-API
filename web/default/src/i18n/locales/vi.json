@@ -6054,13 +6054,10 @@
     "SHA-256 (optional)": "SHA-256 (không bắt buộc)",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "Để trống khi nhập plugin tùy chỉnh. Nếu nhập SHA-256, mã băm phải khớp với tệp tải lên. Hệ thống luôn lưu mã băm nội dung. Kích thước tối đa: 1 MiB.",
     "Computed file SHA-256": "SHA-256 của tệp do hệ thống tính",
-    "API Extensions": "Tiện ích mở rộng API",
     "API extension management": "Quản lý tiện ích mở rộng API",
     "Search API extensions": "Tìm tiện ích mở rộng API",
     "No API extensions found": "Chưa có tiện ích mở rộng API",
     "API extension catalog": "Danh mục tiện ích mở rộng API",
-    "Import API extension": "Nhập tiện ích mở rộng API",
-    "API extension details": "Chi tiết tiện ích mở rộng API",
     "API extension": "Tiện ích mở rộng API",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Quản lý các tiện ích mở rộng API đã cài và phiên bản của chúng. Bật tiện ích không đồng nghĩa với bật thực thi tác vụ hoặc tiếp nhận yêu cầu trả phí.",
     "API extension catalog could not be loaded": "Không thể tải danh mục tiện ích mở rộng API",
@@ -6074,6 +6071,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Có thể xóa trực tiếp khi không có tham chiếu từ tác vụ, kênh hoặc cấu hình giá. Mã nguồn đã cài sẽ bị xóa; gói phân phối và định danh kiểm toán được giữ lại. Có thể nhập lại cùng tệp.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "Phiên bản này vẫn đang được tham chiếu; hãy gỡ tham chiếu từ tác vụ, kênh hoặc cấu hình giá trước khi xóa.",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Phiên bản này từng bị thu hồi vĩnh viễn; hãy liên hệ quản trị viên để xử lý bản ghi thu hồi cũ.",
-    "Task plugin version has different content; import the original file or use a new version": "Nội dung phiên bản này khác với lịch sử; hãy nhập tệp gốc hoặc dùng phiên bản mới."
+    "Task plugin version has different content; import the original file or use a new version": "Nội dung phiên bản này khác với lịch sử; hãy nhập tệp gốc hoặc dùng phiên bản mới.",
+    "Submitted content SHA-256": "SHA-256 của nội dung gửi",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 xác định văn bản đã gửi. Đọc tệp dưới dạng văn bản có thể loại bỏ BOM UTF-8; giá trị này không xác minh các byte của tệp gốc."
   }
 }

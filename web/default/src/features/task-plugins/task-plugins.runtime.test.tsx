@@ -9,6 +9,7 @@ import {
   Outlet,
   RouterContextProvider,
 } from '@tanstack/react-router'
+import english from '@/i18n/locales/en.json'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { after as afterAll, afterEach, test } from 'node:test'
@@ -17,6 +18,11 @@ import type { PluginEntry, PluginMutation, TaskPluginAPI } from './api'
 
 const env = createReactTestEnvironment()
 await env.setup()
+env.i18n.addResourceBundle('en', 'translation', {
+  'Task Plugins': english.translation['Task Plugins'],
+  'Plugin details': english.translation['Plugin details'],
+  'Install plugin package': english.translation['Install plugin package'],
+})
 const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
 // The real router scrolls on navigation; JSDOM needs this browser primitive.
 Object.defineProperty(globalThis, 'scrollTo', {
@@ -235,7 +241,7 @@ test('custom package validation and installation work without an external SHA-25
   assert.equal((check as HTMLButtonElement).disabled, false)
   fireEvent.click(check)
   const install = await v.findByRole('button', { name: 'Install and activate' })
-  assert.ok(v.getByText(`Computed file SHA-256: ${entry.digest}`))
+  assert.ok(v.getByText(`Submitted content SHA-256: ${entry.digest}`))
   assert.equal((install as HTMLButtonElement).disabled, false)
   assert.deepEqual(uploads, [{ document: '{}', expected_sha256: undefined }])
   fireEvent.click(install)
@@ -270,7 +276,7 @@ for (const [name, document, expectedDigest] of [
       assert.equal((validate as HTMLButtonElement).disabled, false)
     )
     fireEvent.click(validate)
-    await v.findByText(`Computed file SHA-256: ${expectedDigest}`)
+    await v.findByText(`Submitted content SHA-256: ${expectedDigest}`)
     assert.deepEqual(f.writes, [])
   })
 }

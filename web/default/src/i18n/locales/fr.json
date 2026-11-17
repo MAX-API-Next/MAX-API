@@ -6054,13 +6054,10 @@
     "SHA-256 (optional)": "SHA-256 (facultatif)",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "Laissez vide pour importer un plugin personnalisé. Si vous indiquez un SHA-256, il doit correspondre au fichier importé. Le système enregistre toujours les empreintes du contenu. Taille maximale : 1 Mio.",
     "Computed file SHA-256": "SHA-256 calculé du fichier",
-    "API Extensions": "Extensions d’API",
     "API extension management": "Gestion des extensions d’API",
     "Search API extensions": "Rechercher des extensions d’API",
     "No API extensions found": "Aucune extension d’API trouvée",
     "API extension catalog": "Catalogue des extensions d’API",
-    "Import API extension": "Importer une extension d’API",
-    "API extension details": "Détails de l’extension d’API",
     "API extension": "Extension d’API",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Gérez les extensions d’API installées et leurs versions. L’activation d’une extension n’active ni l’exécution de tâches ni l’admission payante.",
     "API extension catalog could not be loaded": "Impossible de charger le catalogue des extensions d’API",
@@ -6074,6 +6071,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Supprimez directement en l’absence de références de tâches, de canaux ou de tarifs. Le code installé est supprimé ; les paquets distribués et l’identité d’audit sont conservés. Le même fichier peut être réimporté.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "Cette version est encore référencée ; supprimez les références de tâches, de canaux ou de tarifs avant de la supprimer.",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Cette version a été révoquée définitivement ; contactez l’administrateur pour traiter l’ancien enregistrement de révocation.",
-    "Task plugin version has different content; import the original file or use a new version": "Le contenu de cette version diffère ; importez le fichier original ou utilisez une nouvelle version."
+    "Task plugin version has different content; import the original file or use a new version": "Le contenu de cette version diffère ; importez le fichier original ou utilisez une nouvelle version.",
+    "Submitted content SHA-256": "SHA-256 du contenu envoyé",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "Le SHA-256 identifie le texte envoyé. La lecture en mode texte peut supprimer un BOM UTF-8 ; cette valeur ne vérifie pas les octets du fichier original."
   }
 }

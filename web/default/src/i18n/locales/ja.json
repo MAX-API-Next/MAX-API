@@ -6054,13 +6054,10 @@
     "SHA-256 (optional)": "SHA-256（任意）",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "独自プラグインのインポートでは空欄にできます。SHA-256 を指定した場合は、アップロードしたファイルと一致する必要があります。内容のハッシュは常に記録されます。最大サイズ：1 MiB。",
     "Computed file SHA-256": "計算したファイルの SHA-256",
-    "API Extensions": "API 拡張",
     "API extension management": "API 拡張の管理",
     "Search API extensions": "API 拡張を検索",
     "No API extensions found": "API 拡張がありません",
     "API extension catalog": "API 拡張カタログ",
-    "Import API extension": "API 拡張をインポート",
-    "API extension details": "API 拡張の詳細",
     "API extension": "API 拡張",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "インストール済みの API 拡張とバージョンを管理します。拡張を有効にしても、タスク実行や有料リクエストの受付は有効になりません。",
     "API extension catalog could not be loaded": "API 拡張カタログを読み込めませんでした",
@@ -6074,6 +6071,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "タスク・チャネル・料金設定から参照されていなければ直接削除できます。インストール済みソースを削除し、配布パッケージと監査用識別情報を保持します。同じファイルを再インポートできます。",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "このバージョンは参照されています。削除する前にタスク・チャネル・料金設定の参照を解除してください。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "このバージョンは過去に永久失効されています。管理者に履歴レコードの処理を依頼してください。",
-    "Task plugin version has different content; import the original file or use a new version": "このバージョンの内容が履歴と異なります。元のファイルをインポートするか、新しいバージョンを使用してください。"
+    "Task plugin version has different content; import the original file or use a new version": "このバージョンの内容が履歴と異なります。元のファイルをインポートするか、新しいバージョンを使用してください。",
+    "Submitted content SHA-256": "送信内容の SHA-256",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 は送信したテキストを識別します。テキストとして読み込むと UTF-8 BOM が除去される場合があり、元のファイルのバイト列の検証には使えません。"
   }
 }

@@ -134,7 +134,7 @@ export function useSidebarData(): SidebarData {
           ...(isRoot
             ? [
                 {
-                  title: t('API Extensions'),
+                  title: t('Task Plugins'),
                   url: '/task-plugins',
                   icon: Puzzle,
                 },

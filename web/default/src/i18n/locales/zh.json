@@ -6057,13 +6057,10 @@
     "SHA-256 (optional)": "SHA-256（可选）",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "导入自定义插件时可留空；填写后必须与上传文件的 SHA-256 一致。系统始终记录内容摘要。最大包体积：1 MiB。",
     "Computed file SHA-256": "系统计算的文件 SHA-256",
-    "API Extensions": "接口扩展",
     "API extension management": "接口扩展管理",
     "Search API extensions": "搜索接口扩展",
     "No API extensions found": "暂无接口扩展",
     "API extension catalog": "接口插件列表",
-    "Import API extension": "导入接口插件",
-    "API extension details": "接口插件详情",
     "API extension": "接口插件",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "管理已安装的接口扩展及其版本。启用扩展不代表开放任务执行或付费准入。",
     "API extension catalog could not be loaded": "无法读取接口扩展目录",
@@ -6077,6 +6074,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "无任务、渠道或价格引用时可直接删除。删除会移除已安装源码，保留发行包和审计标识；之后可重新导入原文件。",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "该接口插件版本仍被引用，暂不能删除。请先移除任务、渠道或价格配置中的引用。",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "该接口插件版本曾被永久撤销，请联系管理员处理历史撤销记录。",
-    "Task plugin version has different content; import the original file or use a new version": "该接口插件版本的内容与历史记录不同，请导入原始文件或使用新的版本号。"
+    "Task plugin version has different content; import the original file or use a new version": "该接口插件版本的内容与历史记录不同，请导入原始文件或使用新的版本号。",
+    "Submitted content SHA-256": "提交内容 SHA-256",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 对应实际提交的文本。以文本方式读取文件可能移除 UTF-8 BOM，因此此值不能用于校验原始文件字节。"
   }
 }

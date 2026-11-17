@@ -55,6 +55,15 @@ optional `expected_sha256`; other operations include `key` and `version`:
   `deletion_nodes_ready: true` after upgrading all nodes. Source-free audit
   receipts and embedded distribution files remain available.
 
+Channel creates and model/mapping updates acquire the same catalog-head lock as
+deletion, including batch, tag, Save and map-based writes. Deletion receipts now
+include a source-free JSON index of declared models (`models` TEXT); migrate
+this column on the master and upgrade every channel writer before relying on
+the guard. The guard rejects late references to deleted models, permits an
+explicit identical reinstallation, and leaves unrelated channel patches alone.
+Old experimental receipts without this index remain readable, but names of
+already deleted models cannot be reconstructed from a digest alone.
+
 The console and management API no longer expose `revoke`; legacy requests are
 rejected without committing. Existing revocation records remain readable for
 runtime compatibility and are reported before installation. Ordinary deletion

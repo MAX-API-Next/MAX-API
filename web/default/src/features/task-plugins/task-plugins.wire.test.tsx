@@ -6,6 +6,7 @@ import {
   createRouter,
   RouterContextProvider,
 } from '@tanstack/react-router'
+import english from '@/i18n/locales/en.json'
 import { createReactTestEnvironment } from '@/test/react'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -15,6 +16,11 @@ import { I18nextProvider } from 'react-i18next'
 const endpoint = process.env.TASK_PLUGIN_ADMIN_UI_FIXTURE_URL
 const env = createReactTestEnvironment()
 await env.setup()
+env.i18n.addResourceBundle('en', 'translation', {
+  'Task Plugins': english.translation['Task Plugins'],
+  'Plugin details': english.translation['Plugin details'],
+  'Install plugin package': english.translation['Install plugin package'],
+})
 const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
 // The real router scrolls on navigation; JSDOM needs this browser primitive.
 Object.defineProperty(globalThis, 'scrollTo', {
@@ -109,7 +115,7 @@ test(
         assert.equal((validate as HTMLButtonElement).disabled, false)
       )
       fireEvent.click(validate)
-      await view.findByText(`Computed file SHA-256: ${pin}`)
+      await view.findByText(`Submitted content SHA-256: ${pin}`)
       fireEvent.click(
         await view.findByRole('button', { name: 'Install and activate' })
       )

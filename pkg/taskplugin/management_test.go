@@ -4,8 +4,10 @@ package taskplugin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/MAX-API-Next/MAX-API/pkg/taskusage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,4 +135,35 @@ func TestManagementLostCommitReceiptRequiresAuthoritativeRead(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.EqualValues(t, 1, rev)
 	require.ErrorIs(t, c.MutateExpected(t.Context(), 0, ManagementMutation{Action: "install", Package: p}), ErrCatalogConflict)
+}
+
+type conflictingDeletionStore struct {
+	memoryCatalogStore
+	deleteError error
+}
+
+func (s *conflictingDeletionStore) DeleteVersion(context.Context, int64, string, string) (int64, error) {
+	return 0, s.deleteError
+}
+
+func TestManagementDeletionConflictSuspendsStaleHost(t *testing.T) {
+	for _, wrapped := range []bool{false, true} {
+		t.Run(fmt.Sprint(wrapped), func(t *testing.T) {
+			store := &conflictingDeletionStore{deleteError: ErrCatalogConflict}
+			if wrapped {
+				store.deleteError = fmt.Errorf("store conflict: %w", ErrCatalogConflict)
+			}
+			catalog, err := OpenCatalog(t.Context(), store)
+			require.NoError(t, err)
+			pkg := testPackage(t, validManifest(), "source")
+			require.NoError(t, catalog.Install(t.Context(), pkg))
+			actor := Actor{UserID: 1, TokenID: 2, ChannelID: 3, RequestID: "stale-delete"}
+			binding, err := catalog.Host().Bind(actor, "POST", "/vendor/v1/jobs", "vendor-model", taskusage.MiniMaxH3Contract())
+			require.NoError(t, err)
+			err = catalog.MutateExpected(t.Context(), 1, ManagementMutation{Action: "delete", Key: pkg.Manifest().Key, Version: pkg.Manifest().Version})
+			require.ErrorIs(t, err, ErrCatalogConflict)
+			_, err = catalog.Host().Resolve(binding, actor)
+			require.ErrorIs(t, err, ErrBindingRejected, "a conflicting remote generation must not remain usable")
+		})
+	}
 }

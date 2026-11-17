@@ -59,7 +59,7 @@ export function PluginInstallSheet(props: Props) {
     >
       <SheetContent className='w-full overflow-y-auto sm:max-w-xl'>
         <SheetHeader className='border-b px-6 pt-6 pr-12 pb-5'>
-          <SheetTitle>{t('Import API extension')}</SheetTitle>
+          <SheetTitle>{t('Install plugin package')}</SheetTitle>
           <SheetDescription>
             {t(
               'Select a bundled JavaScript plugin or a MAX package. Compatibility revisions have explicit MAX versions and source hashes. Paid task admission requires separate verification.'
@@ -181,7 +181,12 @@ export function PluginInstallSheet(props: Props) {
                 {props.validated.models.length} {t('Models')}
               </p>
               <p className='font-mono text-xs break-all'>
-                {t('Computed file SHA-256')}: {fileDigest ?? '—'}
+                {t('Submitted content SHA-256')}: {fileDigest ?? '—'}
+              </p>
+              <p className='text-muted-foreground text-xs leading-relaxed'>
+                {t(
+                  'SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.'
+                )}
               </p>
               {props.validated.format_version >= 2 && (
                 <label className='flex items-start gap-2'>

@@ -230,7 +230,7 @@ export function TaskPlugins(props: { transport?: TaskPluginAPI } = {}) {
             }}
           >
             <Plus className='size-4' aria-hidden='true' />
-            {t('Import API extension')}
+            {t('Install plugin package')}
           </Button>
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>

@@ -6062,13 +6062,10 @@
     "SHA-256 (optional)": "SHA-256 (необязательно)",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "Оставьте поле пустым для импорта собственного плагина. Указанный SHA-256 должен совпадать с загруженным файлом. Система всегда сохраняет хеши содержимого. Максимальный размер: 1 МиБ.",
     "Computed file SHA-256": "Вычисленный SHA-256 файла",
-    "API Extensions": "Расширения API",
     "API extension management": "Управление расширениями API",
     "Search API extensions": "Поиск расширений API",
     "No API extensions found": "Расширения API не найдены",
     "API extension catalog": "Каталог расширений API",
-    "Import API extension": "Импорт расширения API",
-    "API extension details": "Сведения о расширении API",
     "API extension": "Расширение API",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Управляйте установленными расширениями API и их версиями. Включение расширения не разрешает выполнение задач или платные запросы.",
     "API extension catalog could not be loaded": "Не удалось загрузить каталог расширений API",
@@ -6082,6 +6079,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Версию можно удалить напрямую, если на неё не ссылаются задачи, каналы или тарифы. Установленный исходный код удаляется; дистрибутивы и идентификатор аудита сохраняются. Тот же файл можно импортировать снова.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "На эту версию ещё есть ссылки; перед удалением уберите ссылки из задач, каналов и тарифов.",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Эта версия была отозвана навсегда; обратитесь к администратору для обработки исторической записи отзыва.",
-    "Task plugin version has different content; import the original file or use a new version": "Содержимое этой версии отличается; импортируйте исходный файл или используйте новую версию."
+    "Task plugin version has different content; import the original file or use a new version": "Содержимое этой версии отличается; импортируйте исходный файл или используйте новую версию.",
+    "Submitted content SHA-256": "SHA-256 отправленного содержимого",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 относится к отправленному тексту. При чтении файла как текста может удаляться UTF-8 BOM; это значение не проверяет исходные байты файла."
   }
 }

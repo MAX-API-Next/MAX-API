@@ -102,13 +102,14 @@ type TaskPluginVersion struct {
 	Revoked  bool               `gorm:"not null"`
 }
 
-// TaskPluginDeletion retains audit identity only; no package or JavaScript bytes.
+// TaskPluginDeletion retains source-free audit identity and declared model names.
 type TaskPluginDeletion struct {
 	Identity  string `gorm:"size:64;primaryKey" json:"-"`
 	PluginKey string `gorm:"size:128;not null" json:"-"`
 	Version   string `gorm:"not null" json:"-"`
 	Digest    string `gorm:"size:64;not null" json:"-"`
 	Revoked   bool   `gorm:"not null" json:"-"`
+	Models    string `gorm:"type:text" json:"-"`
 }
 
 type TaskPluginCatalogStore struct{ db *gorm.DB }

@@ -3,6 +3,7 @@ package taskplugin
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 )
@@ -114,7 +115,11 @@ func (catalog *Catalog) deleteExpected(ctx context.Context, expected int64, key,
 	}
 	revision, err := store.DeleteVersion(ctx, expected, key, version)
 	if err != nil {
-		if err == ErrCatalogConflict || err == ErrCatalogInUse || err == ErrBindingRejected || err == ErrCatalogInvalid {
+		if errors.Is(err, ErrCatalogConflict) {
+			catalog.host.state.Store(nil)
+			return ErrCatalogConflict
+		}
+		if errors.Is(err, ErrCatalogInUse) || errors.Is(err, ErrBindingRejected) || errors.Is(err, ErrCatalogInvalid) {
 			return err
 		}
 		catalog.host.state.Store(nil)

@@ -75,7 +75,7 @@ export function PluginDetailSheet(props: Props) {
     >
       <SheetContent className='w-full overflow-y-auto sm:max-w-2xl'>
         <SheetHeader className='border-b px-6 pt-6 pr-12 pb-5'>
-          <SheetTitle>{t('API extension details')}</SheetTitle>
+          <SheetTitle>{t('Plugin details')}</SheetTitle>
           <SheetDescription>
             {t(
               'Declared metadata and immutable version history; execution is not available.'
@@ -305,8 +305,11 @@ export function PluginDetailSheet(props: Props) {
                     ) : null}
                   </li>
                 ))}
-                {detail.routes.map((r, i) => (
-                  <li key={i} className='py-3 font-mono text-xs break-all'>
+                {detail.routes.map((r) => (
+                  <li
+                    key={`${r.method} ${r.path}`}
+                    className='py-3 font-mono text-xs break-all'
+                  >
                     {r.method} {r.path} · {r.type}
                   </li>
                 ))}

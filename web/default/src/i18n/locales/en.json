@@ -6057,13 +6057,10 @@
     "SHA-256 (optional)": "SHA-256 (optional)",
     "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.": "Leave blank to import a custom plugin. If provided, SHA-256 must match the uploaded file. The system always records content digests. Maximum package size: 1 MiB.",
     "Computed file SHA-256": "Computed file SHA-256",
-    "API Extensions": "API Extensions",
     "API extension management": "API extension management",
     "Search API extensions": "Search API extensions",
     "No API extensions found": "No API extensions found",
     "API extension catalog": "API extension catalog",
-    "Import API extension": "Import API extension",
-    "API extension details": "API extension details",
     "API extension": "API extension",
     "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.": "Manage installed API extensions and versions. Enabling an extension does not enable task execution or paid admission.",
     "API extension catalog could not be loaded": "API extension catalog could not be loaded",
@@ -6077,6 +6074,8 @@
     "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.": "Delete directly when there are no task, channel or pricing references. Installed source is removed; distribution bundles and audit identity are retained. The same file can be imported again.",
     "Task plugin version is still referenced; remove task, channel or pricing references before deleting": "Task plugin version is still referenced; remove task, channel or pricing references before deleting",
     "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record": "Task plugin version was permanently revoked; contact the administrator to resolve the historical revocation record",
-    "Task plugin version has different content; import the original file or use a new version": "Task plugin version has different content; import the original file or use a new version"
+    "Task plugin version has different content; import the original file or use a new version": "Task plugin version has different content; import the original file or use a new version",
+    "Submitted content SHA-256": "Submitted content SHA-256",
+    "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes.": "SHA-256 identifies the submitted text. Reading a file as text may remove a UTF-8 BOM; this value does not verify the original file bytes."
   }
 }
