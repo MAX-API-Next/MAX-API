@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/MAX-API-Next/MAX-API/common"
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
 	"github.com/MAX-API-Next/MAX-API/setting/billing_setting"
 	"github.com/MAX-API-Next/MAX-API/types"
@@ -123,6 +125,11 @@ func TestTaskPluginDeletionReferencesRollbackAndRefresh(t *testing.T) {
 	plain := Task{TaskID: "plain"}
 	require.NoError(t, db.Create(&plain).Error)
 	require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": task.PrivateData}).Error, taskplugin.ErrBindingRejected, "map updates cannot attach a deleted binding either")
+	serialized, err := common.Marshal(task.PrivateData)
+	require.NoError(t, err)
+	for _, value := range []any{string(serialized), serialized} {
+		require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", plain.ID).Updates(map[string]any{"private_data": value}).Error, taskplugin.ErrBindingRejected, "serialized bindings obey the same persistence guard")
+	}
 	changed, _ := catalogFixture(t, "stored", "1.0.0", "different-source")
 	require.Error(t, restarted.Install(ctx, changed), "deletion does not permit changed bytes under the same identity")
 	require.NoError(t, restarted.Install(ctx, pkg), "exact unrevoked source can be installed again explicitly")
@@ -173,28 +180,37 @@ func TestTaskPluginDeletionSerializesWithNewTaskBinding(t *testing.T) {
 		}
 	}()
 	taskTable := db.NamingStrategy.TableName("Task")
-	headTable := db.NamingStrategy.TableName("TaskPluginCatalogHead")
 	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("hold_plugin_task", func(tx *gorm.DB) {
 		if tx.Statement.Table == taskTable {
 			close(locked)
 			<-release
 		}
 	}))
-	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("observe_plugin_delete", func(tx *gorm.DB) {
-		if tx.Statement.Table == headTable {
-			if values, ok := tx.Statement.Dest.(map[string]any); ok && values["revision"] != nil {
-				close(deleting)
-			}
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register("observe_plugin_delete", func(tx *gorm.DB) {
+		if row, ok := tx.Statement.Dest.(*Option); ok && row.Key == modelPricingLockOption {
+			close(deleting)
 		}
 	}))
 	created, removed := make(chan error, 1), make(chan error, 1)
 	go func() {
 		task := Task{TaskID: "concurrent", PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}}
-		created <- db.Create(&task).Error
+		created <- db.WithContext(t.Context()).Create(&task).Error
 	}()
-	<-locked
+	select {
+	case <-locked:
+	case err := <-created:
+		t.Fatalf("task creation ended before its reference lock: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("task reference lock was not reached")
+	}
 	go func() { _, err := store.DeleteVersion(t.Context(), 1, "stored", "1.0.0"); removed <- err }()
-	<-deleting
+	select {
+	case <-deleting:
+	case err := <-removed:
+		t.Fatalf("deletion ended before its writer lock: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("deletion writer lock was not reached")
+	}
 	close(release)
 	require.NoError(t, <-created)
 	require.Error(t, <-removed, "deletion cannot succeed after a concurrent binding commits")

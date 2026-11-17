@@ -85,6 +85,13 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 		}
 		a.selfUse = defaults[0].Value == "true"
 	}
+	var err error
+	// All writers take the head before channel rows. Locking reads below also
+	// avoid reusing an older MySQL REPEATABLE READ snapshot after deletion.
+	a.plugins, a.catalogReady, err = readPricingCatalog(tx, lock)
+	if err != nil {
+		return nil, err
+	}
 	query := tx.Model(&Channel{}).Select("id", "type", "status", "models", "group", "model_mapping", "setting", "base_url", "param_override", "header_override", "settings").Order("id")
 	if lock {
 		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
@@ -92,10 +99,18 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 	if err := query.Find(&a.channels).Error; err != nil {
 		return nil, err
 	}
+	return a, nil
+}
+
+func readPricingCatalog(tx *gorm.DB, lock bool) ([]taskplugin.StoredPackage, bool, error) {
 	if !tx.Migrator().HasTable(&TaskPluginCatalogHead{}) || !tx.Migrator().HasTable(&TaskPluginVersion{}) {
-		return a, nil
+		return nil, false, nil
 	}
-	a.catalogReady = true
+	if lock {
+		if err := lockTaskPluginCatalogHead(tx); err != nil {
+			return nil, false, err
+		}
+	}
 	var head TaskPluginCatalogHead
 	q := tx
 	if lock {
@@ -103,24 +118,27 @@ func readPricingAuthority(tx *gorm.DB, lock bool) (*pricingAuthority, error) {
 	}
 	err := q.First(&head, 1).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+		return nil, false, err
 	}
-	rows, _, loadErr := loadTaskPluginVersions(tx)
+	versionQuery := tx
+	if lock {
+		versionQuery = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	rows, _, loadErr := loadTaskPluginVersions(versionQuery)
 	if loadErr != nil {
-		return nil, loadErr
+		return nil, false, loadErr
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) && len(rows) > 0 {
-		return nil, taskplugin.ErrCatalogInvalid
+		return nil, false, taskplugin.ErrCatalogInvalid
 	}
 	if err == nil && (head.Revision <= 0 || head.MutationID == "") {
-		return nil, taskplugin.ErrCatalogInvalid
+		return nil, false, taskplugin.ErrCatalogInvalid
 	}
 	snapshot := taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows}
 	if err := taskplugin.ValidateCatalogTransition(taskplugin.CatalogSnapshot{}, snapshot); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	a.plugins = rows
-	return a, nil
+	return rows, true, nil
 }
 func (a *pricingAuthority) signature() string {
 	return pricingDigest(struct {

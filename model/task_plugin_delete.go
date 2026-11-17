@@ -66,6 +66,10 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 			}
 		}
 		var head TaskPluginCatalogHead
+		// Match pricing writers before taking the catalog head or reading references.
+		if err := lockModelPricingRows(tx); err != nil {
+			return err
+		}
 		if !tx.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
 			return taskplugin.ErrCatalogUnavailable
 		}
@@ -141,9 +145,9 @@ func (store *TaskPluginCatalogStore) DeleteVersion(ctx context.Context, revision
 		if err != nil {
 			return err
 		}
-		record := TaskPluginDeletion{Identity: identity, PluginKey: key, Version: version, Digest: entry.Digest, Revoked: receipt.Revoked, Models: string(models)}
+		record := TaskPluginDeletion{Identity: identity, PluginKey: key, Version: version, Digest: entry.Digest, Revoked: receipt.Revoked, Models: taskPluginModelIndex(models)}
 		if found {
-			if err := tx.Model(&TaskPluginDeletion{}).Where("identity = ?", identity).Updates(map[string]any{"revoked": receipt.Revoked, "models": string(models)}).Error; err != nil {
+			if err := tx.Model(&TaskPluginDeletion{}).Where("identity = ?", identity).Updates(map[string]any{"revoked": receipt.Revoked, "models": record.Models}).Error; err != nil {
 				return err
 			}
 		} else if err := tx.Create(&record).Error; err != nil {
@@ -177,10 +181,10 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var raw []byte
 		if err := rows.Scan(&raw); err != nil {
-			_ = rows.Close()
 			return err
 		}
 		if len(bytes.TrimSpace(raw)) == 0 {
@@ -188,16 +192,16 @@ func rejectTaskPluginReferences(tx *gorm.DB, pkg *taskplugin.Package) error {
 		}
 		var value any
 		if err := common.Unmarshal(raw, &value); err != nil {
-			_ = rows.Close()
 			return taskplugin.ErrCatalogUnavailable
 		}
 		if taskPluginReference(value, m.Key, m.Version, pkg.Digest()) {
-			_ = rows.Close()
 			return taskplugin.ErrCatalogInUse
 		}
 	}
 	err = rows.Err()
-	_ = rows.Close()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return err
 	}
@@ -293,7 +297,40 @@ func taskPluginReference(value any, key, version, digest string) bool {
 
 func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if values, ok := tx.Statement.Dest.(map[string]any); ok {
-		if private, ok := values["private_data"].(TaskPrivateData); ok {
+		selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
+		seen := false
+		for name, value := range values {
+			field := tx.Statement.Schema.LookUpField(name)
+			if field == nil || field.DBName != "private_data" {
+				continue
+			}
+			if include, exists := selected["private_data"]; !include && (exists || restricted) {
+				continue
+			}
+			if seen {
+				return taskplugin.ErrCatalogInvalid
+			}
+			seen = true
+			var private TaskPrivateData
+			switch data := value.(type) {
+			case TaskPrivateData:
+				private = data
+			case *TaskPrivateData:
+				if data != nil {
+					private = *data
+				}
+			case string:
+				if common.UnmarshalJsonStr(data, &private) != nil {
+					return taskplugin.ErrCatalogInvalid
+				}
+			case []byte:
+				if common.Unmarshal(data, &private) != nil {
+					return taskplugin.ErrCatalogInvalid
+				}
+			case nil:
+			default:
+				return taskplugin.ErrCatalogInvalid
+			}
 			candidate := *task
 			candidate.PrivateData = private
 			task = &candidate

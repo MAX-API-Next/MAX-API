@@ -54,7 +54,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
       if (!mounted.current || !reads.current.current(id)) return
       if (result.isError || !result.data) {
         setSnapshot(undefined)
-        setReadError('API extension catalog could not be loaded')
+        setReadError('Task plugin catalog could not be loaded')
         setReadAfterUnknown(false)
       } else {
         setSnapshot(result.data)
@@ -112,7 +112,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
       await mutateAsync(command)
       if (!mounted.current) return
       setNotice(
-        'API extension catalog updated. Execution and paid admission remain unavailable.'
+        'Plugin catalog updated. Execution and paid admission remain unavailable.'
       )
       onAccepted?.()
     } catch (e) {
@@ -123,7 +123,7 @@ export function useTaskPluginCatalog(transport: TaskPluginAPI) {
         setReadAfterUnknown(false)
       }
       setError(
-        e instanceof PluginError ? e.message : 'API extension request failed'
+        e instanceof PluginError ? e.message : 'Task plugin request failed'
       )
     } finally {
       if (mounted.current) {

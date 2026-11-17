@@ -2,6 +2,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/MAX-API-Next/MAX-API/pkg/taskplugin"
@@ -72,4 +73,66 @@ func TestTaskPluginChannelReferencesCannotOutliveDeletion(t *testing.T) {
 	require.NoError(t, safe.UpdateFields("name"), "metadata changes do not need a plugin")
 	require.NoError(t, catalog.Install(t.Context(), pkg), "explicit identical reimport restores model availability")
 	require.NoError(t, late.Insert())
+}
+
+func TestTaskPluginChannelBeforeFirstInstallation(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprint(mapped), func(t *testing.T) {
+			db := deletionDB(t)
+			oldDB := DB
+			DB = db
+			t.Cleanup(func() { DB = oldDB })
+			require.NoError(t, db.AutoMigrate(&Ability{}))
+			catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			channel := Channel{Name: "first", Models: "ordinary-model", Group: "default"}
+			if mapped {
+				value := `{"alias":"ordinary-model"}`
+				channel.Models = ""
+				channel.ModelMapping = &value
+			}
+			require.NoError(t, channel.Insert())
+			rows, revision, err := catalog.ManagementSnapshot(t.Context())
+			require.NoError(t, err, "an empty head created by a channel must remain readable")
+			require.Empty(t, rows)
+			require.EqualValues(t, 1, revision)
+			pkg, _ := catalogFixture(t, "stored", "1.0.0", "first-install")
+			require.ErrorIs(t, catalog.MutateExpected(t.Context(), 0, taskplugin.ManagementMutation{Action: "install", Package: pkg}), taskplugin.ErrCatalogConflict, "the prior observed zero revision cannot overwrite a committed bootstrap")
+			require.NoError(t, catalog.MutateExpected(t.Context(), revision, taskplugin.ManagementMutation{Action: "install", Package: pkg}))
+			restarted, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+			require.NoError(t, err)
+			rows, revision, err = restarted.ManagementSnapshot(t.Context())
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.EqualValues(t, 2, revision)
+		})
+	}
+}
+
+func TestTaskPluginChannelMapAliasesCannotBypassDeletion(t *testing.T) {
+	db := deletionDB(t)
+	// GORM itself supports both DB and Go field names. This regression exercises
+	// that boundary rather than the separate business update-map schema guard.
+	require.NoError(t, db.Callback().Update().Remove("guard_catalog_update_columns"))
+	catalog, err := taskplugin.OpenCatalog(t.Context(), NewTaskPluginCatalogStore(db))
+	require.NoError(t, err)
+	pkg, _ := catalogFixture(t, "stored", "1.0.0", "alias-reference")
+	require.NoError(t, catalog.Install(t.Context(), pkg))
+	channel := Channel{Name: "ordinary", Models: "ordinary-model"}
+	require.NoError(t, db.Create(&channel).Error)
+	_, revision, err := catalog.ManagementSnapshot(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, catalog.MutateExpected(t.Context(), revision, taskplugin.ManagementMutation{Action: "delete", Key: "stored", Version: "1.0.0"}))
+	for _, values := range []map[string]any{
+		{"Models": "catalog-model"},
+		{"ModelMapping": `{"alias":"catalog-model"}`},
+	} {
+		require.ErrorIs(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(values).Error, taskplugin.ErrBindingRejected)
+	}
+	require.ErrorIs(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{"models": "ordinary-model", "Models": "catalog-model"}).Error, taskplugin.ErrCatalogInvalid, "ambiguous aliases are rejected deterministically")
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Omit("Models").Updates(map[string]any{"Models": "catalog-model", "Name": "renamed"}).Error, "excluded model fields cannot introduce references")
+	var after Channel
+	require.NoError(t, db.First(&after, channel.Id).Error)
+	require.Equal(t, "ordinary-model", after.Models)
+	require.Equal(t, "renamed", after.Name)
 }

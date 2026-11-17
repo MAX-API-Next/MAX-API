@@ -47,6 +47,10 @@ Every mutation includes `expected_revision` as a canonical decimal **string**
 (including `"0"` for the empty catalog). Install also includes `document` and
 optional `expected_sha256`; other operations include `key` and `version`:
 
+A channel reference or pricing write can initialize a valid empty catalog at revision 1.
+Reread the revision before installing if an earlier read observed revision 0;
+that earlier revision correctly conflicts rather than replacing the bootstrap.
+
 - `install` retains immutable bytes, makes this version active and enabled.
 - `activate` activates an existing non-revoked version and enables it.
 - `enable` / `disable` apply only to the specified currently active version.
@@ -57,7 +61,8 @@ optional `expected_sha256`; other operations include `key` and `version`:
 
 Channel creates and model/mapping updates acquire the same catalog-head lock as
 deletion, including batch, tag, Save and map-based writes. Deletion receipts now
-include a source-free JSON index of declared models (`models` TEXT); migrate
+include a source-free JSON index of declared models (`models`: LONGTEXT on MySQL,
+TEXT on SQLite/PostgreSQL); migrate
 this column on the master and upgrade every channel writer before relying on
 the guard. The guard rejects late references to deleted models, permits an
 explicit identical reinstallation, and leaves unrelated channel patches alone.
@@ -96,3 +101,10 @@ Interaction/protocol reference: QuantumNous/new-api `70e6af64`, task-plugin
 list/upload/version/detail workflows (AGPL-3.0). MAX uses its independent pinned
 transport, catalog CAS and retained history. Marketplace/URL download, source
 editing, JavaScript debugging and upstream execution code are outside this API.
+
+Pricing writers and deletion acquire the existing pricing-writer lock before
+the catalog head; channel references use head-before-channel order. Pricing
+validation reads current locked package rows rather than a prior MySQL snapshot.
+The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
+and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
+existing experimental index columns before using deletion on upgraded nodes.

@@ -20,6 +20,14 @@ env.i18n.addResourceBundle('en', 'translation', {
   'Task Plugins': english.translation['Task Plugins'],
   'Plugin details': english.translation['Plugin details'],
   'Install plugin package': english.translation['Install plugin package'],
+  'Task plugin catalog could not be loaded':
+    english.translation['Task plugin catalog could not be loaded'],
+  'Plugin catalog updated. Execution and paid admission remain unavailable.':
+    english.translation[
+      'Plugin catalog updated. Execution and paid admission remain unavailable.'
+    ],
+  'Task plugin request failed':
+    english.translation['Task plugin request failed'],
 })
 const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
 // The real router scrolls on navigation; JSDOM needs this browser primitive.

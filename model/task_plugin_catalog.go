@@ -84,10 +84,38 @@ func (document *taskPluginDocument) Scan(value any) error {
 
 func (taskPluginDocument) GormDataType() string { return "string" }
 func (taskPluginDocument) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	return taskPluginLargeTextType(db)
+}
+
+func taskPluginLargeTextType(db *gorm.DB) string {
 	if db.Dialector.Name() == "mysql" {
 		return "longtext"
 	}
 	return "text"
+}
+
+type taskPluginModelIndex string
+
+func (index taskPluginModelIndex) Value() (driver.Value, error) {
+	return taskPluginDocument(index).Value()
+}
+
+func (index *taskPluginModelIndex) Scan(value any) error {
+	if value == nil {
+		*index = ""
+		return nil
+	}
+	var document taskPluginDocument
+	if err := document.Scan(value); err != nil {
+		return err
+	}
+	*index = taskPluginModelIndex(document)
+	return nil
+}
+
+func (taskPluginModelIndex) GormDataType() string { return "string" }
+func (taskPluginModelIndex) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	return taskPluginLargeTextType(db)
 }
 
 // Identity hashes key/version to keep the primary index within MySQL 5.7's
@@ -104,12 +132,12 @@ type TaskPluginVersion struct {
 
 // TaskPluginDeletion retains source-free audit identity and declared model names.
 type TaskPluginDeletion struct {
-	Identity  string `gorm:"size:64;primaryKey" json:"-"`
-	PluginKey string `gorm:"size:128;not null" json:"-"`
-	Version   string `gorm:"not null" json:"-"`
-	Digest    string `gorm:"size:64;not null" json:"-"`
-	Revoked   bool   `gorm:"not null" json:"-"`
-	Models    string `gorm:"type:text" json:"-"`
+	Identity  string               `gorm:"size:64;primaryKey" json:"-"`
+	PluginKey string               `gorm:"size:128;not null" json:"-"`
+	Version   string               `gorm:"not null" json:"-"`
+	Digest    string               `gorm:"size:64;not null" json:"-"`
+	Revoked   bool                 `gorm:"not null" json:"-"`
+	Models    taskPluginModelIndex `json:"-"`
 }
 
 type TaskPluginCatalogStore struct{ db *gorm.DB }
@@ -123,6 +151,23 @@ func NewTaskPluginCatalogStore(db *gorm.DB) *TaskPluginCatalogStore {
 }
 
 var _ taskplugin.CatalogStore = (*TaskPluginCatalogStore)(nil)
+
+// A positive empty head is a valid generation before the first package.
+// Pricing and channel-reference writes share head-before-channel lock order.
+func lockTaskPluginCatalogHead(tx *gorm.DB) error {
+	if tx == nil {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	if _, ok := tx.Statement.ConnPool.(gorm.TxCommitter); !ok {
+		return taskplugin.ErrCatalogUnavailable
+	}
+	head := TaskPluginCatalogHead{ID: 1, Revision: 1, MutationID: common.GetUUID()}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head).Error; err != nil {
+		return err
+	}
+	return tx.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).
+		UpdateColumn("mutation_id", gorm.Expr("mutation_id")).Error
+}
 
 // SchemaReady only observes the two catalog tables. Replica startup must not
 // perform DDL; the master remains responsible for migrations.
@@ -186,9 +231,6 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 		if err != nil {
 			return err
 		}
-		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
-			return err
-		}
 		var after TaskPluginCatalogHead
 		err = tx.First(&after, 1).Error
 		// Under READ COMMITTED, reject a mixed snapshot. MySQL's consistent
@@ -202,6 +244,9 @@ func (store *TaskPluginCatalogStore) Load(ctx context.Context) (taskplugin.Catal
 			}
 		} else if err != nil || head != after {
 			return taskplugin.ErrCatalogConflict
+		}
+		if err := validateTaskPluginDeletionHead(head, deletions); err != nil {
+			return err
 		}
 		snapshot = taskplugin.CatalogSnapshot{Revision: head.Revision, Packages: rows, Deletions: deletions}
 		return nil

@@ -120,3 +120,10 @@ host time/randomness. Existing experimental format-3 catalogs must be revalidate
 upgrading; this does not migrate previously persisted nondeterministic metadata.
 Direct MiniMax file lookup and Volcengine V4 signing remain unavailable SDK
 capabilities and fail without external I/O; they are not certified integrations.
+
+Pricing writers and deletion acquire the existing pricing-writer lock before
+the catalog head; channel references use head-before-channel order. Pricing
+validation reads current locked package rows rather than a prior MySQL snapshot.
+The source-free declared-model index uses LONGTEXT on MySQL and TEXT on SQLite
+and PostgreSQL, with ASCII storage encoding for legacy character sets. Migrate
+existing experimental index columns before using deletion on upgraded nodes.

@@ -22,6 +22,14 @@ env.i18n.addResourceBundle('en', 'translation', {
   'Task Plugins': english.translation['Task Plugins'],
   'Plugin details': english.translation['Plugin details'],
   'Install plugin package': english.translation['Install plugin package'],
+  'Task plugin catalog could not be loaded':
+    english.translation['Task plugin catalog could not be loaded'],
+  'Plugin catalog updated. Execution and paid admission remain unavailable.':
+    english.translation[
+      'Plugin catalog updated. Execution and paid admission remain unavailable.'
+    ],
+  'Task plugin request failed':
+    english.translation['Task plugin request failed'],
 })
 const originalScrollTo = Object.getOwnPropertyDescriptor(globalThis, 'scrollTo')
 // The real router scrolls on navigation; JSDOM needs this browser primitive.
@@ -362,8 +370,28 @@ test('a lost deletion receipt stays unknown after the version disappears from th
       false
     )
   )
+  const refreshed = deferred<{ revision: string; entries: PluginEntry[] }>()
+  let refreshStarted = false
+  let refreshCompleted = false
+  f.api.read = async () => {
+    refreshStarted = true
+    const result = await refreshed.promise
+    refreshCompleted = true
+    return result
+  }
   fireEvent.click(panel.getByRole('button', { name: 'Refresh' }))
-  await waitFor(() => assert.equal(f.writes.length, 1))
+  await waitFor(() => assert.equal(refreshStarted, true))
+  assert.ok(panel.getByText(/The mutation result is unknown/))
+  await act(async () => refreshed.resolve({ revision: '2', entries: [] }))
+  await waitFor(() => {
+    assert.equal(refreshCompleted, true)
+    assert.equal(
+      (panel.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement)
+        .disabled,
+      false
+    )
+  })
+  assert.equal(f.writes.length, 1)
   assert.ok(v.getByRole('dialog'))
   assert.ok(panel.getByText(/The mutation result is unknown/))
   assert.equal(

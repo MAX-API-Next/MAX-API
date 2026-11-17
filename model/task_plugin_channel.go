@@ -49,13 +49,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 	if !tx.Migrator().HasColumn(&TaskPluginDeletion{}, "models") {
 		return taskplugin.ErrCatalogUnavailable
 	}
-	// Bootstrap the shared lock even before the first catalog installation.
-	// DoNothing does not overwrite an existing revision or deletion marker.
-	head := TaskPluginCatalogHead{ID: 1, MutationID: common.GetUUID()}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&head).Error; err != nil {
-		return err
-	}
-	if err := tx.Model(&TaskPluginCatalogHead{}).Where("id = ?", 1).UpdateColumn("mutation_id", gorm.Expr("mutation_id")).Error; err != nil {
+	if err := lockTaskPluginCatalogHead(tx); err != nil {
 		return err
 	}
 	var receipts []TaskPluginDeletion
@@ -69,7 +63,7 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 			continue
 		} // Legacy receipts predate the model index.
 		var names []string
-		if len(receipt.Models) > taskplugin.MaxPackageBytes || common.UnmarshalJsonStr(receipt.Models, &names) != nil {
+		if len(receipt.Models) > taskplugin.MaxPackageBytes || common.UnmarshalJsonStr(string(receipt.Models), &names) != nil {
 			return taskplugin.ErrCatalogInvalid
 		}
 		for _, name := range names {
@@ -108,8 +102,24 @@ func channelReferenceUpdate(tx *gorm.DB, channel *Channel) (*string, *string, er
 	included := func(column string) bool { value, exists := selected[column]; return value || !exists && !restricted }
 	var models, mapping *string
 	if values, ok := tx.Statement.Dest.(map[string]any); ok {
+		normalized := make(map[string]any, 2)
+		for key, value := range values {
+			column := key
+			if tx.Statement.Schema != nil {
+				if field := tx.Statement.Schema.LookUpField(key); field != nil && field.DBName != "" {
+					column = field.DBName
+				}
+			}
+			if column != "models" && column != "model_mapping" {
+				continue
+			}
+			if _, duplicate := normalized[column]; duplicate {
+				return nil, nil, taskplugin.ErrCatalogInvalid
+			}
+			normalized[column] = value
+		}
 		for _, column := range []string{"models", "model_mapping"} {
-			value, exists := values[column]
+			value, exists := normalized[column]
 			if !exists || !included(column) || value == nil {
 				continue
 			}
