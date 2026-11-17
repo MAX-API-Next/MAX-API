@@ -381,3 +381,86 @@ func TestTaskPluginFrozenEnvelopePersistenceAfterDeletion(t *testing.T) {
 	_, err = store.DeleteVersion(t.Context(), 2, "other", "1.0.0")
 	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse, "a still-installed frozen digest remains persistable and protects its version")
 }
+
+func TestTaskPluginReferenceUpdateDestinations(t *testing.T) {
+	db := deletionDB(t)
+	require.NoError(t, db.Callback().Update().Remove("guard_catalog_update_columns"))
+	store := NewTaskPluginCatalogStore(db)
+	pkg, entry := catalogFixture(t, "stored", "1.0.0", "destination-source")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{entry})
+	require.NoError(t, err)
+	channel := Channel{Name: "before", Models: "ordinary"}
+	task := Task{TaskID: "destination-task"}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Create(&task).Error)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	private := TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "stored", Version: "1.0.0", PackageDigest: pkg.Digest()}}
+	channelMap := map[string]any{"Models": "catalog-model"}
+	privateMap := map[string]any{"PrivateData": private}
+	for name, destination := range map[string]any{
+		"channel struct": struct{ Models string }{Models: "catalog-model"},
+		"channel tagged pointer": &struct {
+			Value string `gorm:"column:model_mapping"`
+		}{Value: `{"alias":"catalog-model"}`},
+		"channel pointer map": &channelMap,
+		"task pointer map":    &privateMap,
+		"task struct":         struct{ PrivateData TaskPrivateData }{PrivateData: private},
+		"task tagged pointer": &struct {
+			Value TaskPrivateData `gorm:"column:private_data"`
+		}{Value: private},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if strings.HasPrefix(name, "channel") {
+				require.ErrorIs(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(destination).Error, taskplugin.ErrBindingRejected)
+				require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Omit("models", "model_mapping").Updates(destination).Error)
+			} else {
+				require.ErrorIs(t, db.Model(&Task{}).Where("id = ?", task.ID).Updates(destination).Error, taskplugin.ErrBindingRejected)
+				require.NoError(t, db.Model(&Task{}).Where("id = ?", task.ID).Omit("private_data").Updates(destination).Error)
+			}
+		})
+	}
+	var afterChannel Channel
+	var afterTask Task
+	require.NoError(t, db.First(&afterChannel, channel.Id).Error)
+	require.NoError(t, db.First(&afterTask, task.ID).Error)
+	require.Equal(t, channel.Models, afterChannel.Models)
+	require.Nil(t, afterChannel.ModelMapping)
+	require.Equal(t, TaskPrivateData{}, afterTask.PrivateData)
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Updates(struct{ Name string }{Name: "after"}).Error)
+	require.NoError(t, db.Model(&Channel{}).Where("id = ?", channel.Id).Select("models").Updates(struct{ Models string }{}).Error, "selected zero values are still emitted")
+	require.NoError(t, db.First(&afterChannel, channel.Id).Error)
+	require.Equal(t, "after", afterChannel.Name)
+	require.Empty(t, afterChannel.Models)
+	// Batch creates use the current hook receiver, not the whole slice.
+	require.ErrorIs(t, db.Create(&[]Channel{{Models: "ordinary"}, {Models: "catalog-model"}}).Error, taskplugin.ErrBindingRejected)
+	var count int64
+	require.NoError(t, db.Model(&Channel{}).Count(&count).Error)
+	require.EqualValues(t, 1, count, "a rejected batch must roll back every channel")
+}
+
+func TestTaskPluginSelectedPlanKeyPersistence(t *testing.T) {
+	db := deletionDB(t)
+	store := NewTaskPluginCatalogStore(db)
+	_, removed := catalogFixture(t, "stored", "1.0.0", "selected-deleted")
+	live, present := catalogFixture(t, "live", "1.0.0", "selected-live")
+	_, err := store.CompareAndSwap(t.Context(), 0, []taskplugin.StoredPackage{removed, present})
+	require.NoError(t, err)
+	_, err = store.DeleteVersion(t.Context(), 1, "stored", "1.0.0")
+	require.NoError(t, err)
+	for name, plan := range map[string]*types.TaskExpressionPlan{
+		"selected only":           {SelectedPluginKey: "stored"},
+		"different live identity": {SelectedPluginKey: "stored", PluginKey: "live", PluginVersion: "1.0.0", PackageDigest: live.Digest()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			task := Task{TaskID: name, PrivateData: TaskPrivateData{PluginBinding: &types.TaskPluginBinding{PluginKey: "live", Version: "1.0.0", PackageDigest: live.Digest()}, BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: plan}}}}
+			require.ErrorIs(t, db.Create(&task).Error, taskplugin.ErrBindingRejected, "a valid binding cannot hide a divergent selected key")
+		})
+	}
+	valid := Task{TaskID: "selected-valid", PrivateData: TaskPrivateData{BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{SelectedPluginKey: "live", PluginKey: "live", PluginVersion: "1.0.0", PackageDigest: live.Digest()}}}}}
+	require.NoError(t, db.Create(&valid).Error)
+	_, err = store.DeleteVersion(t.Context(), 2, "live", "1.0.0")
+	require.ErrorIs(t, err, taskplugin.ErrCatalogInUse)
+	ordinary := Task{TaskID: "ordinary-plan", PrivateData: TaskPrivateData{BillingContext: &TaskBillingContext{TaskBillingPlan: &types.TaskBillingPlan{ExpressionPlan: &types.TaskExpressionPlan{Driver: "go"}}}}}
+	require.NoError(t, db.Create(&ordinary).Error, "plans without plugin references remain unchanged")
+}

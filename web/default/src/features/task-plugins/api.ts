@@ -117,7 +117,7 @@ async function request<T>(
     if (!raw.success)
       throw new PluginError(
         'rejected',
-        raw.message || 'Invalid API extension request'
+        raw.message || 'Invalid task plugin request'
       )
     return schema.parse(raw.data)
   } catch (error) {
@@ -133,7 +133,7 @@ async function request<T>(
     }
     throw new PluginError(
       write ? 'unknown' : 'read',
-      'Invalid API extension response'
+      'Invalid task plugin response'
     )
   }
 }
@@ -172,7 +172,7 @@ export const taskPluginAPI = {
         entry.source_sha256 === upload.expected_sha256
       )
     )
-      throw new PluginError('read', 'Invalid API extension response')
+      throw new PluginError('read', 'Invalid task plugin response')
     return entry
   },
   mutate: async (command: PluginMutation) => {
@@ -182,7 +182,7 @@ export const taskPluginAPI = {
       true
     )
     if (BigInt(receipt.revision) !== BigInt(command.expected_revision) + 1n)
-      throw new PluginError('unknown', 'Invalid API extension response')
+      throw new PluginError('unknown', 'Invalid task plugin response')
     return receipt
   },
 }

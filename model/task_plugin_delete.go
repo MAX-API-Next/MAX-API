@@ -299,62 +299,34 @@ func taskPluginReference(value any, key, version, digest string) bool {
 }
 
 func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
-	if values, ok := tx.Statement.Dest.(map[string]any); ok {
-		selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
-		seen := false
-		for name, value := range values {
-			field := tx.Statement.Schema.LookUpField(name)
-			if field == nil || field.DBName != "private_data" {
-				continue
+	value, emitted, err := taskPluginEmittedField(tx, task, "private_data")
+	if err != nil {
+		return err
+	}
+	if emitted {
+		var private TaskPrivateData
+		switch data := value.(type) {
+		case TaskPrivateData:
+			private = data
+		case *TaskPrivateData:
+			if data != nil {
+				private = *data
 			}
-			if include, exists := selected["private_data"]; !include && (exists || restricted) {
-				continue
-			}
-			if seen {
+		case string:
+			if common.UnmarshalJsonStr(data, &private) != nil {
 				return taskplugin.ErrCatalogInvalid
 			}
-			seen = true
-			var private TaskPrivateData
-			switch data := value.(type) {
-			case TaskPrivateData:
-				private = data
-			case *TaskPrivateData:
-				if data != nil {
-					private = *data
-				}
-			case string:
-				if common.UnmarshalJsonStr(data, &private) != nil {
-					return taskplugin.ErrCatalogInvalid
-				}
-			case []byte:
-				if common.Unmarshal(data, &private) != nil {
-					return taskplugin.ErrCatalogInvalid
-				}
-			case nil:
-			default:
+		case []byte:
+			if common.Unmarshal(data, &private) != nil {
 				return taskplugin.ErrCatalogInvalid
 			}
-			candidate := *task
-			candidate.PrivateData = private
-			task = &candidate
+		case nil:
+		default:
+			return taskplugin.ErrCatalogInvalid
 		}
-	} else {
-		var update *Task
-		switch value := tx.Statement.Dest.(type) {
-		case Task:
-			update = &value
-		case *Task:
-			update = value
-		}
-		if update != nil {
-			selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
-			include, exists := selected["private_data"]
-			if (include || !exists && !restricted) && (update.PrivateData != (TaskPrivateData{}) || include) {
-				candidate := *task
-				candidate.PrivateData = update.PrivateData
-				task = &candidate
-			}
-		}
+		candidate := *task
+		candidate.PrivateData = private
+		task = &candidate
 	}
 	type reference struct{ key, version, digest string }
 	references := make([]reference, 0, 3)
@@ -366,6 +338,11 @@ func guardTaskPluginPersistence(tx *gorm.DB, task *Task) error {
 	if context := task.PrivateData.BillingContext; context != nil {
 		if context.TaskBillingPlan != nil && context.TaskBillingPlan.ExpressionPlan != nil {
 			p := context.TaskBillingPlan.ExpressionPlan
+			// Frozen plans permit an empty selection or the same plugin identity.
+			// Reject malformed selections even when another valid binding exists.
+			if p.SelectedPluginKey != "" && p.SelectedPluginKey != p.PluginKey {
+				return taskplugin.ErrBindingRejected
+			}
 			if p.PluginKey != "" || p.PackageDigest != "" {
 				references = append(references, reference{p.PluginKey, p.PluginVersion, p.PackageDigest})
 			}

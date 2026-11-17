@@ -83,8 +83,26 @@ test('validation rejects a receipt for different pinned bytes', async () => {
         document: 'synthetic',
         expected_sha256: 'b'.repeat(64),
       }),
-    (e) => e instanceof PluginError && e.kind === 'read'
+    (e) =>
+      e instanceof PluginError &&
+      e.kind === 'read' &&
+      e.message === 'Invalid task plugin response'
   )
+})
+
+test('API fallback errors retain the established translation keys', async () => {
+  for (const [payload, message, kind] of [
+    [{ success: false }, 'Invalid task plugin request', 'rejected'],
+    [{ success: true, data: {} }, 'Invalid task plugin response', 'read'],
+  ] as const) {
+    const calls = respond(payload)
+    await assert.rejects(
+      () => taskPluginAPI.read(),
+      (e) =>
+        e instanceof PluginError && e.message === message && e.kind === kind
+    )
+    assert.equal(calls.length, 1)
+  }
 })
 
 test('custom uploads may omit or leave the external SHA-256 empty', async () => {

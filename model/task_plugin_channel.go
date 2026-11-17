@@ -3,6 +3,7 @@ package model
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 
 	"github.com/MAX-API-Next/MAX-API/common"
@@ -98,67 +99,84 @@ func (channel *Channel) BeforeSave(tx *gorm.DB) error {
 }
 
 func channelReferenceUpdate(tx *gorm.DB, channel *Channel) (*string, *string, error) {
-	selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
-	included := func(column string) bool { value, exists := selected[column]; return value || !exists && !restricted }
 	var models, mapping *string
-	if values, ok := tx.Statement.Dest.(map[string]any); ok {
-		normalized := make(map[string]any, 2)
-		for key, value := range values {
-			column := key
-			if tx.Statement.Schema != nil {
-				if field := tx.Statement.Schema.LookUpField(key); field != nil && field.DBName != "" {
-					column = field.DBName
-				}
-			}
-			if column != "models" && column != "model_mapping" {
+	for _, column := range []string{"models", "model_mapping"} {
+		value, emitted, err := taskPluginEmittedField(tx, channel, column)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !emitted || value == nil {
+			continue
+		}
+		var text string
+		switch v := value.(type) {
+		case string:
+			text = v
+		case *string:
+			if v == nil {
 				continue
 			}
-			if _, duplicate := normalized[column]; duplicate {
-				return nil, nil, taskplugin.ErrCatalogInvalid
-			}
-			normalized[column] = value
+			text = *v
+		default:
+			return nil, nil, taskplugin.ErrCatalogInvalid
 		}
-		for _, column := range []string{"models", "model_mapping"} {
-			value, exists := normalized[column]
-			if !exists || !included(column) || value == nil {
-				continue
-			}
-			var text string
-			switch v := value.(type) {
-			case string:
-				text = v
-			case *string:
-				if v == nil {
-					continue
-				}
-				text = *v
-			default:
-				return nil, nil, taskplugin.ErrCatalogInvalid
-			}
-			if column == "models" {
-				models = &text
-			} else {
-				mapping = &text
-			}
+		if column == "models" {
+			models = &text
+		} else {
+			mapping = &text
 		}
-		return models, mapping, nil
-	}
-	candidate := channel
-	switch value := tx.Statement.Dest.(type) {
-	case *Channel:
-		candidate = value
-	case Channel:
-		candidate = &value
-	}
-	if candidate == nil {
-		return nil, nil, taskplugin.ErrCatalogInvalid
-	}
-	// Struct Updates omits zero values unless explicitly selected; Save selects *.
-	if included("models") && (candidate.Models != "" || selected["models"]) {
-		models = &candidate.Models
-	}
-	if included("model_mapping") && candidate.ModelMapping != nil {
-		mapping = candidate.ModelMapping
 	}
 	return models, mapping, nil
+}
+
+// Match GORM's dereferenced map/struct assignment fields, including partial
+// destination schemas. For batch creates the hook receiver is the current row.
+func taskPluginEmittedField(tx *gorm.DB, receiver any, column string) (any, bool, error) {
+	selected, restricted := tx.Statement.SelectAndOmitColumns(false, true)
+	if include, exists := selected[column]; !include && (exists || restricted) {
+		return nil, false, nil
+	}
+	value := reflect.ValueOf(tx.Statement.Dest)
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return nil, false, nil
+	}
+	if values, ok := value.Interface().(map[string]any); ok {
+		var result any
+		found := false
+		for key, value := range values {
+			name := key
+			if tx.Statement.Schema != nil {
+				if field := tx.Statement.Schema.LookUpField(key); field != nil && field.DBName != "" {
+					name = field.DBName
+				}
+			}
+			if name != column {
+				continue
+			}
+			if found {
+				return nil, false, taskplugin.ErrCatalogInvalid
+			}
+			result, found = value, true
+		}
+		return result, found, nil
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		value = reflect.Indirect(reflect.ValueOf(receiver))
+	}
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return nil, false, taskplugin.ErrCatalogInvalid
+	}
+	statement := &gorm.Statement{DB: tx}
+	if err := statement.Parse(value.Interface()); err != nil {
+		return nil, false, taskplugin.ErrCatalogInvalid
+	}
+	field := statement.Schema.LookUpField(column)
+	if field == nil || !field.Updatable {
+		return nil, false, nil
+	}
+	result, zero := field.ValueOf(tx.Statement.Context, value)
+	return result, !zero || selected[column], nil
 }
